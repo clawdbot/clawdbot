@@ -54,6 +54,48 @@ function moveKey(
   delete owner[legacyKey];
 }
 
+function migrateMessageCrossContext(raw: Record<string, unknown>, changes: string[]): void {
+  const globalMessage = getRecord(getRecord(raw.tools)?.message);
+  const globalBypass = globalMessage?.allowCrossContextSend;
+  const globalCrossContext = getRecord(globalMessage?.crossContext);
+  const migrate = (message: Record<string, unknown> | null, path: string, agent: boolean) => {
+    if (!message) {
+      return;
+    }
+    const legacy = message.allowCrossContextSend;
+    const inheritedBypass = agent && globalBypass === true;
+    if (legacy === undefined && !inheritedBypass) {
+      return;
+    }
+    const crossContext = getRecord(message.crossContext) ?? {};
+    // The shipped legacy flag bypassed both checks. An agent's false masked the
+    // root bypass, so preserve that effective policy before changing the root.
+    if ((legacy ?? (agent ? globalBypass : undefined)) === true) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider: true,
+        allowAcrossProviders: true,
+      };
+    } else if (inheritedBypass) {
+      message.crossContext = {
+        ...crossContext,
+        allowWithinProvider:
+          (crossContext.allowWithinProvider ?? globalCrossContext?.allowWithinProvider) !== false,
+        allowAcrossProviders:
+          (crossContext.allowAcrossProviders ?? globalCrossContext?.allowAcrossProviders) === true,
+      };
+    }
+    delete message.allowCrossContextSend;
+    changes.push(`Moved ${path}.allowCrossContextSend → ${path}.crossContext.`);
+  };
+  visitAgentConfigScopes(raw, (scope, path) => {
+    if (path !== "agents.defaults") {
+      migrate(getRecord(getRecord(scope.tools)?.message), `${path}.tools.message`, true);
+    }
+  });
+  migrate(globalMessage, "tools.message", false);
+}
+
 function migrateTruncateAfterCompaction(raw: Record<string, unknown>, changes: string[]): void {
   const compaction = getRecord(getRecord(getRecord(raw.agents)?.defaults)?.compaction);
   if (!compaction || !Object.hasOwn(compaction, "truncateAfterCompaction")) {
@@ -544,6 +586,22 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         ["tools", "message", "allowCrossContextSend"],
         "tools.message.allowCrossContextSend moved to tools.message.crossContext.",
       ),
+      rule(
+        ["agents"],
+        "Per-agent tools.message.allowCrossContextSend moved to tools.message.crossContext on the same agent.",
+        (value) => {
+          let found = false;
+          visitAgentConfigScopes({ agents: value }, (scope, path) => {
+            found ||=
+              path !== "agents.defaults" &&
+              Object.hasOwn(
+                getRecord(getRecord(scope.tools)?.message) ?? {},
+                "allowCrossContextSend",
+              );
+          });
+          return found;
+        },
+      ),
       rule(["tools", "experimental"], "tools.experimental.planTool moved to tools.updatePlan."),
       rule(
         ["talk", "realtime", "voice"],
@@ -593,24 +651,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_RETIRED: LegacyConfigMigrationSpec
         delete media.asyncCompletion;
         changes.push("Removed retired tools.media.asyncCompletion.directSend.");
       }
-      const messageTool = getRecord(getRecord(raw.tools)?.message);
-      if (messageTool && Object.hasOwn(messageTool, "allowCrossContextSend")) {
-        const enabled = messageTool.allowCrossContextSend === true;
-        if (enabled) {
-          const crossContext = getRecord(messageTool.crossContext) ?? {};
-          if (crossContext.allowWithinProvider === undefined) {
-            crossContext.allowWithinProvider = true;
-          }
-          if (crossContext.allowAcrossProviders === undefined) {
-            crossContext.allowAcrossProviders = true;
-          }
-          messageTool.crossContext = crossContext;
-          changes.push("Moved tools.message.allowCrossContextSend → tools.message.crossContext.");
-        } else {
-          changes.push("Removed tools.message.allowCrossContextSend.");
-        }
-        delete messageTool.allowCrossContextSend;
-      }
+      migrateMessageCrossContext(raw, changes);
       // planTool was the only tools.experimental member, so the strict schema now
       // rejects the whole container; lift the value, then drop the empty parent.
       const tools = getRecord(raw.tools);

@@ -1914,6 +1914,7 @@ internal class FullMessageGateway : AutoCloseable {
                 """{"type":"hello-ok","protocol":3,"server":{"host":"full-message-$connection","version":"proof"},"features":{$methods"events":[]},"auth":{"role":"$role","scopes":${if (role == "operator") "[\"operator.read\",\"operator.write\"]" else "[]"}},"snapshot":{"sessionDefaults":{"mainSessionKey":"agent:main:main"}}}""",
               )
             }
+
             "chat.history" -> {
               historyReads.update { it + (connection to session) }
               buildJsonObject {
@@ -1937,6 +1938,7 @@ internal class FullMessageGateway : AutoCloseable {
                 )
               }
             }
+
             "chat.message.get" -> {
               fullReads += FullMessageRead(connection, session, params["agentId"]?.jsonPrimitive?.content.orEmpty(), params["messageId"]?.jsonPrimitive?.content.orEmpty(), params["maxChars"]?.jsonPrimitive?.content?.toIntOrNull())
               if (fullReadRpcError) {
@@ -1945,14 +1947,25 @@ internal class FullMessageGateway : AutoCloseable {
               }
               fullResponseOverride ?: fullResponse(session)
             }
+
             "tts.speak" -> {
               // Observe the production Listen request without starting unrelated platform audio.
               speechReads.update { it + params.getValue("text").jsonPrimitive.content }
               return
             }
-            "chat.metadata" -> json.parseToJsonElement("""{"commands":[],"models":[]}""")
-            "sessions.list" -> json.parseToJsonElement("""{"sessions":[]}""")
-            "health", "sessions.subscribe", "sessions.messages.subscribe" -> JsonObject(emptyMap())
+
+            "chat.metadata" -> {
+              json.parseToJsonElement("""{"commands":[],"models":[]}""")
+            }
+
+            "sessions.list" -> {
+              json.parseToJsonElement("""{"sessions":[]}""")
+            }
+
+            "health", "sessions.subscribe", "sessions.messages.subscribe" -> {
+              JsonObject(emptyMap())
+            }
+
             else -> {
               reject("INVALID_REQUEST", "Proof Gateway does not implement $method")
               return

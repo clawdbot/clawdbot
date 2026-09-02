@@ -1026,15 +1026,9 @@ export async function handleControlUiHttpRequest(
     }
   }
   if (safeFile && path.basename(safeFile.path) !== "index.html") {
-    // Filesystem clocks may lead this host; validators cannot postdate message
-    // origination or a future date would 304 later replacements (mirrors
-    // resolveByteResponse in http-byte-range.ts).
+    // Future filesystem clocks must not make later replacements look unmodified;
+    // clamp to response origination as in resolveByteResponse.
     const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
-    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
-      fs.closeSync(safeFile.fd);
-      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return true;
-    }
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
@@ -1044,6 +1038,12 @@ export async function handleControlUiHttpRequest(
     });
     if (!representation) {
       respondControlUiNotAcceptable(res);
+      return true;
+    }
+    // Negotiation failures precede preconditions; release the selected representation on 304.
+    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+      fs.closeSync(representation.bodyFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
       return true;
     }
     if (req.method === "HEAD") {

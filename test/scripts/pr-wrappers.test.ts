@@ -37,6 +37,10 @@ function isolatedWrapperEnv(root: string) {
   const home = join(root, "home");
   mkdirSync(home, { recursive: true });
   return {
+    GIT_AUTHOR_NAME: "OpenClaw Test",
+    GIT_AUTHOR_EMAIL: "test@example.invalid",
+    GIT_COMMITTER_NAME: "OpenClaw Test",
+    GIT_COMMITTER_EMAIL: "test@example.invalid",
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     HOME: home,
@@ -91,15 +95,14 @@ function makeMismatchedWrapperRepo({
   copyPrWrapperSources(canonical);
   // Marker stub committed to main (the origin/main anchor), so tests can tell
   // an anchor-substituted canonical run apart from a local wrapper run.
-  if (!realModules)
+  if (!realModules) {
     writeFileSync(
       join(canonical, "scripts", "pr-lib", "gates.sh"),
       `ci_dispatch() { ${dispatchBody} }\n`,
     );
+  }
   chmodSync(join(canonical, "scripts", "pr"), 0o755);
 
-  git(canonical, ["config", "user.name", "OpenClaw Test"]);
-  git(canonical, ["config", "user.email", "test@example.invalid"]);
   git(canonical, ["config", "commit.gpgSign", "false"]);
   git(canonical, ["config", "core.hooksPath", "/dev/null"]);
   git(canonical, ["remote", "add", "origin", origin]);
@@ -109,8 +112,6 @@ function makeMismatchedWrapperRepo({
   git(canonical, ["worktree", "add", "-b", "feature", linkedPath, "main"]);
 
   const linked = realpathSync(linkedPath);
-  git(linked, ["config", "user.name", "OpenClaw Test"]);
-  git(linked, ["config", "user.email", "test@example.invalid"]);
   git(linked, ["config", "commit.gpgSign", "false"]);
   expect(git(linked, ["rev-parse", "refs/remotes/origin/main"]).stdout.trim()).toBe(
     git(canonical, ["rev-parse", "main"]).stdout.trim(),
@@ -322,6 +323,34 @@ describe("scripts/pr wrappers", () => {
         ["123", "not-an-outcome", "--confirmed-operator-recovery"],
         ["123", "a".repeat(40), "--confirmed-no-running-tools"],
         ["123", "a".repeat(40), "--confirmed-operator-recovery", "--auto-merge"],
+        ...[
+          [],
+          [""],
+          ["HEAD"],
+          ["a".repeat(39)],
+          ["A".repeat(40)],
+          ["b".repeat(40), "--replacement-head", "c".repeat(40)],
+          ["b".repeat(40), "--confirmed-operator-recovery"],
+        ].map((suffix) =>
+          ["123", "a".repeat(40), "--confirmed-operator-recovery", "--replacement-head"].concat(
+            suffix,
+          ),
+        ),
+        [
+          "123",
+          "a".repeat(40),
+          "--replacement-head",
+          "b".repeat(40),
+          "--confirmed-operator-recovery",
+        ],
+        ["123", "a".repeat(40), "--replacement-head", "b".repeat(40)],
+        [
+          "0123",
+          "a".repeat(40),
+          "--confirmed-operator-recovery",
+          "--replacement-head",
+          "b".repeat(40),
+        ],
       ]) {
         const result = spawnSync(
           join(fixture.canonical, "scripts", "pr"),
@@ -331,6 +360,30 @@ describe("scripts/pr wrappers", () => {
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(2);
         expect(result.stdout).toContain("Usage:");
         expect(result.stderr).not.toContain("only support PRs targeting main");
+      }
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  itPosix("dispatches explicit replacement arguments through the same merge owner", () => {
+    const fixture = makeMismatchedWrapperRepo();
+    try {
+      writeFileSync(join(fixture.bin, "gh"), `#!/bin/sh\nprintf '{"baseRefName":"main"}\\n'\n`);
+      writeFileSync(
+        join(fixture.canonical, "scripts/pr-lib/merge.sh"),
+        `merge_run() { printf '<%s>\\n' "$@"; }\n`,
+      );
+      for (const replacement of [[], ["--replacement-head", "b".repeat(40)]]) {
+        const result = spawnSync(
+          join(fixture.canonical, "scripts/pr"),
+          ["merge-recover", "123", "a".repeat(40), "--confirmed-operator-recovery", ...replacement],
+          { cwd: fixture.canonical, encoding: "utf8", env: fixture.env },
+        );
+        expect(result.status, result.stdout + result.stderr).toBe(0);
+        expect(result.stdout).toBe(
+          `<123>\n<false>\n<${"a".repeat(40)}>\n<${replacement[1] ?? ""}>\n`,
+        );
       }
     } finally {
       fixture.cleanup();
@@ -1028,8 +1081,6 @@ exit 99
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
-    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
-    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
     expect(git(repo, ["add", "."]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     expect(git(repo, ["worktree", "add", "-b", "feature", linked]).status).toBe(0);
@@ -1111,8 +1162,6 @@ exit 99
     const git = (cwd: string, args: string[]) =>
       spawnSync("git", args, { cwd, env, encoding: "utf8", stdio: "pipe" });
     expect(git(repo, ["init", "-b", "main"]).status).toBe(0);
-    expect(git(repo, ["config", "user.name", "OpenClaw Test"]).status).toBe(0);
-    expect(git(repo, ["config", "user.email", "test@example.invalid"]).status).toBe(0);
     expect(git(repo, ["add", "."]).status).toBe(0);
     expect(git(repo, ["commit", "-m", "test: canonical wrapper"]).status).toBe(0);
     // The linked worktree keeps main's wrapper; origin/main anchors trust.

@@ -1,6 +1,10 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Memory Core integration tests exercise the real SQLite search manager through tools.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import {
+  clearMemoryPluginState,
+  registerMemoryCorpusSupplement,
+} from "openclaw/plugin-sdk/memory-host-core";
 import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -22,6 +26,63 @@ describe("memory_search real manager", () => {
 
   beforeEach(() => {
     testing.resetMemorySearchToolCooldowns();
+  });
+
+  it("preserves reindex guidance alongside wiki results after an embedding model change", async () => {
+    const manager = await fixture.getFreshManager(
+      fixture.createConfig({ model: "old-embed", vectorEnabled: false, onSearch: false }),
+    );
+    await manager.sync({ reason: "cli", force: true });
+    await manager.close();
+    const embeddingCalls = fixture.provider.embedBatchCalls;
+    const wikiHit = {
+      corpus: "wiki" as const,
+      path: "entities/alpha.md",
+      score: 1,
+      snippet: "Alpha wiki entry",
+    };
+    registerMemoryCorpusSupplement("memory-guidance-fixture", {
+      search: async () => [wikiHit],
+      get: async () => null,
+    });
+    try {
+      const tool = createMemorySearchTool({
+        config: fixture.createConfig({
+          model: "new-embed",
+          vectorEnabled: false,
+          onSearch: false,
+        }),
+        agentId: "main",
+      });
+      if (!tool) {
+        throw new Error("memory_search tool missing");
+      }
+      const action =
+        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.";
+      const primary = await tool.execute("paused-primary", { query: "alpha" });
+      expect(primary.details).toMatchObject({ disabled: true, unavailable: true, action });
+
+      const combined = await tool.execute("paused-with-wiki", { query: "alpha", corpus: "all" });
+      expect(combined.details).toMatchObject({
+        results: [wikiHit],
+        corpora: [
+          { corpus: "memory", outcome: "unavailable" },
+          { corpus: "wiki", outcome: "ok" },
+        ],
+        warning: expect.stringContaining("Memory corpus unavailable"),
+        action,
+      });
+      expect(combined.content).toContainEqual({
+        type: "text",
+        text: expect.stringContaining(action),
+      });
+      expect(combined.details).not.toHaveProperty("disabled");
+      expect(combined.details).not.toHaveProperty("unavailable");
+      expect(fixture.provider.embedBatchCalls).toBe(embeddingCalls);
+      expect(fixture.provider.embedQueryCalls).toBe(0);
+    } finally {
+      clearMemoryPluginState();
+    }
   });
 
   it("keeps routine transcript refresh silent during memory_search", async () => {

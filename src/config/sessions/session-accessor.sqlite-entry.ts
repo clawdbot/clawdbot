@@ -391,8 +391,10 @@ export function readSessionUpdatedAtCore(scope: SessionAccessScope): number | un
 export async function upsertSessionEntryCore(
   scope: SessionAccessScope,
   patch: Partial<SessionEntry>,
+  options: Pick<SessionEntryPatchOptions, "assertCommitAllowed"> = {},
 ): Promise<SessionEntry | null> {
   return await patchSessionEntryCore(scope, () => patch, {
+    ...options,
     fallbackEntry: createFallbackSessionEntry(patch),
   });
 }

@@ -166,7 +166,7 @@
     "install": {
       "clawhubSpec": "clawhub:@openclaw/matrix",
       "npmSpec": "@openclaw/matrix",
-      "defaultChoice": "clawhub",
+      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10",
       "allowInvalidConfigRecovery": true
     },

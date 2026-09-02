@@ -11,6 +11,12 @@ const stagePrefix = (root: string) =>
 const receiptPath = (output: string, name: string) =>
   path.join(output, "..", "compiler-inputs", `${name}.json`);
 
+export function resolveDeclarationInputCaptureModule() {
+  const require = createRequire(import.meta.url);
+  const fromTsdown = createRequire(require.resolve("tsdown"));
+  return fromTsdown.resolve("rolldown-plugin-dts/tsc-context");
+}
+
 export function createDeclarationStage(root: string) {
   return fs.mkdtempSync(stagePrefix(root));
 }
@@ -40,10 +46,8 @@ export function createDeclarationInputCapture(name: string) {
       return;
     }
     const request: { roots: string[] } = JSON.parse(fs.readFileSync(file, "utf8"));
-    const require = createRequire(import.meta.url);
-    const fromTsdown = createRequire(require.resolve("tsdown"));
     const { globalContext }: { globalContext: { programs: ts.Program[] } } = await import(
-      pathToFileURL(fromTsdown.resolve("rolldown-plugin-dts/tsc-context")).href
+      pathToFileURL(resolveDeclarationInputCaptureModule()).href
     );
     const roots = new Set(
       globalContext.programs.flatMap((program) =>

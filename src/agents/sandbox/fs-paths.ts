@@ -128,6 +128,14 @@ export function buildSandboxFsMounts(sandbox: SandboxFsBridgeContext): SandboxFs
     });
   }
 
+  for (const resource of sandbox.readOnlyResourceMounts ?? []) {
+    mounts.push({
+      hostRoot: resource.hostPath,
+      containerRoot: resource.containerPath,
+      writable: false,
+      source: "protectedSkill",
+    });
+  }
   return dedupeMounts(mounts);
 }
 

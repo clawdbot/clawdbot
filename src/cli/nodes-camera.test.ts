@@ -475,6 +475,7 @@ describe("nodes camera helpers", () => {
     await withCameraTempDir(async (dir) => {
       const out = path.join(dir, "short-write.bin");
       await fs.writeFile(out, "existing-camera");
+      const stagingRoot = `${await fs.realpath(dir)}${path.sep}`;
       const originalOpen = fsMocks.actualOpen;
       if (!originalOpen) {
         throw new Error("expected actual fs.open implementation");
@@ -482,7 +483,7 @@ describe("nodes camera helpers", () => {
       let shortWriteObserved = false;
       fsMocks.open.mockImplementation(async (...args) => {
         const handle = await originalOpen(...args);
-        if (typeof args[0] !== "string" || path.dirname(args[0]) !== dir || args[1] !== "wx") {
+        if (typeof args[0] !== "string" || !args[0].startsWith(stagingRoot) || args[1] !== "wx") {
           return handle;
         }
 

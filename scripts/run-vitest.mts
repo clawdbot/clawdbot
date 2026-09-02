@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
+import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
@@ -28,6 +29,7 @@ import {
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
 import { runVitestCli, type exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
@@ -1205,13 +1207,18 @@ export function spawnWatchedVitestProcess({
   env,
   onNoOutputTimeout,
   workerRun,
+  homeMode = resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
   workerRun?: VitestWorkerRun;
+  homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
 }) {
+  if (homeMode !== "tooling") {
+    assertTestHomeSelection(env, homeMode);
+  }
   let forwardedSignal: NodeSignal | null = null;
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
@@ -1243,11 +1250,12 @@ export function spawnWatchedVitestProcess({
         ],
       }
     : spawnParams;
-  const { child, completion: childCompletion } = spawnOwnedVitestProcess(
-    directNodeArgs
+  const { child, completion: childCompletion } = spawnOwnedVitestProcess({
+    ...(directNodeArgs
       ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
-      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams }),
-  );
+      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
+    homeMode,
+  });
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
@@ -1372,6 +1380,7 @@ export async function runVitest(
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
+  assertTestHomeSelection(env, resolveVitestHomeSelection(vitestArgs, { env }));
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
   const repoRoot = resolveRepoRoot(import.meta.url);

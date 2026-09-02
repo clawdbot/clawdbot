@@ -718,8 +718,6 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
       await releaseMutation.promise;
     },
   });
-  await mutationStarted.promise;
-
   let admitted = false;
   const admission = beginSessionWorkAdmission({
     scope: "store-a",
@@ -728,16 +726,20 @@ it("serializes lifecycle mutation and work admission across identity aliases", a
       admitted = true;
     },
   });
-  await Promise.resolve();
-  expect(admitted).toBe(false);
+  try {
+    await mutationStarted.promise;
+    expect(admitted).toBe(false);
 
-  releaseMutation.resolve();
-  await mutation;
-  const admissionLease = await admission;
-  expect(admitted).toBe(true);
-  expect(isSessionWorkAdmissionActive("store-a", ["agent:main:child", "session-1"])).toBe(true);
-
-  admissionLease.release();
+    releaseMutation.resolve();
+    await mutation;
+    await admission;
+    expect(admitted).toBe(true);
+    expect(isSessionWorkAdmissionActive("store-a", ["agent:main:child", "session-1"])).toBe(true);
+  } finally {
+    releaseMutation.resolve();
+    await mutation;
+    (await admission).release();
+  }
   expect(isSessionWorkAdmissionActive("store-a", ["session-1"])).toBe(false);
 });
 

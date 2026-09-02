@@ -3,7 +3,14 @@ import readline from "node:readline";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
+type TelegramTextEntity = {
+  offset: number;
+  length: number;
+  type: Record<string, unknown> & { "@type": string };
+};
+
 export type TelegramUserbotUpdate = {
+  entities: TelegramTextEntity[];
   botApiMessageId?: number;
   chatId: number;
   kind: "edit" | "message";
@@ -14,6 +21,42 @@ export type TelegramUserbotUpdate = {
   text: string;
   timestamp: number;
 };
+
+function isUtf16Boundary(text: string, offset: number) {
+  const before = text.charCodeAt(offset - 1);
+  const after = text.charCodeAt(offset);
+  return !(before >= 0xd800 && before <= 0xdbff && after >= 0xdc00 && after <= 0xdfff);
+}
+
+function parseTextEntities(value: unknown, text: string): TelegramTextEntity[] {
+  if (!Array.isArray(value)) {
+    throw new Error("Telegram userbot update has invalid entities.");
+  }
+  return value.map((entity: unknown) => {
+    if (!isRecord(entity)) {
+      throw new Error("Telegram userbot update has an invalid entity.");
+    }
+    const { offset, length, type } = entity;
+    // TDLib counts UTF-16 units; accepting a split surrogate would corrupt the observed range.
+    if (
+      typeof offset !== "number" ||
+      !Number.isInteger(offset) ||
+      offset < 0 ||
+      typeof length !== "number" ||
+      !Number.isInteger(length) ||
+      length <= 0 ||
+      offset + length > text.length ||
+      !isUtf16Boundary(text, offset) ||
+      !isUtf16Boundary(text, offset + length) ||
+      !isRecord(type) ||
+      typeof type["@type"] !== "string" ||
+      !type["@type"]
+    ) {
+      throw new Error("Telegram userbot update has an invalid entity.");
+    }
+    return { offset, length, type: { ...type, "@type": type["@type"] } };
+  });
+}
 
 function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
   if (!isRecord(value)) {
@@ -42,6 +85,7 @@ function parseUserbotUpdate(value: unknown): TelegramUserbotUpdate {
     senderId,
     timestamp,
     text: value.text,
+    entities: parseTextEntities(value.entities, value.text),
     ...(typeof value.botApiMessageId === "number"
       ? { botApiMessageId: value.botApiMessageId }
       : {}),

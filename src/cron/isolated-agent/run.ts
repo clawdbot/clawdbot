@@ -373,10 +373,18 @@ export async function runCronIsolatedAgentTurn(params: {
           });
         }
       } finally {
-        // Release runtime references after the run completes (success or failure).
-        // The session entry has already been persisted to disk by this point,
-        // so the in-memory store and run context can be safely dropped.
+        // Release admission before exact-run alias deletion starts its own lifecycle mutation.
         try {
+          try {
+            await disposeCronRunContext({
+              sessionId: initialSessionId,
+              cronSession: prepared.context.cronSession,
+              ownsRunContext,
+              runContextOwnerToken,
+            });
+          } finally {
+            prepared.context.sessionWorkAdmission.release();
+          }
           if (prepared.context.runContinuationSession) {
             try {
               await removeCronRunContinuationSessionIfIdle(prepared.context.runSessionKey);
@@ -386,16 +394,8 @@ export async function runCronIsolatedAgentTurn(params: {
               );
             }
           }
-          await disposeCronRunContext({
-            sessionId: initialSessionId,
-            cronSession: prepared.context.cronSession,
-            ownsRunContext,
-            runContextOwnerToken,
-          });
         } finally {
-          prepared.context.sessionWorkAdmission.release();
-          // Only run-scoped browser identities end with this invocation.
-          // Persistent cron targets keep the session and its tracked tabs alive.
+          // Only run-scoped browser identities end here; persistent targets keep tracked tabs.
           if (prepared.context.runSessionKey !== prepared.context.agentSessionKey) {
             await cleanupBrowserSessionsForLifecycleEnd({
               cfg: prepared.context.cfgWithAgentDefaults,

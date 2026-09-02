@@ -725,7 +725,21 @@ describe("provider env vars dynamic manifest metadata", () => {
     ).toEqual(["WHISPERX_API_KEY"]);
   });
 
-  it("only loads plugin metadata snapshot once when resolving env var candidates, avoiding duplicate snapshot loads", () => {
+  it.each([
+    {
+      name: "auth candidates",
+      resolve: () => resolveProviderAuthEnvVarCandidates({ config: {} }).fireworks,
+      metadataLoads: 1,
+    },
+    {
+      name: "auth scrub keys",
+      resolve: () =>
+        listKnownProviderAuthEnvVarNames({ config: {} }).filter((key) =>
+          key.startsWith("FIREWORKS_"),
+        ),
+      metadataLoads: 2,
+    },
+  ])("resolves $name without repeated metadata discovery", ({ resolve, metadataLoads }) => {
     useInstalledSetupPlugin(
       "external-fireworks",
       "global",
@@ -735,10 +749,10 @@ describe("provider env vars dynamic manifest metadata", () => {
 
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
 
-    resolveProviderAuthEnvVarCandidates({ config: {} });
-
-    // Verify it was only called once, proving alias resolution reused the snapshot and did not perform a second cold load!
-    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).toHaveBeenCalledTimes(1);
+    expect(resolve()).toEqual(["FIREWORKS_ALT_API_KEY"]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot.mock.calls.length).toBeLessThanOrEqual(
+      metadataLoads,
+    );
   });
 
   it("resolves auth maps with policy work bounded to contributing plugins", () => {

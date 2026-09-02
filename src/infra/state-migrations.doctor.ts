@@ -513,82 +513,91 @@ export async function detectLegacyStateMigrations(params: {
   const nodeHost = detectDoctorOwnedState(detectLegacyNodeHostConfig);
   const subagentRegistry = detectDoctorOwnedState(detectLegacySubagentRegistry);
   const rescuePending = detectDoctorOwnedState(detectLegacyRescuePending);
-  const configuredChannels = Object.entries(params.cfg.channels ?? {});
-  // Doctor already resolved this migration owner; plugin defaults must not infer it again.
-  let migrationOwnerConfig = params.cfg;
-  if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
-    const agents = structuredClone(params.cfg.agents);
-    delete agents.ownership;
-    for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
-      entry.default = normalizeAgentId(agentId) === targetAgentId;
-    }
-    for (const entry of agents.list ?? []) {
-      entry.default = normalizeAgentId(entry.id) === targetAgentId;
-    }
-    migrationOwnerConfig = { ...params.cfg, agents };
-  }
-  const configuredAccountIds = Object.fromEntries(
-    configuredChannels.map(([channelId, value]) => {
-      const channelConfig =
-        value && typeof value === "object" && !Array.isArray(value)
-          ? (value as { accounts?: unknown; defaultAccount?: unknown })
-          : undefined;
-      const plugin = getChannelPlugin(channelId as ChannelId);
-      const accountIds = [
-        ...(plugin?.config.listAccountIds(params.cfg) ?? []),
-        ...(channelConfig?.accounts &&
-        typeof channelConfig.accounts === "object" &&
-        !Array.isArray(channelConfig.accounts)
-          ? Object.keys(channelConfig.accounts)
-          : []),
-        ...(typeof channelConfig?.defaultAccount === "string"
-          ? [channelConfig.defaultAccount]
-          : []),
-        ...(params.cfg.bindings ?? []).flatMap((binding) => {
-          const accountId =
-            binding.match?.channel === channelId
-              ? resolveConcreteBindingAccountId(binding.match.accountId)
-              : undefined;
-          return accountId ? [accountId] : [];
-        }),
-      ];
-      return [
-        channelId,
-        Array.from(new Set(accountIds.map((entry) => entry.trim()).filter(Boolean))),
-      ];
-    }),
-  );
   const channelPairing = detectLegacyChannelPairingState({
     sourceDir: oauthDir,
-    configuredChannelIds: configuredChannels.map(([channelId]) => channelId),
-    configuredDefaultAccountIds: Object.fromEntries(
-      configuredChannels.flatMap(([channelId, value]) => {
-        const boundAccountId = params.cfg.bindings?.find(
-          (binding) =>
-            normalizeAgentId(binding.agentId) === targetAgentId &&
-            binding.match?.channel === channelId &&
-            resolveConcreteBindingAccountId(binding.match.accountId) !== undefined,
-        )?.match.accountId;
-        const concreteBoundAccountId = resolveConcreteBindingAccountId(boundAccountId);
-        if (concreteBoundAccountId) {
-          return [[channelId, concreteBoundAccountId]];
+    configuredChannelIds: Object.keys(params.cfg.channels ?? {}),
+    resolveAccounts: () => {
+      const configuredChannels = Object.entries(params.cfg.channels ?? {});
+      // Doctor already resolved this migration owner; plugin defaults must not infer it again.
+      let migrationOwnerConfig = params.cfg;
+      if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
+        const agents = structuredClone(params.cfg.agents);
+        delete agents.ownership;
+        for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
+          entry.default = normalizeAgentId(agentId) === targetAgentId;
         }
-        const defaultAccount =
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as { defaultAccount?: unknown }).defaultAccount
-            : undefined;
-        if (typeof defaultAccount === "string" && defaultAccount.trim()) {
-          return [[channelId, defaultAccount.trim()]];
+        for (const entry of agents.list ?? []) {
+          entry.default = normalizeAgentId(entry.id) === targetAgentId;
         }
-        const plugin = getChannelPlugin(channelId as ChannelId);
-        if (plugin) {
-          const accountId = resolveChannelDefaultAccountId({ plugin, cfg: migrationOwnerConfig });
-          return [[channelId, accountId]];
-        }
-        return [[channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID]];
-      }),
-    ),
-    configuredAccountIds,
+        migrationOwnerConfig = { ...params.cfg, agents };
+      }
+      const configuredAccountIds = Object.fromEntries(
+        configuredChannels.map(([channelId, value]) => {
+          const channelConfig =
+            value && typeof value === "object" && !Array.isArray(value)
+              ? (value as { accounts?: unknown; defaultAccount?: unknown })
+              : undefined;
+          const plugin = getChannelPlugin(channelId as ChannelId);
+          const accountIds = [
+            ...(plugin?.config.listAccountIds(params.cfg) ?? []),
+            ...(channelConfig?.accounts &&
+            typeof channelConfig.accounts === "object" &&
+            !Array.isArray(channelConfig.accounts)
+              ? Object.keys(channelConfig.accounts)
+              : []),
+            ...(typeof channelConfig?.defaultAccount === "string"
+              ? [channelConfig.defaultAccount]
+              : []),
+            ...(params.cfg.bindings ?? []).flatMap((binding) => {
+              const accountId =
+                binding.match?.channel === channelId
+                  ? resolveConcreteBindingAccountId(binding.match.accountId)
+                  : undefined;
+              return accountId ? [accountId] : [];
+            }),
+          ];
+          return [
+            channelId,
+            Array.from(new Set(accountIds.map((entry) => entry.trim()).filter(Boolean))),
+          ];
+        }),
+      );
+      return {
+        defaultAccountIds: Object.fromEntries(
+          configuredChannels.flatMap(([channelId, value]) => {
+            const boundAccountId = params.cfg.bindings?.find(
+              (binding) =>
+                normalizeAgentId(binding.agentId) === targetAgentId &&
+                binding.match?.channel === channelId &&
+                resolveConcreteBindingAccountId(binding.match.accountId) !== undefined,
+            )?.match.accountId;
+            const concreteBoundAccountId = resolveConcreteBindingAccountId(boundAccountId);
+            if (concreteBoundAccountId) {
+              return [[channelId, concreteBoundAccountId]];
+            }
+            const defaultAccount =
+              value && typeof value === "object" && !Array.isArray(value)
+                ? (value as { defaultAccount?: unknown }).defaultAccount
+                : undefined;
+            if (typeof defaultAccount === "string" && defaultAccount.trim()) {
+              return [[channelId, defaultAccount.trim()]];
+            }
+            const plugin = getChannelPlugin(channelId as ChannelId);
+            if (plugin) {
+              const accountId = resolveChannelDefaultAccountId({
+                plugin,
+                cfg: migrationOwnerConfig,
+              });
+              return [[channelId, accountId]];
+            }
+            return [
+              [channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID],
+            ];
+          }),
+        ),
+        accountIds: configuredAccountIds,
+      };
+    },
   });
   const pluginPlanWarnings: string[] = [];
   const pluginPlans =

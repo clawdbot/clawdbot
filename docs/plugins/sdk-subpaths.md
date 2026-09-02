@@ -263,6 +263,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | `plugin-sdk/node-selection-runtime` | Private-local bundled runtime facade for shared capability-gated node selection policy |
     | `plugin-sdk/cli-argv` | Dependency-light root-option parsing for CLI metadata, including `getRootOptionAwareCommandPath` and `consumeRootOptionToken` |
     | `plugin-sdk/cli-runtime` | Private-local after July 2026; Deprecated broad barrel for CLI formatting, wait, version, argument-invocation, and lazy command-group helpers; prefer focused CLI/runtime subpaths |
+    | `plugin-sdk/node-cli-runtime` | Shared node CLI Gateway options, invoke envelope, terminal presentation, and authorization-hint error handling for plugin-owned node commands |
     | `plugin-sdk/qa-runner-runtime` | Private-local after July 2026; Supported facade exposing plugin QA scenarios through the CLI command surface |
     | `plugin-sdk/tts-runtime` | Private-local after July 2026; Supported facade for text-to-speech config schemas and runtime helpers |
     | `plugin-sdk/gateway-config-runtime` | Private-local bundled runtime facade for dependency-light Gateway port resolution (`resolveGatewayPort`); not for third-party plugins |

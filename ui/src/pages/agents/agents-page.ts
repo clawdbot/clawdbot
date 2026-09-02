@@ -16,6 +16,7 @@ import { applicationContext, type ApplicationContext } from "../../app/context.t
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { t } from "../../i18n/index.ts";
 import { resolveAgentSkillsFilter, selectableAgentsList } from "../../lib/agents/display.ts";
 import {
@@ -52,7 +53,6 @@ import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { loadAgentFileContent, saveAgentFile } from "./files.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import {
   resetIdentityDraft,
   saveIdentityDraft,
@@ -132,6 +132,7 @@ class AgentsPage
     agentId: string;
   } | null = null;
   private normalizedLocation = "";
+  private githubProfileId: string | null = null;
   private readonly githubIdentity = new GitHubIdentityController({
     requestUpdate: () => this.requestUpdate(),
     runExternalMutation: (task, options) =>
@@ -564,13 +565,24 @@ class AgentsPage
 
   private syncGitHubIdentity(agentId: string | null) {
     const snapshot = this.context.gateway.snapshot;
+    const profileId = snapshot.selfUser?.id ?? null;
+    if (profileId !== this.githubProfileId) {
+      this.githubIdentity.dispose();
+      this.githubProfileId = profileId;
+    }
     const hasScope = (method: string, scope: GatewayMethodOperatorScope) =>
       canCallGatewayMethod(snapshot, method, scope, { requireAdvertisement: false });
     this.githubIdentity.sync({
       client: this.client,
       connected: this.connected,
-      agentId,
-      config: currentConfigObject(this.context.runtimeConfig.state),
+      target: agentId
+        ? {
+            kind: "shared",
+            scope: "agent",
+            agentId,
+            config: currentConfigObject(this.context.runtimeConfig.state),
+          }
+        : null,
       statusReadable: hasScope("tools.github.status", "operator.read"),
       configurable: hasScope("tools.github.configure", "operator.admin"),
       authorizable: [
@@ -998,6 +1010,8 @@ class AgentsPage
             result: this.toolsEffectiveResult,
           },
           githubIdentity: this.githubIdentity,
+          onOpenGitHubConnections: () =>
+            this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),
           runtimeSessionKey: this.sessionKey,
           runtimeSessionMatchesSelectedAgent: selectedAgentId === this.chatAgentId(),
           modelCatalog: this.chatModelCatalog,

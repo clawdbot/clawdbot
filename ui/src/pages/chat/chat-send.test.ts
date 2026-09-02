@@ -6794,7 +6794,9 @@ describe("handleSendChat", () => {
     const reentry = handleSendChat(host, "same prompt", undefined, firstAction);
     const second = handleSendChat(host, "same prompt", undefined, secondAction);
 
-    expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+    await waitForFast(() =>
+      expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1),
+    );
     expect(host.chatQueue).toHaveLength(2);
     expect(host.chatQueue.map((item) => item.text)).toEqual(["same prompt", "same prompt"]);
 

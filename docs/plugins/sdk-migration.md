@@ -48,6 +48,11 @@ compatibility adapter, diagnostics, docs, and a deprecation window first. That
 applies to SDK imports, manifest fields, setup APIs, hooks, and runtime
 registration behavior.
 
+`ChatCommandDefinition.category` retains the `"docks"` value accepted by the
+2026.8.1 SDK. Command lists display these legacy definitions under **Tools**;
+the category does not enable channel docking or restore retired docking commands.
+New definitions should use `"tools"`.
+
 ### Why
 
 - **Slow startup** - importing one helper loaded dozens of unrelated modules.
@@ -1143,6 +1148,15 @@ until the next Plugin SDK major.
 | `2026-09-01`            | Earlier compatibility deprecations | `channel-lifecycle`, `channel-message`, `channel-reply-pipeline`, `config-runtime`, `infra-runtime`                                                                                 |
 | `next-plugin-sdk-major` | Major-version compatibility gate   | `inbound-reply-dispatch`                                                                                                                                                            |
 | `2026-10-01`            | Media legacy projection            | `agent-media-payload`, plus the non-subpath `MsgContext Media*` fields, channel inbound media payload builders, `buildMediaPayload`, hook media aliases, and `{{Media*}}` templates |
+
+The five September 1 subpaths remain available in 2026.8.2 under an approved
+retention exception; that release’s registry still labels them `deprecated`.
+The post-release registry marks them `removal-pending`, preserving their original
+`2026-09-01` removal target and replacement mappings. Removal awaits verification
+that supported external plugins have migrated. `infra-runtime` additionally retains
+system-event snapshot inspection and consumption until a modern public replacement
+exists. This changes compatibility tracking only, not the exported SDK or runtime
+behavior.
 
 All core plugins have already migrated. External plugins should migrate
 before the next major release. Run `pnpm plugins:boundary-report` to see which

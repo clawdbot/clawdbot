@@ -51,10 +51,17 @@ private fun adaptiveNavigationMode(
   tabletop: Boolean,
 ): AdaptiveNavigationMode =
   when {
-    tabletop || !widthAtLeastMedium || !heightAtLeastMedium ->
+    tabletop || !widthAtLeastMedium || !heightAtLeastMedium -> {
       AdaptiveNavigationMode.Bar
-    !widthAtLeastExpanded -> AdaptiveNavigationMode.Rail
-    else -> AdaptiveNavigationMode.Drawer
+    }
+
+    !widthAtLeastExpanded -> {
+      AdaptiveNavigationMode.Rail
+    }
+
+    else -> {
+      AdaptiveNavigationMode.Drawer
+    }
   }
 
 private fun AdaptiveNavigationMode.toNavigationSuiteType(): NavigationSuiteType =

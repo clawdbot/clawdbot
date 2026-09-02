@@ -94,21 +94,20 @@ function describeMissingHarnessRegistration(
       continue;
     }
     const plugin = context?.metadataSnapshot?.byPluginId.get(pluginId);
-    if (!plugin) {
-      blockers.push(`Owner plugin "${pluginId}" is absent from this prepared plugin generation`);
-      continue;
-    }
     const activation = resolveEffectivePluginActivationState({
       id: pluginId,
-      origin: plugin.origin,
+      // Codex's fallback owner is external; global exposes policy blockers without inventing defaults.
+      origin: plugin?.origin ?? "global",
       config: plugins,
       rootConfig: activationSourceConfig,
-      enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
+      enabledByDefault: plugin ? isPluginEnabledByDefaultForPlatform(plugin) : undefined,
     });
     if (!activation.activated) {
       blockers.push(
         `Owner plugin "${pluginId}" is not activatable${activation.reason ? ` (${activation.reason})` : ""}`,
       );
+    } else if (!plugin) {
+      blockers.push(`Owner plugin "${pluginId}" is absent from this prepared plugin generation`);
     }
   }
   const ownerField = ownerPluginIds.length === 1 ? "ownerPluginId" : "ownerPluginIds";

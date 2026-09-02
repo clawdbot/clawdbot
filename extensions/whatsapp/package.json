@@ -65,7 +65,7 @@
     "install": {
       "clawhubSpec": "clawhub:@openclaw/whatsapp",
       "npmSpec": "@openclaw/whatsapp",
-      "defaultChoice": "clawhub",
+      "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.25"
     },
     "compat": {

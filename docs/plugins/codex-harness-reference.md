@@ -865,10 +865,11 @@ Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
 inspect the actual public picker for your account.
 
-The app-server catalog can report `ultra`; OpenClaw reasoning controls for the
-Codex runtime currently expose levels through `max`. Hidden models can also
-appear in the app-server catalog for internal or specialized flows without being
-normal model-picker choices.
+OpenClaw reasoning controls preserve supported native levels, including `ultra`.
+Codex owns Ultra's proactive delegation and model-specific inference effort;
+Platform API effort metadata does not downgrade the selected runtime mode.
+Hidden models can also appear in the app-server catalog for internal or
+specialized flows without being normal model-picker choices.
 </Note>
 
 Tune discovery under `plugins.entries.codex.config.discovery`:
@@ -959,6 +960,19 @@ document budget to zero. These modes are separate inputs even when their final
 thread configuration overlaps.
 
 ## Workspace bootstrap files
+
+The full generic developer policy, including a `before_prompt_build.systemPrompt`
+replacement, remains native session configuration for compaction and native-child
+inheritance. Ordinary persistent cold or changed-configuration resumes require an
+uninterrupted managed local stdio process owner and observed native unload before OpenClaw injects the full
+current policy. Merely sending `developerInstructions` on `thread/resume` does not
+refresh the model-visible policy on stock Codex. Explicit `systemPrompt: ""` sends
+a withdrawal, not a fallback to older instructions.
+
+Ordinary incognito turns can reuse unchanged generic policy, but changed or emptied
+policy is rejected without sending another native turn or discarding the live
+conversation. Turn-scoped collaboration instructions remain a separate surface.
+See [Hook boundaries](/plugins/codex-harness-runtime#hook-boundaries) for recovery.
 
 Codex normally handles `AGENTS.md` itself through native project-doc discovery.
 OpenClaw does not write synthetic Codex project-doc files or depend on Codex

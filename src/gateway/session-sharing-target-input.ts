@@ -18,6 +18,7 @@ export type { SessionMutationTarget } from "./session-mutation-authorization-err
 type SessionMutationTargetField = "key" | "parentSessionKey" | "sessionKey";
 
 const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutationTargetField[]>([
+  ["skills.library.activate", ["sessionKey"]],
   ["agent", ["sessionKey"]],
   ["board.event", ["sessionKey"]],
   ["board.update", ["sessionKey"]],
@@ -47,6 +48,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
   ["sessions.dispatch", ["key"]],
   ["sessions.files.set", ["sessionKey"]],
   ["sessions.github.publish", ["sessionKey"]],
+  ["sessions.github.confirm", ["sessionKey"]],
   ["sessions.fork", ["sessionKey"]],
   ["sessions.patch", ["key"]],
   ["sessions.goal.update", ["sessionKey"]],
@@ -76,6 +78,7 @@ const SESSION_TARGET_FIELDS_BY_METHOD = new Map<string, readonly SessionMutation
 ]);
 
 const REQUIRED_SESSION_TARGET_METHODS = new Set([
+  "skills.library.activate",
   "board.action",
   "board.event",
   "board.update",
@@ -104,6 +107,7 @@ const REQUIRED_SESSION_TARGET_METHODS = new Set([
   "sessions.groups.rename",
   "sessions.groups.update",
   "sessions.github.publish",
+  "sessions.github.confirm",
   "sessions.patch",
   "sessions.goal.update",
   "sessions.goal.clear",

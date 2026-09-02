@@ -93,6 +93,8 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   cron: "Global scheduler settings for stored automations, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling automation volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables automation execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all automation execution without deleting jobs.",
+  "cron.skipMissedJobs":
+    "Skips missed recurring cron/every slots at Gateway startup and schedules their next future occurrence instead of catching up. Default: false. Enable to avoid stale reminders after downtime; one-shot at jobs still catch up.",
   "cron.webhookToken":
     "Bearer token attached to automation webhook POST deliveries when webhook mode is used. Prefer secret/env substitution and rotate this token regularly if shared webhook endpoints are internet-reachable.",
   "cron.webhookSsrfPolicy":

@@ -32,6 +32,7 @@ import {
   resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
@@ -202,7 +203,7 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
 }
 
 function formatForwardedExternalRunFailureText(message: string): string {
-  const sanitized = renderUserFacingText(message, { errorContext: true })
+  const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
@@ -229,6 +230,20 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // Preflight detail is diagnostic, not provider copy or an assurance that it is
+  // safe to disclose. Verbose opt-in and the shared detail cap still apply.
+  if (isAgentHarnessPreflightError(error)) {
+    return {
+      text: options?.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(
+              sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
+            )
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  }
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
@@ -325,7 +340,9 @@ export function buildExternalRunFailureReply(
   // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
     text: options?.includeDetails
-      ? formatForwardedExternalRunFailureText(normalizedMessage)
+      ? formatForwardedExternalRunFailureText(
+          renderUserFacingText(normalizedMessage, { errorContext: true }),
+        )
       : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     isGenericRunnerFailure: true,
   };
@@ -420,6 +437,11 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
+  // Direct preflight diagnostics are not provider failures; preserve their
+  // identity for the caller's generic settlement and disclosure policy.
+  if (isAgentHarnessPreflightError(params.err)) {
+    return undefined;
+  }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const fallbackAttempts = readFallbackAttempts(params.err);

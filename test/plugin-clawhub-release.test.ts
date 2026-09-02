@@ -1684,10 +1684,10 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 
     expect(state.verifierArgs).toEqual(["--skip-clawhub"]);
     expect(state.proofLines.normal).toBe(
-      "- plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/111",
+      "- plugin ClawHub publish: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/111",
     );
     expect(state.proofLines.bootstrap).toBe(
-      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+      "- plugin ClawHub bootstrap: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/222",
     );
   });
 });

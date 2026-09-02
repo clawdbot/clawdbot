@@ -40,6 +40,7 @@ import {
   isCodexDesktopGenerationCurrent,
   waitForCodexDesktopGeneration,
 } from "./desktop-generation.js";
+import { isCodexAppServerProxyLaunch } from "./launch-args.js";
 import {
   isManagedCodexDesktopCommand,
   resolveManagedCodexAppServerStartOptions,
@@ -1374,11 +1375,34 @@ export function retainSharedCodexAppServerClientByInstanceId(
   return undefined;
 }
 
-/** Captures sole physical-client ownership across awaited configuration adoption. */
+/** Captures the required connection or native-process ownership across awaited work. */
 export function captureExclusiveSharedCodexAppServerClient(
   client: CodexAppServerClient,
+  requiredOwnership: "connection" | "native-process",
 ): () => void {
   const state = getSharedCodexAppServerClientState();
+  // Ordinary refresh needs a process, not a connection to an external server.
+  // Supervision/release retain their existing shared connection-lease contract.
+  const start = getCodexAppServerClientStartMetadata().get(client)?.startOptions;
+  if (
+    requiredOwnership === "native-process" &&
+    (start?.transport !== "stdio" || isCodexAppServerProxyLaunch(start.args))
+  ) {
+    throw new AgentHarnessPreflightError(
+      "Codex ordinary configuration refresh requires an OpenClaw-managed local stdio process, not an external socket or app-server proxy. No turn was sent; reconnect through managed local stdio before continuing.",
+    );
+  }
+  if (requiredOwnership === "native-process" && state.isolatedClients.has(client)) {
+    // Worker clients already have a sole per-attempt owner, not a shared-pool lease.
+    // Host/placement authority is checked by the caller across every awaited handoff.
+    const assertIsolated = () => {
+      if (!state.isolatedClients.has(client) || client.getCloseError()) {
+        throw new CodexAdoptedThreadActiveError();
+      }
+    };
+    assertIsolated();
+    return assertIsolated;
+  }
   for (const [key, entry] of state.clients) {
     if (entry.client !== client) {
       continue;

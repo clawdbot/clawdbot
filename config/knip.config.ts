@@ -93,6 +93,10 @@ const repositoryScriptEntries = [
   "scripts/mcp-code-mode-gateway-e2e.ts!",
   "scripts/openclaw-release-clawhub-plan.ts!",
   "scripts/openclaw-release-clawhub-runtime-state.ts!",
+  // Plugin Prerelease builds immutable package artifacts, then scans them in a bounded child.
+  "scripts/plugin-npm-security-prepare.mts!",
+  "scripts/plugin-npm-security-scan-runner.mjs!",
+  "scripts/plugin-npm-security-scan.mts!",
   // Oxlint loads this JS plugin by path from config/oxlint/boundary-guards.json.
   "scripts/oxlint-boundary-guards.mjs!",
   "scripts/plugin-prerelease-liveish-matrix.mts!",

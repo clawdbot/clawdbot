@@ -14,6 +14,7 @@ import {
   resolvePolicyTestTargets,
 } from "../../scripts/lib/ci-node-test-plan.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
+import { createCompactSplitTimingGeneration } from "../../scripts/lib/vitest-shard-metadata.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, sortRepoPaths, toRepoPath } from "../../src/test-utils/repo-files.js";
 import {
@@ -49,8 +50,6 @@ type VitestConfig = {
 };
 
 const PLUGIN_PRERELEASE_NPM_SPEC_TEST = "src/plugins/install.npm-spec.test.ts";
-const PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST =
-  "src/plugins/npm-install-security-scan.release.test.ts";
 const DEFAULT_NODE_TEST_RUNNER = "blacksmith-8vcpu-ubuntu-2404";
 const BUNDLED_NODE_TEST_RUNNER = "blacksmith-4vcpu-ubuntu-2404";
 const STORE_ALIAS_CHANGED_PATHS = [
@@ -119,6 +118,123 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  it("binds split timing identity to exact complete-file membership", () => {
+    const common = {
+      configs: ["test/vitest/vitest.gateway-server.config.ts"],
+      env: { OPENCLAW_GATEWAY_TEST_WORKERS: "2" },
+      parentShardName: "agentic-control-plane-agent-chat",
+    };
+    const original = createCompactSplitTimingGeneration({
+      ...common,
+      stripes: [["src/gateway/a.test.ts"], ["src/gateway/b.test.ts"]],
+    });
+    expect(
+      createCompactSplitTimingGeneration({
+        ...common,
+        stripes: [["src/gateway/a.test.ts"], ["src/gateway/b.test.ts"]],
+      }),
+    ).toEqual(original);
+    expect(
+      createCompactSplitTimingGeneration({
+        ...common,
+        stripes: [["src/gateway/a.test.ts"], ["src/gateway/c.test.ts"]],
+      }),
+    ).not.toEqual(original);
+    expect(
+      createCompactSplitTimingGeneration({
+        ...common,
+        stripes: [["src/gateway/b.test.ts"], ["src/gateway/a.test.ts"]],
+      }),
+    ).not.toEqual(original);
+  });
+
+  it("retains a complete measured generation and ignores complementary partial generations", () => {
+    const originalTimings = testTimings.readCompactGroupTimings;
+    let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
+      blacksmith: { "agentic-agents-support": 165 },
+      github: { "agentic-agents-support": 253 },
+    };
+    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => {
+      const unrelated = Object.fromEntries(
+        Object.entries(originalTimings(profile)).filter(
+          ([key]) => !key.startsWith("agentic-agents-support"),
+        ),
+      );
+      return { ...unrelated, ...overlays[profile] };
+    });
+    const options = {
+      compactMode: "pull-request" as const,
+      includeReleaseOnlyPluginShards: false,
+      runnerBackend: "hybrid",
+    };
+    const initialPlan = createNodeTestShardBundles(options);
+    const supportGroups = (plan: typeof initialPlan) =>
+      plan
+        .flatMap((job) => job.groups)
+        .filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name))
+        .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
+    const initial = supportGroups(initialPlan);
+    expect(initial).toHaveLength(2);
+    overlays.blacksmith = {
+      ...overlays.blacksmith,
+      ...Object.fromEntries(initial.map((group, index) => [group.timing_key!, 247 + index])),
+    };
+
+    const expanded = supportGroups(createNodeTestShardBundles(options));
+    expect(expanded).toHaveLength(4);
+    const stripes = expanded.map((group) => group.includePatterns!);
+    const changedStripesA = stripes.map((patterns) => patterns.slice());
+    const first = changedStripesA[0]!.shift()!;
+    const second = changedStripesA[1]!.shift()!;
+    changedStripesA[0]!.push(second);
+    changedStripesA[1]!.push(first);
+    const partialA = createCompactSplitTimingGeneration({
+      configs: expanded[0]!.configs,
+      env: expanded[0]!.env,
+      parentShardName: "agentic-agents-support",
+      stripes: changedStripesA,
+    });
+    const changedStripesB = stripes.map((patterns) => patterns.slice());
+    const third = changedStripesB[2]!.shift()!;
+    const fourth = changedStripesB[3]!.shift()!;
+    changedStripesB[2]!.push(fourth);
+    changedStripesB[3]!.push(third);
+    const partialB = createCompactSplitTimingGeneration({
+      configs: expanded[0]!.configs,
+      env: expanded[0]!.env,
+      parentShardName: "agentic-agents-support",
+      stripes: changedStripesB,
+    });
+    overlays = {
+      github: { "agentic-agents-support": 100 },
+      blacksmith: {
+        "agentic-agents-support": 100,
+        [partialA.timingKeys[0]!]: 1_000,
+        [partialA.timingKeys[1]!]: 1_000,
+        [partialB.timingKeys[2]!]: 1_000,
+        [partialB.timingKeys[3]!]: 1_000,
+      },
+    };
+    const incomplete = createNodeTestShardBundles(options).flatMap((job) => job.groups);
+    expect(
+      incomplete.filter((group) => group.shard_name === "agentic-agents-support"),
+    ).toHaveLength(1);
+    expect(
+      incomplete.filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name)),
+    ).toHaveLength(0);
+
+    overlays.blacksmith = {
+      ...overlays.blacksmith,
+      ...Object.fromEntries(expanded.map((group) => [group.timing_key!, 124])),
+    };
+
+    const stable = supportGroups(createNodeTestShardBundles(options));
+    expect(stable).toHaveLength(4);
+    expect(stable.map((group) => group.timing_key)).toEqual(
+      expanded.map((group) => group.timing_key),
+    );
+  });
+
   it("keeps Chromium files in the UI CI owner and Node-driven Playwright files in Node stripes", () => {
     const shards = createNodeTestShards();
     const uiStripes = shards.filter((shard) =>
@@ -177,9 +293,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const target = createNodeTestShards().find((shard) =>
         shard.includePatterns?.includes(consumer),
       )!;
-      const original = testTimings.readCompactGroupTimings;
       vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => ({
-        ...original(profile),
         [target.shardName]: profile === slowerProfile ? 400 : 100,
       }));
       const plan = createNodeTestShardBundles({
@@ -460,21 +574,36 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     { profile: "github", timingProfile: "github", addedSeconds: 40 },
     { profile: "hybrid", timingProfile: "blacksmith", addedSeconds: 35 },
   ] as const)(
-    "uses direct $profile hosted-stripe timings without changing its test partition or capacity",
+    "retains parent floors and uses higher $profile child timings without changing test partitions",
     ({ profile, timingProfile, addedSeconds }) => {
       const shardName = "agentic-agents-support-hosted-2";
-      let measuredSeconds = 100;
+      let directTimings: Readonly<Record<string, number>> = {};
       vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
-        (runner): Readonly<Record<string, number>> =>
-          runner === timingProfile ? { [shardName]: measuredSeconds } : {},
+        (runner): Readonly<Record<string, number>> => ({
+          "agentic-agents-support": runner === "blacksmith" ? 165 : 253,
+          ...(runner === timingProfile ? directTimings : {}),
+        }),
       );
       const options = {
         includeReleaseOnlyPluginShards: false,
         compactMode: "push" as const,
         runnerBackend: profile,
       };
+      const unmeasured = createNodeTestShardBundles(options);
+      const initialGroup = unmeasured
+        .flatMap((shard) => shard.groups)
+        .find((group) => group.shard_name === shardName);
+      expect(initialGroup?.timing_key).toMatch(
+        /^agentic-agents-support#selector-.+#generation-.+#part-2-of-2#include-.+$/u,
+      );
+      const timingKey = initialGroup!.timing_key!;
+      directTimings = { [timingKey]: 1 };
+      const belowFloor = createNodeTestShardBundles(options);
+      // Both larger samples exceed the parent share, so their delta measures
+      // direct timing precedence independently of the retained floor.
+      directTimings = { [timingKey]: 200 };
       const baseline = createNodeTestShardBundles(options);
-      measuredSeconds = 140;
+      directTimings = { [timingKey]: 240 };
       const updated = createNodeTestShardBundles(options);
       const totalSeconds = (plan: typeof baseline) =>
         plan.reduce((sum, shard) => sum + (shard.predictedSeconds ?? 0), 0);
@@ -489,8 +618,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           }))
           .toSorted((a, b) => a.name.localeCompare(b.name));
 
+      expect(totalSeconds(belowFloor)).toBe(totalSeconds(unmeasured));
       expect(totalSeconds(updated) - totalSeconds(baseline)).toBe(addedSeconds);
+      expect(testPartition(baseline)).toEqual(testPartition(unmeasured));
       expect(testPartition(updated)).toEqual(testPartition(baseline));
+      expect(
+        updated.flatMap((shard) => shard.groups).find((group) => group.shard_name === shardName)
+          ?.timing_key,
+      ).toBe(timingKey);
       expect(updated.every((shard) => shard.planConcurrency === 1)).toBe(true);
     },
   );
@@ -617,19 +752,26 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             includePatterns: ["src/cli/gateway-backed-exit.process.test.ts"],
           }),
         ]);
-        expect(cliProcessJobs.filter((shard) => shard.pretestBuildMode)).toEqual([
-          expect.objectContaining({
-            pretestBuildMode: "runtime",
-            groups: expect.arrayContaining([
+        const runtimeCliJobs = cliProcessJobs.filter((shard) => shard.pretestBuildMode);
+        expect(runtimeCliJobs).toHaveLength(2);
+        expect(runtimeCliJobs).toEqual(
+          expect.arrayContaining(
+            [
+              "src/cli/acp-cli-exit.process.test.ts",
+              "src/cli/update-dry-run-state.process.test.ts",
+            ].map((file) =>
               expect.objectContaining({
                 pretestBuildMode: "runtime",
-                includePatterns: expect.arrayContaining([
-                  "src/cli/update-dry-run-state.process.test.ts",
+                groups: expect.arrayContaining([
+                  expect.objectContaining({
+                    pretestBuildMode: "runtime",
+                    includePatterns: expect.arrayContaining([file]),
+                  }),
                 ]),
               }),
-            ]),
-          }),
-        ]);
+            ),
+          ),
+        );
         for (const shard of cliProcessJobs) {
           // The indivisible gateway file takes 200s. Hosted runtime preparation
           // alone costs 160s; other groups retain the 150s admission budget.
@@ -697,6 +839,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         shard.groups.some((group) => isExclusiveCompactShardName(group.shard_name)),
       ).length,
     ).toBeGreaterThan(0);
+    const hybridJobFor = (name: string) =>
+      hybridPullRequestCompact.find((shard) =>
+        shard.groups.some((group) => group.shard_name === name),
+      );
+    const hybridCliJob = hybridJobFor("agentic-cli");
+    const hybridToolingIsolatedJob = hybridJobFor("core-tooling-isolated");
+    expect(hybridCliJob).toBeDefined();
+    expect(hybridToolingIsolatedJob).toBeDefined();
+    expect(hybridToolingIsolatedJob?.checkName).not.toBe(hybridCliJob?.checkName);
     const expectedEmbeddedAgentGroupNames = [
       "agentic-agents-embedded-base-1",
       "agentic-agents-embedded-base-2",
@@ -2007,7 +2158,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
   });
 
-  it("keeps plugin prerelease npm install coverage on the release-only agentic plugin shard", () => {
+  it("keeps plugin prerelease npm install behavior on the release-only agentic plugin shard", () => {
     const pluginsShard = createNodeTestShards().find(
       (shard) => shard.shardName === "agentic-plugins",
     );
@@ -2021,9 +2172,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     });
     expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
       PLUGIN_PRERELEASE_NPM_SPEC_TEST,
-    );
-    expect(listMatchedTestFiles(createPluginsVitestConfig({}))).toContain(
-      PLUGIN_NPM_INSTALL_SECURITY_SCAN_TEST,
     );
   });
 

@@ -299,7 +299,10 @@ class ChatControllerTranscriptCacheTest {
               }
               """.trimIndent()
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -686,12 +689,18 @@ class ChatControllerTranscriptCacheTest {
           currentDefaultAgentRevision = { defaultAgentRevision },
         ) { method, params ->
           when (method) {
-            "sessions.list" -> """{"sessions":[{"key":"custom"}]}"""
+            "sessions.list" -> {
+              """{"sessions":[{"key":"custom"}]}"""
+            }
+
             "chat.history" -> {
               historyOwners += if (params.orEmpty().contains("\"agentId\":\"owner-a\"")) "owner-a" else "owner-b"
               """{"sessionId":"custom-id","messages":[]}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -729,13 +738,19 @@ class ChatControllerTranscriptCacheTest {
           currentDefaultAgentId = { defaultAgentId },
         ) { method, _ ->
           when (method) {
-            "sessions.list" -> """{"sessions":[{"key":"custom"}]}"""
+            "sessions.list" -> {
+              """{"sessions":[{"key":"custom"}]}"""
+            }
+
             "sessions.delete" -> {
               deleteStarted.complete(Unit)
               deleteGate.await()
               """{"deleted":true}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -890,10 +905,17 @@ class ChatControllerTranscriptCacheTest {
       val controller =
         createCachedController(cache) { method, _ ->
           when (method) {
-            "sessions.list" ->
+            "sessions.list" -> {
               """{"totalCount":2,"hasMore":true,"sessions":[{"key":"main","updatedAt":7}]}"""
-            "chat.history" -> """{"sessionId":"session-1","messages":[]}"""
-            else -> "{}"
+            }
+
+            "chat.history" -> {
+              """{"sessionId":"session-1","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -914,10 +936,17 @@ class ChatControllerTranscriptCacheTest {
       val controller =
         createCachedController(cache) { method, _ ->
           when (method) {
-            "sessions.list" ->
+            "sessions.list" -> {
               """{"totalCount":60,"hasMore":false,"sessions":[$sessions]}"""
-            "chat.history" -> """{"sessionId":"session-55","messages":[]}"""
-            else -> "{}"
+            }
+
+            "chat.history" -> {
+              """{"sessionId":"session-55","messages":[]}"""
+            }
+
+            else -> {
+              "{}"
+            }
           }
         }
 
@@ -1087,11 +1116,15 @@ class ChatControllerTranscriptCacheTest {
               requestedOwners += owner
               """{"sessionId":"$owner","messages":[{"role":"assistant","content":"$owner history"}]}"""
             }
+
             "sessions.list" -> {
               val owner = defaultAgentId ?: "unknown"
               """{"sessions":[{"key":"custom","displayName":"$owner title","updatedAt":1}]}"""
             }
-            else -> "{}"
+
+            else -> {
+              "{}"
+            }
           }
         }
 

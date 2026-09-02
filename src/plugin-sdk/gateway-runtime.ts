@@ -1,5 +1,4 @@
 // Public gateway/client helpers for plugins that talk to the host gateway surface.
-
 export { addGatewayClientOptions, callGatewayFromCli } from "../cli/gateway-rpc.js";
 export type { GatewayRpcOpts } from "../cli/gateway-rpc.js";
 export { isGatewayClientRequestError, isGatewayTransportError } from "../gateway/call.js";
