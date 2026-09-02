@@ -250,10 +250,8 @@ async function maybeRunGatewayCleanup(
   opts: SessionsCleanupOptions,
 ): Promise<{ delegated: true; result: SessionsCleanupResult } | { delegated: false }> {
   if (opts.store !== undefined || opts.dryRun) {
-    // Explicit store paths and dry-runs must stay local; the gateway only owns
-    // live in-process cleanup for default stores. A blank --store counts as
-    // explicit: delegating it would clean the default store the caller was
-    // trying to override, before local validation can reject it.
+    // Explicit store paths and dry-runs stay local; sessions.cleanup takes no store param.
+    // A blank --store is explicit too: delegating it would clean the default store.
     return { delegated: false };
   }
   try {

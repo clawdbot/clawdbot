@@ -117,6 +117,25 @@ describe("sessionsCleanupCommand", () => {
   ])(
     "keeps an %s explicit store local instead of delegating default cleanup to the gateway",
     async (_label, store) => {
+      // Resolve a full result so a regression that delegates fails on the
+      // gateway assertion below instead of throwing on the beforeEach null.
+      mocks.callGateway.mockResolvedValue({
+        agentId: "main",
+        storePath: "/gateway/sessions.json",
+        mode: "enforce",
+        dryRun: false,
+        beforeCount: 3,
+        afterCount: 1,
+        missing: 0,
+        dmScopeRetired: 0,
+        modelRunPruned: 0,
+        pruned: 2,
+        capped: 0,
+        diskBudget: null,
+        wouldMutate: true,
+        applied: true,
+        appliedCount: 1,
+      });
       const { runtime } = makeRuntime();
       await sessionsCleanupCommand({ store, enforce: true }, runtime);
 
