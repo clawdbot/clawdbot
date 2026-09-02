@@ -429,7 +429,26 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       });
       expect(headerMetrics.centerOffset).toBeLessThanOrEqual(1);
       expect(headerMetrics.iconWidth).toBeCloseTo(headerMetrics.textSize, 1);
-      expect(headerMetrics.refreshHeight).toBeLessThanOrEqual(20);
+      expect(headerMetrics.refreshHeight).toBe(28);
+
+      await page.setViewportSize({ width: 390, height: 844 });
+      const mobileMetrics = await providerSection.evaluate((section) => {
+        const header = section.querySelector<HTMLElement>(".settings-section__header");
+        const actions = section.querySelector<HTMLElement>(".settings-section__actions");
+        if (!header || !actions) {
+          throw new Error("expected configured-provider mobile header controls");
+        }
+        return {
+          actionsAlignSelf: getComputedStyle(actions).alignSelf,
+          flexDirection: getComputedStyle(header).flexDirection,
+          overflowsViewport: document.documentElement.scrollWidth > window.innerWidth,
+        };
+      });
+      expect(mobileMetrics).toEqual({
+        actionsAlignSelf: "flex-end",
+        flexDirection: "column",
+        overflowsViewport: false,
+      });
     } finally {
       await context.close();
     }

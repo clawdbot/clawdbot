@@ -240,21 +240,21 @@
 }
 
 .settings-section__actions .model-providers__refresh-button {
-  width: 20px;
-  min-width: 20px;
-  height: 20px;
-  padding: 0;
   font-size: var(--control-ui-text-xs);
 }
 
-.model-providers__refresh-button svg {
+.settings-section__actions .model-providers__refresh-button.btn--icon.btn--xs svg {
   width: 1em;
   height: 1em;
 }
 
-@media (min-width: 641px) {
+.settings-section__header:has(.model-providers__refresh-button) {
+  align-items: center;
+}
+
+@media (max-width: 640px) {
   .settings-section__header:has(.model-providers__refresh-button) {
-    align-items: center;
+    align-items: stretch;
   }
 }
 
