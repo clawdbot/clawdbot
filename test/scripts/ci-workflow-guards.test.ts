@@ -3802,8 +3802,9 @@ NODE
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("routes hybrid control jobs without changing hosted fallbacks", () => {
+  it("routes the gate like preflight while security keeps its hybrid-only Blacksmith route", () => {
     const workflow = readCiWorkflow();
+    expect(workflow.jobs["ci-gate"]["runs-on"]).toBe(workflow.jobs.preflight["runs-on"]);
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -3830,9 +3831,12 @@ NODE
         );
       }
       for (const runnerBackend of ["", "blacksmith"] as const) {
-        expect(evaluateWorkflowExpression(expression, { ...context, runnerBackend }), jobName).toBe(
-          jobName === "preflight" ? "blacksmith-4vcpu-ubuntu-2404" : "ubuntu-24.04",
-        );
+        for (const eventName of ["pull_request", "push"] as const) {
+          expect(
+            evaluateWorkflowExpression(expression, { ...context, eventName, runnerBackend }),
+            jobName,
+          ).toBe(jobName === "security-fast" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404");
+        }
       }
     }
   });
