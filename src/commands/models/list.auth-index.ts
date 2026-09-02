@@ -81,6 +81,8 @@ export function createModelListAuthIndex(
         metadataSnapshot: params.metadataSnapshot,
         provider,
         modelId: ref?.modelId,
+        preferredProfileId: ref?.preferredProfileId,
+        lockedProfileId: ref?.lockedProfileId,
       });
     },
   };

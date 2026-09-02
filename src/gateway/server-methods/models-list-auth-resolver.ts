@@ -118,6 +118,8 @@ function createModelsListEntryEvaluator(params: {
         metadataSnapshot: params.metadataSnapshot,
         provider: entry.provider,
         modelId: entry.id,
+        preferredProfileId,
+        lockedProfileId: params.lockedProfileId,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the

@@ -2,6 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  clearUserProfileAuthLink,
+  connectUserModelAccount,
+} from "../../state/user-model-accounts.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { loadDeferredCatalog } from "../server-model-catalog-auth.js";
+import {
+  buildModelsListResult,
+  createGatewayAgentModelCatalogProjector,
+} from "./models-list-result.js";
+import {
+  createModelsListTestContext,
   listModels,
   providerCatalogEntry,
 } from "./models-list-result.openai-routes.test-support.js";
@@ -168,4 +180,75 @@ describe("models.list CLI runtime availability", () => {
 
     expect(result.models[0]).toMatchObject({ available: false, unavailableReason: "missing-auth" });
   });
+
+  it.each([
+    { selection: "draft", expired: false },
+    { selection: "default", expired: false },
+    { selection: "draft", expired: true },
+    { selection: "default", expired: true },
+  ])(
+    "uses personal $selection auth instead of native login (expired=$expired)",
+    async ({ selection, expired }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "personal-cli-model-catalog-" },
+        async (state) => {
+          const owner = ensureProfileForEmail("alice@example.test");
+          const { authProfileId } = connectUserModelAccount({
+            ownerProfileId: owner.id,
+            credential: {
+              type: "token",
+              provider: "anthropic",
+              token: "synthetic-personal-token",
+              expires: Date.now() + (expired ? -60_000 : 600_000),
+            },
+            assertCurrent() {},
+          });
+          if (selection === "draft") {
+            clearUserProfileAuthLink({ profileId: owner.id, provider: "anthropic" });
+          }
+          const context = createModelsListTestContext({
+            cfg: config,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            catalog: [providerCatalogEntry("anthropic", "claude-opus-5")],
+            catalogComplete: true,
+            preparedAuthModes: expired ? { "claude-cli": "oauth" } : {},
+          });
+          const snapshot = await loadDeferredCatalog(context, "main", { readOnly: true });
+          const result = await buildModelsListResult({
+            context,
+            agentId: "main",
+            requesterProfileId: owner.id,
+            params: { view: "configured", preparedOnly: true },
+            preloadedCatalog: { agentId: "main", config, snapshot },
+            preloadedOnly: true,
+            catalogProjector: createGatewayAgentModelCatalogProjector({
+              cfg: config,
+              agentId: "main",
+              agentDir: state.agentDir(),
+              workspaceDir: state.workspaceDir,
+              snapshot,
+              metadataSnapshot: snapshot.metadataSnapshot,
+              preparedAuthStore: snapshot.authStore,
+              preparedRuntimeAuthModes: snapshot.authModes,
+              preparedSyntheticAuthComplete: snapshot.catalogComplete,
+              requesterProfileId: owner.id,
+              ...(selection === "draft"
+                ? { preferredProfileId: authProfileId, lockedProfileId: authProfileId }
+                : {}),
+            }),
+          });
+
+          const model = result.models.find(
+            (entry) => entry.provider === "anthropic" && entry.id === "claude-opus-5",
+          );
+          expect(model).toMatchObject({
+            agentRuntime: expect.objectContaining({ id: "claude-cli" }),
+            available: !expired,
+          });
+          expect(model?.unavailableReason).toBe(expired ? "auth-failed" : undefined);
+        },
+      );
+    },
+  );
 });
