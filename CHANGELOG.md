@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **Updater first-hop compatibility:** preserve the shipped legacy Node-runner imports needed by `v2026.8.2` and the exact d413 updater after package replacement, allowing the old updater to restore the managed Gateway service.
 - **Update readiness:** select declared health-check owners before loading plugin APIs, preventing unrelated optional Doctor checks from interrupting upgrades while retaining mandatory readiness failures.
 
 - **Apple chat:** make queued messages immediately retryable after session-settings failures, while keeping retries bound to the exact failed attempt.
