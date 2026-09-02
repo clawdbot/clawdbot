@@ -61,6 +61,15 @@ export type TranscriptArchiveWorkerMessage = {
 
 export const MAX_MATERIALIZED_ARCHIVE_BATCH_BYTES = 256 * 1024 * 1024;
 
+const MAX_ARCHIVE_SESSION_ID_BYTES = 96;
+
+function resolveArchiveSessionIdComponent(sessionId: string): string {
+  if (Buffer.byteLength(sessionId, "utf8") <= MAX_ARCHIVE_SESSION_ID_BYTES) {
+    return sessionId;
+  }
+  return `session-${createHash("sha256").update(sessionId).digest("hex").slice(0, 32)}`;
+}
+
 export type TranscriptArchivePublishPlan = {
   agentId: string;
   archiveDirectory: string;
@@ -92,7 +101,7 @@ function resolveSqliteTranscriptArchivePath(params: {
   const generationSuffix = params.generation ? `.${params.generation}` : "";
   const archivePath = path.resolve(
     archiveDirectory,
-    `${params.sessionId}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
+    `${resolveArchiveSessionIdComponent(params.sessionId)}.jsonl.${params.reason}.${formatSessionArchiveTimestamp(params.nowMs)}${generationSuffix}`,
   );
   if (path.dirname(archivePath) !== archiveDirectory) {
     throw new Error(`Cannot archive SQLite transcript outside ${archiveDirectory}`);

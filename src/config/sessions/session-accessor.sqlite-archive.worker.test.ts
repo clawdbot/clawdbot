@@ -22,7 +22,10 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "./session-accessor.js";
-import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-archive.js";
+import {
+  materializeSessionStateDeletePlans,
+  publishEncodedSessionTranscriptArchive,
+} from "./session-accessor.sqlite-archive.js";
 import {
   deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
@@ -58,6 +61,32 @@ describe("SQLite transcript archive worker", () => {
     });
     closeOpenClawAgentDatabasesForTest();
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("bounds archive filenames for oversized session IDs", async () => {
+    const sessionId = `oversized-${"x".repeat(300)}`;
+    const sessionKey = "agent:main:oversized-archive-session";
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: Date.now() });
+    await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [
+      createTranscriptEvent("oversized-event", "archive me"),
+    ]);
+
+    const database = openLifecycleTestDatabase(storePath);
+    const plan = planArchiveWorker(database, path.dirname(storePath), sessionId);
+    const materialized = await materializeSessionStateDeletePlans([plan]);
+    const archive = materialized[0]?.archive;
+    expect(archive).toBeTruthy();
+
+    const archivedPath = publishEncodedSessionTranscriptArchive({
+      archiveDirectory: plan.archiveDirectory,
+      archiveName: archive?.archiveName ?? "",
+      bytes: archive?.bytes ?? new Uint8Array(),
+      sha256: archive?.sha256 ?? "",
+    });
+
+    expect(Buffer.byteLength(path.basename(archivedPath), "utf8")).toBeLessThan(256);
+    expect(path.basename(archivedPath)).toMatch(/^session-[a-f0-9]{32}\.jsonl\.deleted\./);
+    expect(readSessionArchiveContentSync(archivedPath)).toContain("oversized-event");
   });
 
   it("keeps the event loop responsive while a transcript archive is built", async () => {
