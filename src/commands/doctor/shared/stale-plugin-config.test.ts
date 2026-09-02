@@ -112,12 +112,13 @@ describe("doctor stale plugin config helpers", () => {
         entries: {
           "explicitly-disabled": { enabled: false },
           "disabled-with-settings": { enabled: false, config: { stale: true } },
+          "google-antigravity-auth": { enabled: false },
         },
       },
     } as OpenClawConfig);
 
     expect(result.changes).toEqual([
-      "- plugins.entries: removed 1 stale plugin entry (disabled-with-settings)",
+      "- plugins.entries: removed 2 stale plugin entries (disabled-with-settings, google-antigravity-auth)",
     ]);
     expect(result.config.plugins?.entries).toEqual({
       "explicitly-disabled": { enabled: false },

@@ -4,7 +4,11 @@ import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { resolveAgentWorkspaceDir, tryResolveDefaultAgentId } from "../../../agents/agent-scope.js";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { isExplicitPluginDisableMarker, normalizePluginId } from "../../../plugins/config-state.js";
+import {
+  isExplicitPluginDisableMarker,
+  isRetiredPluginId,
+  normalizePluginId,
+} from "../../../plugins/config-state.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-records.js";
 import { loadManifestMetadataSnapshot } from "../../../plugins/manifest-contract-eligibility.js";
 import {
@@ -149,7 +153,7 @@ function scanStalePluginConfigWithState(
       const pluginId = normalizePluginId(rawPluginId);
       if (
         !pluginId ||
-        isExplicitPluginDisableMarker(entry) ||
+        (isExplicitPluginDisableMarker(entry) && !isRetiredPluginId(pluginId)) ||
         knownIds.has(pluginId) ||
         officialLookupIds.has(pluginId) ||
         registryState.knownChannelIds.has(pluginId)
