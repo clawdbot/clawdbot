@@ -72,6 +72,7 @@ export interface SessionListHost {
     | "retryChildSessions"
     | "sessionCatalogRefreshStatus"
     | "sessionMutationError"
+    | "visibleSessionLimits"
   >;
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;

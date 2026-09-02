@@ -213,13 +213,6 @@ export function emitSuccessfulPluginInstallSecurityEvent(
   });
 }
 
-export function hasPackageRuntimeDependencies(manifest: PackageManifest): boolean {
-  return (
-    Object.keys(manifest.dependencies ?? {}).length > 0 ||
-    Object.keys(manifest.optionalDependencies ?? {}).length > 0
-  );
-}
-
 function buildBlockedInstallResult(params: {
   blocked: NonNullable<NonNullable<InstallSecurityScanResult>["blocked"]>;
 }): Extract<InstallPluginResult, { ok: false }> {

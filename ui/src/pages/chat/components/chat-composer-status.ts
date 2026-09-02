@@ -36,32 +36,32 @@ export function renderCompactionIndicator(status: CompactionStatus | null | unde
   if (!status) {
     return nothing;
   }
-  if (status.phase === "active" || status.phase === "retrying") {
-    return html`
-      <div
-        class="compaction-indicator compaction-indicator--active"
-        role="status"
-        aria-live="polite"
-      >
-        ${icons.loader} ${t("chat.composer.compactingContext")}
-      </div>
-    `;
+  const active = status.phase === "active" || status.phase === "retrying";
+  if (
+    !active &&
+    (!status.completedAt || Date.now() - status.completedAt >= COMPACTION_TOAST_DURATION_MS)
+  ) {
+    return nothing;
   }
-  if (status.completedAt) {
-    const elapsed = Date.now() - status.completedAt;
-    if (elapsed < COMPACTION_TOAST_DURATION_MS) {
-      return html`
-        <div
-          class="compaction-indicator compaction-indicator--complete"
-          role="status"
-          aria-live="polite"
-        >
-          ${icons.check} ${t("chat.composer.contextCompacted")}
-        </div>
-      `;
-    }
-  }
-  return nothing;
+  return html`
+    <div
+      class="compaction-indicator compaction-indicator--${active ? "active" : "complete"}"
+      role="status"
+      aria-live="polite"
+    >
+      <span class="compaction-indicator__glyph" aria-hidden="true">
+        <span class="compaction-indicator__line"></span>
+        <span class="compaction-indicator__line"></span>
+        <span class="compaction-indicator__line"></span>
+        <span class="compaction-indicator__line"></span>
+        <span class="compaction-indicator__line"></span>
+        ${icons.check}
+      </span>
+      <span class="compaction-indicator__label">
+        ${t(active ? "chat.composer.compactingContext" : "chat.composer.contextCompacted")}
+      </span>
+    </div>
+  `;
 }
 
 export function renderFallbackIndicator(status: FallbackStatus | null | undefined) {

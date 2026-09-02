@@ -126,26 +126,35 @@ describe("ManagedWorktreeService capacity", () => {
     expect(await git(repo, "branch", "--list", "openclaw/unknown-space")).toBe("");
   });
 
-  it.each(["create", "restore"])("allows %s above thirty live worktrees", async (operation) => {
-    const snapshot = await service.create({ repoRoot: repo, name: "archived", baseRef: "HEAD" });
-    await service.remove({ id: snapshot.id, reason: "archive" });
-    await fill(30);
-
-    const created =
-      operation === "restore"
-        ? await service.restore({ id: snapshot.id })
-        : await service.create({ repoRoot: repo, name: "next", baseRef: "HEAD" });
-
-    expect(
-      service.listRegistryRecords().filter((record) => record.removedAt === undefined),
-    ).toHaveLength(31);
+  it("creates beyond 100 live checkouts without removing prior worktrees", async () => {
+    await fill(100);
+    const before = service.listRegistryRecords();
+    const created = await service.create({
+      repoRoot: repo,
+      name: "beyond-target",
+      baseRef: "HEAD",
+    });
+    expect(service.listRegistryRecords()).toHaveLength(101);
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    for (const record of before) {
+      expect(getRegistryWorktree(env, record.id)).toEqual(record);
+      expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+    }
   });
 
-  it("serializes distinct repositories competing for the hundredth checkout", async () => {
-    await fill(99);
+  it("serializes distinct repositories competing for disk headroom", async () => {
     const otherRepo = await initializeRepository(path.join(root, "other"));
     const otherService = new ManagedWorktreeService({ env });
+    const realRun = commandExec.runCommandWithTimeout;
+    vi.spyOn(commandExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      const result = await realRun(argv, options);
+      if (argv[0] === "git" && argv[3] === "worktree" && argv[4] === "add") {
+        // The first checkout still passes its postchecks, but a second checkout
+        // cannot fit its estimate. Without the shared lease both adds can start.
+        availableBytes = 16 * GiB;
+      }
+      return result;
+    });
     const outcomes = await Promise.allSettled([
       service.create({ repoRoot: repo, name: "last-one", baseRef: "HEAD" }),
       otherService.create({ repoRoot: otherRepo, name: "last-two", baseRef: "HEAD" }),
@@ -154,22 +163,20 @@ describe("ManagedWorktreeService capacity", () => {
     expect(outcomes.filter((result) => result.status === "rejected")).toEqual([
       expect.objectContaining({
         reason: expect.objectContaining({
-          message: expect.stringMatching(/100.*archive|100.*remove/i),
+          message: expect.stringMatching(/disk space/i),
         }),
       }),
     ]);
     expect(
       service.listRegistryRecords().filter((record) => record.removedAt === undefined),
-    ).toHaveLength(100);
-    expect(
-      await fs.readFile(
-        path.join(stateDir, "worktrees", "downstream-fixture", "kept-0", "README.md"),
-        "utf8",
-      ),
-    ).toBe("base\n");
+    ).toHaveLength(1);
+    const created = service.listRegistryRecords()[0]!;
+    expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
+    const rejectedRepo = created.repoRoot === repo ? otherRepo : repo;
+    expect(await git(rejectedRepo, "branch", "--list", "openclaw/*")).toBe("");
   });
 
-  it("reuses a valid owned checkout even at capacity and below the reserve", async () => {
+  it("reuses a valid owned checkout at the cleanup target and below the reserve", async () => {
     const params = {
       repoRoot: repo,
       name: "owned",
@@ -184,23 +191,44 @@ describe("ManagedWorktreeService capacity", () => {
     expect(service.listRegistryRecords()).toHaveLength(100);
   });
 
-  it.each(["space", "count"])(
-    "preserves a removed snapshot when restore lacks %s",
-    async (reason) => {
+  it.each(["sufficient", "insufficient"])(
+    "restores beyond 100 live checkouts only with %s disk space",
+    async (space) => {
       const created = await service.create({ repoRoot: repo, name: "restore", baseRef: "HEAD" });
+      await fs.writeFile(path.join(created.path, "README.md"), "dirty tracked file\n");
       await fs.writeFile(path.join(created.path, "uncommitted.txt"), "keep me\n");
       await service.remove({ id: created.id, reason: "archive" });
       const before = getRegistryWorktree(env, created.id);
-      if (reason === "count") {
-        await fill(100);
+      await fill(100);
+      const kept = service.listRegistryRecords().filter((record) => record.id !== created.id);
+      if (space === "sufficient") {
+        const restored = await service.restore({ id: created.id });
+        expect(restored).toMatchObject({
+          id: created.id,
+          path: created.path,
+          branch: created.branch,
+        });
+        expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+        expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+          "dirty tracked file\n",
+        );
+        expect(await fs.readFile(path.join(restored.path, "uncommitted.txt"), "utf8")).toBe(
+          "keep me\n",
+        );
+        expect(await git(restored.path, "status", "--porcelain")).toContain("M README.md");
+        expect(await git(restored.path, "rev-parse", "HEAD")).toBe(
+          await git(repo, "rev-parse", "HEAD"),
+        );
       } else {
         availableBytes = GiB;
+        await expect(service.restore({ id: created.id })).rejects.toThrow(/disk space/i);
+        expect(getRegistryWorktree(env, created.id)).toEqual(before);
+        await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
       }
-      await expect(service.restore({ id: created.id })).rejects.toThrow(
-        reason === "count" ? /100/ : /disk space/i,
-      );
-      expect(getRegistryWorktree(env, created.id)).toEqual(before);
-      await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+      for (const record of kept) {
+        expect(getRegistryWorktree(env, record.id)).toEqual(record);
+        expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("base\n");
+      }
       expect(await git(repo, "show", `${before!.snapshotRef}:uncommitted.txt`)).toBe("keep me");
     },
   );

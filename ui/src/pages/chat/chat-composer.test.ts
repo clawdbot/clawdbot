@@ -174,9 +174,7 @@ describe("renderChatComposer controls", () => {
     const { container } = renderComposer();
     const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
 
-    expect(textarea?.getAttribute("aria-label")).toBe(
-      t("chat.composer.placeholder", { name: "OpenClaw" }),
-    );
+    expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
   });
 
   it("clears a whitespace-only draft on blur so the native placeholder returns", () => {

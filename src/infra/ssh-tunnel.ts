@@ -6,6 +6,7 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { createAbortError, isAbortError, racePromiseWithAbortSignal } from "./abort-signal.js";
 import { sleepWithAbort } from "./backoff.js";
 import { formatErrorMessage, isErrno } from "./errors.js";
+import { tryListenOnPort } from "./ports-probe.js";
 import { ensurePortAvailable, PortInUseError } from "./ports.js";
 import { resolveSshClient } from "./ssh-client.js";
 
@@ -95,23 +96,6 @@ export function parseSshTarget(raw: string): SshParsedTarget | null {
   return { user: userPart, host: hostPart, port: 22 };
 }
 
-async function pickEphemeralPort(): Promise<number> {
-  return await new Promise<number>((resolve, reject) => {
-    const server = net.createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const addr = server.address();
-      server.close(() => {
-        if (!addr || typeof addr === "string") {
-          reject(new Error("failed to allocate a local port"));
-          return;
-        }
-        resolve(addr.port);
-      });
-    });
-  });
-}
-
 async function canConnectLocal(port: number, signal: AbortSignal): Promise<boolean> {
   signal.throwIfAborted();
   return await new Promise<boolean>((resolve) => {
@@ -171,7 +155,7 @@ export async function startSshPortForward(opts: {
     await ensurePortAvailable(localPort, "127.0.0.1");
   } catch (err) {
     if (err instanceof PortInUseError || (isErrno(err) && err.code === "EADDRINUSE")) {
-      localPort = await pickEphemeralPort();
+      localPort = await tryListenOnPort({ port: 0, host: "127.0.0.1" });
     } else {
       throw err;
     }

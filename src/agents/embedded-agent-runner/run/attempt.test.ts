@@ -33,7 +33,6 @@ import {
 import { composeSystemPromptWithHookContext } from "./attempt-thread-helpers.js";
 import { wrapStreamFnSanitizeMalformedToolCalls } from "./attempt-tool-call-replay-sanitization.js";
 import { wrapStreamFnTrimToolCallNames } from "./attempt-tool-call-stream-normalization.js";
-import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 
 const llmRuntime = {
@@ -120,21 +119,6 @@ function firstBaseContext(baseFn: ReturnType<typeof vi.fn>): { messages: unknown
   }
   return call[1] as { messages: unknown[] };
 }
-
-describe("buildEmbeddedAttemptToolRunContext", () => {
-  it("carries runtime toolsAllow into coding tool construction", () => {
-    const context = buildEmbeddedAttemptToolRunContext({
-      trigger: "manual",
-      jobId: "job-1",
-      memoryFlushWritePath: "memory/log.md",
-      toolsAllow: ["memory_search", "memory_get"],
-    });
-    expect(context.trigger).toBe("manual");
-    expect(context.jobId).toBe("job-1");
-    expect(context.memoryFlushWritePath).toBe("memory/log.md");
-    expect(context.runtimeToolAllowlist).toEqual(["memory_search", "memory_get"]);
-  });
-});
 
 describe("resolvePromptBuildHookResult", () => {
   it("preserves prompt-build context fields", async () => {

@@ -1175,6 +1175,10 @@ returned unsubscribe function and call it during service cleanup. The payload is
 change notice; use `api.runtime.agent.session.getSessionEntry(...)` when the plugin needs the full
 current session entry.
 
+OpenClaw calls a service's `stop()` at most once per startup attempt, including when a replacement
+times out before startup fails. Failed-start rollback and shutdown share the same cleanup result;
+a cleanup failure is recorded rather than retried within that attempt.
+
 Service startup failures from a returned or awaited promise are recorded automatically. A service
 that intentionally starts required work in the background must report later failure and recovery
 through its generation-bound health reporter:

@@ -18,6 +18,23 @@ The full chat window is a native split view:
 
 The anchored compact chat panel from the menu bar keeps the compact single-column layout with the same model, thinking, verbosity, and Fast controls inline, plus starter prompts, Talk Mode, voice notes, and Listen. Assistant reasoning and tool activity remain hidden in this compact surface.
 
+## Diagrams
+
+Completed fenced blocks labeled `mermaid` render as diagrams in native chat,
+including Quick Chat. Rendering runs locally using bundled assets. A fence is
+complete when its closing delimiter arrives or the response finishes; incomplete
+streaming fences remain code.
+
+Use the small options button at the top right to view or copy the source and
+expand the diagram. The copy button also appears on hover or keyboard focus.
+Click the diagram to open its vector preview, where you can zoom and pan. Close
+the preview with its close button or Escape. In Quick Chat, closing the preview
+returns to the reply; clicking outside both the bar and its preview dismisses
+Quick Chat.
+
+Invalid or oversized diagrams keep their source readable. Temporary rendering
+failures offer **Retry diagram** in the options menu.
+
 ## Session colors
 
 Right-click a session in the sidebar, or open its menu-bar session submenu, and choose **Color**. Select red, blue, green, yellow, purple, orange, pink, or cyan. **Default** clears the color.
@@ -107,7 +124,7 @@ Disable the feature entirely with **Settings → General → Quick Chat**; the s
 - Session groups: `sessions.groups.list`, `sessions.groups.put`, `sessions.groups.rename`, and `sessions.groups.delete` own the path-free group catalog. Write-scoped `sessions.groups.defaults` and `sessions.groups.update` own optional New Session folder/worktree defaults. Membership is the session `category` updated through `sessions.patch` or assigned during `sessions.create`.
 - Unread state: after a session activates and its live history loads successfully, the app clears the unread state it observed. A manual unread marker created while that session is already open remains through refreshes and run completion; leave and reopen the session, or mark it read explicitly, to clear it. Failed history loads do not clear unread state, and a transient patch failure retries on the next activation. During staggered upgrades, an older active app can still send a bare read acknowledgement that clears the marker. Cross-client protection therefore requires every active app to support the acknowledgement contract; update all connected clients before relying on the reminder.
 - Onboarding uses a dedicated session to keep first-run setup separate.
-- Offline cache: the app keeps a small read-only cache of recent chat sessions and transcripts per gateway (`~/Library/Application Support/OpenClaw/chat-cache.sqlite`): cold opens paint the last known transcript immediately and refresh once the Gateway responds, and recent chats stay browsable while disconnected (sending stays disabled until the connection is back).
+- Offline storage: recent sessions and transcripts are cached per Gateway in `~/Library/Application Support/OpenClaw/databases/gateway-cache.sqlite`. Client-owned pending commands and routing state live separately in `client-state.sqlite` in the same directory. Cold opens paint cached transcripts before the connection is ready and refresh once the Gateway responds.
 
 ## Security surface
 

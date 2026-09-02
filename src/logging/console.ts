@@ -183,27 +183,27 @@ function writeFormattedConsoleOutput(params: {
   traceWrite: (...args: unknown[]) => void;
   caller?: (...args: unknown[]) => void;
 }) {
-  const trimmed = stripAnsi(params.formatted).trimStart();
   const consoleStyle = getConsoleSettings().style;
-  const shouldPrefixTimestamp =
-    consoleStyle !== "json" &&
-    loggingState.consoleTimestampPrefix &&
-    trimmed.length > 0 &&
-    !hasTimestampPrefix(trimmed);
-  const timestamp = shouldPrefixTimestamp ? formatConsoleTimestamp(consoleStyle) : "";
-  const jsonMessage = consoleStyle === "json" ? stripAnsi(params.formatted) : "";
+  const trimmed =
+    consoleStyle !== "json" && loggingState.consoleTimestampPrefix
+      ? stripAnsi(params.formatted).trimStart()
+      : "";
+  const timestamp =
+    trimmed && !hasTimestampPrefix(trimmed) ? formatConsoleTimestamp(consoleStyle) : "";
   const jsonMeta =
     consoleStyle === "json" && params.level === "trace" && params.caller
       ? { stack: stripAnsi(captureConsoleTraceStack(params.formatted, params.caller)) }
       : undefined;
   try {
-    const redacted = redactSensitiveText(params.formatted);
-    const line =
+    const rendered =
       consoleStyle === "json"
-        ? formatJsonConsoleLine({ level: params.level, message: jsonMessage, meta: jsonMeta })
-        : timestamp
-          ? `${timestamp} ${redacted}`
-          : redacted;
+        ? formatJsonConsoleLine({
+            level: params.level,
+            message: stripAnsi(params.formatted),
+            meta: jsonMeta,
+          })
+        : redactSensitiveText(params.formatted);
+    const line = timestamp ? `${timestamp} ${rendered}` : rendered;
     if (loggingState.forceConsoleToStderr) {
       process.stderr.write(`${line}\n`);
     } else if (consoleStyle === "json") {
@@ -292,7 +292,10 @@ export function enableConsoleCapture(): void {
     error: original.error,
   };
 
-  const forward = (level: LogLevel, orig: (...args: unknown[]) => void) => {
+  const forward = (
+    level: Exclude<LogLevel, "fatal" | "silent">,
+    orig: (...args: unknown[]) => void,
+  ) => {
     const forwardedConsoleCall = (...args: unknown[]) => {
       const formatted = util.format(...args);
       let routedLevel = level;
@@ -313,21 +316,7 @@ export function enableConsoleCapture(): void {
         return;
       }
       try {
-        const resolvedLogger = getLogger();
-        // Map console levels to file logger
-        if (routedLevel === "trace") {
-          resolvedLogger.trace(formatted);
-        } else if (routedLevel === "debug") {
-          resolvedLogger.debug(formatted);
-        } else if (routedLevel === "info") {
-          resolvedLogger.info(formatted);
-        } else if (routedLevel === "warn") {
-          resolvedLogger.warn(formatted);
-        } else if (routedLevel === "error" || routedLevel === "fatal") {
-          resolvedLogger.error(formatted);
-        } else {
-          resolvedLogger.info(formatted);
-        }
+        getLogger()[routedLevel](formatted);
       } catch {
         // never block console output on logging failures
       }

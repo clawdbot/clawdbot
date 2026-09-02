@@ -322,10 +322,10 @@ export async function closeQaHttpServer(server: Server, state?: QaBusState): Pro
       server.close((error) => (error ? reject(error) : resolve()));
       state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
+      // Awaited shutdown must keep its deadline alive even when paused sockets cannot wake Node.
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
       }, 250);
-      forceCloseTimer.unref();
     });
   } finally {
     if (forceCloseTimer) {

@@ -1,3 +1,4 @@
+import { listNodes, resolveNodeIdFromList } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   pinExecToolTarget,
   type CodexScheduledToolProjectionFactory,
@@ -26,11 +27,32 @@ export function isCodexDynamicToolExcluded(
   );
 }
 
-export function createNodeExecAliasDynamicTool(
+export async function createNodeExecAliasDynamicTool(
   execTool: OpenClawDynamicTool,
   node?: string,
-): OpenClawDynamicTool {
+  discoverySignal?: AbortSignal,
+): Promise<OpenClawDynamicTool | undefined> {
   const pinnedNode = node?.trim();
+  try {
+    const nodes = await listNodes({}, discoverySignal);
+    // Resolve bindings before filtering: an unavailable or ambiguous target must
+    // never redirect execution to another device that happens to support shell.
+    const nodeId = pinnedNode ? resolveNodeIdFromList(nodes, pinnedNode) : undefined;
+    if (
+      !nodes.some(
+        (candidate) =>
+          (!nodeId || candidate.nodeId === nodeId) &&
+          candidate.connected === true &&
+          candidate.commands?.includes("system.run") === true,
+      )
+    ) {
+      return undefined;
+    }
+  } catch {
+    discoverySignal?.throwIfAborted();
+    // Discovery failure hides the optional remote shell, not the working local shell.
+    return undefined;
+  }
   const pinnedTool = pinExecToolTarget(execTool, {
     host: "node",
     ...(pinnedNode ? { node: pinnedNode } : {}),

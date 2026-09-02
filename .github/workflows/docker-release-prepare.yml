@@ -164,6 +164,10 @@ jobs:
           done
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        with:
+          # Hosted VMs own local builder teardown; deleting its large volume here
+          # delays the dependent seal job after artifact uploads have finished.
+          cleanup: false
       - name: Prepare OCI output directory
         run: mkdir -p "${RUNNER_TEMP}/docker-release/oci"
       # Both variants reuse this builder's local cache. Fresh provenance timestamps

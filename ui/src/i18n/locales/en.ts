@@ -5989,6 +5989,7 @@ export const en: TranslationMap & {
       badge: "Expired",
     },
     composer: {
+      composerInput: "Chat composer",
       placeholder: "Message {name}",
       emptyHint: "Write a message to send.",
       placeholderWithAttachments: "Add a message or paste more images...",
