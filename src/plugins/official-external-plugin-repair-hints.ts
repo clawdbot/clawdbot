@@ -4,11 +4,13 @@ import { resolveConfiguredChannelPresencePolicy } from "./channel-plugin-ids.js"
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import {
   getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
   isExternallyDistributedPlugin,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstallSources,
   resolveOfficialExternalPluginLabel,
+  type OfficialExternalPluginCatalogEntry,
 } from "./official-external-plugin-catalog.js";
 
 /** Repair hint for installing an official external plugin that owns a missing surface. */
@@ -53,10 +55,16 @@ export function resolveExternalPluginRuntimeDependencyRepairHint(candidate: {
   if (!isExternallyDistributedPlugin(candidate)) {
     return undefined;
   }
-  const hint = resolveOfficialExternalPluginRepairHint(candidate.pluginId);
+  // Only the official package that owns this canonical id earns its install command; a foreign
+  // package reusing the id must not be told to install the official one over itself.
+  const entry = getOfficialExternalPluginCatalogEntryForPackage(candidate.packageName);
+  const hint =
+    entry && resolveOfficialExternalPluginId(entry) === candidate.pluginId
+      ? buildOfficialExternalPluginRepairHint(entry, candidate.pluginId)
+      : null;
   return hint
     ? `runtime dependencies are missing for externally distributed plugin ${hint.label}; ${hint.repairHint}`
-    : undefined;
+    : `runtime dependencies are missing for externally distributed plugin ${candidate.pluginId}; reinstall or update the plugin package, then restart the Gateway.`;
 }
 
 /** Resolves install/doctor commands for an official external plugin or channel id. */
@@ -64,9 +72,13 @@ export function resolveOfficialExternalPluginRepairHint(
   pluginIdOrChannelId: string,
 ): OfficialExternalPluginRepairHint | null {
   const entry = getOfficialExternalPluginCatalogEntry(pluginIdOrChannelId);
-  if (!entry) {
-    return null;
-  }
+  return entry ? buildOfficialExternalPluginRepairHint(entry, pluginIdOrChannelId) : null;
+}
+
+function buildOfficialExternalPluginRepairHint(
+  entry: OfficialExternalPluginCatalogEntry,
+  pluginIdOrChannelId: string,
+): OfficialExternalPluginRepairHint | null {
   const installSpec = resolveOfficialExternalPluginInstallSources(entry)[0]?.spec;
   if (!installSpec) {
     return null;
