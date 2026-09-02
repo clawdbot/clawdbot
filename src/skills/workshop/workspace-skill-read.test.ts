@@ -6,6 +6,7 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { proposeUpdateSkill } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import {
   listWritableWorkshopSkillSummaries,
@@ -37,6 +38,37 @@ async function writeSkill(dir: string, name: string, body = ""): Promise<void> {
 }
 
 describe("listWritableWorkshopSkillSummaries", () => {
+  it("uses the declared name for grouped skills when reading and updating", async () => {
+    const baseDir = path.join(resolveWorkshopSkillsDir(testState.env), "group", "folder-name");
+    await writeSkill(baseDir, "declared-name");
+
+    expect(listWritableWorkshopSkillSummaries({ env: testState.env })).toEqual([
+      expect.objectContaining({ name: "declared-name", baseDir }),
+    ]);
+    await expect(
+      readWritableWorkshopSkill("declared-name", { env: testState.env }),
+    ).resolves.toMatchObject({
+      skillKey: "declared-name",
+      baseDir,
+    });
+    await expect(
+      proposeUpdateSkill({
+        workspaceDir: await tempDirs.make("openclaw-workshop-declared-name-workspace-"),
+        env: testState.env,
+        skillName: "declared-name",
+        content: "# Updated\n",
+      }),
+    ).resolves.toMatchObject({
+      record: {
+        target: {
+          skillKey: "declared-name",
+          skillDir: baseDir,
+          skillFile: path.join(baseDir, "SKILL.md"),
+        },
+      },
+    });
+  });
+
   it("applies the configured per-source count and file-size limits", async () => {
     const workshopDir = resolveWorkshopSkillsDir(testState.env);
     for (const name of ["alpha", "beta", "gamma"]) {

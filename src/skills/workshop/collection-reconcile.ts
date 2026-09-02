@@ -298,7 +298,11 @@ export async function restoreLatestSkillCollectionBackup(params: {
         throw new Error("No skill collection backup is available.");
       }
       const backupDir = path.join(backupRoot, backupId);
-      const manifest = await readCollectionBackupManifest({ backupDir, backupId });
+      const manifest = await readCollectionBackupManifest({
+        backupDir,
+        backupId,
+        skillsRoot,
+      });
       // Restoring over user edits made since the cleanup would silently lose them.
       await assertCollectionResultUnchanged(skillsRoot, manifest);
       const affectedDirs = [...new Set([...manifest.skillDirs, ...manifest.resultSkillDirs])];

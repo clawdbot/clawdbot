@@ -42,7 +42,7 @@ identity and revision rather than discovered by scanning every user's files.
 | 2           | Project agent skills   | `<workspace>/.agents/skills`             |
 | 3           | Personal agent skills  | `~/.agents/skills` (default state only)  |
 | 4           | Managed / local skills | `<state-dir>/skills`                     |
-| 5           | Workshop skills        | `<state-dir>/workshop-skills`            |
+| 5           | Workshop skills        | `<config-dir>/workshop-skills`           |
 | 6           | Bundled skills         | shipped with the install                 |
 | 6           | Custodian skills       | shipped; configured Custodian agent only |
 | 7 — lowest  | Extra directories      | `skills.load.extraDirs` + plugin skills  |
@@ -89,14 +89,14 @@ files. See [Nodes](/nodes#node-hosted-skills) for pairing and off-switches.
 In multi-agent setups, each agent has its own workspace. Use the path that
 matches your desired visibility:
 
-| Scope          | Path                          | Visible to                     |
-| -------------- | ----------------------------- | ------------------------------ |
-| Per-agent      | `<workspace>/skills`          | Only that agent                |
-| Project-agent  | `<workspace>/.agents/skills`  | Only that workspace's agent    |
-| Personal-agent | `~/.agents/skills`            | Agents using the default state |
-| Shared managed | `<state-dir>/skills`          | All agents using that state    |
-| Workshop       | `<state-dir>/workshop-skills` | All agents using that state    |
-| Extra dirs     | `skills.load.extraDirs`       | All agents using that config   |
+| Scope          | Path                           | Visible to                     |
+| -------------- | ------------------------------ | ------------------------------ |
+| Per-agent      | `<workspace>/skills`           | Only that agent                |
+| Project-agent  | `<workspace>/.agents/skills`   | Only that workspace's agent    |
+| Personal-agent | `~/.agents/skills`             | Agents using the default state |
+| Shared managed | `<state-dir>/skills`           | All agents using that state    |
+| Workshop       | `<config-dir>/workshop-skills` | All agents using that state    |
+| Extra dirs     | `skills.load.extraDirs`        | All agents using that config   |
 
 When `OPENCLAW_STATE_DIR` points somewhere other than the default
 `~/.openclaw`, session skill indexes exclude home-scoped personal or
@@ -271,7 +271,7 @@ skill from model-initiated selection.
 ## Skill Workshop
 
 [Skill Workshop](/tools/skill-workshop) is a proposal queue between the agent
-and its global `<state-dir>/workshop-skills` directory. When the agent spots
+and its global `<config-dir>/workshop-skills` directory. When the agent spots
 reusable work, it drafts a proposal instead of writing directly to `SKILL.md`.
 Operators edit skills outside that directory through their owning tools or
 files.
@@ -314,7 +314,7 @@ publish and sync.
     allowlists narrow it.
 
     Skill Workshop does not install into either location. Generated skills live
-    in `<state-dir>/workshop-skills`.
+    in `<config-dir>/workshop-skills`.
 
     Git and local installs expect `SKILL.md` at the source root. The slug comes
     from `SKILL.md` frontmatter `name` when valid, then falls back to the
@@ -360,7 +360,7 @@ publish and sync.
     roots whose resolved realpath stays inside the configured root, unless
     `skills.load.allowSymlinkTargets` explicitly trusts a target root.
     Skill Workshop rejects symlinked skills that resolve outside
-    `<state-dir>/workshop-skills`.
+    `<config-dir>/workshop-skills`.
     Managed `~/.openclaw/skills` and personal `~/.agents/skills` may contain
     symlinked skill folders, but every `SKILL.md` realpath must still stay
     inside its resolved skill directory.

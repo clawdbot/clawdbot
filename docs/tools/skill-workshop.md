@@ -14,12 +14,16 @@ generated skills. Through this path, agents and operators create a **proposal** 
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
-Skill Workshop writes only under `<state-dir>/workshop-skills`. Operators edit
+Skill Workshop writes only under `<config-dir>/workshop-skills`. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
 also supports [personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
 when the Gateway supplies an authorized library target; those operations publish
 managed revisions rather than Workshop proposals.
+
+This is the same config directory that holds managed `<config-dir>/skills`.
+`OPENCLAW_STATE_DIR` overrides it; otherwise `OPENCLAW_CONFIG_PATH` selects its
+parent, and `~/.openclaw` is the default.
 
 ## Personal library authoring
 
@@ -67,7 +71,7 @@ The following lifecycle applies to workspace proposals:
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
 - **Directory-owned updates:** creates and updates stay inside
-  `<state-dir>/workshop-skills`. A skill is Workshop-owned exactly when it is
+  `<config-dir>/workshop-skills`. A skill is Workshop-owned exactly when it is
   contained in that directory.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go

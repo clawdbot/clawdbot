@@ -392,7 +392,7 @@ collection review had released becomes `stale` with a status reason, so the
 skill path it once created stays user-owned and Doctor never relocates it.
 
 Skill Workshop ownership is now the physical
-`<state-dir>/workshop-skills` directory. Startup and `openclaw doctor --fix`
+`<config-dir>/workshop-skills` directory. Startup and `openclaw doctor --fix`
 drop the retired columns and index in the shared schema transaction. Doctor
 then relocates applied legacy Workshop creates and rewrites their stored target
 paths. Conflicts become stale proposals and leave both directories unchanged.

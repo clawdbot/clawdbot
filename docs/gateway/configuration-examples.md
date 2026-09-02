@@ -474,7 +474,7 @@ example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
 - `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
   real target root without allowing arbitrary symlink escapes.
 - Skill Workshop does not use these configured symlink targets. It writes only
-  inside `<state-dir>/workshop-skills`.
+  inside `<config-dir>/workshop-skills`.
 
 ## Common patterns
 

@@ -78,6 +78,55 @@ afterEach(async () => {
 });
 
 describe("skill collection backup and restore", () => {
+  it("restores grouped Workshop skills and rejects escaping backup paths", async () => {
+    const nestedDir = path.join(skillsRoot, "group", "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(
+      path.join(nestedDir, "SKILL.md"),
+      "---\nname: nested\ndescription: Nested procedure\n---\n\n# Nested\n",
+      "utf8",
+    );
+
+    const result = await reconcileSkillCollection({
+      workspaceDir,
+      env: testState.env,
+      ...(await readCollectionReceipt()),
+      plan: [{ action: "drop", name: "nested", reason: "Test restore" }],
+    });
+    await expect(fs.access(nestedDir)).rejects.toThrow();
+
+    await expect(
+      restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+    ).resolves.toMatchObject({ restored: ["nested"] });
+    await expect(fs.readFile(path.join(nestedDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "# Nested",
+    );
+
+    const manifestPath = path.join(
+      testState.stateDir,
+      "skill-workshop",
+      "collection-backups",
+      result.backupId,
+      "manifest.json",
+    );
+    const originalManifest = await fs.readFile(manifestPath, "utf8");
+    for (const invalidPath of [".", "../outside", path.resolve(skillsRoot, "outside")]) {
+      const manifest = JSON.parse(originalManifest) as {
+        skillDirs: string[];
+        resultSkillDirs: string[];
+        resultSkillHashes: Record<string, string>;
+      };
+      manifest.skillDirs = [invalidPath];
+      manifest.resultSkillDirs = [];
+      manifest.resultSkillHashes = {};
+      await fs.writeFile(manifestPath, JSON.stringify(manifest), "utf8");
+      await expect(
+        restoreLatestSkillCollectionBackup({ workspaceDir, env: testState.env }),
+      ).rejects.toThrow("Skill collection backup path is outside the Skill Workshop directory");
+    }
+    await fs.writeFile(manifestPath, originalManifest, "utf8");
+  });
+
   it("invalidates skill snapshots before backup pruning fails", async () => {
     await writeWorkshopOwnedSkills([
       { name: "procedure", description: "Original procedure", body: "# Original\n" },

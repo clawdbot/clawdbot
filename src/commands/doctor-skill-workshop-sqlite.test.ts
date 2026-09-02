@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { renderProposalMarkdown } from "../skills/workshop/frontmatter.js";
 import {
@@ -131,6 +131,130 @@ describe("doctor Skill Workshop SQLite migration", () => {
       },
     });
 
+    await expect(
+      migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+    ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
+  });
+
+  it("persists each relocation before continuing after a later move fails", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-relocation-failure-workspace-"),
+    );
+    const now = "2026-09-01T00:00:00.000Z";
+    const records = ["first-relocation", "second-relocation"].map((name) => {
+      const skillDir = path.join(workspaceDir, "skills", name);
+      const content = `---\nname: ${name}\ndescription: ${name} procedure\n---\n\n# ${name}\n`;
+      return {
+        content,
+        record: {
+          schema: SKILL_WORKSHOP_SCHEMA,
+          id: `${name}-20260901-1234567890`,
+          kind: "create",
+          status: "applied",
+          title: `Create ${name}`,
+          description: `${name} procedure`,
+          createdAt: now,
+          updatedAt: now,
+          createdBy: "skill-workshop",
+          proposedVersion: "v1",
+          draftFile: "PROPOSAL.md",
+          draftHash: hashSkillProposalContent(content),
+          target: {
+            skillName: name,
+            skillKey: name,
+            skillDir,
+            skillFile: path.join(skillDir, "SKILL.md"),
+            source: "openclaw-workspace",
+          },
+          scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+          appliedAt: now,
+        } satisfies SkillProposalRecord,
+      };
+    });
+    for (const { record, content } of records) {
+      await fs.mkdir(record.target.skillDir, { recursive: true });
+      await fs.writeFile(record.target.skillFile, content, "utf8");
+    }
+
+    const databasePath = openOpenClawStateDatabase({ env: testState.env }).path;
+    closeOpenClawStateDatabaseForTest();
+    const legacy = openNodeSqliteDatabase(databasePath);
+    legacy.exec(`
+      ALTER TABLE skill_workshop_proposals ADD COLUMN workspace_dir TEXT NOT NULL DEFAULT '';
+      ALTER TABLE skill_workshop_proposals ADD COLUMN claim_released_time INTEGER;
+    `);
+    const insertProposal = legacy.prepare(
+      `INSERT INTO skill_workshop_proposals (
+        proposal_id, record_json, owner_agent_id, workspace_dir, kind, status,
+        created_at, updated_at, draft_hash, applied_at, claim_released_time
+      ) VALUES (?, ?, 'main', ?, 'create', 'applied', ?, ?, ?, ?, NULL)`,
+    );
+    for (const { record } of records) {
+      insertProposal.run(
+        record.id,
+        JSON.stringify(record),
+        workspaceDir,
+        now,
+        now,
+        record.draftHash,
+        now,
+      );
+    }
+    legacy.exec(`
+      PRAGMA user_version = 15;
+      UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
+    `);
+    legacy.close();
+
+    const workshopRoot = resolveWorkshopSkillsDir(testState.env);
+    const secondSource = records[1]!.record.target.skillDir;
+    const secondDestination = path.join(workshopRoot, "second-relocation");
+    const originalRename = fs.rename.bind(fs);
+    const renameSpy = vi.spyOn(fs, "rename").mockImplementation(async (source, destination) => {
+      if (
+        path.resolve(String(source)) === path.resolve(secondSource) &&
+        path.resolve(String(destination)) === path.resolve(secondDestination)
+      ) {
+        throw new Error("injected relocation failure");
+      }
+      return originalRename(source, destination);
+    });
+    try {
+      await expect(
+        migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
+      ).rejects.toThrow("injected relocation failure");
+    } finally {
+      renameSpy.mockRestore();
+    }
+
+    expect(
+      (await readSkillProposalRecord(records[0]!.record.id, { env: testState.env }))?.target,
+    ).toMatchObject({
+      skillDir: path.join(workshopRoot, "first-relocation"),
+      skillFile: path.join(workshopRoot, "first-relocation", "SKILL.md"),
+      source: "openclaw-workshop",
+    });
+
+    const repaired = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+    expect(repaired.changes.join("\n")).toContain(
+      "Relocated 1 Skill Workshop skill, retargeted 1 proposal, marked 0 stale",
+    );
+    for (const { record } of records) {
+      const targetDir = path.join(workshopRoot, path.basename(record.target.skillDir));
+      await expect(fs.access(path.join(targetDir, "SKILL.md"))).resolves.toBeUndefined();
+      await expect(
+        readSkillProposalRecord(record.id, { env: testState.env }),
+      ).resolves.toMatchObject({
+        target: {
+          skillDir: targetDir,
+          skillFile: path.join(targetDir, "SKILL.md"),
+          source: "openclaw-workshop",
+        },
+      });
+    }
     await expect(
       migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env }),
     ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });

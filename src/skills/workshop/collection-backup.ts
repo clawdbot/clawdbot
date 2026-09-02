@@ -4,6 +4,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { pathExists } from "../../infra/fs-safe.js";
+import { isPathStrictlyInside } from "../../infra/path-guards.js";
 import type {
   SkillCollectionPlanEntry,
   WritableSkillCollectionEntry,
@@ -113,12 +114,17 @@ export async function discardPendingCollectionBackup(
 export async function readCollectionBackupManifest(params: {
   backupDir: string;
   backupId: string;
+  skillsRoot: string;
 }): Promise<CollectionBackupManifest> {
   const record = asNullableRecord(
     JSON.parse(await fs.readFile(path.join(params.backupDir, "manifest.json"), "utf8")),
   );
-  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs");
-  const resultSkillDirs = readBackupSkillDirs(record?.resultSkillDirs, "resultSkillDirs");
+  const skillDirs = readBackupSkillDirs(record?.skillDirs, "skillDirs", params.skillsRoot);
+  const resultSkillDirs = readBackupSkillDirs(
+    record?.resultSkillDirs,
+    "resultSkillDirs",
+    params.skillsRoot,
+  );
   const resultSkillHashes = asNullableRecord(record?.resultSkillHashes);
   if (
     record?.schema !== BACKUP_SCHEMA ||
@@ -152,16 +158,24 @@ export async function readCollectionBackupManifest(params: {
   };
 }
 
-/** Manifest entries are skill directory names directly under the Workshop skills root. */
-function readBackupSkillDirs(value: unknown, label: string): string[] {
+/** Manifest entries are normalized relative paths to skill directories under the Workshop root. */
+function readBackupSkillDirs(value: unknown, label: string, skillsRoot: string): string[] {
   if (
     !Array.isArray(value) ||
     !value.every((entry): entry is string => typeof entry === "string")
   ) {
     throw new Error(`Invalid skill collection backup ${label}.`);
   }
+  const resolvedRoot = path.resolve(skillsRoot);
   for (const relativeDir of value) {
-    if (relativeDir !== path.basename(relativeDir) || relativeDir === ".." || !relativeDir) {
+    const resolvedDir = path.resolve(resolvedRoot, relativeDir);
+    // Strict containment also rejects "." so a manifest can never name the root itself.
+    if (
+      !relativeDir ||
+      path.isAbsolute(relativeDir) ||
+      relativeDir !== path.normalize(relativeDir) ||
+      !isPathStrictlyInside(resolvedRoot, resolvedDir)
+    ) {
       throw new Error(
         `Skill collection backup path is outside the Skill Workshop directory: ${relativeDir}`,
       );

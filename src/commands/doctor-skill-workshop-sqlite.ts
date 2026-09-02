@@ -171,7 +171,8 @@ export async function inspectLegacySkillWorkshopMigration(
   const plan = await planWorkshopRelocation(records, env);
   const backups = await listLegacyCollectionBackupRoots(env);
   return {
-    externalProposalCount: plan.updates.length,
+    externalProposalCount:
+      plan.updates.length + plan.moves.reduce((count, move) => count + move.updates.length, 0),
     legacyBackupRootCount: backups.names.length,
   };
 }
@@ -180,7 +181,7 @@ async function planWorkshopRelocation(
   records: SkillProposalRecord[],
   env: NodeJS.ProcessEnv,
 ): Promise<{
-  moves: Array<{ source: string; destination: string }>;
+  moves: Array<{ source: string; destination: string; updates: SkillProposalRecord[] }>;
   updates: SkillProposalRecord[];
 }> {
   const workshopRoot = resolveWorkshopSkillsDir(env);
@@ -209,8 +210,10 @@ async function planWorkshopRelocation(
   }
 
   const updates: SkillProposalRecord[] = [];
+  const updatesBySource = new Map<string, SkillProposalRecord[]>();
   for (const record of external) {
-    const movedDestination = plannedMoves.get(path.resolve(record.target.skillDir));
+    const source = path.resolve(record.target.skillDir);
+    const movedDestination = plannedMoves.get(source);
     const conflictReason = staleReasons.get(record.id);
     const updated = movedDestination
       ? retargetWorkshopProposal(record, {
@@ -232,11 +235,21 @@ async function planWorkshopRelocation(
               )
             : undefined;
     if (updated) {
-      updates.push(updated);
+      if (movedDestination) {
+        const sourceUpdates = updatesBySource.get(source) ?? [];
+        sourceUpdates.push(updated);
+        updatesBySource.set(source, sourceUpdates);
+      } else {
+        updates.push(updated);
+      }
     }
   }
   return {
-    moves: [...plannedMoves].map(([source, destination]) => ({ source, destination })),
+    moves: [...plannedMoves].map(([source, destination]) => ({
+      source,
+      destination,
+      updates: updatesBySource.get(source) ?? [],
+    })),
     updates,
   };
 }
@@ -252,20 +265,24 @@ async function relocateLegacyWorkshopTargets(
     const record = parseSkillProposalRow(row);
     return record ? [record] : [];
   });
+  let retargetedProposals = 0;
+  let staleProposals = 0;
+  const persistUpdates = async (updates: SkillProposalRecord[]): Promise<void> => {
+    for (const record of updates) {
+      if (record.status === "stale") {
+        staleProposals += 1;
+      } else {
+        retargetedProposals += 1;
+      }
+      await updateSkillProposalRecord({ record, store: { env } });
+    }
+  };
   const plan = await planWorkshopRelocation(records, env);
   for (const move of plan.moves) {
     await moveWorkshopSkillDirectory(move.source, move.destination);
+    await persistUpdates(move.updates);
   }
-  let retargetedProposals = 0;
-  let staleProposals = 0;
-  for (const record of plan.updates) {
-    if (record.status === "stale") {
-      staleProposals += 1;
-    } else {
-      retargetedProposals += 1;
-    }
-    await updateSkillProposalRecord({ record, store: { env } });
-  }
+  await persistUpdates(plan.updates);
   const backups = await listLegacyCollectionBackupRoots(env);
   for (const name of backups.names) {
     await removePathWithinRoot({

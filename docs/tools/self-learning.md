@@ -163,7 +163,7 @@ Every learned skill receives these controls:
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
 - **Workshop-owned writes:** creates and updates stay inside
-  `<state-dir>/workshop-skills`. Bundled, plugin, managed, system, personal,
+  `<config-dir>/workshop-skills`. Bundled, plugin, managed, system, personal,
   project, workspace, and extra-root skills remain outside Workshop ownership.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
