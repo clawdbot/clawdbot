@@ -1013,8 +1013,28 @@ For a standalone preview with synthetic data, use:
 pnpm dev:ui:mock -- --port 19321
 ```
 
+Open the printed URL in a fresh Chromium profile or isolated browser context,
+without existing service workers or operator credentials. Chat, presence, and
+profile data are synthetic. Add `--fixture attachments` for media examples; the
+printed board fixture URL is also available.
+
 The mock preview selects its own origin for Gateway resources, including
-avatars, so those requests stay on the preview server.
+avatars, before application startup. It supplies synthetic WebSocket responses
+and confines native resource requests to the serving origin and local data/blob
+fixtures, including frames, while preserving same-origin Vite HMR and terminal
+WebAssembly. Unimplemented HTTP API routes return a local JSON 404; external
+fetches are rejected with a standalone-mock diagnostic. New workers, Talk WebRTC,
+popups, and external link/navigation actions are disabled in the mock app.
+External iframe URL assignments are rejected before Chromium can speculatively
+connect. Add a local fixture when a demo needs another response. Each invocation
+owns a separate Vite cache and removes it on graceful shutdown, so concurrent
+previews and attachment fixtures do not invalidate one another.
+
+This is a trusted-fixture development boundary, not a sandbox for hostile HTML,
+browser extensions, or an already-controlling service worker. Browser-level
+navigation outside the app is outside its control. Production connection settings
+and `pnpm ui:dev` behavior are unchanged; use that command when you intentionally
+need a real Gateway or external integration.
 
 ## Blank Control UI page
 
