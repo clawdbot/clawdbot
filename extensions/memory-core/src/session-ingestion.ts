@@ -5,7 +5,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   buildSessionEntry,
   loadMemorySessionMetadata,
-  parseUsageCountedSessionIdFromFileName,
   sessionPathForFile,
   statSessionEntrySync,
   type SessionTranscriptCorpusEntry,
@@ -95,11 +94,7 @@ type SessionIngestionScan = {
 type DayDisposition = "include" | "skip" | "block";
 
 function buildSessionScope(agentId: string, sessionId: string): string {
-  const logicalId =
-    parseUsageCountedSessionIdFromFileName(sessionId) ??
-    parseUsageCountedSessionIdFromFileName(`${sessionId}.jsonl`) ??
-    sessionId;
-  return `${agentId}:${logicalId}`;
+  return `${agentId}:${sessionId}`;
 }
 
 function sessionPathFromCorpus(entry: SessionTranscriptCorpusEntry): string {
