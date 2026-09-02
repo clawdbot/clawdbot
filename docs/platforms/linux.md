@@ -295,7 +295,7 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
@@ -305,7 +305,7 @@ KillMode=control-group
 WantedBy=default.target
 ```
 
-Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom.
+Hand-written units do not inherit the adaptive heap sizing that `openclaw gateway install` writes for managed Gateway services. Prefer the managed installer, or set an explicit heap limit in the custom supervisor after accounting for native-memory headroom. Keep `TimeoutStopSec` at `330` or higher: the Gateway drains active work for up to five minutes on stop and restart, and a shorter stop timeout makes systemd SIGKILL it mid-turn.
 
 Enable it:
 

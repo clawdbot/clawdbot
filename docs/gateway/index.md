@@ -251,7 +251,7 @@ ExecStart=/usr/local/bin/openclaw gateway --port 18789
 Restart=always
 RestartSec=5
 RestartPreventExitStatus=78
-TimeoutStopSec=30
+TimeoutStopSec=330
 TimeoutStartSec=30
 SuccessExitStatus=0 143
 OOMPolicy=continue
@@ -260,6 +260,8 @@ KillMode=control-group
 [Install]
 WantedBy=default.target
 ```
+
+Keep `TimeoutStopSec` at `330` or higher: the Gateway drains active work for up to five minutes on stop and restart, and a shorter stop timeout makes systemd SIGKILL it mid-turn. `systemctl --user cat openclaw-gateway[-<profile>].service` shows the current managed unit body if you would rather copy that.
 
   </Tab>
 
@@ -289,8 +291,25 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
 ```
 
 Use the same service body as the user unit, but install it under
-`/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
-`ExecStart=` if your `openclaw` binary lives elsewhere.
+`/etc/systemd/system/openclaw-gateway[-<profile>].service`, adjust
+`ExecStart=` if your `openclaw` binary lives elsewhere, and add the account
+that owns the config and state directory to `[Service]`:
+
+```ini
+[Service]
+User=<user>
+Group=<user>
+Environment=HOME=/home/<user>
+```
+
+Do not run the Gateway as root. A system unit without `User=` runs as root, so
+every command the agent executes runs as root too, and with no `HOME` the
+Gateway looks for its config under `/root/.openclaw`, exits with code `78`
+(`Missing config`), and `RestartPreventExitStatus=78` keeps it stopped. Set
+`OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` in the unit instead when the
+state lives outside that home. On a single-user host, `loginctl enable-linger`
+plus the user unit above is the supported way to keep the Gateway running
+without a login session.
 
 Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
 
