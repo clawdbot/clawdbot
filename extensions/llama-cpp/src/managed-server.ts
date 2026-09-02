@@ -135,7 +135,11 @@ async function resolveHuggingFaceArtifact(
       if (!response.ok) {
         throw new Error(`Cannot resolve ${source}: HTTP ${response.status}`);
       }
-      const ggufFile = asOptionalRecord(asOptionalRecord(await response.json())?.ggufFile);
+      const ggufFile = asOptionalRecord(
+        asOptionalRecord(
+          await readProviderJsonResponse(response, "llama.cpp Hugging Face manifest"),
+        )?.ggufFile,
+      );
       file = typeof ggufFile?.rfilename === "string" ? ggufFile.rfilename : undefined;
       expectedSize = typeof ggufFile?.size === "number" ? ggufFile.size : undefined;
       if (!file) {
@@ -162,7 +166,7 @@ async function resolveHuggingFaceArtifact(
         `Cannot read Hugging Face integrity metadata for ${source}: HTTP ${treeResponse.status}`,
       );
     }
-    tree = await treeResponse.json();
+    tree = await readProviderJsonResponse(treeResponse, "llama.cpp Hugging Face tree");
   } finally {
     await releaseTree();
   }
