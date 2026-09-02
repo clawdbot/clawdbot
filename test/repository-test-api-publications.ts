@@ -122,7 +122,6 @@ const publications: Record<string, string | symbol> = {
     "openclaw.doctorHealthContributionsTestApi",
   ),
   "src/infra/exec-approvals-store.ts": Symbol.for("openclaw.execApprovalsStoreTestApi"),
-  "src/infra/session-cost-usage-cache-runtime.ts": Symbol.for("openclaw.sessionCostUsageTestApi"),
   "src/infra/session-delivery-queue-runtime.ts": Symbol.for(
     "openclaw.sessionDeliveryQueueRuntimeTestApi",
   ),
