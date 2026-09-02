@@ -281,5 +281,6 @@ export function resolveOpenAICompletionsCompat(
           defaults.visibleReasoningDetailTypes)
         : defaults.visibleReasoningDetailTypes,
     requiresNonEmptyUserOrAssistantMessage: defaults.requiresNonEmptyUserOrAssistantMessage,
+    reasoningEffortMap: configured?.reasoningEffortMap ?? {},
   };
 }

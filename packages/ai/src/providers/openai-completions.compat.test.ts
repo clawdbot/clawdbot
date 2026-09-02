@@ -166,6 +166,7 @@ const defaultResolvedCompat = {
   supportsLongCacheRetention: true,
   visibleReasoningDetailTypes: [],
   requiresNonEmptyUserOrAssistantMessage: false,
+  reasoningEffortMap: {},
 } satisfies ResolvedOpenAICompletionsCompat;
 
 const proxyResolvedCompat = {
