@@ -6350,7 +6350,16 @@ describe("update-cli", () => {
     await runWithGatewayServiceEnv({ yes: true });
     platformSpy.mockRestore();
 
-    expect(doctorCommandCall()).toBeDefined();
+    const doctorCall = doctorCommandCall();
+    expect(doctorCall).toBeDefined();
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR,
+    ).toBe("0");
+    expect(
+      (doctorCall?.[1].env as NodeJS.ProcessEnv | undefined)
+        ?.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION,
+    ).toBe("0");
     expect(getLogOutput()).toContain("Gateway: restarted and verified.");
     const npmInstallCallIndex = vi
       .mocked(runCommandWithTimeout)
