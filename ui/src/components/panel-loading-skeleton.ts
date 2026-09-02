@@ -74,6 +74,7 @@ class PanelLoadingSkeleton extends OpenClawLitElement {
         transparent 75%
       );
       content: "";
+      transform: translateX(-100%);
       animation: shimmer var(--skeleton-duration, 1.5s) ease-in-out infinite;
       will-change: transform;
     }
