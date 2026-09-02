@@ -193,6 +193,12 @@ describe("mock OpenAI response markers", () => {
           let call;
           let assistant;
           if (api === "responses") {
+            if (stream) {
+              expect(first.filter((event) => event.item?.type === "message")).toMatchObject([
+                { type: "response.output_item.added", output_index: 0 },
+                { type: "response.output_item.done", output_index: 0 },
+              ]);
+            }
             const items = stream
               ? first
                   .filter((event) => event.type === "response.output_item.done")
@@ -325,7 +331,17 @@ describe("mock OpenAI response markers", () => {
         const body = await response.text();
 
         expect(response.status).toBe(200);
-        expect(body.match(/response\.output_text\.delta/gu)).toHaveLength(2);
+        const events = body
+          .split("\n\n")
+          .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+          .map((line) => JSON.parse(line.slice(6)));
+        expect(events.filter((event) => event.type === "response.output_text.delta")).toHaveLength(
+          2,
+        );
+        expect(events.filter((event) => event.item?.type === "message")).toMatchObject([
+          { type: "response.output_item.added", output_index: 0 },
+          { type: "response.output_item.done", output_index: 0 },
+        ]);
         expect(Date.now() - startedAt).toBeGreaterThanOrEqual(60);
       },
     );

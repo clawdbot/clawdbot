@@ -21,10 +21,8 @@ import {
   KEYBOARD_SHORTCUTS_REQUEST_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
-import { rememberSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -32,6 +30,7 @@ import {
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import { ShellPanelOwner } from "./app-shell-panels.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
 import {
   DEBUG_OVERLAY_ELEMENT,
@@ -62,11 +61,7 @@ import {
   restoreToastFromNavDrawer,
   visibleNavDrawerToggle,
 } from "./navigation-surface.ts";
-import {
-  isBrowserPanelAvailable,
-  isDesktopPanelAvailable,
-  isHomePanelAvailable,
-} from "./panel-availability.ts";
+import { isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -87,6 +82,7 @@ export interface ShellChromeHost extends HTMLElement {
   readonly context: ApplicationContext<RouteId> | undefined;
   readonly activeSessionKey: string;
   readonly onboardingMode: boolean;
+  readonly custodianMinimizeRequestId: number;
   readonly updateComplete: Promise<boolean>;
   readonly lazyCustomElements: LazyCustomElementRequestController;
   readonly commandPaletteElement: OptionalCustomElement;
@@ -116,19 +112,15 @@ export interface ShellChromeHost extends HTMLElement {
 }
 
 export class ShellChromeOwner {
+  readonly panels: ShellPanelOwner;
   private pendingLazyAction = readLazyShellAction();
   private listeners: AbortController | undefined;
   private readonly navDrawerSwipe: NavDrawerSwipeLoader;
   constructor(private readonly host: ShellChromeHost) {
-    this.navDrawerSwipe = new NavDrawerSwipeLoader(host, () => this.toggleNavigationSurface());
-  }
-
-  private isSessionRoute(): boolean {
-    const locationRouteId = routeIdFromPath(
-      globalThis.location?.pathname ?? "",
-      this.host.context?.basePath ?? "",
+    this.panels = new ShellPanelOwner(host, (element, event) =>
+      this.requestLazyElement(element, event),
     );
-    return isSessionRouteId(locationRouteId ?? this.host.routeState.routeId);
+    this.navDrawerSwipe = new NavDrawerSwipeLoader(host, () => this.toggleNavigationSurface());
   }
 
   connect(): void {
@@ -159,11 +151,11 @@ export class ShellChromeOwner {
       ["openclaw:native-toggle-search", this.handleNativeToggleSearch],
       ["openclaw:native-new-session", this.handleNativeNewSession],
       ["openclaw:native-navigate", this.handleNativeNavigate],
-      [TERMINAL_PANEL_TOGGLE_EVENT, this.handleDeferredTerminalToggle],
-      [BROWSER_PANEL_TOGGLE_EVENT, this.handleDeferredBrowserToggle],
-      [DESKTOP_PANEL_TOGGLE_EVENT, this.handleDeferredDesktopToggle],
-      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
-      [HOME_PANEL_TOGGLE_EVENT, this.handleDeferredAssistantToggle],
+      [TERMINAL_PANEL_TOGGLE_EVENT, this.panels.handleDeferredTerminalToggle],
+      [BROWSER_PANEL_TOGGLE_EVENT, this.panels.handleDeferredBrowserToggle],
+      [DESKTOP_PANEL_TOGGLE_EVENT, this.panels.handleDeferredDesktopToggle],
+      [CUSTODIAN_PANEL_TOGGLE_EVENT, this.panels.handleDeferredAssistantToggle],
+      [HOME_PANEL_TOGGLE_EVENT, this.panels.handleDeferredAssistantToggle],
       [SHELL_APPROVALS_OPEN_EVENT, this.handleApprovalsOpen],
     ] as const) {
       window.addEventListener(type, listener, options);
@@ -407,16 +399,21 @@ export class ShellChromeOwner {
       return;
     }
     if (
+      isTerminalPanelShortcut(event) &&
       !isSessionRouteId(host.routeState.routeId) &&
-      !isOptionalElementDefined(host.terminalPanelElement) &&
-      isTerminalPanelShortcut(event)
+      !event.defaultPrevented &&
+      !host.onboardingMode &&
+      !isSettingsTakeover(host.routeState.routeId) &&
+      host.context &&
+      isTerminalAvailable(
+        host.context.gateway.snapshot,
+        host.context.config.current.terminalEnabled ?? false,
+      )
     ) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT));
       return;
     }
-    // Unlike the terminal panel, the assistant panel never handles its own
-    // keydown, so the shell owns this chord on every route.
     if (isHomePanelShortcut(event) && isHomePanelAvailable(host.context?.gateway)) {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent(HOME_PANEL_TOGGLE_EVENT));
@@ -562,92 +559,6 @@ export class ShellChromeOwner {
     this.requestLazyElement(host.execApprovalElement, descriptor);
   };
 
-  readonly handleDeferredTerminalToggle = (event: Event): void => {
-    const host = this.host;
-    if (this.isSessionRoute()) {
-      rememberSessionPanelToggle("terminal", event);
-      return;
-    }
-    if (isOptionalElementDefined(host.terminalPanelElement)) {
-      return;
-    }
-    const context = host.context;
-    const snapshot = context?.gateway?.snapshot;
-    if (
-      !snapshot ||
-      !isTerminalAvailable(snapshot, context.config.current.terminalEnabled ?? false)
-    ) {
-      event.preventDefault();
-      return;
-    }
-    this.requestLazyElement(
-      host.terminalPanelElement,
-      lazyShellEvent(TERMINAL_PANEL_TOGGLE_EVENT, event),
-    );
-  };
-
-  readonly handleDeferredBrowserToggle = (event: Event): void => {
-    const host = this.host;
-    if (this.isSessionRoute()) {
-      rememberSessionPanelToggle("browser", event);
-      return;
-    }
-    if (isOptionalElementDefined(host.browserPanelElement)) {
-      return;
-    }
-    const snapshot = host.context?.gateway?.snapshot;
-    if (snapshot && isBrowserPanelAvailable(snapshot)) {
-      this.requestLazyElement(
-        host.browserPanelElement,
-        lazyShellEvent(BROWSER_PANEL_TOGGLE_EVENT, event),
-      );
-    } else {
-      event.preventDefault();
-    }
-  };
-
-  readonly handleDeferredDesktopToggle = (event: Event): void => {
-    const host = this.host;
-    if (this.isSessionRoute()) {
-      rememberSessionPanelToggle("desktop", event);
-      return;
-    }
-    const context = host.context;
-    if (!context || !isDesktopPanelAvailable(context.gateway.snapshot)) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-      return;
-    }
-    if (isOptionalElementDefined(host.desktopPanelElement)) {
-      return;
-    }
-    this.requestLazyElement(
-      host.desktopPanelElement,
-      lazyShellEvent(DESKTOP_PANEL_TOGGLE_EVENT, event),
-    );
-  };
-
-  readonly handleDeferredAssistantToggle = (event: Event): void => {
-    const host = this.host;
-    if (isOptionalElementDefined(host.assistantPanelElement)) {
-      return;
-    }
-    const snapshot = host.context?.gateway?.snapshot;
-    const home = event.type === HOME_PANEL_TOGGLE_EVENT;
-    if (
-      home
-        ? isHomePanelAvailable(host.context?.gateway)
-        : canCallGatewayMethod(snapshot, "openclaw.chat", "operator.admin")
-    ) {
-      this.requestLazyElement(
-        host.assistantPanelElement,
-        lazyShellEvent(home ? HOME_PANEL_TOGGLE_EVENT : CUSTODIAN_PANEL_TOGGLE_EVENT, event),
-      );
-    } else {
-      event.preventDefault();
-    }
-  };
-
   private lazyElementForShellEvent(eventType: LazyShellEvent["eventType"]): OptionalCustomElement {
     const host = this.host;
     const elements: Record<LazyShellEvent["eventType"], OptionalCustomElement> = {
@@ -727,12 +638,14 @@ export class ShellChromeOwner {
   }
 
   abandonPendingLazyActionForContext(): void {
+    this.panels.reset();
     this.pendingLazyAction = null;
     clearLazyShellAction();
     this.host.lazyCustomElements.abandon();
   }
 
   preservePendingLazyActionForReload(): void {
+    this.panels.reset();
     this.host.lazyCustomElements.abandon();
   }
 
