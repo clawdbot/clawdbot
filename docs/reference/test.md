@@ -381,8 +381,8 @@ Managed commands keep their existing close-based completion contract unless stri
 tree verification is requested; failed finalization never releases ownership.
 Stop all remaining writers before manually removing the reported exact directory.
 Windows and non-detached launches allocate the same isolated native home, but retain
-their namespace and enclosing claims with a diagnostic after child exit because
-descendant completion cannot be verified. Raw external invocations do not gain
+their namespace and enclosing claims with a diagnostic after child exit and pipe
+closure because descendant completion cannot be verified. Raw external invocations do not gain
 this boundary. Forced parent or supervisor death (such as `SIGKILL`) can prevent
 cleanup; unregistered descendants that intentionally escape the owned group remain
 outside this contract. The wrappers do

@@ -48,46 +48,55 @@ export function createFixtureLifetime(ownerRoot?: string) {
 
   async function drain() {
     const failures: unknown[] = [];
-    // Bodies can register their final command/cleanup while unwinding. Drain
-    // those too; a rejected command alone does not certify process-group death.
-    while (work.length) {
-      const batch = work.splice(0);
-      const results = await Promise.allSettled(batch.map((item) => item.completion));
-      for (const [index, result] of results.entries()) {
-        const value: unknown = result.status === "rejected" ? result.reason : result.value;
-        if ((batch[index]!.cleanup && result.status === "rejected") || hasUnjoinedWork(value)) {
-          failures.push(value);
+    // Removal yields too: work admitted during it still owns this same claim.
+    // Drain those bodies and roots before publishing any completion receipt.
+    do {
+      // Bodies can register their final command/cleanup while unwinding. Drain
+      // those too; a rejected command alone does not certify process-group death.
+      while (work.length) {
+        const batch = work.splice(0);
+        const results = await Promise.allSettled(batch.map((item) => item.completion));
+        for (const [index, result] of results.entries()) {
+          const value: unknown = result.status === "rejected" ? result.reason : result.value;
+          if ((batch[index]!.cleanup && result.status === "rejected") || hasUnjoinedWork(value)) {
+            failures.push(value);
+          }
         }
       }
-    }
-    if (failures.length) {
-      const ownedRoots = [...roots];
-      roots.clear();
-      // Abandon the local handles, never the pending receipts. Later cleanup,
-      // reuse, or module reset cannot certify an earlier failed drain.
-      claims.clear();
-      throw new AggregateError(
-        failures,
-        `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
+      if (failures.length) {
+        const ownedRoots = [...roots];
+        roots.clear();
+        // Abandon the local handles, never the pending receipts. Later cleanup,
+        // reuse, or module reset cannot certify an earlier failed drain.
+        claims.clear();
+        throw new AggregateError(
+          failures,
+          `Fixture cleanup unverified; retained ${ownedRoots.join(", ")}`,
+        );
+      }
+      // Recursive removal can take seconds on Darwin. Keep sibling command deadlines,
+      // output drainage, and reaping live while releasing these already-joined inputs.
+      const removals = await Promise.allSettled(
+        [...roots].map(async (root) => {
+          await fs.promises.rm(root, {
+            recursive: true,
+            force: true,
+            maxRetries: 5,
+            retryDelay: 20,
+          });
+          roots.delete(root);
+        }),
       );
-    }
-    // Recursive removal can take seconds on Darwin. Keep sibling command deadlines,
-    // output drainage, and reaping live while releasing these already-joined inputs.
-    const removals = await Promise.allSettled(
-      [...roots].map(async (root) => {
-        await fs.promises.rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
-        roots.delete(root);
-      }),
-    );
-    const errors = removals.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (errors.length === 1) {
-      throw errors[0];
-    }
-    if (errors.length > 1) {
-      throw new AggregateError(errors, "Test temporary directory cleanup failed");
-    }
+      const errors = removals.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Test temporary directory cleanup failed");
+      }
+    } while (work.length || roots.size);
     for (const [root, release] of claims) {
       release();
       claims.delete(root);

@@ -75,6 +75,57 @@ it("cleans independent roots after a removal failure and retries the retained ro
   }
 });
 
+it("holds claims for work admitted during asynchronous fixture removal", async () => {
+  const lifetime = createFixtureLifetime();
+  const first = lifetime.createTempDir("fixture-removing-");
+  const removing = createDeferred();
+  const allowRemoval = createDeferred();
+  const removed = createDeferred();
+  const allowWork = createDeferred();
+  const remove = fs.promises.rm;
+  const removal = vi.spyOn(fs.promises, "rm").mockImplementation(async (root, options) => {
+    if (root === first) {
+      removing.resolve();
+      await allowRemoval.promise;
+    }
+    await remove(root, options);
+    if (root === first) {
+      removed.resolve();
+    }
+  });
+  let cleaned = false;
+  const cleanup = lifetime.cleanup().then(() => {
+    cleaned = true;
+  });
+  let work: Promise<void> | undefined;
+  try {
+    await removing.promise;
+    const later = lifetime.createTempDir("fixture-admitted-during-removal-");
+    work = lifetime.run(() => allowWork.promise);
+    allowRemoval.resolve();
+    await removed.promise;
+    // Let the first removal's completion callbacks run while the later body is held.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(cleaned).toBe(false);
+    expect(() => owner.assertReleased()).toThrow("Unreleased Vitest resource claim");
+    expect(fs.existsSync(later)).toBe(true);
+    allowWork.resolve();
+    await work;
+    await cleanup;
+    expect(fs.existsSync(later)).toBe(false);
+    expect(() => owner.assertReleased()).not.toThrow();
+  } finally {
+    allowRemoval.resolve();
+    allowWork.resolve();
+    await work;
+    await cleanup;
+    removal.mockRestore();
+    await lifetime.cleanup();
+  }
+});
+
 it
   .skipIf(process.platform === "win32")
   .for(["normal", "missing readiness", "held close", "early exit", "cleanup rejection"])(
