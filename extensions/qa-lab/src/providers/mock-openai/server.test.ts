@@ -6570,6 +6570,7 @@ Update and merge these partial structured summaries.`,
         type: "response.completed",
         response: {
           id: "response_mock",
+          object: "response",
           status: "completed",
           output: [
             { type: "function_call", name: "read", call_id: nativeId, arguments: "{}" },

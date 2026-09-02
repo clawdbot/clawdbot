@@ -620,7 +620,7 @@ function prepareEmbeddedAgentQueueMessage(
   if (
     typeof activity.lastProgressAgeMs === "number" &&
     activity.lastProgressAgeMs > resolveRunStaleThresholdMs(activity) &&
-    recoveryBlocker !== "human_input_wait"
+    !recoveryBlocker
   ) {
     diag.debug(`queue message failed: sessionId=${sessionId} reason=stale_run`);
     return { kind: "complete", outcome: createQueueFailureOutcome(sessionId, "stale_run") };

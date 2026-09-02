@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach } from "vitest";
 import {
@@ -152,6 +153,63 @@ describe("CodexAppServerEventProjector media projection", () => {
     );
   });
 
+  it.each([false, true])(
+    "fences direct tool-result callbacks after blocked media when projection closed=%s",
+    async (closed) => {
+      const media = createDeferred<{ dataBase64: string }>();
+      const readRemoteWorkspaceFile = vi.fn(() => media.promise);
+      const onToolResult = vi.fn();
+      const projector = await createProjector(
+        { ...(await createParams()), verboseLevel: "full", onToolResult },
+        { remoteWorkspaceRoot: "/remote/workspace", readRemoteWorkspaceFile },
+      );
+      const pending = projector.handleNotification(
+        turnCompleted([
+          {
+            type: "imageGeneration",
+            id: "blocked-image",
+            status: "completed",
+            result: "",
+            revisedPrompt: null,
+            savedPath: "/remote/workspace/image.png",
+          },
+          {
+            type: "commandExecution",
+            id: "command-after-image",
+            command: "echo late-output",
+            cwd: "/remote/workspace",
+            commandActions: [],
+            processId: null,
+            source: "agent",
+            status: "completed",
+            aggregatedOutput: "late-output",
+            exitCode: 0,
+            durationMs: 1,
+          },
+        ]),
+      );
+      try {
+        await vi.waitFor(() => expect(readRemoteWorkspaceFile).toHaveBeenCalledOnce());
+        expect(onToolResult).not.toHaveBeenCalled();
+        if (closed) {
+          await projector.closeProjection();
+        }
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+        if (closed) {
+          expect(onToolResult).not.toHaveBeenCalled();
+        } else {
+          expect(onToolResult).toHaveBeenCalledWith(
+            expect.objectContaining({ text: expect.stringContaining("late-output") }),
+          );
+        }
+      } finally {
+        media.resolve({ dataBase64: tinyPngBase64 });
+        await pending;
+      }
+    },
+  );
+
   it("never exposes a remote image path when remote file transfer is unavailable", async () => {
     const projector = await createProjector(undefined, {
       remoteWorkspaceRoot: "/remote/codex-workspace",
@@ -237,42 +295,6 @@ describe("CodexAppServerEventProjector media projection", () => {
       hadPotentialSideEffects: true,
       replaySafe: false,
     });
-  });
-
-  it("supersedes terminal assistant text before raw image persistence settles", async () => {
-    const projector = await createProjector();
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: { type: "agentMessage", id: "answer-before-image", text: "stale answer" },
-      }),
-    );
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(true);
-
-    let resolveMedia: (() => void) | undefined;
-    const mediaPersistence = new Promise<void>((resolve) => {
-      resolveMedia = resolve;
-    });
-    const mediaProjection = (
-      projector as unknown as {
-        generatedMediaProjection: { recordRaw(item: unknown): Promise<void> };
-      }
-    ).generatedMediaProjection;
-    vi.spyOn(mediaProjection, "recordRaw").mockReturnValue(mediaPersistence);
-
-    const pending = projector.handleNotification(
-      forCurrentTurn("rawResponseItem/completed", {
-        item: {
-          type: "image_generation_call",
-          id: "image-after-answer",
-          status: "completed",
-          result: tinyPngBase64,
-        },
-      }),
-    );
-
-    expect(projector.hasLatestTerminalAssistantCandidateText()).toBe(false);
-    resolveMedia?.();
-    await pending;
   });
 
   it("does not let delayed raw completion consume a newer assistant echo", async () => {

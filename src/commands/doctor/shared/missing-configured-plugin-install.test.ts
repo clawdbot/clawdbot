@@ -230,7 +230,7 @@ function mockBrokenBraveInstall(
     ...recordOverrides,
   });
   mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave"));
+  mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot("brave", installDir));
   mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
     officialWebSearchPluginEntry({
       id: "brave",
@@ -408,7 +408,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         plugins: [{ id: "codex", packageVersion: "2026.5.6", channels: ["codex"] }],
         diagnostics:
           previousState === "damaged"
-            ? brokenPluginSnapshot("codex").diagnostics
+            ? brokenPluginSnapshot("codex", installDir).diagnostics
             : previousState === "stale-descriptor"
               ? [{ level: "error", pluginId: "codex", message: "without channelConfigs metadata" }]
               : [],
@@ -1762,27 +1762,27 @@ describe("repairMissingConfiguredPluginInstalls", () => {
   it("does not download configured channel plugins that are still bundled", async () => {
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
-        id: "matrix",
-        pluginId: "matrix",
+        id: "bundleddemo",
+        pluginId: "bundleddemo",
         origin: "bundled",
         meta: { label: "Matrix" },
         install: {
-          npmSpec: "@openclaw/matrix",
+          npmSpec: "@openclaw/bundleddemo",
         },
       },
     ]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [
         {
-          id: "matrix",
+          id: "bundleddemo",
           origin: "bundled",
-          packageName: "@openclaw/matrix",
-          channels: ["matrix"],
+          packageName: "@openclaw/bundleddemo",
+          channels: ["bundleddemo"],
         },
       ],
       diagnostics: [],
     });
-    mockCurrentBundledPlugin("matrix", "@openclaw/matrix");
+    mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -1790,11 +1790,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       cfg: {
         plugins: {
           entries: {
-            matrix: { enabled: true },
+            bundleddemo: { enabled: true },
           },
         },
         channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+          bundleddemo: { enabled: true, homeserver: "https://bundleddemo.example.org" },
         },
       },
       env: testEnv,
@@ -1809,41 +1809,41 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   it("removes stale managed install records when the configured plugin is bundled", async () => {
     const records = {
-      matrix: {
+      bundleddemo: {
         source: "npm",
-        spec: "@openclaw/matrix",
-        installPath: "/missing/matrix",
+        spec: "@openclaw/bundleddemo",
+        installPath: "/missing/bundleddemo",
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
     mocks.listChannelPluginCatalogEntries.mockReturnValue([
       {
-        id: "matrix",
-        pluginId: "matrix",
+        id: "bundleddemo",
+        pluginId: "bundleddemo",
         origin: "bundled",
         meta: { label: "Matrix" },
         install: {
-          npmSpec: "@openclaw/matrix",
+          npmSpec: "@openclaw/bundleddemo",
         },
       },
     ]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [
         {
-          id: "matrix",
+          id: "bundleddemo",
           origin: "bundled",
-          packageName: "@openclaw/matrix",
-          channels: ["matrix"],
+          packageName: "@openclaw/bundleddemo",
+          channels: ["bundleddemo"],
         },
       ],
       diagnostics: [
         {
-          pluginId: "matrix",
+          pluginId: "bundleddemo",
           message: "manifest without channelConfigs metadata",
         },
       ],
     });
-    mockCurrentBundledPlugin("matrix", "@openclaw/matrix");
+    mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -1851,11 +1851,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       cfg: {
         plugins: {
           entries: {
-            matrix: { enabled: true },
+            bundleddemo: { enabled: true },
           },
         },
         channels: {
-          matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+          bundleddemo: { enabled: true, homeserver: "https://bundleddemo.example.org" },
         },
       },
       env: testEnv,
@@ -1872,74 +1872,91 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     );
     expect(result).toEqual({
-      changes: ['Removed stale managed install record for bundled plugin "matrix".'],
+      changes: ['Removed stale managed install record for bundled plugin "bundleddemo".'],
       warnings: [],
       pluginInventoryChanged: true,
       records: {},
     });
   });
 
-  it("uses current bundled discovery to remove records before stale snapshots can reinstall official plugins", async () => {
-    const records = {
-      "google-meet": {
-        source: "npm",
-        spec: "@openclaw/google-meet",
-        resolvedName: "@openclaw/google-meet",
-        installPath: "/missing/google-meet",
-      },
-    };
-    mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      plugins: [
+  it.each(["healthy", "absent", "empty"])(
+    "preserves and repairs %s official external installs in source checkouts",
+    async (payload) => {
+      const root = tempDirs.make("openclaw-external-companion-");
+      const installPath = path.join(root, "payload");
+      const repairedPath = path.join(root, "repaired");
+      fs.mkdirSync(repairedPath);
+      fs.writeFileSync(path.join(repairedPath, "package.json"), '{"name":"@openclaw/google-meet"}');
+      if (payload !== "absent") {
+        fs.mkdirSync(installPath);
+      }
+      if (payload === "healthy") {
+        fs.copyFileSync(
+          path.join(repairedPath, "package.json"),
+          path.join(installPath, "package.json"),
+        );
+      }
+      const records = {
+        "google-meet": {
+          source: "npm",
+          spec: "@openclaw/google-meet",
+          resolvedName: "@openclaw/google-meet",
+          installPath,
+        },
+      };
+      mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
+      const repairedRecords = {
+        "google-meet": { ...records["google-meet"], installPath: repairedPath },
+      };
+      mocks.updateNpmInstalledPlugins.mockResolvedValue(
+        successfulUpdate("google-meet", repairedRecords),
+      );
+      mocks.loadPluginMetadataSnapshot.mockReturnValue({
+        plugins: [
+          {
+            id: "google-meet",
+            origin: "npm",
+            packageName: "@openclaw/google-meet",
+          },
+        ],
+        diagnostics: [],
+      });
+      mockCurrentBundledPlugin("google-meet", "@openclaw/google-meet");
+      mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         {
           id: "google-meet",
-          origin: "npm",
-          packageName: "@openclaw/google-meet",
-        },
-      ],
-      diagnostics: [],
-    });
-    mockCurrentBundledPlugin("google-meet", "@openclaw/google-meet");
-    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
-      {
-        id: "google-meet",
-        label: "Google Meet",
-        install: { npmSpec: "@openclaw/google-meet" },
-        openclaw: {
-          id: "google-meet",
+          label: "Google Meet",
           install: { npmSpec: "@openclaw/google-meet" },
-        },
-      },
-    ]);
-
-    const { repairMissingConfiguredPluginInstalls } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingConfiguredPluginInstalls({
-      cfg: {
-        plugins: {
-          entries: {
-            "google-meet": { enabled: true },
+          openclaw: {
+            id: "google-meet",
+            install: { npmSpec: "@openclaw/google-meet" },
           },
         },
-      },
-      env: testEnv,
-    });
+      ]);
 
-    expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
-    expect(mocks.writePersistedInstalledPluginIndexInstallRecords).toHaveBeenCalledWith(
-      {},
-      {
-        config: expect.any(Object),
+      const { repairMissingConfiguredPluginInstalls } =
+        await import("./missing-configured-plugin-install.js");
+      const result = await repairMissingConfiguredPluginInstalls({
+        cfg: {
+          plugins: {
+            entries: {
+              "google-meet": { enabled: true },
+            },
+          },
+        },
         env: testEnv,
-      },
-    );
-    expect(result).toEqual({
-      changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
-      warnings: [],
-      pluginInventoryChanged: true,
-      records: {},
-    });
-  });
+      });
+
+      expect(mocks.installPluginFromNpmSpec).not.toHaveBeenCalled();
+      expect(mocks.updateNpmInstalledPlugins).toHaveBeenCalledTimes(payload === "healthy" ? 0 : 1);
+      expect(result.records).toEqual(payload === "healthy" ? records : repairedRecords);
+      expect(result.changes).toEqual(
+        payload === "healthy" ? [] : ['Repaired missing configured plugin "google-meet".'],
+      );
+      expect(result.warnings).toEqual([]);
+      expect(result.capabilityConsentRequired).toBeUndefined();
+    },
+  );
 
   it("installs an official external plugin when only a stale bundled descriptor remains", async () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
@@ -1993,11 +2010,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
 
   it("removes stale bundled install records even when the plugin is not configured", async () => {
     const records = {
-      "google-meet": {
+      bundleddemo: {
         source: "npm",
-        spec: "@openclaw/google-meet",
-        resolvedName: "@openclaw/google-meet",
-        installPath: "/missing/google-meet",
+        spec: "@openclaw/bundleddemo",
+        resolvedName: "@openclaw/bundleddemo",
+        installPath: "/missing/bundleddemo",
       },
     };
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
@@ -2005,7 +2022,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       plugins: [],
       diagnostics: [],
     });
-    mockCurrentBundledPlugin("google-meet", "@openclaw/google-meet");
+    mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
     const { repairMissingConfiguredPluginInstalls } =
       await import("./missing-configured-plugin-install.js");
@@ -2023,7 +2040,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       },
     );
     expect(result).toEqual({
-      changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
+      changes: ['Removed stale managed install record for bundled plugin "bundleddemo".'],
       warnings: [],
       pluginInventoryChanged: true,
       records: {},
@@ -2035,54 +2052,54 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       "npm",
       {
         source: "npm",
-        spec: "@openclaw/matrix-fork",
-        resolvedName: "@openclaw/matrix-fork",
-        resolvedSpec: "@openclaw/matrix-fork@1.2.3",
-        installPath: "/missing/matrix-fork",
+        spec: "@openclaw/bundleddemo-fork",
+        resolvedName: "@openclaw/bundleddemo-fork",
+        resolvedSpec: "@openclaw/bundleddemo-fork@1.2.3",
+        installPath: "/missing/bundleddemo-fork",
       },
     ],
     [
       "clawhub",
       {
         source: "clawhub",
-        spec: "clawhub:@openclaw/matrix-fork@stable",
-        clawhubPackage: "@openclaw/matrix-fork",
-        installPath: "/missing/matrix-fork",
+        spec: "clawhub:@openclaw/bundleddemo-fork@stable",
+        clawhubPackage: "@openclaw/bundleddemo-fork",
+        installPath: "/missing/bundleddemo-fork",
       },
     ],
   ])(
     "keeps %s install records whose package names only share a bundled prefix",
     async (_, record) => {
-      const records = { matrix: record };
+      const records = { bundleddemo: record };
       mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
       mocks.listChannelPluginCatalogEntries.mockReturnValue([
         {
-          id: "matrix",
-          pluginId: "matrix",
+          id: "bundleddemo",
+          pluginId: "bundleddemo",
           origin: "bundled",
           meta: { label: "Matrix" },
           install: {
-            npmSpec: "@openclaw/matrix",
+            npmSpec: "@openclaw/bundleddemo",
           },
         },
       ]);
       mocks.loadPluginMetadataSnapshot.mockReturnValue({
         plugins: [
           {
-            id: "matrix",
+            id: "bundleddemo",
             origin: "bundled",
-            packageName: "@openclaw/matrix",
-            channels: ["matrix"],
+            packageName: "@openclaw/bundleddemo",
+            channels: ["bundleddemo"],
           },
         ],
         diagnostics: [
           {
-            pluginId: "matrix",
+            pluginId: "bundleddemo",
             message: "manifest without channelConfigs metadata",
           },
         ],
       });
-      mockCurrentBundledPlugin("matrix", "@openclaw/matrix");
+      mockCurrentBundledPlugin("bundleddemo", "@openclaw/bundleddemo");
 
       const { repairMissingConfiguredPluginInstalls } =
         await import("./missing-configured-plugin-install.js");
@@ -2090,11 +2107,11 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         cfg: {
           plugins: {
             entries: {
-              matrix: { enabled: true },
+              bundleddemo: { enabled: true },
             },
           },
           channels: {
-            matrix: { enabled: true, homeserver: "https://matrix.example.org" },
+            bundleddemo: { enabled: true, homeserver: "https://bundleddemo.example.org" },
           },
         },
         env: testEnv,
@@ -2784,8 +2801,8 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       plugins: [],
       diagnostics: [
-        ...brokenPluginSnapshot("brave").diagnostics,
-        ...brokenPluginSnapshot("discord").diagnostics,
+        ...brokenPluginSnapshot("brave", records.brave.installPath).diagnostics,
+        ...brokenPluginSnapshot("discord", records.discord.installPath).diagnostics,
       ],
     });
     mocks.updateNpmInstalledPlugins.mockResolvedValue({
@@ -3955,6 +3972,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
         {
           level: "error",
           pluginId: "demo",
+          source: records.demo.installPath,
           message: "extension entry escapes package directory: ./index.ts",
         },
       ],
@@ -4369,7 +4387,7 @@ describe("repairMissingConfiguredPluginInstalls", () => {
       clawhubUrl: "https://clawhub.ai",
     });
     mocks.loadInstalledPluginIndexInstallRecords.mockResolvedValue(records);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId));
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(brokenPluginSnapshot(pluginId, installDir));
     if (catalogKind === "provider") {
       mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
         officialWebSearchPluginEntry({

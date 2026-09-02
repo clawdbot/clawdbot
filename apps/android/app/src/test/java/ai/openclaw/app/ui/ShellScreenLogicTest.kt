@@ -34,13 +34,6 @@ import java.util.Locale
 @Config(sdk = [34])
 class ShellScreenLogicTest {
   @Test
-  fun bottomNavHidesForKeyboardAndCommandPalette() {
-    assertTrue(shellBottomNavVisible(keyboardVisible = false, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = true, commandOpen = false))
-    assertFalse(shellBottomNavVisible(keyboardVisible = false, commandOpen = true))
-  }
-
-  @Test
   fun localizedUppercaseUsesTheSelectedAppLocale() {
     assertEquals("İLETİŞİM", localizedUppercase("iletişim", languageTag = "tr", fallbackLocale = Locale.US))
   }

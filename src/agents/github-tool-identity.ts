@@ -468,42 +468,67 @@ export function matchesPreparedGitHubPublicationIdentity(params: {
   );
 }
 
-/** Resolves a Gateway-owned publication identity without exposing its child environment. */
-export async function prepareGitHubPublicationIdentity(params: {
+type GitHubIdentityPreparation = {
   config: OpenClawConfig;
   sourceConfig?: OpenClawConfig;
   agentId: string;
   env?: NodeJS.ProcessEnv;
-}): Promise<PreparedGitHubPublicationIdentity> {
+};
+
+export class GitHubIdentityError extends Error {
+  constructor(readonly reason: "unavailable" | "changed" | "rate_limited" | "unverified") {
+    super(
+      reason === "changed"
+        ? "GitHub identity changed; reload the dashboard and retry."
+        : reason === "rate_limited"
+          ? "GitHub identity verification is rate limited; wait and retry."
+          : reason === "unverified"
+            ? "The effective GitHub identity could not be verified; retry or reconnect the agent's GitHub identity."
+            : "The selected GitHub credential is unavailable; reconnect the agent's GitHub identity in Settings.",
+    );
+  }
+}
+
+async function prepareSharedGitHubIdentity(
+  params: GitHubIdentityPreparation & {
+    assertCurrent?: () => void;
+  },
+) {
   const identity = resolveGitHubToolIdentity(params);
   const managed = identity.source !== "system-detected";
   const hostEnv = params.env ?? process.env;
-  const prepared = prepareGitHubToolEnvironment({
+  const overlay = prepareGitHubToolEnvironment({
     config: params.config,
     sourceConfig: params.sourceConfig,
     agentId: params.agentId,
     env: hostEnv,
   });
   const directScrubEnv = Object.fromEntries(
-    Object.keys(prepared.credentialScrubEnv).map((name) => [name, undefined]),
+    Object.keys(overlay.credentialScrubEnv).map((name) => [name, undefined]),
   );
-  const env: NodeJS.ProcessEnv = {
-    ...hostEnv,
+  const currentEnvironment = (): NodeJS.ProcessEnv => ({
+    ...(params.env ?? process.env),
     ...directScrubEnv,
-    ...prepared.localIdentityEnv,
+    ...overlay.localIdentityEnv,
     GH_PROMPT_DISABLED: "1",
-  };
-  const token = managed
-    ? await readManagedGitHubToken(identity.profileDir)
-    : await readNativeGitHubToken(env);
+  });
+  const env = currentEnvironment();
+  const readToken = () =>
+    managed
+      ? readManagedGitHubToken(identity.profileDir)
+      : readNativeGitHubToken(currentEnvironment());
+  params.assertCurrent?.();
+  const token = await readToken();
+  params.assertCurrent?.();
   if (!token) {
-    throw new Error("The selected GitHub credential is unavailable.");
+    throw new GitHubIdentityError("unavailable");
   }
   const probe = await verifyGitHubCredential(token);
+  params.assertCurrent?.();
   if (probe.status !== "available") {
-    throw new Error("The effective GitHub identity could not be verified.");
+    throw new GitHubIdentityError(probe.status);
   }
-  return Object.freeze({
+  const prepared: PreparedGitHubPublicationIdentity = Object.freeze({
     source: identity.source,
     ...(managed ? { profileId: identity.config.profileId } : {}),
     account: probe.account,
@@ -511,6 +536,61 @@ export async function prepareGitHubPublicationIdentity(params: {
     // native login changes cannot redirect an already-admitted operation.
     env: Object.freeze({ ...env, GH_TOKEN: token, GITHUB_TOKEN: undefined }),
   });
+  return { prepared, token, readToken };
+}
+
+/** Publication owns a fixed credential snapshot for its already-admitted operation. */
+export async function prepareGitHubPublicationIdentity(
+  params: GitHubIdentityPreparation,
+): Promise<PreparedGitHubPublicationIdentity> {
+  return (await prepareSharedGitHubIdentity(params)).prepared;
+}
+
+/** Read authority tracks current selection and token rotation, without exporting a child environment. */
+export async function prepareGitHubReadIdentity(
+  params: GitHubIdentityPreparation & {
+    getCurrentConfig: () => OpenClawConfig;
+    assertActive: () => void;
+    refresh: () => Promise<void>;
+  },
+) {
+  const selected = resolveGitHubToolIdentity(params);
+  const profileId = selected.source === "system-detected" ? undefined : selected.config.profileId;
+  const kind = selected.source === "system-detected" ? undefined : selected.config.kind;
+  const assertSelected = () => {
+    params.assertActive();
+    const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
+    if (
+      current.source !== selected.source ||
+      (current.source !== "system-detected" &&
+        (current.config.profileId !== profileId || current.config.kind !== kind))
+    ) {
+      throw new GitHubIdentityError("changed");
+    }
+  };
+  assertSelected();
+  await params.refresh();
+  assertSelected();
+  const { token, readToken, prepared } = await prepareSharedGitHubIdentity({
+    ...params,
+    assertCurrent: assertSelected,
+  });
+  assertSelected();
+  return {
+    token,
+    cacheScope: createHash("sha256")
+      .update(JSON.stringify([selected.source, profileId, prepared.account.accountId, token]))
+      .digest("hex"),
+    assertSelected,
+    revalidate: async () => {
+      assertSelected();
+      const current = await readToken();
+      assertSelected();
+      if (current !== token) {
+        throw new GitHubIdentityError("changed");
+      }
+    },
+  };
 }
 
 export async function removeManagedGitHubProfile(profileDir: string): Promise<void> {

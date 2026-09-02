@@ -1,8 +1,13 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../../config/sessions/transcript-write-context.js";
-import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
+import {
+  prepareSystemAgentRunAdmission,
+  type AdmittedRunContext,
+} from "../../admitted-run-context.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
@@ -10,9 +15,12 @@ import {
 import { createUsageAccumulator } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
+import { createEmbeddedRunLaneController } from "./lane-controller.js";
+import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import { prepareTerminalWithSettledTurnFinalization } from "./settled-turn-finalization.js";
 import { resolveEmbeddedRunAttemptTerminalState } from "./terminal-outcome.js";
 import { resolveSettledTurnFinalizationRequest } from "./terminal-resolution.js";
+import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const backendMocks = vi.hoisted(() => ({
   runSettledFinalization: vi.fn(),
@@ -97,7 +105,29 @@ function settledFailedAttempt(): EmbeddedRunAttemptWithReceiptEvidence {
   return { ...attempt, successfulNestedToolNames: ["memory_search"] };
 }
 
+let admittedRunContext: AdmittedRunContext;
+
 function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
+  let lifecycleGeneration = getAgentEventLifecycleGeneration();
+  const laneController = createEmbeddedRunLaneController({
+    getLifecycleGeneration: () => lifecycleGeneration,
+    getParams: () => ({
+      admittedRunContext,
+      sessionFile: "/tmp/session-settled.jsonl",
+      sessionId: "session-settled",
+      runId: "run-settled",
+      workspaceDir: "/tmp/openclaw-test",
+      prompt: "finish the task",
+      timeoutMs: 60_000,
+    }),
+    globalLane: "settled-finalization-global",
+    sessionLane: "settled-finalization-session",
+    initialQueuedLifecycleGeneration: lifecycleGeneration,
+    setLifecycleGeneration: (value) => {
+      lifecycleGeneration = value;
+    },
+    setParams: () => {},
+  });
   const usageAccumulator = createUsageAccumulator();
   usageAccumulator.assistantTurns = 1;
   usageAccumulator.bridgeCalls = { search: 1, describe: 2, call: 3 };
@@ -116,7 +146,7 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
     },
     terminalBase: {
       runParams: {
-        admittedRunContext: createTestAdmittedRunContext("run-settled"),
+        admittedRunContext,
         sessionId: "session-settled",
         runId: "run-settled",
         workspaceDir: "/tmp/openclaw-test",
@@ -138,6 +168,7 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
     lastRunPromptUsage: undefined,
     finalization: {
       preparedAttempt: {
+        admittedRunContext,
         runId: "run-settled",
         sessionId: "session-settled",
         workspaceDir: "/tmp/openclaw-test",
@@ -154,7 +185,8 @@ function finalizationInput(attempt: ReturnType<typeof settledFailedAttempt>) {
       modelApi: "openai-responses",
       executionContract: undefined,
       hasTerminalToolPresentation: false,
-      noteLaneTaskProgress: vi.fn(),
+      createAttemptControls: vi.fn(laneController.createAttemptControls),
+      abortSignal: laneController.abortSignal,
     },
   } as unknown as Parameters<typeof prepareTerminalWithSettledTurnFinalization>[0];
 }
@@ -209,7 +241,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
     ).toBeNull();
   });
 
-  it("keeps explicit silence terminal only for reply-optional settled turns", () => {
+  it("keeps explicit silence terminal across required and optional settled turns", () => {
     const toolUseAssistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool-1", name: "write", arguments: {} }],
@@ -242,6 +274,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         runParams: {
           sessionId: "session:settled-silent",
           runId: "run:settled-silent",
+          allowEmptyAssistantReplyAsSilent: true,
           ...runParams,
         } as never,
         attempt,
@@ -258,9 +291,7 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       });
 
     expect(request({ trigger: "heartbeat" })).toBeNull();
-    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBe(
-      SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION,
-    );
+    expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBeNull();
   });
 
   it("requires an available finalizer and no visible structured error", () => {
@@ -323,9 +354,16 @@ describe("resolveSettledTurnFinalizationRequest", () => {
 });
 
 describe("prepareTerminalWithSettledTurnFinalization", () => {
-  beforeEach(() => {
+  let admission: ReturnType<typeof prepareSystemAgentRunAdmission>;
+  beforeEach(async () => {
     backendMocks.runSettledFinalization.mockReset();
     transcriptMocks.appendAssistantMirrorMessageByIdentity.mockReset();
+    admission = prepareSystemAgentRunAdmission({}, "run-settled", "main", "finalization-test");
+    admittedRunContext = await admission.admit("embedded");
+  });
+  afterEach(() => {
+    admission.close();
+    vi.useRealTimers();
   });
 
   it.each([false, true])(
@@ -471,27 +509,47 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
-  it("retries an empty tool-free finalization once", async () => {
+  it("retries empty finalization with fresh controls and retires prior timeout and Stop callbacks", async () => {
+    vi.useFakeTimers();
     const attempt = settledFailedAttempt();
-    const emptyAssistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: "" }],
+    const input = finalizationInput(attempt);
+    const factory = vi.mocked(input.finalization.createAttemptControls);
+    const { close, ...retiredControls } = factory({ admittedRunContext });
+    close();
+    factory.mockClear();
+    Object.assign(input.finalization.preparedAttempt, retiredControls, {
+      abortSignal: AbortSignal.abort(new Error("original attempt timed out")),
     });
+    const emptyAssistant = buildEmbeddedRunnerAssistant({ content: [] });
     const finalAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "The command completed successfully." }],
     });
+    let firstAttempt: EmbeddedRunAttemptParams;
     backendMocks.runSettledFinalization
-      .mockResolvedValueOnce({
-        outcome: "empty",
-        result: { assistant: emptyAssistant, usage: emptyAssistant.usage },
+      .mockImplementationOnce(async (params: EmbeddedRunAttemptParams) => {
+        firstAttempt = params;
+        expect(params.abortSignal?.aborted).toBe(false);
+        expect(params.onAttemptAbort).not.toBe(retiredControls.onAttemptAbort);
+        expect(params.onAttemptTimeout).not.toBe(retiredControls.onAttemptTimeout);
+        expect(params.onAttemptDeadlineChanged).not.toBe(retiredControls.onAttemptDeadlineChanged);
+        params.onAttemptTimeout?.(new Error("first finalizer timed out while settling"));
+        return { outcome: "empty", result: { assistant: emptyAssistant } };
       })
-      .mockResolvedValueOnce({
-        outcome: "answered",
-        result: { assistant: finalAssistant, usage: finalAssistant.usage },
+      .mockImplementationOnce(async (params: EmbeddedRunAttemptParams) => {
+        expect(params.onAttemptAbort).not.toBe(firstAttempt.onAttemptAbort);
+        expect(params.onAttemptTimeout).not.toBe(firstAttempt.onAttemptTimeout);
+        expect(params.onAttemptDeadlineChanged).not.toBe(firstAttempt.onAttemptDeadlineChanged);
+        firstAttempt.onAttemptAbort?.();
+        firstAttempt.onAttemptTimeout?.(new Error("late timeout"));
+        firstAttempt.onAttemptDeadlineChanged?.({ kind: "bounded", deadlineAtMs: Date.now() });
+        await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+        expect(params.abortSignal?.aborted).toBe(false);
+        return { outcome: "answered", result: { assistant: finalAssistant } };
       });
 
-    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(factory).toHaveBeenCalledTimes(2);
     expect(backendMocks.runSettledFinalization.mock.calls).toEqual([
       [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
       [expect.objectContaining({ disableTools: true }), attempt, expect.anything()],
@@ -501,9 +559,43 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expect.objectContaining({ text: "The command completed successfully." }),
     ]);
     expect(result.prepared.agentMeta).toMatchObject({ assistantTurns: 3 });
+    for (const controls of factory.mock.results) {
+      if (controls.type === "return") {
+        controls.value.onAttemptAbort();
+        controls.value.onAttemptTimeout(new Error("late timeout after finalization"));
+      }
+    }
+    await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
+    expect(input.finalization.abortSignal.aborted).toBe(false);
   });
 
-  it("delivers a host fallback after two empty tool-free finalization attempts", async () => {
+  it.each([
+    { timeoutMs: 60_000, initialTimeoutMs: 60_000 },
+    { timeoutMs: 0, initialTimeoutMs: MAX_TIMER_TIMEOUT_MS },
+  ])(
+    "seeds the normalized $timeoutMs budget when the finalizer publishes no deadline",
+    async ({ timeoutMs, initialTimeoutMs }) => {
+      const input = finalizationInput(settledFailedAttempt());
+      input.finalization.preparedAttempt.timeoutMs = timeoutMs;
+      backendMocks.runSettledFinalization.mockResolvedValueOnce({
+        outcome: "answered",
+        result: {
+          assistant: buildEmbeddedRunnerAssistant({ content: [{ type: "text", text: "Done." }] }),
+        },
+      });
+
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+      expect(input.finalization.createAttemptControls).toHaveBeenCalledExactlyOnceWith({
+        admittedRunContext: input.terminalBase.runParams.admittedRunContext,
+        abortSignal: input.finalization.abortSignal,
+        initialTimeoutMs,
+      });
+      expect(result.finalizationOutcome).toBe("answered");
+    },
+  );
+
+  it("persists fallback with the queue signal after the original attempt aborts", async () => {
     const attempt = settledFailedAttempt();
     const emptyAssistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: "" }],
@@ -514,6 +606,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
 
     const input = finalizationInput(attempt);
+    input.finalization.preparedAttempt.abortSignal = AbortSignal.abort(
+      new Error("original attempt timed out"),
+    );
     input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
     input.finalization.preparedAttempt.agentId = "main";
     input.finalization.preparedAttempt.sessionTarget = {
@@ -558,6 +653,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       expectedLifecycleRevision: "revision-a",
       expectedWriterRunId: "run-settled",
       idempotencyKey: "run-settled:settled-finalization-fallback",
+      signal: input.finalization.abortSignal,
       sessionId: "session-settled",
       sessionKey: "agent:main:settled",
       storePath: "/tmp/sessions.json",
@@ -595,12 +691,21 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     ]);
   });
 
-  it("delivers a host fallback when isolated finalization fails", async () => {
+  it("closes failed finalizer controls before delivering a host fallback", async () => {
+    vi.useFakeTimers();
     const attempt = settledFailedAttempt();
-    backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer failed"));
+    const input = finalizationInput(attempt);
+    backendMocks.runSettledFinalization.mockImplementationOnce(
+      async (params: EmbeddedRunAttemptParams) => {
+        params.onAttemptTimeout?.(new Error("finalizer timeout"));
+        throw new Error("finalizer failed");
+      },
+    );
 
-    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+    await vi.advanceTimersByTimeAsync(EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS + 1);
 
+    expect(input.finalization.abortSignal.aborted).toBe(false);
     expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
     expect(result.finalizationOutcome).toBe("failed");
     expect(result.attempt).not.toBe(attempt);
@@ -687,27 +792,44 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     },
   );
 
-  it("preserves an explicit cancellation instead of delivering a fallback", async () => {
-    const attempt = settledFailedAttempt();
-    const input = finalizationInput(attempt);
-    const controller = new AbortController();
-    controller.abort(new Error("cancelled by user"));
-    input.finalization.preparedAttempt.abortSignal = controller.signal;
-    backendMocks.runSettledFinalization.mockRejectedValueOnce(new Error("finalizer cancelled"));
+  it.each(["outer", "Stop"])(
+    "preserves %s cancellation during finalization without a fallback",
+    async (source) => {
+      const attempt = settledFailedAttempt();
+      const input = finalizationInput(attempt);
+      const controller = new AbortController();
+      input.finalization.abortSignal = AbortSignal.any([
+        input.finalization.abortSignal,
+        controller.signal,
+      ]);
+      backendMocks.runSettledFinalization.mockImplementationOnce(
+        async (params: EmbeddedRunAttemptParams) => {
+          if (source === "outer") {
+            controller.abort(new Error("cancelled by user"));
+          } else {
+            params.onAttemptAbort?.();
+          }
+          params.abortSignal?.throwIfAborted();
+          throw new Error("finalizer cancellation did not propagate");
+        },
+      );
 
-    const result = await prepareTerminalWithSettledTurnFinalization(input);
+      const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-    expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
-    expect(result.finalizationOutcome).toBe("failed");
-    expect(result.attempt).toBe(attempt);
-    expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
-  });
+      expect(backendMocks.runSettledFinalization).toHaveBeenCalledOnce();
+      expect(input.finalization.abortSignal.aborted).toBe(true);
+      expect(result.finalizationOutcome).toBe("failed");
+      expect(result.attempt).toBe(attempt);
+      expect(result.prepared.payloadsWithToolMedia?.[0]).toMatchObject({ isError: true });
+      expect(transcriptMocks.appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves cancellation while fallback transcript persistence is pending", async () => {
     const attempt = settledFailedAttempt();
     const input = finalizationInput(attempt);
     const controller = new AbortController();
-    input.finalization.preparedAttempt.abortSignal = controller.signal;
+    input.finalization.abortSignal = controller.signal;
     input.finalization.preparedAttempt.sessionKey = "agent:main:settled";
     input.finalization.preparedAttempt.agentId = "main";
     input.finalization.preparedAttempt.sessionTarget = {

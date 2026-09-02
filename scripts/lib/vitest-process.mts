@@ -19,6 +19,10 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
+import {
+  createVitestResourceOwner,
+  findVitestResourceOwner,
+} from "./vitest-resource-ownership.mts";
 
 /** Own temporary files until the Vitest child, its group, and its pipes have joined. */
 export function spawnOwnedVitestProcess(spec: {
@@ -37,12 +41,25 @@ export function spawnOwnedVitestProcess(spec: {
   const tempDirs = createTempDirTracker();
   const detached = spec.options.detached ?? shouldUseDetachedVitestProcessGroup();
   const verifiedGroup = detached && shouldUseDetachedVitestProcessGroup();
-  const tempRoot = tempDirs.make(
-    "oc-vt-",
-    fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir()),
-  );
+  let tempRoot: string | undefined;
+  let owner: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let parent: { root: string; release: () => void } | undefined;
+  const dispose = () => {
+    owner?.assertReleased();
+    tempDirs.cleanup();
+    parent?.release();
+  };
   let child;
   try {
+    const containingRoot = fs.realpathSync(env.TMPDIR || env.TMP || env.TEMP || tmpdir());
+    // An intermediate runner can die before publishing its own cleanup result.
+    // Its containing owner must already hold the obligation before allocation.
+    const containingOwner = findVitestResourceOwner(containingRoot);
+    if (containingOwner) {
+      parent = { root: containingOwner.root, release: containingOwner.claim() };
+    }
+    tempRoot = tempDirs.make("oc-vt-", containingRoot);
+    owner = createVitestResourceOwner(tempRoot);
     const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
@@ -69,31 +86,39 @@ export function spawnOwnedVitestProcess(spec: {
     child = spawn(spec.command, spec.args, options);
   } catch (error) {
     tempDirs.cleanup();
+    parent?.release();
     throw error;
   }
-  const completion = createVitestProcessCompletion({ child, detached }).then(
-    (result) => {
+  const completion = (async () => {
+    try {
+      const result = await createVitestProcessCompletion({ child, detached });
       if (verifiedGroup) {
-        tempDirs.cleanup();
+        dispose();
       } else {
+        // Keep the containing claim too: leader exit cannot certify descendants.
         console.error(
           `[vitest] retained temporary namespace ${tempRoot}; descendant completion is unverified on this non-group launch. Stop the remaining writers before removing this exact directory.`,
         );
       }
       return result;
-    },
-    (error: unknown) => {
+    } catch (error) {
+      // A failed parent receipt can follow successful child disposal. Report
+      // the still-owned ancestor, not a child directory already removed.
+      const retainedRoot = tempRoot && tempDirs.dirs.has(tempRoot) ? tempRoot : parent?.root;
       // No PID means spawn failed; otherwise unverified writers still own the files.
       if (!child.pid) {
-        tempDirs.cleanup();
-      } else {
-        throw new Error(
-          `[vitest] retained temporary namespace ${tempRoot}; child/group completion was not verified. Stop the remaining writers before removing this exact directory.`,
-          { cause: error },
+        dispose();
+      } else if (retainedRoot) {
+        throw Object.assign(
+          new Error(
+            `[vitest] retained temporary namespace ${retainedRoot}; child/group or nested resource completion was not verified. Stop the remaining writers before removing this exact directory.`,
+            { cause: error },
+          ),
+          { processTreeState: "indeterminate" },
         );
       }
       throw error;
-    },
-  );
+    }
+  })();
   return { child, completion };
 }

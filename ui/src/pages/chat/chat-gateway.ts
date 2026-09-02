@@ -252,16 +252,16 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     message: Record<string, unknown>,
     visibleMessages: unknown[],
     runId: string | null | undefined,
-    retainSupersededMessages = false,
+    afterSequence?: number | null,
   ): void => {
     const event = payload as ChatEventPayload & { messageId?: unknown; messageSeq?: unknown };
     publishChatSessionProjectionMessages(state, visibleMessages, {
       scope,
-      retainSupersededMessages,
       event: {
         type: "messagePersisted",
         message,
         envelope: {
+          afterSequence,
           ...(runId ? { runId } : {}),
           ...(event.messageId === undefined ? {} : { messageId: event.messageId }),
           ...(event.messageSeq === undefined ? {} : { messageSeq: event.messageSeq }),
@@ -446,8 +446,7 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
         ? reconcileTerminalStreamBoundary(finalMessage, state)
         : { kind: "none" as const };
       if (boundary.kind === "split") {
-        // Same-run assistant rows share one cumulative reducer identity. Keep the
-        // authoritative prefix stable and project the complete terminal tail after it.
+        // The tail follows a known transcript boundary; it cannot adopt the saved prefix.
         discardStreamSegmentIndexes(state, boundary.replacedSegmentIndexes);
         let visibleMessages = materializeVisibleStream({ includeCurrent: false });
         if (boundary.tailMessage && !shouldHideAssistantChatMessage(boundary.tailMessage)) {
@@ -459,7 +458,12 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
               boundary.afterBoundaryRunId,
             ),
           );
-          publishVisibleTerminal(boundary.tailMessage, visibleMessages, terminalRunId, true);
+          publishVisibleTerminal(
+            boundary.tailMessage,
+            visibleMessages,
+            terminalRunId,
+            boundary.afterSequence,
+          );
         } else {
           publishChatSessionProjectionMessages(state, visibleMessages, { scope });
         }

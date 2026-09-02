@@ -3,6 +3,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -980,7 +981,7 @@ function killOwnedCommand(child) {
 }
 
 /** @param {"update" | "recovery" | "diagnostic"} phase */
-async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs) {
+async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs, cwd = params.cwd) {
   const outputFd = fs.openSync(params.logPath, "a", 0o600);
   let timeout;
   const updaterChunks = [];
@@ -988,7 +989,7 @@ async function runOwnedUpdateCommand(phase, commandArgv, timeoutMs) {
   let outputOverflow = false;
   try {
     const child = spawn(process.execPath, ["-e", ${JSON.stringify(HANDOFF_COMMAND_RUNNER_SCRIPT)}, JSON.stringify(commandArgv)], {
-      cwd: params.cwd,
+      cwd,
       env: process.env,
       detached: true,
       stdio: ["pipe", "pipe", outputFd],
@@ -1135,12 +1136,14 @@ async function collectUpdateFailureTriage() {
       }
       wake?.();
     });
-    process.stdin.once("close", () => {
+    const onDisconnect = () => {
       disconnected = true;
       wake?.();
-    });
+    };
+    process.stdin.once("end", onDisconnect).once("close", onDisconnect);
     const reply = (line) => fs.writeSync(1, line + "\n");
     let parked = false;
+    let transferred = false;
     while (isPidAlive(params.parentPid)) {
       if (!ownsManagedUpdateLease()) throw new Error("managed update lease no longer owns the helper");
       if (readProcessStartIdentity(params.parentPid) !== params.parentStartIdentity) {
@@ -1159,8 +1162,20 @@ async function collectUpdateFailureTriage() {
           try { process.kill(params.parentPid, "SIGKILL"); } catch {}
         }
       }
+      // A child CLI must finish reporting before its Gateway's stop kills it.
+      // Only an acknowledged transfer lets EOF commit; ordinary EOF cancels.
+      if (transferred && disconnected && !parked) {
+        appendLog("initiating CLI disconnected; parking the managed gateway service");
+        await parkGatewayService();
+        parked = true;
+        outcome = Date.now() < params.parentExitDeadlineAt ? "update" : "restore";
+      }
       const command = commands.shift();
-      if (command === "park") {
+      if (command === "transfer" && !parked && !transferred) {
+        transferred = true;
+        appendLog("managed update ownership transferred; waiting for initiating CLI exit");
+        reply("transferred");
+      } else if (command === "park") {
         try {
           if (!parked) await parkGatewayService();
           parked = true;
@@ -1252,7 +1267,8 @@ async function collectUpdateFailureTriage() {
     }
 
     appendLog("starting managed update command: " + params.commandLabel);
-    const exit = await runOwnedUpdateCommand("update", params.commandArgv);
+    // Update inputs retain shell-relative paths; recovery keeps the durable helper cwd.
+    const exit = await runOwnedUpdateCommand("update", params.commandArgv, undefined, params.invocationCwd);
     const { updaterOutput, outputOverflow } = exit;
     // Only this invocation's direct child result carries the producer decision.
     // Success may change install roots; only recovery requires the original root.
@@ -1324,6 +1340,7 @@ type ManagedServiceUpdateHandoffParams = {
   restartDelayMs?: number;
   channel?: UpdateChannel;
   tag?: string;
+  acceptCapabilities?: boolean;
   meta: UpdateRestartSentinelMeta;
   handoffId?: string;
   supervisor?: RespawnSupervisor | null;
@@ -1332,6 +1349,7 @@ type ManagedServiceUpdateHandoffParams = {
   execPath?: string;
   argv1?: string;
   parentPid?: number;
+  invocationCwd?: string;
 };
 
 type ManagedServiceUpdateHandoffResult = {
@@ -1359,10 +1377,14 @@ function resolveUpdateCliArgv(params: {
   timeoutMs?: number;
   channel?: UpdateChannel;
   tag?: string;
+  acceptCapabilities?: boolean;
   execPath?: string;
   argv1?: string;
 }): string[] {
   const updateArgs = ["update", "--yes", "--json"];
+  if (params.acceptCapabilities) {
+    updateArgs.push("--accept-capabilities");
+  }
   if (params.channel) {
     updateArgs.push("--channel", params.channel);
   }
@@ -1392,7 +1414,12 @@ function resolveManagedServiceCliArgv(
 }
 
 export function formatManagedServiceUpdateCommand(
-  params?: { timeoutMs?: number; channel?: UpdateChannel; tag?: string },
+  params?: {
+    timeoutMs?: number;
+    channel?: UpdateChannel;
+    tag?: string;
+    acceptCapabilities?: boolean;
+  },
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   return formatCliCommand(
@@ -1522,14 +1549,17 @@ async function spawnManagedServiceUpdateHandoff(
   );
   const logPath = path.join(dir, "handoff.log");
   const commandArgv = resolveUpdateCliArgv({
-    timeoutMs: params.timeoutMs,
-    channel: params.channel,
-    tag: params.tag,
+    ...params,
     execPath: params.execPath ?? process.execPath,
     argv1: params.argv1 ?? process.argv[1],
   });
   const commandLabel = formatManagedServiceUpdateCommand(
-    { timeoutMs: params.timeoutMs, channel: params.channel, tag: params.tag },
+    {
+      timeoutMs: params.timeoutMs,
+      channel: params.channel,
+      tag: params.tag,
+      acceptCapabilities: params.acceptCapabilities,
+    },
     params.env,
   );
   const metaFile: ControlPlaneUpdateSentinelMetaFile = {
@@ -1572,6 +1602,7 @@ async function spawnManagedServiceUpdateHandoff(
     parentExitTimeoutMs,
     parentExitDeadlineAt: Date.now() + parentExitTimeoutMs,
     cwd: dir,
+    invocationCwd: params.invocationCwd,
     commandArgv,
     recoveryCommandArgv: resolveManagedServiceCliArgv(
       { execPath: params.execPath ?? process.execPath, argv1: params.argv1 ?? process.argv[1] },
@@ -1877,6 +1908,28 @@ export async function commitManagedServiceUpdateHandoff(
       outcome === "update" ? "commit" : "restore-commit",
     )) === "committed"
   );
+}
+
+export async function transferManagedServiceUpdateHandoff(
+  identity: NonNullable<GatewayRestartIntent["successorOwner"]>,
+): Promise<boolean> {
+  const child = activeManagedServiceUpdateHandoffs.get(
+    resolveUpdateInstallRoot(identity.installRoot),
+  )?.launcher;
+  if (
+    !(child?.stdin instanceof Socket) ||
+    !(child.stdout instanceof Socket) ||
+    !claimManagedServiceUpdateHandoff(identity) ||
+    (await sendManagedServiceUpdateHandoffCommand(identity, "transfer")) !== "transferred" ||
+    !claimManagedServiceUpdateHandoff(identity)
+  ) {
+    return false;
+  }
+  // Node's spawn pipe streams are net.Socket instances. Unref keeps the control
+  // channel open until CLI exit, so its result is printed before service stop.
+  child.stdin.unref();
+  child.stdout.unref();
+  return true;
 }
 
 export async function cancelManagedServiceUpdateHandoff(

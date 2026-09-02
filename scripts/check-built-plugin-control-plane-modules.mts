@@ -6,6 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
+import { collectSourceCheckoutPluginBuildEntries } from "./lib/bundled-plugin-build-entries.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 
@@ -26,11 +27,12 @@ type BuiltDoctorContractClosureViolation = BuiltPluginControlPlaneModule & {
 
 type ProbeParams = {
   rootDir?: string;
+  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
 };
 
 const ROOT = resolveRepoRoot(import.meta.url);
-const DIRECT_CONTRACT_FILES = ["contract-api.js", "doctor-contract-api.js"];
+const DIRECT_CONTRACT_ENTRIES = ["contract-api", "doctor-contract-api"];
 const LEGACY_SETUP_PROPERTIES = new Map<string, string>([
   ["legacyStateMigrations", "channel-legacy-state-migrations"],
   ["legacySessionSurface", "channel-legacy-session-surface"],
@@ -98,12 +100,20 @@ function listLegacySetupModuleSpecifiers(setupEntryPath: string) {
 }
 
 /** Lists exact built doctor, contract, and channel legacy migration artifacts. */
-export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } = {}) {
+export function listBuiltPluginControlPlaneModules(
+  params: Pick<ProbeParams, "rootDir" | "env"> = {},
+) {
   const rootDir = path.resolve(params.rootDir ?? ROOT);
   const extensionsDir = path.join(rootDir, "dist", "extensions");
   if (!fs.existsSync(extensionsDir)) {
     return [];
   }
+  const sourceEntries = new Map(
+    (fs.existsSync(path.join(rootDir, "extensions"))
+      ? collectSourceCheckoutPluginBuildEntries({ cwd: rootDir, env: params.env })
+      : []
+    ).map((entry) => [entry.id, entry]),
+  );
   const modules = new Map<string, BuiltPluginControlPlaneModule>();
   for (const entry of fs
     .readdirSync(extensionsDir, { withFileTypes: true })
@@ -111,18 +121,22 @@ export function listBuiltPluginControlPlaneModules(params: { rootDir?: string } 
     .toSorted((left, right) => left.name.localeCompare(right.name))) {
     const pluginId = entry.name;
     const pluginDir = path.join(extensionsDir, pluginId);
-    for (const fileName of DIRECT_CONTRACT_FILES) {
+    // Packaged core artifacts use ESM; isolated source-checkout plugins use
+    // the same selected format as their builder and generated metadata.
+    const extension = sourceEntries.get(pluginId)?.runtimeExtension ?? ".js";
+    for (const entryName of DIRECT_CONTRACT_ENTRIES) {
+      const fileName = `${entryName}${extension}`;
       const modulePath = path.join(pluginDir, fileName);
       if (fs.existsSync(modulePath)) {
         const relativePath = path.relative(rootDir, modulePath).split(path.sep).join("/");
         modules.set(relativePath, {
           pluginId,
-          kind: fileName === "doctor-contract-api.js" ? "doctor-contract" : "contract",
+          kind: entryName === "doctor-contract-api" ? "doctor-contract" : "contract",
           relativePath,
         });
       }
     }
-    const setupEntryPath = path.join(pluginDir, "setup-entry.js");
+    const setupEntryPath = path.join(pluginDir, `setup-entry${extension}`);
     if (!fs.existsSync(setupEntryPath)) {
       continue;
     }
@@ -184,30 +198,36 @@ export function probeBuiltPluginControlPlaneModules(
   );
 }
 
-// Built chunks are plain ESM, so static edges are exactly the import/export
-// declarations. Dynamic `import()` is excluded by construction: a lazy edge is
-// never paid at enumeration time.
+// Follow ESM declarations and eager CJS require calls emitted by isolated builds.
+// Dynamic imports and requires inside functions are lazy, not enumeration costs.
 function parseStaticModuleSpecifiers(source: string, filePath: string): string[] {
   const sourceFile = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest, true);
   const specifiers: string[] = [];
-  for (const statement of sourceFile.statements) {
+  const visit = (node: ts.Node): void => {
+    if (ts.isFunctionLike(node)) {
+      return;
+    }
     const moduleSpecifier =
-      ts.isImportDeclaration(statement) || ts.isExportDeclaration(statement)
-        ? statement.moduleSpecifier
-        : undefined;
+      ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
+        ? node.moduleSpecifier
+        : ts.isCallExpression(node) &&
+            ts.isIdentifier(node.expression) &&
+            /^(?:require|_+require\d*)$/u.test(node.expression.text)
+          ? node.arguments[0]
+          : undefined;
     if (moduleSpecifier && ts.isStringLiteralLike(moduleSpecifier)) {
       specifiers.push(moduleSpecifier.text);
     }
-  }
+    ts.forEachChild(node, visit);
+  };
+  visit(sourceFile);
   return specifiers;
 }
 
 function resolveBuiltChunkPath(importerPath: string, specifier: string): string | undefined {
   const target = path.resolve(path.dirname(importerPath), specifier);
-  const candidates = [target, `${target}.js`, `${target}.mjs`, path.join(target, "index.js")];
-  return candidates.find(
-    (candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile(),
-  );
+  // Generated chunk edges carry their exact output suffix, including CJS.
+  return fs.existsSync(target) && fs.statSync(target).isFile() ? target : undefined;
 }
 
 /** Collects the bare dependencies a built artifact reaches through static imports. */

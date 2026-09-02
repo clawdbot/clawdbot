@@ -1,3 +1,4 @@
+import { isUtf8 } from "node:buffer";
 import process from "node:process";
 import { StringDecoder } from "node:string_decoder";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -133,14 +134,12 @@ function trimTruncatedUtf8Boundary(
     }
     return buffer.subarray(start);
   }
-  const decoder = new TextDecoder("utf-8", { fatal: true });
+  // A UTF-8 code point is at most four bytes. Keep the original buffer when
+  // no boundary yields a valid prefix, including malformed interior output.
   for (let removed = 0; removed <= 3 && removed <= buffer.length; removed += 1) {
     const end = buffer.length - removed;
-    try {
-      decoder.decode(buffer.subarray(0, end));
+    if (isUtf8(buffer.subarray(0, end))) {
       return buffer.subarray(0, end);
-    } catch {
-      // A UTF-8 code point is at most four bytes; try the preceding boundary.
     }
   }
   return buffer;

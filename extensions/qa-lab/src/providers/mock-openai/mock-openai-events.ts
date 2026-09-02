@@ -1,6 +1,6 @@
 // QA Lab mock provider output event builders.
 
-import type { StreamEvent } from "./mock-openai-contracts.js";
+import { buildCompletedResponseEvent, type StreamEvent } from "./mock-openai-contracts.js";
 import { buildMockFunctionCall } from "./mock-openai-tooling.js";
 
 export function buildFailedResponseEvents(): StreamEvent[] {
@@ -290,9 +290,8 @@ export function buildAssistantThenToolCallEvents(
   args: Record<string, unknown>,
 ): StreamEvent[] {
   const call = buildMockFunctionCall(name, args);
-  const message = buildAssistantOutputItem(spec);
   const events: StreamEvent[] = [];
-  appendAssistantMessageEvents(events, spec, 0);
+  const message = appendAssistantMessageEvents(events, spec, 0);
   events.push({
     type: "response.output_item.added",
     output_index: 1,
@@ -315,15 +314,7 @@ export function buildAssistantThenToolCallEvents(
     output_index: 1,
     item: call.item,
   });
-  events.push({
-    type: "response.completed",
-    response: {
-      id: call.responseId,
-      status: "completed",
-      output: [message, call.item],
-      usage: { input_tokens: 64, output_tokens: 32, total_tokens: 96 },
-    },
-  });
+  events.push(buildCompletedResponseEvent(call.responseId, [message, call.item], 32));
   return events;
 }
 
@@ -339,23 +330,11 @@ export function buildAssistantEvents(
           },
         ]
       : specsOrText;
-  const renderedSpecs = specs.map((spec) => ({ spec, item: buildAssistantOutputItem(spec) }));
-  const output = renderedSpecs.map(({ item }) => item);
   const events: StreamEvent[] = [];
-
-  for (const [outputIndex, { spec }] of renderedSpecs.entries()) {
-    appendAssistantMessageEvents(events, spec, outputIndex);
-  }
-
-  events.push({
-    type: "response.completed",
-    response: {
-      id: "resp_mock_msg_1",
-      status: "completed",
-      output,
-      usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
-    },
-  });
+  const output = specs.map((spec, outputIndex) =>
+    appendAssistantMessageEvents(events, spec, outputIndex),
+  );
+  events.push(buildCompletedResponseEvent("resp_mock_msg_1", output, 24));
   return events;
 }
 
@@ -395,15 +374,7 @@ export function buildReasoningOnlyEvents(summaryText: string, id: string): Strea
       output_index: 0,
       item: reasoningItem,
     },
-    {
-      type: "response.completed",
-      response: {
-        id: `resp_${id}`,
-        status: "completed",
-        output: [reasoningItem],
-        usage: { input_tokens: 64, output_tokens: 8, total_tokens: 72 },
-      },
-    },
+    buildCompletedResponseEvent(`resp_${id}`, [reasoningItem], 8),
   ];
 }
 
@@ -443,14 +414,8 @@ export function buildReasoningAndAssistantEvents(params: {
     },
     1,
   );
-  events.push({
-    type: "response.completed",
-    response: {
-      id: `resp_${params.reasoningId}`,
-      status: "completed",
-      output: [reasoningItem, answerItem],
-      usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
-    },
-  });
+  events.push(
+    buildCompletedResponseEvent(`resp_${params.reasoningId}`, [reasoningItem, answerItem], 16),
+  );
   return events;
 }

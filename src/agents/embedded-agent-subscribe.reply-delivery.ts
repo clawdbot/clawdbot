@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import {
   getReplyPayloadMetadata,
@@ -16,7 +17,10 @@ import {
   readPendingToolMediaReply,
   restorePendingToolMediaReply,
 } from "./embedded-agent-subscribe.handlers.messages.replies.js";
-import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
+import type {
+  AssistantStreamData,
+  EmbeddedAgentSubscribeContext,
+} from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 
 type ReplyDeliveryParams = {
@@ -30,17 +34,24 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   const lastEmittedCommentaryByItem = new Map<string, string>();
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
+  // Retry subscriptions reuse run IDs and reset message counters. Their scopes
+  // must stay distinct so a correction cannot overwrite an earlier attempt.
+  const streamId = randomUUID();
+  let messageIndex = -1;
+  let blockIndex = -1;
+  let assistantItemId = "";
+  let prefix = "";
+  let streamedText = "";
+  let finalized = false;
   const shouldAllowSilentTurnText = (text: string | undefined) =>
     Boolean(text && isSilentReplyText(text, SILENT_REPLY_TOKEN));
   const emitAssistantStreamDataSafely = (
     delivery: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number],
   ) => {
-    const { data } = delivery;
-    const itemId = typeof data.itemId === "string" ? data.itemId : "";
+    const { data, eventData } = delivery;
+    const itemId = eventData?.itemId ?? "";
     const progressText =
-      data.phase === "commentary" && typeof data.text === "string"
-        ? data.text.replace(/\s+/g, " ").trim()
-        : "";
+      eventData?.phase === "commentary" ? eventData.text.replace(/\s+/g, " ").trim() : "";
     const event = progressText
       ? {
           stream: "item" as const,
@@ -52,9 +63,9 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
             ...(itemId ? { itemId } : {}),
           },
         }
-      : data.phase === "commentary"
+      : !eventData || eventData.phase === "commentary"
         ? undefined
-        : { stream: "assistant" as const, data };
+        : { stream: "assistant" as const, data: eventData };
     if (
       event &&
       (event.stream !== "item" || lastEmittedCommentaryByItem.get(itemId) !== progressText)
@@ -90,11 +101,60 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       }
     }
   };
-  const emitAssistantStreamData = (
-    data: EmbeddedAgentSubscribeContext["state"]["deferredAssistantEvents"][number]["data"],
-    options?: { emitPartialReply?: boolean },
+  const emitAssistantStreamData: EmbeddedAgentSubscribeContext["emitAssistantStreamData"] = (
+    data,
+    options,
   ) => {
-    const delivery = { data, emitPartialReply: options?.emitPartialReply === true };
+    let eventData: AssistantStreamData | undefined;
+    if (data.phase === "commentary") {
+      eventData = data;
+    } else {
+      if (messageIndex !== state.assistantMessageStartIndex) {
+        messageIndex = state.assistantMessageStartIndex;
+        blockIndex = state.assistantMessageIndex;
+        assistantItemId = `${streamId}:${messageIndex}`;
+        prefix = streamedText = "";
+        finalized = false;
+      }
+      if (!finalized || options?.finalMessage) {
+        if (blockIndex !== state.assistantMessageIndex) {
+          prefix = streamedText;
+          blockIndex = state.assistantMessageIndex;
+        }
+        const text = options?.finalMessage
+          ? data.text
+          : prefix && data.text
+            ? `${prefix}\n${data.text}`
+            : prefix || data.text;
+        const replace = options?.finalMessage
+          ? !text.startsWith(streamedText)
+          : data.replace === true;
+        const delta = options?.finalMessage
+          ? replace
+            ? ""
+            : text.slice(streamedText.length)
+          : prefix && streamedText.length === prefix.length && data.delta
+            ? `\n${data.delta}`
+            : data.delta;
+        if (text !== streamedText || data.mediaUrls?.length || data.managedMediaUrls?.length) {
+          eventData = {
+            ...data,
+            text,
+            delta,
+            replace: replace || undefined,
+            itemId: assistantItemId,
+          };
+        }
+        streamedText = text;
+        finalized = options?.finalMessage === true;
+      }
+    }
+    // Project before deferral while these message/block indices are current.
+    // Channel partials retain their block-scoped payload; the bus gets a whole message.
+    const delivery = { data, eventData, emitPartialReply: options?.emitPartialReply === true };
+    if (!eventData && !delivery.emitPartialReply) {
+      return;
+    }
     if (state.deferBlockReplyDelivery) {
       state.deferredAssistantEvents.push(delivery);
       return;
@@ -248,13 +308,19 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
 
   const rememberAssistantText = (text: string, normalizedText?: string) => {
     state.lastAssistantTextMessageIndex = state.assistantMessageIndex;
+    state.lastAssistantTextContentIndex = state.lastAssistantStreamContentIndex;
+    state.lastAssistantTextItemId = state.lastAssistantStreamItemId;
     state.lastAssistantTextTrimmed = text.trimEnd();
     const normalized = normalizedText ?? normalizeTextForComparison(text);
     state.lastAssistantTextNormalized = normalized.length > 0 ? normalized : undefined;
   };
 
   const shouldSkipAssistantText = (text: string, normalizedText?: string) => {
-    if (state.lastAssistantTextMessageIndex !== state.assistantMessageIndex) {
+    // Distinct provider content blocks may legitimately contain identical text.
+    if (
+      state.lastAssistantTextMessageIndex !== state.assistantMessageIndex ||
+      state.lastAssistantTextContentIndex !== state.lastAssistantStreamContentIndex
+    ) {
       return false;
     }
     const trimmed = text.trimEnd();
@@ -306,7 +372,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     // the flushed partial instead of appending a duplicate. The partial stays
     // when message_end never arrives (hard run-budget abort) — that is the
     // salvage the timeout flush exists for.
-    if (state.hasFlushedPartialText && text) {
+    if (state.hasFlushedPartialText) {
       replaceCurrentAssistantText(text);
       state.hasFlushedPartialText = false;
       state.assistantTextBaseline = assistantTexts.length;

@@ -200,6 +200,18 @@ preserves the existing payload and does not publish a new install record.
 Registry verification and any required capability review finish before the
 repaired install record is published.
 
+When a bundled plugin moves to an external package, failed relocation reports
+that the replacement payload was not installed and preserves the underlying error.
+Resolve that error before retrying with `openclaw update repair`.
+Doctor and update repair reinstall configured payloads with missing package files
+or a reported missing runtime entry;
+an empty directory is not a successful installation. Rollback removes empty
+managed npm projects after staged files are cleaned up. Doctor preserves external
+companion packages and their install records even when a source checkout also
+contains a bundled-discovery copy of the same plugin. Repair diagnostics must identify the recorded
+package root; a broken same-ID source copy does not trigger replacement of a
+healthy managed package.
+
 With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
@@ -321,6 +333,17 @@ aligned:
   missing or older than the current stable release.
 
 ### Restart handoff
+
+When an agent runs `openclaw update` inside a systemd user service or macOS
+LaunchAgent Gateway, the CLI hands the update to the same managed-service helper
+before stopping the Gateway. It prints the helper log path and follow-up commands
+for update status and Gateway health, then exits; this acknowledges the handoff,
+not a completed update. The helper owns stop, update, restart, and recovery outside
+the Gateway process tree. Keep stdout connected to the agent: stopping the service
+can terminate the surrounding exec shell (SIGTERM or exit 143), including commands
+chained after the update. After a handoff result, use the printed follow-up commands
+for the final outcome. Plain terminal updates remain synchronous, and `--no-restart`
+does not authorize stopping the agent's Gateway.
 
 The Gateway core auto-updater requires a managed service restart path. It hands
 the CLI update to a detached helper before the Gateway exits. A foreground

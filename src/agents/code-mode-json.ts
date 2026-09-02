@@ -7,6 +7,10 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
   if (value === undefined) {
     return null;
   }
+  // Strings, booleans and null need no detachment or JSON normalization.
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
   try {
     const serialized = JSON.stringify(value);
     return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
@@ -14,13 +18,8 @@ export function toCodeModeJsonSafe(value: unknown): unknown {
     if (value instanceof Error) {
       return { name: value.name, message: value.message };
     }
-    if (value === null) {
-      return null;
-    }
     switch (typeof value) {
-      case "string":
       case "number":
-      case "boolean":
         return value;
       case "bigint":
       case "symbol":

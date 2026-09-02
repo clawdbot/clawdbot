@@ -54,7 +54,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.size
@@ -115,7 +114,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextAlign
@@ -149,11 +147,6 @@ private val overviewListRowMinHeight = 54.dp
 private const val overviewRecentSessionLimit = 50
 private const val overviewRecentSessionVisibleLimit = 3
 
-internal fun shellBottomNavVisible(
-  keyboardVisible: Boolean,
-  commandOpen: Boolean,
-): Boolean = !keyboardVisible && !commandOpen
-
 /** Main post-onboarding shell that owns top-level Android navigation state. */
 @Composable
 fun ShellScreen(
@@ -161,14 +154,17 @@ fun ShellScreen(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val appearanceThemeFamily by viewModel.appearanceThemeFamily.collectAsState()
+  val appearanceAccentArgb by viewModel.appearanceAccentArgb.collectAsState()
   val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val shellDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
   OpenClawSystemBarAppearance(lightAppearance = !shellDark)
-  ClawDesignTheme(dark = shellDark, accentArgb = gatewayAccentArgb) {
+  ClawDesignTheme(dark = shellDark, family = appearanceThemeFamily, accentArgb = appearanceAccentArgb ?: gatewayAccentArgb) {
     val nav = rememberSaveable(saver = ShellNavigation.Saver) { ShellNavigation() }
     var commandOpen by rememberSaveable { mutableStateOf(false) }
     var conversationScreenWasActive by rememberSaveable { mutableStateOf(false) }
     val sidebarDrawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    var sidebarRowDragging by remember { mutableStateOf(false) }
     val coroutineScope = rememberCoroutineScope()
     val requestedHomeDestination by viewModel.requestedHomeDestination.collectAsState()
     val pendingTrust by viewModel.pendingGatewayTrust.collectAsState()
@@ -226,18 +222,13 @@ fun ShellScreen(
       if (commandOpen || pendingTrust != null) sidebarDrawerState.close()
     }
 
-    val density = LocalDensity.current
-    val keyboardVisible = WindowInsets.ime.getBottom(density) > 0
-    val compactNavigationVisible =
-      shellBottomNavVisible(keyboardVisible = keyboardVisible, commandOpen = commandOpen)
-
     val activeSidebarDestination =
       when {
+        nav.activeTab == Tab.Settings && nav.settingsRoute != SettingsRoute.Skills -> SidebarDestination.Settings
+        nav.activeTab == Tab.Overview -> SidebarDestination.Work
         nav.activeTab == Tab.Chat -> SidebarDestination.Home
-        nav.activeTab == Tab.Overview -> SidebarDestination.Overview
-        nav.activeTab == Tab.Sessions -> SidebarDestination.Sessions
-        nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Usage -> SidebarDestination.Usage
-        nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.CronJobs -> SidebarDestination.Automations
+        nav.activeTab == Tab.Settings && nav.settingsRoute == SettingsRoute.Skills -> SidebarDestination.Skills
+        nav.activeTab == Tab.Sessions -> SidebarDestination.Threads
         else -> null
       }
     val openSidebar: () -> Unit = {
@@ -248,21 +239,19 @@ fun ShellScreen(
     }
     val selectSidebarDestination: (SidebarDestination) -> Unit = { destination ->
       when (destination) {
+        SidebarDestination.Settings -> nav.openSettingsRoute(SettingsRoute.Home)
+        SidebarDestination.Work -> nav.selectTab(Tab.Overview)
         SidebarDestination.Home -> nav.selectTab(Tab.Chat)
-        SidebarDestination.Overview -> nav.selectTab(Tab.Overview)
-        SidebarDestination.Usage -> nav.openSettingsRoute(SettingsRoute.Usage)
-        SidebarDestination.Automations -> nav.openSettingsRoute(SettingsRoute.CronJobs)
-        SidebarDestination.Sessions -> nav.selectTab(Tab.Sessions)
+        SidebarDestination.Skills -> nav.openSettingsRoute(SettingsRoute.Skills)
+        SidebarDestination.Threads -> nav.selectTab(Tab.Sessions)
       }
       closeSidebar()
     }
 
     Box(modifier = modifier.fillMaxSize().background(ClawTheme.colors.canvas)) {
-      AdaptiveNavigationShell(
+      SidebarNavigationShell(
         drawerState = sidebarDrawerState,
-        compactNavigationVisible = compactNavigationVisible,
-        activeDestination = activeSidebarDestination,
-        onSelectDestination = selectSidebarDestination,
+        gesturesEnabled = !sidebarRowDragging,
         drawerContent = {
           OpenClawSidebar(
             viewModel = viewModel,
@@ -272,10 +261,13 @@ fun ShellScreen(
             activeSessionKey = chatSessionKey,
             activeDestination = activeSidebarDestination,
             connection = gatewayConnectionDisplay,
+            drawerActive = sidebarDrawerState.isOpen,
             showCloseButton = true,
             onClose = closeSidebar,
-            onOpenSettings = {
-              nav.selectTab(Tab.Settings)
+            onDragActiveChange = { sidebarRowDragging = it },
+            onNewSession = {
+              viewModel.startNewChat(worktree = false)
+              nav.selectTab(Tab.Chat)
               closeSidebar()
             },
             onSelectAgent = { agentId ->
@@ -287,6 +279,19 @@ fun ShellScreen(
               viewModel.switchChatSession(session.key, session.ownerAgentId)
               nav.selectTab(Tab.Chat)
               closeSidebar()
+            },
+            onSelectCatalogSession = { session ->
+              viewModel.continueSessionCatalogEntry(session) { continued ->
+                if (continued) {
+                  nav.selectTab(Tab.Chat)
+                  closeSidebar()
+                }
+              }
+            },
+            onCreateCatalogSession = { catalogId ->
+              nav.selectTab(Tab.Chat)
+              closeSidebar()
+              viewModel.createSessionCatalogEntry(catalogId)
             },
             onSelectDestination = selectSidebarDestination,
           )
@@ -309,7 +314,6 @@ fun ShellScreen(
               viewModel = viewModel,
               showSidebarButton = true,
               onOpenSidebar = openSidebar,
-              onOpenSessions = { nav.openDetailTab(Tab.Sessions) },
               onOpenDashboard = nav::openSessionDashboard,
               onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
               onOpenProvidersModels = { nav.openDetailTab(Tab.ProvidersModels) },

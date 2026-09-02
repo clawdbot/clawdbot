@@ -454,7 +454,7 @@ export async function buildDynamicTools(
     hostSystemAgentActive && isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow)
       ? preserveRingZeroSystemAgentTool(readableAllTools, normallyProfiledTools)
       : normallyProfiledTools;
-  const codexFilteredTools = addNodeShellDynamicToolsIfNeeded(
+  const codexFilteredTools = await addNodeShellDynamicToolsIfNeeded(
     addGatewayShellDynamicToolsIfAvailable(
       addSandboxShellDynamicToolsIfAvailable(
         isCodexMemoryFlushRun(params)
@@ -882,12 +882,12 @@ function addSandboxShellDynamicToolsIfAvailable(
 function isSandboxShellDynamicToolExcluded(config: CodexPluginConfig): boolean {
   return isCodexDynamicToolExcluded(config, ["exec", "sandbox_exec", "process", "sandbox_process"]);
 }
-function addNodeShellDynamicToolsIfNeeded(
+async function addNodeShellDynamicToolsIfNeeded(
   filteredTools: OpenClawDynamicTool[],
   allTools: OpenClawDynamicTool[],
   input: DynamicToolBuildParams,
   nodePolicy: CodexNativeExecutionPolicy,
-): OpenClawDynamicTool[] {
+): Promise<OpenClawDynamicTool[]> {
   if (isCodexMemoryFlushRun(input.params)) {
     return filteredTools;
   }
@@ -898,18 +898,21 @@ function addNodeShellDynamicToolsIfNeeded(
     return filteredTools;
   }
   const execTool = allTools.find((tool) => normalizeCodexDynamicToolName(tool.name) === "exec");
-  if (!execTool) {
-    return filteredTools;
-  }
   if (
-    !isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) &&
-    !filteredTools.some(
+    !execTool ||
+    isCodexDynamicToolExcluded(input.pluginConfig, ["exec", CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME]) ||
+    filteredTools.some(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    return [...filteredTools, createNodeExecAliasDynamicTool(execTool, nodePolicy.node)];
+    return filteredTools;
   }
-  return filteredTools;
+  const nodeExec = await createNodeExecAliasDynamicTool(
+    execTool,
+    nodePolicy.node,
+    input.runAbortController.signal,
+  );
+  return nodeExec ? [...filteredTools, nodeExec] : filteredTools;
 }
 function shouldKeepOpenClawShellDynamicTools(
   input: DynamicToolBuildParams,

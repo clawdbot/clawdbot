@@ -1,6 +1,7 @@
 // Package Mac App tests cover package mac app script behavior.
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { availableParallelism } from "node:os";
 import path from "node:path";
 import { minimatch } from "minimatch";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,6 +9,125 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scriptPath = "scripts/package-mac-app.sh";
+const swiftScriptPath = "scripts/lib/mac-swift-build.sh";
+
+describe.skipIf(process.platform === "win32" || availableParallelism() < 2)(
+  "parallel macOS Swift build ownership",
+  () => {
+    it.each(["success", "failure", "wrong-source", "cancel", "cleanup-failure"])(
+      "joins architecture workers and preserves assembly safety: %s",
+      async (mode) => {
+        const root = tempDirs.make("openclaw-swift-parallel-");
+        const stage = path.join(root, "stage");
+        const scripts = path.join(root, "scripts/lib");
+        mkdirSync(scripts, { recursive: true });
+        mkdirSync(stage);
+        const commit = "b".repeat(40);
+        writeFileSync(
+          path.join(scripts, "mac-swift-build.sh"),
+          `#!/bin/bash
+set -euo pipefail
+exec "${process.execPath}" "${path.join(root, "worker.mjs")}" "$@"
+`,
+        );
+        writeFileSync(
+          path.join(root, "worker.mjs"),
+          `
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawn } from 'node:child_process';
+const [operation, root, arch, config, jobs, commit, skip, work] = process.argv.slice(2);
+const mode = ${JSON.stringify(mode)};
+const event = (value) => fs.appendFileSync(path.join(root, 'events'), value + '\\n');
+if (operation === 'cleanup') {
+  event('cleanup:' + arch);
+  process.exit(mode === 'cleanup-failure' ? 55 : 0);
+}
+event('build:' + arch + ':' + jobs);
+const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });
+fs.writeFileSync(path.join(root, 'pid-' + arch), String(child.pid));
+const exited = new Promise(resolve => child.on('exit', resolve));
+process.on('SIGTERM', async () => { child.kill(); await exited; event('stopped:' + arch); process.exit(143); });
+fs.writeFileSync(path.join(root, 'ready-' + arch), 'ready');
+const deadline = Date.now() + 5000;
+while (!['arm64', 'x86_64'].every(a => fs.existsSync(path.join(root, 'ready-' + a)))) {
+  if (Date.now() > deadline) throw new Error('architecture barrier did not open');
+  await new Promise(resolve => setTimeout(resolve, 10));
+}
+event('barrier:' + arch);
+if (mode === 'cancel' || (mode === 'failure' && arch === 'arm64')) await new Promise(() => {});
+child.kill(); await exited;
+if (mode === 'failure') process.exit(42);
+fs.writeFileSync(path.join(work, 'peekaboo-commit'), mode === 'wrong-source' ? 'wrong' : commit);
+`,
+        );
+        const script = readFileSync(scriptPath, "utf8");
+        const cleanup = script.slice(
+          script.indexOf("cleanup_package_build() {"),
+          script.indexOf("PNPM_CMD=()"),
+        );
+        const build = script.slice(
+          script.indexOf('echo "🔨 Building $PRODUCT'),
+          script.indexOf('BIN_PRIMARY="$(bin_for_arch'),
+        );
+        // Exercise the real parent wait/signal/cleanup flow; only the heavy graph is a fixture.
+        const launcher = `set -euo pipefail
+ROOT_DIR=${JSON.stringify(root)}
+APP_STAGE_DIR=${JSON.stringify(stage)}
+SWIFT_BUILD_RESULTS=""
+SWIFT_BUILD_PID=""
+PRODUCT=OpenClaw
+BUILD_CONFIG=release
+PEEKABOO_LOCKED_SOURCE_COMMIT=${commit}
+SKIP_MLX_TTS=0
+BUILD_ARCHS=(arm64 x86_64)
+node() { exec "${process.execPath}" ${JSON.stringify(path.resolve("scripts/build-mac-swift.mts"))} "\${@:2}"; }
+${cleanup}
+${build}
+touch "$ROOT_DIR/assembled"
+`;
+        const child = spawn("/bin/bash", ["-c", launcher], { stdio: ["ignore", "pipe", "pipe"] });
+        let stderr = "";
+        child.stderr.on("data", (chunk: Buffer) => {
+          stderr += chunk.toString();
+        });
+        child.stdout.resume();
+        const closed = new Promise<number | null>((resolve) => {
+          child.on("close", resolve);
+        });
+        if (mode === "cancel") {
+          await expect
+            .poll(
+              () =>
+                existsSync(path.join(root, "ready-arm64")) &&
+                existsSync(path.join(root, "ready-x86_64")),
+            )
+            .toBe(true);
+          child.kill("SIGTERM");
+        }
+        const code = await closed;
+        expect(code, stderr).toBe(
+          mode === "success" ? 0 : mode === "cancel" ? 143 : mode === "cleanup-failure" ? 2 : 1,
+        );
+        expect(existsSync(path.join(root, "assembled"))).toBe(mode === "success");
+        expect(existsSync(stage)).toBe(mode === "cleanup-failure");
+        const events = readFileSync(path.join(root, "events"), "utf8").trim().split("\n");
+        expect(events.filter((event) => event.startsWith("cleanup:")).toSorted()).toEqual([
+          "cleanup:arm64",
+          "cleanup:x86_64",
+        ]);
+        for (const arch of ["arm64", "x86_64"]) {
+          const pid = Number(readFileSync(path.join(root, `pid-${arch}`), "utf8"));
+          expect(() => process.kill(pid, 0)).toThrow();
+          expect(
+            existsSync(path.join(root, "apps/macos/.build", `.openclaw-package-${arch}.lock`)),
+          ).toBe(mode === "cleanup-failure");
+        }
+      },
+      15_000,
+    );
+  },
+);
 
 describe("packaged worker freshness", () => {
   it.each([
@@ -196,7 +316,7 @@ function runSwiftToolchainHarness(options: {
 function getSparkleBuildHelperBlock(): string {
   const script = readFileSync(scriptPath, "utf8");
   const start = script.indexOf("sparkle_canonical_build_from_version()");
-  const end = script.indexOf("build_path_for_arch()");
+  const end = script.indexOf('source "$ROOT_DIR/scripts/lib/mac-swift-build.sh"');
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -288,7 +408,7 @@ function runSourceProvenanceStampHarness(corruptKey?: string) {
 }
 
 function getMLXTTSHelperBuildBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
+  const script = readFileSync(swiftScriptPath, "utf8");
   const start = script.indexOf("helper_build_path_for_arch() {");
   const end = script.indexOf("sparkle_framework_for_arch()", start);
 
@@ -299,21 +419,21 @@ function getMLXTTSHelperBuildBlock(): string {
 }
 
 function getSwiftPackageResolutionBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
+  const script = readFileSync(swiftScriptPath, "utf8");
   const start = script.indexOf("run_with_locked_swift_packages()");
-  const end = script.indexOf("PNPM_CMD=()");
+  const end = script.indexOf("build_swift_architecture() {");
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
 
   // The shared EXIT cleanup also needs the packager preamble's unallocated app stage.
-  return `APP_STAGE_DIR=""\n${script.slice(start, end)}`;
+  return `${script.slice(start, end)}\nBUILD_PATH="$ROOT_DIR/build"\nSWIFT_WORK_ROOT="$ROOT_DIR/work"\nmkdir -p "$SWIFT_WORK_ROOT"\n`;
 }
 
 function getCompiledPeekabooHelperBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
+  const script = readFileSync(swiftScriptPath, "utf8");
   const start = script.indexOf("compiled_peekaboo_commit() {");
-  const end = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()", start);
+  const end = script.indexOf("swiftpm_resource_sources()", start);
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
   return script.slice(start, end);
@@ -505,9 +625,9 @@ function getSwiftPMResourceBundleBlock(): string {
 }
 
 function getSwiftPMResourcePatchBlock(): string {
-  const script = readFileSync(scriptPath, "utf8");
-  const start = script.indexOf("PATCHED_SWIFTPM_RESOURCE_SOURCES=()");
-  const end = script.indexOf("cleanup_package_build() {", start);
+  const script = readFileSync(swiftScriptPath, "utf8");
+  const start = script.indexOf("swiftpm_resource_sources()");
+  const end = script.indexOf("cleanup_swift_architecture() {", start);
 
   expect(start).toBeGreaterThanOrEqual(0);
   expect(end).toBeGreaterThan(start);
@@ -579,8 +699,8 @@ function runSwiftPMResourceBundleHarness(
     helper_build_path_for_arch() {
       echo "$MLX_TTS_HELPER_BUILD_ROOT/$1"
     }
-    build_mlx_tts_helper() {
-      [[ "$#" -eq 2 && "$1" == "$PRIMARY_ARCH" && "$2" == "--show-bin-path" ]] || return 1
+    helper_products_for_arch() {
+      [[ "$#" -eq 1 && "$1" == "$PRIMARY_ARCH" ]] || return 1
       printf '%s\\n' ${JSON.stringify(helperBuildProducts)}
     }
     ${getSwiftPMResourceBundleBlock()}
@@ -589,7 +709,7 @@ function runSwiftPMResourceBundleHarness(
   return { appRoot, result };
 }
 
-function runSwiftPMResourcePatchHarness() {
+function runSwiftPMResourcePatchHarness(failRestore = false) {
   const root = tempDirs.make("openclaw-package-resource-patch-");
   const buildPath = path.join(root, "build");
   const checkoutRoot = path.join(buildPath, "checkouts");
@@ -648,12 +768,17 @@ function runSwiftPMResourcePatchHarness() {
 
   const result = runHelper(`
     set -euo pipefail
+    SWIFT_WORK_ROOT=${JSON.stringify(tempDirs.make("openclaw-resource-backups-"))}
+    BUILD_PATH=${JSON.stringify(buildPath)}
     ${getSwiftPMResourcePatchBlock()}
     patch_swiftpm_resource_lookups ${JSON.stringify(buildPath)}
     grep -q keyboardShortcutsPackagedResources ${JSON.stringify(keyboardShortcuts)}
     test "$(grep -c swiftMathPackagedResources ${JSON.stringify(swiftMathFont)})" -eq 3
     grep -q swiftMathPackagedResources ${JSON.stringify(swiftMathLegacyFont)}
-    restore_swiftpm_resource_sources
+    ${failRestore ? "mv() { return 13; }" : ""}
+    cleanup_status=0
+    restore_swiftpm_resource_sources || cleanup_status=$?
+    exit "$cleanup_status"
   `);
 
   return { fixtures, result };
@@ -886,7 +1011,7 @@ describe("package-mac-app plist stamping", () => {
   it("gates only release packaging on clean matching source and verifies the embedded commit", () => {
     const script = readFileSync(scriptPath, "utf8");
     const sourceCheck = script.indexOf('bash "$ROOT_DIR/scripts/apple-release-source-check.sh"');
-    const build = script.indexOf('cd "$ROOT_DIR/apps/macos"');
+    const build = script.indexOf('node "$ROOT_DIR/scripts/build-mac-swift.mts"');
     const embeddedRead = script.indexOf(
       'plist_print_required "$APP_ROOT/Contents/Info.plist" OpenClawGitCommit',
     );
@@ -1004,10 +1129,7 @@ describe("package-mac-app plist stamping", () => {
 
   it("builds and bundles the MLX TTS helper for every requested architecture", () => {
     const script = readFileSync(scriptPath, "utf8");
-    const buildLoop = script.slice(
-      script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
-      script.indexOf('BIN_PRIMARY="$(bin_for_arch "$PRIMARY_ARCH")"'),
-    );
+    const buildLoop = readFileSync(swiftScriptPath, "utf8");
     const helperCopy = script.slice(
       script.indexOf('echo "🚚 Copying MLX TTS helper"'),
       script.indexOf("SPARKLE_FRAMEWORK_PRIMARY="),
@@ -1108,8 +1230,13 @@ describe("package-mac-app plist stamping", () => {
       MLX_TTS_HELPER_BUILD_ROOT=${JSON.stringify(helperBuildRoot)}
       MLX_TTS_HELPER_PRODUCT=openclaw-mlx-tts
       BUILD_CONFIG=release
+      SWIFT_BUILD_JOBS=2
+      SWIFT_BUILD_RESULTS=${JSON.stringify(tempRoot)}
+      mkdir -p "$SWIFT_BUILD_RESULTS/${arch}"
       ${getMLXTTSHelperBuildBlock()}
       build_mlx_tts_helper ${arch}
+      build_mlx_tts_helper ${arch} --show-bin-path > "$SWIFT_BUILD_RESULTS/${arch}/helper-products"
+      swift() { echo unexpected-build >&2; return 99; }
       cat "$(helper_bin_for_arch ${arch})"
     `);
 
@@ -1129,6 +1256,8 @@ describe("package-mac-app plist stamping", () => {
         path.join(helperBuildRoot, arch),
         "--arch",
         arch,
+        "--jobs",
+        "2",
       ];
       const invocations = readFileSync(invocationPath, "utf8")
         .trim()
@@ -1139,7 +1268,7 @@ describe("package-mac-app plist stamping", () => {
   );
 
   it("skips the MLX TTS helper build and copy when OPENCLAW_SKIP_MLX_TTS=1", () => {
-    const script = readFileSync(scriptPath, "utf8");
+    const script = readFileSync(scriptPath, "utf8") + readFileSync(swiftScriptPath, "utf8");
 
     // Both the per-arch build and the bundle copy are gated on the same flag so
     // a skipped build never tries to copy a helper binary that was not built.
@@ -1583,6 +1712,11 @@ describe("package-mac-app plist stamping", () => {
     }
   });
 
+  it("fails cleanup instead of deleting backups when resource restoration fails", () => {
+    const { result } = runSwiftPMResourcePatchHarness(true);
+    expect(result.status).not.toBe(0);
+  });
+
   it("fails closed when any required SwiftPM resource bundle is missing", () => {
     for (const missingBundle of swiftPMResourceBundles) {
       const { result } = runSwiftPMResourceBundleHarness({ missingBundle });
@@ -1633,54 +1767,31 @@ describe("package-mac-app plist stamping", () => {
     expect(script).toContain('--output "$APP_ROOT/Contents/Resources"');
   });
 
-  it("preserves locked Swift package resolution before building", () => {
-    const script = readFileSync(scriptPath, "utf8");
-    const resolveCall =
-      'run_with_locked_swift_packages swift package --scratch-path "$BUILD_PATH" resolve';
-    const buildCall = 'swift build -c "$BUILD_CONFIG" --product "$PRODUCT"';
-    const prepareCall = 'node "$ROOT_DIR/scripts/prepare-apple-mermaid.mjs"';
-
-    expect(script.indexOf(prepareCall)).toBeGreaterThan(script.indexOf("run_pnpm build"));
-    expect(script.indexOf(prepareCall)).toBeLessThan(script.indexOf(resolveCall));
-
-    expect(script).toContain(
-      'resolved_file="${SWIFT_PACKAGE_ROOT:-$ROOT_DIR/apps/macos}/Package.resolved"',
+  it("preserves locked Swift resolution and verifies source around each native build", () => {
+    const worker = readFileSync(swiftScriptPath, "utf8");
+    const build = worker.indexOf('swift build -c "$BUILD_CONFIG" --jobs');
+    expect(worker).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
+    expect(worker).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
+    expect(worker).toContain('cp "$resolved_snapshot" "$resolved_file"');
+    expect(worker).toContain("identity in result");
+    expect(worker.lastIndexOf("verify_snapshot_swift_lock", build)).toBeGreaterThan(
+      worker.indexOf("build_swift_architecture()"),
     );
-    expect(script).toContain(
-      'SWIFT_PACKAGE_LOCK_BASELINE="$SWIFT_PACKAGE_CONTAINER/Package.resolved.committed"',
+    expect(worker.indexOf("verify_snapshot_swift_lock", build)).toBeGreaterThan(build);
+    expect(worker).toContain(
+      'cp "$ROOT_DIR/apps/macos-mlx-tts/Package.resolved" "$MLX_TTS_HELPER_ROOT/Package.resolved"',
     );
-    expect(script).toContain('chmod 0400 "$SWIFT_PACKAGE_LOCK_BASELINE"');
-    expect(script).toContain("identity in result");
-    expect(script).toContain('cmp -s "$resolved_snapshot" "$resolved_file"');
-    expect(script).toContain('cp "$resolved_snapshot" "$resolved_file"');
-    expect(script).toContain("ERROR: Swift package resolution changed Package.resolved");
-    expect(script).toContain(resolveCall);
-    expect(script).toContain(buildCall);
-    expect(
-      script.indexOf(
-        "prepare_swift_package_root",
-        script.indexOf('for arch in "${BUILD_ARCHS[@]}"; do'),
-      ),
-    ).toBeLessThan(script.indexOf(resolveCall));
-    expect(script.indexOf("cleanup_swift_package_root", script.indexOf(buildCall))).toBeGreaterThan(
-      script.indexOf(buildCall),
-    );
-    const buildIndex = script.indexOf(buildCall);
-    expect(script.lastIndexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(
-      script.indexOf(resolveCall),
-    );
-    expect(script.indexOf("verify_snapshot_swift_lock", buildIndex)).toBeGreaterThan(buildIndex);
-    expect(script).not.toContain("swift build --disable-automatic-resolution");
-    expect(script.indexOf(resolveCall)).toBeLessThan(script.indexOf(buildCall));
   });
 
   it.each([
-    { operation: "create", exitCode: 1, reason: "No such file or directory" },
-    { operation: "attach", exitCode: 73, reason: "Permission denied" },
-    { operation: "none", exitCode: 0, reason: "" },
+    { operation: "create", exitCode: 1, reason: "No such file or directory", mounts: "empty" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "empty" },
+    { operation: "none", exitCode: 0, reason: "", mounts: "empty" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "mounted" },
+    { operation: "attach", exitCode: 73, reason: "Permission denied", mounts: "failed" },
   ])(
-    "preserves Peekaboo snapshot diagnostics and cleanup: $operation",
-    ({ operation, exitCode, reason }) => {
+    "preserves Peekaboo snapshot diagnostics and cleanup: $operation / $mounts",
+    ({ operation, exitCode, reason, mounts }) => {
       const root = tempDirs.make("openclaw-peekaboo-snapshot-fixture-");
       const buildPath = path.join(root, "build with spaces");
       const checkout = path.join(buildPath, "checkouts", "Peekaboo");
@@ -1721,6 +1832,15 @@ describe("package-mac-app plist stamping", () => {
         `,
       );
       chmodSync(hdiutil, 0o755);
+      const mountCommand = path.join(root, "mount");
+      writeFileSync(
+        mountCommand,
+        `#!/bin/bash
+printf 'mount\\n' >> "$operations"
+${mounts === "failed" ? "exit 1" : mounts === "mounted" ? `printf '/dev/disk9 on %s/work/snapshot/mount (apfs, read-only)\\n' "$fixture_root"` : "exit 0"}
+`,
+      );
+      chmodSync(mountCommand, 0o755);
 
       const result = runHelper(
         `
@@ -1729,7 +1849,10 @@ describe("package-mac-app plist stamping", () => {
       export operations=${JSON.stringify(operationsPath)}
       export PATH=${JSON.stringify(`${root}:/usr/bin:/bin`)}
       TMPDIR=${JSON.stringify(scratch)}
+      ROOT_DIR=${JSON.stringify(root)}
       ${getSwiftPackageResolutionBlock()}
+      trap cleanup_swift_architecture EXIT
+      BUILD_PATH=${JSON.stringify(buildPath)}
       compiled_peekaboo_commit() {
         printf 'verify:%s:%s\\n' "$1" "$2" >> "$operations"
         printf '%s' "$2"
@@ -1754,10 +1877,19 @@ describe("package-mac-app plist stamping", () => {
       if (operation === "none") {
         expectedOperations.push(`verify:${mount}:${expectedCommit}`, "snapshot-ready");
       }
-      expectedOperations.push("detach", `remove:-rf ${snapshotRoot}`);
-      expect(result.status).toBe(exitCode);
+      expectedOperations.push("detach");
+      if (operation !== "none") {
+        expectedOperations.push("mount");
+      }
+      const retained = mounts !== "empty";
+      if (!retained) {
+        expectedOperations.push(
+          `remove:-rf ${snapshotRoot}  ${path.join(root, "work/resource-backups")}`,
+        );
+      }
+      expect(result.status).toBe(retained ? 1 : exitCode);
       expect(readFileSync(operationsPath, "utf8").trim().split("\n")).toEqual(expectedOperations);
-      expect(existsSync(snapshotRoot)).toBe(false);
+      expect(existsSync(snapshotRoot)).toBe(retained);
       expect(readFileSync(path.join(checkout, "source"), "utf8")).toBe("source preserved\n");
       expect(readFileSync(unrelated, "utf8")).toBe("unrelated snapshot preserved\n");
       const readArgs = (command: string) =>
@@ -1801,7 +1933,7 @@ describe("package-mac-app plist stamping", () => {
     expect(verifier).toContain('"--no-replace-objects"');
     expect(verifier).toContain('"fsck", "--full", "--strict"');
     expect(verifier).toContain('"cat-file", object_type');
-    expect(readFileSync(scriptPath, "utf8")).toContain(
+    expect(readFileSync(swiftScriptPath, "utf8")).toContain(
       'swift package --scratch-path "$build_path" edit Peekaboo --path "$PEEKABOO_SNAPSHOT_MOUNT"',
     );
     const mismatched = runRealCompiledPeekabooHarness("none", "e".repeat(40));

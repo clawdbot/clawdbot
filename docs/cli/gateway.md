@@ -569,7 +569,8 @@ bounded AI-access scan. An explicit `--timeout` still takes precedence.
 Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
 `--wait`, active work returns a nonzero exit with blocker details. With
 `--wait`, the CLI retries until the bounded deadline using one stable request
-ID.
+ID. The value must be a non-negative number of seconds; an empty value is rejected.
+Use `--wait 0` for a single attempt without polling.
 
 ```bash
 openclaw gateway suspend

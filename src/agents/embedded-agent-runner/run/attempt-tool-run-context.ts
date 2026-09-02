@@ -8,7 +8,7 @@ import { mergeForcedEmbeddedAttemptToolsAllow } from "./attempt-tool-constructio
 import type { EmbeddedRunTrigger } from "./params.js";
 
 /**
- * Builds the stable tool-run context forwarded into an embedded-attempt execution.
+ * Builds the shared tool-run context for embedded and plugin harness attempts.
  */
 export function buildEmbeddedAttemptToolRunContext(params: {
   thinkLevel?: ThinkLevel;
@@ -21,7 +21,10 @@ export function buildEmbeddedAttemptToolRunContext(params: {
   swarmOutputSchema?: Record<string, unknown>;
   conversationToolPolicy?: GroupToolPolicyConfig;
   trace?: DiagnosticTraceContext;
+  currentInboundAudio?: boolean;
+  replyOperation?: { readonly acceptedSteeredInboundAudio: boolean };
 }) {
+  const { currentInboundAudio, replyOperation } = params;
   // Collector output is mandatory result transport, even on a narrowed tool surface.
   const runtimeToolAllowlist = mergeForcedEmbeddedAttemptToolsAllow(params.toolsAllow, {
     forceMessageTool: params.forceMessageTool,
@@ -35,6 +38,10 @@ export function buildEmbeddedAttemptToolRunContext(params: {
     memoryFlushWritePath: params.memoryFlushWritePath,
     swarmCollector: params.swarmCollector,
     swarmOutputSchema: params.swarmOutputSchema,
+    currentInboundAudio,
+    // Read accepted steering from the captured owner when the tool executes.
+    hasCurrentInboundAudio: () =>
+      currentInboundAudio === true || replyOperation?.acceptedSteeredInboundAudio === true,
     ...(runtimeToolAllowlist ? { runtimeToolAllowlist } : {}),
     ...(params.conversationToolPolicy
       ? { conversationToolPolicy: params.conversationToolPolicy }
