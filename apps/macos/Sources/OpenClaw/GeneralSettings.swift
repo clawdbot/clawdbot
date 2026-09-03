@@ -1068,8 +1068,24 @@ extension GeneralSettings {
     }
 
     private func applyDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: self.state)
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: self.state)
+        guard let setupInput = GatewayDiscoverySelectionSupport.requestSetupCode(for: gateway) else { return }
+        self.remoteStatus = .checking
+        Task { @MainActor in
+            do {
+                let route = try await GatewayDiscoveryPairing.authenticate(setupInput: setupInput)
+                guard GatewayDiscoverySelectionSupport.applyAuthenticatedSelection(
+                    stableID: gateway.stableID,
+                    route: route,
+                    state: self.state)
+                else {
+                    throw GatewayDiscoveryPairingError.configSaveFailed
+                }
+                await self.testRemote()
+            } catch {
+                self.remoteStatus = .failed(error.localizedDescription)
+                GatewayDiscoverySelectionSupport.presentError(error)
+            }
+        }
     }
 }
 

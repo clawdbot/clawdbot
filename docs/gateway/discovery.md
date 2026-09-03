@@ -31,8 +31,8 @@ Protocol details: [Gateway protocol](/gateway/protocol).
 ## Why direct and SSH both exist
 
 - **Direct WS** is the best UX on the same network and within a tailnet: LAN
-  auto-discovery via Bonjour, pairing tokens and ACLs owned by the gateway,
-  and no shell access required.
+  discovery via Bonjour, authenticated setup with a pinned TLS identity, pairing
+  tokens and ACLs owned by the gateway, and no shell access required.
 - **SSH** is the universal fallback: works anywhere you have SSH access, even
   across unrelated networks, survives multicast/mDNS issues, and needs no new
   inbound port besides SSH.
@@ -135,8 +135,8 @@ connect via SSH by forwarding the loopback gateway port. See
 
 1. If a paired direct endpoint is configured and reachable, use it.
 2. Else, if discovery finds a gateway on `local.` or the configured wide-area
-   domain, offer a one-tap "Use this gateway" choice and save it as the
-   direct endpoint.
+   domain, show it as a candidate. Before saving it as a direct endpoint, require
+   a TLS setup code carrying a certificate pin and short-lived bootstrap token.
 3. Else, if a tailnet DNS/IP is configured, try direct. For mobile nodes on
    tailnet/public routes, direct means a secure endpoint, not plaintext
    remote `ws://`.
@@ -150,6 +150,9 @@ The gateway is the source of truth for node/client admission:
   [Gateway pairing](/gateway/pairing)).
 - The gateway enforces auth (token/keypair), scopes/ACLs (it is not a raw
   proxy to every method), and rate limits.
+- Bonjour locates candidates only. The macOS app verifies the setup code's TLS
+  pin before sending its bootstrap token, then uses the issued device credential
+  for that authenticated Gateway. Existing shared credentials are not transferred.
 
 ## Responsibilities by component
 

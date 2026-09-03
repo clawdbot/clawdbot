@@ -4,6 +4,7 @@ enum GatewayDiscoveryPreferences {
     private static let preferredStableIDKey = "gateway.preferredStableID"
     private static let legacyPreferredStableIDKey = "bridge.preferredStableID"
     private static let preferredRouteBindingKey = "gateway.preferredStableIDRouteBinding.v1"
+    private static let authenticatedTLSFingerprintKey = "gateway.preferredTLSFingerprint.v1"
 
     static func preferredStableID() -> String? {
         let defaults = AppDefaults.standard
@@ -17,6 +18,7 @@ enum GatewayDiscoveryPreferences {
         // A caller without an endpoint binding cannot prove that a prior binding
         // belongs to this id. The bound overload installs a fresh one below.
         AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+        AppDefaults.standard.removeObject(forKey: self.authenticatedTLSFingerprintKey)
         let trimmed = stableID?.trimmingCharacters(in: .whitespacesAndNewlines)
         if let trimmed, !trimmed.isEmpty {
             AppDefaults.standard.set(trimmed, forKey: self.preferredStableIDKey)
@@ -42,6 +44,29 @@ enum GatewayDiscoveryPreferences {
             return
         }
         AppDefaults.standard.set(routeBinding, forKey: self.preferredRouteBindingKey)
+    }
+
+    static func setAuthenticatedPreferredGateway(
+        stableID: String,
+        tlsFingerprint: String)
+    {
+        guard let fingerprint = self.normalizedFingerprint(tlsFingerprint) else { return }
+        self.setPreferredStableID(stableID)
+        AppDefaults.standard.set(fingerprint, forKey: self.authenticatedTLSFingerprintKey)
+    }
+
+    static func authenticatedTLSFingerprint() -> String? {
+        guard self.preferredStableID() != nil else { return nil }
+        return self.normalizedFingerprint(
+            AppDefaults.standard.string(forKey: self.authenticatedTLSFingerprintKey))
+    }
+
+    static func hasAuthenticatedTLSIdentity(configuredFingerprint: String?) -> Bool
+    {
+        guard let authenticated = self.authenticatedTLSFingerprint(),
+              let configured = self.normalizedFingerprint(configuredFingerprint)
+        else { return false }
+        return authenticated == configured
     }
 
     /// Discovery ids name one concrete Gateway. Persist the non-secret fallback
@@ -77,26 +102,45 @@ enum GatewayDiscoveryPreferences {
         connectionMode: AppState.ConnectionMode,
         remoteTransport: AppState.RemoteTransport,
         remoteURL: String,
-        remoteTarget: String) -> String?
+        remoteTarget: String,
+        tlsFingerprint: String? = nil) -> String?
     {
+        let routeBinding: String?
         if connectionMode == .remote {
-            return self.routeBinding(
+            routeBinding = self.routeBinding(
                 connectionMode: connectionMode,
                 remoteTransport: remoteTransport,
                 remoteURL: remoteURL,
                 remoteTarget: remoteTarget)
+        } else {
+            routeBinding = OnboardingSystemAgentResumeStore.routeIdentity(
+                connectionMode: connectionMode,
+                preferredGatewayID: nil,
+                remoteTransport: remoteTransport,
+                remoteURL: remoteURL,
+                remoteTarget: remoteTarget)
         }
-        return OnboardingSystemAgentResumeStore.routeIdentity(
-            connectionMode: connectionMode,
-            preferredGatewayID: nil,
-            remoteTransport: remoteTransport,
-            remoteURL: remoteURL,
-            remoteTarget: remoteTarget)
+        if self.hasAuthenticatedTLSIdentity(configuredFingerprint: tlsFingerprint),
+           let fingerprint = self.authenticatedTLSFingerprint()
+        {
+            return self.tlsDeviceAuthGatewayID(fingerprint)
+        }
+        return routeBinding
+    }
+
+    static func tlsDeviceAuthGatewayID(_ fingerprint: String) -> String? {
+        self.normalizedFingerprint(fingerprint).map { "tls-sha256:\($0)" }
     }
 
     @discardableResult
     static func clearPreferredStableIDIfRouteBindingMismatch(_ currentRouteBinding: String?) -> Bool {
         guard self.preferredStableID() != nil else {
+            AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
+            return false
+        }
+        // Authenticated discovery is bound to the pinned certificate instead of
+        // an address, so the same Gateway can move without another bootstrap.
+        if self.authenticatedTLSFingerprint() != nil {
             AppDefaults.standard.removeObject(forKey: self.preferredRouteBindingKey)
             return false
         }
@@ -113,5 +157,18 @@ enum GatewayDiscoveryPreferences {
     private static func normalized(_ value: String?) -> String? {
         let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func normalizedFingerprint(_ value: String?) -> String? {
+        var fingerprint = value?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if fingerprint?.hasPrefix("sha256:") == true {
+            fingerprint?.removeFirst("sha256:".count)
+        }
+        fingerprint = fingerprint?.replacingOccurrences(of: ":", with: "")
+        guard let fingerprint,
+              fingerprint.count == 64,
+              fingerprint.allSatisfy({ $0.isHexDigit })
+        else { return nil }
+        return fingerprint
     }
 }

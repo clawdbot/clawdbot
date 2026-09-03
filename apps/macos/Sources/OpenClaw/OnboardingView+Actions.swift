@@ -33,24 +33,44 @@ extension OnboardingView {
     }
 
     func selectRemoteGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) {
+        guard let setupInput = GatewayDiscoverySelectionSupport.requestSetupCode(for: gateway) else { return }
+        Task { @MainActor in
+            do {
+                let route = try await GatewayDiscoveryPairing.authenticate(setupInput: setupInput)
+                guard self.completeRemoteGatewaySelection(gateway, route: route) else {
+                    throw GatewayDiscoveryPairingError.configSaveFailed
+                }
+            } catch {
+                GatewayDiscoverySelectionSupport.presentError(error)
+            }
+        }
+    }
+
+    @discardableResult
+    func completeRemoteGatewaySelection(
+        _ gateway: GatewayDiscoveryModel.DiscoveredGateway,
+        route: AuthenticatedGatewayRoute) -> Bool
+    {
+        let previousFingerprint = GatewayDiscoveryPreferences.authenticatedTLSFingerprint()
         let shouldResetGatewayState = Self.shouldResetGatewayBoundAIState(
             connectionMode: state.connectionMode,
             currentPreferredGatewayID: self.effectivePreferredGatewayID,
             persistedPreferredGatewayID: GatewayDiscoveryPreferences.preferredStableID(),
-            selectedGatewayID: gateway.stableID)
+            selectedGatewayID: gateway.stableID) ||
+            (previousFingerprint != nil && previousFingerprint != route.tlsFingerprint)
+        guard GatewayDiscoverySelectionSupport.applyAuthenticatedSelection(
+            stableID: gateway.stableID,
+            route: route,
+            state: state)
+        else { return false }
         if shouldResetGatewayState {
-            // The mode can remain `.remote` while the selected Gateway changes,
-            // so its onChange hook alone cannot retire route-bound state.
             resetGatewayBoundAIState()
             resetRemoteProbeFeedback()
         }
         defaultsToLocalGateway = false
         preferredGatewayID = gateway.stableID
-        GatewayDiscoverySelectionSupport.applyRemoteSelection(gateway: gateway, state: state)
-
-        state.connectionMode = .remote
-        MacNodeModeCoordinator.shared.setPreferredGatewayStableID(gateway.stableID, state: state)
         probeConfiguredGatewayForDashboard()
+        return true
     }
 
     static func shouldResetGatewayBoundAIState(

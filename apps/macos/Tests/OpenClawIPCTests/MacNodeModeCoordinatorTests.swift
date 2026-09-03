@@ -65,6 +65,19 @@ private actor CoordinatorDrainSnapshotProbe {
     }
 }
 
+private actor CoordinatorConnectAuthProbe {
+    private var auth: [String: String]?
+
+    func record(_ message: URLSessionWebSocketTask.Message) {
+        let params = GatewayWebSocketTestSupport.connectRequestParams(from: message)
+        self.auth = (params?["auth"] as? [String: Any])?.compactMapValues { $0 as? String }
+    }
+
+    func snapshot() -> [String: String]? {
+        self.auth
+    }
+}
+
 private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
     private var stopCount = 0
     private let stopGate = AsyncTestGate()
@@ -228,6 +241,73 @@ struct MacNodeModeCoordinatorTests {
         #expect(!MacNodeModeCoordinator.endpointAttemptIsCurrent(
             capturedGeneration: 7,
             currentGeneration: 8))
+    }
+
+    @Test func `node connect uses only the prepared endpoint credential owner`() async throws {
+        let stateDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: stateDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: stateDir) }
+
+        try await DeviceIdentityStore.withStateDirectory(stateDir) {
+            let primaryIdentity = DeviceIdentityStore.loadOrCreate()
+            let nodeIdentity = DeviceIdentityStore.loadOrCreate(profile: .node)
+            _ = DeviceAuthStore.storeToken(
+                deviceId: nodeIdentity.deviceId,
+                role: "node",
+                token: "legacy-unscoped-node-token",
+                profile: .node)
+            _ = DeviceAuthStore.storeToken(
+                deviceId: primaryIdentity.deviceId,
+                role: "node",
+                token: "bound-node-token",
+                gatewayID: "tls-sha256:gateway-a")
+
+            for (gatewayID, expectedToken) in [
+                (nil, "legacy-unscoped-node-token"),
+                ("tls-sha256:gateway-a", "bound-node-token"),
+            ] {
+                let endpoint = try GatewayConnection.EndpointSnapshot(
+                    config: (
+                        url: #require(URL(string: "ws://gateway.example.invalid")),
+                        token: nil,
+                        password: nil),
+                    routeAuthority: nil,
+                    deviceAuthGatewayID: gatewayID)
+                let options = MacNodeModeCoordinator.connectOptions(
+                    GatewayConnectOptions(
+                        role: "node",
+                        scopes: [],
+                        caps: [],
+                        commands: [],
+                        permissions: [:],
+                        clientId: "openclaw-macos",
+                        clientMode: "node",
+                        clientDisplayName: "macOS Test",
+                        deviceIdentityProfile: .node),
+                    for: endpoint)
+                let probe = CoordinatorConnectAuthProbe()
+                let webSocketSession = GatewayTestWebSocketSession(taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                        guard sendIndex == 0 else { return }
+                        await probe.record(message)
+                    })
+                })
+                let gateway = GatewayNodeSession()
+
+                try await gateway.connect(
+                    url: endpoint.config.url,
+                    credentials: .init(),
+                    connectOptions: options,
+                    sessionBox: WebSocketSessionBox(session: webSocketSession),
+                    onConnected: {},
+                    onDisconnected: { _ in },
+                    onInvoke: { request in BridgeInvokeResponse(id: request.id, ok: true) })
+
+                #expect(await probe.snapshot()?["token"] == expectedToken)
+                await gateway.disconnect()
+            }
+        }
     }
 
     @Test @MainActor func `config and CLI changes restart startup scoped node host worker`() async {
