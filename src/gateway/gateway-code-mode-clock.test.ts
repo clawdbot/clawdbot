@@ -340,9 +340,7 @@ describe("Gateway Code Mode clock rollback", () => {
             }
           });
           const wallClockBeforeRollback = Date.now();
-          const wallClock = vi
-            .spyOn(Date, "now")
-            .mockReturnValue(wallClockBeforeRollback - 5_000);
+          const wallClock = vi.spyOn(Date, "now").mockReturnValue(wallClockBeforeRollback - 5_000);
           restoreWallClock = () => wallClock.mockRestore();
           try {
             await new Promise<void>((resolve) => {
