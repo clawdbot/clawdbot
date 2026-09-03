@@ -593,6 +593,8 @@ Example:
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
     `ignoreOtherMentions` optionally drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot. An explicit mention of the current bot still wins.
 
+    Images posted while the bot stays quiet are kept as channel context and reach the next mention that carries no image of its own, so "what is this?" answers the picture above it. Earlier releases kept those images but handed them only to ACP-backed agents; every runtime now receives them. The next mention gets them whether or not it asks about them, which spends vision tokens on an unrelated question, and it consumes them — a later mention no longer has them.
+
     Group DMs:
 
     - default: ignored (`dm.groupEnabled=false`)

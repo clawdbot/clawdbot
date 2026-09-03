@@ -236,6 +236,10 @@ function extractMessageText(message: MessageEvent["message"]): string {
   return "";
 }
 
+/** One wording for both paths: an answered turn appends it to the agent body, a
+ *  gated one to the history entry, so a reader is told the same thing either way. */
+export const LINE_ATTACHMENT_UNAVAILABLE_NOTICE = "[line attachment unavailable]";
+
 /**
  * Renders a message the group's mention gate kept as context instead of
  * answering. It carries the facts an answered turn would have read, so a
@@ -287,7 +291,10 @@ async function finalizeLineInboundContext(params: {
   media: readonly ChannelInboundMediaInput[];
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
-  inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  // The whole entry, not the three fields a transcript line needs: a kept
+  // message's media and messageId are what a following mention reattaches, and
+  // narrowing here would drop them where the type still checks.
+  inboundHistory?: HistoryEntry[];
   mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
@@ -488,7 +495,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
         body: rawBody,
-        notice: "[line attachment unavailable]",
+        notice: LINE_ATTACHMENT_UNAVAILABLE_NOTICE,
       })
     : rawBody;
 

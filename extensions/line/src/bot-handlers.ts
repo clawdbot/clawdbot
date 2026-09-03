@@ -3,6 +3,7 @@ import type { webhook } from "@line/bot-sdk";
 import {
   type buildChannelInboundEventContext,
   buildMentionRegexes,
+  formatInboundMediaUnavailableText,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
   implicitMentionKindWhen,
@@ -48,6 +49,7 @@ import {
   buildLinePostbackContext,
   describeLineMessageForHistory,
   getLineSourceInfo,
+  LINE_ATTACHMENT_UNAVAILABLE_NOTICE,
   readLineTextMessageBody,
   type LineInboundContext,
   type LineInboundMentionAccess,
@@ -455,12 +457,15 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   }
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
+  const historyLimit = context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT;
   if (isGroup && decision.access.activationAccess.shouldSkip) {
     const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
-    if (historyKey && context.groupHistories) {
+    // A disabled window (documented as `historyLimit: 0`) keeps nothing, so the
+    // download below would spend bandwidth on bytes the recorder then drops.
+    if (historyKey && context.groupHistories && historyLimit > 0) {
       const displayName = sourceInfo.userId
         ? await getUserDisplayName(sourceInfo.userId, {
             cfg,
@@ -472,23 +477,33 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         : senderId;
       // History has one sender string; keep the stable ID when display names collide.
       const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
-      // Only an image survives history reattachment, so nothing else is fetched
-      // for a message this group already declined to answer. Resolving before the
-      // record keeps the answered path's failure semantics: a retryable
-      // preparation error rejects the event for one replay, not a second record.
-      const media =
-        message.type === "image"
-          ? toHistoryMediaEntries((await downloadLineInboundMedia(event, context)).allMedia, {
-              kind: "image",
-              messageId: message.id,
-            })
-          : undefined;
+      // An image is the only kind LINE serves bytes for that history can reattach:
+      // stickers reattach too, but LINE has no content endpoint for them. Nothing
+      // else is fetched for a message this group already declined to answer.
+      // Resolving before the record keeps the answered path's failure semantics: a
+      // retryable preparation error rejects the event for one replay, not a second
+      // record.
+      const download =
+        message.type === "image" ? await downloadLineInboundMedia(event, context) : undefined;
+      const media = download
+        ? toHistoryMediaEntries(download.allMedia, { kind: "image", messageId: message.id })
+        : undefined;
+      const description = describeLineMessageForHistory(message);
       await createChannelHistoryWindow({ historyMap: context.groupHistories }).recordWithMedia({
         historyKey,
-        limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+        limit: historyLimit,
         entry: {
           sender,
-          body: describeLineMessageForHistory(message),
+          // An answered turn tells the sender their attachment did not arrive; a
+          // kept one has no reply to carry that, so the notice rides the entry
+          // instead. Without it an oversized image reads as a normal one that the
+          // following mention then cannot see.
+          body: download?.mediaUnavailable
+            ? formatInboundMediaUnavailableText({
+                body: description,
+                notice: LINE_ATTACHMENT_UNAVAILABLE_NOTICE,
+              })
+            : description,
           timestamp: event.timestamp,
           messageId: message.id,
         },
@@ -504,7 +519,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   const historyReservation = reserveLineGroupHistory(
     context.groupHistories,
     groupHistoryKey,
-    context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
+    historyLimit,
   );
 
   try {

@@ -23,11 +23,17 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   // Keep mention facts real without loading the inbound execution lifecycle.
   implicitMentionKindWhen: (await import("openclaw/plugin-sdk/channel-mention-gating"))
     .implicitMentionKindWhen,
-  // How a gated image reaches the group window is under test, so its media
-  // converter is the real one; it has no subpath of its own to import from.
+  // What a gated message keeps for the mention that follows it is under test, so
+  // the media projection stays the real one; it is pure and this entrypoint is
+  // the only one that exports it.
   toHistoryMediaEntries: (
     await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()
   ).toHistoryMediaEntries,
+  // The kept entry's wording is asserted below, so it is composed by the real
+  // formatter rather than a stub that could drift from the answered path's.
+  formatInboundMediaUnavailableText: (
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()
+  ).formatInboundMediaUnavailableText,
   buildMentionRegexes: () => [],
   isChannelPartialDeliveryError: (error: unknown) =>
     Boolean(
@@ -138,9 +144,9 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
 }));
 
 vi.mock("./bot-message-context.js", async (importOriginal) => ({
-  // Reading a LINE body and describing a gated message are both pure and are
-  // part of the behavior these tests exercise, so they come from the real
-  // module rather than a stub.
+  // Reading a LINE text body and describing a gated message are both pure, and
+  // both are part of the behavior under test, so they come from the real module
+  // rather than a stub.
   ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
@@ -212,6 +218,7 @@ function createLineWebhookTestContext(params: {
   groupAllowFrom?: LineAccountConfig["groupAllowFrom"];
   requireMention?: boolean;
   groupHistories?: Map<string, HistoryEntry[]>;
+  historyLimit?: number;
   accessGroups?: Record<string, { type: "message.senders"; members: Record<string, string[]> }>;
   implicitMentions?: { quotedBot?: boolean };
 }): Parameters<typeof handleLineWebhookEvents>[1] {
@@ -247,6 +254,7 @@ function createLineWebhookTestContext(params: {
     mediaMaxBytes: 1,
     processMessage: params.processMessage,
     ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+    ...(params.historyLimit === undefined ? {} : { historyLimit: params.historyLimit }),
   };
 }
 
@@ -1717,6 +1725,67 @@ describe("handleLineWebhookEvents", () => {
         media: [expect.objectContaining({ path: "/tmp/line-media/prepared.jpg" })],
       }),
     ]);
+  });
+
+  it("tells a kept entry its attachment never arrived", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-gated-oversized",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-gated-oversized",
+      },
+      timestamp: 1700000000000,
+      source: { type: "group", groupId: "group-oversized", userId: "user-oversized" },
+      webhookEventId: "evt-gated-oversized",
+    });
+
+    // Not retryable: the size limit is the answer, so the event is not replayed.
+    downloadLineMediaMock.mockRejectedValueOnce(new Error("media exceeds size limit"));
+    await handleLineWebhookEvents([event], context);
+
+    expect(processMessage).not.toHaveBeenCalled();
+    const entries = groupHistories.get("group-oversized");
+    expect(entries).toHaveLength(1);
+    expect(entries?.[0]?.body).toContain("[line attachment unavailable]");
+    expect(entries?.[0]?.media ?? []).toEqual([]);
+  });
+
+  it("keeps nothing and fetches nothing when the group window is disabled", async () => {
+    const processMessage = vi.fn();
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    const context = createLineWebhookTestContext({
+      processMessage,
+      groupPolicy: "open",
+      requireMention: true,
+      groupHistories,
+      historyLimit: 0,
+    });
+    const event = createTestMessageEvent({
+      message: {
+        id: "m-gated-nowindow",
+        type: "image",
+        contentProvider: { type: "line" },
+        quoteToken: "q-gated-nowindow",
+      },
+      timestamp: 1700000000000,
+      source: { type: "group", groupId: "group-nowindow", userId: "user-nowindow" },
+      webhookEventId: "evt-gated-nowindow",
+    });
+
+    await handleLineWebhookEvents([event], context);
+
+    expect(processMessage).not.toHaveBeenCalled();
+    expect(groupHistories.has("group-nowindow")).toBe(false);
+    expect(downloadLineMediaMock).not.toHaveBeenCalled();
   });
 
   it("does not bypass mention gating when non-bot mention is present with control command", async () => {

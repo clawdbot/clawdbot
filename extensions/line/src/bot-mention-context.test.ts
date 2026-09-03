@@ -149,12 +149,16 @@ const cases: MentionCase[] = [
     },
   },
   {
+    // A non-text message carries no mention data, so it only reaches a turn in a
+    // group that answers unaddressed messages; under requireMention it is kept as
+    // context instead.
     name: "non-text message without native mention metadata",
     eventKind: "location",
+    requireMention: false,
     expected: {
       WasMentioned: false,
       ExplicitlyMentionedBot: false,
-      GroupRequireMention: true,
+      GroupRequireMention: false,
       ImplicitMentionKinds: [],
     },
   },
