@@ -562,10 +562,10 @@ export async function handleOpenResponsesHttpRequest(
               limits: limits.files,
               signal: abortController.signal,
             });
-            const rawText = file.text?.trim() ?? "";
+            const rawText = file.text ?? "";
             const fileImages = file.images ?? [];
             const metadata = file.metadata ? { metadata: file.metadata } : {};
-            const outcome: FileAttachmentOutcome = rawText
+            const outcome: FileAttachmentOutcome = rawText.trim()
               ? { kind: "extracted", text: rawText, images: fileImages, ...metadata }
               : fileImages.length > 0
                 ? { kind: "rendered-to-images", images: fileImages, ...metadata }
