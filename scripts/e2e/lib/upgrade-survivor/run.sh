@@ -1121,16 +1121,12 @@ bootstrap_mobile_pairing() {
 verify_mobile_pairing() {
   local phase_name="$1"
   local evidence_file="$2"
-  local expect_known_node_surface_reapproval="true"
-  if [ "$candidate_install_mode" = "historical-package-replacement" ]; then
-    expect_known_node_surface_reapproval="false"
-  fi
   run_mobile_pairing_client verify \
     --package-root "$(package_root)" \
     --credentials "$MOBILE_PAIRING_CREDENTIALS" \
     --evidence "$evidence_file" \
     --phase "$phase_name" \
-    --expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"
+    --expect-known-node-surface-reapproval true
 }
 
 verify_mobile_pairing_once() {
@@ -1516,22 +1512,7 @@ run_doctor() {
   fi
 }
 
-repair_fixture_plugin_consent() {
-  if [ "$update_repair_required" = "1" ]; then
-    # Migration assertions run first: explicit fixture consent must not conceal a
-    # broken doctor migration. The candidate owns staged-artifact acceptance.
-    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
-      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
-      echo "openclaw update repair failed" >&2
-      openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
-      openclaw_e2e_print_log "$REPAIR_JSON" >&2
-      return 1
-    fi
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
-    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
-    assert_survival
-  fi
+repair_update_restart_auth() {
   if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
     # Start is preparation only. The following updater must replace this exact
     # supervisor itself; its existing replacement and auth assertions remain required.
@@ -1551,6 +1532,25 @@ repair_fixture_plugin_consent() {
         assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
     fi
   fi
+}
+
+repair_fixture_plugin_consent() {
+  if [ "$update_repair_required" = "1" ]; then
+    # Migration assertions run first: explicit fixture consent must not conceal a
+    # broken doctor migration. The candidate owns staged-artifact acceptance.
+    if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw update repair \
+      --accept-capabilities --yes --no-restart --json >"$REPAIR_JSON" 2>"$ARTIFACT_ROOT/repair.err"; then
+      echo "openclaw update repair failed" >&2
+      openclaw_e2e_print_log "$ARTIFACT_ROOT/repair.err" >&2
+      openclaw_e2e_print_log "$REPAIR_JSON" >&2
+      return 1
+    fi
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-repair-json "$REPAIR_JSON"
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-recovered-plugin-installs "$UPDATE_JSON" "$candidate_version" "$initial_update_observation_root" "$baseline_version"
+    assert_survival
+  fi
+  repair_update_restart_auth || return "$?"
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
     phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
   fi
@@ -1803,6 +1803,9 @@ run_plugin_fixture_phase assert-legacy-runtime-deps-symlink-repaired assert_lega
 phase validate-post-doctor-config validate_post_doctor_config
 phase assert-survival assert_survival
 run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent
+if companion_survivor_scenario; then
+  repair_update_restart_auth
+fi
 if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase recovery-custom-restore node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs custom-restore
 fi

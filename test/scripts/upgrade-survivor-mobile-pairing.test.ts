@@ -610,18 +610,15 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(source).not.toContain("mobile-backup");
   });
 
-  it("requires the known watch-command reapproval only for updater candidates", () => {
+  it("requires the known watch-command reapproval for every candidate reconnect", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");
     const reconnect = source.slice(
       source.indexOf("verify_mobile_pairing()"),
       source.indexOf("verify_mobile_pairing_once()"),
     );
-    expect(reconnect).toContain('expect_known_node_surface_reapproval="true"');
-    expect(reconnect).toContain('[ "$candidate_install_mode" = "historical-package-replacement" ]');
-    expect(reconnect).toContain('expect_known_node_surface_reapproval="false"');
-    expect(reconnect).toContain(
-      '--expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"',
-    );
+    expect(reconnect).toContain("--expect-known-node-surface-reapproval true");
+    expect(reconnect).not.toContain("candidate_install_mode");
+    expect(reconnect).not.toContain("--expect-known-node-surface-reapproval false");
   });
 
   it("passes candidate source provenance into the isolated package runner", () => {
@@ -712,10 +709,49 @@ run_plugin_fixture_phase fixture-phase true
       expect(orchestration).toContain(`run_plugin_fixture_phase ${phase} `);
       expect(orchestration).not.toMatch(new RegExp(`^phase ${phase} `, "mu"));
     }
+    expect(orchestration).toContain(
+      [
+        "run_plugin_fixture_phase fixture-plugin-consent repair_fixture_plugin_consent",
+        "if companion_survivor_scenario; then",
+        "  repair_update_restart_auth",
+        "fi",
+      ].join("\n"),
+    );
     expect(orchestration).toContain("phase bootstrap-mobile-pairing bootstrap_mobile_pairing");
     expect(orchestration).toContain("phase mobile-pairing-candidate-first");
     expect(orchestration).toContain("phase mobile-pairing-candidate-restart");
     expect(orchestration).toContain("phase mobile-pairing-final");
+  });
+
+  it("preserves update auto-auth recovery for companion survivors", () => {
+    const source = readFileSync(RUNNER_PATH, "utf8");
+    const helper = source.slice(
+      source.indexOf("repair_update_restart_auth()"),
+      source.indexOf("\nrepair_fixture_plugin_consent()"),
+    );
+    const result = execFileSync(
+      "bash",
+      [
+        "-c",
+        `set -eu
+UPDATE_RESTART_MODE=auto-auth
+COMMAND_TIMEOUT=1
+ARTIFACT_ROOT=/tmp
+update_repair_required=0
+${helper}
+phase() { printf '%s\\n' "$1"; }
+assert_survival() { :; }
+repair_update_restart_auth
+`,
+      ],
+      { encoding: "utf8" },
+    );
+
+    expect(result.trim().split("\n")).toEqual([
+      "prepare-recovery-service",
+      "prepared-gateway-auth",
+      "recovery-update-restart",
+    ]);
   });
 
   it("selects package replacement by the immutable 8.1 source SHA, not its version alone", () => {
