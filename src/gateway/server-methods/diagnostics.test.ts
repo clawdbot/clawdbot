@@ -159,8 +159,8 @@ describe("diagnostics gateway methods", () => {
     ]);
   });
 
-  it("returns every static command lane in sorted order with live capacity counts", async () => {
-    const lane = CommandLane.SkillWorkshopReview;
+  it("reports static lanes in sorted order and hides disabled lanes only after work drains", async () => {
+    const lane = CommandLane.HookDispatch;
     const originalConcurrency = getCommandLaneSnapshot(lane).maxConcurrent;
     setCommandLaneConcurrency(lane, 1);
 
@@ -177,9 +177,17 @@ describe("diagnostics gateway methods", () => {
       await activeRelease;
     });
     await activeStarted;
-    const queued = enqueueCommandInLane(lane, async () => undefined);
+    let queued = Promise.resolve();
 
     try {
+      setCommandLaneConcurrency(lane, 0);
+      expect((await requestLaneDiagnostics()).lanes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ lane, activeCount: 1, queuedCount: 0, maxConcurrent: 0 }),
+        ]),
+      );
+      setCommandLaneConcurrency(lane, 1);
+      queued = enqueueCommandInLane(lane, async () => undefined);
       const payload = await requestLaneDiagnostics();
       expect(payload.ts).toBeGreaterThan(0);
       expect(payload.lanes.map((snapshot) => snapshot.lane)).toEqual([
@@ -203,8 +211,31 @@ describe("diagnostics gateway methods", () => {
           }),
         ]),
       );
+
+      setCommandLaneConcurrency(lane, 0);
+      releaseActive();
+      await active;
+      expect((await requestLaneDiagnostics()).lanes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ lane, activeCount: 0, queuedCount: 1, maxConcurrent: 0 }),
+        ]),
+      );
+
+      setCommandLaneConcurrency(lane, 1);
+      await queued;
+      expect((await requestLaneDiagnostics()).lanes).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ lane, activeCount: 0, queuedCount: 0, maxConcurrent: 1 }),
+        ]),
+      );
+
+      setCommandLaneConcurrency(lane, 0);
+      expect((await requestLaneDiagnostics()).lanes.map((snapshot) => snapshot.lane)).not.toContain(
+        lane,
+      );
     } finally {
       releaseActive();
+      setCommandLaneConcurrency(lane, 1);
       await Promise.all([active, queued]);
       setCommandLaneConcurrency(lane, originalConcurrency);
     }
