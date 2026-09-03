@@ -38,9 +38,13 @@ const sharedPlainTextSiblings: ReadonlyArray<
     source: Pick<ChannelOutboundAdapter, "sanitizeText" | "normalizePayload">,
   ]
 > = [
-  ["Google Chat", "googlechat", expectDefined(googlechatPlugin.outbound)],
-  ["IRC", "irc", expectDefined(ircPlugin.outbound)],
-  ["WhatsApp", "whatsapp", expectDefined(whatsappPlugin.outbound)],
+  [
+    "Google Chat",
+    "googlechat",
+    expectDefined(googlechatPlugin.outbound, "googlechatPlugin.outbound"),
+  ],
+  ["IRC", "irc", expectDefined(ircPlugin.outbound, "ircPlugin.outbound")],
+  ["WhatsApp", "whatsapp", expectDefined(whatsappPlugin.outbound, "whatsappPlugin.outbound")],
 ];
 
 afterEach(() => {
