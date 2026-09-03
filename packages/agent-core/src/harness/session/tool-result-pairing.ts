@@ -305,10 +305,10 @@ export function classifyToolUseResultPairing(
             replaceable.result = normalizeToolResultName(normalized, replaceable.name);
             replaceable.sourceResult = message;
             replaceable.sourceResultIndex = index;
-          } else if (!preserveUnframed) {
+          } else {
             droppedResults.push({ message, index });
           }
-        } else if (!preserveUnframed) {
+        } else {
           droppedResults.push({ message, index });
         }
       }

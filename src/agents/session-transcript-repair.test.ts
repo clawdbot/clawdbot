@@ -857,6 +857,22 @@ describe("repairToolUseResultPairing prefers real result over synthetic error", 
     expect(toolResults[0]?.content?.[0]?.text).toBe("first real");
   });
 
+  it("reports duplicate results discarded when preserving unframed results", () => {
+    const input = castAgentMessages([
+      makeAssistant("call_1"),
+      makeRealResult("call_1", "first real"),
+      makeRealResult("call_1", "second real"),
+    ]);
+
+    const result = repairToolUseResultPairing(input, {
+      preserveUnframedToolResults: true,
+    });
+
+    expect(result.messages).toEqual([input[0], input[1]]);
+    expect(result.discarded).toEqual([input[2]]);
+    expect(result.droppedDuplicateCount).toBe(1);
+  });
+
   it("two synthetic errors → keeps first (unchanged behavior)", () => {
     const input = castAgentMessages([
       makeAssistant("call_1"),
