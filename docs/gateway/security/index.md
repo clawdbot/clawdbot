@@ -56,7 +56,7 @@ openclaw security audit --json
 ### What the audit checks (high level)
 
 - **Inbound access** - DM/group policies, allowlists: can strangers trigger the bot?
-- **Cross-agent session access** - two or more agents with default Gateway-wide session visibility and unrestricted agent-to-agent access: `info` for one operator's personas, `warn` when sandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels.
+- **Cross-agent session access** - two or more agents with default Gateway-wide session visibility and unrestricted agent-to-agent access: `info` for one operator's personas, `warn` when sandboxing, agent-level tool restrictions, or shared-user ingress suggest different trust levels. Fully sandboxed rosters under the default spawn-tree clamp produce no finding; setting `agents.defaults.sandbox.sessionToolsVisibility` to `"all"` disables that exemption.
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
 - **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
