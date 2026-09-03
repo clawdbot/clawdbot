@@ -2446,7 +2446,7 @@ export async function autoMigrateLegacyState(params: {
             cfg: params.cfg,
             mode,
             pluginDoctorConfig: params.pluginDoctorConfig,
-            pluginSessionStoreAgentIds,
+            ...(mode === "doctor" ? { pluginSessionStoreAgentIds } : {}),
             sessionStoreOwnership,
             env,
             homedir: params.homedir,
