@@ -104,6 +104,7 @@
 
 .session-hovercard__attribution-copy {
   display: flex;
+  align-items: center;
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -122,6 +123,12 @@
   color: var(--muted);
 }
 
+button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.session-hovercard__participant-unresolved,
 .session-hovercard__no-pr,
 .session-hovercard__more {
   color: var(--muted);

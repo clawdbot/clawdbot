@@ -140,8 +140,15 @@ suite.define(() => {
         expect(await identity.getAttribute("href")).toBe("/activity?person=profile-ada");
         await expect
           .poll(async () =>
-            (await card.locator(".session-hovercard__attribution-copy").textContent())
-              ?.replace(/\s+/gu, " ")
+            (
+              await card
+                .locator(
+                  ".session-hovercard__attribution-name, .session-hovercard__attribution-others",
+                )
+                .allTextContents()
+            )
+              .join(" ")
+              .replace(/\s+/gu, " ")
               .trim(),
           )
           .toBe("Ada King & 1 other");

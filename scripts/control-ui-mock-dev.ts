@@ -1809,6 +1809,13 @@ async function createChatPickerScenario(
       execCwd: "/Users/demo/Work/openclaw",
       lastReadAt: baseTime - 120_000,
       owner: { actor: MOCK_ACTOR_PETER },
+      participantCount: 4,
+      participants: [
+        { identity: { type: "profile", id: "profile-mira" }, label: "Mira" },
+        { identity: { type: "profile", id: "profile-riley" }, label: "Riley" },
+        { identity: { type: "profile", id: "profile-sam" }, label: "Sam" },
+        { identity: { type: "profile", id: "profile-lee" }, label: "Lee" },
+      ],
       observerDigest: {
         headline: "Done: fixed the flaky retry-window test",
         health: "done",

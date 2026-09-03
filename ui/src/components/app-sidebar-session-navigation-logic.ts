@@ -190,6 +190,7 @@ export function buildSidebarSessionNavigationState(input: {
       createdActor: row.createdActor,
       owner: row.owner,
       participants: row.participants,
+      expandedParticipants: row.expandedParticipants,
       participantCount: row.participantCount,
       archivedBy: row.archivedBy,
       // The sidebar's zone structure already says what forked from what;
