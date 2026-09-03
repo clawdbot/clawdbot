@@ -79,7 +79,7 @@ suite.define(() => {
                 sshVerify: false,
               },
             },
-            reload: { mode: "hot" },
+            reload: { mode: "hybrid" },
           },
           agents: {
             ...config.agents,
@@ -214,8 +214,7 @@ suite.define(() => {
               },
               { interval: 250, timeout: 60_000 },
             );
-            await waitForReconnect(unauthorizedNode, unauthorizedHelloCount);
-            await publishSessionHost(unauthorizedNode);
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
@@ -228,8 +227,9 @@ suite.define(() => {
             await page.screenshot({
               animations: "disabled",
               fullPage: true,
-              path: path.join(suite.artifactDir, "02-unauthorized-after-restart.png"),
+              path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
             });
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
           },
         );
       } finally {
@@ -430,13 +430,6 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       capacity: { total: 1, available: 1 },
     },
-  });
-}
-
-async function waitForReconnect(client: GatewayClient, previousCount: number): Promise<void> {
-  await vi.waitFor(() => expect(helloCounts.get(client) ?? 0).toBeGreaterThan(previousCount), {
-    interval: 100,
-    timeout: 60_000,
   });
 }
 

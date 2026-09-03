@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resolveDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import type { BackupAgentRoot } from "../commands/backup-resource-inventory.js";
+import type {
+  BackupAgentRoot,
+  BackupResourceInventory,
+} from "../commands/backup-resource-inventory.js";
 import {
   buildBackupArchiveBasename,
   buildBackupArchivePath,
@@ -42,9 +45,12 @@ import {
 import { isErrno } from "./errors.js";
 import { writeJson } from "./json-files.js";
 import {
-  createLegacyAuditBackupSnapshots,
+  createLegacyAuditBackupCapture,
   hasLegacyAuditBackupSources,
+  legacyAuditBackupCapturesMatch,
+  LegacyAuditBackupStateChangedError,
   isLegacyAuditMigrationBackupPath,
+  type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";
 
@@ -328,6 +334,88 @@ function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").Re
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
 
+const MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS = 3;
+
+type ConsistentStateSnapshotPlan = {
+  legacyAuditSnapshots: LegacyAuditBackupSnapshot[];
+  stateSqliteBackup: Awaited<ReturnType<typeof createBackupSqliteSnapshotPlan>>;
+};
+
+async function createConsistentStateSnapshotPlan(params: {
+  inventory: BackupResourceInventory;
+  stateDir?: string;
+  tempDir: string;
+  onlyConfig: boolean;
+}): Promise<ConsistentStateSnapshotPlan> {
+  if (params.onlyConfig) {
+    return {
+      legacyAuditSnapshots: [],
+      stateSqliteBackup: { snapshots: [], discoveredSourcePaths: new Set<string>() },
+    };
+  }
+  if (!params.stateDir) {
+    return {
+      legacyAuditSnapshots: [],
+      stateSqliteBackup: await createBackupSqliteSnapshotPlan({
+        inventory: params.inventory,
+        tempDir: params.tempDir,
+        legacyAuditSnapshots: [],
+      }),
+    };
+  }
+
+  const stateDir = params.stateDir;
+  if (!(await hasLegacyAuditBackupSources(stateDir))) {
+    const fastAttemptDir = path.join(params.tempDir, "state-snapshot-no-legacy");
+    await fs.mkdir(fastAttemptDir, { recursive: true });
+    const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
+      inventory: params.inventory,
+      tempDir: fastAttemptDir,
+      legacyAuditSnapshots: [],
+    });
+    if (!(await hasLegacyAuditBackupSources(stateDir))) {
+      return { legacyAuditSnapshots: [], stateSqliteBackup };
+    }
+    await fs.rm(fastAttemptDir, { recursive: true, force: true });
+  }
+
+  let lastStateChangeMessage: string | undefined;
+  for (let attempt = 0; attempt < MAX_LEGACY_AUDIT_CAPTURE_ATTEMPTS; attempt += 1) {
+    const attemptDir = path.join(params.tempDir, `state-snapshot-attempt-${attempt + 1}`);
+    const verificationDir = path.join(attemptDir, "legacy-verification");
+    await fs.mkdir(attemptDir, { recursive: true });
+    try {
+      const firstCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: attemptDir }),
+      );
+      const stateSqliteBackup = await createBackupSqliteSnapshotPlan({
+        inventory: params.inventory,
+        tempDir: attemptDir,
+        legacyAuditSnapshots: firstCapture.snapshots,
+        legacyAuditDatabaseWitness: firstCapture.databaseWitness,
+      });
+      await fs.mkdir(verificationDir, { recursive: true });
+      const secondCapture = await withLegacyAuditMigrationLease(stateDir, () =>
+        createLegacyAuditBackupCapture({ stateDir, tempDir: verificationDir }),
+      );
+      if (!legacyAuditBackupCapturesMatch(firstCapture, secondCapture)) {
+        throw new LegacyAuditBackupStateChangedError();
+      }
+      await fs.rm(verificationDir, { recursive: true, force: true });
+      return { legacyAuditSnapshots: firstCapture.snapshots, stateSqliteBackup };
+    } catch (error) {
+      await fs.rm(attemptDir, { recursive: true, force: true });
+      if (!(error instanceof LegacyAuditBackupStateChangedError)) {
+        throw error;
+      }
+      lastStateChangeMessage = error.message;
+    }
+  }
+  throw new LegacyAuditBackupStateChangedError(
+    `${lastStateChangeMessage ?? "Legacy audit state changed while backup was capturing it"}; retry backup after legacy audit migration settles`,
+  );
+}
+
 export async function createBackupArchive(
   opts: BackupCreateOptions = {},
 ): Promise<BackupCreateResult> {
@@ -406,34 +494,12 @@ export async function createBackupArchive(
   }
   const tempArchivePath = publication.tempArchivePath;
   try {
-    // Capture every legacy file first, including active and claimed sources.
-    // A concurrent Doctor then leaves each row in this snapshot, the later
-    // SQLite snapshot, or both; restore-side import keys make overlap harmless.
-    const hasLegacyAuditSources = stateAsset
-      ? await hasLegacyAuditBackupSources(stateAsset.sourcePath)
-      : false;
-    const createSnapshotPlans = async () => {
-      const legacyAuditSnapshots =
-        stateAsset && hasLegacyAuditSources
-          ? await createLegacyAuditBackupSnapshots({
-              stateDir: stateAsset.sourcePath,
-              tempDir,
-            })
-          : [];
-      const stateSqliteBackup = !onlyConfig
-        ? await createBackupSqliteSnapshotPlan({
-            inventory: plan.inventory,
-            tempDir,
-            legacyAuditSnapshots,
-          })
-        : { snapshots: [], discoveredSourcePaths: new Set<string>() };
-      return { legacyAuditSnapshots, stateSqliteBackup };
-    };
-    const snapshotPlans =
-      stateAsset && hasLegacyAuditSources
-        ? await withLegacyAuditMigrationLease(stateAsset.sourcePath, createSnapshotPlans)
-        : await createSnapshotPlans();
-    const { legacyAuditSnapshots, stateSqliteBackup } = snapshotPlans;
+    const { legacyAuditSnapshots, stateSqliteBackup } = await createConsistentStateSnapshotPlan({
+      inventory: plan.inventory,
+      stateDir: stateAsset?.sourcePath,
+      tempDir,
+      onlyConfig,
+    });
     const sourcePathRemaps = new Map<string, string>();
     const skippedStateSourcePaths = new Set<string>();
     for (const snapshot of stateSqliteBackup.snapshots) {
