@@ -125,6 +125,7 @@ import {
 } from "./tools/cron-tool.js";
 import type { CronToolOptions } from "./tools/cron-tool.types.js";
 import { wrapToolWithGatewayCallerIdentity } from "./tools/gateway-caller-context.js";
+import type { QuestionPromptDelivery } from "./tools/question-prompt-send.js";
 
 const MEMORY_FLUSH_ALLOWED_TOOL_NAMES = new Set(["read", "write"]);
 
@@ -182,6 +183,11 @@ type OpenClawCodingToolsOptions = {
   messageProvider?: string;
   /** Canonical transport channel when tool-policy provider differs from delivery channel. */
   messageChannel?: string;
+  /**
+   * How this run shows a blocking question tool's prompt. Left unset by harnesses
+   * whose tool lifecycle reserves the prompt for them.
+   */
+  questionPrompt?: QuestionPromptDelivery;
   /** Capabilities declared by the gateway client that originated this run. */
   clientCaps?: string[];
   /** Out-of-band plugin bindings attached by the run initiator. */
@@ -826,6 +832,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
             allowHostBrowserControl: sandbox ? sandbox.browserAllowHostControl : true,
             agentSessionKey: options?.sessionKey,
             runId: options?.runId,
+            ...(options?.questionPrompt ? { questionPrompt: options.questionPrompt } : {}),
             requesterThinkingLevel: options?.requesterThinkingLevel,
             sessionPermissionPolicy,
             execSession: sessionPermissionPolicy

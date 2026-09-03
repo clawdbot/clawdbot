@@ -134,6 +134,7 @@ export async function createServiceChildRelayAdapter(params: {
   secretInput?: SpawnSecretInput;
   oomScoreWrapperSelected: boolean;
   windowsShellCommand?: string;
+  abortSignal?: AbortSignal;
 }): Promise<ServiceChildRelayAdapter> {
   const generation = randomUUID();
   const useWindowsJobAnchor =
@@ -153,6 +154,9 @@ export async function createServiceChildRelayAdapter(params: {
   const controlFd = useWindowsJobAnchor ? undefined : reserveStdioEntry(stdio, "pipe");
   reserveStdioEntry(stdio, "ipc");
 
+  if (params.abortSignal?.aborted) {
+    throw new Error("service child construction aborted");
+  }
   params.assertCurrent?.();
   const child = spawn(process.execPath, resolveRuntimeWorkerArgv(workerUrl), {
     stdio,
@@ -205,6 +209,7 @@ export async function createServiceChildRelayAdapter(params: {
   void startup.promise.catch(() => {});
   void resultCompletion.promise.catch(() => {});
   void extinctionCompletion.promise.catch(() => {});
+  const constructionAbort = createDeferredCore<never>();
   let startupErrorAckDelivery: Promise<void> | undefined;
 
   const settleWait = () => {
@@ -241,6 +246,24 @@ export async function createServiceChildRelayAdapter(params: {
     settleWait();
     extinctionCompletion.reject(waitError);
   };
+
+  const constructionAbortSignal = params.abortSignal;
+  const onConstructionAbort = () => {
+    child.kill("SIGKILL");
+    loseIdentity("construction aborted");
+    constructionAbort.reject(waitError ?? new Error("service child construction aborted"));
+  };
+  if (constructionAbortSignal) {
+    constructionAbortSignal.addEventListener("abort", onConstructionAbort, { once: true });
+  }
+  const removeConstructionAbortListener = () => {
+    if (constructionAbortSignal) {
+      constructionAbortSignal.removeEventListener("abort", onConstructionAbort);
+    }
+  };
+  if (constructionAbortSignal?.aborted) {
+    onConstructionAbort();
+  }
 
   const sendChildMessage = (
     message: ServiceChildStart | ServiceChildControlMessage,
@@ -298,6 +321,8 @@ export async function createServiceChildRelayAdapter(params: {
     }
     inboundSequence = message.sequence;
     if (message.type === "ready" && state === "starting") {
+      // Ready is not construction-complete: secret delivery can still be
+      // blocked. Keep abort protection until the adapter returns.
       commandPid = message.commandPid;
       state = "active";
       startup.resolve();
@@ -416,6 +441,7 @@ export async function createServiceChildRelayAdapter(params: {
   });
   child.once("exit", () => {
     childExited = true;
+    removeConstructionAbortListener();
     if (useWindowsJobAnchor) {
       finishWindowsAuthority();
     }
@@ -436,8 +462,9 @@ export async function createServiceChildRelayAdapter(params: {
   };
   assertCurrent();
   try {
-    await sendChildMessage(start);
+    await Promise.race([sendChildMessage(start), constructionAbort.promise]);
   } catch (error) {
+    removeConstructionAbortListener();
     child.kill("SIGKILL");
     throw error;
   }
@@ -445,12 +472,13 @@ export async function createServiceChildRelayAdapter(params: {
   assertCurrent();
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
-    secretDelivery?.deliverTo(child),
+    secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal }),
   ]);
   const startupError = startupResult.status === "rejected" ? startupResult.reason : undefined;
   const secretDeliveryError =
     secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
   if (startupError !== undefined || secretDeliveryError !== undefined) {
+    removeConstructionAbortListener();
     if (useWindowsJobAnchor && startupError !== undefined) {
       await startupErrorAckDelivery;
       await extinctionCompletion.promise;
@@ -461,6 +489,12 @@ export async function createServiceChildRelayAdapter(params: {
     // backpressured secret pipe closing as a consequence of that failed admission.
     throw startupError ?? secretDeliveryError;
   }
+  if (params.abortSignal?.aborted || waitError) {
+    removeConstructionAbortListener();
+    child.kill("SIGKILL");
+    throw waitError ?? new Error("service child construction aborted");
+  }
+  removeConstructionAbortListener();
 
   assertCurrent();
   const stdin = createManagedChildStdin(child.stdin);

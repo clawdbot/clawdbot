@@ -1,4 +1,4 @@
-import { GATEWAY_OWNER_PROFILE_ID } from "./user-profile-id.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 
 const UUID_PATTERN = "[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}";
 const PERSONAL_AUTH_PROFILE_PATTERN = new RegExp(

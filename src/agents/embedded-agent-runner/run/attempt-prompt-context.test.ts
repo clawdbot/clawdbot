@@ -50,6 +50,7 @@ const projectionState: ToolResultPromptProjectionState = {
   replacements: new Map(),
   frozen: new Set(),
   ambiguousBaseKeys: new Set(),
+  restoredCacheTtl: new Map(),
   sourceTextByKey: new Map(),
 };
 

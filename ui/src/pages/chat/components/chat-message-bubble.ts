@@ -36,7 +36,7 @@ import "../../../styles/chat/reply-preview.css";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import type { LinkFaviconFetcher } from "../link-favicon-loader.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
-import { renderAssistantAttachments } from "./chat-message-attachments.ts";
+import { renderAssistantAttachments, renderOmittedMedia } from "./chat-message-attachments.ts";
 import { renderMessageImages } from "./chat-message-images.ts";
 import type { MessageActionDetails } from "./chat-message-markdown.ts";
 import {
@@ -284,6 +284,10 @@ export function renderGroupedMessage(
   };
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
+  const omittedMedia = normalizedMessage.content.filter(
+    (item): item is Extract<MessageContentItem, { type: "omitted_media" }> =>
+      item.type === "omitted_media",
+  );
   const assistantViewBlocks = normalizedMessage.content.filter(
     (item): item is Extract<MessageContentItem, { type: "canvas" }> => item.type === "canvas",
   );
@@ -324,6 +328,7 @@ export function renderGroupedMessage(
     !hasToolCards &&
     !hasImages &&
     expiredPairingQrCount === 0 &&
+    omittedMedia.length === 0 &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !normalizedMessage.replyTarget
@@ -417,6 +422,7 @@ export function renderGroupedMessage(
     !markdown &&
     !hasImages &&
     expiredPairingQrCount === 0 &&
+    omittedMedia.length === 0 &&
     visibleAttachments.length === 0 &&
     assistantViewBlocks.length === 0 &&
     !reasoningMarkdown;
@@ -425,7 +431,7 @@ export function renderGroupedMessage(
   // Collapsed tool results must not load attachments or render hidden markdown.
   const renderBody = () => html`
     ${renderPairingQrExpiryNotices(expiredPairingQrCount)}
-    ${renderMessageImages(images, imageRenderOptions)}
+    ${renderMessageImages(images, imageRenderOptions)} ${renderOmittedMedia(omittedMedia)}
     ${renderAssistantAttachments(
       visibleAttachments,
       imageRenderOptions,
@@ -526,7 +532,7 @@ export function renderGroupedMessage(
                 </button>
                 ${toolMessageExpanded
                   ? html`<div class="chat-tool-msg-body">${renderBody()}</div>`
-                  : nothing}
+                  : renderOmittedMedia(omittedMedia)}
                 ${toolCards.map((card) => renderToolApprovalReviews(card))}
               </div>
             `

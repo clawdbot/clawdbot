@@ -111,6 +111,89 @@ async function createRelay(platform: "linux" | "win32") {
   return { adapter, cancellations, emit, completeRoot, close };
 }
 
+it("kills the spawned relay when abortSignal fires before ready", async () => {
+  platformMock = mockProcessPlatform("linux");
+  const stub = createStubChild();
+  stub.child.unref = vi.fn();
+  const control = new Duplex({
+    autoDestroy: false,
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  Object.defineProperty(stub.child, "stdio", {
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+    configurable: true,
+  });
+  mocks.spawn.mockReturnValue(stub.child);
+  const abort = new AbortController();
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+    abortSignal: abort.signal,
+  });
+  await nextTurn();
+  expect(mocks.spawn).toHaveBeenCalled();
+  expect(stub.killMock).not.toHaveBeenCalled();
+
+  abort.abort();
+  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
+  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
+  control.destroy();
+  stub.emitExit(null, "SIGKILL");
+});
+
+it("settles when construction aborts before deferred start delivery fails", async () => {
+  platformMock = mockProcessPlatform("linux");
+  const stub = createStubChild();
+  stub.child.unref = vi.fn();
+  const control = new Duplex({
+    autoDestroy: false,
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  Object.defineProperty(stub.child, "stdio", {
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control],
+    configurable: true,
+  });
+  const startCallbacks: Array<(error: Error | null) => void> = [];
+  stub.sendMock.mockImplementation((_message, ...args) => {
+    const callback = args.findLast((value) => typeof value === "function") as
+      | ((error: Error | null) => void)
+      | undefined;
+    if (!callback) {
+      throw new Error("Expected a start delivery callback");
+    }
+    startCallbacks.push(callback);
+    return true;
+  });
+  mocks.spawn.mockReturnValue(stub.child);
+  const abort = new AbortController();
+  const starting = createServiceChildRelayAdapter({
+    command: "synthetic-command",
+    args: [],
+    stdinMode: "pipe-closed",
+    oomScoreWrapperSelected: false,
+    abortSignal: abort.signal,
+  });
+
+  await nextTurn();
+  expect(startCallbacks).toHaveLength(1);
+  abort.abort();
+  await expect(starting).rejects.toThrow(/construction aborted|cleanup identity lost/);
+  expect(stub.killMock).toHaveBeenCalledWith("SIGKILL");
+
+  startCallbacks[0]!(new Error("synthetic start delivery failed"));
+  await nextTurn();
+  control.destroy();
+  stub.emitExit(null, "SIGKILL");
+});
+
 it("refreshes the supervisor deadline from text-only Windows Job output", async () => {
   const { adapter, emit, completeRoot, close } = await createRelay("win32");
   vi.spyOn(childAdapter, "createChildAdapter").mockResolvedValue(adapter);

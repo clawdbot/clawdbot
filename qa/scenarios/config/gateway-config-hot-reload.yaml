@@ -13,6 +13,9 @@ scenario:
     - Hot setting changes preserve the Gateway PID, boot identity, and original authenticated WebSocket.
     - Real requests exercise endpoints, image limits, tool policy, CLI gating, terminal shells, HSTS, GitHub credentials, title generation, node routing, pairing, APNs relay settings, and observer output.
     - Real browser reloads exercise environment presentation, external embeds, sandbox permissions, and favicon preferences.
+    - Real Chromium processes adopt launch defaults while externally attached browsers remain alive.
+    - Detached terminal deadlines and approved node policies update existing sessions without widening pairing approval.
+    - Token/password rotation and browser-origin revocation close only stale connections while keeping the serving Gateway boot.
     - A startup-only terminal enablement change closes the original socket as a positive restart control.
     - Disposable Testbox SSH with generated keys proves stale pairing probes cannot approve after a policy change.
     - All external upstream fixtures and synthetic node/catalog behavior are identified in the evidence.
@@ -28,5 +31,5 @@ scenario:
     config:
       requiredProviderMode: mock-openai
     args: [--output-dir, "${outputDir}"]
-    timeoutMs: 600000
-    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1, Chromium, and sudo sshd. Real Gateway and browser behavior; simulated provider, GitHub, favicon, APNs, and node upstreams.
+    timeoutMs: 900000
+    summary: Requires a disposable Linux Testbox with OPENCLAW_TESTBOX=1, Chromium, Xvfb, and sudo sshd. Real Gateway and browser behavior; simulated provider, GitHub, favicon, APNs, and node upstreams.

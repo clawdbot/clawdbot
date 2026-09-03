@@ -17,6 +17,7 @@ vi.mock("../../gateway/method-scopes.js", () => ({
 vi.mock("../../gateway/server-plugins.js", () => ({
   dispatchGatewayMethodInProcess: mocks.dispatch,
   getInProcessGatewayRequestContext: vi.fn(),
+  runWithOperatorToolGatewayCleanupContext: <T>(run: () => T) => run(),
   hasInProcessGatewayContext: (resolveGatewayContext?: () => GatewayRequestContext | undefined) =>
     Boolean(resolveGatewayContext?.() ?? mocks.hasContext),
 }));
@@ -54,6 +55,7 @@ describe("trusted in-process Gateway session creation", () => {
       { agentId: "main" },
       {
         forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
         sessionCreation: creation,
         syntheticScopes: ["operator.write"],
       },
@@ -186,6 +188,7 @@ describe("trusted in-process Gateway session creation", () => {
       expect(dispatchThroughSelectedGateway(options)).toBe(admitted);
       expect(options).toEqual({
         forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
         resolveGatewayContext: expect.any(Function),
         sessionCreation: creation,
         signal: controller.signal,
@@ -322,6 +325,7 @@ describe("request-shaped in-process Gateway dispatch", () => {
       { sessionKey: "agent:main:worker", message: "run" },
       {
         forceSyntheticClient: true,
+        operatorRoleActor: { kind: "system" },
         agentToolCaller,
         syntheticScopes: ["operator.write"],
         expectFinal: true,
@@ -494,5 +498,128 @@ describe("request-shaped in-process Gateway dispatch", () => {
       "trusted agent runtime identity requires in-process Gateway dispatch",
     );
     expect(mocks.callGateway).not.toHaveBeenCalled();
+  });
+});
+
+describe("built-in Gateway foreground authority", () => {
+  beforeEach(() => {
+    mocks.hasContext = true;
+    mocks.dispatch.mockReset().mockResolvedValue({ ok: true });
+    mocks.callGateway.mockReset();
+    mocks.callGatewayTool.mockReset();
+  });
+
+  const callers = [
+    {
+      name: "request-shaped",
+      call: () =>
+        callAgentToolGatewayRequest({
+          method: "sessions.patch",
+          params: { key: "target", pinned: true },
+        }),
+    },
+    {
+      name: "generic",
+      call: () => callInProcessGatewayTool("sessions.patch", { key: "target", pinned: true }),
+    },
+  ];
+
+  it.each(callers)(
+    "rejects retained $name work after its exact caller closes",
+    async ({ call }) => {
+      let current = true;
+      await withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:caller",
+          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+          receiptAuthority: () => current,
+        },
+        async () => {
+          current = false;
+          await expect(call()).rejects.toThrow(/authority.*no longer active/i);
+        },
+      );
+      expect(mocks.dispatch).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(callers)(
+    "rechecks $name caller authority at the mutation commit boundary",
+    async ({ call }) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      let current = true;
+      let committed = false;
+      mocks.dispatch.mockImplementation(async (_method, _params, options) => {
+        entered.resolve();
+        await release.promise;
+        options.sessionMutationCommitGuard?.();
+        committed = true;
+        return { ok: true };
+      });
+      const pending = withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:caller",
+          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+          receiptAuthority: () => current,
+        },
+        call,
+      );
+      const rejected = expect(pending).rejects.toThrow(/authority.*no longer active/i);
+      await entered.promise;
+      current = false;
+      release.resolve();
+      await rejected;
+      expect(committed).toBe(false);
+    },
+  );
+
+  it("lets host-owned abort cleanup settle without reopening the closed foreground caller", async () => {
+    const context = {} as GatewayRequestContext;
+    const controller = new AbortController();
+    let current = true;
+    let cancelled = false;
+    mocks.dispatch.mockImplementation(async (method, _params, options) => {
+      if (method === "conversations.turn.cancel") {
+        expect(options.resolveGatewayContext()).toBe(context);
+        expect(readInProcessAgentRuntimeIdentity(options)).toBeUndefined();
+        cancelled = true;
+        return { ok: true };
+      }
+      current = false;
+      controller.abort();
+      await options.onSignalAbort();
+      throw new Error("primary aborted");
+    });
+    await expect(
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "agent:main:caller",
+          operationalRunInstance: { instanceId: "caller-instance", runId: "caller-run" },
+          receiptAuthority: () => current,
+          approvalSignals: [controller.signal],
+          gatewayContextResolver: () => context,
+        },
+        () =>
+          callAgentToolGatewayRequest({
+            method: "conversations.turn",
+            params: { turnId: "owned-turn" },
+            signal: controller.signal,
+            onSignalAbort: async (request) => {
+              await request("conversations.turn.cancel", { turnId: "owned-turn" });
+            },
+          }),
+      ),
+    ).rejects.toThrow();
+    expect(cancelled).toBe(true);
+    expect(mocks.dispatch.mock.calls.map(([method]) => method)).toEqual([
+      "conversations.turn",
+      "conversations.turn.cancel",
+    ]);
   });
 });

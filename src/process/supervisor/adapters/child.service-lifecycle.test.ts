@@ -2,7 +2,9 @@ import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForPidFile } from "../../../../test/helpers/process-wait.js";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { createProcessSupervisor } from "../supervisor.js";
 import { createChildAdapter } from "./child.js";
@@ -123,24 +125,92 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     { reason: "no-output-timeout" as const, timeoutMs: undefined, noOutputTimeoutMs: 100 },
   ])("removes the group before returning $reason", async (timing) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    const run = await createProcessSupervisor().spawn({
-      mode: "child",
-      argv: [
-        "/bin/sh",
-        "-c",
-        'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
-      ],
-      stdinMode: "pipe-closed",
-      sessionId: "service-lifecycle-test",
-      backendId: "service-lifecycle-test",
-      timeoutMs: timing.timeoutMs,
-      noOutputTimeoutMs: timing.noOutputTimeoutMs,
-    });
-    const exit = await run.wait();
-    const [rootPid, descendantPid] = parsePidPair(exit.stdout);
+    const supervisor = createProcessSupervisor();
+    const ready = createDeferred<[number, number]>();
+    let output = "";
+    const ownedPids: number[] = [];
+    // Deadlines include construction. Hold the clock until the real PID banner
+    // so this case tests admitted-group cleanup independently of startup speed.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+    try {
+      const run = await supervisor.spawn({
+        mode: "child",
+        argv: [
+          "/bin/sh",
+          "-c",
+          'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+        ],
+        stdinMode: "pipe-closed",
+        sessionId: "service-lifecycle-test",
+        backendId: "service-lifecycle-test",
+        timeoutMs: timing.timeoutMs,
+        noOutputTimeoutMs: timing.noOutputTimeoutMs,
+        onStdout: (chunk) => {
+          output += chunk;
+          if (/^\d+ \d+/u.test(output)) {
+            ready.resolve(parsePidPair(output));
+          }
+        },
+      });
+      const [rootPid, descendantPid] = await ready.promise;
+      ownedPids.push(rootPid, descendantPid);
+      ownedPids.forEach((pid) => activePids.add(pid));
 
-    expect(exit.reason).toBe(timing.reason);
-    await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+      await vi.advanceTimersByTimeAsync(100);
+      const exit = await run.wait();
+      expect(exit.reason).toBe(timing.reason);
+      await run.waitForExtinction?.();
+      await supervisor.shutdown();
+      vi.useRealTimers();
+      await waitFor(() => !isAlive(rootPid) && !isAlive(descendantPid));
+    } finally {
+      for (const pid of ownedPids) {
+        try {
+          process.kill(pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+      try {
+        await supervisor.shutdown();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+  });
+
+  it("bounds construction while secret delivery blocks and cleans the real command", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    const cwd = tempDirs.make("openclaw-service-secret-construction-");
+    const pidPath = path.join(cwd, "command.pid");
+    const command = `
+      require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
+      setInterval(() => {}, 1000);
+    `;
+    const supervisor = createProcessSupervisor();
+    const pendingRun = supervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", command],
+      stdinMode: "pipe-closed",
+      sessionId: "service-secret-construction",
+      backendId: "service-secret-construction",
+      timeoutMs: 500,
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.alloc(8 * 1024 * 1024, 97),
+      },
+    });
+    const commandPid = await waitForPidFile(pidPath, 5_000);
+    activePids.add(commandPid);
+    expect(isAlive(commandPid)).toBe(true);
+
+    const run = await pendingRun;
+    await expect(run.wait()).resolves.toMatchObject({
+      reason: "overall-timeout",
+      timedOut: true,
+    });
+    await waitFor(() => !isAlive(commandPid));
+    await supervisor.shutdown();
   });
 
   it("preserves root-result timing while retaining descendant cleanup ownership", async () => {

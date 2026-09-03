@@ -22,10 +22,6 @@ import {
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
-import {
-  resolveNodePairingCommandAllowlist,
-  normalizeDeclaredNodeCommands,
-} from "../node-command-policy.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import { PAIRING_SCOPE } from "../operator-scopes.js";
@@ -295,21 +291,6 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
       // Surface approval rotates the persistent generation. Abort any wake
       // already admitted under the prior command surface before it can send.
       invalidateNodeWakeState(approvedNode.nodeId);
-      const cfg = context.getRuntimeConfig();
-      // Pairing allowlist matches connect-time reconciliation: approved
-      // dangerous surfaces stay live so persistent enablement does not require
-      // another reconnect; invoke policy still gates use.
-      const currentAllowlist = resolveNodePairingCommandAllowlist(cfg, {
-        platform: approvedNode.platform,
-        deviceFamily: approvedNode.deviceFamily,
-        caps: approvedNode.caps,
-        commands: approvedNode.commands,
-        approvedCommands: approvedNode.commands,
-      });
-      const currentAllowedCommands = normalizeDeclaredNodeCommands({
-        declaredCommands: approvedNode.commands ?? [],
-        allowlist: currentAllowlist,
-      });
       // Only the exact generation committed by this approval may inherit the
       // authenticated live session. A later re-pair must reconnect instead.
       const persistedApprovedState = await captureNodePairingState(approvedNode.nodeId);
@@ -330,7 +311,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
               approvedNode.nodeId,
               {
                 caps: approvedNode.caps ?? [],
-                commands: currentAllowedCommands,
+                commands: approvedNode.commands ?? [],
                 permissions: approvedNode.permissions,
               },
               {
@@ -344,7 +325,7 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
             )
           : null;
       if (updatedNode) {
-        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode, cfg });
+        refreshConnectedNodeSurfaceCaches({ context, nodeSession: updatedNode });
       }
       context.broadcast(
         "node.pair.resolved",

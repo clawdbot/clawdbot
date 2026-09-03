@@ -20,7 +20,8 @@ vi.mock("../manifest-registry.js", () => ({
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
 }));
 
-vi.mock("../manifest-registry-installed.js", () => ({
+vi.mock("../manifest-registry-installed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../manifest-registry-installed.js")>()),
   loadPluginManifestRegistryForInstalledIndex: (
     ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
   ) => registryJitiMocks.loadPluginManifestRegistry(...args),
@@ -33,6 +34,9 @@ vi.mock("../plugin-registry.js", async (importOriginal) => {
     loadPluginRegistrySnapshot: (
       ...args: Parameters<typeof registryJitiMocks.loadPluginRegistrySnapshot>
     ) => registryJitiMocks.loadPluginRegistrySnapshot(...args),
+    loadPluginRegistrySnapshotWithMetadata: (
+      ...args: Parameters<typeof registryJitiMocks.loadPluginRegistrySnapshot>
+    ) => ({ snapshot: registryJitiMocks.loadPluginRegistrySnapshot(...args) }),
     loadPluginManifestRegistryForPluginRegistry: (
       ...args: Parameters<typeof registryJitiMocks.loadPluginManifestRegistry>
     ) => registryJitiMocks.loadPluginManifestRegistry(...args),

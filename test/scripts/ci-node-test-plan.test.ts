@@ -547,7 +547,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(groupNames(updated)).toEqual(groupNames(fallback));
 
       // Two complete, compatible configs share setup without changing either
-      // process envelope. Only Blacksmith requests capacity for overlapping plans.
+      // process envelope. Blacksmith placements request capacity for overlapping plans.
       const fixtureConfigs = new Set([
         "test/vitest/vitest.hooks.config.ts",
         "test/vitest/vitest.secrets.config.ts",
@@ -563,7 +563,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
         const base = createNodeTestShards(options);
         expect(base).toHaveLength(2);
-        timings.mockReturnValue(Object.fromEntries(base.map((shard) => [shard.shardName, 70])));
+        const groupSeconds = profile === "github" ? 70 : 170;
+        timings.mockReturnValue(
+          Object.fromEntries(base.map((shard) => [shard.shardName, groupSeconds])),
+        );
         const packed = createNodeTestShardBundles(options);
         expect(packed).toHaveLength(1);
         expect(packed[0]?.groups).toEqual(
@@ -572,11 +575,11 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             shard_name: shardName,
           })),
         );
-        expect(packed[0]?.planConcurrency).toBe(profile === "blacksmith" ? 2 : 1);
+        expect(packed[0]?.planConcurrency).toBe(profile === "github" ? 1 : 2);
         expect(packed[0]?.runner).toBe(
-          profile === "blacksmith" ? EXTRA_LARGE_NODE_TEST_RUNNER : base[0]?.runner,
+          profile === "github" ? base[0]?.runner : EXTRA_LARGE_NODE_TEST_RUNNER,
         );
-        expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 122 : 140);
+        expect(packed[0]?.predictedSeconds).toBe(profile === "hybrid" ? 296 : groupSeconds * 2);
       } finally {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
@@ -594,7 +597,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(
       fallback
         .filter((shard) => !shard.requiresDist)
-        .every((shard) => (shard.predictedSeconds ?? Infinity) <= 210),
+        .every(
+          (shard) =>
+            (shard.predictedSeconds ?? Infinity) <= (shard.planConcurrency === 2 ? 360 : 210),
+        ),
     ).toBe(true);
     // Runtime consumers retain their build floor without unrelated Doctor work.
     // The complete CLI catalog still leaves its slow gateway files alone.
@@ -649,7 +655,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       shard.groups.some((group) => group.shard_name === "agentic-gateway-core-3"),
     );
     expect(tail?.predictedSeconds).toBeGreaterThanOrEqual(140);
-    expect(tail?.predictedSeconds).toBeLessThanOrEqual(210);
+    expect(tail?.predictedSeconds).toBeLessThanOrEqual(tail?.planConcurrency === 2 ? 360 : 210);
   });
 
   it.each([
@@ -708,7 +714,6 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         updated.flatMap((shard) => shard.groups).find((group) => group.shard_name === shardName)
           ?.timing_key,
       ).toBe(timingKey);
-      expect(updated.every((shard) => shard.planConcurrency === 1)).toBe(true);
     },
   );
 
@@ -860,8 +865,10 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           expect(supportGroups.every((group) => group.runner === DEFAULT_NODE_TEST_RUNNER)).toBe(
             true,
           );
-          expect(plan.some((shard) => shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(false);
-          expect(plan.every((shard) => shard.planConcurrency === 1)).toBe(true);
+          if (profile.name === "GitHub-hosted") {
+            expect(plan.some((shard) => shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)).toBe(false);
+            expect(plan.every((shard) => shard.planConcurrency === 1)).toBe(true);
+          }
         }
         const cliProcessJobs = plan.filter((shard) =>
           shard.groups.some((group) =>
@@ -957,7 +964,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(jobOf("core-unit-fast-1")).toBeGreaterThanOrEqual(0);
     expect(jobOf("core-unit-fast-2")).toBeGreaterThanOrEqual(0);
     // Timing-sensitive and runtime-building jobs stay serial. Ordinary Blacksmith
-    // bins may overlap only with the larger capacity request; logical groups stay intact.
+    // placements may overlap only with the larger request; logical groups stay intact.
     for (const shard of [
       ...pullRequestCompact,
       ...githubPullRequestCompact,
@@ -970,8 +977,15 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         expect(exclusiveCount).toBe(shard.groups.length);
         expect(shard.planConcurrency).toBe(1);
       }
+      if (!githubPullRequestCompact.includes(shard) && !exclusiveCount && !shard.requiresDist) {
+        expect(
+          shard.groups.every(
+            (group) => Boolean(group.pretestBuildMode) === Boolean(shard.pretestBuildMode),
+          ),
+        ).toBe(true);
+      }
       if (shard.planConcurrency === 2) {
-        expect(pullRequestCompact).toContain(shard);
+        expect(githubPullRequestCompact).not.toContain(shard);
         expect(shard.runner).toBe(EXTRA_LARGE_NODE_TEST_RUNNER);
         expect(shard.groups.length).toBeGreaterThan(1);
         expect(shard.pretestBuildMode).toBeUndefined();
@@ -2599,7 +2613,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           (shard) =>
             shard.groups.length <= 10 &&
             (shard.planConcurrency === 1 ||
-              (runnerBackend === "blacksmith" &&
+              (runnerBackend !== "github" &&
                 shard.planConcurrency === 2 &&
                 shard.runner === EXTRA_LARGE_NODE_TEST_RUNNER)),
         ),

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createChatAbortMarker,
   createChatRunState,
@@ -6,6 +6,32 @@ import {
 } from "./server-chat-state.js";
 
 describe("createChatRunState", () => {
+  it.each([false, true])(
+    "stops returning finalized recipients at expiry (other state: %s)",
+    (keepState) => {
+      let now = 1_000;
+      const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+      try {
+        const state = createChatRunState();
+        state.toolEventRecipients.add("finished", "conn-finished");
+        state.toolEventRecipients.add("active", "conn-active");
+        if (keepState) {
+          state.getOrCreate("finished").buffer = "retained";
+        }
+        state.toolEventRecipients.markFinal("finished");
+        now += 29_999;
+        expect(state.toolEventRecipients.get("finished")).toEqual(new Set(["conn-finished"]));
+        now += 1;
+        expect(state.toolEventRecipients.get("finished")).toBeUndefined();
+        expect(state.toolEventRecipients.get("finished")).toBeUndefined();
+        expect(state.toolEventRecipients.get("active")).toEqual(new Set(["conn-active"]));
+        expect(state.runs.has("finished")).toBe(keepState);
+      } finally {
+        clock.mockRestore();
+      }
+    },
+  );
+
   it("clears transient projection state without dropping run ownership or abort tombstones", () => {
     const state = createChatRunState();
     state.registry.add("run-1", { sessionKey: "session-1", clientRunId: "client-1" });

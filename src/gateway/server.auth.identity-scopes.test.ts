@@ -5,10 +5,11 @@ import {
   selectGatewayConnectAuth,
 } from "../../packages/gateway-client/src/connect-auth.js";
 import type { HelloOk } from "../../packages/gateway-protocol/src/schema/frames.js";
-import type {
-  UsersListModelAccountsResult,
-  UsersSelectModelAccountResult,
-  UsersSelfResult,
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UsersListModelAccountsResult,
+  type UsersSelectModelAccountResult,
+  type UsersSelfResult,
 } from "../../packages/gateway-protocol/src/schema/users.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
@@ -17,7 +18,6 @@ import { loadOriginDeviceToken, storeOriginDeviceToken } from "../infra/device-a
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../state/user-profile-id.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import type { OperatorScope } from "./operator-scopes.js";

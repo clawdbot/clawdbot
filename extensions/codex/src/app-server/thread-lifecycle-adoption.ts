@@ -29,6 +29,7 @@ import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
   CodexThreadRequestContext,
+  CodexThreadResumePreparation,
 } from "./thread-lifecycle-types.js";
 import { releaseCodexConsumedLiveThread } from "./thread-lifecycle-warm.js";
 import {
@@ -139,11 +140,12 @@ export async function resumePendingCodexThread(
     ? await lifecycleTiming.measure("plugin-config-build", () => params.pluginThreadConfig?.build())
     : undefined;
   const clientId = resolveCodexAppServerClientInstanceId(params.client);
-  const configuration = await preparePendingCodexThreadResume(
-    params,
-    binding,
-    context.dynamicToolsFingerprint,
-    async (assertCurrent) => {
+  const resumed = await resumeExistingCodexThread(params, {
+    ...context,
+    prebuiltPluginThreadConfig,
+    prepareResume: () =>
+      preparePendingCodexThreadResume(params, binding, context.dynamicToolsFingerprint),
+    releaseRetainedThread: async (assertCurrent) => {
       const released = await context.releaseRetainedThread(binding.threadId, assertCurrent);
       assertCurrent();
       if (!released || (binding.clientId && binding.clientId !== clientId)) {
@@ -156,21 +158,11 @@ export async function resumePendingCodexThread(
         });
       }
     },
-  );
-  try {
-    const resumed = await resumeExistingCodexThread(params, {
-      ...context,
-      prebuiltPluginThreadConfig,
-      assertResumeConfiguration: configuration.assertConfigured,
-      assertResumeOwnership: configuration.assertCurrent,
-    });
-    if (!resumed) {
-      throw new Error(`Codex did not configure resumed thread ${binding.threadId}.`);
-    }
-    return resumed;
-  } finally {
-    configuration.dispose();
+  });
+  if (!resumed) {
+    throw new Error(`Codex did not configure resumed thread ${binding.threadId}.`);
   }
+  return resumed;
 }
 
 /** Manual attachment is intent, never evidence that loaded native overrides took effect. */
@@ -178,8 +170,7 @@ async function preparePendingCodexThreadResume(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
   dynamicToolsFingerprint: string,
-  releaseSubscription: (assertCurrent: () => void) => Promise<void>,
-): Promise<{ assertConfigured: () => void; assertCurrent: () => void; dispose: () => void }> {
+): Promise<CodexThreadResumePreparation> {
   const fail = (reason: string) =>
     new Error(
       `Cannot configure resumed Codex thread ${binding.threadId}: ${reason}. ` +
@@ -240,8 +231,6 @@ async function preparePendingCodexThreadResume(
       throw fail("its immutable native tool catalog does not match the current OpenClaw tools");
     }
     assertCurrent();
-    await releaseSubscription(assertCurrent);
-    assertCurrent();
     return {
       assertConfigured: observation.assertConfigured,
       assertCurrent,
@@ -258,7 +247,7 @@ export async function prepareCodexThreadResume(
   params: CodexStartOrResumeThreadParams,
   binding: CodexAppServerThreadBinding,
   context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
-) {
+): Promise<CodexThreadResumePreparation> {
   const assertClient = captureCodexAppServerClientLifetime(
     params.client,
     binding.connectionScope === "supervision" ? "connection" : "native-process",
@@ -272,8 +261,13 @@ export async function prepareCodexThreadResume(
     }
   };
   assertCurrent();
-  const thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
-  assertCurrent();
+  let thread: CodexThread;
+  try {
+    thread = await assertAdoptedCodexThreadResumeAllowed(params, binding.threadId, context);
+  } finally {
+    // A failed read cannot authorize recovery after its physical or host owner closes.
+    assertCurrent();
+  }
   // Known supervision keeps its native home; manual adoption's stricter home and catalog
   // checks remain in preparePendingCodexThreadResume, before this common handoff.
   assertCodexSupervisionThreadLineage(binding, thread);

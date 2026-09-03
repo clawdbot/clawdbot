@@ -566,7 +566,7 @@ The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cl
 ### What hot-applies vs what needs a restart
 
 Most fields hot-apply without downtime; some hot-applied sections restart just that
-subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gateway. In
+subsystem (channel, cron, heartbeat) rather than the whole Gateway. In
 `hybrid` mode, Gateway-restart-required changes are handled automatically.
 
 By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
@@ -578,38 +578,59 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
-| Category                | Fields                                                                           | Gateway restart needed?      |
-| ----------------------- | -------------------------------------------------------------------------------- | ---------------------------- |
-| Channels                | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                | No (restarts that channel)   |
-| Agent & models          | `agent`, `agents`, `models`, `routing`                                           | No                           |
-| Automation              | `hooks`, `cron`, `agent.heartbeat`                                               | No (restarts that subsystem) |
-| Sessions & messages     | `session`, `messages`                                                            | No                           |
-| Tools & media           | `tools`, `skills`, `mcp`, `audio`, `talk`                                        | No                           |
-| Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`          | No (reloads plugin runtime)  |
-| UI & misc               | `ui`, `logging`, `identity`, `bindings`                                          | No                           |
-| Gateway HTTP APIs       | `gateway.http.endpoints`, `gateway.http.securityHeaders.strictTransportSecurity` | No (next request)            |
-| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`                | No (next operation)          |
-| Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                 | No                           |
-| Gateway push            | `gateway.push.apns.relay`                                                        | No (next push)               |
-| Gateway terminal        | `gateway.terminal.shell`                                                         | No (new terminals)           |
-| Gateway server          | Other `gateway.*` settings (port, bind, auth, roles, tailscale, TLS)             | **Yes**                      |
-| Infrastructure          | `discovery`, `browser`, `plugins.load`, `plugins.installs`                       | **Yes**                      |
+| Category                | Fields                                                                                                                                                                       | Gateway restart needed?                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Channels                | `channels.*`, `web` (WhatsApp) - all built-in and plugin channels                                                                                                            | No (restarts that channel)             |
+| Agent & models          | `agent`, `agents`, `models`, `routing`                                                                                                                                       | No                                     |
+| Automation              | `hooks`, `cron`, `agent.heartbeat`                                                                                                                                           | No (restarts that subsystem)           |
+| Sessions & messages     | `session`, `messages`                                                                                                                                                        | No                                     |
+| Tools & media           | `tools`, `skills`, `mcp`, `audio`, `talk`                                                                                                                                    | No                                     |
+| Plugin config           | `plugins.entries.*`, `plugins.allow`, `plugins.deny`, `plugins.enabled`                                                                                                      | No (reloads plugin runtime)            |
+| UI & misc               | `ui`, `logging`, `identity`, `bindings`                                                                                                                                      | No                                     |
+| Gateway HTTP APIs       | `gateway.http.endpoints`, `gateway.http.securityHeaders.strictTransportSecurity`                                                                                             | No (next request)                      |
+| Gateway tools & nodes   | `gateway.tools`, `gateway.nodes.browser`, `gateway.nodes.pairing`, `gateway.nodes.commands`, `gateway.nodes.pluginTools.enabled`, `gateway.nodes.allowSkills`                | No                                     |
+| Gateway client features | `gateway.cliAgents`, selected `gateway.controlUi` settings below                                                                                                             | No                                     |
+| Gateway push            | `gateway.push.apns.relay`                                                                                                                                                    | No (next push)                         |
+| Gateway terminal        | `gateway.terminal.shell`, `gateway.terminal.detachedSessionTimeoutSeconds`                                                                                                   | No                                     |
+| Gateway credentials     | `gateway.auth.token`, `gateway.auth.password`, with the same effective auth mode                                                                                             | No (old shared-auth clients reconnect) |
+| Browser defaults        | `browser.profiles`, `browser.defaultProfile`, `browser.headless`, `browser.executablePath`, `browser.attachOnly`, `browser.cdpUrl`, `browser.noSandbox`, `browser.extraArgs` | No                                     |
+| Gateway server          | Other `gateway.*` settings (port, bind, auth mode, roles, tailscale, TLS)                                                                                                    | **Yes**                                |
+| Infrastructure          | `discovery`, other `browser` settings, `plugins.load`, `plugins.installs`                                                                                                    | **Yes**                                |
 
 Under `gateway.controlUi`, the `environment`, `github`, `toolTitles`,
 `sessionObserver`, `embedSandbox`, `allowExternalEmbedUrls`, and
 `automaticallyFetchFavicons` settings hot-apply. Reload open Control UI pages to
 pick up the environment label, CLI agent picker, embed preferences, and favicon
-display preference; the Gateway process keeps running. Control UI serving paths,
-origin policy, and authentication still require a Gateway restart.
+display preference; the Gateway process keeps running. `allowedOrigins` and
+`dangerouslyAllowHostHeaderOriginFallback` also hot-apply: pending handshakes
+recheck the new policy, and browser connections it no longer allows close.
+Control UI serving paths still require a Gateway restart.
 
-Node command allowlists and node-published tools or skills still require a
-Gateway restart because they also configure services created at startup. Browser
+Node command policy updates connected nodes immediately. Disabling node-published
+tools or skills withdraws them; re-enabling restores the last publication within
+the node's existing pairing approval. Reload never grants an unapproved command.
+Revoking a command cancels its active invocations and rejects later input and
+results. Revoking desktop streaming also closes its observer transports. Browser
 node routing applies to subsequent operations. Node pairing policy
 (`gateway.nodes.pairing`) also hot-applies: pending automatic approvals recheck
 the current policy before granting access, including after SSH probes. Existing
 paired devices remain paired. Terminal shell changes apply to newly opened
-terminals; active terminals keep their original shell. Terminal enablement and
-detached-session timeouts still require a restart.
+terminals; active terminals keep their original shell. Detached-session timeout
+changes recalculate deadlines from each terminal's original disconnect time.
+Already-expired sessions close immediately; attached terminals keep running.
+Terminal enablement still requires a restart.
+
+Browser default-profile changes apply on the next request. Launch-setting
+changes replace affected managed browser processes when next used; externally
+attached browsers stay running. Browser enablement, evaluation, SSRF policy,
+extension relay, and tab cleanup remain restart-owned.
+
+Token and password rotation hot-applies only when the effective auth mode stays
+the same. Existing clients using the old shared credential must reconnect with
+the new credential; independently paired device-token clients remain connected.
+Browser device tokens derived from the old shared credential are revoked too.
+For SecretRef credentials, set `gateway.auth.mode` explicitly to make rotation
+eligible for hot reload. Auth-mode changes still restart the Gateway.
 
 <Note>
 Changing `gateway.reload` or `gateway.remote` also does **not** trigger a restart. Individual plugins can override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.

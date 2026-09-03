@@ -28,11 +28,7 @@ import {
 } from "./net.js";
 import { checkBrowserOrigin } from "./origin-check.js";
 import { withSerializedRateLimitAttempt } from "./rate-limit-attempt-serialization.js";
-export {
-  resolveEffectiveSharedGatewayAuth,
-  resolveGatewayAuth,
-  type ResolvedGatewayAuth,
-} from "./auth-resolve.js";
+export { resolveGatewayAuth, type ResolvedGatewayAuth } from "./auth-resolve.js";
 const LEGACY_OPENCLAW_ENV_NOTE =
   " Legacy CLAWDBOT_* and MOLTBOT_* environment variables are ignored; use OPENCLAW_* names.";
 

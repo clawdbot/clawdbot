@@ -515,6 +515,11 @@ describe("runEmbeddedAgentEntry", () => {
   it("finalizes only the accepted fallback candidate after its attempt releases ownership", async () => {
     let primaryReleased = false;
     let fallbackReleased = false;
+    const releaseAcceptedTerminalWork = vi.fn();
+    const onAcceptedTerminal = vi.fn(() => {
+      expect(state.finalizedAttempts).toEqual([]);
+      return releaseAcceptedTerminalWork;
+    });
     const { runEmbeddedAgentEntry } = await import("./run-entry.js");
     await runEmbeddedAgentEntry({
       selection: { cfg: {}, provider: "primary-provider", model: "primary-model" },
@@ -526,6 +531,7 @@ describe("runEmbeddedAgentEntry", () => {
       },
       behavior: { kind: "command-rpc", hasCommittedSideEffect: () => false },
       sessionOverride: { kind: "preserve" },
+      onAcceptedTerminal,
       runCandidate: async (provider, model, options) => {
         const label = provider === "primary-provider" ? "primary" : "fallback";
         recordTurnAttempt(options.onContextEngineTurnCandidate, label);
@@ -544,7 +550,52 @@ describe("runEmbeddedAgentEntry", () => {
 
     expect(primaryReleased).toBe(true);
     expect(fallbackReleased).toBe(true);
+    expect(onAcceptedTerminal).toHaveBeenCalledOnce();
+    expect(releaseAcceptedTerminalWork).toHaveBeenCalledOnce();
     expect(state.finalizedAttempts).toEqual(["fallback"]);
+  });
+
+  it("does not commit the accepted terminal after abort wins before fallback settlement", async () => {
+    const abortController = new AbortController();
+    const onAcceptedTerminal = vi.fn();
+    state.runWithModelFallback.mockImplementationOnce(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model, initialAttemptOptions(params));
+      abortController.abort("user_abort");
+      return {
+        outcome: "completed" as const,
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    const { runEmbeddedAgentEntry } = await import("./run-entry.js");
+    await runEmbeddedAgentEntry({
+      selection: { cfg: {}, provider: "provider", model: "model" },
+      identity: { runId: "settle-after-abort", agentId: "main", sessionId: "session-1" },
+      harness: {
+        workspaceDir: "/tmp/workspace",
+        preparation: { kind: "direct" },
+        resolveRuntimeOverride: () => undefined,
+      },
+      behavior: {
+        kind: "channel-delivery",
+        readDeliveryEvidence: () => ({
+          hasDirectlySentBlockReply: false,
+          hasBlockReplyPipelineOutput: false,
+        }),
+      },
+      sessionOverride: { kind: "preserve" },
+      abortSignal: abortController.signal,
+      onAcceptedTerminal,
+      runCandidate: async (provider, model, options) => {
+        recordTurnAttempt(options.onContextEngineTurnCandidate, "candidate");
+        return makeResult({ provider, model });
+      },
+    });
+
+    expect(onAcceptedTerminal).not.toHaveBeenCalled();
+    expect(state.finalizedAttempts).toEqual([]);
   });
 
   it("accepts an empty result after a committed side effect and finalizes it once", async () => {
