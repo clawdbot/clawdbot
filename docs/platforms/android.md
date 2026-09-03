@@ -311,7 +311,7 @@ openclaw gateway call node.list --params "{}"
 
 The draft has its own full-width row above the attachment and voice/send controls,
 so larger text and narrow screens do not squeeze it between buttons. The empty
-hint stays on one line; drafts show up to four lines and scroll when space is limited.
+hint stays on one line; drafts show up to six lines and scroll when space is limited.
 The composer has narrower side gutters than the transcript, with readable draft
 text and 48dp action targets. Typography still follows system text scaling.
 Model and thinking controls sit together, opposite the microphone and primary
