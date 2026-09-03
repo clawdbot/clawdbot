@@ -239,6 +239,24 @@ describe("createCliJsonlStreamingParser", () => {
       terminalReason: "background_requested",
       expected: { text: "", sessionId: "hook-stopped", usage: undefined },
     },
+    {
+      name: "names a reply-less provider-side reason without recording a stop",
+      frames: [] as unknown[],
+      terminalReason: "model_error",
+      expected: {
+        text: "",
+        sessionId: "hook-stopped",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: model_error, stop_reason: tool_use).",
+      },
+    },
+    {
+      name: "keeps streamed text when a provider-side reason follows a reply",
+      frames: [claudeTextDelta("streamed answer")] as unknown[],
+      terminalReason: "model_error",
+      expected: { text: "streamed answer", sessionId: "hook-stopped", usage: undefined },
+    },
   ])("$name", ({ frames, expected, terminalReason }) => {
     const parser = createCliJsonlStreamingParser({
       backend: {

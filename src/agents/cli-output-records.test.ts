@@ -189,11 +189,55 @@ describe("parseCliJson", () => {
         sessionId: "session-json-long-reason",
         usage: undefined,
         errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook stopped ${"x".repeat(51)}, stop_reason: ${"y".repeat(64)}).`,
+      },
+    },
+    {
+      name: "records an aborted-tools terminal result as a turn stop",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-aborted-tools",
+        stop_reason: "tool_use",
+        terminal_reason: "aborted_tools",
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-aborted-tools",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: aborted_tools, stop_reason: tool_use).",
         terminalFailure: {
           reason: "turn_stopped",
-          terminalReason: `hook stopped ${"x".repeat(51)}`,
-          stopReason: "y".repeat(64),
+          terminalReason: "aborted_tools",
+          stopReason: "tool_use",
         },
+      },
+    },
+    {
+      name: "names a reply-less provider-side terminal reason without recording a stop",
+      input: {
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "session-json-model-error",
+        stop_reason: "end_turn",
+        terminal_reason: "model_error",
+        result: "",
+      },
+      command: "claude",
+      sessionIdFields: ["session_id"],
+      providerId: "claude-cli",
+      expected: {
+        text: "",
+        sessionId: "session-json-model-error",
+        usage: undefined,
+        errorText:
+          "Claude CLI ended the turn without a reply (terminal_reason: model_error, stop_reason: end_turn).",
       },
     },
     {

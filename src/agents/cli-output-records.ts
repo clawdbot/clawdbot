@@ -312,40 +312,63 @@ export function describeClaudeTurnStop(failure: {
   return `Claude CLI ended the turn without a reply (terminal_reason: ${failure.terminalReason}${stopReason}).`;
 }
 
+// Reasons the CLI reports when it ended the turn on purpose after work may
+// already have run: a hook or an abort cut the turn short, or a budget ran
+// out. Replaying one of these on another model would re-run its tool effects.
+// Every other reply-less reason is named in the error text but stays
+// failover-eligible: the SDK does not document whether provider-side reasons
+// (`model_error`, `rapid_refill_breaker`) or pre-tool setup failures reach a
+// `success` record without `is_error`, and a retry there is the pre-existing
+// behavior rather than a new risk.
+const CLAUDE_TURN_STOP_REASONS = new Set([
+  "hook_stopped",
+  "stop_hook_prevented",
+  "aborted_tools",
+  "aborted_streaming",
+  "budget_exhausted",
+]);
+
+/** A reply-less Claude result that ended for a reason other than completing. */
+export function readClaudeReplyLessTerminalReason(
+  parsed: Record<string, unknown>,
+): { terminalReason: string; stopReason?: string } | undefined {
+  const terminalReason =
+    typeof parsed.terminal_reason === "string"
+      ? normalizeCliTerminalReason(parsed.terminal_reason)
+      : "";
+  // Only a reply-less result counts: a turn that still delivered text is a
+  // normal answer. A backgrounded turn continues and reports later, and a
+  // result that already carries an explicit CLI error keeps that error's own
+  // classification (an API failure must stay failover-able, not terminal).
+  if (
+    parsed.type !== "result" ||
+    !terminalReason ||
+    terminalReason === "completed" ||
+    terminalReason === "max_turns" ||
+    terminalReason === "background_requested" ||
+    unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
+    collectExplicitCliErrorText(parsed)
+  ) {
+    return undefined;
+  }
+  const stopReason =
+    typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
+  // Both fields reach operator- and model-visible failure text, so cap the
+  // CLI-controlled strings here rather than injecting unbounded backend text.
+  return { terminalReason, ...(stopReason ? { stopReason } : {}) };
+}
+
 function readClaudeTerminalFailure(
   parsed: Record<string, unknown>,
 ): CliTerminalFailure | undefined {
   const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
   const terminalReason =
-    typeof parsed.terminal_reason === "string"
-      ? normalizeCliTerminalReason(parsed.terminal_reason)
-      : "";
+    typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
-    // Any other non-completed terminal reason is the CLI reporting that it
-    // ended the turn itself. Only a reply-less result is a failure: a stopped
-    // turn that still delivered text stays a normal answer.
-    // A backgrounded turn continues and reports its answer later, and a result
-    // that already carries an explicit CLI error keeps that error's own
-    // classification (an API failure must stay failover-able, not terminal).
-    if (
-      parsed.type !== "result" ||
-      !terminalReason ||
-      terminalReason === "completed" ||
-      terminalReason === "background_requested" ||
-      unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
-      collectExplicitCliErrorText(parsed)
-    ) {
-      return undefined;
-    }
-    const stopReason =
-      typeof parsed.stop_reason === "string" ? normalizeCliTerminalReason(parsed.stop_reason) : "";
-    // Both fields reach operator- and model-visible failure text, so cap the
-    // CLI-controlled strings here rather than injecting unbounded backend text.
-    return {
-      reason: "turn_stopped",
-      terminalReason,
-      ...(stopReason ? { stopReason } : {}),
-    };
+    const stop = readClaudeReplyLessTerminalReason(parsed);
+    return stop && CLAUDE_TURN_STOP_REASONS.has(stop.terminalReason)
+      ? { reason: "turn_stopped", ...stop }
+      : undefined;
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
@@ -476,12 +499,8 @@ export function parseCliJson(
   for (const parsed of parsedRecords) {
     sessionId = pickCliSessionId(parsed, backend) ?? sessionId;
     usage = readCliUsage(parsed) ?? usage;
-    const terminalFailure = isClaudeStreamJsonDialect({
-      backend,
-      providerId: providerId ?? "",
-    })
-      ? readClaudeTerminalFailure(parsed)
-      : undefined;
+    const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
+    const terminalFailure = claudeDialect ? readClaudeTerminalFailure(parsed) : undefined;
     if (terminalFailure) {
       return {
         text: "",
@@ -490,6 +509,12 @@ export function parseCliJson(
         errorText: resolveCliTerminalErrorText(parsed, terminalFailure),
         terminalFailure,
       };
+    }
+    // Outside the stop allowlist the reason is still named, but the turn stays
+    // failover-eligible, so no terminal failure is recorded.
+    const namedStop = claudeDialect ? readClaudeReplyLessTerminalReason(parsed) : undefined;
+    if (namedStop) {
+      return { text: "", sessionId, usage, errorText: describeClaudeTurnStop(namedStop) };
     }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
     const shouldClassifyError =
