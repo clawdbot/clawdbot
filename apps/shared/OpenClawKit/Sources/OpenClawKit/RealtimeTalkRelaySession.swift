@@ -261,7 +261,6 @@ public final class RealtimeTalkRelaySession {
     /// Provider deltas may span any number of frames; retain only the partial tail so the
     /// AsyncStream's 32 slots always contain bounded 20 ms PCM chunks.
     private var pendingOutputAudio = Data()
-    private var outputIdleTask: Task<Void, Never>?
     private var outputSessionId = 0
     private var pendingPlaybackMarks: [String] = []
     private var audioSender: RealtimeAudioSender?
@@ -278,7 +277,6 @@ public final class RealtimeTalkRelaySession {
     private var cancelledOutputTurnId: String?
     private var outputCancellationTask: Task<Void, Never>?
     private var outputStartedAtMs: Double?
-    private var outputPlaybackExpectedEndMs: Double = 0
     private var lastBargeInAtMs: Double = 0
     private var micLogFrameCount = 0
     private var micLogByteCount = 0
@@ -742,16 +740,11 @@ extension RealtimeTalkRelaySession {
             "talk realtime audio: chunks=\(self.outputAudioChunkCount) bytes=\(self.outputAudioByteCount)")
     }
 
-    private func markOutputAudioStarted(byteCount: Int, nowMs: Double) {
+    private func markOutputAudioStarted(nowMs: Double) {
         if !self.isOutputPlaying {
             self.outputStartedAtMs = nowMs
-            self.outputPlaybackExpectedEndMs = nowMs
         }
         self.isOutputPlaying = true
-        let bytesPerSecond = max(1, self.outputSampleRateHz * Double(MemoryLayout<Int16>.size))
-        let chunkDurationMs = (Double(byteCount) / bytesPerSecond) * 1000
-        self.outputPlaybackExpectedEndMs = max(nowMs, self.outputPlaybackExpectedEndMs) + chunkDurationMs
-        self.scheduleOutputPlaybackIdle(expectedEndMs: self.outputPlaybackExpectedEndMs)
     }
 
     private func handleInputLevelDuringOutput(_ rms: Float, timestampMs: Double) {
@@ -1026,39 +1019,13 @@ extension RealtimeTalkRelaySession {
         self.outputContinuation = nil
     }
 
-    private func scheduleOutputPlaybackIdle(expectedEndMs: Double) {
-        self.outputIdleTask?.cancel()
-        let nowMs = ProcessInfo.processInfo.systemUptime * 1000
-        let idleDelayMs = max(350, expectedEndMs - nowMs + 500)
-        self.outputIdleTask = Task { [weak self] in
-            try? await Task.sleep(nanoseconds: UInt64(idleDelayMs * 1_000_000))
-            guard !Task.isCancelled else { return }
-            await MainActor.run { [weak self] in
-                guard let self, !self.isClosed else { return }
-                let nowMs = ProcessInfo.processInfo.systemUptime * 1000
-                self.refreshOutputPlaybackState(timestampMs: nowMs, cancelIdleTask: false)
-            }
-        }
-    }
-
-    private func refreshOutputPlaybackState(timestampMs: Double, cancelIdleTask: Bool = true) {
+    private func markOutputPlaybackFinished() {
+        // Only drained playback completes output; elapsed time cannot prove the
+        // device finished queued audio. Publish the terminal transition once.
         guard self.isOutputPlaying else { return }
-        guard timestampMs >= self.outputPlaybackExpectedEndMs + 500 else { return }
-        self.markOutputPlaybackFinished(cancelIdleTask: cancelIdleTask)
-    }
-
-    private func markOutputPlaybackFinished(cancelIdleTask: Bool = true) {
-        // The idle timer and player completion can race; only the first completion owns the
-        // speaking-state transition and playback-mark acknowledgement.
-        guard self.isOutputPlaying else { return }
-        if cancelIdleTask {
-            self.outputIdleTask?.cancel()
-            self.outputIdleTask = nil
-        }
         self.isOutputPlaying = false
         self.outputIdentity = nil
         self.outputStartedAtMs = nil
-        self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
         self.acknowledgePlaybackMarks(self.takePendingPlaybackMarks())
@@ -1109,13 +1076,10 @@ extension RealtimeTalkRelaySession {
         self.pendingOutputAudio.removeAll(keepingCapacity: true)
         self.outputTask?.cancel()
         self.outputTask = nil
-        self.outputIdleTask?.cancel()
-        self.outputIdleTask = nil
         _ = self.pcmPlayer.stop()
         self.isOutputPlaying = false
         self.outputIdentity = nil
         self.outputStartedAtMs = nil
-        self.outputPlaybackExpectedEndMs = 0
         self.outputEnvelope?.cancel()
         self.onSpeakingChanged(false)
     }
@@ -1286,7 +1250,7 @@ extension RealtimeTalkRelaySession {
         }
         self.outputIdentity = incomingIdentity
         self.recordOutputAudioChunk(byteCount: data.count)
-        self.markOutputAudioStarted(byteCount: data.count, nowMs: ProcessInfo.processInfo.systemUptime * 1000)
+        self.markOutputAudioStarted(nowMs: ProcessInfo.processInfo.systemUptime * 1000)
         self.onSpeakingChanged(true)
         self.ensureOutputPlaybackStarted()
         self.bufferOutputAudio(data)
@@ -1434,7 +1398,6 @@ extension RealtimeTalkRelaySession {
               let audioSender = self.audioSender
         else { return nil }
         self.recordMicrophoneFrame(byteCount: encoded.count, rms: rms, timestampMs: timestampMs)
-        self.refreshOutputPlaybackState(timestampMs: timestampMs)
         if self.isOutputPlaying {
             if self.audioCapture.suppressesInputDuringOutput {
                 self.recordSuppressedOutputEchoFrame(
@@ -1560,7 +1523,7 @@ extension RealtimeTalkRelaySession {
 
     // periphery:ignore - package tests start output playback without decoding real audio.
     func _test_markOutputAudioStarted(nowMs: Double) {
-        self.markOutputAudioStarted(byteCount: 4800, nowMs: nowMs)
+        self.markOutputAudioStarted(nowMs: nowMs)
     }
 
     // periphery:ignore - package tests finish playback without a real player callback.

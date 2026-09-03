@@ -195,9 +195,19 @@ inter-session user turns that only have provenance metadata.
 
 **Anthropic / Minimax (Anthropic-compatible)**
 
+- Runtime-context carriers are persisted as hidden custom messages immediately
+  after their user turn and replayed in place. Inline inbound metadata on older
+  user turns is also retained. This append-only policy applies to Anthropic-family
+  routes, including Bedrock, Vertex, and Foundry, because retained thinking is
+  bound to the exact preceding conversation. Carriers remain user-role context,
+  never system instructions, and are excluded from chat history and compaction
+  summarization. Other providers keep transient carriers.
 - Tool result pairing repair and synthetic tool results.
 - Turn validation (merge consecutive user turns to satisfy strict
-  alternation).
+  alternation). On the direct Messages API the append-only policy keeps
+  consecutive user turns separate instead, so a command turn followed by a
+  prompt replays with the same per-turn timestamp stamps the active turn was
+  signed over; Bedrock Converse still merges them.
 - Trailing assistant prefill turns are stripped from outgoing Anthropic
   Messages payloads when thinking is enabled, including Cloudflare AI
   Gateway routes.

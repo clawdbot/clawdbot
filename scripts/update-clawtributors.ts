@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import pMap, { pMapSkip } from "p-map";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { cancelResponseReaderSoon } from "./lib/bounded-response.mjs";
 import { execPlainGh } from "./lib/plain-gh.mjs";
 import type { ApiContributor, Entry, MapConfig, User } from "./update-clawtributors.types.js";
 
@@ -601,12 +602,6 @@ async function withAvatarProbeTimeout<T>(
   }
 }
 
-function cancelAvatarProbeReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void {
-  void Promise.resolve()
-    .then(() => reader.cancel())
-    .catch(() => undefined);
-}
-
 function toAvatarProbeError(value: unknown, fallbackMessage: string): Error {
   if (value instanceof Error) {
     return value;
@@ -631,7 +626,7 @@ async function readAvatarProbeChunkWithTimeout(
   const timeoutReadPromise = timeoutPromise.catch((error: unknown) => {
     if (waitingForRead) {
       markCanceled();
-      cancelAvatarProbeReaderSoon(reader);
+      cancelResponseReaderSoon(reader);
     }
     throw toAvatarProbeError(error, "avatar probe response body read timed out");
   });

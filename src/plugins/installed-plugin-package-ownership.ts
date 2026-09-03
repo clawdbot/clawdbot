@@ -116,9 +116,10 @@ export function resolveInstalledPluginPackageOwnership(
     return ownershipError(pluginId, `does not belong to package owner "${installOwner}"`);
   }
 
+  const realpathCache = new Map<string, string>();
   const hasUnsafePackageEntry = index.plugins.some(
     (entry) =>
-      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env) &&
+      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env, realpathCache) &&
       (isInstalledPluginIndexInstallOwnerAmbiguous(entry) ||
         resolveInstalledPluginIndexInstallOwner(entry) !== installOwner),
   );
@@ -148,10 +149,11 @@ export function resolveInstalledPluginLifecycleOwnership(
   ) {
     return ownership;
   }
+  const realpathCache = new Map<string, string>();
   const hasConflictingEntry = index.plugins.some(
     (entry) =>
       entry.pluginId === pluginId ||
-      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env),
+      installRecordPathMatchesPluginRoot(installRecord, entry.rootDir, env, realpathCache),
   );
   if (hasConflictingEntry) {
     return ownership;
@@ -164,12 +166,14 @@ export function resolveInstalledPluginLifecycleOwnership(
   };
 }
 
+// Share physical path facts only within one synchronous scan. A later lifecycle
+// check gets a fresh map so replaced package paths are observed again.
 function installRecordPathMatchesPluginRoot(
   record: InstalledPluginInstallRecordInfo,
   rootDir: string,
   env: NodeJS.ProcessEnv,
+  realpathCache: Map<string, string>,
 ): boolean {
-  const realpathCache = new Map<string, string>();
   const resolvedRoot =
     safeRealpathSync(path.resolve(rootDir), realpathCache) ?? path.resolve(rootDir);
   return [record.installPath, record.sourcePath].some((candidate) => {
@@ -190,20 +194,16 @@ export function hasMissingInstalledPluginOwnerMetadata(
     return true;
   }
   const installRecords = Object.entries(index.installRecords);
-  if (
-    index.plugins.some(
-      (plugin) =>
-        isInstalledPluginIndexInstallOwnerAmbiguous(plugin) ||
-        (!resolveInstalledPluginIndexInstallOwner(plugin) &&
-          installRecords.some(([, record]) =>
-            installRecordPathMatchesPluginRoot(record, plugin.rootDir, env),
-          )),
-    )
-  ) {
-    return true;
-  }
+  const realpathCache = new Map<string, string>();
   // An orphaned owner record (for example, package code removed out of band) is
   // already closed by the lifecycle resolver. It must not make every unrelated
   // config read attempt an impossible registry migration with no discoverable rows.
-  return false;
+  return index.plugins.some(
+    (plugin) =>
+      isInstalledPluginIndexInstallOwnerAmbiguous(plugin) ||
+      (!resolveInstalledPluginIndexInstallOwner(plugin) &&
+        installRecords.some(([, record]) =>
+          installRecordPathMatchesPluginRoot(record, plugin.rootDir, env, realpathCache),
+        )),
+  );
 }

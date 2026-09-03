@@ -539,6 +539,28 @@ describe("parseCliOutput", () => {
 
     expect(result).toEqual(expected);
   });
+
+  it("keeps the missing-result failure after compaction-only metadata", () => {
+    const result = parseCliOutput({
+      raw: JSON.stringify({ type: "system", subtype: "status", status: "compacting" }),
+      backend: {
+        command: "claude",
+        output: "jsonl",
+        jsonlDialect: "claude-stream-json",
+        sessionIdFields: ["session_id"],
+      },
+      providerId: "claude-cli",
+      parseJsonlLifecycleEvent: () => ({ kind: "compaction", phase: "start" }),
+      outputMode: "jsonl",
+    });
+
+    expect(result).toEqual({
+      text: "",
+      sessionId: undefined,
+      usage: undefined,
+      errorText: "CLI stream-json output ended without a result event.",
+    });
+  });
 });
 
 describe("parseCliJsonl record usage", () => {

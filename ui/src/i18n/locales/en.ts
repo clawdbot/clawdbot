@@ -499,6 +499,15 @@ export const en: TranslationMap & {
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
+  communityInvite: {
+    cardLabel: "Join the OpenClaw community on Discord",
+    artAlt: "A lobster beside the Discord mark on a lit seafloor pedestal",
+    title: "Come build with us",
+    body: "Ask anything, show what you're making, and find out what everyone else is building.",
+    bodyGreeting: "Or just say hi.",
+    action: "Join us on Discord",
+    dismissForever: "Dismiss and don't show again",
+  },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
     campaign: {
@@ -829,7 +838,6 @@ export const en: TranslationMap & {
     cloudWorker: "Cloud · {profile}",
     cloudWorkerMachine: "{profile} · {machine}",
     cloudWorkerProvider: "Cloud worker provider: {provider}",
-    cloudRequiresWorktree: "Cloud needs a Git checkout",
     cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
     cloudProfileRuntimeUnsupported:
       "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
@@ -844,16 +852,9 @@ export const en: TranslationMap & {
     autoDevice: "Auto",
     autoDeviceSub: "Least-busy device",
     autoDeviceSubEligible: "First eligible device",
-    noSessionHosts: "No session hosts are paired. Connect a machine with session hosting enabled.",
     neverConnected: "Never connected",
     offlineFor: "Offline for {duration}",
     lastSeen: "Last seen {time}",
-    deviceUnavailable: "Device unavailable. Reconnect it and try again.",
-    sessionHostingDisabled:
-      "Session hosting is disabled. Run openclaw connect --service --session-host on the device.",
-    deviceCapacityUnavailable:
-      "Worker capacity is unavailable. Restart the device session host and try again.",
-    deviceNoSlots: "No worker slots are available. Wait for a slot or pick another device.",
     nodeUpdateRequired:
       "Update required: run {updateCommand}, then reconnect. For a headless node, run {restartCommand}.",
     capabilityCamera: "Camera",
@@ -913,13 +914,8 @@ export const en: TranslationMap & {
     chooseNativeHost: "Choose a native CLI host",
     nativeTerminalPrompt: "Optional initial prompt for the native CLI",
     terminalNodeFolder: "Existing absolute folder on this node",
-    terminalHostUnavailable:
-      "Native CLI host unavailable. Check that the CLI is installed and the node is connected with its fresh-start command approved, then retry the catalog.",
-    terminalDisabled: "Enable CLI agents and terminals in Gateway settings to start a native CLI.",
     terminalAttachmentsUnsupported:
       "Remove attachments before starting a native CLI. Add files from the terminal after it opens.",
-    terminalPlacementUnsupported:
-      "Native CLI sessions use a specific host, not OpenClaw worker placement. Reset this draft and choose a native host.",
     starting: "Starting…",
     createFailed: "Couldn't create the session.",
     createOutcomeUnknown:
@@ -929,12 +925,8 @@ export const en: TranslationMap & {
     placementSetupInterrupted:
       "This session's runner setup was interrupted. Check recent sessions before starting this task again.",
     catalogUnavailable: "This session target is unavailable.",
-    restoringPreferences: "Restoring your last session setup…",
-    checkingPlace: "Checking the selected place…",
     placementNotReady: "The selected runner isn't ready yet. Try again in a moment.",
-    agentsUnavailable: "No agents are available on this Gateway yet.",
     nodeUnavailable: "The selected device is unavailable. Pick another place.",
-    terminalNeedsFolder: "Pick a folder before starting in a terminal.",
     terminalCapabilityOverridesUnsupported:
       "Clear session capability overrides before starting in a terminal.",
     what: "What",
@@ -981,10 +973,19 @@ export const en: TranslationMap & {
     createdBy: "Created by {name}",
     ownedBy: "Owned by {name}",
     archivedBy: "Archived by {name}",
+    archiveReason: "Archive reason",
+    archiveReasonManual: "Archived manually",
+    archiveReasonActiveSessionCap:
+      "Automatically archived because the active-session limit was reached",
+    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
+    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     viewingNow: "viewing now",
     owners: "Owners",
     allOwners: "All owners",
     involvingMe: "Involving me",
+    specificOwner: "Specific owner",
+    specificOwnerAvailable: "Specific owner: {count} available",
+    specificOwnerSelected: "Specific owner: {name}",
     ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
@@ -1225,7 +1226,7 @@ export const en: TranslationMap & {
     groupByDate: "Date",
     group: "Group",
     ungrouped: "Ungrouped",
-    newGroup: "New group…",
+    newGroup: "New group",
     newGroupPrompt: "New group name",
     newGroupTitle: "New group",
     newGroupCreate: "Create group",
@@ -1240,7 +1241,7 @@ export const en: TranslationMap & {
     moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
-    groupDefaultsMenu: "New session defaults…",
+    groupDefaultsMenu: "New session defaults",
     groupDefaultsTitle: 'New session defaults for "{group}"',
     groupDefaultsDescription: "Choose where new sessions in this group start.",
     groupDefaultsCwd: "Working directory",
@@ -1252,10 +1253,10 @@ export const en: TranslationMap & {
     groupDefaultsWorktreeHint: "Runs each session in an isolated Git worktree.",
     groupDefaultsFailed: "Could not save the group defaults.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
-    renameGroupMenu: "Rename group…",
+    renameGroupMenu: "Rename group",
     renameGroupTitle: 'Rename group "{group}"',
     groupNameLabel: "Group name",
-    deleteGroupMenu: "Delete group…",
+    deleteGroupMenu: "Delete group",
     deleteGroupTitle: 'Delete group "{group}"',
     deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
     deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
@@ -2291,6 +2292,7 @@ export const en: TranslationMap & {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    meetings: "Meetings",
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
@@ -2334,6 +2336,7 @@ export const en: TranslationMap & {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Recent sessions across people using this gateway.",
+    meetings: "Meeting notes and transcripts across this gateway.",
     apps: "Companion apps for phone, watch, desktop, and browser.",
     portals: "Live previews from agent-run applications.",
     approvals: "Recent exec, plugin, and system-agent approvals.",
@@ -3895,7 +3898,7 @@ export const en: TranslationMap & {
       noOtherTabs: "No other tabs",
       resize: "Resize",
       autoHeight: "Auto height",
-      remove: "Remove",
+      remove: "Delete",
       needsApproval: "Needs approval",
       needsApprovalDetail: "This widget requested additional access.",
       networkAccess: "Network origins",
@@ -5851,12 +5854,12 @@ export const en: TranslationMap & {
     permissionControls: {
       label: "Permissions",
       help: "Choose permissions for this session.",
-      applying: "Applying permissions…",
       default: "Default",
       defaultDescription: "Follow the agent's configured policy.",
       defaultWithMode: "Default ({mode})",
       fullRequiresAdmin: "Full access requires operator.admin access.",
       updateFailed: "Failed to update permissions: {error}",
+      refreshFailed: "Permissions were saved, but refreshing the session failed: {error}",
       modes: {
         "read-only": {
           label: "Read Only",

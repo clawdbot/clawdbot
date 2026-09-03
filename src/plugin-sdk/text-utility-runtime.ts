@@ -13,6 +13,7 @@ export {
   resolveLiveToolResultMaxChars,
 } from "../agents/tool-result-limits.js";
 export { escapeHtml } from "../shared/html-escape.js";
+export { boundedJsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 
 type ChannelProbeResult = BaseProbeResult & { elapsedMs?: number };
 

@@ -88,7 +88,8 @@ struct TailscaleIntegrationSectionTests {
         #expect(service.statusError == nil)
     }
 
-    @Test func `concurrent status checks share one request`() async {
+    @Test(arguments: ["neither", "initial", "joined"])
+    func `concurrent status checks share one request despite waiter cancellation`(cancelledWaiter: String) async {
         let loader = TailscaleStatusLoader()
         let completion = TailscaleStatusCompletion()
         let joinBarrier = TailscaleStatusJoinBarrier()
@@ -109,6 +110,11 @@ struct TailscaleIntegrationSectionTests {
             await completion.markFinished()
         }
         await joinBarrier.wait()
+        if cancelledWaiter == "initial" {
+            first.cancel()
+        } else if cancelledWaiter == "joined" {
+            second.cancel()
+        }
 
         #expect(await loader.requestCount == 1)
         #expect(await completion.finishedCount == 0)
@@ -118,6 +124,7 @@ struct TailscaleIntegrationSectionTests {
         await second.value
 
         #expect(await completion.finishedCount == 1)
+        #expect(await loader.requestWasCancelled == false)
         #expect(service.tailscaleIP == "100.66.5.88")
 
         await service.checkTailscaleStatus()
@@ -210,6 +217,7 @@ struct TailscaleIntegrationSectionTests {
 
 private actor TailscaleStatusLoader {
     private(set) var requestCount = 0
+    private(set) var requestWasCancelled = false
     private var requestStartedContinuations: [CheckedContinuation<Void, Never>] = []
     private var requestContinuation: CheckedContinuation<Void, Never>?
     private var shouldSuspendRequest = true
@@ -226,6 +234,7 @@ private actor TailscaleStatusLoader {
                 self.requestContinuation = continuation
             }
         }
+        self.requestWasCancelled = Task.isCancelled
         let data = try JSONEncoder().encode(
             TailscaleService.TailscaleAPIResponse(
                 status: "Running",

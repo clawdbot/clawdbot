@@ -502,7 +502,8 @@ export const loadPendingFinalDeliveryPayload = (
     spawnMode: entry.delivery?.payload?.spawnMode ?? entry.spawnMode,
     wakeOnDescendantSettle:
       entry.delivery?.payload?.wakeOnDescendantSettle ?? entry.wakeOnDescendantSettle,
-    terminalReply: entry.delivery?.payload?.terminalReply ?? entry.completion?.terminalReply,
+    // Completion is the terminal-reply owner; a retry payload can predate its final receipt.
+    terminalReply: entry.completion?.terminalReply ?? entry.delivery?.payload?.terminalReply,
   };
 };
 

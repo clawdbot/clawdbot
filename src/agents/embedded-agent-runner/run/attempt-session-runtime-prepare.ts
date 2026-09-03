@@ -149,6 +149,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     prepareEmbeddedAttemptSessionBoundary({
       abortSignal: input.agentSession.runAbortSignal,
       activeSession,
+      appendOnlyRuntimeContext: transcriptPolicy.appendOnlyRuntimeContext,
       attempt,
       ...preparedSessionManager.userMessageBoundary,
       isRawModelRun: input.isRawModelRun,

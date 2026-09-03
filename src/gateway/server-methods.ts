@@ -61,10 +61,8 @@ import type {
   GatewayRequestOptions,
   SessionMutationAuthorization,
 } from "./server-methods/types.js";
-import {
-  resolveDirectIncognitoTargets,
-  sessionMutationTargetFields,
-} from "./session-sharing-target-input.js";
+import { sessionMutationTargetFields } from "./session-method-policy.js";
+import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
 import {
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
@@ -124,6 +122,8 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "memory-search": () =>
     import("./server-methods/memory-search.js").then((module) => module.memorySearchHandlers),
   terminal: () => import("./server-methods/terminal.js").then((module) => module.terminalHandlers),
+  transcripts: () =>
+    import("./server-methods/transcripts.js").then((module) => module.transcriptsHandlers),
   "ui-command": () =>
     import("./server-methods/ui-command.js").then((module) => module.uiCommandHandlers),
   "models-auth-status": () =>

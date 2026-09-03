@@ -37,13 +37,13 @@ describe("plugin-boundary-report", () => {
     expect(summary.compat?.removalPendingCount).toBe(8);
     expect(summary.compat?.removalPendingDueCount).toEqual(expect.any(Number));
     expect(summary.compat?.removalPending?.map((record) => record.code)).toEqual([
+      "plugin-sdk-media-understanding-public-demotion",
+      "plugin-sdk-memory-host-core-public-demotion",
       "plugin-sdk-channel-lifecycle-subpath",
       "plugin-sdk-channel-message-subpath",
       "plugin-sdk-channel-reply-pipeline-subpath",
       "plugin-sdk-config-runtime-subpath",
       "plugin-sdk-infra-runtime-subpath",
-      "plugin-sdk-media-understanding-public-demotion",
-      "plugin-sdk-memory-host-core-public-demotion",
       "plugin-sdk-plugin-config-runtime-public-demotion",
     ]);
     for (const record of summary.compat?.removalPending ?? []) {

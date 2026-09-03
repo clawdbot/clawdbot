@@ -98,6 +98,50 @@ describe("dispatchReplyFromConfig", () => {
     expect(activeDuringOffRun).toBe(false);
   });
 
+  it("keeps verbose commentary in the channel draft when that draft owns progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+    const dispatcher = createDispatcher();
+    const onItemEvent = vi.fn();
+
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+        From: "telegram:group:-100123",
+        SessionKey: "agent:main:telegram:group:-100123",
+      }),
+      cfg: automaticGroupReplyConfig,
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        expect(opts?.commentaryPayloadsEnabled).toBe(false);
+        await opts?.onItemEvent?.({
+          itemId: "commentary-draft-1",
+          kind: "preamble",
+          progressText: "Inspecting the dispatch path.",
+        });
+        return { text: "Done." } satisfies ReplyPayload;
+      },
+      replyOptions: {
+        commentaryProgressEnabled: true,
+        progressPreambleEnabled: true,
+        commentaryPayloadsEnabled: true,
+        shouldDeliverCommentaryPayloads: () => false,
+        onItemEvent,
+      },
+    });
+
+    expect(onItemEvent).toHaveBeenCalledExactlyOnceWith({
+      itemId: "commentary-draft-1",
+      kind: "preamble",
+      progressText: "Inspecting the dispatch path.",
+    });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({ text: "Done." });
+  });
+
   it.each([
     { surface: "slack", verboseLevel: "on", nextVerboseLevel: "off", durableCommentary: true },
     { surface: "slack", verboseLevel: "off", nextVerboseLevel: "on", durableCommentary: false },

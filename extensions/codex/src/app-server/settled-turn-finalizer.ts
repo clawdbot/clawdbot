@@ -3,8 +3,10 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
+import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import { runBoundedCodexAppServerTurn, type CodexBoundedTurnOptions } from "./bounded-turn.js";
-import { createAssistantMessage } from "./event-projector-assistant-message.js";
+import { createAttributedCodexAssistantMessage } from "./event-projector-assistant-message.js";
+import { resolveCodexLocalRuntimeAttribution } from "./local-runtime-attribution.js";
 import { isJsonObject, type CodexThreadItem } from "./protocol.js";
 import { CodexSettledTurnContext } from "./settled-turn-context.js";
 import {
@@ -31,16 +33,42 @@ export async function runCodexSettledTurnFinalization(
   options: CodexBoundedTurnOptions,
 ): Promise<AgentHarnessSettledTurnFinalizationResult> {
   const { attempt, settledAttempt } = operation;
+  const assertActive = () => attempt.abortSignal?.throwIfAborted();
+  assertActive();
   const finalizationContext = settledAttempt.settledTurnFinalizationContext;
   if (!(finalizationContext instanceof CodexSettledTurnContext)) {
     throw new Error("Codex settled-turn finalization context is unavailable");
   }
-  const historyItems = finalizationContext.data;
+  const { selection, data: historyItems } = finalizationContext;
+  const hostAuthPlan = attempt.runtimePlan?.auth;
+  const authRequirement = hostAuthPlan?.modelRoute?.authRequirement;
+  // Capture fixes binding/ordered-profile selection. Ordinary user-home sessions
+  // intentionally authorize private side turns through the host plan instead.
+  const authProfileId =
+    selection.authProfileId ?? hostAuthPlan?.forwardedAuthProfileId ?? attempt.authProfileId;
+  const authHandoff = await resolveCodexAppServerPreparedAuthHandoff({
+    authRequirement,
+    resolvedApiKey: attempt.resolvedApiKey,
+    authProfileId,
+    authProfileStore: attempt.authProfileStore,
+    agentDir: attempt.agentDir,
+    homeScope: "agent",
+    config: attempt.config,
+    subscriptionProfileRequiredError:
+      "Prepared Codex settled-turn finalization requires its selected OpenAI subscription profile.",
+    subscriptionProfileUnusableError:
+      "The selected OpenAI subscription profile cannot finalize this settled turn.",
+  });
+  assertActive();
+  const authSelection = authHandoff.preparedAuth
+    ? { preparedAuth: authHandoff.preparedAuth }
+    : { profile: authHandoff.authProfileId };
   const bounded = await runBoundedCodexAppServerTurn({
     config: attempt.config,
-    model: { mode: "required", id: attempt.modelId },
-    modelProvider: "openai",
-    profile: attempt.authProfileId,
+    model: { mode: "required", id: selection.model },
+    modelProvider: selection.modelProvider,
+    ...authSelection,
+    authRequirement,
     timeoutMs: attempt.runTimeoutOverrideMs ?? attempt.timeoutMs,
     signal: attempt.abortSignal,
     agentDir: attempt.agentDir,
@@ -55,6 +83,16 @@ export async function runCodexSettledTurnFinalization(
     requireNoExternalCapabilities: true,
     allowEmptyText: true,
   });
+  assertActive();
+  const { model, modelProvider } = bounded.nativeSelection;
+  if (!modelProvider) {
+    throw new Error("Codex settled-turn finalization did not report its native model provider");
+  }
+  const attribution = {
+    modelId: model,
+    provider: modelProvider,
+    api: resolveCodexLocalRuntimeAttribution(attempt).api,
+  };
   let promptEchoSeen = false;
   let unexpectedItem: CodexThreadItem | undefined;
   for (const item of bounded.items) {
@@ -85,7 +123,7 @@ export async function runCodexSettledTurnFinalization(
   const text = bounded.text.trim();
   if (!text || isSilentReplyText(text)) {
     return {
-      assistant: createAssistantMessage(attempt, "", {
+      assistant: createAttributedCodexAssistantMessage(attribution, "", {
         tokenUsage: bounded.usage,
         aborted: false,
         promptError: null,
@@ -96,7 +134,7 @@ export async function runCodexSettledTurnFinalization(
 
   const mirrorIdentity = `settled-finalizer:${attempt.runId}`;
   const assistant = attachCodexMirrorIdentity(
-    createAssistantMessage(attempt, text, {
+    createAttributedCodexAssistantMessage(attribution, text, {
       tokenUsage: bounded.usage,
       aborted: false,
       promptError: null,
@@ -104,6 +142,7 @@ export async function runCodexSettledTurnFinalization(
     mirrorIdentity,
   );
   const mirrorResult = await codexTranscriptMirrorRuntime.mirror({
+    assertCurrent: assertActive,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     agentId: attempt.agentId,
@@ -117,6 +156,7 @@ export async function runCodexSettledTurnFinalization(
     config: attempt.config,
     skipBeforeMessageWriteHooks: true,
   });
+  assertActive();
   const persistedMessage = mirrorResult.messagesPresent.find(
     (message) => readMirrorIdentity(message) === mirrorIdentity,
   );

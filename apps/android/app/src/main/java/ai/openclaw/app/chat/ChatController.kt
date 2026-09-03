@@ -464,6 +464,9 @@ class ChatController internal constructor(
   private val _historyLoading = MutableStateFlow(false)
   val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
+  private val _isCreatingSession = MutableStateFlow(false)
+  val isCreatingSession: StateFlow<Boolean> = _isCreatingSession.asStateFlow()
+
   private val _errorText = MutableStateFlow<NativeText?>(null)
   val errorText: StateFlow<String?> = _errorText.resolveOptionalNativeText()
 
@@ -763,7 +766,6 @@ class ChatController internal constructor(
   // Its diagnostic remains owned until that terminal, a newer run, or an owner reset.
   @Volatile private var runDiagnosticOwner: RunDiagnosticOwner? = null
   private var historyLoadErrorGeneration: Long? = null
-  private val newChatCreateInFlight = AtomicBoolean(false)
 
   private var lastHealthPollAtMs: Long? = null
   private val chatMetadataRequestSequence = AtomicLong(0)
@@ -2439,11 +2441,10 @@ class ChatController internal constructor(
       updateLocalizedErrorText(nativeText("Wait for the current response to finish before starting a new chat."))
       return false
     }
-    if (!newChatCreateInFlight.compareAndSet(false, true)) {
+    if (!_isCreatingSession.compareAndSet(false, true)) {
       return false
     }
     val lease = captureRequestLease(createGatewayScope)
-    var loadingGeneration: Long? = null
 
     fun <T> applyIfCurrent(action: () -> T): T? {
       var result: T? = null
@@ -2466,14 +2467,10 @@ class ChatController internal constructor(
     }
     val normalizedCatalogId = catalogId?.trim()?.takeIf(String::isNotEmpty)
     return try {
-      loadingGeneration =
-        applyIfCurrent {
-          createContext.ensureActive()
-          updateErrorText(null)
-          _historyLoading.value = true
-          historyLoadGeneration.get()
-        }
-      if (loadingGeneration == null) return false
+      applyIfCurrent {
+        createContext.ensureActive()
+        updateErrorText(null)
+      } ?: return false
       if (lease == null) throw GatewayRequestNotEnqueued("not connected")
       val inheritParent =
         synchronized(gatewayScopeApplyLock) {
@@ -2515,10 +2512,7 @@ class ChatController internal constructor(
       applyIfCurrent { updateErrorText(err.message) }
       false
     } finally {
-      applyIfCurrent {
-        if (loadingGeneration == historyLoadGeneration.get()) _historyLoading.value = false
-      }
-      newChatCreateInFlight.set(false)
+      _isCreatingSession.value = false
     }
   }
 
@@ -4613,9 +4607,7 @@ class ChatController internal constructor(
       finishHistoryHealth(healthRefresh, generation)
       synchronized(gatewayScopeApplyLock) {
         if (isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) {
-          // Publication already retired history's loading state. Its tail must not clear
-          // New's loading state, which can share the same history generation.
-          if (liveHistoryMarker?.generation != generation) _historyLoading.value = false
+          _historyLoading.value = false
           scheduleRecoveryHistoryReconciliation(sessionKey, generation, runIdsToReconcile)
         }
       }

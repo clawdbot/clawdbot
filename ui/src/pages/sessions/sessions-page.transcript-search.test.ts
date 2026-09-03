@@ -97,15 +97,6 @@ describe("Sessions transcript search scope", () => {
       }
 
       page.routeData = {
-        gateway: context.gateway,
-        gatewaySnapshot: context.gateway.snapshot,
-        sessions: context.sessions,
-        result: {
-          count: 1,
-          sessions: [{ key: "agent:main:archived", label: "Archived task", archived: true }],
-        } as SessionsListResult,
-        loading: false,
-        error: null,
         expandedSessionKey: null,
         statusFilter: "archived",
       };

@@ -376,6 +376,10 @@ suite.define(() => {
           await expect.poll(() => gateway.getRequests("progressCard.get")).toHaveLength(1);
           const card = page.locator('[data-progress-card-placement="composer"]');
           await expect.poll(() => card.isVisible()).toBe(true);
+          const composerFade = await page
+            .locator(".agent-chat__composer-shell")
+            .evaluate((node) => getComputedStyle(node, "::before").backgroundImage);
+          expect(composerFade).toBe("none");
           const expectMarkerCentered = async () => {
             await expect
               .poll(async () => {

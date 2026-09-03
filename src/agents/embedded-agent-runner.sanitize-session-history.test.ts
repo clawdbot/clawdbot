@@ -1585,6 +1585,51 @@ describe("sanitizeSessionHistory", () => {
     expect(toolResult.toolCallId).toBe("toolu_legacy");
   });
 
+  it("keeps consecutive user turns separate for append-only Anthropic Messages replay", async () => {
+    // A command turn followed by the prompt is sent as two stamped user messages on the
+    // active turn; merging them on replay changes the bytes bound to later thinking.
+    const basePolicy: TranscriptPolicy = {
+      sanitizeMode: "full",
+      sanitizeToolCallIds: true,
+      toolCallIdMode: "strict",
+      preserveNativeAnthropicToolUseIds: true,
+      repairToolUseResultPairing: true,
+      preserveSignatures: true,
+      appendOnlyRuntimeContext: true,
+      dropThinkingBlocks: false,
+      dropReasoningFromHistory: false,
+      applyGoogleTurnOrdering: false,
+      validateGeminiTurns: false,
+      validateAnthropicTurns: true,
+      allowSyntheticToolResults: true,
+    };
+    const messages = castAgentMessages([
+      makeUserMessage("/model anthropic/claude-fable-5-1 -s"),
+      makeUserMessage("Read notes.txt"),
+      makeAssistantMessage([{ type: "text", text: "Done" }]),
+    ]);
+
+    const anthropic = await validateReplayTurns({
+      messages,
+      modelApi: "anthropic-messages",
+      provider: "anthropic",
+      modelId: "claude-fable-5-1",
+      sessionId: TEST_SESSION_ID,
+      policy: basePolicy,
+    });
+    expect(anthropic.map((msg) => msg.role)).toEqual(["user", "user", "assistant"]);
+
+    const bedrock = await validateReplayTurns({
+      messages,
+      modelApi: "bedrock-converse-stream",
+      provider: "amazon-bedrock",
+      modelId: "anthropic.claude-fable-5-1",
+      sessionId: TEST_SESSION_ID,
+      policy: basePolicy,
+    });
+    expect(bedrock.map((msg) => msg.role)).toEqual(["user", "assistant"]);
+  });
+
   it("strips copied inbound metadata from assistant replay text", async () => {
     const messages = castAgentMessages([
       makeUserMessage("Ping"),
@@ -1649,6 +1694,8 @@ describe("sanitizeSessionHistory", () => {
     expect(sanitized.map((msg) => msg.role)).toEqual(["user", "user"]);
     expect(JSON.stringify(sanitized)).not.toContain("assistant copied inbound metadata omitted");
 
+    // Append-only Anthropic Messages replay keeps the surviving user turns
+    // separate; the Messages API accepts consecutive user messages.
     const validated = await validateReplayTurns({
       messages: sanitized,
       modelApi: "anthropic-messages",
@@ -1656,13 +1703,10 @@ describe("sanitizeSessionHistory", () => {
       modelId: "claude-sonnet-4-6",
       sessionId: TEST_SESSION_ID,
     });
-    expect(validated).toHaveLength(1);
-    expect(validated[0]?.role).toBe("user");
-    expect((validated[0] as Extract<AgentMessage, { role: "user" }>).content).toEqual([
-      { type: "text", text: "First" },
-      { type: "text", text: "Second" },
-    ]);
-    expect(typeof (validated[0] as { timestamp?: unknown }).timestamp).toBe("number");
+    expect(validated.map((msg) => msg.role)).toEqual(["user", "user"]);
+    expect(
+      validated.map((msg) => (msg as Extract<AgentMessage, { role: "user" }>).content),
+    ).toEqual(["First", "Second"]);
   });
 
   it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {

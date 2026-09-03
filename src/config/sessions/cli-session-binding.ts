@@ -109,14 +109,6 @@ export function getCliSessionBinding(
   return undefined;
 }
 
-/** Read just the reusable CLI session ID for a provider. */
-export function getCliSessionId(
-  entry: CliSessionBindingEntry | undefined,
-  provider: string,
-): string | undefined {
-  return getCliSessionBinding(entry, provider)?.sessionId;
-}
-
 export function clearAllCliSessions(
   entry: Partial<Pick<SessionEntry, "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId">>,
 ): void {

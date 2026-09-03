@@ -96,6 +96,11 @@ default agent.
 The skills table renders horizontal tabs as single spaces so descriptions
 stay aligned with the neighboring columns.
 
+`info` resolves an exact skill name before a metadata key. Key, case-insensitive,
+and separator-normalized matches must identify one skill; ambiguous selectors
+fail instead of choosing discovery order. Workshop reads and update targeting
+use the same lookup.
+
 `check` reports missing prerequisites independently of agent exclusion: a skill
 excluded by the agent allowlist can also appear under **Missing requirements**.
 Disabled skills and skills blocked by the bundled allowlist keep their separate

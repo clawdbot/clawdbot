@@ -69,10 +69,10 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "removed"): string {
   return (
-    `\u26A0\uFE0F Session maintenance warning: this active session would be evicted (${reasonText}). ` +
-    `Maintenance is set to warn-only, so nothing was reset. ` +
+    `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
+    `Maintenance is set to warn-only, so nothing was changed. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
 }
@@ -166,6 +166,7 @@ describe("deliverSessionMaintenanceWarning", () => {
         maxEntries: 10,
         wouldPrune: false,
         wouldCap: true,
+        capOutcome: "archive",
       } as never,
     });
 
@@ -173,6 +174,26 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventCall()).toEqual([
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "archived"),
+      { sessionKey: params.sessionKey },
+    ]);
+  });
+
+  it("describes synthetic cap overflow as removal", async () => {
+    mocks.deliveryContextFromSession.mockReturnValueOnce(undefined as never);
+    const params = createParams({
+      warning: {
+        pruneAfterMs: 3_600_000,
+        maxEntries: 10,
+        wouldPrune: false,
+        wouldCap: true,
+        capOutcome: "remove",
+      } as never,
+    });
+
+    await deliverSessionMaintenanceWarning(params);
+
     expect(firstSystemEventCall()).toEqual([
       expectedMaintenanceWarning("not in the most recent 10 sessions"),
       { sessionKey: params.sessionKey },

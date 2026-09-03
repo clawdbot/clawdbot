@@ -25,6 +25,8 @@ import type { AnyAgentTool } from "./common.js";
 type GatewayToolCallerIdentity = {
   agentId: string;
   sessionKey: string;
+  /** Prepared requesting-tool posture; absent authority never bypasses approvals. */
+  fullPermission?: boolean;
   operationalRunInstance?: OperationalRunInstanceRef;
   /** Exact run authority used to fence delegated system-agent approvals. */
   approvalAuthority?: AgentRunDelegatedAuthority;
@@ -197,6 +199,11 @@ export async function withGatewayToolCallerIdentity<T>(
       : undefined;
   const operationalRunInstance =
     inheritedOwner?.operationalRunInstance ?? identity.operationalRunInstance;
+  // Same-run wrappers can narrow a prepared posture, never erase a restriction.
+  const fullPermission =
+    inheritedOwner?.fullPermission === false || identity.fullPermission === false
+      ? false
+      : (inheritedOwner?.fullPermission ?? identity.fullPermission);
   const approvalAuthority = inheritedOwner?.approvalAuthority ?? identity.approvalAuthority;
   const approvalAuthorityCheck =
     inheritedOwner?.approvalAuthorityCheck ?? identity.approvalAuthorityCheck;
@@ -236,6 +243,7 @@ export async function withGatewayToolCallerIdentity<T>(
     {
       agentId: inheritedOwner?.agentId ?? identity.agentId.trim(),
       sessionKey: inheritedOwner?.sessionKey ?? identity.sessionKey.trim(),
+      ...(fullPermission !== undefined ? { fullPermission } : {}),
       ...(operationalRunInstance ? { operationalRunInstance } : {}),
       ...(approvalAuthority ? { approvalAuthority } : {}),
       ...(approvalAuthorityCheck ? { approvalAuthorityCheck } : {}),

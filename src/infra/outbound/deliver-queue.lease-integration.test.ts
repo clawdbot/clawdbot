@@ -298,33 +298,41 @@ describe("delivery producer lease integration", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
   });
 
-  it("publishes a fresh live delivery with cross-process ownership before provider I/O", async () => {
-    const tmpDir = fixtures.tmpDir();
-    let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
-    try {
-      blocked = await startBlockedFreshDelivery({ tmpDir });
-      const entry = readQueuedEntry(tmpDir, blocked.queueId);
+  it.for([0, 38_000])(
+    "retains fresh delivery ownership before provider I/O after a %ims scheduling stall",
+    async (stallMs) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(new Date("2026-09-02T23:00:00.000Z"));
+      const tmpDir = fixtures.tmpDir();
+      let blocked: Awaited<ReturnType<typeof startBlockedFreshDelivery>> | undefined;
+      try {
+        blocked = await startBlockedFreshDelivery({ tmpDir });
+        // Advancing wall time without timers models a blocked Gateway: no
+        // heartbeat can run before the delayed provider boundary resumes.
+        vi.setSystemTime(Date.now() + stallMs);
+        const entry = readQueuedEntry(tmpDir, blocked.queueId);
 
-      expect(entry).toMatchObject({
-        recoveryState: "producer_claimed",
-        requiresProducerClaim: true,
-        producerClaimId: expect.any(String),
-        availableAt: expect.any(Number),
-      });
-      expect(entry.availableAt as number).toBeGreaterThan(Date.now());
-      expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
+        expect(entry).toMatchObject({
+          recoveryState: "producer_claimed",
+          requiresProducerClaim: true,
+          producerClaimId: expect.any(String),
+          availableAt: expect.any(Number),
+        });
+        expect(entry.availableAt as number).toBeGreaterThan(Date.now());
+        expect(await claimDeliveryPlatformSendAttempt(blocked.queueId, tmpDir)).toBeUndefined();
 
-      blocked.releasePreparation();
-      await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
-      expect(blocked.sendText).toHaveBeenCalledOnce();
-      expect(
-        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
-      ).toBeUndefined();
-    } finally {
-      blocked?.releasePreparation();
-      await blocked?.delivery.catch(() => undefined);
-    }
-  });
+        blocked.releasePreparation();
+        await expect(blocked.delivery).resolves.toMatchObject([{ messageId: blocked.messageId }]);
+        expect(blocked.sendText).toHaveBeenCalledOnce();
+        expect(
+          getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, blocked.queueId, tmpDir),
+        ).toBeUndefined();
+      } finally {
+        blocked?.releasePreparation();
+        await blocked?.delivery.catch(() => undefined);
+      }
+    },
+  );
 
   it("upgrades and renews a legacy reused intent through long channel preparation", async () => {
     vi.useFakeTimers();
@@ -338,7 +346,7 @@ describe("delivery producer lease integration", () => {
         deliveryIntentId,
         requiresProducerClaim: false,
       });
-      await vi.advanceTimersByTimeAsync(35_000);
+      await vi.advanceTimersByTimeAsync(65_000);
 
       expect(await claimDeliveryPlatformSendAttempt(deliveryIntentId, tmpDir)).toBeUndefined();
       expect(readQueuedEntry(tmpDir, deliveryIntentId)).toMatchObject({
@@ -379,7 +387,7 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         producerClaimId: "replacement-owner",
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -417,7 +425,7 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -458,7 +466,7 @@ describe("delivery producer lease integration", () => {
         retryCount: 0,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,
@@ -509,7 +517,7 @@ describe("delivery producer lease integration", () => {
         platformSendStartedAt: dispatched.platformSendStartedAt as number,
         availableAt: Date.now() - 1,
       });
-      await vi.advanceTimersByTimeAsync(10_001);
+      await vi.advanceTimersByTimeAsync(20_001);
 
       const rejected = expect(blocked.delivery).rejects.toThrow(
         `Delivery platform claim was lost: ${deliveryIntentId}`,

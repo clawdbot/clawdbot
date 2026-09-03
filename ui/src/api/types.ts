@@ -12,7 +12,10 @@ import type {
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { ChannelsStatusResult } from "../../../packages/gateway-protocol/src/schema/channels.js";
 import type { QueueMode } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { SessionRow } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type {
+  SessionEntryArchiveReason,
+  SessionRow,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type {
   SessionCompactionCheckpoint as ProtocolSessionCompactionCheckpoint,
   SessionObserverDigest,
@@ -442,7 +445,9 @@ export type SessionsBranchesSwitchResult =
 export type SessionsPatchResult = SessionsPatchResultBase<{
   sessionId: string;
   updatedAt?: number;
+  permissionMode?: GatewaySessionRow["permissionMode"];
   archivedAt?: number;
+  archiveReason?: SessionEntryArchiveReason;
   contextWindow?: string;
   thinkingLevel?: string;
   fastMode?: FastMode;

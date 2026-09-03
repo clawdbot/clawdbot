@@ -1,10 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { setSessionPathBuilder } from "../app-session-path-builder.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 
@@ -47,7 +45,6 @@ function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
 
 describe("SessionLinkTitler", () => {
   beforeEach(() => {
-    setSessionPathBuilder(buildControlUiSessionPath);
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-16T12:00:00Z"));
   });

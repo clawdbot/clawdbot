@@ -1,15 +1,22 @@
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
 import { buildCliMcpDelegationCapabilityBinding } from "../../agents/cli-runner/mcp-grant-context.js";
 import {
+  clearCliSessionInStore,
+  persistCliSessionBindingResult,
+} from "../../agents/cli-session-store.js";
+import {
   getCliSessionBinding,
   shouldClearFailedCliSessionBinding,
 } from "../../agents/cli-session.js";
 import { resolveDelegationCapability } from "../../agents/delegation-capability.js";
+import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import type { ModelFallbackResultClassification } from "../../agents/model-fallback-attempt.js";
 import { createAgentRunSupersededAbortError } from "../../agents/run-termination.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import {
   getGeneratedMediaTaskIdsForSessionKey,
   hasNewGeneratedMediaTaskForSessionKey,
@@ -17,7 +24,6 @@ import {
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 import { resolveRunAuthProfile } from "./agent-runner-auth-profile.js";
 import {
-  clearCliSessionBindingForRun,
   createCliReasoningStreamBridge,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
@@ -35,6 +41,7 @@ import { resolveFollowupRunToolAuthorityFingerprint } from "./reply-tool-authori
 export async function runCliFallbackCandidate(
   params: AgentFallbackCandidateCommonParams & {
     cliExecutionProvider: string;
+    classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
     lifecycleGeneration: string;
   },
 ): Promise<{
@@ -140,7 +147,7 @@ export async function runCliFallbackCandidate(
         agentId: turn.followupRun.run.agentId,
         runId: params.runId,
       },
-      async () => {
+      async (assertSettlementCurrent) => {
         // Placement admission may wait behind an older turn. Snapshot placement,
         // permission, and native resume identity only after this turn owns it.
         const sessionEntry = sessionTarget
@@ -180,13 +187,15 @@ export async function runCliFallbackCandidate(
                   ) {
                     return;
                   }
-                  await clearCliSessionBindingForRun({
+                  await clearCliSessionInStore({
                     provider: params.cliExecutionProvider,
-                    expectedSessionId: cliSessionBinding.sessionId,
+                    expectedCliSessionId: cliSessionBinding.sessionId,
+                    expectedSessionId: sessionEntry?.sessionId,
+                    assertCommitAllowed: assertSettlementCurrent,
                     sessionKey: turn.sessionKey,
                     sessionStore: turn.activeSessionStore,
                     storePath: turn.storePath,
-                    activeSessionEntry: turn.getActiveSessionEntry(),
+                    activeSessionEntry: sessionEntry,
                   });
                 }
               : undefined,
@@ -212,6 +221,8 @@ export async function runCliFallbackCandidate(
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
+          onCompactionStart: turn.opts?.onCompactionStart,
+          onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
               const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);
@@ -423,13 +434,33 @@ export async function runCliFallbackCandidate(
           },
         });
         if (droppedCliSessionReplacement) {
-          await clearCliSessionBindingForRun({
+          await clearCliSessionInStore({
             provider: params.cliExecutionProvider,
-            expectedSessionId: cliSessionBinding?.sessionId,
+            expectedCliSessionId: cliSessionBinding?.sessionId,
+            expectedSessionId: sessionEntry?.sessionId,
+            assertCommitAllowed: assertSettlementCurrent,
             sessionKey: turn.sessionKey,
             sessionStore: turn.activeSessionStore,
             storePath: turn.storePath,
-            activeSessionEntry: turn.getActiveSessionEntry(),
+            activeSessionEntry: sessionEntry,
+          });
+        }
+        const classification = params.classifyResult(candidateResult);
+        if (
+          (!classification || candidateResult.meta.agentMeta?.clearCliSessionBinding === true) &&
+          !shouldPreserveUserFacingSessionStateForInputProvenance(
+            turn.followupRun.run.inputProvenance,
+          )
+        ) {
+          await persistCliSessionBindingResult({
+            provider: params.cliExecutionProvider,
+            result: candidateResult,
+            sessionKey,
+            storePath: turn.storePath,
+            sessionStore: turn.activeSessionStore,
+            expectedSession: sessionEntry,
+            assertSettlementCurrent,
+            abortSignal: params.runAbortSignal,
           });
         }
         return candidateResult;

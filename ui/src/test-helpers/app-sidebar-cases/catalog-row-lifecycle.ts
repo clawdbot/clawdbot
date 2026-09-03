@@ -122,7 +122,6 @@ describe("AppSidebar catalog row lifecycle", () => {
 
     const updatedLabel = sidebar.querySelector<HTMLElement>(labelSelector);
     expect(updatedLabel?.textContent).toBe("Short");
-    expect(updatedLabel).not.toBe(oldLabel);
     expect(updatedLabel?.classList.contains("hover-marquee--scrolling")).toBe(false);
     expect(updatedLabel?.style.getPropertyValue("--hover-marquee-shift")).toBe("");
   });

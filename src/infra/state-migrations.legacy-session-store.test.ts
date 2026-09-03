@@ -47,10 +47,50 @@ it.each([
       });
 
       expect(store[modelRunSessionKey] != null).toBe(modelRunSessionPresent);
-      expect(Object.keys(store)).toHaveLength(2);
+      expect(Object.values(store).filter((entry) => entry.archivedAt === undefined)).toHaveLength(
+        2,
+      );
     });
   },
 );
+
+it("does not treat archived rows as legacy maintenance pressure", async () => {
+  await withTestDir({ prefix: "openclaw-legacy-session-maintenance-" }, async (root) => {
+    const storePath = path.join(root, "sessions.json");
+    const modelRunSessionKey = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174000";
+    const now = Date.now();
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [modelRunSessionKey]: { sessionId: "session-model-run", updatedAt: now - 2 * DAY_MS },
+        "agent:main:active": { sessionId: "session-active", updatedAt: now },
+        "agent:main:archived": {
+          archivedAt: now - DAY_MS,
+          sessionId: "session-archived",
+          updatedAt: now - 3 * DAY_MS,
+        },
+      }),
+    );
+
+    const store = loadLegacySessionStore(storePath, {
+      runMaintenance: true,
+      maintenanceConfig: {
+        mode: "enforce",
+        pruneAfterMs: 30 * DAY_MS,
+        archiveDashboardAfterMs: null,
+        modelRunPruneAfterMs: DAY_MS,
+        maxEntries: 2,
+        preserveRecentMs: null,
+        resetArchiveRetentionMs: null,
+        maxDiskBytes: null,
+        highWaterBytes: null,
+      },
+    });
+
+    expect(store[modelRunSessionKey]).toBeDefined();
+    expect(store["agent:main:archived"]?.archivedAt).toBe(now - DAY_MS);
+  });
+});
 
 it("stages prompt blobs after a recreated session directory", async () => {
   await withTestDir({ prefix: "openclaw-legacy-session-store-" }, async (root) => {

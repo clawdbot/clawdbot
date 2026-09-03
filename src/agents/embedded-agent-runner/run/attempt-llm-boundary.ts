@@ -21,9 +21,11 @@ import {
   type CurrentUserTimestampMatch,
   type UserTranscriptContext,
 } from "./attempt-history.js";
+import { sessionMessagesContainIdempotencyKey } from "./pre-persisted-user-turn.js";
 import type { RuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 
 type LlmBoundaryOptions = {
+  appendOnlyRuntimeContext?: boolean;
   timezone?: string;
   includeTimestamp?: boolean;
   projectPersistedSenderContext?: boolean;
@@ -52,19 +54,20 @@ export function normalizeMessagesForLlmBoundary(
     options?.userTranscriptContexts,
     options?.currentUserTimestampOverride,
   );
-  const withoutHistoricalInboundMetadata = stripHistoricalInboundMetadataFromUserMessages(
-    normalized,
-    options,
-  );
+  const normalizedUserMessages = normalizeUserMessagesForLlmBoundary(normalized, options);
   const withPersistedSenderContext =
     options?.projectPersistedSenderContext === false
-      ? withoutHistoricalInboundMetadata
-      : projectPersistedSenderContext(withoutHistoricalInboundMetadata, userTranscriptMessages);
-  return stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
+      ? normalizedUserMessages
+      : projectPersistedSenderContext(normalizedUserMessages, userTranscriptMessages);
+  // Prefix-bound thinking must replay every earlier carrier in its original position.
+  return options?.appendOnlyRuntimeContext
+    ? withPersistedSenderContext
+    : stripHistoricalRuntimeContextCustomMessages(withPersistedSenderContext);
 }
 
 /** Normalizes existing transcript messages as if the current prompt were appended last. */
 export function normalizeMessagesForCurrentPromptBoundary(params: {
+  appendOnlyRuntimeContext?: boolean;
   messages: AgentMessage[];
   prompt: string;
   timezone?: string;
@@ -76,6 +79,7 @@ export function normalizeMessagesForCurrentPromptBoundary(params: {
 }
 
 export function normalizeCurrentPromptTextForLlmBoundary(params: {
+  appendOnlyRuntimeContext?: boolean;
   prompt: string;
   timezone?: string;
   includeTimestamp?: boolean;
@@ -89,6 +93,7 @@ export function normalizeCurrentPromptTextForLlmBoundary(params: {
 }
 
 function buildCurrentPromptBoundaryInput(params: {
+  appendOnlyRuntimeContext?: boolean;
   prompt: string;
   timezone?: string;
   includeTimestamp?: boolean;
@@ -101,6 +106,7 @@ function buildCurrentPromptBoundaryInput(params: {
     timestamp: params.currentUserTimestamp ?? Date.now(),
   } as AgentMessage;
   const options: LlmBoundaryOptions = {
+    appendOnlyRuntimeContext: params.appendOnlyRuntimeContext,
     ...(params.timezone ? { timezone: params.timezone } : {}),
     ...(params.includeTimestamp === false ? { includeTimestamp: false } : {}),
     ...(params.currentUserTranscriptMessage
@@ -131,35 +137,35 @@ export function installRuntimeContextMessageForPrompt(params: {
     };
   };
   message?: RuntimeContextCustomMessage;
+  persistedUserIdempotencyKey?: string;
 }): () => void {
   const { message, session } = params;
   if (!message) {
     return () => undefined;
   }
-  const installBeforePrompt = () => {
+  const install = (placeMessage: typeof appendRuntimeContextMessageForPrompt) => {
     if (!session.messages.includes(message)) {
-      session.agent.state.messages = appendRuntimeContextMessageForPrompt({
+      session.agent.state.messages = placeMessage({
         message,
         messages: session.messages,
       });
     }
   };
-  const installBeforeRetry = () => {
-    if (!session.messages.includes(message)) {
-      session.agent.state.messages = insertRuntimeContextMessageForPrompt({
-        message,
-        messages: session.messages,
-      });
-    }
-  };
-  installBeforePrompt();
+  // Keyed retries can reuse their recorded user; transient context must precede
+  // that user so the boundary's current-turn filter retains it.
+  install(
+    params.persistedUserIdempotencyKey &&
+      sessionMessagesContainIdempotencyKey(session.messages, params.persistedUserIdempotencyKey)
+      ? insertRuntimeContextMessageForPrompt
+      : appendRuntimeContextMessageForPrompt,
+  );
   const agent = session.agent;
   const originalContinue = Reflect.get(agent, "continue", agent) as unknown;
   if (typeof originalContinue === "function") {
     const continueWithAgent = originalContinue.bind(agent) as () => Promise<void>;
     agent.continue = function continueWithRuntimeContext(this: typeof agent): Promise<void> {
       // Pi overflow recovery can rebuild state from the persisted branch before retrying.
-      installBeforeRetry();
+      install(insertRuntimeContextMessageForPrompt);
       return continueWithAgent();
     };
   }
@@ -457,7 +463,7 @@ function messageRuntimeTimestampMatchesCurrentUserOverride(
   return true;
 }
 
-function stripHistoricalInboundMetadataFromUserMessages(
+function normalizeUserMessagesForLlmBoundary(
   messages: AgentMessage[],
   options: LlmBoundaryOptions | undefined,
 ): AgentMessage[] {
@@ -470,6 +476,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
     const content = (message as { content?: unknown }).content;
     const injectMediaText = !hasNonBlankUserText(content) && hasPersistedMedia(message);
     const isActive = index === activeUserMessageIndex;
+    const preserveInboundMetadata = isActive || options?.appendOnlyRuntimeContext === true;
     const override = options?.currentUserTimestampOverride;
     const runtimeTimestamp = (message as { timestamp?: unknown }).timestamp;
     const useCurrentUserTimestampOverride =
@@ -481,17 +488,8 @@ function stripHistoricalInboundMetadataFromUserMessages(
       ? override.timestamp
       : runtimeTimestamp;
 
-    // Historical turns strip inbound metadata blocks (Conversation info, Sender
-    // info, etc.); the active turn keeps its metadata for the current request.
-    // BOTH then get media-only text if needed, form-canonicalize, and stamp from
-    // their own timestamp, so current and historical bytes stay identical.
-    //
-    // Channel-envelope preservation: a message that already carries its OWN
-    // leading `[DOW YYYY-MM-DD HH:MM ...] ` envelope (Discord/Telegram, or a
-    // cron "Current time:" marker) keeps it verbatim — we strip metadata from
-    // the body but NEVER drop or replace the envelope, and never re-stamp. This
-    // keeps such messages byte-stable across current↔historical (the envelope is
-    // present in both forms) and avoids double-stamping.
+    // Append-only replay keeps historical metadata because removing it invalidates
+    // later thinking signatures. Timestamp envelopes remain fixed in both policies.
     const transformText = (raw: string): string => {
       // Restore late-media paths only for blank media turns, never into transcript storage.
       const sourceText =
@@ -500,13 +498,13 @@ function stripHistoricalInboundMetadataFromUserMessages(
           : raw;
       const { body, envelope } = splitLeadingTimestampEnvelope(sourceText);
       if (envelope || sourceText.includes(BOUNDARY_CRON_TIME_MARKER)) {
-        if (isActive) {
+        if (preserveInboundMetadata) {
           return sourceText;
         }
         // Strip metadata from the body but re-attach the original envelope.
         return `${envelope}${stripInboundMetadata(body)}`;
       }
-      const stripped = isActive ? sourceText : stripInboundMetadata(sourceText);
+      const stripped = preserveInboundMetadata ? sourceText : stripInboundMetadata(sourceText);
       return stampUserTextWithMessageTimestamp(
         stripped,
         messageTimestamp,
@@ -559,7 +557,7 @@ function stripHistoricalInboundMetadataFromUserMessages(
         nextText = transformText(textBlock.text);
         processedFirstText = true;
       } else {
-        nextText = isActive ? textBlock.text : stripInboundMetadata(textBlock.text);
+        nextText = preserveInboundMetadata ? textBlock.text : stripInboundMetadata(textBlock.text);
       }
       if (nextText === textBlock.text) {
         return block;

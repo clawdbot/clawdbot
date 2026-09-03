@@ -7,6 +7,7 @@ import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import {
   mergeGeneratedChannelConfigs,
   readGeneratedBundledChannelConfigs,
+  resolvePluginRuntimeChannelMetadata,
 } from "./lib/plugin-npm-package-manifest.mts";
 import { isRecord } from "./lib/record-shared.mjs";
 import {
@@ -33,12 +34,8 @@ function rewritePackageExtensions(entries: unknown, extension: string): string[]
   }
 
   return entries
-    .filter((entry) => typeof entry === "string" && entry.trim().length > 0)
-    .map((entry) => {
-      const normalized = entry.replace(/^\.\//, "");
-      const rewritten = normalized.replace(/\.[^.]+$/u, extension);
-      return `./${rewritten}`;
-    });
+    .map((entry) => rewritePackageEntry(entry, extension))
+    .filter((entry) => entry !== undefined);
 }
 
 function rewritePackageEntry(entry: unknown, extension: string): string | undefined {
@@ -301,10 +298,16 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
       removeFileIfExists(distPackageJsonPath);
       continue;
     }
-    if (packageJson && isRecord(packageJson.openclaw) && "extensions" in packageJson.openclaw) {
+    if (packageJson && isRecord(packageJson.openclaw)) {
       const extension = buildEntry.runtimeExtension;
+      const channel = resolvePluginRuntimeChannelMetadata(packageJson.openclaw.channel, {
+        pluginDir: dirent.name,
+        runtimeBuildOutputs: rewritePackageExtensions(buildEntry.sourceEntries, extension) ?? [],
+        runtimeRoot: ".",
+      });
       packageJson.openclaw = {
         ...packageJson.openclaw,
+        ...(channel ? { channel } : {}),
         extensions: rewritePackageExtensions(packageJson.openclaw.extensions, extension),
         ...(typeof packageJson.openclaw.setupEntry === "string"
           ? { setupEntry: rewritePackageEntry(packageJson.openclaw.setupEntry, extension) }

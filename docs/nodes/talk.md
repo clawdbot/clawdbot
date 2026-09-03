@@ -170,6 +170,10 @@ The Gateway must also advertise `gateway-relay` and `agent-consult` for the sele
 `talk.catalog`. Realtime requires macOS 26 or newer, matching Voice Wake; on older versions the
 Talk and Voice Wake controls are unavailable.
 
+On Apple clients, relay playback stays active until the device finishes the queued audio, not
+until an estimated duration expires. Playback acknowledgments and microphone echo suppression
+follow that completion; pause, barge-in, and cancellation can still stop playback earlier.
+
 ### When realtime cannot start
 
 Talk never silently sits idle. If the relay fails to start — no Gateway route, rejected

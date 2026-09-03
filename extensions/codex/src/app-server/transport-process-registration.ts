@@ -10,6 +10,9 @@ import {
   readCodexAppServerProcessSnapshot,
 } from "./transport-process-snapshot.js";
 
+// Startup tolerates transient host load; signal containment retains its shorter budget.
+const PROCESS_REGISTRATION_INSPECTION_MS = 10_000;
+
 const processIdentity = z.object({
   pid: z.number().int().positive().safe(),
   pgid: z.number().int().positive().safe(),
@@ -43,15 +46,15 @@ async function openProcessRegistrationStore() {
   });
 }
 
-async function reapRegisteredCodexAppServerOrphans(requestedDeadline?: number): Promise<void> {
+async function reapRegisteredCodexAppServerOrphans(): Promise<void> {
   const store = await openProcessRegistrationStore();
-  const deadline = requestedDeadline ?? Date.now() + 10_000;
+  const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
   for (const entry of store.entries()) {
     if (Date.now() >= deadline) {
       throw new Error("Codex orphan cleanup exceeded its startup budget. Retry to finish cleanup.");
     }
     const registration = registrationSchema.parse(entry.value);
-    const snapshot = await readCodexAppServerProcessSnapshot(undefined, [
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, [
       registration.parent.pid,
       registration.child.pid,
     ]);
@@ -133,7 +136,8 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
     if (!child.pid) {
       throw new ProcessInspectionError("unavailable");
     }
-    const snapshot = await readCodexAppServerProcessSnapshot(undefined, [child.pid]);
+    const deadline = Date.now() + PROCESS_REGISTRATION_INSPECTION_MS;
+    const snapshot = await readCodexAppServerProcessSnapshot(deadline, [child.pid]);
     const parent = snapshot.find((row) => row.pid === process.pid);
     const spawned = snapshot.find((row) => row.pid === child.pid);
     if (!parent || !spawned || spawned.ppid !== process.pid) {
@@ -141,7 +145,7 @@ export async function prepareCodexAppServerProcessRegistration(): Promise<
         "Cannot register the Codex child process: its direct-parent identity is unavailable. Retry.",
       );
     }
-    const command = await readCodexAppServerProcessCommand(spawned, Date.now() + 2_000);
+    const command = await readCodexAppServerProcessCommand(spawned, deadline);
     if (child.exitCode !== null || child.signalCode !== null) {
       throw new Error(
         "Cannot register the Codex child process command: the child exited during inspection. Retry.",

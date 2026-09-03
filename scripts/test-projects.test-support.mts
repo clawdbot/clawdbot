@@ -109,23 +109,25 @@ import {
   splitTestTargetChunks as splitTargetChunks,
 } from "./lib/gateway-server-test-plan.mts";
 import { readTestSelectorSourceFacts } from "./lib/test-selector-source-facts.mts";
+// CI imports planning before dependency installation; execution owners stay outside this closure.
+import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
+import { resolveBooleanModeFlag, vitestOptionConsumesNextArg } from "./lib/vitest-cli-mode.mts";
 import {
   isCiLikeEnv,
   resolveLocalFullSuiteProfile,
   type VitestHostInfo,
 } from "./lib/vitest-local-scheduling.mts";
 import {
+  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
+  resolveDefaultVitestNoOutputTimeoutMs,
+  resolveVitestNodeArgs,
+} from "./lib/vitest-process-env.mts";
+import {
   estimateVitestTestFileSeconds,
   estimateVitestToolingFileSeconds,
   resolveShardTimingKey,
   type VitestShardTimingSpec,
 } from "./lib/vitest-shard-metadata.mts";
-import {
-  DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
-  resolveDefaultVitestNoOutputTimeoutMs,
-  resolveVitestCliEntry,
-  resolveVitestNodeArgs,
-} from "./run-vitest.mts";
 
 type VitestRunPlan = {
   config: string;
@@ -3801,36 +3803,42 @@ export function createVitestPreflightPnpmArgs(config: string) {
 }
 
 export function parseTestProjectsArgs(args: string[], cwd = process.cwd()) {
-  const forwardedArgs = [];
-  const targetArgs = [];
+  const forwardedArgs: string[] = [];
+  const nonTargetArgs: string[] = [];
+  const targetArgs: string[] = [];
   let watchMode = false;
   let passthrough = false;
 
-  for (const arg of args) {
+  for (let index = 0; index < args.length; index++) {
+    const arg = args[index]!;
     if (arg === "--") {
-      if (targetArgs.length > 0) {
-        passthrough = true;
-      }
+      // The project wrapper consumes separators; direct native and batch calls retain theirs.
+      passthrough = targetArgs.length > 0;
       continue;
     }
-    if (passthrough) {
-      if (arg === "--watch") {
-        watchMode = true;
-      }
-      forwardedArgs.push(arg);
-      continue;
+    const watch = resolveBooleanModeFlag(args, index, "watch", "-w");
+    if (watch) {
+      watchMode = watch.value;
     }
-    if (arg === "--watch") {
-      watchMode = true;
+    // Preserve bare wrapper --watch's existing omission of the named run command.
+    const next = args[index + 1];
+    if (!passthrough && arg === "--watch" && next !== "true" && next !== "false") {
       continue;
-    }
-    if (isPathLikeTargetArg(arg, cwd)) {
-      targetArgs.push(arg);
     }
     forwardedArgs.push(arg);
+    if (vitestOptionConsumesNextArg(arg, next)) {
+      forwardedArgs.push(next!);
+      // Preserve operand occurrences even when their value also names a target.
+      nonTargetArgs.push(arg, next!);
+      index++;
+    } else if (!passthrough && isPathLikeTargetArg(arg, cwd)) {
+      targetArgs.push(arg);
+    } else {
+      nonTargetArgs.push(arg);
+    }
   }
 
-  return { forwardedArgs, targetArgs, watchMode };
+  return { forwardedArgs, nonTargetArgs, targetArgs, watchMode };
 }
 
 export function buildVitestRunPlans(
@@ -3839,7 +3847,12 @@ export function buildVitestRunPlans(
   listChangedPaths: (baseRef: string, cwd: string) => string[] = listChangedPathsFromGit,
   options: ChangedTestTargetOptions = {},
 ) {
-  const { forwardedArgs, targetArgs, watchMode } = parseTestProjectsArgs(args, cwd);
+  const {
+    forwardedArgs,
+    nonTargetArgs: remainingArgs,
+    targetArgs,
+    watchMode,
+  } = parseTestProjectsArgs(args, cwd);
   const changedTargetArgs =
     targetArgs.length === 0 ? resolveChangedTargetArgs(args, cwd, listChangedPaths, options) : null;
   const requestedTargetArgs = changedTargetArgs ?? targetArgs;
@@ -3874,7 +3887,7 @@ export function buildVitestRunPlans(
     ];
   }
 
-  const nonTargetArgs = activeForwardedArgs.filter((arg) => !requestedTargetArgs.includes(arg));
+  const nonTargetArgs = changedTargetArgs !== null ? activeForwardedArgs : remainingArgs;
   const explicitConfigTargets = activeTargetArgs.map((targetArg) =>
     toRepoRelativeTarget(targetArg, cwd),
   );

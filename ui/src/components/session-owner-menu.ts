@@ -45,7 +45,9 @@ export function renderSessionOwnerAssignmentOptions(
           ?disabled=${params.disabled || selfChecked}
           title=${title}
         >
-          <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.users}</span>
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${renderSessionOwnerAvatar(params.selfOwner)}</span
+          >
           <span class="session-menu__text">${t("sessionsView.assignToMe")}</span>
           ${selfChecked
             ? html`<span slot="details" class="session-menu__check" aria-hidden="true"

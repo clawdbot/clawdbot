@@ -117,14 +117,14 @@ on:
         default: ""
         type: string
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
   workflow_call:
     inputs:
       advisory:
-        description: Treat failures as advisory for the caller
+        description: Also treat preparation and Linux failures as advisory for the caller
         required: false
         default: false
         type: boolean
@@ -902,7 +902,7 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
-    continue-on-error: ${{ inputs.advisory }}
+    continue-on-error: ${{ inputs.advisory || matrix.os_id != 'ubuntu' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}

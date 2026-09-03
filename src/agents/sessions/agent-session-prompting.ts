@@ -8,6 +8,7 @@ import type {
   PersistedUserTurnMessage,
   UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.types.js";
+import { isOpenClawRuntimeContextCustomMessage } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import { stripFrontmatter } from "../utils/frontmatter.js";
 import { AgentSessionBase } from "./agent-session-base.js";
@@ -31,9 +32,24 @@ export const agentSessionSetPromptPreparation: unique symbol = Symbol.for(
   "openclaw.agent-session.set-prompt-preparation",
 );
 
+/** @internal Queue prompt-owned context with cleanup for preflight exits. */
+export const agentSessionQueuePromptContext: unique symbol = Symbol.for(
+  "openclaw.agent-session.queue-prompt-context",
+);
+
 export abstract class AgentSessionPrompting extends AgentSessionBase {
   private logicalPromptActive = false;
   private promptPreparation?: () => Promise<void>;
+
+  [agentSessionQueuePromptContext](message: CustomMessage): () => void {
+    // The carrier belongs immediately after its user, ahead of queued extension context.
+    this.pendingNextTurnMessages.unshift(message);
+    return () => {
+      this.pendingNextTurnMessages = this.pendingNextTurnMessages.filter(
+        (pending) => pending !== message,
+      );
+    };
+  }
 
   [agentSessionSetPromptPreparation](prepare: (() => Promise<void>) | undefined): void {
     this.promptPreparation = prepare;
@@ -266,8 +282,22 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
       }
 
       const persistedUserIdempotencyKey = options?.persistedUserIdempotencyKey;
+      const persistedUserIndex = persistedUserIdempotencyKey
+        ? this.agent.state.messages.findLastIndex(
+            (message) =>
+              message.role === "user" &&
+              "idempotencyKey" in message &&
+              message.idempotencyKey === persistedUserIdempotencyKey,
+          )
+        : -1;
+      // Outer retries reuse the recorded user/carrier pair. Re-enqueuing either
+      // would duplicate the turn and detach runtime context from its original prefix.
+      const replayPersistedTurn =
+        persistedUserIndex >= 0 &&
+        isOpenClawRuntimeContextCustomMessage(this.agent.state.messages[persistedUserIndex + 1]);
       const activeTail = this.agent.state.messages.at(-1);
       if (
+        !replayPersistedTurn &&
         persistedUserIdempotencyKey &&
         activeTail?.role === "user" &&
         "idempotencyKey" in activeTail &&
@@ -278,15 +308,17 @@ export abstract class AgentSessionPrompting extends AgentSessionBase {
         this.agent.state.messages = this.agent.state.messages.slice(0, -1);
       }
 
-      // Build messages array (custom message if any, then user message)
       messages = [];
 
-      // Add user message
-      messages.push(this.createUserMessage(expandedText, currentImages));
+      if (!replayPersistedTurn) {
+        messages.push(this.createUserMessage(expandedText, currentImages));
+      }
 
       // Inject any pending "nextTurn" messages as context alongside the user message
       for (const msg of this.pendingNextTurnMessages) {
-        messages.push(msg);
+        if (!replayPersistedTurn || !isOpenClawRuntimeContextCustomMessage(msg)) {
+          messages.push(msg);
+        }
       }
       this.pendingNextTurnMessages = [];
 

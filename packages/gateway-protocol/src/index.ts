@@ -18,10 +18,12 @@ export * from "./schema/board.js";
 export * from "./schema/progress-card.js";
 export {
   SessionCreatedActorSchema,
+  SessionEntryArchiveReasonSchema,
   SessionPermissionModeSchema,
   SessionOwnerSchema,
   SessionToolOverridesSchema,
   type SessionCreatedActor,
+  type SessionEntryArchiveReason,
   type SessionOwner,
   type SessionPermissionMode,
   type SessionRow,
