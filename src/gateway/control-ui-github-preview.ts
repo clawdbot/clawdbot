@@ -1,3 +1,4 @@
+import type { prepareGitHubReadIdentity } from "../agents/github-tool-identity.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ControlUiGitHubPreview } from "./control-ui-contract.js";
 // Same-origin GitHub metadata adapter for Control UI link previews.
@@ -42,6 +43,8 @@ export type ControlUiGitHubPreviewTarget = {
   repo: string;
 };
 
+export type ControlUiGitHubPreviewIdentity = Awaited<ReturnType<typeof prepareGitHubReadIdentity>>;
+
 type CacheEntry<T> = {
   expiresAt: number;
   promise: Promise<T>;
@@ -78,6 +81,7 @@ export function parseControlUiGitHubPreviewTarget(
   const number = value.number;
   if (
     (kind !== "issue" && kind !== "pull") ||
+    (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim())) ||
     !isValidOwner(owner) ||
     !isValidRepo(repo) ||
     typeof number !== "number" ||
@@ -365,36 +369,48 @@ function cacheKey(target: ControlUiGitHubPreviewTarget, credentialScope: string)
   return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}\0${credentialScope}`;
 }
 
-export function loadControlUiGitHubPreview(
+export async function loadControlUiGitHubPreview(
   target: ControlUiGitHubPreviewTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
   fetchImpl: typeof fetch = fetch,
 ): Promise<ControlUiGitHubPreview> {
-  const { token, cacheScope } = resolveGitHubApiCredentialScope();
+  await identity?.revalidate();
+  identity?.assertSelected();
+  const { token, cacheScope } = identity ?? resolveGitHubApiCredentialScope();
   const key = cacheKey(target, cacheScope);
   const now = Date.now();
-  const cached = previewCache.get(key);
-  if (cached && cached.expiresAt > now) {
+  let entry = previewCache.get(key);
+  if (entry && entry.expiresAt <= now) {
     previewCache.delete(key);
-    previewCache.set(key, cached);
-    return cached.promise;
+    entry = undefined;
   }
-  if (cached) {
+  if (entry) {
     previewCache.delete(key);
+    previewCache.set(key, entry);
+  } else {
+    const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
+    const request = identity
+      ? fetchPreview(target, fetchImpl, token)
+      : withOptionalGitHubAuth(token, (requestToken) =>
+          fetchPreview(target, fetchImpl, requestToken),
+        );
+    const pending: CacheEntry<ControlUiGitHubPreview> = {
+      expiresAt: now + successCacheMs,
+      promise: request.catch((error: unknown) => {
+        // Short failure caching protects quota when a user repeatedly crosses
+        // a private, missing, or rate-limited link.
+        pending.expiresAt = Date.now() + FAILURE_CACHE_MS;
+        throw error;
+      }),
+    };
+    entry = pending;
+    previewCache.set(key, entry);
+    pruneMapToMaxSize(previewCache, CACHE_LIMIT);
   }
-
-  const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
-  const entry: CacheEntry<ControlUiGitHubPreview> = {
-    expiresAt: now + successCacheMs,
-    promise: withOptionalGitHubAuth(token, (requestToken) =>
-      fetchPreview(target, fetchImpl, requestToken),
-    ).catch((error: unknown) => {
-      // Short failure caching protects the anonymous GitHub quota when a user
-      // repeatedly crosses a private, missing, or rate-limited link.
-      entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
-      throw error;
-    }),
-  };
-  previewCache.set(key, entry);
-  pruneMapToMaxSize(previewCache, CACHE_LIMIT);
-  return entry.promise;
+  const preview = await entry.promise;
+  // Transport is credential-scoped, but every reader must still hold its
+  // current identity before cached or newly fetched metadata is delivered.
+  await identity?.revalidate();
+  identity?.assertSelected();
+  return preview;
 }
