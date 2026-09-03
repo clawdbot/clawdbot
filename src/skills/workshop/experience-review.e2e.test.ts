@@ -213,7 +213,11 @@ describe("Workshop experience review through the real provider and tool owners",
             config: candidate.config,
             agentId: "main",
           });
-          const progress = await getSkillProposalRunProgress({ runId });
+          const progress = await getSkillProposalRunProgress({
+            config: candidate.config,
+            agentId: "main",
+            runId,
+          });
           const outcomes = Object.entries(readSkillReviewOutcomes().experienceReviews).filter(
             ([key]) => !outcomesBefore.has(key),
           );

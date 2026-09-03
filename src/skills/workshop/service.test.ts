@@ -548,7 +548,13 @@ describe("skill workshop proposals", () => {
       "revision-run",
       "later-run",
     ]);
-    await expect(getSkillProposalRunProgress({ runId: "revision-run" })).resolves.toEqual({
+    await expect(
+      getSkillProposalRunProgress({
+        config: workshopConfig,
+        agentId: "main",
+        runId: "revision-run",
+      }),
+    ).resolves.toEqual({
       mutationCount: 2,
       proposalIds: [proposal.record.id],
     });
@@ -584,7 +590,13 @@ describe("skill workshop proposals", () => {
       content: "# Recovered Proposal\n",
       origin: { runId: "interrupted-run" },
     });
-    await expect(getSkillProposalRunProgress({ runId: "interrupted-run" })).resolves.toEqual({
+    await expect(
+      getSkillProposalRunProgress({
+        config: workshopConfig,
+        agentId: "main",
+        runId: "interrupted-run",
+      }),
+    ).resolves.toEqual({
       mutationCount: 1,
       proposalIds: [proposal.record.id],
     });

@@ -4,6 +4,7 @@
  * timeout classification, and owner-provided approval outcomes.
  */
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
+import { getRuntimeConfig } from "../config/config.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
 import { sanitizeApprovalScope } from "../infra/approval-scope.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
@@ -542,13 +543,10 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
   if (params.toolName !== "skill_workshop") {
     return undefined;
   }
-  if (!params.ctx?.config) {
-    throw new Error("Skill Workshop tool calls require the active agent configuration.");
-  }
   const result = await resolveSkillWorkshopToolApproval({
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
-    config: params.ctx.config,
+    config: params.ctx?.config ?? getRuntimeConfig(),
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({

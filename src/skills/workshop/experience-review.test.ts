@@ -620,7 +620,7 @@ describe("skill experience review preparation", () => {
     params.ctx.agentId = agentId;
     params.ctx.foregroundPromptContext.agentId = agentId;
     const result = await prepareSkillExperienceReviewCandidate(
-      { ctx: params.ctx },
+      { ctx: params.ctx, config: params.config },
       {
         session: { scope: "global" },
         agents: {

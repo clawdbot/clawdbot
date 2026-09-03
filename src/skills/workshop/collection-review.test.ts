@@ -8,6 +8,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "../../agents/tools/skill-workshop-tool.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   createOpenClawTestState,
@@ -36,8 +37,12 @@ vi.mock("../../agents/auth-profiles/store.js", () => ({
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 
-const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
-  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
+const createSkillWorkshopTool = (
+  options: Omit<Parameters<typeof createSkillWorkshopToolImpl>[0], "config" | "agentId"> & {
+    config?: OpenClawConfig;
+    agentId?: string;
+  },
+) => createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function runReview(params: {
   config: Parameters<typeof runSkillCollectionReviewForAgent>[0]["config"];

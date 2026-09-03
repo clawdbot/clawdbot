@@ -170,9 +170,9 @@ describe("skills proposal gateway handlers", () => {
     expect(created.record.id).toMatch(/^weather-planner-/);
     expect(created.record.draftFile).toBe("PROPOSAL.md");
     expect(created.record.supportFiles?.[0]?.path).toBe("references/weather.md");
-    expect(readSkillProposalEvents({ proposalId: created.record.id }).events[0]?.actor).toEqual({
-      type: "gateway",
-    });
+    expect(
+      readSkillProposalEvents({ config: {}, proposalId: created.record.id }).events[0]?.actor,
+    ).toEqual({ type: "gateway" });
 
     const list = await callHandler("skills.proposals.list", {});
     expect(list.ok).toBe(true);

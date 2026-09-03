@@ -46,6 +46,7 @@ describe("skill_workshop operator revision constraint", () => {
     const reviewed = created.details as { id: string; revisionHash: string };
     const revisionTool = createConfiguredSkillWorkshopTool({
       workspaceDir: await tempDirs.make("openclaw-skill-workshop-chat-agent-"),
+      config: {},
       agentId: "writer",
       run: {
         env: testState.env,

@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import {
   createOpenClawTestState,
@@ -17,17 +18,19 @@ const pendingApprovalConfig = {
     },
   },
 };
+type OptionalWorkshopConfig<T> = Omit<T, "config"> & { config?: OpenClawConfig };
 
 const resolveSkillWorkshopToolApproval = (
-  params: Parameters<typeof resolveSkillWorkshopToolApprovalImpl>[0],
+  params: OptionalWorkshopConfig<Parameters<typeof resolveSkillWorkshopToolApprovalImpl>[0]>,
 ) =>
   resolveSkillWorkshopToolApprovalImpl({
     agentId: "main",
     config: pendingApprovalConfig,
     ...params,
   });
-const proposeCreateSkill = (params: Parameters<typeof proposeCreateSkillImpl>[0]) =>
-  proposeCreateSkillImpl({ config: {}, agentId: "main", ...params });
+const proposeCreateSkill = (
+  params: OptionalWorkshopConfig<Parameters<typeof proposeCreateSkillImpl>[0]>,
+) => proposeCreateSkillImpl({ config: {}, agentId: "main", ...params });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({

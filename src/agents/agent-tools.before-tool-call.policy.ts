@@ -6,6 +6,7 @@
  * remain in this sequence.
  */
 import type { ToolLoopWarning } from "@openclaw/agent-core";
+import { getRuntimeConfig } from "../config/config.js";
 import { freezeDiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
 import { getGlobalHookRunnerRegistry } from "../plugins/hook-runner-global-state.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
@@ -55,14 +56,6 @@ import { admitSingleToolCallLoop } from "./tool-loop-admission.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
-function requireSkillWorkshopConfig(
-  config: HookContext["config"],
-): NonNullable<HookContext["config"]> {
-  if (!config) {
-    throw new Error("Skill Workshop tool calls require the active agent configuration.");
-  }
-  return config;
-}
 const BEFORE_TOOL_CALL_HOOK_FAILURE_REASON =
   "Tool call blocked because before_tool_call hook failed";
 
@@ -182,7 +175,7 @@ export async function runBeforeToolCallHook(args: {
         ? await resolveSkillWorkshopToolApproval({
             toolName,
             toolParams: normalizedParams,
-            config: requireSkillWorkshopConfig(args.ctx?.config),
+            config: args.ctx?.config ?? getRuntimeConfig(),
             ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
             ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
           })

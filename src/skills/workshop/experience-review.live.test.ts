@@ -214,7 +214,11 @@ describeLive("skill experience review live OpenAI eval", () => {
         config: reviewCandidate.config,
         agentId: "main",
       });
-      const progress = await getSkillProposalRunProgress({ runId });
+      const progress = await getSkillProposalRunProgress({
+        config: reviewCandidate.config,
+        agentId: "main",
+        runId,
+      });
       const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
       expect(outcomes).toHaveLength(1);
       const decision = assertExperienceReviewDecision({
