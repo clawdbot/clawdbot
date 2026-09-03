@@ -28,7 +28,10 @@ export async function reconcileSkillCollectionReviewJobs(params: {
 
   const specs = resolveSkillCollectionReviewMonitorSpecs(params.cfg);
   const desired = new Set(specs.map((spec) => spec.agentId));
-  const { duplicates } = partitionSystemMonitors(jobs, skillCollectionReviewMonitorAgentId);
+  const { retained, duplicates } = partitionSystemMonitors(
+    jobs,
+    skillCollectionReviewMonitorAgentId,
+  );
   for (const { agentId, job } of duplicates) {
     try {
       await params.cron.remove(job.id, {
@@ -62,9 +65,8 @@ export async function reconcileSkillCollectionReviewJobs(params: {
     }
   }
 
-  for (const job of jobs) {
-    const agentId = skillCollectionReviewMonitorAgentId(job);
-    if (!agentId || desired.has(agentId)) {
+  for (const [agentId, job] of retained) {
+    if (desired.has(agentId)) {
       continue;
     }
     try {

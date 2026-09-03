@@ -44,7 +44,8 @@ describe("reconcileSkillCollectionReviewJobs", () => {
     const remove = vi.fn(async () => ({ ok: true }));
     const list = vi.fn(async () => [
       monitorJob("main"),
-      monitorJob("stale"),
+      monitorJob("stale", "stale-older"),
+      { ...monitorJob("stale", "stale-newer"), updatedAtMs: 2 },
       {
         ...monitorJob("collider"),
         id: "user-job",
@@ -77,8 +78,9 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       enabledExplicit: true,
       systemOwned: true,
     });
-    expect(remove).toHaveBeenCalledWith("job-stale", { systemOwned: true });
-    expect(remove).toHaveBeenCalledTimes(1);
+    expect(remove).toHaveBeenNthCalledWith(1, "stale-older", { systemOwned: true });
+    expect(remove).toHaveBeenNthCalledWith(2, "stale-newer", { systemOwned: true });
+    expect(remove).toHaveBeenCalledTimes(2);
   });
 
   it("removes duplicate monitors before converging their declaration", async () => {
