@@ -1,3 +1,5 @@
+import path from "node:path";
+import { replaceFileAtomic } from "../infra/replace-file.js";
 import { persistBoundedClobberedConfigSnapshot } from "./io.clobber-snapshot.js";
 import type { ConfigIoContext } from "./io.context.js";
 import {
@@ -54,9 +56,14 @@ async function persistPrefixedConfigRecovery(params: {
     raw: params.originalRaw,
     observedAt,
   });
-  await context.deps.fs.promises.writeFile(context.configPath, params.recoveredRaw, {
-    encoding: "utf-8",
+  await replaceFileAtomic({
+    filePath: context.configPath,
+    content: params.recoveredRaw,
+    dirMode: 0o700,
     mode: 0o600,
+    tempPrefix: path.basename(context.configPath),
+    copyFallbackOnPermissionError: true,
+    fileSystem: context.deps.fs,
   });
   await context.deps.fs.promises.chmod?.(context.configPath, 0o600).catch((error: unknown) => {
     warnOnConfigPermissionHardeningFailure({ context, detail: "prefix recovery", error });

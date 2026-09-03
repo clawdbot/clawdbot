@@ -717,6 +717,66 @@ describe("config io write", () => {
     ]);
   });
 
+  itWithHome(
+    "prefix recovery leaves the config intact when the write crashes midway",
+    async (home) => {
+      const configPath = configPathForHome(home);
+      const configBasename = path.basename(configPath);
+      const cleanRaw = formatConfig({ gateway: { mode: "local" } });
+      const pollutedRaw = `Found and updated: False\n${cleanRaw}`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, pollutedRaw, "utf-8");
+
+      // Simulate a crash after a write of the recovered config has started but
+      // before it completed: the target is truncated and the write never returns.
+      // The target is the live config path, or a staged temp file for it; writes
+      // to anything else (for example the clobbered snapshot) proceed normally.
+      const stagedHandles = new WeakSet<object>();
+      const isStagedConfigTemp = (file: fsNode.PathLike) => {
+        const name = path.basename(String(file));
+        return name.startsWith(`${configBasename}.`) && name.endsWith(".tmp");
+      };
+      const crashingFs: typeof fsNode = {
+        ...fsNode,
+        promises: {
+          ...fsNode.promises,
+          open: (async (file, ...rest) => {
+            const handle = await fsNode.promises.open(file, ...rest);
+            if (isStagedConfigTemp(file)) {
+              stagedHandles.add(handle);
+            }
+            return handle;
+          }) as typeof fsNode.promises.open,
+          writeFile: (async (target, data, options) => {
+            const crashes =
+              typeof target === "string" ? target === configPath : stagedHandles.has(target);
+            if (crashes) {
+              await fsNode.promises.writeFile(target, "", options);
+              throw new Error("simulated crash mid-write");
+            }
+            return fsNode.promises.writeFile(target, data, options);
+          }) as typeof fsNode.promises.writeFile,
+        },
+      };
+      const io = createHomeConfigIO(home, {
+        fs: crashingFs,
+        env: { VITEST: "true" } as NodeJS.ProcessEnv,
+        logger: { warn: vi.fn(), error: vi.fn() },
+      });
+
+      const snapshot = await io.readConfigFileSnapshot();
+      expect(snapshot.valid).toBe(false);
+
+      await expect(io.recoverConfigFromJsonRootSuffix(snapshot)).rejects.toThrow(
+        "simulated crash mid-write",
+      );
+
+      // A failed recovery must not leave the live config truncated: the previous
+      // bytes stay on disk, the way the normal config write path behaves.
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(pollutedRaw);
+    },
+  );
+
   itWithHome("warns when prefix recovery cannot tighten config permissions", async (home) => {
     const configPath = configPathForHome(home);
     const cleanConfig = {
