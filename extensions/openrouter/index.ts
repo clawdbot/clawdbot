@@ -1,11 +1,11 @@
+import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-runtime";
 // Openrouter plugin entrypoint registers its OpenClaw integration.
-import { resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ProviderReplayPolicy,
   ProviderReplayPolicyContext,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
+  ProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import {
@@ -52,11 +52,9 @@ const OPENROUTER_FUSION_MODEL_ID = "openrouter/fusion";
 const OPENROUTER_CACHE_TTL_MODEL_FAMILY = /^(?:anthropic|deepseek|moonshot(?:ai)?|z-?ai)\//;
 const MAX_PROMPT_MODEL_ID_DISPLAY_CHARS = 256;
 
-type OpenRouterFusionPromptContext = {
-  config?: OpenClawConfig;
-  agentId?: string;
-  modelId: string;
-};
+type OpenRouterFusionPromptContext = Parameters<
+  NonNullable<ProviderPlugin["resolveSystemPromptContribution"]>
+>[0];
 
 type OpenRouterFusionPromptContribution = {
   dynamicSuffix?: string;
@@ -111,18 +109,18 @@ function openRouterModelConfigKey(modelId: string): string {
 }
 
 function findConfiguredOpenRouterModelParams(
-  ctx: OpenRouterFusionPromptContext,
+  configuredModels: Record<string, { params?: Record<string, unknown> }> | undefined,
+  modelId: string,
 ): Record<string, unknown> | undefined {
-  const configuredModels = ctx.config?.agents?.defaults?.models;
   if (!configuredModels) {
     return undefined;
   }
 
-  const normalizedModelId = normalizeOpenRouterApiModelId(ctx.modelId) ?? ctx.modelId;
+  const normalizedModelId = normalizeOpenRouterApiModelId(modelId) ?? modelId;
   const directKeys = [
-    openRouterModelConfigKey(ctx.modelId),
+    openRouterModelConfigKey(modelId),
     openRouterModelConfigKey(normalizedModelId),
-    `${PROVIDER_ID}/${ctx.modelId}`,
+    `${PROVIDER_ID}/${modelId}`,
     `${PROVIDER_ID}/${normalizedModelId}`,
   ];
   for (const key of directKeys) {
@@ -138,8 +136,8 @@ function findConfiguredOpenRouterModelParams(
       continue;
     }
     const provider = rawKey.slice(0, slashIndex).trim().toLowerCase();
-    const modelId = rawKey.slice(slashIndex + 1);
-    const candidateModelId = normalizeOpenRouterApiModelId(modelId) ?? modelId;
+    const configuredModelId = rawKey.slice(slashIndex + 1);
+    const candidateModelId = normalizeOpenRouterApiModelId(configuredModelId) ?? configuredModelId;
     if (
       provider === PROVIDER_ID &&
       candidateModelId.trim().toLowerCase() === normalizedModelId.trim().toLowerCase()
@@ -151,33 +149,25 @@ function findConfiguredOpenRouterModelParams(
   return undefined;
 }
 
-function findConfiguredOpenRouterAgentParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  if (!ctx.agentId) {
-    return undefined;
-  }
-  return readRecord(resolveAgentConfig(ctx.config ?? {}, ctx.agentId)?.params);
-}
-
-function resolveMergedOpenRouterPromptParams(
-  ctx: OpenRouterFusionPromptContext,
-): Record<string, unknown> | undefined {
-  const merged = {
-    ...readRecord(ctx.config?.agents?.defaults?.params),
-    ...findConfiguredOpenRouterModelParams(ctx),
-    ...findConfiguredOpenRouterAgentParams(ctx),
-  };
-  return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
 function resolveFusionExtraBody(
   ctx: OpenRouterFusionPromptContext,
 ): Record<string, unknown> | undefined {
-  const params = resolveMergedOpenRouterPromptParams(ctx);
-  const rawExtraBody =
-    params && Object.hasOwn(params, "extra_body") ? params.extra_body : params?.extraBody;
-  return readRecord(rawExtraBody);
+  const agentConfig =
+    ctx.agentId && ctx.config ? resolveAgentConfig(ctx.config, ctx.agentId) : undefined;
+  const sources = [
+    readRecord(ctx.config?.agents?.defaults?.params),
+    findConfiguredOpenRouterModelParams(ctx.config?.agents?.defaults?.models, ctx.modelId),
+    readRecord(agentConfig?.params),
+  ];
+  let effective: Record<string, unknown> | undefined;
+  for (const source of sources) {
+    if (!source || (!Object.hasOwn(source, "extra_body") && !Object.hasOwn(source, "extraBody"))) {
+      continue;
+    }
+    const raw = Object.hasOwn(source, "extra_body") ? source.extra_body : source.extraBody;
+    effective = readRecord(raw);
+  }
+  return effective;
 }
 
 function resolveOpenRouterFusionPromptContribution(

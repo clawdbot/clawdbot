@@ -531,6 +531,7 @@ async function dispatchDiscordCommandInteraction(params: {
     cfg,
     provider: menuModelContext?.provider,
     model: menuModelContext?.model,
+    agentId: menuModelContext?.agentId,
     agentRuntime: menuModelContext?.agentRuntime,
     ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
   });

@@ -379,6 +379,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
           cfg: params.cfg,
           provider: params.provider,
           model: params.model,
+          agentId: params.agentId,
         }),
         isGroup: sessionState.isGroup,
         loadSkillCommands: loadNativeSkillCommands,

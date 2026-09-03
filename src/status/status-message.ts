@@ -747,6 +747,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     cfg: contextConfig,
     provider: selectedLookupProvider,
     model: selectedLookupModel,
+    agentId: args.agentId,
     modelContextWindow: args.selectedContextWindow,
     modelContextTokens: args.selectedContextTokens,
     allowAsyncLoad: false,
@@ -770,6 +771,7 @@ export function buildStatusMessageParts(args: StatusArgs): StatusMessageParts {
     ...(activeContextProvider ? { provider: activeContextProvider } : {}),
     modelProvider: contextLookupProvider,
     model: contextLookupModel,
+    agentId: args.agentId,
     modelContextWindow: activeCatalogEntry?.contextWindow,
     modelContextTokens:
       activeCatalogEntry?.contextTokens ??

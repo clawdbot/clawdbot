@@ -394,6 +394,7 @@ export async function sessionsCommand(
           cfg,
           provider: modelRef.provider,
           model: modelRef.model,
+          agentId,
           allowAsyncLoad: false,
         });
     const contextTokens = resolveProjectedSessionContextTokens({

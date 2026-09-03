@@ -860,6 +860,7 @@ export async function prepareCliRunContext(
       provider: params.provider,
       modelProvider: backendResolved.modelProvider,
       model: contextModelId,
+      agentId: sessionAgentId,
       modelContextWindow: params.modelContextWindow,
       modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,

@@ -393,6 +393,36 @@ describe("resolveContextTokensForModel", () => {
     expect(result).toBe(ANTHROPIC_CONTEXT_1M_TOKENS);
   });
 
+  it("does not activate a nested agent-model context1m param", () => {
+    const result = resolveContextTokensForModel({
+      cfg: {
+        agents: {
+          defaults: {
+            params: { context1m: false },
+            models: {
+              "claude-cli/claude-opus-4-7": { params: { context1m: false } },
+            },
+          },
+          list: [
+            {
+              id: "research",
+              models: {
+                "claude-cli/claude-opus-4-7": { params: { context1m: true } },
+              },
+            },
+          ],
+        },
+      },
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      agentId: "research",
+      fallbackContextTokens: 200_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(200_000);
+  });
+
   it("returns 1M context when claude-cli context1m is enabled for a GA 1M model", () => {
     const result = resolveContextTokensForModel({
       cfg: {

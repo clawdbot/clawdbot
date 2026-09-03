@@ -403,6 +403,42 @@ describe("Telegram native command built-ins", () => {
     expect(replyMocks.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
   });
 
+  it("does not activate nested agent-model thinking params", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-7" },
+          models: {
+            "anthropic/claude-opus-4-7": { params: { thinking: "low" } },
+          },
+        },
+        entries: {
+          main: {
+            models: {
+              "anthropic/claude-opus-4-7": { params: { thinking: "high" } },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    sessionMocks.sessionStoreEntries.mockReturnValue({});
+
+    const { handler, sendMessage } = registerAndResolveCommandHandler({
+      commandName: "think",
+      cfg,
+      allowFrom: ["*"],
+    });
+    await handler(createTelegramPrivateCommandContext());
+
+    expectSendMessageCall({
+      sendMessage,
+      chatId: 100,
+      textIncludes: "Current thinking level: low.\nChoose level for /think.",
+      requireReplyMarkup: true,
+      label: "default-model thinking menu",
+    });
+  });
+
   it("uses per-agent thinking defaults before target model and global thinking defaults", async () => {
     const cfg = {
       agents: {

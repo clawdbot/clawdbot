@@ -211,6 +211,30 @@ describe("applyExtraParamsToAgent OpenRouter reasoning", () => {
     });
   });
 
+  it("uses the narrower extraBody alias for the emitted Fusion payload", () => {
+    const payload = runExtraParamsPayloadCase({
+      provider: "openrouter",
+      modelId: "fusion",
+      cfg: {
+        agents: {
+          defaults: {
+            params: { extra_body: { plugins: [{ id: "fusion", model: "broad/model" }] } },
+            models: {
+              "openrouter/fusion": {
+                params: { extraBody: { plugins: [{ id: "fusion", model: "narrow/model" }] } },
+              },
+            },
+          },
+        },
+      },
+      payload: { model: "fusion" },
+    });
+
+    expect(payload).toMatchObject({
+      plugins: [{ id: "fusion", model: "narrow/model" }],
+    });
+  });
+
   it("uses configured long retention for OpenRouter Anthropic cache markers", () => {
     const payload = runExtraParamsPayloadCase({
       provider: "openrouter",

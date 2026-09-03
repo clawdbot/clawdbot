@@ -76,6 +76,7 @@ function resolveContextWindowForHint(params: {
     cfg: params.cfg,
     provider: params.ref.provider,
     model: params.ref.model,
+    agentId: params.agentId,
     allowAsyncLoad: false,
   });
   return modelContextTokens ?? sessionContextTokens;

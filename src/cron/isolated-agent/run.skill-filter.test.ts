@@ -729,6 +729,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
         cfg: expect.any(Object),
         provider: "openai",
         model: "gpt-5.4",
+        agentId: "default",
         allowAsyncLoad: false,
       });
     });

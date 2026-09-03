@@ -18,12 +18,14 @@ export function resolveMemoryFlushContextWindowTokens(params: {
   modelId?: string;
   cfg?: OpenClawConfig;
   provider?: string;
+  agentId?: string;
 }): number {
   return (
     resolveContextTokensForModel({
       cfg: params.cfg,
       provider: params.provider,
       model: params.modelId,
+      agentId: params.agentId,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS
   );
@@ -57,6 +59,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   modelId?: string;
+  agentId?: string;
 }): number | undefined {
   const provider = params.provider?.trim();
   const modelId = params.modelId?.trim();
@@ -71,12 +74,13 @@ export function resolveResponsesServerCompactionThreshold(params: {
     models: providerConfig?.models,
     normalizeModelId,
   }).get(normalizeModelId(modelId));
-  const { defaultParams, modelParams } = resolveModelExtraParamSources({
+  const { paramSources } = resolveModelExtraParamSources({
     config: params.cfg,
     provider,
     modelId,
+    agentId: params.agentId,
   });
-  const extraParams = { ...defaultParams, ...modelParams };
+  const extraParams = Object.assign({}, ...paramSources);
   if (normalizedProvider === "anthropic") {
     return resolveAnthropicServerCompactionPlan(
       {
@@ -85,7 +89,12 @@ export function resolveResponsesServerCompactionThreshold(params: {
         baseUrl: configuredModel?.baseUrl ?? providerConfig?.baseUrl,
         contextWindow:
           configuredModel?.contextWindow ??
-          resolveMemoryFlushContextWindowTokens({ cfg: params.cfg, provider, modelId }),
+          resolveMemoryFlushContextWindowTokens({
+            cfg: params.cfg,
+            provider,
+            modelId,
+            agentId: params.agentId,
+          }),
       },
       extraParams,
     ).threshold;
@@ -96,6 +105,7 @@ export function resolveResponsesServerCompactionThreshold(params: {
     cfg: params.cfg,
     provider,
     modelId,
+    agentId: params.agentId,
   });
   return resolveOpenAIResponsesServerCompactionPlan(
     {

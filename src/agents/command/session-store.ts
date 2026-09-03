@@ -14,6 +14,7 @@ import { projectSessionSnapshotChanges } from "../../config/sessions/session-sna
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
@@ -97,6 +98,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
           cfg,
           provider: providerUsed,
           model: modelUsed,
+          agentId: resolveAgentIdFromSessionKey(sessionKey),
           fallbackContextTokens: DEFAULT_CONTEXT_TOKENS,
           allowAsyncLoad: false,
         }) ?? DEFAULT_CONTEXT_TOKENS);

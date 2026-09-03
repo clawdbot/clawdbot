@@ -69,6 +69,33 @@ function buildHostConfig(params: {
 }
 
 describe("Responses server compaction host/transport parity", () => {
+  it("does not activate a nested agent-model compaction threshold", () => {
+    const modelRef = modelKey("openai", TEST_MODEL_ID);
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { responsesCompactThreshold: 120_000 },
+        },
+        entries: {
+          audit: {
+            models: {
+              [modelRef]: { params: { responsesCompactThreshold: 175_000 } },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveResponsesServerCompactionThreshold({
+        cfg,
+        provider: "openai",
+        modelId: TEST_MODEL_ID,
+        agentId: "audit",
+      }),
+    ).toBe(120_000);
+  });
+
   it.each([
     {
       name: "OpenAI default route without an authored base URL",
@@ -277,5 +304,34 @@ describe("Anthropic server compaction host threshold", () => {
         modelId,
       }),
     ).toBe(expected);
+  });
+
+  it("uses the resolved Anthropic context window for the fallback threshold", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          params: { anthropicServerCompaction: true },
+          models: {
+            "anthropic/claude-opus-4-7": { params: { context1m: false } },
+          },
+        },
+        entries: {
+          audit: {
+            models: {
+              "anthropic/claude-opus-4-7": { params: { context1m: true } },
+            },
+          },
+        },
+      },
+    };
+
+    expect(
+      resolveResponsesServerCompactionThreshold({
+        cfg,
+        provider: "anthropic",
+        modelId: "claude-opus-4-7",
+        agentId: "audit",
+      }),
+    ).toBe(700_000);
   });
 });

@@ -922,71 +922,71 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
-        try {
-          const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
-            await import("openclaw/plugin-sdk/provider-auth-runtime");
-          const runtimeAuth = await resolveApiKeyForProvider({
-            provider: PROVIDER_ID,
-            cfg: ctx.config,
-            ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-            ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
-            ...(auth.profileId
-              ? {
-                  profileId: auth.profileId,
-                  lockedProfile: true,
-                }
-              : {}),
-          });
-          if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
-            const metadata = resolveProviderAuthProfileMetadata({
+        const selectedApiKey =
+          auth.mode === "api_key" && auth.apiKey
+            ? {
+                apiKey: auth.apiKey,
+                discoveryApiKey: auth.discoveryApiKey,
+                profileId: auth.profileId,
+              }
+            : undefined;
+        // Catalog auth is already selected. Re-resolving an explicit API key
+        // would let an unrelated OAuth profile replace its account and models.
+        if (auth.mode !== "api_key") {
+          try {
+            const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
+              await import("openclaw/plugin-sdk/provider-auth-runtime");
+            const runtimeAuth = await resolveApiKeyForProvider({
               provider: PROVIDER_ID,
               cfg: ctx.config,
               ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
-              ...((runtimeAuth.profileId ?? auth.profileId)
-                ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+              ...(ctx.workspaceDir ? { workspaceDir: ctx.workspaceDir } : {}),
+              ...(auth.profileId
+                ? {
+                    profileId: auth.profileId,
+                    lockedProfile: true,
+                  }
                 : {}),
             });
-            const catalog = scopeOpenAICatalogOutcome(
-              await buildOpenAICodexLiveProviderConfig({
-                discoveryApiKey: runtimeAuth.apiKey,
-                accountId: metadata.accountId,
-              }),
-              runtimeAuth.profileId ?? auth.profileId,
-            );
-            return {
-              providers: { [PROVIDER_ID]: catalog.provider },
-              ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
-            };
+            if (runtimeAuth && isCodexCatalogAuthMode(runtimeAuth.mode) && runtimeAuth.apiKey) {
+              const metadata = resolveProviderAuthProfileMetadata({
+                provider: PROVIDER_ID,
+                cfg: ctx.config,
+                ...(ctx.agentDir ? { agentDir: ctx.agentDir } : {}),
+                ...((runtimeAuth.profileId ?? auth.profileId)
+                  ? { profileId: runtimeAuth.profileId ?? auth.profileId }
+                  : {}),
+              });
+              const catalog = scopeOpenAICatalogOutcome(
+                await buildOpenAICodexLiveProviderConfig({
+                  discoveryApiKey: runtimeAuth.apiKey,
+                  accountId: metadata.accountId,
+                }),
+                runtimeAuth.profileId ?? auth.profileId,
+              );
+              return {
+                providers: { [PROVIDER_ID]: catalog.provider },
+                ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+              };
+            }
+          } catch {
+            // OAuth discovery is advisory; fall through so configured API-key
+            // auth can still publish the standard OpenAI catalog.
           }
-        } catch {
-          // OAuth discovery is advisory; fall through so configured API-key
-          // auth can still publish the standard OpenAI catalog.
         }
-        if (auth.mode === "api_key" && auth.apiKey) {
-          const catalog = scopeOpenAICatalogOutcome(
-            await buildOpenAILiveProviderConfig({
-              apiKey: auth.apiKey,
-              baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-              discoveryApiKey: auth.discoveryApiKey,
-              rejectionScope: resolveOpenAICatalogRejectionScope(auth),
-            }),
-            auth.profileId,
-          );
-          return {
-            providers: { [PROVIDER_ID]: catalog.provider },
-            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
-          };
-        }
-        const apiKey = ctx.resolveProviderApiKey(PROVIDER_ID);
+        const apiKey = selectedApiKey ?? ctx.resolveProviderApiKey(PROVIDER_ID);
         if (!apiKey.apiKey) {
           return null;
         }
-        const catalog = await buildOpenAILiveProviderConfig({
-          apiKey: apiKey.apiKey,
-          baseUrl: resolveOpenAICatalogBaseUrl(ctx),
-          discoveryApiKey: apiKey.discoveryApiKey,
-          rejectionScope: resolveOpenAICatalogRejectionScope(apiKey),
-        });
+        const catalog = scopeOpenAICatalogOutcome(
+          await buildOpenAILiveProviderConfig({
+            apiKey: apiKey.apiKey,
+            baseUrl: resolveOpenAICatalogBaseUrl(ctx),
+            discoveryApiKey: apiKey.discoveryApiKey,
+            rejectionScope: resolveOpenAICatalogRejectionScope(apiKey),
+          }),
+          selectedApiKey?.profileId,
+        );
         return {
           providers: { [PROVIDER_ID]: catalog.provider },
           ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
@@ -1038,7 +1038,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
     },
     ...responsesHooks,
     prepareExtraParams: (ctx) => {
-      const providerConfig = ctx.config?.models?.providers?.[PROVIDER_ID];
+      const providerConfig = resolveAuthoredOpenAIConfigRoute({
+        provider: ctx.provider,
+        modelId: ctx.modelId,
+        config: ctx.config,
+      })?.configuredProvider;
       const useCodexTransport =
         shouldUseCodexResponsesHooks({
           provider: ctx.provider,

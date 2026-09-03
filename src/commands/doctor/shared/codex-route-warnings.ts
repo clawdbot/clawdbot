@@ -6,6 +6,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   isAgentRuntimeModelParam,
+  resolveEffectiveModelExtraParams,
   resolveModelExtraParamSources,
 } from "../../../agents/model-extra-params.js";
 import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
@@ -220,43 +221,35 @@ function collectCodexModelParamHits(
       serviceTiers.length > 0 &&
       serviceTiers.every((configured) => normalizeString(configured) === "priority") &&
       modelUsesCodexForEveryAgent(cfg, route.canonicalModel);
-    const paramSources = [
-      { params: sources.defaultParams, path: "agents.defaults.params", modelScoped: false },
-      {
-        params: modelParams,
-        path: `agents.defaults.models.${route.canonicalModel}.params`,
-        modelScoped: true,
-      },
-      ...(route.agentId
-        ? [
-            {
-              params: sources.agentParams,
-              path: `${agentPaths.get(route.agentId) ?? `agents.entries.${route.agentId}`}.params`,
-              modelScoped: false,
-            },
-          ]
-        : []),
+    const agentPath = route.agentId
+      ? (agentPaths.get(route.agentId) ?? `agents.entries.${route.agentId}`)
+      : undefined;
+    const sourcePaths = [
+      "agents.defaults.params",
+      `agents.defaults.models.${route.canonicalModel}.params`,
+      agentPath ? `${agentPath}.params` : undefined,
     ];
-    for (const source of paramSources) {
-      for (const [key, paramValue] of Object.entries(source.params ?? {})) {
-        if (source.modelScoped && isAgentRuntimeModelParam(key, paramValue)) {
-          continue;
-        }
-        const path = `${source.path}.${key}`;
-        if (seen.has(path)) {
-          continue;
-        }
-        seen.add(path);
-        hits.push({
-          key,
-          path,
-          modelRef: route.canonicalModel,
-          removable:
-            source.modelScoped &&
-            canRemoveServiceTier &&
-            SERVICE_TIER_PARAM_KEYS.some((alias) => alias === key),
-        });
+    for (const { key, effectiveKey, value, sourceIndex } of resolveEffectiveModelExtraParams(
+      sources,
+    )) {
+      const sourcePath = sourcePaths[sourceIndex];
+      if (!sourcePath || (sourceIndex === 1 && isAgentRuntimeModelParam(effectiveKey, value))) {
+        continue;
       }
+      const path = `${sourcePath}.${key}`;
+      if (seen.has(path)) {
+        continue;
+      }
+      seen.add(path);
+      hits.push({
+        key,
+        path,
+        modelRef: route.canonicalModel,
+        removable:
+          sourceIndex === 1 &&
+          canRemoveServiceTier &&
+          SERVICE_TIER_PARAM_KEYS.some((alias) => alias === key),
+      });
     }
   }
   return hits;

@@ -6032,6 +6032,45 @@ test("sessions.create retains the 100K fallback when only another provider has m
   }
 });
 
+test("sessions.create uses the child agent context cap for an explicit fork", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.sessionConfig = { scope: "per-sender" };
+  testState.agentsConfig = {
+    list: [
+      { id: "main", default: true },
+      {
+        id: "research",
+        model: "claude-cli/claude-opus-4-7",
+        params: { context1m: true },
+      },
+    ],
+  };
+  const parent = await createCheckpointFixture(dir);
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(parent.sessionId, {
+        sessionFile: parent.sessionFile,
+        totalTokens: 200_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      }),
+    },
+  });
+
+  try {
+    const created = await directSessionReq("sessions.create", {
+      agentId: "research",
+      parentSessionKey: "agent:main:main",
+      fork: true,
+    });
+
+    expect(created.ok, JSON.stringify(created.error)).toBe(true);
+  } finally {
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = undefined;
+  }
+});
+
 test("sessions.create admits an explicit fork within the child model context window", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };

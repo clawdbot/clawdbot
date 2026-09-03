@@ -143,6 +143,7 @@ export function buildDiscordCommandOptions(params: {
             cfg: currentCfg,
             provider: context?.provider,
             model: context?.model,
+            agentId: context?.agentId,
             agentRuntime: context?.agentRuntime,
             ...(choiceCatalog?.length ? { catalog: choiceCatalog } : {}),
           });

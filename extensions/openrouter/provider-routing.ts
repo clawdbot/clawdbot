@@ -1,13 +1,15 @@
 // Openrouter provider module implements model/runtime integration.
+import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
+import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+
+type OpenRouterProviderConfig = {
+  params?: Record<string, unknown>;
+};
+
 type OpenRouterExtraParamsContext = {
   config?: {
     models?: {
-      providers?: Record<
-        string,
-        {
-          params?: Record<string, unknown>;
-        }
-      >;
+      providers?: Record<string, OpenRouterProviderConfig>;
     };
   };
   extraParams: Record<string, unknown>;
@@ -48,6 +50,37 @@ function readRecord(value: unknown): Record<string, unknown> | undefined {
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
+function resolveOpenRouterProviderConfigParams(
+  ctx: OpenRouterExtraParamsContext,
+): Record<string, unknown> | undefined {
+  const requestedProvider = ctx.provider.trim();
+  const normalizedProvider = normalizeProviderId(requestedProvider);
+  if (!normalizedProvider) {
+    return undefined;
+  }
+
+  const providers = Object.entries(ctx.config?.models?.providers ?? {});
+  // Preserve routing split across normalized duplicates. Merge aliases in stable
+  // raw-key order, then exact-key rows so config insertion order cannot decide conflicts.
+  const matchedProviders = providers.filter(
+    ([provider]) => normalizeProviderId(provider) === normalizedProvider,
+  );
+  matchedProviders.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0));
+  const prioritizedProviders = [
+    ...matchedProviders.filter(([provider]) => provider.trim() !== requestedProvider),
+    ...matchedProviders.filter(([provider]) => provider.trim() === requestedProvider),
+  ];
+  let matchedParams: Record<string, unknown> | undefined;
+  for (const [, config] of prioritizedProviders) {
+    const params = readRecord(config.params);
+    if (params) {
+      // SAFETY: both inputs are sanitized plain records, so the recursive merge remains a record.
+      matchedParams = mergeDeep(matchedParams ?? {}, params) as Record<string, unknown>;
+    }
+  }
+  return matchedParams;
+}
+
 function mergeOpenRouterProviderRouting(params: {
   providerParams?: Record<string, unknown>;
   modelParams?: Record<string, unknown>;
@@ -67,7 +100,7 @@ function mergeOpenRouterProviderRouting(params: {
 export function resolveOpenRouterExtraParamsForTransport(
   ctx: OpenRouterExtraParamsContext,
 ): { patch?: Record<string, unknown> } | undefined {
-  const providerConfigParams = readRecord(ctx.config?.models?.providers?.[ctx.provider]?.params);
+  const providerConfigParams = resolveOpenRouterProviderConfigParams(ctx);
   const modelParams = readRecord(ctx.model?.params);
   const providerRouting = mergeOpenRouterProviderRouting({
     providerParams: providerConfigParams,

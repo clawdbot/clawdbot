@@ -463,6 +463,12 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("scopes the OpenAI API-key catalog to the OpenAI provider id", async () => {
+    mocks.resolveApiKeyForProvider.mockResolvedValue({
+      mode: "oauth",
+      apiKey: "synthetic-oauth-token",
+      source: "profile:openai:chatgpt",
+      profileId: "openai:chatgpt",
+    });
     const provider = buildOpenAIProvider();
     const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       Response.json({
@@ -472,7 +478,6 @@ describe("buildOpenAIProvider", () => {
 
     try {
       const result = await provider.catalog?.run({
-        providerIds: ["openai"],
         resolveProviderAuth: () => ({
           mode: "api_key",
           apiKey: "sk-openai",
@@ -486,6 +491,8 @@ describe("buildOpenAIProvider", () => {
       }
       expect(Object.keys(result.providers)).toEqual(["openai"]);
       expect(result.providers.openai?.apiKey).toBe("sk-openai");
+      expect(mocks.resolveApiKeyForProvider).not.toHaveBeenCalled();
+      expect(mocks.resolveProviderAuthProfileMetadata).not.toHaveBeenCalled();
       expect(fetchSpy).toHaveBeenCalledOnce();
       const fetchInit = fetchSpy.mock.calls[0]?.[1];
       const headers = fetchInit?.headers;

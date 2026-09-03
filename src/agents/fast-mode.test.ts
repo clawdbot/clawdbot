@@ -119,6 +119,43 @@ describe("resolveFastModeState", () => {
     expect(state.source).toBe("config");
   });
 
+  it("uses only selected-model params for native fast controls", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          params: { fast_mode: false, fast_seconds: 90 },
+          models: {
+            "openai/gpt-5.5": { params: { fastMode: true, fastAutoOnSeconds: 60 } },
+          },
+        },
+        entries: {
+          audit: {
+            params: { fastMode: false, fastAutoOnSeconds: 30 },
+            models: {
+              "openai/gpt-5.5": {
+                params: { fast_mode: "auto", fast_seconds: 15 },
+              },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = resolveFastModeState({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.5",
+      agentId: "audit",
+    });
+
+    expect(state).toMatchObject({
+      mode: true,
+      enabled: true,
+      source: "config",
+      fastAutoOnSeconds: 60,
+    });
+  });
+
   it("formats auto mode with the default threshold", () => {
     expect(formatFastModeAutoLabel()).toBe("auto (60 sec)");
     expect(formatFastModeStatusValue({ mode: "auto" })).toBe("auto (60 sec)");
@@ -163,9 +200,10 @@ describe("resolveFastModeState", () => {
   });
 
   it.each([
-    ["fastSeconds", { fastSeconds: 15 }],
-    ["fast_seconds", { fast_seconds: 15 }],
-  ])("uses model %s alias for auto cutoff", (_label, params) => {
+    ["fastSeconds", { fastSeconds: 15 }, 15],
+    ["fast_seconds", { fast_seconds: 15 }, 15],
+    ["fast_auto_on_seconds before fastSeconds", { fast_auto_on_seconds: 20, fastSeconds: 15 }, 20],
+  ])("uses model %s alias for auto cutoff", (_label, params, expected) => {
     const cfg = {
       agents: {
         defaults: {
@@ -184,7 +222,7 @@ describe("resolveFastModeState", () => {
 
     expect(state.mode).toBe("auto");
     expect(state.source).toBe("config");
-    expect(state.fastAutoOnSeconds).toBe(15);
+    expect(state.fastAutoOnSeconds).toBe(expected);
   });
 
   it("uses model config when the runtime passes a provider-qualified model ref", () => {

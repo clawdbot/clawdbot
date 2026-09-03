@@ -321,6 +321,7 @@ export async function executeTelegramBuiltinCommand(
         command: commandDefinition,
         args: commandArgs,
         cfg: dispatch.runtimeCfg,
+        agentId: dispatch.route.agentId,
         ...menuModelContext,
         ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
       })

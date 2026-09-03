@@ -441,12 +441,12 @@ describe("collectCodexRouteWarnings", () => {
       agents: {
         defaults: {
           model: "openai/gpt-5.6-sol",
-          params: { temperature: 0.7 },
+          params: { temperature: 0.7, thinking: "high" },
           models: {
             "openai/gpt-5.6-sol": {
               params: {
                 fastMode: true,
-                fast_mode: false,
+                fast_mode: { providerNative: "enabled" },
                 serviceTier: "priority",
                 temperature: 0.2,
               },
@@ -459,7 +459,19 @@ describe("collectCodexRouteWarnings", () => {
           },
         },
         entries: {
-          coder: { params: { topP: 0.8 } },
+          coder: {
+            params: {
+              topP: 0.8,
+              fastMode: { enabled: true },
+              fastAutoOnSeconds: 30,
+              temperature: 0.6,
+            },
+            models: {
+              "openai/gpt-5.6-sol": {
+                params: { fast_mode: true, temperature: 0.1, thinking: "medium", topK: 40 },
+              },
+            },
+          },
           worker: {
             models: {
               "openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
@@ -476,11 +488,30 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.warnings.join("\n")).toContain(
       "agents.defaults.models.openai/gpt-5.6-sol.params.serviceTier",
     );
-    expect(result.warnings.join("\n")).toContain(
+    expect(result.warnings.join("\n")).not.toContain(
       "agents.defaults.models.openai/gpt-5.6-sol.params.temperature",
     );
-    expect(result.warnings.join("\n")).toContain("agents.defaults.params.temperature");
+    expect(result.warnings.join("\n")).toContain(
+      "agents.defaults.models.openai/gpt-5.6-sol.params.fast_mode",
+    );
+    expect(result.warnings.join("\n")).not.toContain(
+      "agents.defaults.models.openai/gpt-5.6-sol.params.fastMode",
+    );
+    expect(result.warnings.join("\n")).not.toContain("agents.defaults.params.temperature");
     expect(result.warnings.join("\n")).toContain("agents.entries.coder.params.topP");
+    expect(result.warnings.join("\n")).not.toContain(
+      "agents.entries.coder.models.openai/gpt-5.6-sol.params.temperature",
+    );
+    expect(result.warnings.join("\n")).not.toContain(
+      "agents.entries.coder.models.openai/gpt-5.6-sol.params.topK",
+    );
+    expect(result.warnings.join("\n")).toContain("agents.entries.coder.params.temperature");
+    expect(result.warnings.join("\n")).toContain("agents.defaults.params.thinking");
+    expect(result.warnings.join("\n")).toContain("agents.entries.coder.params.fastAutoOnSeconds");
+    expect(result.warnings.join("\n")).toContain("agents.entries.coder.params.fastMode");
+    expect(result.warnings.join("\n")).not.toContain(
+      "agents.entries.coder.models.openai/gpt-5.6-sol.params.thinking",
+    );
     expect(result.warnings.join("\n")).not.toContain("gpt-5.6-openclaw.params.serviceTier");
   });
 

@@ -1,7 +1,7 @@
 /** Shared command registry builders used by browser-safe and runtime command lists. */
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";
-import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";
+import { formatFastModeAutoLabel } from "../shared/fast-mode.js";
 import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";
 import type {
   ChatCommandDefinition,
@@ -518,14 +518,12 @@ export function buildBuiltinChatCommands(
     defineBuiltinCommand("fast", "Toggle fast mode.", "options", "standard", {
       args: [
         defineCommandArgument("mode", "on, off, auto, default, or status", {
-          choices: ({ cfg, provider, model }) => [
+          choices: ({ fastAutoOnSeconds }) => [
             "on",
             "off",
             {
               value: "auto",
-              label: formatFastModeAutoLabel({
-                fastAutoOnSeconds: resolveFastModeModelAutoOnSeconds({ cfg, provider, model }),
-              }),
+              label: formatFastModeAutoLabel({ fastAutoOnSeconds }),
             },
             "default",
             "status",

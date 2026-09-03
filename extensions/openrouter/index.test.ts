@@ -515,6 +515,7 @@ describe("openrouter provider hooks", () => {
       provider: "openrouter",
       modelId: "openrouter/fusion",
       promptMode: "full",
+      agentId: "analyst",
       config: {
         agents: {
           defaults: {
@@ -525,9 +526,22 @@ describe("openrouter provider hooks", () => {
                     plugins: [
                       {
                         id: "fusion",
-                        analysis_models: ["deepseek/deepseek-v4-pro"],
+                        analysis_models: ["default/model"],
                       },
                     ],
+                  },
+                },
+              },
+            },
+          },
+          entries: {
+            analyst: {
+              models: {
+                "openrouter/fusion": {
+                  params: {
+                    extraBody: {
+                      plugins: [{ id: "fusion", analysis_models: ["agent/model"] }],
+                    },
                   },
                 },
               },
@@ -537,7 +551,8 @@ describe("openrouter provider hooks", () => {
       },
     } as never);
 
-    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
+    expect(contribution?.dynamicSuffix).toContain("Analysis models: default/model.");
+    expect(contribution?.dynamicSuffix).not.toContain("agent/model");
   });
 
   it("matches transport alias precedence for Fusion extra body", async () => {
@@ -578,8 +593,32 @@ describe("openrouter provider hooks", () => {
       },
     } as never);
 
-    expect(contribution?.dynamicSuffix).toContain("Analysis models: google/gemini-3.5-flash.");
-    expect(contribution?.dynamicSuffix).not.toContain("deepseek/deepseek-v4-pro");
+    expect(contribution?.dynamicSuffix).toContain("Analysis models: deepseek/deepseek-v4-pro.");
+    expect(contribution?.dynamicSuffix).not.toContain("google/gemini-3.5-flash");
+  });
+
+  it("omits Fusion prompt details when a narrower scope disables extra body", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const contribution = provider.resolveSystemPromptContribution?.({
+      provider: "openrouter",
+      modelId: "openrouter/fusion",
+      promptMode: "full",
+      agentId: "analyst",
+      config: {
+        agents: {
+          defaults: {
+            params: {
+              extra_body: {
+                plugins: [{ id: "fusion", analysis_models: ["default/model"] }],
+              },
+            },
+          },
+          entries: { analyst: { params: { extraBody: null } } },
+        },
+      },
+    } as never);
+
+    expect(contribution).toBeUndefined();
   });
 
   it("reads per-agent Fusion config from the canonical agent roster", async () => {
@@ -1009,16 +1048,26 @@ describe("openrouter provider hooks", () => {
                   sort: "price",
                   data_collection: "deny",
                 },
+                frequencyPenalty: 0.3,
+              },
+            },
+            " OpenRouter ": {
+              params: {
+                provider: {
+                  sort: "throughput",
+                  allow_fallbacks: false,
+                },
+                frequencyPenalty: 0.1,
+                topK: 40,
               },
             },
           },
         },
       },
-      provider: "openrouter",
+      provider: " openrouter ",
       modelId: "openai/gpt-5.4",
       extraParams: {
         provider: {
-          sort: "latency",
           require_parameters: true,
         },
         temperature: 0.2,
@@ -1040,11 +1089,58 @@ describe("openrouter provider hooks", () => {
 
     expect(patch?.responseCache).toBe(true);
     expect(patch?.temperature).toBe(0.2);
+    expect(patch?.frequencyPenalty).toBe(0.3);
+    expect(patch?.topK).toBe(40);
     expect(patch?.provider).toEqual({
-      sort: "latency",
+      sort: "price",
       data_collection: "deny",
+      allow_fallbacks: false,
       order: ["openai"],
       require_parameters: true,
+    });
+  });
+
+  it("orders normalized OpenRouter alias conflicts independently of insertion", async () => {
+    const provider = await registerSingleProviderPlugin(openrouterPlugin);
+    const aliases = [
+      [
+        "OpenRouter",
+        {
+          params: {
+            topK: 40,
+            provider: { sort: "price" },
+          },
+        },
+      ],
+      [
+        " OPENROUTER ",
+        {
+          params: {
+            topK: 20,
+            provider: { sort: "throughput", data_collection: "deny" },
+          },
+        },
+      ],
+    ] as const;
+    const resolve = (entries: ReadonlyArray<(typeof aliases)[number]>) =>
+      provider.extraParamsForTransport?.({
+        config: { models: { providers: Object.fromEntries(entries) } },
+        provider: " openrouter ",
+        modelId: "openai/gpt-5.4",
+        extraParams: {},
+        transport: "sse",
+      } as never)?.patch;
+
+    const forward = resolve(aliases);
+    const reverse = resolve(aliases.toReversed());
+
+    expect(reverse).toEqual(forward);
+    expect(forward).toEqual({
+      topK: 40,
+      provider: {
+        sort: "price",
+        data_collection: "deny",
+      },
     });
   });
 

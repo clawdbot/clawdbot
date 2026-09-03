@@ -7,6 +7,7 @@ export function resolveContextTokens(params: {
   cfg: OpenClawConfig;
   provider: string;
   model: string;
+  agentId?: string;
   modelContextWindow?: number;
   modelContextTokens?: number;
 }): number {
@@ -15,6 +16,7 @@ export function resolveContextTokens(params: {
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
+      agentId: params.agentId,
       modelContextWindow: params.modelContextWindow,
       modelContextTokens: params.modelContextTokens,
       allowAsyncLoad: false,

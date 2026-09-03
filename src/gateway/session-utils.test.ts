@@ -1050,6 +1050,25 @@ describe("gateway session utils", () => {
     expect(row.contextWindows).toEqual(catalog[0]?.contextWindows);
   });
 
+  test("session defaults ignore nested agent-model params", () => {
+    const cfg = {
+      agents: {
+        defaults: { params: { context1m: false } },
+        list: [
+          {
+            id: "reviewer",
+            model: "claude-cli/claude-opus-4-7",
+            models: {
+              "claude-cli/claude-opus-4-7": { params: { context1m: true } },
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    expect(getSessionDefaults(cfg, undefined, { agentId: "reviewer" }).contextTokens).toBe(200_000);
+  });
+
   test("session rows project automation bindings and event fields forward them", () => {
     const cfg = createModelDefaultsConfig({ primary: "openai/gpt-5.4" });
     registerSessionAutomationSource({

@@ -375,6 +375,7 @@ export function buildGatewaySessionRow(params: {
       cfg,
       provider: rowModelProvider,
       model: rowModel,
+      agentId: sessionAgentId,
       modelContextTokens: catalogEntry?.contextTokens,
       modelContextWindow: contextWindowProfile.contextTokens,
       allowAsyncLoad: false,

@@ -139,6 +139,43 @@ describe("resolveExtraParams", () => {
     });
   });
 
+  it("does not activate nested agent-model params as request precedence", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          defaults: {
+            params: { temperature: 0.9, topP: 0.9, cacheRetention: "long" },
+            models: {
+              "anthropic/claude-sonnet-4-6": {
+                params: { temperature: 0.8, topP: 0.8, maxTokens: 2048 },
+              },
+            },
+          },
+          entries: {
+            audit: {
+              params: { temperature: 0.7, cacheRetention: "none" },
+              models: {
+                "anthropic/claude-sonnet-4-6": {
+                  params: { temperature: 0.2, topP: 0.3, maxTokens: 321 },
+                },
+              },
+            },
+          },
+        },
+      },
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      agentId: "audit",
+    });
+
+    expect(result).toEqual({
+      temperature: 0.7,
+      topP: 0.8,
+      maxTokens: 2048,
+      cacheRetention: "none",
+    });
+  });
+
   it("preserves higher-precedence agent parallelToolCalls override across alias styles", () => {
     // Canonicalization must happen after precedence resolution, or a broad
     // snake_case value can overwrite the agent's camelCase override.
@@ -241,6 +278,32 @@ describe("resolveExtraParams", () => {
     expect(result).toEqual({
       parallel_tool_calls: true,
       response_format: { type: "json_object" },
+      text_verbosity: "low",
+    });
+  });
+
+  it("does not let nested agent-model aliases override request params", () => {
+    const result = resolveExtraParams({
+      cfg: {
+        agents: {
+          entries: {
+            audit: {
+              params: { maxTokens: 100 },
+              models: {
+                "openai/gpt-5.6-sol": { params: { max_tokens: 200 } },
+              },
+            },
+          },
+        },
+      },
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      agentId: "audit",
+    });
+
+    expect(result).toEqual({
+      maxTokens: 100,
+      parallel_tool_calls: true,
       text_verbosity: "low",
     });
   });

@@ -2,6 +2,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { resolveFastModeState } from "../agents/fast-mode.js";
 import {
   buildConfiguredModelCatalog,
   resolveConfiguredModelRef,
@@ -361,6 +362,7 @@ export function resolveCommandArgChoices(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentId?: string;
   agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
 }): ResolvedCommandArgChoice[] {
@@ -373,11 +375,19 @@ export function resolveCommandArgChoices(params: {
     ? provided
     : (() => {
         const defaults = resolveDefaultCommandContext(cfg);
+        const provider = params.provider ?? defaults.provider;
+        const model = params.model ?? defaults.model;
         const context: CommandArgChoiceContext = {
           cfg,
-          provider: params.provider ?? defaults.provider,
-          model: params.model ?? defaults.model,
+          provider,
+          model,
+          agentId: params.agentId,
           agentRuntime: params.agentRuntime,
+          fastAutoOnSeconds:
+            command.key === "fast"
+              ? resolveFastModeState({ cfg, provider, model, agentId: params.agentId })
+                  .fastAutoOnSeconds
+              : undefined,
           catalog: params.catalog ?? (cfg ? buildConfiguredModelCatalog({ cfg }) : undefined),
           command,
           arg,
@@ -396,10 +406,11 @@ export function resolveCommandArgMenu(params: {
   cfg?: OpenClawConfig;
   provider?: string;
   model?: string;
+  agentId?: string;
   agentRuntime?: string;
   catalog?: ThinkingCatalogEntry[];
 }): { arg: CommandArgDefinition; choices: ResolvedCommandArgChoice[]; title?: string } | null {
-  const { command, args, cfg, provider, model, agentRuntime, catalog } = params;
+  const { command, args, cfg, provider, model, agentId, agentRuntime, catalog } = params;
   if (!command.args || !command.argsMenu) {
     return null;
   }
@@ -418,6 +429,7 @@ export function resolveCommandArgMenu(params: {
               cfg,
               provider,
               model,
+              agentId,
               agentRuntime,
               catalog: resolvedCatalog,
             }).length > 0,
@@ -442,6 +454,7 @@ export function resolveCommandArgMenu(params: {
     cfg,
     provider,
     model,
+    agentId,
     agentRuntime,
     catalog: resolvedCatalog,
   });

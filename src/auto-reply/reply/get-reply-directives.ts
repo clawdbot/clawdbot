@@ -512,6 +512,7 @@ export async function resolveReplyDirectives(params: {
         cfg,
         provider,
         model,
+        agentId,
         modelContextWindow: modelState.modelContextWindow,
         modelContextTokens: modelState.modelContextTokens,
       });

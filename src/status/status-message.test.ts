@@ -249,6 +249,31 @@ describe("buildStatusMessage cost snapshot", () => {
 });
 
 describe("buildStatusMessage context window", () => {
+  it("uses the selected agent context override", () => {
+    const text = buildStatusMessage({
+      config: {
+        agents: {
+          defaults: { model: "claude-cli/claude-opus-4-7" },
+          entries: { research: { params: { context1m: true } } },
+        },
+      },
+      agent: { model: "claude-cli/claude-opus-4-7" },
+      agentId: "research",
+      sessionEntry: {
+        sessionId: "agent-context-window",
+        updatedAt: 0,
+        totalTokens: 11,
+        totalTokensFresh: true,
+        totalTokensVersion: SESSION_TOTAL_TOKENS_VERSION,
+      },
+      sessionKey: "agent:research:main",
+      sessionScope: "per-sender",
+      queue: { mode: "steer", depth: 0 },
+    });
+
+    expect(text).toContain("Context: 11/1.0m");
+  });
+
   it("rejects a stale runtime window after a same-model harness change", () => {
     const text = buildStatusMessage({
       config: {
