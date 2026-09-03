@@ -61,7 +61,7 @@ function createIdentity() {
   return {
     deviceId: sha256(rawPublicKey),
     publicKey: rawPublicKey.toString("base64url"),
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
     instanceId: WATCH_CLIENT.instanceId,
   };
 }
@@ -264,7 +264,7 @@ async function main() {
   throw new Error(`unknown watchOS direct-node command: ${command ?? "<missing>"}`);
 }
 
-main().catch((error) => {
+main().catch((/** @type {unknown} */ error) => {
   console.error(error instanceof Error ? error.stack : String(error));
   console.error("[watchos-direct-node] FAILED (exit 1)");
   process.exitCode = 1;

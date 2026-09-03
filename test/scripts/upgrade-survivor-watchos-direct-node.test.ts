@@ -74,7 +74,9 @@ describe.skipIf(process.platform === "win32")(
         response.statusCode = 404;
         response.end();
       });
-      await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+      await new Promise<void>((resolveListen) => {
+        server.listen(0, "127.0.0.1", resolveListen);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("failed to bind watch fixture");
@@ -121,11 +123,16 @@ describe.skipIf(process.platform === "win32")(
           "candidate",
         ]);
       } finally {
-        await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        await new Promise<void>((resolveClose) => {
+          server.close(() => resolveClose());
+        });
       }
 
       expect(requests).toHaveLength(2);
       const [bootstrap, reconnect] = requests;
+      if (!bootstrap || !reconnect) {
+        throw new Error("watch fixture omitted bootstrap or reconnect request");
+      }
       expect(bootstrap).toMatchObject({
         minProtocol: 4,
         maxProtocol: 4,
@@ -305,7 +312,9 @@ describe.skipIf(process.platform === "win32")(
         response.statusCode = 404;
         response.end();
       });
-      await new Promise<void>((resolveListen) => server.listen(0, "127.0.0.1", resolveListen));
+      await new Promise<void>((resolveListen) => {
+        server.listen(0, "127.0.0.1", resolveListen);
+      });
       const address = server.address();
       if (!address || typeof address === "string") {
         throw new Error("failed to bind watch fixture");
@@ -345,7 +354,9 @@ describe.skipIf(process.platform === "win32")(
           "restart",
         ]);
       } finally {
-        await new Promise<void>((resolveClose) => server.close(() => resolveClose()));
+        await new Promise<void>((resolveClose) => {
+          server.close(() => resolveClose());
+        });
       }
 
       expect(authenticatedTokens).toEqual([retainedToken, rotatedToken]);
