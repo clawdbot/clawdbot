@@ -1,4 +1,3 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -50,11 +49,7 @@ const boardSnapshot = {
 
 suite.define(() => {
   it("opens a responsive gallery card in its owning chat with the dashboard expanded", async () => {
-    const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-gallery");
-    if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
+    const proofDir = process.env.OPENCLAW_UI_E2E_RECORD === "1" ? suite.artifactDir : null;
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       viewport: { width: 1440, height: 900 },
@@ -101,7 +96,7 @@ suite.define(() => {
       expect(await releaseCard.locator("a").getAttribute("href")).toBe(
         "/chat/main/release-health-12345678?dashboard=expanded",
       );
-      if (recordProof) {
+      if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "01-gallery.png") });
       }
 
@@ -110,20 +105,20 @@ suite.define(() => {
       await page.locator(".board-session-surface").waitFor();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
       await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
-      if (recordProof) {
+      if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "02-expanded-dashboard.png") });
       }
 
       await page.getByRole("button", { name: "Collapse", exact: true }).click();
       await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
-      if (recordProof) {
+      if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "03-split-dashboard.png") });
       }
       await page.locator(".side-panel__minimize").click();
       await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
-      if (recordProof) {
+      if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "04-chat-only.png") });
       }
 
@@ -146,7 +141,7 @@ suite.define(() => {
               getComputedStyle(element).gridTemplateColumns.split(" ").filter(Boolean).length,
           ),
       ).toBe(1);
-      if (recordProof) {
+      if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
       }
     } finally {
