@@ -50,7 +50,7 @@ suite.define(() => {
       const unreadDot = unreadRow.locator(".session-unread-dot");
       await unreadRow.waitFor({ state: "visible", timeout: 10_000 });
       await unreadDot.waitFor({ state: "visible" });
-      await captureUiProof(page, "optimistic-read-before.png");
+      await captureUiProof(suite, page, "optimistic-read-before.png");
       const listRequestsBefore = (await gateway.getRequests("sessions.list")).length;
       const patchRequestsBefore = (await gateway.getRequests("sessions.patch")).length;
 
@@ -64,13 +64,13 @@ suite.define(() => {
       await unreadDot.waitFor({ state: "hidden", timeout: 2_000 });
       expect((await gateway.getRequests("sessions.patch")).length - patchRequestsBefore).toBe(1);
       expect((await gateway.getRequests("sessions.list")).length - listRequestsBefore).toBe(0);
-      await captureUiProof(page, "optimistic-read-in-flight.png");
+      await captureUiProof(suite, page, "optimistic-read-in-flight.png");
 
       await gateway.resolveDeferred("sessions.patch");
       patchHeld = false;
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(unreadKey));
       await unreadDot.waitFor({ state: "hidden" });
-      await captureUiProof(page, "optimistic-read-settled.png");
+      await captureUiProof(suite, page, "optimistic-read-settled.png");
     } finally {
       if (patchHeld) {
         await gateway.resolveDeferred("sessions.patch").catch(() => undefined);

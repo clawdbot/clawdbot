@@ -28,7 +28,8 @@ import type { SessionRefreshOutcome } from "./session-roster-refresh.ts";
 
 /** The Gateway's single pin fact: `pinned` is a projection of `pinnedAt`. */
 type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
-type PendingRowPatch<T> = { token: symbol; previous: T; next: T };
+/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
+type PendingRowPatch<T> = { token: symbol; previous: T; next: T; canonical: T };
 
 type SessionMutationsHost = {
   connection: SessionConnectionOwner;
@@ -60,13 +61,19 @@ function createOptimisticRowPatches<T>(
         token,
         previous: current ? current.previous : fields.read(host.publishedRow(key)),
         next,
+        canonical: next,
       });
       host.redecorateLists();
       return token;
     },
     confirm(key: string, token: symbol, confirmed: T): void {
       const current = pending.get(key);
-      if (current && current.token !== token) {
+      if (!current) {
+        return;
+      }
+      if (current.token === token) {
+        current.canonical = confirmed;
+      } else {
         current.previous = confirmed;
       }
     },
@@ -75,8 +82,12 @@ function createOptimisticRowPatches<T>(
       if (!current || current.token !== token) {
         return;
       }
-      if (!completed && connectionCurrent) {
-        current.next = current.previous;
+      if (connectionCurrent) {
+        // Decoration writes the intent into the published snapshot, so releasing
+        // it cannot restore a value it overwrote. Project the settled truth once
+        // more first, or a canonical row that disagrees with the optimistic
+        // value stays hidden until an unrelated update arrives.
+        current.next = completed ? current.canonical : current.previous;
         host.redecorateLists();
       }
       pending.delete(key);
@@ -414,9 +425,17 @@ export function createSessionMutations(host: SessionMutationsHost) {
         );
       }
     };
-    const confirmUnreadPatch = () => {
-      if (unreadPatchToken && patchParams.unread !== undefined) {
-        optimisticUnread.confirm(normalizedKey, unreadPatchToken, patchParams.unread);
+    // A conditional read acknowledgement settles successfully without applying
+    // when a newer manual mark-unread owns the row: the Gateway returns that
+    // entry with its marker intact and broadcasts no change. A present marker
+    // is unread by definition, so it is the value this intent settles to.
+    const confirmUnreadPatch = (entry: SessionPatchResult["entry"] | undefined) => {
+      if (unreadPatchToken) {
+        optimisticUnread.confirm(
+          normalizedKey,
+          unreadPatchToken,
+          entry?.markedUnreadAt !== undefined,
+        );
       }
     };
     const settleUnreadPatch = (completed: boolean) => {
@@ -506,7 +525,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
         archiveState.clear(normalizedKey);
       }
       confirmPinPatch();
-      confirmUnreadPatch();
+      confirmUnreadPatch(result?.entry);
       // Commit and list reconciliation are separate outcomes. Callers must not
       // turn a failed refresh into an apparent rollback of the committed patch.
       let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };

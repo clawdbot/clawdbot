@@ -120,4 +120,24 @@ describe("session unread mutation capability", () => {
     expect(rowUnread(sessions.state.result)).toBe(false);
     sessions.dispose();
   });
+
+  it("restores the marker-owned unread row when the acknowledgement settles stale", async () => {
+    const committed = createDeferred<unknown>();
+    const { gateway } = unreadHarness({
+      patchResponse: () => committed.promise,
+      serverUnread: () => true,
+    });
+    const sessions = createSessionCapability(gateway);
+
+    await sessions.refresh({ force: true });
+    const operation = sessions.patch(key, { unread: false }, { expectedMarkedUnreadAt: 41 });
+    expect(rowUnread(sessions.state.result)).toBe(false);
+
+    // The Gateway keeps a newer manual marker, answers ok without applying, and
+    // broadcasts nothing; settlement is the only place the row can come back.
+    committed.resolve({ ok: true, key, path: "", entry: { markedUnreadAt: 99 } });
+    await expect(operation).resolves.toBeTruthy();
+    expect(rowUnread(sessions.state.result)).toBe(true);
+    sessions.dispose();
+  });
 });
