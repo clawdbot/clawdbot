@@ -213,6 +213,57 @@ describe("remote-exec skill resources", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "retains a skill identity when a same-named node skill remains active",
+    async () => {
+      const { workspace } = await createSource();
+      const staleBaseDir = path.join(workspace, "skills", "stale");
+      await fs.mkdir(staleBaseDir, { recursive: true });
+      await fs.writeFile(
+        path.join(staleBaseDir, "SKILL.md"),
+        "---\ndescription: Stale resource\n---\n# Stale\n",
+      );
+      const snapshot = buildSkillSnapshot(workspace, {
+        entries: loadWorkspaceSkills(workspace, { workspaceOnly: true }),
+      });
+      const sourceSkill = snapshot.resolvedSkills?.[0];
+      expect(sourceSkill).toBeDefined();
+      snapshot.skills.push({ name: "stale", skillKey: "stale" });
+      snapshot.resolvedSkills?.push(
+        {
+          ...structuredClone(sourceSkill!),
+          name: "stale",
+          filePath: path.join(staleBaseDir, "SKILL.md"),
+          baseDir: staleBaseDir,
+        },
+        {
+          ...structuredClone(sourceSkill!),
+          name: "stale",
+          filePath: "node://worker/skills/stale/SKILL.md",
+          baseDir: "node://worker/skills/stale",
+        },
+      );
+      await fs.rm(staleBaseDir, { recursive: true });
+      await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
+
+      const resources = await transferSkillResources({
+        tunnel,
+        assertCurrent: () => {},
+        snapshot,
+      });
+      const remoteRoot = path.dirname(resources!.mounts[0]!.containerPath);
+      try {
+        expect(resources!.snapshot.skills.map((skill) => skill.name)).toEqual(["source", "stale"]);
+        expect(resources!.snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual([
+          "source",
+          "stale",
+        ]);
+      } finally {
+        await fs.rm(remoteRoot, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "removes every stale skill from the transferred snapshot when no bundles remain",
     async () => {
       const { filePath, snapshot } = await createSource();

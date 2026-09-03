@@ -102,6 +102,9 @@ export async function transferSkillResources(params: {
         .map((skill) => skill.sourcePath)
         .filter((sourcePath): sourcePath is string => sourcePath !== undefined),
     );
+    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
+      (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
+    );
     const skippedSkillNames = new Set(
       (params.snapshot.resolvedSkills ?? [])
         .filter(
@@ -110,11 +113,12 @@ export async function transferSkillResources(params: {
         )
         .map((skill) => skill.name),
     );
+    const retainedSkillNames = new Set([
+      ...resolvedSkills.map((skill) => skill.name),
+      ...delivery.skills.map((skill) => skill.name),
+    ]);
     const skills = structuredClone(params.snapshot.skills).filter(
-      (skill) => !skippedSkillNames.has(skill.name),
-    );
-    const resolvedSkills = structuredClone(params.snapshot.resolvedSkills ?? []).filter(
-      (skill) => skill.filePath.startsWith("node://") || deliveredSourcePaths.has(skill.filePath),
+      (skill) => !skippedSkillNames.has(skill.name) || retainedSkillNames.has(skill.name),
     );
     const mounts: Array<{ hostPath: string; containerPath: string }> = [];
     for (const [index, skill] of delivery.skills.entries()) {
