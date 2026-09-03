@@ -12,6 +12,7 @@ import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.
 import { isReplyPayloadStatusNotice } from "../../auto-reply/reply-payload.js";
 import type { ReplyMessageInjectionAttempt } from "../../auto-reply/reply/reply-run-registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import type { PrepareAssistantTranscriptMessage } from "../../config/sessions/transcript-assistant-delivery.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import type { SkillWorkshopProposalRevisionConstraint } from "../../skills/workshop/types.js";
 import { isOperatorUiClient } from "../../utils/message-channel.js";
@@ -66,6 +67,7 @@ type StartChatDispatchParams = {
   client: GatewayRequestHandlerOptions["client"];
   context: GatewayRequestHandlerOptions["context"];
   toolsAllow?: string[];
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   skillLibraryAuthoring?: import("../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   cronCreatorAuthority: ReturnType<ChatSendExternalAuthorityAdmission["resolve"]>;
@@ -167,6 +169,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
   let replyDispatchRun: ReplyDispatchRun | undefined;
   const replyDispatch = createChatSendReplyDispatch({
     accountId,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
     isAgentRunStarted: () => agentRunStarted,
     isRunCurrent: () =>
       !activeRunAbort.controller.signal.aborted &&

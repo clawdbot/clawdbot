@@ -28,15 +28,18 @@ class ChatControllerModelSelectionTest {
   fun nativeModelLockSurvivesHistoryAndPartialSettingsWithoutLockingThinking() =
     runTest {
       val sessionKey = "agent:main:native"
-      val thinking = thinkingFields("off", "off", "high")
+      var thinking = thinkingFields("off", "off", "high")
+      var modelSelectionLocked = true
       val (controller, requests) =
         chatControllerTestSetup {
-          respond(
-            "chat.history",
-            """{"sessionId":"native-model-session","messages":[],"sessionInfo":{"key":"$sessionKey","agentId":"main","sessionId":"native-model-session","modelProvider":"synthetic","model":"outer-default","modelSelectionLocked":true,"agentRuntime":{"id":"codex","source":"session"},$thinking}}""",
-          )
+          respond("chat.history") {
+            """{"sessionId":"native-model-session","messages":[],"sessionInfo":{"key":"$sessionKey","agentId":"main","sessionId":"native-model-session","modelProvider":"synthetic","model":"outer-default","modelSelectionLocked":$modelSelectionLocked,"agentRuntime":{"id":"codex","source":"session"},$thinking}}"""
+          }
           respond("sessions.list", """{"sessions":[]}""")
-          respond("sessions.patch", """{"resolved":{"thinkingLevel":"high"}}""")
+          respond("sessions.patch") {
+            thinking = thinkingFields("high", "off", "high")
+            """{"resolved":{"thinkingLevel":"high"}}"""
+          }
         }
       controller.load(sessionKey)
       advanceUntilIdle()
@@ -55,6 +58,7 @@ class ChatControllerModelSelectionTest {
       assertEquals(JsonPrimitive("high"), patch["thinkingLevel"])
       assertFalse("model" in patch)
 
+      modelSelectionLocked = false
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"sessionKey":"$sessionKey","agentId":"main","phase":"message","session":{"key":"$sessionKey","modelSelectionLocked":false}}""",
@@ -698,7 +702,7 @@ class ChatControllerModelSelectionTest {
         requests
           .filter { it.first == "chat.history" }
           .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
-      assertEquals(listOf(JsonPrimitive(1), null), historyLimits)
+      assertEquals(listOf(null, JsonPrimitive(1), null), historyLimits)
     }
 
   @Test
@@ -978,7 +982,7 @@ class ChatControllerModelSelectionTest {
         requests
           .filter { it.first == "chat.history" }
           .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
-      assertEquals(listOf(JsonPrimitive(1), JsonPrimitive(1), null), historyLimits)
+      assertEquals(listOf(null, JsonPrimitive(1), JsonPrimitive(1), null), historyLimits)
     }
 
   @Test
@@ -1691,51 +1695,68 @@ class ChatControllerModelSelectionTest {
   @Test
   fun staleHistoryDoesNotOverwriteAcceptedModelSelection() =
     runTest {
-      val historyStarted = CompletableDeferred<Unit>()
-      val releaseHistory = CompletableDeferred<Unit>()
-      val listStarted = CompletableDeferred<Unit>()
-      val releaseList = CompletableDeferred<Unit>()
-      val controller =
-        createScriptedChatController {
-          respond("chat.history") { _ ->
-            historyStarted.complete(Unit)
-            releaseHistory.await()
-            """{"messages":[{"role":"assistant","content":"Recovered transcript"}],"sessionInfo":{"key":"main","modelProvider":"anthropic","model":"claude-opus-4",${thinkingFields("low", "off", "low", "high")}}}"""
+      for (refreshFromEvent in listOf(false, true)) {
+        val historyStarted = CompletableDeferred<Unit>()
+        val releaseHistory = CompletableDeferred<Unit>()
+        val releaseList = CompletableDeferred<Unit>()
+        val previousSettings = """{"key":"main","modelProvider":"anthropic","model":"claude-opus-4",${thinkingFields("low", "off", "low", "high")}}"""
+        val setup =
+          chatControllerTestSetup {
+            respond("chat.history", """{"messages":[],"sessionInfo":$previousSettings}""")
+            respond("sessions.list", """{"sessions":[$previousSettings]}""")
+            respond("sessions.patch", """{"resolved":{"modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}}""")
+            respond("chat.metadata", """{"commands":[],"models":[]}""")
           }
-          respond("sessions.patch", """{"resolved":{"modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}}""")
-          respond("sessions.list") {
-            listStarted.complete(Unit)
-            releaseList.await()
-            """{"sessions":[{"key":"main","modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}]}"""
-          }
-          respond("chat.metadata", """{"commands":[],"models":[]}""")
+        val controller = setup.controller
+        if (refreshFromEvent) {
+          controller.load("main")
+          advanceUntilIdle()
+          assertEquals("anthropic/claude-opus-4", controller.selectedModelRef.value)
+        }
+        setup.respond("chat.history") {
+          historyStarted.complete(Unit)
+          releaseHistory.await()
+          """{"messages":[{"role":"assistant","content":"Recovered transcript"}],"sessionInfo":$previousSettings}"""
+        }
+        setup.respond("sessions.list") {
+          releaseList.await()
+          """{"sessions":[{"key":"main","modelProvider":"openai","model":"gpt-5",${thinkingFields("high", "off", "high")}}]}"""
         }
 
-      controller.load("main")
-      historyStarted.await()
-      assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5"))
+        if (refreshFromEvent) {
+          controller.handleGatewayEvent(
+            "session.message",
+            """{"sessionKey":"main","agentId":"main","messageId":"recovered","messageSeq":1,"message":{"role":"assistant","content":[{"type":"text","text":"Recovered transcript"}]}}""",
+          )
+        } else {
+          controller.load("main")
+        }
+        runCurrent()
+        assertTrue("History must refresh (event=$refreshFromEvent)", historyStarted.isCompleted)
+        assertTrue(controller.setSessionModelAwait("main", "openai/gpt-5"))
 
-      releaseHistory.complete(Unit)
-      listStarted.await()
+        releaseHistory.complete(Unit)
+        runCurrent()
 
-      try {
-        assertEquals(
-          "Recovered transcript",
-          controller.messages.value
-            .single()
-            .content
-            .single()
-            .text,
-        )
-        assertEquals("openai/gpt-5", controller.selectedModelRef.value)
-        val session = controller.sessions.value.single()
-        assertEquals("openai/gpt-5", "${session.modelProvider}/${session.model}")
-        assertEquals("high", session.thinkingLevel)
-        assertEquals("high", controller.thinkingLevel.value)
-      } finally {
-        releaseList.complete(Unit)
+        try {
+          assertEquals(
+            "Recovered transcript",
+            controller.messages.value
+              .single()
+              .content
+              .single()
+              .text,
+          )
+          assertEquals("openai/gpt-5", controller.selectedModelRef.value)
+          val session = controller.sessions.value.single()
+          assertEquals("openai/gpt-5", "${session.modelProvider}/${session.model}")
+          assertEquals("high", session.thinkingLevel)
+          assertEquals("high", controller.thinkingLevel.value)
+        } finally {
+          releaseList.complete(Unit)
+        }
+        advanceUntilIdle()
       }
-      advanceUntilIdle()
     }
 
   @Test
@@ -1866,7 +1887,6 @@ class ChatControllerModelSelectionTest {
     fun owner() = resolveChatComposerOwner(null, controller.sessionOwnerAgentId.value, sessionKey = controller.sessionKey.value, mainSessionKey = "main")
     val drafts = ChatComposerTextDraftStore()
     drafts[owner()] = "Unsent draft"
-    val historyRequests = requests.count { it.first == "chat.history" }
     val metadataRequests = requests.count { it.first == "chat.metadata" }
     for (unrelated in listOf(
       """{"sessionKey":"other","agentId":"main","reason":"patch"}""",
@@ -1877,6 +1897,7 @@ class ChatControllerModelSelectionTest {
     }
     advanceUntilIdle()
     assertEquals(metadataRequests, requests.count { it.first == "chat.metadata" })
+    val historyRequests = requests.count { it.first == "chat.history" }
     for (next in listOf(true, false)) {
       available = next
       if (reason == "seqGap") {

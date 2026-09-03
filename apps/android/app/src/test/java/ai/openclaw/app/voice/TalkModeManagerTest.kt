@@ -1,6 +1,10 @@
 package ai.openclaw.app.voice
 
+import ai.openclaw.app.NodeRuntime
+import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.SecurePrefs
+import ai.openclaw.app.VoiceCaptureMode
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.DeviceAuthStore
 import ai.openclaw.app.gateway.GatewayClientInfo
 import ai.openclaw.app.gateway.GatewayConnectOptions
@@ -8,22 +12,28 @@ import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.GatewayRequestRejected
 import ai.openclaw.app.gateway.GatewaySession
 import ai.openclaw.app.gateway.testDeviceIdentityStore
+import ai.openclaw.app.i18n.NativeStringResources
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeText
+import ai.openclaw.app.i18n.notifyNativeLocaleChanged
 import ai.openclaw.app.i18n.verbatimText
 import android.Manifest
 import android.content.ComponentName
 import android.content.IntentFilter
 import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioRecord
 import android.media.AudioTrack
+import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Looper
-import android.os.SystemClock
+import android.os.ParcelFileDescriptor
 import android.speech.RecognitionListener
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.util.Base64
+import androidx.core.os.LocaleListCompat
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +42,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ThreadContextElement
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
@@ -51,6 +62,7 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
@@ -63,7 +75,9 @@ import okhttp3.mockwebserver.MockWebServer
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -77,8 +91,11 @@ import org.robolectric.shadows.ShadowTextToSpeech
 import java.time.Duration
 import java.util.Locale
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -135,8 +152,8 @@ class TalkModeManagerTest {
     runTest {
       withStartedLocalPlayback { manager, playbackJob, player ->
         val pendingClear = CompletableDeferred<String?>()
-        setPrivateField(manager, "realtimeSessionId", "relay-1")
-        setPrivateField(manager, "realtimeOutputTurnId", " ")
+        installRealtimeSession(manager, "relay-1")
+        manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"audio","talkEvent":{"turnId":" "},"audioBase64":""}""")
         setPrivateField(manager, "pendingRealtimeOutputClear", pendingClear)
         val stops = player.stopCalls
 
@@ -150,20 +167,20 @@ class TalkModeManagerTest {
     }
 
   @Test
-  fun stopTtsCancelsTheOutputOwnedWhenTheActionStarted() =
+  fun retiredStopTtsCannotReplaceAnotherCancellationWaiter() =
     runTest {
-      val manager = createManager(scope = this)
+      val manager = createManager(scope = backgroundScope)
       val priorClear = CompletableDeferred<String?>()
-      setPrivateField(manager, "realtimeSessionId", "relay-a")
-      setPrivateField(manager, "realtimeOutputTurnId", "turn-a")
+      installRealtimeSession(manager, "relay-a")
+      manager.realtimeEvent("""{"relaySessionId":"relay-a","type":"audio","talkEvent":{"turnId":"turn-a"},"audioBase64":""}""")
       setPrivateField(manager, "pendingRealtimeOutputClear", priorClear)
 
       manager.stopTts()
-      setPrivateField(manager, "realtimeSessionId", null)
-      setPrivateField(manager, "realtimeOutputTurnId", "turn-b")
+      installRealtimeSession(manager, "relay-b")
+      manager.realtimeEvent("""{"relaySessionId":"relay-b","type":"audio","talkEvent":{"turnId":"turn-b"},"audioBase64":""}""")
       runCurrent()
 
-      assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
+      assertTrue(readPrivateField(manager, "pendingRealtimeOutputClear") === priorClear)
     }
 
   @Test
@@ -476,7 +493,7 @@ class TalkModeManagerTest {
     var stoppedByRelay = false
     val manager = createManager(onStoppedByRelay = { stoppedByRelay = true })
 
-    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    installRealtimeSession(manager, "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
 
     manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"error"}""")
@@ -490,10 +507,23 @@ class TalkModeManagerTest {
   }
 
   @Test
+  fun aDeferredTerminalNotificationCannotStopAReplacementTalkStart() {
+    var claim: (() -> Boolean)? = null
+    val manager = createManager(onStoppedByRelay = { claim = it })
+    installRealtimeSession(manager, "relay-1")
+    setMutableStateFlow(manager, "_isEnabled", true)
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"completed"}""")
+    assertTrue(checkNotNull(claim).invoke())
+    // NodeRuntime invalidates capture before its asynchronous voice-wake suppression work.
+    manager.stopAllCapture()
+    assertFalse(checkNotNull(claim).invoke())
+  }
+
+  @Test
   fun realtimeClosePreservesTypedFailureWithoutEnglishPrefix() {
     val manager = createManager()
 
-    setPrivateField(manager, "realtimeSessionId", "relay-1")
+    installRealtimeSession(manager, "relay-1")
     setMutableStateFlow(manager, "_isEnabled", true)
     setTalkFailure(manager, verbatimText("Échec de Talk : session refusée."))
 
@@ -518,11 +548,17 @@ class TalkModeManagerTest {
         }
 
       manager.stopAllCapture()
-      setMutableStateFlow(manager, "_statusText", verbatimText("Désactivé"))
-      assertEquals("Désactivé", manager.statusText.value)
-      advanceUntilIdle()
-
-      assertTrue(turn.await() is TimeoutCancellationException)
+      NativeStringResources.install(RuntimeEnvironment.getApplication())
+      try {
+        NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
+        notifyNativeLocaleChanged()
+        assertEquals("Désactivé", manager.statusText.value)
+        advanceUntilIdle()
+        assertTrue(turn.await() is TimeoutCancellationException)
+      } finally {
+        NativeStringResources.setApplicationLocales(LocaleListCompat.getEmptyLocaleList())
+        notifyNativeLocaleChanged()
+      }
     }
 
   @Test
@@ -531,13 +567,13 @@ class TalkModeManagerTest {
       val acknowledgements = mutableListOf<Pair<String, String>>()
       val manager =
         createManager(
-          scope = this,
+          scope = backgroundScope,
           realtimePlaybackDispatcher = StandardTestDispatcher(testScheduler),
           realtimeMarkAcknowledger = { sessionId, markName ->
             acknowledgements += sessionId to markName
           },
         )
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      installRealtimeSession(manager, "relay-1")
 
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"mark","markName":"audio-1"}""")
       runCurrent()
@@ -583,11 +619,13 @@ class TalkModeManagerTest {
   }
 
   @Test
-  fun finalUserTranscriptMarksAwaitingAgentUntilStatusMovesOn() {
+  fun responseStartMarksAwaitingAgentUntilStatusMovesOn() {
     val manager = createRealtimeManager()
 
     assertFalse(manager.awaitingAgent.value)
     manager.transcript("user", "hello", final = true)
+    assertFalse("A transcript does not prove response work has started", manager.awaitingAgent.value)
+    manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"responseStarted","turnId":"response-turn"}""")
     assertTrue(manager.awaitingAgent.value)
     // Any later status transition clears the typed flag; forgetting it at a
     // new setStatus site fails safe instead of showing a stale Thinking wave.
@@ -745,9 +783,9 @@ class TalkModeManagerTest {
   @Test
   fun e2eRealtimeTurnUsesRelayTranscriptPath() =
     runTest {
-      val manager = createManager(scope = this)
+      val manager = createManager(scope = backgroundScope)
 
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      installRealtimeSession(manager, "relay-1")
       setMutableStateFlow(manager, "_isEnabled", true)
       manager.runE2eRealtimeTurn(
         userText = "voice e2e user",
@@ -841,8 +879,30 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun localPlaybackReleasesItsAudioFocusForEveryTerminalOutcome() =
+    runTest {
+      for (outcome in listOf("completed", "failed", "focus-lost", "cancelled")) {
+        withStartedLocalPlayback { manager, playback, player ->
+          val audio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
+          val focus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+          when (outcome) {
+            "completed" -> player.finished.complete(Unit)
+            "failed" -> player.finished.completeExceptionally(IllegalStateException("speaker failed"))
+            "focus-lost" -> audio.lastAudioFocusRequest.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
+            "cancelled" -> manager.stopTts()
+          }
+          runCurrent()
+          assertTrue("Playback must finish after $outcome", playback.isCompleted)
+          assertFalse(manager.isSpeaking.value)
+          assertSame("Focus must return after $outcome", focus, audio.lastAbandonedAudioFocusRequest)
+        }
+      }
+    }
+
+  @Test
   fun cancelledPlaybackCompletionKeepsReplacementSpeaking() =
     runTest {
+      val audio = shadowOf(RuntimeEnvironment.getApplication().getSystemService(AudioManager::class.java))
       val synthesizer = FakeTalkSpeechSynthesizer()
       synthesizer.result.complete(
         TalkSpeakResult.Success(
@@ -875,6 +935,7 @@ class TalkModeManagerTest {
           assertEquals(1, player.playCalls)
           assertEquals(1, callbackDepth)
           assertTrue(manager.isSpeaking.value)
+          val firstFocus = checkNotNull(audio.lastAudioFocusRequest)
 
           // Cancellation queues the old caller's cleanup; the replacement may
           // start before that cleanup runs on another dispatcher.
@@ -885,6 +946,8 @@ class TalkModeManagerTest {
           assertTrue(first.isCancelled)
           assertFalse(first.isCompleted)
           assertTrue(manager.isSpeaking.value)
+          val replacementFocus = checkNotNull(audio.lastAudioFocusRequest.audioFocusRequest)
+          firstFocus.listener.onAudioFocusChange(AudioManager.AUDIOFOCUS_LOSS)
 
           runCurrent()
           assertTrue(first.isCompleted)
@@ -897,6 +960,7 @@ class TalkModeManagerTest {
           next.join()
           assertFalse(manager.isSpeaking.value)
           assertEquals(0, callbackDepth)
+          assertSame(replacementFocus, audio.lastAbandonedAudioFocusRequest)
         } finally {
           manager.stopAllCapture()
           first.cancelAndJoin()
@@ -950,6 +1014,7 @@ class TalkModeManagerTest {
   fun realtimeClearKeepsLocalPlaybackSpeaking() = assertRealtimeEndKeepsLocalPlaybackSpeaking(clear = true)
 
   @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
   fun realtimeIdleKeepsLocalPlaybackSpeaking() = assertRealtimeEndKeepsLocalPlaybackSpeaking(clear = false)
 
   private fun assertRealtimeEndKeepsLocalPlaybackSpeaking(clear: Boolean) =
@@ -987,6 +1052,7 @@ class TalkModeManagerTest {
         "talk.event",
         """{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"realtime-turn"}}""",
       )
+      proof.scheduler.runCurrent()
       assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
     } else {
       // The stock shadow accounts written frames immediately. Advance both
@@ -1016,6 +1082,934 @@ class TalkModeManagerTest {
     assertTrue(proof.manager.isSpeaking.value)
     return track
   }
+
+  @Test
+  @Config(shadows = [DeadRealtimeAudioTrack::class])
+  fun realtimeDeviceFailureStopsTheRelayWithVisibleFailure() =
+    runBlocking {
+      withRealtimePlayback { proof ->
+        val pcm = ByteArray(100)
+        proof.manager.handleGatewayEvent(
+          "talk.event",
+          """{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"failed-turn"},"audioBase64":"${Base64.encodeToString(pcm, Base64.NO_WRAP)}"}""",
+        )
+        proof.scheduler.runCurrent()
+        assertFalse("A failed output device must not leave Talk silently enabled", proof.manager.isEnabled.value)
+        assertTrue(
+          proof.manager.statusText.value
+            .contains("audio playback device error"),
+        )
+        assertFalse(proof.manager.isSpeaking.value)
+      }
+    }
+
+  @Test
+  fun retiredPttRestartCannotReopenRecognition() {
+    val manager = createManager()
+    val recognizer = SpeechRecognizer.createSpeechRecognizer(RuntimeEnvironment.getApplication())
+    setPrivateField(manager, "recognizer", recognizer)
+    setPrivateField(manager, "activePttCaptureId", "replacement-capture")
+    val start =
+      manager.javaClass
+        .getDeclaredMethod(
+          "startPushToTalkRecognition",
+          String::class.java,
+          PushToTalkRecognitionCandidate::class.java,
+        ).also { it.isAccessible = true }
+    try {
+      start.invoke(manager, "retired-capture", PushToTalkRecognitionCandidate.SilenceSegmented)
+      assertNull("A stale restart must not reacquire native recognition", shadowOf(recognizer).lastRecognizerIntent)
+      assertFalse(manager.isListening.value)
+    } finally {
+      manager.stopAllCapture()
+    }
+  }
+
+  @Test
+  fun rawPttCloseWaitsForInFlightDeviceCleanup() =
+    runBlocking {
+      val releaseEntered = CountDownLatch(1)
+      val finishRelease = CountDownLatch(1)
+      val recorder =
+        object : AudioRecord(
+          MediaRecorder.AudioSource.VOICE_RECOGNITION,
+          16_000,
+          AudioFormat.CHANNEL_IN_MONO,
+          AudioFormat.ENCODING_PCM_16BIT,
+          16_000,
+        ) {
+          override fun release() {
+            releaseEntered.countDown()
+            check(finishRelease.await(10, TimeUnit.SECONDS))
+            super.release()
+          }
+        }
+      val pipe = ParcelFileDescriptor.createPipe()
+      val type = Class.forName("ai.openclaw.app.voice.PushToTalkAudioSource")
+      val source =
+        type
+          .getDeclaredConstructor(
+            ParcelFileDescriptor::class.java,
+            ParcelFileDescriptor.AutoCloseOutputStream::class.java,
+            AudioRecord::class.java,
+          ).also { it.isAccessible = true }
+          .newInstance(pipe[0], ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]), recorder)
+      val finish = type.getDeclaredMethod("finishFromPump").also { it.isAccessible = true }
+      val close = type.getDeclaredMethod("close").also { it.isAccessible = true }
+      val finishing = async(Dispatchers.Default) { finish.invoke(source) }
+      val closeStarted = CompletableDeferred<Unit>()
+      var closing: kotlinx.coroutines.Deferred<*>? = null
+      try {
+        assertTrue(releaseEntered.await(5, TimeUnit.SECONDS))
+        closing =
+          async(Dispatchers.Default) {
+            closeStarted.complete(Unit)
+            close.invoke(source)
+          }
+        closeStarted.await()
+        assertNull(
+          "close must wait for the cleanup that owns the recorder",
+          withTimeoutOrNull(250) {
+            closing.await()
+            true
+          },
+        )
+      } finally {
+        finishRelease.countDown()
+        finishing.await()
+        closing?.await() ?: close.invoke(source)
+      }
+      assertEquals(AudioRecord.STATE_UNINITIALIZED, recorder.state)
+    }
+
+  @Test
+  fun destroyedContinuousRecognizerCannotFailItsReplacement() =
+    runTest {
+      val manager = createManager(scope = this)
+      val app = RuntimeEnvironment.getApplication()
+      val retired = SpeechRecognizer.createSpeechRecognizer(app)
+      setPrivateField(manager, "recognizer", retired)
+      val retiredListener = recognitionListener(manager, null)
+      manager.stopAllCapture()
+      val replacement = SpeechRecognizer.createSpeechRecognizer(app)
+      setPrivateField(manager, "recognizer", replacement)
+      setPrivateField(manager, "stopRequested", false)
+      setMutableStateFlow(manager, "_isEnabled", true)
+      setMutableStateFlow(manager, "_isListening", true)
+      val status = manager.statusText.value
+      try {
+        retiredListener.onError(SpeechRecognizer.ERROR_AUDIO)
+        assertTrue("A late native callback must not stop the replacement listener", manager.isListening.value)
+        assertEquals(status, manager.statusText.value)
+      } finally {
+        manager.stopAllCapture()
+      }
+    }
+
+  @Test
+  fun manualMicWaitsForRealtimeDeviceAndCaptureRetirement() =
+    runBlocking {
+      withNodeOwningRealtimePlayback { runtime, proof ->
+        val track = startRealtimeAudio(proof)
+        runtime.setMicEnabled(true)
+        assertFalse("Manual mic cannot overlap the old Talk device", runtime.micEnabled.value)
+        proof.scheduler.runCurrent()
+        assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
+        assertFalse("Capture cancellation must also finish before the handoff", runtime.micEnabled.value)
+        proof.drainCancelledCapture()
+        withTimeout(5_000) {
+          while (!runtime.micEnabled.value) {
+            proof.scheduler.runCurrent()
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        assertEquals(VoiceCaptureMode.ManualMic, runtime.voiceCaptureMode.value)
+      }
+    }
+
+  @Test
+  fun sameTalkModeReassertionStopsManualMicCapture() =
+    runBlocking {
+      withNodeOwningRealtimePlayback { runtime, proof ->
+        val mic = (readPrivateField(runtime, "micCapture\$delegate") as Lazy<*>).value as MicCaptureManager
+        mic.setMicEnabled(true)
+        assertTrue(runtime.micEnabled.value)
+        runtime.setTalkModeEnabled(true)
+        assertFalse(runtime.micEnabled.value)
+        proof.drainCancelledCapture()
+        withTimeout(5_000) {
+          while (!proof.manager.isEnabled.value) {
+            proof.scheduler.runCurrent()
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        assertEquals(VoiceCaptureMode.TalkMode, runtime.voiceCaptureMode.value)
+        assertTrue(proof.manager.isEnabled.value)
+      }
+    }
+
+  @Test
+  fun repeatedStopKeepsOtherMicOwnersBlockedUntilRealtimeCleanupFinishes() =
+    runBlocking {
+      withNodeOwningRealtimePlayback { runtime, proof ->
+        val track = startRealtimeAudio(proof)
+        runtime.setTalkModeEnabled(false)
+        runtime.setTalkModeEnabled(false)
+        assertFalse(runtime.tryAcquireVoiceNoteMic())
+        assertFalse(runtime.tryAcquireDictationMic())
+        assertFalse(runtime.setCameraAudioCaptureActive(true))
+        proof.scheduler.runCurrent()
+        assertEquals(AudioTrack.STATE_UNINITIALIZED, track.state)
+        assertFalse(runtime.tryAcquireVoiceNoteMic())
+        proof.drainCancelledCapture()
+        withTimeout(5_000) {
+          while (!runtime.tryAcquireVoiceNoteMic()) {
+            proof.scheduler.runCurrent()
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        runtime.releaseVoiceNoteMic()
+        assertTrue(runtime.tryAcquireDictationMic())
+        runtime.releaseDictationMic()
+        assertTrue(runtime.setCameraAudioCaptureActive(true))
+        runtime.setCameraAudioCaptureActive(false)
+      }
+    }
+
+  private suspend fun withNodeOwningRealtimePlayback(block: suspend (NodeRuntime, RealtimePlaybackProof) -> Unit) {
+    val app = RuntimeEnvironment.getApplication()
+    val prefs = SecurePrefs(app, app.getSharedPreferences("node-playback-${System.nanoTime()}", 0))
+    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture)
+    try {
+      ((readPrivateField(runtime, "micCapture\$delegate") as Lazy<*>).value as MicCaptureManager).onGatewayConnectionChanged(false)
+      withRealtimePlayback { proof ->
+        setPrivateField(runtime, "talkMode\$delegate", lazyOf(proof.manager))
+        setMutableStateFlow(runtime, "_voiceCaptureMode", VoiceCaptureMode.TalkMode)
+        setMutableStateFlow(runtime, "externalAudioCaptureActive", true)
+        block(runtime, proof)
+      }
+    } finally {
+      closeNodeRuntimeTestFixture(runtime)
+    }
+  }
+
+  @Test
+  fun relayFailureRetainsTheCaptureOwnerFromAdmissionDuringNewPttPreparation() =
+    runBlocking {
+      var captureEpoch = 1
+      var stoppedReplacement = false
+      withRealtimePlayback(captureRelayStopNotification = {
+        val admittedEpoch = captureEpoch
+
+        fun(isCurrent: () -> Boolean) {
+          if (admittedEpoch == captureEpoch && isCurrent()) stoppedReplacement = true
+        }
+      }) { proof ->
+        // PTT preparation claims the outer owner before it enters the Talk manager.
+        captureEpoch++
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"close","reason":"error"}""")
+        assertFalse(proof.manager.isEnabled.value)
+        assertFalse(stoppedReplacement)
+      }
+    }
+
+  @Test
+  fun finalAssistantTextRestoresIdleWithoutConsumingLaterAudio() =
+    runBlocking {
+      for ((playbackEnabled, responseStarted) in listOf(false, true).flatMap { playback -> listOf(playback to false, playback to true) }) {
+        withRealtimePlayback { proof ->
+          proof.manager.setPlaybackEnabled(playbackEnabled)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Question","final":true}""")
+          if (responseStarted) proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
+          assertEquals(responseStarted, proof.manager.awaitingAgent.value)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          proof.scheduler.runCurrent()
+          assertEquals("Answer", proof.manager.lastAssistantText.value)
+          assertFalse("Final text with no pending playback must leave Thinking", proof.manager.awaitingAgent.value)
+          assertEquals("Listening", proof.manager.statusText.value)
+          if (playbackEnabled) {
+            // Google can finish output transcription before a later audio part arrives.
+            startRealtimeAudio(proof)
+            assertEquals("Speaking…", proof.manager.statusText.value)
+          }
+        }
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun finalAssistantTextWaitsForQueuedAudioPresentation() =
+    runBlocking {
+      PlayoutAudioTrack.reset()
+      PlayoutAudioTrack.presentedFrames = 0
+      PlayoutAudioTrack.timestampFrames = 0
+      val acknowledged = CompletableDeferred<Unit>()
+      try {
+        withRealtimePlayback(responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.acknowledgeMark") acknowledged.complete(Unit)
+          null
+        }) { proof ->
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Question","final":true}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
+          val pcm = ByteArray(4_800)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"realtime-turn"},"audioBase64":"${Base64.encodeToString(pcm, Base64.NO_WRAP)}"}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"mark","markName":"last-chunk"}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          assertTrue("Queued audio must be observed before changing response status", proof.manager.awaitingAgent.value)
+          proof.scheduler.runCurrent()
+          assertTrue(proof.manager.isSpeaking.value)
+          assertEquals("Speaking…", proof.manager.statusText.value)
+          assertFalse("Final text cannot acknowledge unpresented audio", acknowledged.isCompleted)
+          PlayoutAudioTrack.presentedFrames = pcm.size / 2
+          PlayoutAudioTrack.timestampFrames = pcm.size / 2L
+          proof.scheduler.advanceTimeBy(20)
+          proof.scheduler.runCurrent()
+          withTimeout(5_000) { acknowledged.await() }
+          assertFalse(proof.manager.isSpeaking.value)
+          assertFalse(proof.manager.awaitingAgent.value)
+          assertEquals("Listening", proof.manager.statusText.value)
+        }
+      } finally {
+        PlayoutAudioTrack.reset()
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun providerClearStopsPreviousAudioAfterNextResponseStarts() =
+    runBlocking {
+      PlayoutAudioTrack.reset()
+      try {
+        withRealtimePlayback { proof ->
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          val track = startRealtimeAudio(proof)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"First answer","final":true,"talkEvent":{"turnId":"realtime-turn"}}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"next-turn"}}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Second answer","final":false,"talkEvent":{"turnId":"next-turn"}}""")
+          proof.scheduler.runCurrent()
+          assertTrue(proof.manager.isSpeaking.value)
+          assertTrue(proof.manager.awaitingAgent.value)
+
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"type":"output.audio.done","turnId":"realtime-turn","final":true}}""")
+          proof.scheduler.runCurrent()
+
+          assertEquals("A newer transcript cannot prevent clearing queued playback", AudioTrack.STATE_UNINITIALIZED, track.state)
+          assertFalse(proof.manager.isSpeaking.value)
+          assertTrue("Clearing old audio cannot finish the next response", proof.manager.awaitingAgent.value)
+          assertEquals("Thinking…", proof.manager.statusText.value)
+          assertEquals(
+            listOf("First question", "First answer", "Second question", "Second answer"),
+            proof.manager.conversation.value
+              .map { it.text },
+          )
+        }
+      } finally {
+        PlayoutAudioTrack.reset()
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun queuedFinalTextCannotFinishNewerUserThinking() = assertOldOutputPreservesNewerUserThinking(withAudio = false)
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun presentedOldAudioCannotFinishNewerUserThinking() = assertOldOutputPreservesNewerUserThinking(withAudio = true)
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun continuingOldOutputCannotFinishNewerUserThinking() {
+    for (lateEvent in listOf("audio", "final-text")) {
+      for (playback in listOf("playing", "drained", "cleared")) {
+        assertOldOutputPreservesNewerUserThinking(withAudio = true, lateEvent = lateEvent, drainedBeforeInput = playback == "drained", clearBeforeInput = playback == "cleared")
+      }
+    }
+  }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun responseLifecycleOwnsStatusAcrossContinuationAndLateInput() =
+    runBlocking {
+      for (drainedBeforeInput in listOf(false, true)) {
+        PlayoutAudioTrack.reset()
+        try {
+          withRealtimePlayback { proof ->
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"realtime-turn"}""")
+            startRealtimeAudio(proof)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"realtime-turn","final":true}}""")
+            PlayoutAudioTrack.timestampFrames = 2_400L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertEquals("Listening", proof.manager.statusText.value)
+
+            val continuationStart = """{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"continuation-turn"}"""
+            proof.manager.realtimeEvent(continuationStart)
+            assertTrue("A continuation is admitted work without a new user transcript", proof.manager.awaitingAgent.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"continuation-turn"}}""")
+            proof.scheduler.runCurrent()
+            assertTrue(proof.manager.isSpeaking.value)
+            proof.manager.realtimeEvent(continuationStart)
+            assertEquals("A duplicate response start cannot reset playback", "Speaking…", proof.manager.statusText.value)
+            assertFalse(proof.manager.awaitingAgent.value)
+            if (drainedBeforeInput) {
+              PlayoutAudioTrack.timestampFrames = 4_800L
+              proof.scheduler.advanceTimeBy(20)
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+            }
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Next question","final":true,"talkEvent":{"turnId":"continuation-turn"}}""")
+            assertEquals(
+              "Next question",
+              proof.manager.conversation.value
+                .last()
+                .text,
+            )
+            assertFalse("Late input does not identify what the continuation answered", proof.manager.awaitingAgent.value)
+            assertEquals(if (drainedBeforeInput) "Listening" else "Speaking…", proof.manager.statusText.value)
+
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+            assertTrue(proof.manager.awaitingAgent.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"continuation-turn","final":true}}""")
+            proof.scheduler.runCurrent()
+            assertEquals(!drainedBeforeInput, proof.manager.isSpeaking.value)
+            assertTrue("A stale terminal cannot finish newer work", proof.manager.awaitingAgent.value)
+            assertEquals("Thinking…", proof.manager.statusText.value)
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audioDone","talkEvent":{"type":"turn.ended","turnId":"next-turn","final":true}}""")
+            proof.scheduler.runCurrent()
+            assertEquals(!drainedBeforeInput, proof.manager.isSpeaking.value)
+            assertFalse("An empty matching terminal must finish its response while earlier audio remains buffered", proof.manager.awaitingAgent.value)
+            assertEquals(if (drainedBeforeInput) "Listening" else "Speaking…", proof.manager.statusText.value)
+            PlayoutAudioTrack.timestampFrames = 4_800L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertFalse(proof.manager.isSpeaking.value)
+            assertEquals("Listening", proof.manager.statusText.value)
+          }
+        } finally {
+          PlayoutAudioTrack.reset()
+        }
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun consultWorkCannotBeFinishedByEarlierPlayback() =
+    runBlocking {
+      PlayoutAudioTrack.reset()
+      try {
+        withRealtimePlayback(responseForRequest = { request, _ ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.client.toolCall") """{"runId":"working-run"}""" else null
+        }) { proof ->
+          startRealtimeAudio(proof)
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"toolCall","callId":"next-consult","name":"openclaw_agent_consult","args":{"question":"Next question"}}""")
+          withTimeout(5_000) {
+            while (!proof.manager.awaitingAgent.value) {
+              proof.scheduler.runCurrent()
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+          }
+          PlayoutAudioTrack.timestampFrames = 2_400L
+          proof.scheduler.advanceTimeBy(20)
+          proof.scheduler.runCurrent()
+          assertFalse(proof.manager.isSpeaking.value)
+          assertTrue("Earlier playback cannot finish an admitted consult", proof.manager.awaitingAgent.value)
+          assertEquals("Thinking…", proof.manager.statusText.value)
+          startRealtimeAudio(proof)
+          assertFalse("Newly admitted audio can advance the current work phase", proof.manager.awaitingAgent.value)
+          assertEquals("Speaking…", proof.manager.statusText.value)
+        }
+      } finally {
+        PlayoutAudioTrack.reset()
+      }
+    }
+
+  @Test
+  @Config(shadows = [PlayoutAudioTrack::class])
+  fun lateFinalUserTranscriptKeepsTheAnsweredUtteranceStatus() =
+    runBlocking {
+      val cases =
+        listOf("consult-audio", "stopped-audio", "cleared-audio", "active-audio", "drained-audio", "local-replay")
+          .flatMap { mode -> listOf(Triple(mode, true, false), Triple(mode, false, false)) } +
+          listOf(Triple("active-audio", false, true), Triple("drained-audio", false, true))
+      for ((mode, earlyPartial, completedPreviousTurn) in cases) {
+        PlayoutAudioTrack.reset()
+        try {
+          withRealtimePlayback(responseForRequest = { request, _ ->
+            if (request.getValue("method").jsonPrimitive.content == "talk.client.toolCall") """{"runId":"consult-run"}""" else null
+          }) { proof ->
+            val encodedAudio = Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)
+            if (completedPreviousTurn) {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Previous question","final":true,"talkEvent":{"turnId":"previous-turn"}}""")
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"$encodedAudio","talkEvent":{"turnId":"previous-turn"}}""")
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Previous answer","final":true,"talkEvent":{"turnId":"previous-turn"}}""")
+              proof.scheduler.runCurrent()
+              assertTrue(proof.manager.isSpeaking.value)
+              PlayoutAudioTrack.timestampFrames = 2_400L
+              proof.scheduler.advanceTimeBy(20)
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+              assertEquals("Listening", proof.manager.statusText.value)
+            }
+            val completedFrames = if (completedPreviousTurn) 4_800L else 2_400L
+            if (earlyPartial) {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you tack","final":false,"talkEvent":{"turnId":"active-turn"}}""")
+            }
+            val partialUserId =
+              proof.manager.conversation.value
+                .lastOrNull { it.role == VoiceConversationRole.User }
+                ?.id
+            if (mode == "consult-audio") {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"toolCall","callId":"consult-call","name":"openclaw_agent_consult","args":{"question":"Synthetic question"}}""")
+              withTimeout(5_000) {
+                while (!proof.manager.awaitingAgent.value) {
+                  proof.scheduler.runCurrent()
+                  withContext(Dispatchers.Default) { delay(10) }
+                }
+              }
+            }
+            val audio = """{"relaySessionId":"playback-relay","type":"audio","audioBase64":"$encodedAudio","talkEvent":{"turnId":"active-turn"}}"""
+            if (mode == "local-replay") {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Checking","final":true}""")
+            } else {
+              proof.manager.realtimeEvent(audio)
+            }
+            proof.scheduler.runCurrent()
+            assertEquals(mode != "local-replay", proof.manager.isSpeaking.value)
+            if (mode == "stopped-audio") {
+              proof.manager.stopTts()
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+            }
+            if (mode == "cleared-audio") {
+              proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"active-turn"}}""")
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+            }
+            if (mode == "drained-audio") {
+              PlayoutAudioTrack.timestampFrames = completedFrames
+              proof.scheduler.advanceTimeBy(20)
+              proof.scheduler.runCurrent()
+              assertFalse(proof.manager.isSpeaking.value)
+            }
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Can you check?","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+            val userEntry =
+              proof.manager.conversation.value
+                .last { it.role == VoiceConversationRole.User }
+            if (earlyPartial) assertEquals(partialUserId, userEntry.id)
+            val userId = userEntry.id
+            assertEquals("Can you check?", userEntry.text)
+            val awaitingAfterUserTranscript = proof.manager.awaitingAgent.value
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"Checking","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+            PlayoutAudioTrack.timestampFrames = completedFrames
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertFalse(proof.manager.isSpeaking.value)
+            assertEquals(
+              "Finalizing an answered utterance cannot restart Thinking or outlive playback ($mode, earlyPartial=$earlyPartial, completedPreviousTurn=$completedPreviousTurn)",
+              false to "Listening",
+              awaitingAfterUserTranscript to proof.manager.statusText.value,
+            )
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":false,"talkEvent":{"turnId":"active-turn"}}""")
+            if (mode != "local-replay") {
+              proof.manager.realtimeEvent(audio)
+              proof.scheduler.runCurrent()
+              assertEquals("A partial transcript does not replace the physical playback phase", if (mode == "stopped-audio") "Listening" else "Speaking…", proof.manager.statusText.value)
+            }
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+            assertFalse("Even a distinct transcript does not prove new work was admitted", proof.manager.awaitingAgent.value)
+            assertTrue(
+              userId !=
+                proof.manager.conversation.value
+                  .last()
+                  .id,
+            )
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"inputAudio","byteLength":960}""")
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+            assertTrue("An admitted response owns the waiting status", proof.manager.awaitingAgent.value)
+            PlayoutAudioTrack.timestampFrames = completedFrames + 2_400L
+            proof.scheduler.advanceTimeBy(20)
+            proof.scheduler.runCurrent()
+            assertFalse(proof.manager.isSpeaking.value)
+            assertTrue("Earlier audio cannot finish newly admitted work", proof.manager.awaitingAgent.value)
+            assertEquals("Thinking…", proof.manager.statusText.value)
+          }
+        } finally {
+          PlayoutAudioTrack.reset()
+        }
+      }
+    }
+
+  private fun assertOldOutputPreservesNewerUserThinking(
+    withAudio: Boolean,
+    lateEvent: String? = null,
+    drainedBeforeInput: Boolean = false,
+    clearBeforeInput: Boolean = false,
+  ) = runBlocking {
+    PlayoutAudioTrack.reset()
+    try {
+      withRealtimePlayback { proof ->
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"First question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"active-turn"}""")
+        if (withAudio) {
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"active-turn"}}""")
+          proof.scheduler.runCurrent()
+          assertTrue(proof.manager.isSpeaking.value)
+        }
+        val finalText = """{"relaySessionId":"playback-relay","type":"transcript","role":"assistant","text":"First answer","final":true,"talkEvent":{"turnId":"active-turn"}}"""
+        if (lateEvent == null) proof.manager.realtimeEvent(finalText)
+        if (drainedBeforeInput) {
+          PlayoutAudioTrack.timestampFrames = 2_400L
+          proof.scheduler.advanceTimeBy(20)
+          proof.scheduler.runCurrent()
+          assertFalse(proof.manager.isSpeaking.value)
+        }
+        if (clearBeforeInput) {
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"turnId":"active-turn"}}""")
+          proof.scheduler.runCurrent()
+        }
+        // Old output can be queued before the next response starts, even after its input transcript.
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"transcript","role":"user","text":"Second question","final":true,"talkEvent":{"turnId":"active-turn"}}""")
+        when (lateEvent) {
+          "audio" -> proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"active-turn"}}""")
+          "final-text" -> proof.manager.realtimeEvent(finalText)
+        }
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"responseStarted","turnId":"next-turn"}""")
+        proof.scheduler.runCurrent()
+        assertTrue("Queued old output cannot claim a newly admitted response", proof.manager.awaitingAgent.value)
+        if (withAudio) PlayoutAudioTrack.timestampFrames = if (lateEvent == "audio") 4_800L else 2_400L
+        proof.scheduler.advanceTimeBy(20)
+        proof.scheduler.runCurrent()
+        assertFalse(proof.manager.isSpeaking.value)
+        assertTrue("Old output completion cannot finish a newer admitted response", proof.manager.awaitingAgent.value)
+        assertEquals("Thinking…", proof.manager.statusText.value)
+        if (lateEvent != null) {
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","audioBase64":"${Base64.encodeToString(ByteArray(4_800), Base64.NO_WRAP)}","talkEvent":{"turnId":"next-turn"}}""")
+          proof.scheduler.runCurrent()
+          assertTrue("A new output turn must claim the current request", proof.manager.isSpeaking.value)
+          assertFalse(proof.manager.awaitingAgent.value)
+        }
+      }
+    } finally {
+      PlayoutAudioTrack.reset()
+    }
+  }
+
+  @Test
+  fun createdRelayRejectedAtAdmissionIsClosed() =
+    runBlocking {
+      val creates =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      val pending = CompletableDeferred<Pair<String, WebSocket>>()
+      val closed = CompletableDeferred<Unit>()
+      withRealtimePlayback(interceptRequest = { request, socket ->
+        val method = request.getValue("method").jsonPrimitive.content
+        if (method == "talk.session.close" && request["params"]
+            ?.jsonObject
+            ?.get("sessionId")
+            ?.jsonPrimitive
+            ?.content == "unadmitted-relay"
+        ) {
+          closed.complete(Unit)
+        }
+        if (method == "talk.session.create" && creates.incrementAndGet() == 2) {
+          pending.complete(request.getValue("id").jsonPrimitive.content to socket)
+          true
+        } else {
+          false
+        }
+      }) { proof ->
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        proof.manager.setEnabled(true)
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!pending.isCompleted) {
+          proof.scheduler.runCurrent()
+          check(System.nanoTime() < deadline) { "Replacement relay create was not requested" }
+          withContext(Dispatchers.Default) { delay(10) }
+        }
+        val (requestId, socket) = pending.await()
+        val pumping =
+          java.util.concurrent.atomic
+            .AtomicBoolean(true)
+        var worker: Thread? = null
+        try {
+          synchronized(readPrivateField(proof.manager, "realtimeCapturePauseLock")!!) {
+            socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"relaySessionId":"unadmitted-relay"}}""")
+            worker =
+              Thread {
+                while (pumping.get()) {
+                  proof.scheduler.runCurrent()
+                  Thread.yield()
+                }
+              }.also { it.start() }
+            val lockDeadline = System.nanoTime() + 5_000_000_000L
+            while (worker.state != Thread.State.BLOCKED) {
+              check(System.nanoTime() < lockDeadline) { "Create response did not reach locked admission" }
+              Thread.yield()
+            }
+            proof.manager.stopAllCapture()
+          }
+          assertNotNull("A remotely created but unadmitted relay must be closed", withTimeoutOrNull(5_000) { closed.await() })
+          assertFalse(proof.manager.isEnabled.value)
+        } finally {
+          pumping.set(false)
+          worker?.join(5_000)
+          assertFalse("Scheduler worker must terminate", worker?.isAlive == true)
+        }
+      }
+    }
+
+  @Test
+  fun stoppedPushToTalkAdmissionCannotPauseLaterTalk() =
+    runBlocking {
+      installSpeechRecognitionService()
+      withRealtimePlayback { proof ->
+        var stopped = false
+        val stopBeforePause =
+          object : ThreadContextElement<Unit>, AbstractCoroutineContextElement(object : CoroutineContext.Key<ThreadContextElement<Unit>> {}) {
+            override fun updateThreadContext(context: CoroutineContext) {
+              if (!stopped && proof.manager.activePushToTalkCaptureId != null) {
+                stopped = true
+                proof.manager.stopAllCapture()
+              }
+            }
+
+            override fun restoreThreadContext(
+              context: CoroutineContext,
+              oldState: Unit,
+            ) = Unit
+          }
+        val obsolete = proof.scope.async(stopBeforePause) { runCatching { proof.manager.beginPushToTalk(allowNewCapture = true) } }
+
+        suspend fun awaitState(condition: () -> Boolean) {
+          val deadline = System.nanoTime() + 5_000_000_000L
+          while (!condition()) {
+            proof.scheduler.runCurrent()
+            check(System.nanoTime() < deadline) { "Timed out waiting for PTT admission boundary" }
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        awaitState {
+          if (stopped) proof.drainCancelledCapture()
+          obsolete.isCompleted
+        }
+        assertTrue("Stop must occur after PTT admission and before its awaited completion", stopped)
+        assertTrue(obsolete.await().isFailure)
+        proof.manager.setEnabled(true)
+        awaitState { readPrivateField(proof.manager, "realtimeSessionId") != null }
+        assertTrue("A retired PTT admission cannot leave later Talk paused", proof.manager.isListening.value)
+      }
+    }
+
+  @Test
+  fun retiredPushToTalkCannotEnqueueCancellationAfterPhysicalCleanup() =
+    runBlocking {
+      installSpeechRecognitionService()
+      val cancellations =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      withRealtimePlayback(responseForRequest = { request, _ ->
+        if (request.getValue("method").jsonPrimitive.content == "talk.session.cancelOutput") {
+          cancellations.incrementAndGet()
+          """{"ok":true,"status":"idle","turnId":"old-turn"}"""
+        } else {
+          null
+        }
+      }) { proof ->
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"old-turn"},"audioBase64":"AAA="}""")
+        val obsolete = proof.scope.async { runCatching { proof.manager.beginPushToTalk(allowNewCapture = true) } }
+        val admissionDeadline = System.nanoTime() + 5_000_000_000L
+        while (proof.manager.activePushToTalkCaptureId == null) {
+          proof.scheduler.runCurrent()
+          check(System.nanoTime() < admissionDeadline) { "Timed out admitting push-to-talk" }
+          withContext(Dispatchers.Default) { delay(10) }
+        }
+        assertNotNull(proof.manager.activePushToTalkCaptureId)
+        assertTrue("PTT must still await its retired physical input", proof.manager.audioRetirement.pending)
+        assertEquals(0, cancellations.get())
+
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        val deadline = System.nanoTime() + 5_000_000_000L
+        while (!obsolete.isCompleted) {
+          proof.scheduler.runCurrent()
+          proof.drainCancelledCapture()
+          check(System.nanoTime() < deadline) { "Timed out retiring push-to-talk" }
+          withContext(Dispatchers.Default) { delay(10) }
+        }
+        assertTrue(obsolete.await().isFailure)
+        assertEquals("Retired PTT must not send cancellation after physical cleanup", 0, cancellations.get())
+      }
+    }
+
+  @Test
+  fun retiredPushToTalkCancellationCannotStopReplacementRelay() =
+    runBlocking {
+      installSpeechRecognitionService()
+      for (applied in listOf(false, true)) {
+        val pending = CompletableDeferred<Pair<String, WebSocket>>()
+        withRealtimePlayback(interceptRequest = { request, socket ->
+          if (request.getValue("method").jsonPrimitive.content == "talk.session.cancelOutput") {
+            pending.complete(request.getValue("id").jsonPrimitive.content to socket)
+            true
+          } else {
+            false
+          }
+        }) { proof ->
+          suspend fun awaitState(condition: () -> Boolean) {
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (!condition()) {
+              proof.scheduler.runCurrent()
+              check(System.nanoTime() < deadline) { "Timed out waiting for push-to-talk transition" }
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+          }
+          proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"old-turn"},"audioBase64":"AAA="}""")
+          val oldStart = proof.scope.async { runCatching { proof.manager.beginPushToTalk(allowNewCapture = true) } }
+          proof.scheduler.runCurrent()
+          proof.drainCancelledCapture()
+          awaitState {
+            proof.drainCancelledCapture()
+            pending.isCompleted
+          }
+          proof.manager.stopAllCapture()
+          proof.drainCancelledCapture()
+          proof.manager.setEnabled(true)
+          awaitState { proof.manager.isListening.value }
+          val (requestId, socket) = pending.await()
+          socket.send(
+            if (applied) {
+              """{"type":"res","id":"$requestId","ok":true,"payload":{"ok":true,"status":"applied","turnId":"old-turn"}}"""
+            } else {
+              """{"type":"res","id":"$requestId","ok":false,"error":{"code":"UNAVAILABLE","message":"old cancellation failed"}}"""
+            },
+          )
+          awaitState { oldStart.isCompleted }
+          assertTrue("The retired PTT request must reject capture", oldStart.await().isFailure)
+          assertTrue("Old cancellation must leave the replacement relay enabled", proof.manager.isEnabled.value)
+          assertTrue("Old cancellation must leave the replacement relay listening", proof.manager.isListening.value)
+        }
+      }
+    }
+
+  @Test
+  fun providerClearCannotCompletePushToTalkCancellation() =
+    runBlocking {
+      installSpeechRecognitionService()
+      val pending = CompletableDeferred<Pair<String, WebSocket>>()
+      val providerClearDrained = mapOf("unkeyed" to CompletableDeferred<Unit>(), "keyed" to CompletableDeferred<Unit>())
+      withRealtimePlayback(interceptRequest = { request, socket ->
+        when (request.getValue("method").jsonPrimitive.content) {
+          "talk.session.cancelOutput" -> {
+            pending.complete(request.getValue("id").jsonPrimitive.content to socket)
+            true
+          }
+
+          "talk.session.acknowledgeMark" -> {
+            request["params"]
+              ?.jsonObject
+              ?.get("markName")
+              ?.jsonPrimitive
+              ?.content
+              ?.let { providerClearDrained[it]?.complete(Unit) }
+            false
+          }
+
+          else -> {
+            false
+          }
+        }
+      }) { proof ->
+        suspend fun awaitState(condition: () -> Boolean) {
+          val deadline = System.nanoTime() + 5_000_000_000L
+          while (!condition()) {
+            proof.scheduler.runCurrent()
+            proof.drainCancelledCapture()
+            check(System.nanoTime() < deadline) { "Timed out waiting for push-to-talk cancellation boundary" }
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"old-turn"},"audioBase64":"AAA="}""")
+        val starting = proof.scope.async { runCatching { proof.manager.beginPushToTalk(allowNewCapture = true) } }
+        awaitState { pending.isCompleted }
+        val clear = readPrivateField(proof.manager, "pendingRealtimeOutputClear") as CompletableDeferred<*>
+        val (requestId, socket) = pending.await()
+        var replied = false
+        try {
+          val completedByProviderClear = mutableMapOf<String, Boolean>()
+          for ((kind, drained) in providerClearDrained) {
+            val talkEvent = if (kind == "keyed") """, "talkEvent":{"type":"output.audio.done","turnId":"old-turn","final":true}""" else ""
+            socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"clear","reason":"barge-in"$talkEvent}}""")
+            // A mark after clear observes the real playback queue retiring before its acknowledgement.
+            socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"mark","markName":"$kind"}}""")
+            awaitState { drained.isCompleted && !proof.manager.audioRetirement.pending }
+            completedByProviderClear[kind] = clear.isCompleted
+            assertFalse("PTT must still await the cancellation RPC", starting.isCompleted)
+          }
+
+          socket.send("""{"type":"event","event":"talk.event","payload":{"relaySessionId":"playback-relay","type":"clear","talkEvent":{"type":"turn.cancelled","turnId":"old-turn"}}}""")
+          socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"ok":true,"status":"applied","turnId":"old-turn"}}""")
+          replied = true
+          awaitState { starting.isCompleted }
+
+          assertEquals(
+            "Provider playback clears cannot acknowledge explicit push-to-talk cancellation",
+            mapOf("providerClearCompletedCancellation" to mapOf("unkeyed" to false, "keyed" to false), "relaySessionId" to "playback-relay", "pushToTalkStarted" to true),
+            mapOf(
+              "providerClearCompletedCancellation" to completedByProviderClear,
+              "relaySessionId" to readPrivateField(proof.manager, "realtimeSessionId"),
+              "pushToTalkStarted" to starting.await().isSuccess,
+            ),
+          )
+        } finally {
+          if (!replied) socket.send("""{"type":"res","id":"$requestId","ok":true,"payload":{"ok":true,"status":"idle"}}""")
+        }
+      }
+    }
+
+  @Test
+  fun delayedStartFailureCannotStopTheReplacementRelay() =
+    runBlocking {
+      val creates =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      val pending = CompletableDeferred<Pair<String, WebSocket>>()
+      withRealtimePlayback(interceptRequest = { request, socket ->
+        if (request.getValue("method").jsonPrimitive.content == "talk.session.create" && creates.incrementAndGet() == 2) {
+          pending.complete(request.getValue("id").jsonPrimitive.content to socket)
+          true
+        } else {
+          false
+        }
+      }) { proof ->
+        suspend fun awaitState(condition: () -> Boolean) {
+          val deadline = System.nanoTime() + 5_000_000_000L
+          while (!condition()) {
+            proof.scheduler.runCurrent()
+            check(System.nanoTime() < deadline) { "Timed out waiting for relay transition" }
+            withContext(Dispatchers.Default) { delay(10) }
+          }
+        }
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        proof.manager.setEnabled(true)
+        val work = readPrivateField(proof.manager, "gatewayWorkJob") as Job
+        awaitState { pending.isCompleted && work.children.count { it.isActive } == 1 }
+        val oldStart = work.children.single { it.isActive }
+        proof.manager.stopAllCapture()
+        proof.drainCancelledCapture()
+        proof.manager.setEnabled(true)
+        awaitState { proof.manager.isListening.value }
+        val (requestId, socket) = pending.await()
+        socket.send("""{"type":"res","id":"$requestId","ok":false,"error":{"code":"UNAVAILABLE","message":"delayed start failure"}}""")
+        awaitState { oldStart.isCompleted }
+        assertTrue("An obsolete start error must not disable its replacement", proof.manager.isEnabled.value)
+        assertTrue(proof.manager.isListening.value)
+      }
+    }
 
   @Test
   fun relayConsultReturnsCanonicalOwnedResultOverGatewayConnection() =
@@ -1081,7 +2075,9 @@ class TalkModeManagerTest {
 
   private suspend fun withRealtimePlayback(
     sessionKey: String = "main",
+    captureRelayStopNotification: () -> ((() -> Boolean) -> Unit) = { {} },
     responseForRequest: (JsonObject, WebSocket) -> String? = { _, _ -> null },
+    interceptRequest: (JsonObject, WebSocket) -> Boolean = { _, _ -> false },
     block: suspend (RealtimePlaybackProof) -> Unit,
   ) {
     val app = RuntimeEnvironment.getApplication()
@@ -1126,6 +2122,7 @@ class TalkModeManagerTest {
         onAfterSpeak = { callbackDepth -= 1 },
         realtimeCaptureDispatcher = captureDispatcher,
         realtimePlaybackDispatcher = StandardTestDispatcher(scheduler),
+        captureRelayStopNotification = captureRelayStopNotification,
       )
     val writes = mutableListOf<Triple<AudioTrack, ByteArray, AudioFormat>>()
     val listener = ShadowAudioTrack.OnAudioDataWrittenListener { track, bytes, format -> writes += Triple(track, bytes, format) }
@@ -1149,6 +2146,7 @@ class TalkModeManagerTest {
               ) {
                 val request = Json.parseToJsonElement(text).jsonObject
                 if (request["type"]?.jsonPrimitive?.content != "req") return
+                if (interceptRequest(request, webSocket)) return
                 val id = request.getValue("id").jsonPrimitive.content
                 val payload =
                   responseForRequest(request, webSocket) ?: when (request.getValue("method").jsonPrimitive.content) {
@@ -1195,7 +2193,11 @@ class TalkModeManagerTest {
           withContext(Dispatchers.Default) { delay(10) }
         }
         ShadowAudioTrack.addAudioDataListener(listener)
-        block(RealtimePlaybackProof(manager, managerScope, scheduler, synthesizer, player, writes) { callbackDepth })
+        block(
+          RealtimePlaybackProof(manager, managerScope, scheduler, synthesizer, player, writes, {
+            while (true) (captureTasks.poll() ?: break).run()
+          }) { callbackDepth },
+        )
       } finally {
         manager.stopAllCapture()
         managerJob.cancel()
@@ -1307,6 +2309,116 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun stopTtsDiscardsQueuedAudioWithoutStoppingLaterCapture() =
+    runBlocking {
+      val frames = java.util.concurrent.LinkedBlockingQueue<ByteArray>()
+      val reads =
+        java.util.concurrent.atomic
+          .AtomicInteger()
+      val firstFrameQueued = CountDownLatch(1)
+      val resumedFrameQueued = CountDownLatch(1)
+      val appends = ConcurrentLinkedQueue<String>()
+      val cancelled = CompletableDeferred<Pair<String, WebSocket>>()
+      val resumed = CompletableDeferred<Unit>()
+      org.robolectric.shadows.ShadowAudioRecord.setSourceProvider {
+        object : org.robolectric.shadows.ShadowAudioRecord.AudioRecordSource {
+          override fun readInByteArray(
+            bytes: ByteArray,
+            offset: Int,
+            size: Int,
+            blocking: Boolean,
+          ): Int {
+            when (reads.incrementAndGet()) {
+              2 -> firstFrameQueued.countDown()
+              3 -> resumedFrameQueued.countDown()
+            }
+            val frame = checkNotNull(frames.poll(5, TimeUnit.SECONDS)) { "Capture fixture did not receive its next frame" }
+            frame.copyInto(bytes, destinationOffset = offset)
+            return frame.size
+          }
+        }
+      }
+      try {
+        withRealtimePlayback(interceptRequest = { request, socket ->
+          when (request.getValue("method").jsonPrimitive.content) {
+            "talk.session.cancelOutput" -> {
+              cancelled.complete(request.getValue("id").jsonPrimitive.content to socket)
+              true
+            }
+
+            "talk.session.appendAudio" -> {
+              appends +=
+                request
+                  .getValue("params")
+                  .jsonObject
+                  .getValue("audioBase64")
+                  .jsonPrimitive.content
+              resumed.complete(Unit)
+              false
+            }
+
+            else -> {
+              false
+            }
+          }
+        }) { proof ->
+          val gateway = readPrivateField(proof.manager, "session") as GatewaySession
+          val transport = readPrivateField(gateway, "writeLock") as kotlinx.coroutines.sync.Mutex
+          val lockOwner = Any()
+          transport.lock(lockOwner)
+          var held = true
+          var capture: Thread? = null
+          try {
+            frames.put(byteArrayOf(1, 2))
+            capture = Thread { proof.drainCancelledCapture() }.also { it.start() }
+            assertTrue("Capture must queue the first frame", firstFrameQueued.await(5, TimeUnit.SECONDS))
+            proof.drainCancelledCapture()
+            proof.manager.realtimeEvent("""{"relaySessionId":"playback-relay","type":"audio","talkEvent":{"turnId":"old-turn"},"audioBase64":"AAA="}""")
+            proof.manager.stopTts()
+            proof.scheduler.runCurrent()
+            assertNotNull(readPrivateField(proof.manager, "pendingRealtimeOutputClear"))
+
+            transport.unlock(lockOwner)
+            held = false
+            val cancellationDeadline = System.nanoTime() + 5_000_000_000L
+            while (!cancelled.isCompleted) {
+              proof.drainCancelledCapture()
+              proof.scheduler.runCurrent()
+              check(System.nanoTime() < cancellationDeadline) { "Cancellation did not reach the peer" }
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+            val (id, socket) = withTimeout(5_000) { cancelled.await() }
+            assertTrue("The peer must not receive a pre-cancellation frame", appends.isEmpty())
+            socket.send("""{"type":"res","id":"$id","ok":true,"payload":{"ok":true,"status":"idle","turnId":"old-turn"}}""")
+            val deadline = System.nanoTime() + 5_000_000_000L
+            while (readPrivateField(proof.manager, "pendingRealtimeOutputClear") != null) {
+              proof.scheduler.runCurrent()
+              check(System.nanoTime() < deadline) { "Cancellation did not settle" }
+              withContext(Dispatchers.Default) { delay(10) }
+            }
+
+            frames.put(byteArrayOf(3, 4))
+            assertTrue("Capture must queue a new frame after cancellation", resumedFrameQueued.await(5, TimeUnit.SECONDS))
+            proof.drainCancelledCapture()
+            withTimeout(5_000) { resumed.await() }
+            assertEquals(listOf(Base64.encodeToString(byteArrayOf(3, 4), Base64.NO_WRAP)), appends.toList())
+            assertTrue(proof.manager.isEnabled.value)
+          } finally {
+            if (held) transport.unlock(lockOwner)
+            proof.manager.stopAllCapture()
+            frames.offer(byteArrayOf())
+            capture?.join(5_000)
+            assertFalse("Capture worker must terminate", capture?.isAlive == true)
+            proof.drainCancelledCapture()
+          }
+        }
+      } finally {
+        org.robolectric.shadows.ShadowAudioRecord
+          .clearSource()
+      }
+    }
+
+  @Test
   fun realtimeAudioFramesStreamUntilPlaybackOrCancellationStarts() {
     val manager = createManager()
 
@@ -1314,11 +2426,9 @@ class TalkModeManagerTest {
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 16))
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
 
-    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() + 1_000)
-
+    setPrivateField(manager, "localMediaPlaybackActive", true)
     assertFalse(shouldAppendRealtimeCapturedFrame(manager, 4_800))
-
-    setPrivateField(manager, "realtimePlaybackEndsAtMs", SystemClock.elapsedRealtime() - 1)
+    setPrivateField(manager, "localMediaPlaybackActive", false)
 
     assertTrue(shouldAppendRealtimeCapturedFrame(manager, 4_800))
     setPrivateField(manager, "pendingRealtimeOutputClear", CompletableDeferred<String?>())
@@ -1337,7 +2447,7 @@ class TalkModeManagerTest {
       setPrivateField(manager, "realtimeAppendJob", appendJob)
       setMutableStateFlow(manager, "_isEnabled", true)
 
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
 
       assertTrue(captureJob.isCancelled)
       assertTrue(appendJob.isCancelled)
@@ -1355,10 +2465,10 @@ class TalkModeManagerTest {
           scope = this,
           onStoppedByRelay = { stoppedByRelay = true },
         )
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      installRealtimeSession(manager, "relay-1")
       setMutableStateFlow(manager, "_isEnabled", true)
 
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
 
       assertNull(readPrivateField(manager, "realtimeSessionId"))
       assertNull(readPrivateField(manager, "pendingRealtimeOutputClear"))
@@ -1411,7 +2521,7 @@ class TalkModeManagerTest {
     runTest {
       val manager = createManager()
       setMutableStateFlow(manager, "_isEnabled", true)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-new")
+      manager.prepareRealtimeCapturePause("capture-new", lease = null)()
       setPrivateField(manager, "activePttCaptureId", "capture-new")
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-old")
@@ -1425,7 +2535,7 @@ class TalkModeManagerTest {
     runTest {
       val manager = createManager()
 
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
       setPrivateField(manager, "activePttCaptureId", null)
 
       val pause = readPrivateField(manager, "realtimeCapturePause")
@@ -1447,12 +2557,12 @@ class TalkModeManagerTest {
           realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
         )
       setMutableStateFlow(manager, "_isEnabled", true)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "sessionId", "relay-1")
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      installRealtimeSession(manager, "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", nativeText("Thinking…"))
+      manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"transcript","role":"user","text":"Question","final":true}""")
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -1479,11 +2589,11 @@ class TalkModeManagerTest {
           realtimeCaptureDispatcher = StandardTestDispatcher(testScheduler),
         )
       setMutableStateFlow(manager, "_isEnabled", true)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "sessionId", "relay-replacement")
       setPrivateField(pause, "restartRelay", true)
-      setPrivateField(manager, "realtimeSessionId", "relay-replacement")
+      installRealtimeSession(manager, "relay-replacement")
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -1498,11 +2608,10 @@ class TalkModeManagerTest {
   fun stoppedTalkModeDoesNotRestartRelayAfterPushToTalk() =
     runTest {
       val manager = createManager(scope = this)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "restartRelay", true)
       setPrivateField(manager, "stopRequested", true)
-      setMutableStateFlow(manager, "_statusText", nativeText("Off"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -1518,7 +2627,7 @@ class TalkModeManagerTest {
       val manager = createManager(scope = this)
       assertTrue(manager.shouldAllowSpeechInterrupt())
 
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
 
       assertFalse(manager.shouldAllowSpeechInterrupt())
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
@@ -1551,7 +2660,7 @@ class TalkModeManagerTest {
         )
       withMain(dispatcher = Dispatchers.Unconfined, cleanup = manager::stopAllCapture) {
         setMutableStateFlow(manager, "_isEnabled", true)
-        manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+        manager.prepareRealtimeCapturePause("capture-1", lease = null)()
         setPrivateField(manager, "activePttCaptureId", "capture-1")
         @Suppress("UNCHECKED_CAST")
         (readPrivateField(manager, "pttFinalSegments") as MutableList<String>) += "finish this capture"
@@ -1577,8 +2686,8 @@ class TalkModeManagerTest {
   fun relayClosePreservesFinishingPushToTalkOwnership() =
     runTest {
       val manager = createManager(scope = this)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
+      installRealtimeSession(manager, "relay-1")
       setPrivateField(manager, "finishingPttCaptureId", "capture-1")
 
       manager.realtimeEvent("""{"relaySessionId":"relay-1","type":"close","reason":"completed"}""")
@@ -1598,12 +2707,11 @@ class TalkModeManagerTest {
           onStoppedByRelay = { stoppedByRelay = true },
         )
       setMutableStateFlow(manager, "_isEnabled", true)
-      manager.pauseRealtimeCaptureForPushToTalk("capture-1")
+      manager.prepareRealtimeCapturePause("capture-1", lease = null)()
       val pause = readPrivateField(manager, "realtimeCapturePause")!!
       setPrivateField(pause, "sessionId", "relay-1")
-      setPrivateField(manager, "realtimeSessionId", "relay-1")
+      installRealtimeSession(manager, "relay-1")
       setMutableStateFlow(manager, "_isListening", false)
-      setMutableStateFlow(manager, "_statusText", nativeText("Gateway not connected"))
 
       manager.resumeRealtimeCaptureAfterPushToTalk("capture-1")
 
@@ -1635,7 +2743,7 @@ class TalkModeManagerTest {
     isConnected: () -> Boolean = { true },
     onBeforeSpeak: suspend () -> Unit = {},
     onAfterSpeak: suspend () -> Unit = {},
-    onStoppedByRelay: () -> Unit = {},
+    onStoppedByRelay: (isCurrent: () -> Boolean) -> Unit = {},
     realtimeCaptureDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimePlaybackDispatcher: CoroutineDispatcher = Dispatchers.IO,
     realtimeMarkAcknowledger: (suspend (String, String) -> Unit)? = null,
@@ -1657,16 +2765,16 @@ class TalkModeManagerTest {
       isConnected = isConnected,
       onBeforeSpeak = onBeforeSpeak,
       onAfterSpeak = onAfterSpeak,
-      onStoppedByRelay = onStoppedByRelay,
+      captureRelayStopNotification = { onStoppedByRelay },
       talkSpeakClient = talkSpeakClient,
       talkAudioPlayer = talkAudioPlayer ?: TalkAudioPlayer(app),
       realtimeCaptureDispatcher = realtimeCaptureDispatcher,
       realtimePlaybackDispatcher = realtimePlaybackDispatcher,
       realtimeMarkAcknowledger = realtimeMarkAcknowledger,
-    )
+    ).also { setPrivateField(it, "relayStopNotification", onStoppedByRelay) }
   }
 
-  private fun createRealtimeManager(): TalkModeManager = createManager().also { setPrivateField(it, "realtimeSessionId", "relay-1") }
+  private fun createRealtimeManager(): TalkModeManager = createManager().also { installRealtimeSession(it, "relay-1") }
 
   private suspend fun TestScope.withMain(
     dispatcher: CoroutineDispatcher = StandardTestDispatcher(testScheduler),
@@ -1702,6 +2810,27 @@ class TalkModeManagerTest {
 
   @Suppress("UNCHECKED_CAST")
   private fun playbackGeneration(manager: TalkModeManager) = readPrivateField(manager, "playbackGeneration") as AtomicLong
+
+  private fun installRealtimeSession(
+    manager: TalkModeManager,
+    id: String?,
+  ) {
+    setPrivateField(manager, "realtimeSessionId", id)
+    val owner =
+      if (id == null) {
+        null
+      } else {
+        val lease =
+          GatewaySession.RequestLease("synthetic-gateway") { _, _, _, enqueue ->
+            enqueue {}
+            "{}"
+          }
+        val method = TalkModeManager::class.java.getDeclaredMethod("createRealtimePlayoutSession", String::class.java, GatewaySession.RequestLease::class.java)
+        method.isAccessible = true
+        method.invoke(manager, id, lease)
+      }
+    setPrivateField(manager, "realtimePlayoutSession", owner)
+  }
 
   private fun setPrivateField(
     target: Any,
@@ -1755,11 +2884,14 @@ class TalkModeManagerTest {
 
   private fun recognitionListener(
     manager: TalkModeManager,
-    captureId: String,
+    captureId: String?,
   ): RecognitionListener {
-    val method = manager.javaClass.getDeclaredMethod("recognitionListener", String::class.java)
+    val owner =
+      (readPrivateField(manager, "recognizer") as? SpeechRecognizer)
+        ?: SpeechRecognizer.createSpeechRecognizer(RuntimeEnvironment.getApplication()).also { setPrivateField(manager, "recognizer", it) }
+    val method = manager.javaClass.getDeclaredMethod("recognitionListener", String::class.java, SpeechRecognizer::class.java)
     method.isAccessible = true
-    return method.invoke(manager, captureId) as RecognitionListener
+    return method.invoke(manager, captureId, owner) as RecognitionListener
   }
 
   private fun silenceSegmentedRung(): Any {
@@ -1787,6 +2919,7 @@ private data class RealtimePlaybackProof(
   val synthesizer: FakeTalkSpeechSynthesizer,
   val player: FakeTalkAudioPlayer,
   val writes: List<Triple<AudioTrack, ByteArray, AudioFormat>>,
+  val drainCancelledCapture: () -> Unit,
   val callbackDepth: () -> Int,
 )
 
@@ -1822,4 +2955,16 @@ private class FakeTalkAudioPlayer : TalkAudioPlaying {
     stopCalls += 1
     stopped = true
   }
+}
+
+@org.robolectric.annotation.Implements(AudioTrack::class)
+class DeadRealtimeAudioTrack : ShadowAudioTrack() {
+  @org.robolectric.annotation.Implementation(minSdk = 23)
+  override fun native_write_byte(
+    audioData: ByteArray,
+    offsetInBytes: Int,
+    sizeInBytes: Int,
+    format: Int,
+    isBlocking: Boolean,
+  ): Int = AudioTrack.ERROR_DEAD_OBJECT
 }

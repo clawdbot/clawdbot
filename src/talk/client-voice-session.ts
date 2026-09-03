@@ -4,6 +4,7 @@ import {
   appendTranscriptMessage,
   loadSessionEntryReadOnly,
   patchSessionEntryCore,
+  publishTranscriptUpdate,
 } from "../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
 import { mergeSessionEntry } from "../config/sessions/types.js";
@@ -508,7 +509,7 @@ function appendVoiceTranscript(params: {
         },
         { agentId: normalized.agentId },
       );
-      await appendTranscriptMessage(
+      const appended = await appendTranscriptMessage(
         { ...sessionTarget, sessionId: sessionEntry.sessionId },
         {
           ...(normalized.config ? { config: normalized.config } : {}),
@@ -522,6 +523,13 @@ function appendVoiceTranscript(params: {
           now: timestamp,
         },
       );
+      // Publish the committed row before fallible bookkeeping; a retry can deduplicate it.
+      if (appended.appended) {
+        await publishTranscriptUpdate(
+          { ...sessionTarget, sessionId: sessionEntry.sessionId },
+          { message: appended.message, messageId: appended.messageId },
+        );
+      }
       runOpenClawAgentWriteTransaction(
         (database) => {
           const current = readRecordInTransaction(database, normalized.voiceSessionId);

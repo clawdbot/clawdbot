@@ -21,6 +21,7 @@ import {
   emitAcpLifecycleError as emitAcpLifecycleErrorBase,
   emitAcpPromptSubmitted,
   emitAcpRuntimeEvent as emitAcpRuntimeEventBase,
+  resolveAcpLifecycleEndFields,
 } from "./attempt-execution.js";
 
 let captured: AgentEventPayload[] = [];
@@ -36,9 +37,21 @@ function emitAcpRuntimeEvent(
 }
 
 function emitAcpLifecycleEnd(
-  params: Omit<Parameters<typeof emitAcpLifecycleEndBase>[0], "toolTracker">,
+  params: Omit<Parameters<typeof emitAcpLifecycleEndBase>[0], "toolTracker" | "endFields"> & {
+    abortSignal?: AbortSignal;
+    stopReason?: string;
+    resultStatus?: "completed" | "cancelled";
+  },
 ) {
-  return emitAcpLifecycleEndBase({ ...params, toolTracker });
+  return emitAcpLifecycleEndBase({
+    ...params,
+    toolTracker,
+    endFields: resolveAcpLifecycleEndFields(
+      params.abortSignal,
+      params.stopReason,
+      params.resultStatus,
+    ),
+  });
 }
 
 function emitAcpLifecycleError(
@@ -350,7 +363,7 @@ describe("ACP diagnostic events", () => {
     emitAcpLifecycleEndBase({
       runId: "run-tool-unrelated",
       toolTracker: unrelatedTracker,
-      resultStatus: "completed",
+      endFields: resolveAcpLifecycleEndFields(undefined, undefined, "completed"),
     });
 
     emitAcpLifecycleEnd({ ...params, resultStatus: "completed" });

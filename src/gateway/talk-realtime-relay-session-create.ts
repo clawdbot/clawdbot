@@ -5,6 +5,7 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME } from "../talk/agent-consult-to
 import { buildRealtimeVoiceAgentCancelProviderResult } from "../talk/agent-run-control-shared.js";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  type RealtimeVoiceAudioClearReason,
   type RealtimeVoiceCloseReason,
 } from "../talk/provider-types.js";
 import { createRealtimeVoiceSessionHarness } from "../talk/realtime-session-harness.js";
@@ -101,6 +102,7 @@ export function createTalkRealtimeRelaySession(
       ...(talkEvent ? { talkEvent: harness.emit(talkEvent) } : {}),
     });
   let currentOutputItemId: string | undefined;
+  let playbackTurnId: string | undefined;
   let ready = false;
   let continuityResetActive = false;
   let failureEmitted = false;
@@ -112,6 +114,18 @@ export function createTalkRealtimeRelaySession(
   const getActiveRelay = (): RelaySession | undefined => {
     const relay = relayRef.current;
     return relay && relaySessions.get(relay.id) === relay ? relay : undefined;
+  };
+  const clearPlayback = (reason?: RealtimeVoiceAudioClearReason) => {
+    // Released clients match clear to the audio sent, which can outlive response completion
+    // and remain queued after a newer response starts without sending audio.
+    const turnId = playbackTurnId;
+    playbackTurnId = undefined;
+    emit(
+      { relaySessionId, type: "clear", ...(reason ? { reason } : {}) },
+      turnId
+        ? { type: "output.audio.done", turnId, payload: { reason: reason ?? "clear" }, final: true }
+        : undefined,
+    );
   };
   const bridgeRef: { current?: ReturnType<typeof harness.createBridge> } = {};
   const outputOwnership = new TalkRealtimeRelayOutputOwnership(
@@ -213,6 +227,7 @@ export function createTalkRealtimeRelaySession(
             offset,
             Math.min(offset + RELAY_OUTPUT_AUDIO_FRAME_BYTES, audio.byteLength),
           );
+          playbackTurnId = outputTurnId;
           emit(
             {
               relaySessionId,
@@ -229,25 +244,7 @@ export function createTalkRealtimeRelaySession(
           );
         }
       },
-      clearAudio: (reason) => {
-        const relay = getActiveRelay();
-        if (!relay) {
-          return;
-        }
-        const outputTurnId = outputOwnership.resolve(false);
-        if (!outputTurnId) {
-          return;
-        }
-        emit(
-          { relaySessionId, type: "clear", ...(reason ? { reason } : {}) },
-          {
-            type: "output.audio.done",
-            turnId: outputTurnId,
-            payload: { reason: reason ?? "clear" },
-            final: true,
-          },
-        );
-      },
+      clearAudio: clearPlayback,
       sendMark: (markName) => {
         const relay = getActiveRelay();
         if (!relay) {
@@ -287,18 +284,35 @@ export function createTalkRealtimeRelaySession(
         outputOwnership.drain?.resolve();
         outputOwnership.phase = "unowned";
         outputOwnership.turnId = outputOwnership.responseId = undefined;
+        const activeTurnId = relay.harness.talk.activeTurnId;
+        // Queued audio A and active turn B need distinct clears. Emit A before cancelling B
+        // so the Talk event sequence and client cancellation fence retain their ordering.
+        if (!activeTurnId || (playbackTurnId && playbackTurnId !== activeTurnId)) {
+          clearPlayback();
+        }
         const talkEvent = resetTalkRealtimeRelayContinuity(relay, event.type);
         if (!getActiveRelay()) {
           return;
         }
-        const clearEvent = { relaySessionId, type: "clear" as const };
-        broadcastToOwner(params.context, params.connId, {
-          ...clearEvent,
-          ...(talkEvent ? { talkEvent } : {}),
-        });
+        playbackTurnId = undefined;
+        if (talkEvent) {
+          broadcastToOwner(params.context, params.connId, {
+            relaySessionId,
+            type: "clear",
+            talkEvent,
+          });
+        }
         return;
       }
       if (event.direction !== "server") {
+        return;
+      }
+      if (event.type === "response.created") {
+        // Response admission owns work status; asynchronous input transcripts do not.
+        const turnId = outputOwnership.resolve(false);
+        if (turnId) {
+          emit({ relaySessionId, type: "responseStarted", turnId });
+        }
         return;
       }
       if (event.type === "session.created") {
