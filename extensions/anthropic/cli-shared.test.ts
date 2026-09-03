@@ -35,6 +35,8 @@ describe("Claude CLI adapter equivalence", () => {
     "--verbose",
     "--setting-sources",
     "user",
+    "--tools",
+    "Skill",
     "--allowedTools",
     "mcp__openclaw__*",
     "--disallowedTools",
