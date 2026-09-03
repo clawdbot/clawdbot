@@ -195,6 +195,35 @@ suite.define(() => {
               .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
               .count(),
           ).toBe(0);
+          await writeFile(
+            path.join(suite.artifactDir, "verdict.json"),
+            `${JSON.stringify(
+              {
+                gateway: {
+                  omittedHasMarker: JSON.stringify(omittedHistory).includes('"omitted":true'),
+                  omittedExcludesInlinePayload:
+                    !JSON.stringify(omittedHistory).includes("omitted inline image"),
+                  retainedIncludesUrl: JSON.stringify(retainedHistory).includes(retainedImageUrl),
+                },
+                ui: {
+                  omittedCardText: await omittedCard.textContent(),
+                  omittedInteractiveDescendantCount: await omittedCard
+                    .locator("a, button, img, audio, video")
+                    .count(),
+                  retainedImageSrc: await retainedPane
+                    .locator(`img.chat-message-image[src="${retainedImageUrl}"]`)
+                    .getAttribute("src"),
+                  retainedOmittedCardCount: await retainedPane
+                    .locator(".chat-assistant-attachment-card", {
+                      hasText: "Omitted from history",
+                    })
+                    .count(),
+                },
+              },
+              null,
+              2,
+            )}\n`,
+          );
           await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
         },
       );
