@@ -11,6 +11,7 @@ import {
 } from "./schtasks-layout.js";
 import {
   findInstalledProcessPid,
+  findInstalledProcessPids,
   isNodeHostArgv,
   readWindowsProcessSnapshot,
   resolveScheduledTaskCommandPort,
@@ -47,6 +48,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceRestartResult,
 } from "./service-types.js";
+import { WINDOWS_TASK_SUPERVISOR_FLAG } from "./windows-task-supervisor-contract.js";
 
 export type ScheduledTaskActivation = "scheduled-task" | "direct-fallback";
 
@@ -69,9 +71,10 @@ async function readPreLaunchTaskPids(
 ): Promise<ReadonlySet<number>> {
   const pids = new Set<number>();
   try {
+    const snapshot = readWindowsProcessSnapshot();
     const scriptPathNeedle = normalizeLowercaseStringOrEmpty(scriptPath.replaceAll("/", "\\"));
     if (scriptPathNeedle) {
-      for (const entry of readWindowsProcessSnapshot() ?? []) {
+      for (const entry of snapshot ?? []) {
         const pid = entry.ProcessId;
         if (typeof pid !== "number" || !Number.isFinite(pid) || pid <= 0) {
           continue;
@@ -96,6 +99,20 @@ async function readPreLaunchTaskPids(
           command,
         )) {
           pids.add(pid);
+        }
+        // The owned-pid resolver reports a single preferred owner, but a stopped task can leave
+        // both its gateway child and its supervisor alive. Baseline every match so a survivor
+        // cannot become the resolver's answer after `/Run` and read as newly launched.
+        const installedArguments = command?.programArguments;
+        if (snapshot && installedArguments?.length) {
+          for (const argv of [
+            installedArguments,
+            [...installedArguments, WINDOWS_TASK_SUPERVISOR_FLAG],
+          ]) {
+            for (const pid of findInstalledProcessPids(snapshot, port, argv, () => true)) {
+              pids.add(pid);
+            }
+          }
         }
       }
     }

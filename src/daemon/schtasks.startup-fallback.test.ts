@@ -1899,6 +1899,61 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("does not treat a surviving pre-launch task supervisor as launch evidence", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+      fastForwardTaskStartWait();
+      const installedGatewayCommandLine =
+        '"C:\\Program Files\\nodejs\\node.exe" "C:\\openclaw\\dist\\index.js" gateway --port 18789';
+      let snapshotQueries = 0;
+      spawnSync.mockImplementation((command, args) => {
+        if (
+          command !== getWindowsPowerShellExePath() ||
+          !Array.isArray(args) ||
+          !args.includes(NODE_PROCESS_QUERY)
+        ) {
+          return makeSpawnSyncResult();
+        }
+        // The stopped task left both its gateway child and its supervisor alive; the child
+        // exits after the pre-launch baseline, so the supervisor becomes the resolver's answer.
+        const processes =
+          snapshotQueries++ === 0
+            ? [
+                { ProcessId: 4242, CommandLine: installedGatewayCommandLine },
+                {
+                  ProcessId: 4243,
+                  CommandLine: `${installedGatewayCommandLine} --task-supervisor`,
+                },
+              ]
+            : [
+                {
+                  ProcessId: 4243,
+                  CommandLine: `${installedGatewayCommandLine} --task-supervisor`,
+                },
+              ];
+        return makeSpawnSyncResult({ stdout: JSON.stringify(processes) });
+      });
+      addAcceptedRunNeverStartsResponses();
+
+      await expect(
+        installScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\openclaw\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+        }),
+      ).rejects.toThrow("refusing a direct fallback");
+
+      expect(spawn).not.toHaveBeenCalled();
+    });
+  });
+
   it("accepts a newly observed gateway process while a pre-existing listener keeps running", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       fastForwardTaskStartWait();
