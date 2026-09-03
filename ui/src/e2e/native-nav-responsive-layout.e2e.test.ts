@@ -196,12 +196,16 @@ suite.define(() => {
       sidebarBrand
         .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
         .evaluateAll((actions) => {
-          const boxes = actions.map((action) => action.getBoundingClientRect());
-          return boxes
-            .slice(1)
-            .map((box, index) =>
-              Math.round(Math.max(box.left - boxes[index].right, boxes[index].left - box.right)),
-            );
+          const [first, ...rest] = actions.map((action) => action.getBoundingClientRect());
+          if (!first) {
+            return [];
+          }
+          let previous = first;
+          return rest.map((box) => {
+            const gap = Math.round(Math.max(box.left - previous.right, previous.left - box.right));
+            previous = box;
+            return gap;
+          });
         });
 
     await expect.poll(controlGaps).toEqual([0, 0]);
