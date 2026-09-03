@@ -352,7 +352,7 @@ async function runProof(params: {
               message_id: 5000 + telegramCalls.length,
               date: 1_756_000_000,
               chat: { id: CHAT_ID, type: "private" },
-              text: String(body.text ?? ""),
+              text: typeof body.text === "string" ? body.text : "",
             },
           });
           return;
@@ -554,7 +554,7 @@ async function runProof(params: {
 
     const sent = telegramCalls.slice(before).filter((call) => call.method === "sendMessage");
     check("exactly one Telegram sendMessage reached the Bot API edge", sent.length, 1);
-    const deliveredText = String(sent[0]?.body.text ?? "");
+    const deliveredText = typeof sent[0]?.body.text === "string" ? sent[0].body.text : "";
     console.log("  --- redacted delivered Telegram sendMessage.text ---");
     for (const line of redact(deliveredText, redactions).split("\n")) {
       console.log(`  | ${line}`);
