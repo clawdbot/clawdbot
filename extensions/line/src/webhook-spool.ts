@@ -49,7 +49,11 @@ type LineWebhookSpoolOptions = {
   deliver: (
     events: readonly webhook.Event[],
     destination: string,
-    control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+    control: {
+      turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle;
+      /** Parts LINE announced for this send but never delivered. */
+      missingParts?: number;
+    },
   ) => Promise<void>;
   queue?: ChannelIngressQueue<LineWebhookSpoolPayload>;
 };
@@ -198,6 +202,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       let turnEvents: readonly webhook.Event[] = [event];
       let turnLifecycles: readonly (typeof lifecycle)[] = [lifecycle];
       let releaseLane: (() => void) | undefined;
+      let missingParts: number | undefined;
       if (imageSet) {
         if (!acceptsDeferredClaims) {
           // Shutting down: a claim parked in the buffer would never flush, so hand
@@ -223,9 +228,10 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           return undefined;
         }
         if (set.missing) {
-          // The turn answers what arrived; the rest becomes its own turn later.
-          // Without this the operator sees only a short mediaCount and nothing
-          // that explains the difference.
+          // The turn answers what arrived. The agent is told as well - a short
+          // set otherwise reads as the whole send - and the operator gets the
+          // count that explains a small media count.
+          missingParts = set.missing;
           options.runtime.error?.(
             danger(
               `line: image set ${imageSet.setId} delivered ${set.events.length} of ${set.events.length + set.missing} parts`,
@@ -260,6 +266,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
       ).turnAdoptionLifecycle;
       let handedOff = false;
       const delivery = options.deliver(turnEvents, destination, {
+        ...(missingParts === undefined ? {} : { missingParts }),
         turnAdoptionLifecycle: {
           ...boundLifecycle,
           onAdopted: async () => {

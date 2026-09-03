@@ -105,6 +105,7 @@ export function createLineBot(opts: LineBotOptions): LineBot {
         ...(control.turnAdoptionLifecycle
           ? { turnAdoptionLifecycle: control.turnAdoptionLifecycle }
           : {}),
+        ...(control.missingParts === undefined ? {} : { missingParts: control.missingParts }),
         groupHistories,
         historyLimit:
           account.config.historyLimit ??

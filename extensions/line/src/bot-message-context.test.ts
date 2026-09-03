@@ -435,6 +435,31 @@ describe("buildLineMessageContext", () => {
     });
   });
 
+  it("tells the agent how much of a multi-image send never arrived", async () => {
+    const event = createMessageEvent({ type: "user", userId: "user-image" }, {
+      message: {
+        id: "image-1",
+        type: "image",
+        contentProvider: { type: "line" },
+      },
+    } as Partial<MessageEvent>);
+
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [{ path: "/tmp/one.png", contentType: "image/png" }],
+      missingParts: 2,
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    // Without this the turn reads as the whole send and the agent answers
+    // confidently about images the sender can see are missing.
+    expect(context?.ctxPayload.BodyForAgent).toBe(
+      "[line: 2 more images in this send were not delivered]",
+    );
+  });
+
   it("keeps materialized media-only text empty and projects structured media facts", async () => {
     const event = createMessageEvent({ type: "user", userId: "user-image" }, {
       message: {

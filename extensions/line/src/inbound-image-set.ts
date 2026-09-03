@@ -1,4 +1,5 @@
 // Line plugin module groups the durable claims LINE splits one multi-image send into.
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 
 // LINE does not deliver several images picked in one action as one message. It
 // sends one webhook event per image, ties them together with an imageSet id, and
@@ -20,7 +21,12 @@
 // released behind the set still waits for it. Its window also starts when an
 // item is buffered, and this one starts after the lane is entered, so time spent
 // queued behind earlier work on the lane is not charged to the gap between
-// parts.
+// parts. Its flush also runs on a bare timer, detached from the delivery
+// callback, while this turn has to stay inside the ingress admission the spool
+// pump holds open. Per-key serialization itself is the shared helper's.
+//
+// The delay bounds the gap between parts of one send, not a whole upload, so it
+// is generous next to the sub-second gaps LINE was measured delivering.
 const IMAGE_SET_FLUSH_DELAY_MS = 4_000;
 
 type PendingImageSetPart<TEvent, TLifecycle> = {
@@ -120,21 +126,28 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   // Tail of each lane's queue: everything that deferred waits behind it in turn.
   const laneChain = new Map<string, Promise<void>>();
 
+  // The queued task is the held region itself: it resolves once its holder calls
+  // the returned release, which is what keeps the lane occupied for the whole
+  // delivery rather than only for the wait.
   const enterLane = async (laneKey: string): Promise<() => void> => {
-    const prior = laneChain.get(laneKey) ?? Promise.resolve();
     let release = () => {};
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const mine = prior.then(async () => await held);
-    laneChain.set(laneKey, mine);
-    await prior;
-    return () => {
-      release();
-      if (laneChain.get(laneKey) === mine) {
-        laneChain.delete(laneKey);
-      }
-    };
+    let entered = () => {};
+    const turn = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    void enqueueKeyedTask({
+      tails: laneChain,
+      key: laneKey,
+      task: async () => {
+        entered();
+        await held;
+      },
+    });
+    await turn;
+    return release;
   };
 
   const admit = async (input: {

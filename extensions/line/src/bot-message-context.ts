@@ -53,6 +53,8 @@ interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
   mediaUnavailable?: boolean;
+  /** Parts LINE announced for this send but never delivered. */
+  missingParts?: number;
   cfg: OpenClawConfig;
   account: ResolvedLineAccount;
   commandAuthorized: boolean;
@@ -470,12 +472,20 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
         ? [{ kind: nativeMediaKind }]
         : [];
   const rawBody = textContent;
+  // The turn answers what arrived. Saying so keeps the agent from describing a
+  // short set as the whole send.
+  const shortfallNotice = params.missingParts
+    ? `[line: ${params.missingParts} more image${params.missingParts === 1 ? "" : "s"} in this send were not delivered]`
+    : undefined;
+  const withShortfall = shortfallNotice
+    ? formatInboundMediaUnavailableText({ body: rawBody, notice: shortfallNotice })
+    : rawBody;
   const agentBody = mediaUnavailable
     ? formatInboundMediaUnavailableText({
-        body: rawBody,
+        body: withShortfall,
         notice: "[line attachment unavailable]",
       })
-    : rawBody;
+    : withShortfall;
 
   if (!agentBody && mediaFacts.length === 0) {
     return null;

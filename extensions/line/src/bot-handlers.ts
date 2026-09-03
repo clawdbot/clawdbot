@@ -96,6 +96,8 @@ interface LineHandlerContext {
     },
   ) => Promise<void>;
   turnAdoptionLifecycle?: LineWebhookTurnAdoptionLifecycle;
+  /** Parts LINE announced for this send but never delivered. */
+  missingParts?: number;
   groupHistories?: Map<string, HistoryEntry[]>;
   historyLimit?: number;
 }
@@ -496,6 +498,7 @@ async function handleMessageEvent(
       event: answerAs,
       allMedia: [...allMedia],
       mediaUnavailable,
+      ...(context.missingParts === undefined ? {} : { missingParts: context.missingParts }),
       cfg,
       account,
       commandAuthorized: decision.access.commandAccess.authorized,
