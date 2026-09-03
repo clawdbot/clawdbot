@@ -141,6 +141,17 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
+async function waitFor<T>(resolve: () => T | undefined): Promise<T> {
+  for (let attempt = 0; attempt < 480; attempt += 1) {
+    const value = resolve();
+    if (value !== undefined) {
+      return value;
+    }
+    await sleep(1_000);
+  }
+  throw new Error("timed out waiting for live CLI announce proof");
+}
+
 type CliBackendAgentAttemptTimeouts = {
   agentTimeoutSeconds: number;
   requestTimeoutMs: number;
@@ -670,8 +681,7 @@ describeLive("gateway live (cli backend)", () => {
         const announceChildToken = `CLI_ANNOUNCE_CHILD_${announceNonce}`;
         const announceParentToken = `CLI_ANNOUNCE_PARENT_${announceNonce}`;
         let announceParentObservedAt: number | undefined;
-        let announceError: unknown;
-        const announceRequest = activeClient.request<AgentPayload>(
+        const announceRequest = activeClient.request(
           "agent",
           {
             sessionKey: announceSessionKey,
@@ -682,20 +692,14 @@ describeLive("gateway live (cli backend)", () => {
               "Run this exact OpenClaw CLI-backed completion announcement scenario. Use tool calls, not prose.",
               `Call sessions_spawn exactly once with taskName=cli_announce_${announceNonce.toLowerCase()} and task=${JSON.stringify(`Reply exactly ${announceChildToken} and nothing else.`)}.`,
               `After sessions_spawn returns status=accepted, call bash with exactly: sleep 35; printf CLI_ANNOUNCE_PARENT_TOOL_DONE_${announceNonce}.`,
-              "Do not call sessions_yield.",
               `After the bash call completes, reply exactly ${announceParentToken}.`,
             ].join("\n"),
           },
           { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
         );
-        announceRequest
-          .then(() => (announceParentObservedAt = Date.now()))
-          .catch((error: unknown) => (announceError = error));
+        void announceRequest.then(() => (announceParentObservedAt = Date.now()));
 
-        const completedAnnounceChild = await waitFor("CLI-backed announce child completion", () => {
-          if (announceError) {
-            throw toLintErrorObject(announceError, "Non-Error thrown");
-          }
+        const completedAnnounceChild = await waitFor(() => {
           return listSubagentRunsForRequester(announceSessionKey).find(
             (run) =>
               run.taskName === `cli_announce_${announceNonce.toLowerCase()}` &&
@@ -707,7 +711,7 @@ describeLive("gateway live (cli backend)", () => {
         announceParentObservedAt ??= Date.now();
         expect(extractPayloadText(announceParent.result)).toContain(announceParentToken);
 
-        const deliveredAnnounceChild = await waitFor("ordered CLI-backed completion announce", () =>
+        const deliveredAnnounceChild = await waitFor(() =>
           listSubagentRunsForRequester(announceSessionKey).find(
             (run) =>
               run.runId === completedAnnounceChild.runId &&
@@ -716,16 +720,9 @@ describeLive("gateway live (cli backend)", () => {
               typeof run.delivery?.announcedAt === "number",
           ),
         );
-        const announceAt = deliveredAnnounceChild.delivery?.announcedAt ?? 0;
-        console.log(
-          `[cli-announce-order] ${JSON.stringify({
-            completionEnqueuedAt: deliveredAnnounceChild.delivery?.enqueuedAt,
-            completionDeliveredAt: deliveredAnnounceChild.delivery?.deliveredAt,
-            completionAnnouncedAt: announceAt,
-            parentObservedAt: announceParentObservedAt,
-          })}`,
+        expect(deliveredAnnounceChild.delivery?.announcedAt).toBeGreaterThanOrEqual(
+          announceParentObservedAt,
         );
-        expect(announceAt).toBeGreaterThanOrEqual(announceParentObservedAt);
 
         if (modelSwitchTarget) {
           const switchNonce = randomBytes(3).toString("hex").toUpperCase();
