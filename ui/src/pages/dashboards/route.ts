@@ -2,24 +2,14 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  DEFAULT_SESSION_LIST_QUERY,
-  type SessionListOptions,
-  type SessionListSnapshot,
-} from "../../lib/sessions/index.ts";
+import type { SessionListOptions, SessionListSnapshot } from "../../lib/sessions/index.ts";
 import { resolveSessionNavigationAgentId } from "../../lib/sessions/route-navigation.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
+import { dashboardSessionListQuery as dashboardSessionListQueryForAgent } from "../../lib/sessions/session-requests.ts";
 import type { DashboardsRouteData } from "./view.ts";
 
 export function dashboardSessionListQuery(context: ApplicationContext): SessionListOptions {
-  return {
-    ...DEFAULT_SESSION_LIST_QUERY,
-    hasBoard: true,
-    archivedFilter: "all",
-    ...(context.agentSelection.state.scopeId
-      ? { agentId: context.agentSelection.state.scopeId }
-      : {}),
-  };
+  return dashboardSessionListQueryForAgent(context.agentSelection.state.scopeId);
 }
 
 export function dashboardsRouteData(

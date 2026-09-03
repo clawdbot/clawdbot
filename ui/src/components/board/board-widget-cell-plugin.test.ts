@@ -215,6 +215,10 @@ describe("plugin board widget cells", () => {
     for (const [index, scenario] of responses.entries()) {
       const request = vi.fn(async () => scenario.response);
       const context = {
+        agentSelection: {
+          state: { scopeId: null },
+          subscribe: () => () => undefined,
+        },
         sessions: {
           state: {
             result: {
@@ -239,6 +243,33 @@ describe("plugin board widget cells", () => {
             },
           },
           subscribe: () => () => undefined,
+          subscribeList: () => () => undefined,
+          listSnapshot: () => ({
+            result: {
+              sessions: [
+                { key: "global", agentId: "main", status: "failed", startedAt: 0, endedAt: 2 },
+                { key: "global", agentId: "research", status: "done", startedAt: 0, endedAt: 2 },
+                {
+                  key: "agent:main:notes",
+                  agentId: "main",
+                  status: "failed",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+                {
+                  key: "agent:research:notes",
+                  agentId: "research",
+                  status: "done",
+                  startedAt: 0,
+                  endedAt: 2,
+                },
+              ],
+            },
+            agentId: null,
+            loading: false,
+            error: null,
+          }),
+          refreshList: async () => undefined,
         },
         gateway: {
           snapshot: {
@@ -354,6 +385,16 @@ describe("plugin board widget cells", () => {
       };
     });
     const context = {
+      agentSelection: {
+        state: { scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      sessions: {
+        subscribe: () => () => undefined,
+        subscribeList: () => () => undefined,
+        listSnapshot: () => ({ result: null, agentId: null, loading: false, error: null }),
+        refreshList: async () => undefined,
+      },
       gateway: {
         snapshot: {
           phase: "connected",
@@ -472,5 +513,110 @@ describe("plugin board widget cells", () => {
     );
     expect(cell.querySelector('[data-test-id="session-progress-error"] button')).toBeNull();
     expect(request).toHaveBeenCalledTimes(6);
+  });
+
+  it("keeps a board-less running target live on another session's dashboard", async () => {
+    const boardOwnerKey = "agent:main:dashboard";
+    const boardlessTargetKey = "agent:main:boardless";
+    const now = Date.now();
+    const targetRow = {
+      key: boardlessTargetKey,
+      agentId: "main",
+      status: "running",
+      hasActiveRun: true,
+      startedAt: now - 60_000,
+    };
+    const rosterQueries: Array<{ hasBoard?: boolean }> = [];
+    const request = vi.fn(async () => ({
+      card: {
+        sessionKey: boardlessTargetKey,
+        revision: 1,
+        updatedAt: now,
+        markdown: `Progress for ${boardlessTargetKey}`,
+        steps: [{ step: "Owned work", status: "in_progress" }],
+      },
+    }));
+    const context = {
+      agentSelection: {
+        state: { scopeId: null },
+        subscribe: () => () => undefined,
+      },
+      sessions: {
+        state: { result: null },
+        subscribe: () => () => undefined,
+        subscribeList: (query: { hasBoard?: boolean }) => {
+          rosterQueries.push(query);
+          return () => undefined;
+        },
+        listSnapshot: (query: { hasBoard?: boolean }) => ({
+          // The Gateway filters hasBoard against each session's own board
+          // inventory, so the board-less target only exists in the shared roster.
+          result: {
+            sessions: [
+              { key: boardOwnerKey, agentId: "main", status: "done", startedAt: 0, endedAt: 2 },
+              ...(query.hasBoard ? [] : [targetRow]),
+            ],
+          },
+          agentId: null,
+          loading: false,
+          error: null,
+        }),
+        refreshList: async () => undefined,
+      },
+      gateway: {
+        snapshot: {
+          phase: "connected",
+          client: { request },
+          hello: {
+            features: { methods: ["progressCard.get"] },
+            controlUiWidgetKinds: [
+              { pluginId: "session", kind: "session:progress", label: "Session progress" },
+            ],
+          },
+        },
+        subscribe: () => () => undefined,
+        subscribeEvents: () => () => undefined,
+      },
+    } as unknown as ApplicationContext;
+    const widget: BoardWidget = {
+      name: "cross-session-progress",
+      tabId: "main",
+      title: "Session progress",
+      contentKind: "plugin",
+      pluginKind: "session:progress",
+      props: { sessionKey: boardlessTargetKey },
+      sizeW: 6,
+      sizeH: 4,
+      position: 0,
+      grantState: "none",
+      revision: 1,
+    };
+    const provider = createApplicationContextProvider(context);
+    const cell = document.createElement("openclaw-board-widget-cell");
+    cell.widget = widget;
+    cell.rect = { name: widget.name, x: 0, y: 0, w: 6, h: 4 };
+    cell.sessionKey = boardOwnerKey;
+    cell.session = { sessionKey: boardOwnerKey, agentId: "main" };
+    cell.active = true;
+    cell.callbacks = callbacks();
+    provider.append(cell);
+    document.body.append(provider);
+
+    await vi.waitFor(
+      () =>
+        expect(request).toHaveBeenCalledWith("progressCard.get", {
+          sessionKey: boardlessTargetKey,
+        }),
+      CHUNK_LOAD_WAIT,
+    );
+    const element = cell.querySelector("openclaw-session-progress-widget");
+    await vi.waitFor(
+      () => expect(element?.querySelector(".session-run-spinner")).not.toBeNull(),
+      CHUNK_LOAD_WAIT,
+    );
+    expect(element?.querySelector(".session-progress-card__step--paused")).toBeNull();
+    // Liveness must not depend on dashboard gallery membership.
+    expect(rosterQueries.length).toBeGreaterThan(0);
+    expect(rosterQueries.every((query) => query.hasBoard === undefined)).toBe(true);
   });
 });
