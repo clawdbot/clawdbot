@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { renderNode } from "../../components/config-form.node.ts";
-import { hintForPath, humanize, type JsonSchema } from "../../components/config-form.shared.ts";
+import {
+  humanize,
+  localizedHintForPath,
+  type JsonSchema,
+} from "../../components/config-form.shared.ts";
 import {
   renderSettingsGroup,
   renderSettingsPage,
@@ -46,7 +50,7 @@ export function renderSetupSection(schema: JsonSchema, props: ConfigProps, disab
           if (typeof value !== "string" || !value) {
             return [];
           }
-          const hint = hintForPath(["wizard", key], props.uiHints);
+          const hint = localizedHintForPath(["wizard", key], props.uiHints);
           return [
             renderSettingsRow({
               title: hint?.label ?? schema.properties?.[key]?.title ?? humanize(key),

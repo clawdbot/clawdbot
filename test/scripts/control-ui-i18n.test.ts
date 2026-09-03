@@ -26,8 +26,24 @@ import {
   runProcess,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { loadControlUiSourceCatalog } from "../../scripts/lib/control-ui-i18n-source-catalog.ts";
+import { flattenTranslations } from "../../scripts/lib/control-ui-i18n-sync-plan.ts";
+import { configHintTranslationKey } from "../../ui/src/i18n/lib/config-hint-translation.ts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+describe("control-ui config hint source catalog", () => {
+  it("includes core config labels and help under collision-safe keys", () => {
+    const source = flattenTranslations(loadControlUiSourceCatalog());
+
+    const label = "Gateway Token";
+    expect(source.get(configHintTranslationKey("gateway.auth.token", "label", label))).toBe(label);
+    const helpEntry = [...source].find(([key]) =>
+      key.startsWith("configHints.gateway%2Eauth%2Etoken.help."),
+    );
+    expect(helpEntry?.[1]).toBeTypeOf("string");
+  });
+});
 
 describe("control-ui-i18n generated ownership", () => {
   it("keeps generated locale snapshots out of source PRs", () => {

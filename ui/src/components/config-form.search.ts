@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ConfigUiHints } from "../api/types.ts";
-import { hintForPath, humanize, schemaType, type JsonSchema } from "../lib/config-form-utils.ts";
+import {
+  localizedHintForPath,
+  humanize,
+  schemaType,
+  type JsonSchema,
+} from "../lib/config-form-utils.ts";
 import { arrayItemSchema, arrayItemSchemaIndexes } from "./config-form.array-items.ts";
 
 export type ConfigSearchCriteria = {
@@ -67,7 +72,7 @@ export function resolveConfigFieldMeta(
   schema: JsonSchema,
   hints: ConfigUiHints,
 ): ConfigFieldMeta {
-  const hint = hintForPath(path, hints);
+  const hint = localizedHintForPath(path, hints);
   const fallbackSegment = path.findLast((segment) => typeof segment === "string") ?? path.at(-1);
   const label = hint?.label ?? schema.title ?? humanize(String(fallbackSegment));
   const help = hint?.help ?? schema.description;

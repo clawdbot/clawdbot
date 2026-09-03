@@ -115,6 +115,15 @@ describe("I18nManager pending locale retry", () => {
     expect(loadTranslation).not.toHaveBeenCalled();
   });
 
+  it("looks up only the active locale when a caller owns its fallback", async () => {
+    const { manager } = createManager();
+    manager.registerTranslation("de", german);
+    await manager.setLocale("de");
+
+    expect(manager.translateActive("common.health")).toBe("Gesundheit");
+    expect(manager.translateActive("common.connected")).toBeUndefined();
+  });
+
   it("deduplicates an in-flight target and permits retry after the shared load settles", async () => {
     const { internals, loadTranslation, manager } = createManager();
     vi.spyOn(console, "error").mockImplementation(() => {});
