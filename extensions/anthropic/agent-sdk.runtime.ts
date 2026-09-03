@@ -416,6 +416,16 @@ function resolveClaudeAgentSdkOptions(
     // versions that support the flag.
     options.systemPrompt = context.systemPrompt;
   }
+  // Keep Claude Code's own memory surfaces out of the agent's context. These
+  // are the same two keys OpenClaw already sets on its restricted-run path
+  // (CLAUDE_RESTRICTED_SETTINGS in cli-shared.ts); the difference is that a
+  // normal agent run never applied them, so a gateway agent inherited the
+  // host's auto-memory index and any CLAUDE.md reachable from cwd on top of
+  // its own AGENTS.md / MEMORY.md.
+  options.settings = {
+    autoMemoryEnabled: false,
+    claudeMdExcludes: ["**/CLAUDE.md", "**/CLAUDE.local.md", "**/.claude/rules/**"],
+  };
   return options;
 }
 
