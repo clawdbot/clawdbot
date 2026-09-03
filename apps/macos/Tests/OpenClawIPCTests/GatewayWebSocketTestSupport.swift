@@ -196,6 +196,7 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     private var connectRequestID: String?
     private var sendCount = 0
     private var receiveCount = 0
+    private var callbackReceiveCount = 0
     private var cancelCount = 0
     private var pendingReceiveHandler: (@Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)?
 
@@ -219,6 +220,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
 
     func snapshotSendCount() -> Int {
         self.lock.withLock { self.sendCount }
+    }
+
+    func snapshotCallbackReceiveCount() -> Int {
+        self.lock.withLock { self.callbackReceiveCount }
     }
 
     func resume() {
@@ -270,7 +275,10 @@ final class GatewayTestWebSocketTask: WebSocketTasking, @unchecked Sendable {
     func receive(
         completionHandler: @escaping @Sendable (Result<URLSessionWebSocketTask.Message, Error>) -> Void)
     {
-        self.lock.withLock { self.pendingReceiveHandler = completionHandler }
+        self.lock.withLock {
+            self.callbackReceiveCount += 1
+            self.pendingReceiveHandler = completionHandler
+        }
     }
 
     func emitReceiveSuccess(_ message: URLSessionWebSocketTask.Message) {
