@@ -1,3 +1,4 @@
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { ChatAccountSelection } from "../../../packages/gateway-protocol/src/schema/users.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -25,7 +26,7 @@ export function resolveChatAccountSelection(params: {
     return {
       kind: "shared",
       authProfileId,
-      label: (credential?.displayName?.trim() || authProfileId).slice(0, 256),
+      label: truncateUtf16Safe(credential?.displayName?.trim() || authProfileId, 256),
       source,
     };
   }
@@ -42,7 +43,7 @@ export function resolveChatAccountSelection(params: {
   const displayName = owner ? getUserProfileDisplay(owner).displayName?.trim() : undefined;
   return {
     kind: "personal",
-    label: displayName ? `${displayName}'s account`.slice(0, 256) : "Personal account",
+    label: displayName ? truncateUtf16Safe(`${displayName}'s account`, 256) : "Personal account",
     source,
   };
 }
