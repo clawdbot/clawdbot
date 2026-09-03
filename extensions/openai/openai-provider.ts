@@ -54,6 +54,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
   OPENAI_GPT_56_TERRA_MODEL_ID,
+  OPENAI_GPT_6_ASTRA_MODEL_ID,
   OPENAI_PROVIDER_MODERN_MODEL_IDS,
   isOpenAIPlatformOnlyRouteModelId,
   isOpenAISubscriptionOnlyRouteModelId,
@@ -793,6 +794,10 @@ function buildOpenAIUnknownModelHint(modelId: string): string | undefined {
 
 const OPENAI_GPT_FORWARD_COMPAT_CASES = [
   {
+    match: [OPENAI_GPT_6_ASTRA_MODEL_ID],
+    templateIds: [OPENAI_GPT_56_SOL_MODEL_ID, OPENAI_GPT_55_MODEL_ID],
+  },
+  {
     match: [OPENAI_CHAT_LATEST_MODEL_ID],
     templateIds: OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS,
     patch: { reasoning: false, cost: OPENAI_CHAT_LATEST_COST, contextWindow: 400_000 },
@@ -837,6 +842,7 @@ function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelCont
   const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
   const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
+    modelId === OPENAI_GPT_6_ASTRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
