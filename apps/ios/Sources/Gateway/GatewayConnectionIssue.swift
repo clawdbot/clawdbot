@@ -61,7 +61,7 @@ enum GatewayConnectionIssue: Equatable {
             return .unauthorized
         case .timeout, .connectionRefused, .reachabilityFailed, .websocketCancelled:
             return .network
-        case .unknown:
+        case .legacyIdentityConflict, .unknown:
             return .unknown(problem.message)
         default:
             return .none

@@ -311,7 +311,7 @@ async function cleanupReceiptSources(params: {
     return {
       changes: [],
       warnings: [
-        "Native device identity import is pending; restart the native app before running Doctor cleanup.",
+        "Native device identity import is pending; open the Mac app to finish the import or reconcile preserved identities. Doctor will not consume the native claim.",
       ],
     };
   }
@@ -400,7 +400,7 @@ async function migrateWithExclusiveStateOwnership(params: {
     return {
       changes: [],
       warnings: [
-        "Native device identity import is pending; restart the native app before running Doctor.",
+        "Native device identity import is pending; open the Mac app to finish the import or reconcile preserved identities. Doctor will not consume the native claim.",
       ],
     };
   }

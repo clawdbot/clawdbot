@@ -51,4 +51,33 @@ import Testing
         let issue = GatewayConnectionIssue.detect(from: "Connected")
         #expect(issue == .none)
     }
+
+    @Test func `legacy identity conflict does not advertise Mac recovery`() throws {
+        let conflict = DeviceIdentityConflictError(candidates: [
+            DeviceIdentityConflictCandidate(
+                sourcePath: "~/Documents/identity/device.json",
+                fingerprint: "0123456789ab",
+                createdAtMs: 1_800_000_000_000),
+        ], profile: .primary)
+        let problem = try #require(GatewayConnectionProblemMapper.map(error: conflict))
+
+        #expect(problem.kind == .legacyIdentityConflict)
+        #expect(problem.actionLabel == nil)
+        #expect(problem.docsURL == nil)
+        #expect(!problem.message.contains("This Mac"))
+        #expect(!(problem.actionLabel?.localizedCaseInsensitiveContains("reconcile") ?? false))
+
+        let issue = GatewayConnectionIssue.detect(problem: problem)
+        #expect(issue == .unknown(problem.message))
+        if case let .unknown(message) = issue {
+            #expect(!message.contains("This Mac"))
+            #expect(!message.localizedCaseInsensitiveContains("reconcile"))
+        }
+
+        let actionTitle = GatewayProblemPrimaryAction.title(
+            for: problem,
+            retryTitle: "Retry connection",
+            nonRetryableTitle: "Open Settings")
+        #expect(actionTitle == "Open Settings")
+    }
 }

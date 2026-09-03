@@ -29,6 +29,7 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         case deviceSignatureInvalid
         case devicePublicKeyInvalid
         case deviceIdMismatch
+        case legacyIdentityConflict
         case tailscaleIdentityMissing
         case tailscaleProxyMissing
         case tailscaleWhoisFailed
@@ -221,6 +222,9 @@ public enum GatewayConnectionProblemMapper {
     }
 
     private static func rawMap(_ error: Error) -> GatewayConnectionProblem? {
+        if let conflict = DeviceIdentityConflictError.unpack(error) {
+            return self.legacyIdentityConflictProblem(conflict)
+        }
         if let authError = error as? GatewayConnectAuthError {
             return self.map(authError)
         }
@@ -791,6 +795,38 @@ extension GatewayConnectionProblemMapper {
                 pauseReconnect: true,
                 technicalDetails: tlsError.localizedDescription)
         }
+    }
+
+    private static func legacyIdentityConflictProblem(_ conflict: DeviceIdentityConflictError)
+        -> GatewayConnectionProblem
+    {
+        #if os(macOS)
+        GatewayConnectionProblem(
+            kind: .legacyIdentityConflict,
+            owner: .unknown,
+            title: "Conflicting device identities",
+            message: "This Mac has preserved device identities with different keys. "
+                + "Choose one identity or create a new one before connecting.",
+            actionLabel: "Reconcile identities",
+            docsURL: URL(string: "https://docs.openclaw.ai/platforms/macos"),
+            retryable: false,
+            pauseReconnect: true,
+            technicalDetails: conflict.localizedDescription)
+        #else
+        // Recovery is Mac-app-owned. iOS can observe the same store conflict but
+        // must not advertise a reconcile action or macOS recovery docs it cannot run.
+        GatewayConnectionProblem(
+            kind: .legacyIdentityConflict,
+            owner: .unknown,
+            title: "Conflicting device identities",
+            message: "Preserved device identities have different keys. This app cannot "
+                + "reconcile them, so connection is paused.",
+            actionLabel: nil,
+            docsURL: nil,
+            retryable: false,
+            pauseReconnect: true,
+            technicalDetails: conflict.localizedDescription)
+        #endif
     }
 
     private static func mapTransportError(_ error: Error) -> GatewayConnectionProblem? {

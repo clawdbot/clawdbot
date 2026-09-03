@@ -376,10 +376,11 @@ public actor GatewayChannelActor {
             try self.ensureCurrentConnectAttempt(attemptID, task: connectTask)
             try self.requireCurrentConnection(connectionGeneration)
         } catch {
-            let wrapped: Error = if let authError = error as? GatewayConnectAuthError {
-                authError
-            } else {
-                self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
+            let wrapped = self.wrap(
+                error,
+                context: "connect to gateway @ \(self.url.absoluteString)")
+            if self.shouldPauseReconnectAfterAuthFailure(wrapped) {
+                self.reconnectPausedForAuthFailure = true
             }
             self.connectFailureBackoff.record(error: error, pendingDeviceTokenRetry: self.pendingDeviceTokenRetry)
             await self.transitionToDisconnected(
@@ -436,14 +437,6 @@ public actor GatewayChannelActor {
                 // Avoid spamming logs; the reconnect paths will surface meaningful errors.
             }
         }
-    }
-
-    static func loadDeviceIdentityForConnect(
-        includeDeviceIdentity: Bool,
-        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
-    {
-        guard includeDeviceIdentity else { return nil }
-        return try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: profile)
     }
 
     private func sendConnect(
@@ -1310,6 +1303,9 @@ extension GatewayChannelActor {
     }
 
     private func shouldPauseReconnectAfterAuthFailure(_ error: Error) -> Bool {
+        if DeviceIdentityConflictError.unpack(error) != nil {
+            return true
+        }
         guard let authError = error as? GatewayConnectAuthError else {
             return false
         }
@@ -1570,6 +1566,9 @@ extension GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
+        if let conflict = DeviceIdentityConflictError.unpack(error) {
+            return conflict
+        }
         if error is CancellationError ||
             error is GatewayConnectAuthError ||
             error is GatewayResponseError ||

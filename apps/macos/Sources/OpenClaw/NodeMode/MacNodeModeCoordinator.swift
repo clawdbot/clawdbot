@@ -316,6 +316,13 @@ final class MacNodeModeCoordinator: NSObject {
             computerControlProvider: ComputerControlProvider.current())
     }
 
+    /// Wakes the node connect loop after the operator reconciles a blocked identity.
+    /// Shipping recovery path: must stay outside `#if DEBUG` or Release menu recovery
+    /// cannot resume the paused node after a successful choice.
+    func retryAfterIdentityRecovery() {
+        self.enqueueRouteInvalidation(mode: .reconnectRefresh)
+    }
+
     func currentCanvasPluginSurfaceRoute() async -> GatewayCanvasHostRoute? {
         await self.session.currentCanvasHostRoute()
     }
@@ -547,6 +554,21 @@ final class MacNodeModeCoordinator: NSObject {
                 {
                     await self.session.disconnect()
                     retryDelay = 1_000_000_000
+                    continue
+                }
+                if let conflict = DeviceIdentityConflictError.unpack(error) {
+                    let recovered = DeviceIdentityConflictRecovery.presentIfNeeded(conflict: conflict)
+                    if recovered {
+                        await NodesStore.shared.prepareLocalNodeIdentity()
+                        retryDelay = 1_000_000_000
+                        continue
+                    }
+                    self.logger.error(
+                        "mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")
+                    self.channelStatus.record(.unavailable(
+                        reason: "Conflicting device identities",
+                        diagnostic: conflict.localizedDescription))
+                    guard await refreshIterator.next() != nil else { return }
                     continue
                 }
                 self.logger.error("mac node gateway connect failed: \(error.localizedDescription, privacy: .public)")

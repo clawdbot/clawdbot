@@ -4,6 +4,7 @@ read_when:
   - Installing the macOS app
   - Deciding between local and remote Gateway mode on macOS
   - Looking for macOS app release downloads
+  - Recovering from conflicting Mac device identities
 title: "macOS app"
 ---
 
@@ -145,6 +146,27 @@ notification permission instead of browser push because the app delivers notific
 The app does **not** replace the Gateway or general CLI docs. Gateway
 configuration, providers, plugins, channels, tools, and security live in their
 own docs.
+
+## Troubleshooting
+
+### Conflicting device identities
+
+If the menu bar shows **Conflicting device identities**, or Doctor warns that a
+native device identity import is pending, the Mac app found more than one
+preserved identity with different keys and has no canonical SQLite row yet.
+
+Do not delete those files and do not keep restarting the app or rerunning
+Doctor. Open the OpenClaw Mac app and use the menu bar recovery:
+
+1. Choose the identity this Mac should keep, or create a new identity.
+2. Creating a new identity archives the other sources and requires re-approving
+   this Mac on the Gateway.
+3. Unselected sources are renamed to
+   `device.json.conflict-archived-<timestamp>` (or the matching node identity
+   filename). They are not deleted.
+
+Doctor still will not consume a `.native-importing` claim. Finish the import or
+reconciliation in the Mac app, then rerun Doctor if you still need cleanup.
 
 ## macOS detail pages
 

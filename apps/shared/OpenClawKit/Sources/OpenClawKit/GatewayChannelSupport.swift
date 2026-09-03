@@ -48,6 +48,14 @@ extension GatewayChannelActor {
         case timeout
     }
 
+    static func loadDeviceIdentityForConnect(
+        includeDeviceIdentity: Bool,
+        profile: GatewayDeviceIdentityProfile) throws -> DeviceIdentity?
+    {
+        guard includeDeviceIdentity else { return nil }
+        return try DeviceIdentityStore.loadOrCreatePersistedOrThrow(profile: profile)
+    }
+
     public static let defaultOperatorConnectScopes: [String] = [
         "operator.admin",
         "operator.read",
