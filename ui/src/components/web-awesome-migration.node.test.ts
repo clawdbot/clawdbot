@@ -51,6 +51,7 @@ describe("Web Awesome control ownership", () => {
     // This inventory tracks literal ARIA roles, not Web Awesome elements that own roles internally.
     expect(await matchingFiles(/<[a-z][^>]*\srole=["'](?:combobox|listbox|option)["']/u)).toEqual([
       "components/command-palette.ts",
+      "pages/chat/components/chat-composer-mention-menu.ts",
       "pages/chat/components/chat-composer-skill-menu.ts",
       "pages/chat/components/chat-composer-slash-menu.ts",
       "pages/chat/components/chat-model-picker-options.ts",
@@ -63,8 +64,10 @@ describe("Web Awesome control ownership", () => {
     // sidebar, inspector, and responsive dock state across more than two panes.
     expect(await matchingFiles(/<resizable-divider\b/u)).toEqual([
       "app/app-shell-view.ts",
+      "components/dock-layout-controller.ts",
       "pages/chat/chat-page.ts",
       "pages/chat/components/chat-resizable-divider.ts",
+      "pages/skill-workshop/view.ts",
     ]);
   });
 });

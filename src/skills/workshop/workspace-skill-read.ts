@@ -12,6 +12,7 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { tryRealpath } from "../loading/symlink-targets.js";
+import { listWorkshopOwnedSkillDirs } from "./ownership.js";
 
 const WRITABLE_WORKSPACE_SOURCES = new Set(["openclaw-workspace", "agents-skills-project"]);
 
@@ -41,6 +42,7 @@ type WritableWorkspaceSkillSummary = {
   name: string;
   description?: string;
   filePath: string;
+  userAuthored: boolean;
 };
 
 /**
@@ -50,24 +52,21 @@ type WritableWorkspaceSkillSummary = {
  */
 export function listWritableWorkspaceSkillSummaries(
   workspaceDir: string,
-  opts?: { config?: OpenClawConfig; agentId?: string },
+  opts?: { config?: OpenClawConfig; agentId?: string; env?: NodeJS.ProcessEnv },
 ): WritableWorkspaceSkillSummary[] {
   const status = buildWorkspaceSkillStatus(workspaceDir, {
     config: opts?.config,
     agentId: opts?.agentId,
   });
-  const summaries: WritableWorkspaceSkillSummary[] = [];
-  for (const skill of status.skills) {
-    if (!WRITABLE_WORKSPACE_SOURCES.has(skill.source)) {
-      continue;
-    }
-    summaries.push(
-      skill.description
-        ? { name: skill.skillKey, description: skill.description, filePath: skill.filePath }
-        : { name: skill.skillKey, filePath: skill.filePath },
-    );
-  }
-  return summaries;
+  const ownedDirs = listWorkshopOwnedSkillDirs(workspaceDir, opts?.env ? { env: opts.env } : {});
+  return status.skills
+    .filter((skill) => WRITABLE_WORKSPACE_SOURCES.has(skill.source))
+    .map((skill) => ({
+      name: skill.name,
+      description: skill.description,
+      filePath: skill.filePath,
+      userAuthored: !ownedDirs.has(path.resolve(skill.baseDir)),
+    }));
 }
 
 /** Reads the live SKILL.md of a writable workspace skill, resolved like an update target. */
@@ -75,7 +74,7 @@ export async function readWritableWorkspaceSkill(
   workspaceDir: string,
   skillName: string,
   opts?: { config?: OpenClawConfig; agentId?: string },
-): Promise<{ skillKey: string; skillFile: string; content: string }> {
+): Promise<{ skillName: string; skillKey: string; skillFile: string; content: string }> {
   const name = normalizeOptionalString(skillName);
   if (!name) {
     throw new Error("Skill name is required.");
@@ -93,5 +92,10 @@ export async function readWritableWorkspaceSkill(
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);
   }
-  return { skillKey: targetSkill.skillKey, skillFile: targetSkill.filePath, content };
+  return {
+    skillName: targetSkill.name,
+    skillKey: targetSkill.skillKey,
+    skillFile: targetSkill.filePath,
+    content,
+  };
 }

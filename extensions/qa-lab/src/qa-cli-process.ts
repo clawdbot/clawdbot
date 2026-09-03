@@ -1,5 +1,5 @@
 // Qa Lab plugin module runs CLI processes and parses their structured output.
-import { spawn, spawnSync, type ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isRecord as isJsonRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -17,7 +17,7 @@ import { QaSuiteInfraError } from "./errors.js";
 import { resolveQaNodeExecPath } from "./node-exec.js";
 import { createQaPosixCommandSettlement } from "./posix-command-settlement.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
-import { resolveQaWindowsSystem32ExePath } from "./windows-system-tools.js";
+import { runQaWindowsTaskkill } from "./windows-system-tools.js";
 
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
 
@@ -181,19 +181,8 @@ function parseQaCliJsonOutput(text: string, args: readonly string[]) {
 }
 
 function killQaCliWindowsProcessTree(child: Pick<ChildProcessWithoutNullStreams, "kill" | "pid">) {
-  if (child.pid) {
-    const result = spawnSync(
-      resolveQaWindowsSystem32ExePath("taskkill.exe"),
-      ["/PID", String(child.pid), "/T", "/F"],
-      {
-        stdio: "ignore",
-        windowsHide: true,
-        timeout: 5_000,
-      },
-    );
-    if (!result.error && result.status === 0) {
-      return;
-    }
+  if (child.pid && runQaWindowsTaskkill({ pid: child.pid, signal: "SIGKILL" })) {
+    return;
   }
   child.kill("SIGKILL");
 }

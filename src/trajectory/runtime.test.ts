@@ -391,9 +391,19 @@ describe("trajectory runtime", () => {
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
     runtimeRecorder.recordEvent("model.completed", {
+      threadId: "thread-compact",
+      turnId: "turn-compact",
+      timedOut: true,
+      yieldDetected: false,
+      aborted: true,
+      promptError: "terminal prompt error",
       usage: oversizedUsage,
       promptCache,
       stopReason: "length",
+      assistantTexts: Array.from(
+        { length: 12 },
+        (_value, index) => `assistant-${index} ${"x".repeat(32_000)}`,
+      ),
       messagesSnapshot: [{ role: "user", content: "x".repeat(32_000) }],
     });
 
@@ -402,12 +412,19 @@ describe("trajectory runtime", () => {
     expect(parsed.data).toMatchObject({
       truncated: true,
       reason: "trajectory-event-size-limit",
+      threadId: "thread-compact",
+      turnId: "turn-compact",
+      timedOut: true,
+      yieldDetected: false,
+      aborted: true,
+      promptError: "terminal prompt error",
       promptCache,
       stopReason: "length",
     });
     expect(parsed.data.usage).toBeUndefined();
+    expect(parsed.data.assistantTexts).toBeUndefined();
     expect(parsed.data.droppedFields).toEqual(
-      expect.arrayContaining(["usage", "messagesSnapshot"]),
+      expect.arrayContaining(["usage", "assistantTexts", "messagesSnapshot"]),
     );
     expect(
       Buffer.byteLength(expectDefined(writes[0], "writes[0] test invariant"), "utf8"),

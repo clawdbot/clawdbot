@@ -12,16 +12,11 @@ interface NodeHttpProxyAgents {
   httpsAgent: HttpsAgent;
 }
 
-/** Resolves the environment proxy URL that applies to a target URL. */
-function resolveHttpProxyUrlForTarget(targetUrl: string | URL): URL | undefined {
-  return resolveEnvNodeProxyUrlForTarget(targetUrl);
-}
-
 /** Builds fixed HTTP and HTTPS proxy agents for a target URL, when env proxy config applies. */
 export function createHttpProxyAgentsForTarget(
   targetUrl: string | URL,
 ): NodeHttpProxyAgents | undefined {
-  const proxyUrl = resolveHttpProxyUrlForTarget(targetUrl);
+  const proxyUrl = resolveEnvNodeProxyUrlForTarget(targetUrl);
   if (!proxyUrl) {
     return undefined;
   }

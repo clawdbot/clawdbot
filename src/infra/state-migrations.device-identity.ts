@@ -1,4 +1,4 @@
-// Doctor-only import for the retired primary device identity JSON.
+// Owner-authorized import for the retired primary device identity JSON.
 import { root, type Root } from "@openclaw/fs-safe";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -11,6 +11,7 @@ import {
   type NormalizedLegacyDeviceIdentity,
 } from "./device-identity-legacy.js";
 import {
+  readStoredDeviceIdentityReadOnly,
   resolveDeviceIdentityStore,
   validateStoredDeviceIdentity,
   type DeviceIdentity,
@@ -316,6 +317,7 @@ async function cleanupReceiptSources(params: {
   }
   const changes: string[] = [];
   const warnings: string[] = [];
+  const notices: string[] = [];
   let removed = 0;
   for (const candidate of [params.detected.sourcePath, params.detected.claimPath]) {
     if (!(await params.stateRoot.exists(relativeLegacyPath(params.stateDir, candidate)))) {
@@ -333,6 +335,18 @@ async function cleanupReceiptSources(params: {
       continue;
     }
     if (snapshot.sha256 !== params.receipt.sourceSha256) {
+      // SQLite owns runtime identity; warning about inert retired bytes would
+      // make startup refuse an otherwise healthy gateway.
+      try {
+        if (readStoredDeviceIdentityReadOnly({ env: params.env, identityKey: IDENTITY_KEY })) {
+          notices.push(
+            `Preserved retired device identity ${candidate}: bytes differ from the migration receipt; the canonical SQLite identity remains authoritative. Archive or delete the file to clear this notice.`,
+          );
+          continue;
+        }
+      } catch {
+        // Invalid canonical identity must retain its readiness-blocking warning.
+      }
       warnings.push(
         `Retired device identity cleanup preserved ${candidate}: bytes differ from the migration receipt.`,
       );
@@ -346,13 +360,19 @@ async function cleanupReceiptSources(params: {
       warnings.push(`Retired device identity cleanup failed for ${candidate}: ${String(error)}`);
     }
   }
-  if (warnings.length === 0 && (!params.receipt.removedSource || removed > 0)) {
+  // A divergent preserved claim cannot complete its interrupted receipt unless
+  // receipt-covered original bytes were actually removed during this pass.
+  if (
+    warnings.length === 0 &&
+    (!params.receipt.removedSource || removed > 0) &&
+    (notices.length === 0 || removed > 0)
+  ) {
     markLegacyMigrationSourceRemoved(params.receipt.sourceKey, params.env);
   }
   if (removed > 0) {
     changes.push("Removed retired device identity JSON covered by its SQLite receipt.");
   }
-  return { changes, warnings };
+  return { changes, warnings, notices };
 }
 
 async function migrateWithExclusiveStateOwnership(params: {
@@ -507,12 +527,16 @@ async function migrateWithExclusiveStateOwnership(params: {
   };
 }
 
-/** Import the retired primary identity while excluding Gateways that can recreate it. */
+/**
+ * Import a verified retired primary identity under explicit Doctor or startup authority.
+ * Startup authority cannot repair or replace an invalid canonical identity.
+ */
 export async function migrateLegacyDeviceIdentity(params: {
   detected: LegacyDeviceIdentityDetection;
   stateDir: string;
   env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
+  allowLegacyDeviceIdentityImport?: boolean;
   beforeClaim?: (sourcePath: string) => void;
   beforeCleanup?: () => void;
   removeSource?: (sourcePath: string) => Promise<void> | void;
@@ -520,7 +544,10 @@ export async function migrateLegacyDeviceIdentity(params: {
   if (!params.detected.hasLegacy && !params.detected.hasInvalidCanonical) {
     return { changes: [], warnings: [] };
   }
-  if (params.doctorOnlyStateMigrations !== true) {
+  if (
+    params.doctorOnlyStateMigrations !== true &&
+    params.allowLegacyDeviceIdentityImport !== true
+  ) {
     return { changes: [], warnings: [] };
   }
   let identityCoordinator: ReturnType<typeof acquireDeviceIdentityCoordinator> | undefined;

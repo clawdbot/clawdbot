@@ -1,6 +1,7 @@
 // PTY adapter wraps pseudo-terminal processes for the process supervisor.
 import type { IDisposable } from "@lydell/node-pty";
-import { signalProcessTree } from "../../kill-tree.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
+import { signalPtySessionTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import {
   readPtyTerminalName,
@@ -16,6 +17,7 @@ declare const WORKER_DEPLOY_BUILD: boolean;
 type PtyAdapter = SpawnProcessAdapter;
 
 export async function createPtyAdapter(params: {
+  assertCurrent?: () => void;
   shell: string;
   args: string[];
   cwd?: string;
@@ -23,6 +25,7 @@ export async function createPtyAdapter(params: {
   cols?: number;
   rows?: number;
   name?: string;
+  abortSignal?: AbortSignal;
 }): Promise<PtyAdapter> {
   // Worker deploys are portable JavaScript artifacts; exec falls back to the child adapter
   // instead of binding the Gateway host's native PTY binary into the bundle.
@@ -46,6 +49,7 @@ export async function createPtyAdapter(params: {
   if (spawnEnv) {
     setPtyTerminalName({ env: spawnEnv, name: terminalName, platform: process.platform });
   }
+  params.assertCurrent?.();
   const pty = spawn(preparedSpawn.command, preparedSpawn.args, {
     cwd: params.cwd,
     env: spawnEnv,
@@ -53,15 +57,22 @@ export async function createPtyAdapter(params: {
     cols: params.cols ?? 120,
     rows: params.rows ?? 30,
   });
+  if (params.abortSignal?.aborted) {
+    try {
+      pty.kill();
+    } catch {
+      // ignore kill errors
+    }
+    throw new Error("PTY construction aborted");
+  }
 
   let dataListener: IDisposable | null = null;
   let exitListener: IDisposable | null = null;
-  let waitResult: { code: number | null; signal: NodeJS.Signals | number | null } | null = null;
-  let resolveWait:
-    | ((value: { code: number | null; signal: NodeJS.Signals | number | null }) => void)
-    | null = null;
-  let waitPromise: Promise<{ code: number | null; signal: NodeJS.Signals | number | null }> | null =
-    null;
+  const completion = createDeferredCore<{
+    code: number | null;
+    signal: NodeJS.Signals | number | null;
+  }>();
+  let waitSettled = false;
   let forceKillWaitFallbackTimer: NodeJS.Timeout | null = null;
   let stdinDestroyed = false;
   let stdinEnded = false;
@@ -75,18 +86,14 @@ export async function createPtyAdapter(params: {
   };
 
   const settleWait = (value: { code: number | null; signal: NodeJS.Signals | number | null }) => {
-    if (waitResult) {
+    if (waitSettled) {
       return;
     }
+    waitSettled = true;
     clearForceKillWaitFallback();
     stdinDestroyed = true;
     stdinEnded = true;
-    waitResult = value;
-    if (resolveWait) {
-      const resolve = resolveWait;
-      resolveWait = null;
-      resolve(value);
-    }
+    completion.resolve(value);
   };
 
   const scheduleForceKillWaitFallback = (signal: NodeJS.Signals) => {
@@ -150,24 +157,7 @@ export async function createPtyAdapter(params: {
     // PTY gives a unified output stream.
   };
 
-  const wait = async () => {
-    if (waitResult) {
-      return waitResult;
-    }
-    if (!waitPromise) {
-      waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | number | null }>(
-        (resolve) => {
-          resolveWait = resolve;
-          if (waitResult) {
-            const settled = waitResult;
-            resolveWait = null;
-            resolve(settled);
-          }
-        },
-      );
-    }
-    return waitPromise;
-  };
+  const wait = async () => await completion.promise;
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
     try {
@@ -176,7 +166,7 @@ export async function createPtyAdapter(params: {
         typeof pty.pid === "number" &&
         pty.pid > 0
       ) {
-        signalProcessTree(pty.pid, signal, { detached: true });
+        signalPtySessionTree(pty.pid, signal);
       } else if (process.platform === "win32") {
         pty.kill();
       } else {
@@ -214,6 +204,7 @@ export async function createPtyAdapter(params: {
     pid: pty.pid || undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
+    supportsRawOutput: false,
     onStdout,
     onStderr,
     wait,

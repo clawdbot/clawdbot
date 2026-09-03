@@ -133,7 +133,11 @@ export function resolveQaRunProfileExecutionSelection(params: {
       reasons.push(`execution.kind=${params.executionKind}`);
     }
     // qa-channel is the built-in harness channel, so another driver cannot implement it.
-    if (scenario.execution.channel === "qa-channel" && params.channelDriver !== "qa-channel") {
+    if (
+      scenario.execution.channels?.length === 1 &&
+      scenario.execution.channels[0] === "qa-channel" &&
+      params.channelDriver !== "qa-channel"
+    ) {
       reasons.push("channelDriver=qa-channel");
     }
     const effectiveChannel = resolveQaScenarioLaneChannel({
@@ -175,13 +179,7 @@ export function resolveQaRunProfileExecutionSelection(params: {
 
 export function scenarioDeclaresQaChannel(scenario: QaSeedScenarioWithSource, channel: string) {
   const normalizedChannel = channel.trim().toLowerCase();
-  if (scenario.execution.channel === normalizedChannel) {
-    return true;
-  }
-  return (
-    scenario.execution.kind === "flow" &&
-    scenario.execution.channels?.includes(normalizedChannel) === true
-  );
+  return scenario.execution.channels?.includes(normalizedChannel) === true;
 }
 
 export function resolveQaProfileScenarios(params: {
@@ -217,11 +215,7 @@ export function resolveQaProfileScenarios(params: {
       reasons.push(`does not declare channel ${channel}`);
     }
     if (eligibleChannels.size > 0) {
-      const declaredChannels = scenario.execution.channel
-        ? [scenario.execution.channel]
-        : scenario.execution.kind === "flow"
-          ? (scenario.execution.channels ?? [])
-          : [];
+      const declaredChannels = scenario.execution.channels ?? [];
       if (
         declaredChannels.length > 0 &&
         !declaredChannels.some((declaredChannel) => eligibleChannels.has(declaredChannel))

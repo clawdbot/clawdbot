@@ -1,4 +1,5 @@
 // Qa Lab plugin module implements bus server behavior.
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -6,6 +7,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
@@ -33,7 +35,10 @@ const QA_MALFORMED_JSON_BODY_MESSAGE = "Malformed JSON body";
 const qaBusConversationSchema = z
   .object({
     id: z.string(),
-    kind: z.enum(["direct", "channel", "group"]),
+    kind: z.preprocess(
+      (kind) => (kind === "dm" ? "direct" : kind),
+      z.enum(["direct", "channel", "group"]),
+    ),
     title: z.string().optional(),
   })
   .passthrough();
@@ -184,6 +189,8 @@ export async function readQaJsonBody(
     await readRequestBodyWithLimit(req, {
       maxBytes: options?.maxBytes ?? QA_HTTP_JSON_MAX_BODY_BYTES,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
+      // Defer destruction so writeQaRequestBodyLimitError can answer before the close.
+      destroyOnLimit: false,
     })
   ).trim();
   if (!text) {
@@ -223,11 +230,21 @@ export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<v
   });
 }
 
-export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+export async function writeQaRequestBodyLimitError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
   if (!isRequestBodyLimitError(error)) {
     return false;
   }
-  writeError(res, error.statusCode, requestBodyErrorToText(error.code));
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json; charset=utf-8",
+  );
   return true;
 }
 
@@ -306,10 +323,10 @@ export async function closeQaHttpServer(server: Server, state?: QaBusState): Pro
       server.close((error) => (error ? reject(error) : resolve()));
       state?.reset(true); // Fence first so late request bodies cannot add waiter timers.
       server.closeIdleConnections?.();
+      // Awaited shutdown must keep its deadline alive even when paused sockets cannot wake Node.
       forceCloseTimer = setTimeout(() => {
         server.closeAllConnections?.();
       }, 250);
-      forceCloseTimer.unref();
     });
   } finally {
     if (forceCloseTimer) {
@@ -450,7 +467,7 @@ export async function handleQaBusRequest(params: {
         return true;
     }
   } catch (error) {
-    if (writeQaRequestBodyLimitError(params.res, error)) {
+    if (await writeQaRequestBodyLimitError(params.req, params.res, error)) {
       return true;
     }
     writeError(params.res, 400, error);
@@ -471,10 +488,7 @@ export function createQaBusServer(state: QaBusState): Server {
 
 export async function startQaBusServer(params: { state: QaBusState; port?: number }) {
   const server = createQaBusServer(params.state);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(params.port ?? 0, "127.0.0.1", () => resolve());
-  });
+  await once(server.listen(params.port ?? 0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("qa-bus failed to bind");

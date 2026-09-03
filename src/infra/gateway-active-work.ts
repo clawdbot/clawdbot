@@ -1,11 +1,14 @@
 // Collects process activity shared by restart and host-suspension decisions.
 import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
+import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../process/gateway-work-admission.js";
 import {
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
@@ -60,6 +63,11 @@ export type GatewayActiveWorkSnapshot = {
   blockers: GatewayActiveWorkBlocker[];
 };
 
+type GatewayActiveWorkWaitResult = {
+  drained: boolean;
+  snapshot: GatewayActiveWorkSnapshot;
+};
+
 export type GatewayActiveWorkInspectors = {
   getQueueSize: () => number;
   getPendingReplies: () => number;
@@ -69,6 +77,7 @@ export type GatewayActiveWorkInspectors = {
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
   getRootRequests: () => number;
+  getRootRequestHolders?: () => string[];
   getSessionAdmissions: () => number;
   getSessionMutations: () => number;
   getChatRuns: () => number;
@@ -86,6 +95,7 @@ const defaultInspectors: GatewayActiveWorkInspectors = {
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
   getRootRequests: () => getActiveGatewayRootWorkCount({ excludeCurrent: true }),
+  getRootRequestHolders: () => getActiveGatewayRootWorkHolders({ excludeCurrent: true }),
   getSessionAdmissions: getActiveSessionWorkAdmissionCount,
   getSessionMutations: getActiveSessionLifecycleMutationCount,
   getChatRuns: () => 0,
@@ -142,7 +152,21 @@ export function createGatewayActiveWorkSnapshot(
     `${counts.backgroundExecSessions} active background exec session(s)`,
   );
   add(counts.cronRuns, "cron-run", `${counts.cronRuns} active cron run(s)`);
-  add(counts.rootRequests, "root-request", `${counts.rootRequests} active gateway request(s)`);
+  const rootRequestHolders =
+    inspectors.getRootRequests && !inspectors.getRootRequestHolders
+      ? []
+      : (resolved.getRootRequestHolders?.() ?? []);
+  const rootRequestHolderNames = rootRequestHolders.toSorted().slice(0, 8);
+  if (rootRequestHolders.length > rootRequestHolderNames.length) {
+    rootRequestHolderNames.push(
+      `+${rootRequestHolders.length - rootRequestHolderNames.length} more`,
+    );
+  }
+  add(
+    counts.rootRequests,
+    "root-request",
+    `${counts.rootRequests} active gateway request(s)${rootRequestHolderNames.length > 0 ? `: ${rootRequestHolderNames.join(", ")}` : ""}`,
+  );
   add(
     counts.sessionAdmissions,
     "session-admission",
@@ -198,4 +222,33 @@ export function createGatewayActiveWorkSnapshot(
   }
 
   return { idle: counts.totalActive === 0, counts, blockers };
+}
+
+const GATEWAY_ACTIVE_WORK_POLL_MS = 250;
+
+/** Waits for the complete process-wide active-work inventory to become idle. */
+export async function waitForGatewayActiveWork(
+  timeoutMs?: number,
+  options: { onSnapshot?: (snapshot: GatewayActiveWorkSnapshot) => void } = {},
+): Promise<GatewayActiveWorkWaitResult> {
+  const timeout =
+    typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
+      ? Math.max(0, Math.floor(timeoutMs))
+      : undefined;
+  const deadlineAt = timeout === undefined ? undefined : Date.now() + timeout;
+
+  while (true) {
+    const snapshot = createGatewayActiveWorkSnapshot();
+    options.onSnapshot?.(snapshot);
+    if (snapshot.idle) {
+      return { drained: true, snapshot };
+    }
+    const remainingMs = deadlineAt === undefined ? undefined : deadlineAt - Date.now();
+    if (remainingMs !== undefined && remainingMs <= 0) {
+      return { drained: false, snapshot };
+    }
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, Math.min(GATEWAY_ACTIVE_WORK_POLL_MS, remainingMs ?? Infinity));
+    });
+  }
 }

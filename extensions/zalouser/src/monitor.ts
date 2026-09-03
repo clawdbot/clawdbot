@@ -683,6 +683,7 @@ async function processMessage(
         return await deliverZalouserReply({
           payload: payload as { text?: string; mediaUrls?: string[]; mediaUrl?: string },
           profile: account.profile,
+          mediaMaxBytes: account.mediaMaxBytes,
           chatId,
           isGroup,
           runtime,
@@ -721,6 +722,7 @@ async function processMessage(
 }
 
 async function deliverZalouserReply(params: {
+  mediaMaxBytes?: number;
   payload: OutboundReplyPayload;
   profile: string;
   chatId: string;
@@ -745,6 +747,7 @@ async function deliverZalouserReply(params: {
   const sendReplyPart = async (text: string, mediaUrl?: string) => {
     await sendMessageZalouser(chatId, text, {
       profile,
+      mediaMaxBytes: params.mediaMaxBytes,
       ...(mediaUrl ? { mediaUrl } : {}),
       isGroup,
       textMode: "markdown",

@@ -3,7 +3,6 @@
  * registration lazy-load these exports when browser runtime behavior is needed.
  */
 export { createBrowserTool } from "./src/browser-tool.js";
-export { ensureBrowserProxyUploadCleanup } from "./src/browser-proxy-upload.js";
 export { handleBrowserGatewayRequest } from "./src/gateway/browser-request.js";
 export { runBrowserProxyCommand } from "./src/node-host/invoke-browser.js";
 export { createBrowserPluginService } from "./src/plugin-service.js";

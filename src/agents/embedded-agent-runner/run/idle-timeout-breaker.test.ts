@@ -1,11 +1,7 @@
 // Idle-timeout breaker tests cover the outer run-loop guard that stops
 // repeated silent provider attempts from spinning forever.
 import { describe, expect, it } from "vitest";
-import {
-  MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT,
-  createIdleTimeoutBreakerState,
-  stepIdleTimeoutBreaker,
-} from "./idle-timeout-breaker.js";
+import { createIdleTimeoutBreakerState, stepIdleTimeoutBreaker } from "./idle-timeout-breaker.js";
 
 // Issue #76293. The wedge: a stalled provider returns from each LLM call
 // with idleTimedOut=true and no completed model progress. Without this
@@ -36,10 +32,6 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
     }
     return steps;
   }
-
-  it("default cap matches the constant the run loop reads from", () => {
-    expect(MAX_CONSECUTIVE_IDLE_TIMEOUTS_BEFORE_OUTPUT).toBe(5);
-  });
 
   it("does not trip on a single wedged attempt", () => {
     const steps = drive([{ idleTimedOut: true, completedModelProgress: false }]);

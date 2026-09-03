@@ -49,7 +49,9 @@ describe("workboard gateway methods", () => {
     expect([...methods.keys()]).toEqual([
       "workboard.cards.list",
       "workboard.cards.create",
+      "workboard.cards.captureSession",
       "workboard.cards.update",
+      "workboard.cards.start",
       "workboard.cards.move",
       "workboard.cards.delete",
       "workboard.cards.comment",
@@ -145,6 +147,28 @@ describe("workboard gateway methods", () => {
     expect(createRespond.mock.calls[0]?.[1]?.card).toMatchObject({
       metadata: { automation: { workspaceAccess: { unrestricted: true } } },
     });
+    const createdCard = createRespond.mock.calls[0]?.[1]?.card;
+    await store.move(createdCard.id, "blocked", 2000);
+    const conflictRespond = vi.fn();
+    await methods.get("workboard.cards.update")?.handler({
+      params: {
+        id: createdCard.id,
+        expectedUpdatedAt: createdCard.updatedAt,
+        patch: { title: "Stale edit" },
+      },
+      respond: conflictRespond,
+    } as never);
+    expect(conflictRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "workboard_conflict",
+        details: {
+          type: "workboard_card_conflict",
+          card: expect.objectContaining({ status: "blocked", position: 2000 }),
+        },
+      }),
+    );
 
     const listRespond = vi.fn();
     await listHandler?.({ params: {}, respond: listRespond } as never);
@@ -413,6 +437,50 @@ describe("workboard gateway methods", () => {
     expect(run).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionKey: `subagent:workboard-default-${card.id}`,
+      }),
+    );
+  });
+
+  it("returns an actionable exact-card admission failure", async () => {
+    type RegisteredMethod = {
+      handler: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
+      opts: Parameters<OpenClawPluginApi["registerGatewayMethod"]>[2];
+    };
+    const methods = new Map<string, RegisteredMethod>();
+    const run = vi.fn();
+    const api = {
+      runtime: {
+        state: { openKeyedStore: vi.fn(() => createMemoryStore()) },
+        subagent: { run },
+      },
+      registerGatewayMethod: vi.fn(
+        (method: string, handler: RegisteredMethod["handler"], opts: RegisteredMethod["opts"]) => {
+          methods.set(method, { handler, opts });
+        },
+      ),
+    } as unknown as OpenClawPluginApi;
+    const store = new WorkboardStore(createMemoryStore());
+    const card = await store.create({
+      title: "Blocked exact start",
+      status: "blocked",
+      workspaceAccess: { unrestricted: true },
+    });
+    registerWorkboardGatewayMethods({ api, store });
+    const respond = vi.fn();
+
+    await methods.get("workboard.cards.start")?.handler({
+      params: { id: card.id },
+      context: { getRuntimeConfig: () => ({}) },
+      respond,
+    } as never);
+
+    expect(run).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "workboard_error",
+        message: expect.stringMatching(/blocked.*backlog.*todo.*ready/i),
       }),
     );
   });

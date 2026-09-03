@@ -1,3 +1,5 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentToolResult } from "../../agents/runtime/index.js";
 import type { ExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
@@ -51,6 +53,7 @@ export type MessageActionInput = {
   requesterSenderE164?: string | null;
   senderIsOwner?: boolean;
   conversationReadOrigin?: ConversationReadInvocationOrigin;
+  workspaceDir?: string;
   /** @internal Host-owned route plan computed before broadcast SecretRef resolution. */
   broadcastAccountPlan?: MessageBroadcastAccountPlan;
   /**
@@ -68,6 +71,10 @@ export type MessageActionInput = {
   /** @internal Exact admitted execution provenance for owner-native delivery audit. */
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
   toolContext?: ChannelThreadingToolContext;
+  /** @internal Host media grant captured before untrusted caller code can mutate config. */
+  mediaAccess?: OutboundMediaAccess;
+  /** @internal Workspace transport reader whose use remains subject to sender policy. */
+  workspaceMediaAccess?: OutboundMediaAccess;
   gateway?: MessageActionGateway;
   deps?: OutboundSendDeps;
   sessionKey?: string;
@@ -92,8 +99,14 @@ export type MessageActionInput = {
   deliveryCompletion?: DurableDeliveryCompletion;
   /** @internal Runs after queue persistence and before platform I/O. */
   onDeliveryIntent?: (intent: DurableMessageSendIntent) => void;
+  /** @internal Revalidates caller-owned authority before each durable adapter attempt. */
+  onDeliveryAttempt?: () => Promise<void>;
   /** @internal Runs on identified platform evidence before queue acknowledgement. */
   onDeliveryResult?: (result: OutboundDeliveryResult) => Promise<void> | void;
+  /** @internal Revalidates caller authority immediately before recipient-visible I/O. */
+  onPlatformSendDispatch?: () => Promise<void>;
+  /** @internal Keep ephemeral-authority sends out of replayable recovery. */
+  skipQueue?: boolean;
   /** @internal Runs when broadcast converts a typed target denial into result text. */
   onActionDenied?: (
     error: MessageActionDeniedError,
@@ -101,6 +114,7 @@ export type MessageActionInput = {
     receiptDiscriminator: string,
   ) => void;
   sandboxRoot?: string;
+  sandboxContainerWorkdir?: string;
   dryRun?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   sourceReplyFinal?: boolean;
@@ -168,6 +182,76 @@ export type MessageActionResult =
       toolResult?: AgentToolResult<unknown>;
       dryRun: boolean;
     };
+
+export function resolveMessageSendOutcome(
+  sendResult: MessageSendResult | undefined,
+  action: "Message" | "Broadcast" = "Message",
+): { ok: true } | { ok: false; error: string; sentBeforeError?: true } {
+  if (
+    !sendResult ||
+    sendResult.deliveryStatus === undefined ||
+    sendResult.deliveryStatus === "sent"
+  ) {
+    return { ok: true };
+  }
+  switch (sendResult.deliveryStatus) {
+    case "suppressed":
+      return {
+        ok: false,
+        error: `${action} send suppressed: ${sendResult.suppressionReason ?? "unknown reason"}.`,
+      };
+    case "failed":
+      return { ok: false, error: sendResult.error ?? `${action} send failed.` };
+    case "partial_failed":
+      return {
+        ok: false,
+        error: sendResult.error ?? `${action} send partially failed.`,
+        sentBeforeError: true,
+      };
+  }
+  return sendResult.deliveryStatus satisfies never;
+}
+
+export function resolveMessageActionOutcome(
+  result: MessageActionResult,
+): ReturnType<typeof resolveMessageSendOutcome> {
+  if (result.kind === "broadcast") {
+    const failure = result.payload.results.find((entry) => !entry.ok);
+    return failure ? { ok: false, error: failure.error ?? "Broadcast failed." } : { ok: true };
+  }
+  if (result.dryRun) {
+    return { ok: true };
+  }
+  const outcome =
+    result.kind === "send" ? resolveMessageSendOutcome(result.sendResult) : { ok: true as const };
+  const payload = result.payload;
+  if (!outcome.ok || !isRecord(payload) || payload.ok !== false) {
+    return outcome;
+  }
+  const error =
+    [payload.error, payload.warning, payload.hint, payload.reason]
+      .map(normalizeOptionalString)
+      .find(Boolean) ?? `Message ${result.action} failed.`;
+  return { ok: false, error };
+}
+
+export function resolveMessageActionMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object check intentionally keeps array and prototype-backed payloads readable.
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (!result || typeof result !== "object") {
+    return undefined;
+  }
+  // SAFETY: The nested object check preserves the same permissive payload contract.
+  return normalizeOptionalString((result as Record<string, unknown>).messageId);
+}
 
 export type ResolvedActionContext = {
   cfg: OpenClawConfig;

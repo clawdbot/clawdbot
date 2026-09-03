@@ -32,7 +32,7 @@ const { loadPrivateQaCliModule } = vi.hoisted(() => ({
 
 const { inferAction, registerCapabilityCli } = vi.hoisted(() => {
   const action = vi.fn();
-  const register = vi.fn((program: Command) => {
+  const register = vi.fn((program: Command, _argv: string[]) => {
     program.command("infer").alias("capability").action(action);
   });
   return { inferAction: action, registerCapabilityCli: register };
@@ -213,6 +213,11 @@ describe("registerSubCliCommands", () => {
     await program.parseAsync(["infer"], { from: "user" });
 
     expect(registerCapabilityCli).toHaveBeenCalledTimes(1);
+    expect(registerCapabilityCli).toHaveBeenCalledWith(expect.any(Command), [
+      "node",
+      "openclaw",
+      "infer",
+    ]);
     expect(inferAction).toHaveBeenCalledTimes(1);
   });
 

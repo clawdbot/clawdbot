@@ -7,11 +7,21 @@ const activeCronTaskRunsByRunId = new Map<
   { controller: AbortController; onCancel?: (reason: string) => void }
 >();
 const settlingCronTaskRuns = new Map<Promise<unknown>, { retirementTimer?: NodeJS.Timeout }>();
+const activeCronTaskRunDrainWaiters = new Set<() => void>();
 // Restart drain may retire an abort-ignoring core after a bounded grace, but a
 // host snapshot must keep refusing readiness until that core actually settles.
 const suspensionVisibleCronTaskRuns = new Set<Promise<unknown>>();
-const DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS = 25;
 const CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS = 60_000;
+
+function notifyActiveCronTaskRunDrainWaitersIfEmpty(): void {
+  if (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0) {
+    return;
+  }
+  for (const resolve of activeCronTaskRunDrainWaiters) {
+    resolve();
+  }
+  activeCronTaskRunDrainWaiters.clear();
+}
 
 function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void {
   const entry = settlingCronTaskRuns.get(promise);
@@ -20,6 +30,7 @@ function startActiveCronTaskRunSettlementGrace(promise: Promise<unknown>): void 
   }
   entry.retirementTimer = setTimeout(() => {
     settlingCronTaskRuns.delete(promise);
+    notifyActiveCronTaskRunDrainWaitersIfEmpty();
   }, CRON_TASK_RUN_SETTLEMENT_TRACKING_MAX_MS);
   entry.retirementTimer.unref?.();
 }
@@ -58,6 +69,7 @@ export function registerActiveCronTaskRun(params: {
     }
     if (activeCronTaskRunsByRunId.get(runId)?.controller === params.controller) {
       activeCronTaskRunsByRunId.delete(runId);
+      notifyActiveCronTaskRunDrainWaitersIfEmpty();
     }
   };
 }
@@ -101,6 +113,7 @@ export function trackActiveCronTaskRunSettlement(
       }
       settlingCronTaskRuns.delete(promise);
       suspensionVisibleCronTaskRuns.delete(promise);
+      notifyActiveCronTaskRunDrainWaitersIfEmpty();
     });
 }
 
@@ -118,19 +131,26 @@ export function retireActiveCronTaskRunTracking(): void {
     }
   }
   settlingCronTaskRuns.clear();
+  notifyActiveCronTaskRunDrainWaitersIfEmpty();
 }
 
 export async function waitForActiveCronTaskRuns(timeoutMs: number): Promise<{
   drained: boolean;
   active: number;
 }> {
-  const deadline = Date.now() + Math.max(0, Math.floor(timeoutMs));
-  while (
-    (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0) &&
-    Date.now() < deadline
-  ) {
+  const waitMs = Math.max(0, Math.floor(timeoutMs));
+  if (waitMs > 0 && (activeCronTaskRunsByRunId.size > 0 || settlingCronTaskRuns.size > 0)) {
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, DEFAULT_CRON_TASK_RUN_DRAIN_POLL_MS);
+      const waiter = () => {
+        clearTimeout(timeout);
+        resolve();
+      };
+      // A native timer bounds shutdown independently of wall-clock jumps.
+      const timeout = setTimeout(() => {
+        activeCronTaskRunDrainWaiters.delete(waiter);
+        resolve();
+      }, waitMs);
+      activeCronTaskRunDrainWaiters.add(waiter);
     });
   }
   return {

@@ -11,16 +11,17 @@ import {
   openMemoryCoreStateStore,
   readMemoryCoreWorkspaceEntries,
 } from "./dreaming-state.js";
+import {
+  deleteShortTermLockEntryIfCurrent,
+  isShortTermLockStealable,
+  resolveLockPath,
+  withMemoryWorkspaceLock,
+} from "./memory-workspace-lock.js";
 import { filterLiveShortTermRecallEntries } from "./short-term-promotion-record.js";
 import {
-  SHORT_TERM_LOCK_STALE_MS,
-  isProcessLikelyAlive,
-  parseLockOwnerPid,
   readPhaseSignalStore,
   readStore,
-  resolveLockPath,
   resolveStorePath,
-  withShortTermLock,
   writePhaseSignalStore,
   writeStore,
 } from "./short-term-promotion-store.js";
@@ -33,7 +34,6 @@ import type {
   ShortTermRecallStore,
 } from "./short-term-promotion-types.js";
 import {
-  MAX_QUERY_HASHES,
   MAX_RECALL_DAYS,
   SHORT_TERM_RECALL_MAX_ENTRIES,
   enforceShortTermRecallStoreRetention,
@@ -135,12 +135,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   });
   const lockEntry = await lockStore.lookup(lockKey);
   if (lockEntry) {
-    const ageMs = Date.now() - lockEntry.acquiredAt;
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (
-      ageMs > SHORT_TERM_LOCK_STALE_MS &&
-      (ownerPid === null || !isProcessLikelyAlive(ownerPid))
-    ) {
+    if (isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
       issues.push({
         severity: "warn",
         code: "recall-lock-stale",
@@ -183,14 +178,11 @@ export async function repairShortTermPromotionArtifacts(params: {
     maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
   });
   const lockEntry = await lockStore.lookup(lockKey);
-  if (lockEntry && Date.now() - lockEntry.acquiredAt > SHORT_TERM_LOCK_STALE_MS) {
-    const ownerPid = parseLockOwnerPid(lockEntry.owner);
-    if (ownerPid === null || !isProcessLikelyAlive(ownerPid)) {
-      removedStaleLock = await lockStore.delete(lockKey);
-    }
+  if (lockEntry && isShortTermLockStealable(lockKey, lockEntry, Date.now())) {
+    removedStaleLock = await deleteShortTermLockEntryIfCurrent(lockStore, lockKey, lockEntry);
   }
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const rawEntries = await readMemoryCoreWorkspaceEntries<unknown>({
       namespace: SHORT_TERM_RECALL_NAMESPACE,
       workspaceDir,
@@ -216,15 +208,6 @@ export async function repairShortTermPromotionArtifacts(params: {
             key,
             {
               ...entry,
-              dailyCount: Math.max(
-                0,
-                Math.floor((entry as { dailyCount?: number }).dailyCount ?? 0),
-              ),
-              groundedCount: Math.max(
-                0,
-                Math.floor((entry as { groundedCount?: number }).groundedCount ?? 0),
-              ),
-              queryHashes: (entry.queryHashes ?? []).slice(-MAX_QUERY_HASHES),
               recallDays: mergeRecentDistinct(entry.recallDays ?? [], fallbackDay, MAX_RECALL_DAYS),
               conceptTags: conceptTags.length > 0 ? conceptTags : (entry.conceptTags ?? []),
             } satisfies ShortTermRecallEntry,
@@ -296,7 +279,7 @@ export async function removeGroundedShortTermCandidates(params: {
   const nowIso = new Date().toISOString();
   let removed = 0;
 
-  await withShortTermLock(workspaceDir, async () => {
+  await withMemoryWorkspaceLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
       readStore(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),

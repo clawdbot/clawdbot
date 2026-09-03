@@ -4,6 +4,7 @@ type McpAppUnmountTarget = Element & {
   restartAfterTeardown(): void;
   teardown(): Promise<void>;
 };
+type McpAppUnmountKey = string | readonly string[];
 
 function isMcpAppUnmountTarget(value: Element): value is McpAppUnmountTarget {
   return (
@@ -30,12 +31,9 @@ function findMcpAppUnmountTargets(
   return [...targets];
 }
 
-/**
- * Keeps the currently rendered subtree connected while MCP Apps acknowledge teardown.
- * New renders coalesce behind one bounded component-owned teardown instead of queuing.
- */
+/** Keeps rendered DOM and owner state together until one coalesced MCP teardown completes. */
 export class McpAppUnmountGate {
-  private renderedKey: string | null = null;
+  private renderedKey: McpAppUnmountKey | null = null;
   private renderedValue: unknown;
   private pending = false;
   private restartTargets: McpAppUnmountTarget[] | null = null;
@@ -45,15 +43,15 @@ export class McpAppUnmountGate {
     private readonly selector = "mcp-app-view",
   ) {}
 
-  private apply(key: string, value: unknown): unknown {
+  private apply(key: McpAppUnmountKey, renderValue: () => unknown): unknown {
+    this.renderedValue = renderValue();
     this.renderedKey = key;
-    this.renderedValue = value;
     return this.renderedValue;
   }
 
   render(
-    key: string,
-    value: unknown,
+    key: McpAppUnmountKey,
+    renderValue: () => unknown,
     leavingRoots: () => Iterable<ParentNode>,
     options: { retainRenderedValue?: boolean } = {},
   ): unknown {
@@ -74,18 +72,18 @@ export class McpAppUnmountGate {
       });
       return this.renderedKey === key && options.retainRenderedValue
         ? this.renderedValue
-        : this.apply(key, value);
+        : this.apply(key, renderValue);
     }
     if (this.renderedKey === key && options.retainRenderedValue) {
       return this.renderedValue;
     }
     if (this.renderedKey === null || this.renderedKey === key) {
-      return this.apply(key, value);
+      return this.apply(key, renderValue);
     }
 
     const targets = findMcpAppUnmountTargets(leavingRoots(), this.selector);
     if (targets.length === 0) {
-      return this.apply(key, value);
+      return this.apply(key, renderValue);
     }
 
     this.pending = true;

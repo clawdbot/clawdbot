@@ -28,10 +28,8 @@ describe("OpenAI reasoning effort support", () => {
     expect(resolveOpenAIReasoningEffortForModel({ model: luna, effort: "off" })).toBe("none");
   });
 
-  it.each([
-    { provider: "openai", id: "gpt-5.5" },
-    { provider: "openai", id: "gpt-5.5" },
-  ])("preserves xhigh for $provider/$id", (model) => {
+  it("preserves xhigh for openai/gpt-5.5", () => {
+    const model = { provider: "openai", id: "gpt-5.5" };
     expect(resolveOpenAISupportedReasoningEfforts(model)).toContain("xhigh");
     expect(resolveOpenAIReasoningEffortForModel({ model, effort: "xhigh" })).toBe("xhigh");
   });

@@ -1,5 +1,6 @@
 import CoreLocation
 import OpenClawIPC
+import Speech
 import Testing
 import UserNotifications
 @testable import OpenClaw
@@ -7,6 +8,47 @@ import UserNotifications
 @Suite(.serialized)
 @MainActor
 struct PermissionManagerTests {
+    @Test(arguments: [
+        (SFSpeechRecognizerAuthorizationStatus.notDetermined, false, false),
+        (.notDetermined, true, false),
+        (.denied, false, false),
+        (.denied, true, true),
+        (.restricted, false, false),
+        (.restricted, true, true),
+        (.authorized, false, false),
+        (.authorized, true, false),
+    ])
+    func `speech recovery only opens Settings for an already denied interactive request`(
+        status: SFSpeechRecognizerAuthorizationStatus,
+        interactive: Bool,
+        shouldRecover: Bool)
+    {
+        #expect(PermissionManager.shouldOpenSpeechRecognitionSettings(
+            status: status,
+            interactive: interactive) == shouldRecover)
+    }
+
+    @Test(arguments: [
+        (Capability.microphone, "Microphone"),
+        (.speechRecognition, "SpeechRecognition"),
+        (.camera, "Camera"),
+        (.location, "LocationServices"),
+    ])
+    func `denied privacy permissions route to their own System Settings pane`(
+        capability: Capability,
+        pane: String)
+    {
+        #expect(SystemSettingsURLSupport.privacySettingsCandidates(for: capability) == [
+            "x-apple.systempreferences:com.apple.preference.security?Privacy_\(pane)",
+            "x-apple.systempreferences:com.apple.preference.security",
+        ])
+    }
+
+    @Test(arguments: [Capability.appleScript, .notifications, .accessibility, .screenRecording])
+    func `unrelated permissions do not inherit a privacy recovery pane`(capability: Capability) {
+        #expect(SystemSettingsURLSupport.privacySettingsCandidates(for: capability).isEmpty)
+    }
+
     @Test func `notification authorization accepts provisional delivery`() throws {
         #expect(PermissionManager.isNotificationAuthorized(status: .authorized))
         #expect(PermissionManager.isNotificationAuthorized(status: .provisional))

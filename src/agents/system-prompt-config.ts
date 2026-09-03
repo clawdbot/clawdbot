@@ -7,7 +7,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildTtsSystemPromptHint } from "../tts/tts-settings.js";
-import { resolveAgentConfig } from "./agent-scope.js";
+import { resolveMainSessionDelegationMode } from "./delegation-guidance.js";
 import { resolveOwnerDisplaySetting } from "./owner-display.js";
 import { buildAgentSystemPrompt } from "./system-prompt.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
@@ -49,19 +49,15 @@ function buildModelAliasLines(cfg?: OpenClawConfig) {
 function resolveAgentSystemPromptConfig(params: {
   config?: OpenClawConfig;
   agentId?: string;
+  sessionKey?: string;
   sourceReplyDeliveryMode?: AgentSystemPromptRenderParams["sourceReplyDeliveryMode"];
 }): ResolvedAgentSystemPromptConfig {
-  const { config, agentId, sourceReplyDeliveryMode } = params;
+  const { config, agentId, sessionKey, sourceReplyDeliveryMode } = params;
   const ownerDisplay = resolveOwnerDisplaySetting(config);
-  const agentSubagents =
-    config && agentId ? resolveAgentConfig(config, agentId)?.subagents : undefined;
   return {
     ownerDisplay: ownerDisplay.ownerDisplay,
     ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
-    subagentDelegationMode:
-      agentSubagents?.delegationMode ??
-      config?.agents?.defaults?.subagents?.delegationMode ??
-      "suggest",
+    subagentDelegationMode: resolveMainSessionDelegationMode({ config, agentId, sessionKey }),
     ttsHint: config
       ? buildTtsSystemPromptHint(config, agentId, {
           messageToolOnly: sourceReplyDeliveryMode === "message_tool_only",
@@ -80,6 +76,7 @@ export function buildConfiguredAgentSystemPrompt(params: ConfiguredAgentSystemPr
     ? resolveAgentSystemPromptConfig({
         config,
         agentId,
+        sessionKey: renderParams.runtimeInfo?.sessionKey,
         sourceReplyDeliveryMode: renderParams.sourceReplyDeliveryMode,
       })
     : {};

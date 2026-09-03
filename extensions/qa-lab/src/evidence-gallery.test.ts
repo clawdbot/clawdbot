@@ -368,9 +368,9 @@ describe("evidence gallery", () => {
           coverageIds: [],
           runner: {
             availability: "local",
-            command: `node --import tsx ${repoRoot}/scripts/qa/ux-matrix-evidence-producer.ts --artifact-base ${runDir}`,
+            command: `node ${repoRoot}/external/qa/ux-matrix-producer.mjs --artifact-base ${runDir}`,
             lane: "web-ui-playwright",
-            workflow: `${repoRoot}/.github/workflows/ux-matrix-qa.yml#ux-matrix-local`,
+            workflow: `${repoRoot}/external/ci/ux-matrix.yml#matrix-local`,
           },
           stage: "first-run",
           status: "pass",
@@ -381,9 +381,9 @@ describe("evidence gallery", () => {
           runner: {
             availability: "local",
             command:
-              "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
+              "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
             lane: "cli-status",
-            workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+            workflow: "external/ci/ux-matrix.yml#matrix-local",
           },
           stage: "first-run",
           status: "proof-gap",
@@ -402,7 +402,7 @@ describe("evidence gallery", () => {
     await fs.writeFile(path.join(runDir, "scorecard.md"), "# UX Matrix\n\n- pass: 1\n", "utf8");
     await fs.writeFile(
       path.join(runDir, "commands.txt"),
-      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix\n",
+      "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix\n",
       "utf8",
     );
     await fs.mkdir(path.join(runDir, "preflight"), { recursive: true });
@@ -424,7 +424,7 @@ describe("evidence gallery", () => {
             kind: "ux-matrix-cell",
             id: "ux-matrix.web-ui.first-run",
             title: `UX Matrix: web-ui / first-run at ${repoRoot}`,
-            source: { path: "scripts/qa/ux-matrix-evidence-producer.ts" },
+            source: { path: "external/qa/ux-matrix-producer.mjs" },
           },
           coverage: [],
           execution: {
@@ -463,7 +463,7 @@ describe("evidence gallery", () => {
             kind: "ux-matrix-cell",
             id: "qa-lab.wrapper-cli-error",
             title: "UX Matrix: cli / error-state",
-            source: { path: "scripts/qa/ux-matrix-evidence-producer.ts" },
+            source: { path: "external/qa/ux-matrix-producer.mjs" },
           },
           coverage: [],
           execution: {
@@ -539,9 +539,9 @@ describe("evidence gallery", () => {
         runner: {
           availability: "local",
           command:
-            "node --import tsx <repo-root>/scripts/qa/ux-matrix-evidence-producer.ts --artifact-base <repo-root>/.artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1",
+            "node <repo-root>/external/qa/ux-matrix-producer.mjs --artifact-base <repo-root>/.artifacts/qa-e2e/suite/script/nested<repo-root>/ux-matrix-producer/run-1",
           lane: "web-ui-playwright",
-          workflow: "<repo-root>/.github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+          workflow: "<repo-root>/external/ci/ux-matrix.yml#matrix-local",
         },
         stage: "first-run",
         status: "pass",
@@ -556,9 +556,9 @@ describe("evidence gallery", () => {
         runner: {
           availability: "local",
           command:
-            "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
+            "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
           lane: "cli-status",
-          workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+          workflow: "external/ci/ux-matrix.yml#matrix-local",
         },
         stage: "first-run",
         status: "proof-gap",
@@ -584,7 +584,7 @@ describe("evidence gallery", () => {
       repoRoot,
     );
     expect(model.producerContext?.commands?.preview).toBe(
-      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix\n",
+      "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix\n",
     );
     expect(model.producerContext?.commands?.path).toContain("commands.txt");
     expect(decodeURIComponent(model.producerContext?.commands?.href ?? "")).not.toContain(repoRoot);

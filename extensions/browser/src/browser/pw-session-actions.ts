@@ -82,9 +82,10 @@ export function refLocator(page: Page, ref: string) {
       ? ref.slice(4)
       : ref;
 
-  if (/^e\d+$/.test(normalized)) {
+  const isRoleRef = /^e\d+$/.test(normalized);
+  if (isRoleRef || AX_REF_PATTERN.test(normalized)) {
     const state = pageStates.get(page);
-    if (state?.roleRefsMode === "aria") {
+    if (isRoleRef && state?.roleRefsMode === "aria") {
       const scope = state.roleRefsFrame ?? page;
       return scope.locator(`aria-ref=${normalized}`);
     }
@@ -95,39 +96,15 @@ export function refLocator(page: Page, ref: string) {
       );
     }
     const scope = state?.roleRefsFrame ?? page;
-    const locAny = scope as unknown as {
-      getByRole: (
-        role: never,
-        opts?: { name?: string; exact?: boolean },
-      ) => ReturnType<Page["getByRole"]>;
-    };
-    const locator = info.name
-      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
-      : locAny.getByRole(info.role as never);
-    return info.nth !== undefined ? locator.nth(info.nth) : locator;
-  }
-
-  if (AX_REF_PATTERN.test(normalized)) {
-    const state = pageStates.get(page);
-    const info = state?.roleRefs?.[normalized];
-    if (!info) {
-      throw new Error(
-        `Unknown ref "${normalized}". Run a new snapshot and use a ref from that snapshot.`,
-      );
-    }
-    const scope = state.roleRefsFrame ?? page;
     if (info.domMarker) {
       return scope.locator(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${normalized}"]`);
     }
-    const locAny = scope as unknown as {
-      getByRole: (
-        role: never,
-        opts?: { name?: string; exact?: boolean },
-      ) => ReturnType<Page["getByRole"]>;
-    };
-    const locator = info.name
-      ? locAny.getByRole(info.role as never, { name: info.name, exact: true })
-      : locAny.getByRole(info.role as never);
+    // Playwright omits empty names and names over 900 UTF-16 units from ARIA text.
+    // Match that exact bucket before nth; raw AX names (including "") stay explicit.
+    const locator = scope.getByRole(info.role as never, {
+      name: info.name ?? /^$|^.{901,}$/s,
+      exact: true,
+    });
     return info.nth !== undefined ? locator.nth(info.nth) : locator;
   }
 
@@ -322,19 +299,35 @@ async function withPlaywrightSafeReadReconnect<T>(
 }
 
 async function readPagesViaPlaywright(
-  opts: { cdpUrl: string; ssrfPolicy?: SsrFPolicy },
+  opts: {
+    cdpUrl: string;
+    ssrfPolicy?: SsrFPolicy;
+    requireCompleteTargetList?: boolean;
+  },
   attempt?: { cancelled: boolean },
-): Promise<
-  Array<{
-    targetId: string;
-    title: string;
-    url: string;
-    type: string;
-  }>
-> {
+): Promise<PlaywrightPageEnumeration> {
   return await withPlaywrightSafeReadReconnect(
     { cdpUrl: opts.cdpUrl, ssrfPolicy: opts.ssrfPolicy, attempt },
     async (browser) => {
+      let remainingTargetIds: Set<string> | undefined;
+      if (opts.requireCompleteTargetList) {
+        const session = await browser.newBrowserCDPSession();
+        try {
+          const result = await session.send("Target.getTargets");
+          if (!Array.isArray(result.targetInfos)) {
+            throw new Error("Browser target enumeration was unavailable.");
+          }
+          remainingTargetIds = new Set(
+            result.targetInfos
+              .filter(
+                (info) => info.type === "page" && !isBlockedTarget(opts.cdpUrl, info.targetId),
+              )
+              .map((info) => info.targetId),
+          );
+        } finally {
+          await session.detach().catch(() => {});
+        }
+      }
       const pages = await getAllPages(browser);
       const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
       const pageResults = await Promise.all(
@@ -348,8 +341,11 @@ async function readPagesViaPlaywright(
             }
             targetInfo = null;
           }
-          if (!targetInfo || isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
-            return null;
+          if (!targetInfo) {
+            return { status: "unresolved" as const };
+          }
+          if (isBlockedTarget(opts.cdpUrl, targetInfo.targetId)) {
+            return { status: "blocked" as const };
           }
           let url = "";
           try {
@@ -360,19 +356,44 @@ async function readPagesViaPlaywright(
             }
           }
           return {
-            targetId: targetInfo.targetId,
-            title: targetInfo.title,
-            url,
-            type: "page",
+            status: "available" as const,
+            page: {
+              targetId: targetInfo.targetId,
+              title: targetInfo.title,
+              url,
+              type: "page" as const,
+            },
           };
         }),
       );
       // Promise.all preserves candidate order and still propagates recoverable disconnects
       // to the outer reconnect path when any per-page task rejects.
-      return pageResults.filter((result) => result !== null);
+      // Native discovery can lead Page publication. Consume only projected IDs from that
+      // snapshot; a quarantined Page reference alone cannot identify a missing native target.
+      const resolvedPages = pageResults.flatMap((result) =>
+        result.status === "available" &&
+        (!remainingTargetIds || remainingTargetIds.delete(result.page.targetId))
+          ? [result.page]
+          : [],
+      );
+      if (
+        (remainingTargetIds && remainingTargetIds.size > 0) ||
+        ((opts.requireCompleteTargetList || resolvedPages.length === 0) &&
+          pageResults.some((result) => result.status === "unresolved"))
+      ) {
+        return { status: "unavailable", reason: "target-identity-unresolved" };
+      }
+      return { status: "available", pages: resolvedPages };
     },
   );
 }
+
+type PlaywrightPageEnumeration =
+  | {
+      status: "available";
+      pages: Array<{ targetId: string; title: string; url: string; type: "page" }>;
+    }
+  | { status: "unavailable"; reason: "target-identity-unresolved" };
 
 /**
  * List all pages/tabs from the persistent Playwright connection.
@@ -383,30 +404,66 @@ export async function listPagesViaPlaywright(opts: {
   cdpUrl: string;
   ssrfPolicy?: SsrFPolicy;
   timeoutMs?: number;
+  requireCompleteTargetList?: boolean;
+  signal?: AbortSignal;
 }) {
   const timeoutMs =
     typeof opts.timeoutMs === "number" && Number.isFinite(opts.timeoutMs)
       ? Math.max(1, Math.floor(opts.timeoutMs))
       : undefined;
-  if (timeoutMs === undefined) {
-    return await readPagesViaPlaywright(opts);
-  }
-
   let timer: ReturnType<typeof setTimeout> | undefined;
   let timeoutError: Error | undefined;
   const attempt = { cancelled: false };
-  const timeout = new Promise<never>((_, reject) => {
-    timer = setTimeout(() => {
-      attempt.cancelled = true;
-      timeoutError = new Error(`Playwright page enumeration timed out after ${timeoutMs}ms`);
-      reject(timeoutError);
-    }, timeoutMs);
-    timer.unref?.();
-  });
+  const operations: Array<Promise<PlaywrightPageEnumeration>> = [
+    readPagesViaPlaywright(opts, attempt),
+  ];
+  if (timeoutMs !== undefined) {
+    operations.push(
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => {
+          attempt.cancelled = true;
+          timeoutError = new Error(`Playwright page enumeration timed out after ${timeoutMs}ms`);
+          reject(timeoutError);
+        }, timeoutMs);
+        timer.unref?.();
+      }),
+    );
+  }
+  let abortError: Error | undefined;
+  let abortListener: (() => void) | undefined;
+  const signal = opts.signal;
+  if (signal) {
+    operations.push(
+      new Promise<never>((_, reject) => {
+        if (signal.aborted) {
+          attempt.cancelled = true;
+          abortError =
+            signal.reason instanceof Error
+              ? signal.reason
+              : new Error("Playwright page enumeration was aborted.");
+          reject(abortError);
+          return;
+        }
+        abortListener = () => {
+          attempt.cancelled = true;
+          abortError =
+            signal.reason instanceof Error
+              ? signal.reason
+              : new Error("Playwright page enumeration was aborted.");
+          reject(abortError);
+        };
+        signal.addEventListener("abort", abortListener, { once: true });
+      }),
+    );
+  }
   try {
-    return await Promise.race([readPagesViaPlaywright(opts, attempt), timeout]);
+    const enumeration = await Promise.race(operations);
+    if (enumeration.status === "unavailable") {
+      throw new Error("Playwright page target identities are temporarily unavailable.");
+    }
+    return enumeration.pages;
   } catch (err) {
-    if (err === timeoutError) {
+    if (err === timeoutError || err === abortError) {
       await forceDisconnectPlaywrightForTarget({
         cdpUrl: opts.cdpUrl,
         ssrfPolicy: opts.ssrfPolicy,
@@ -417,6 +474,9 @@ export async function listPagesViaPlaywright(opts: {
   } finally {
     if (timer) {
       clearTimeout(timer);
+    }
+    if (abortListener && signal) {
+      signal.removeEventListener("abort", abortListener);
     }
   }
 }
@@ -432,6 +492,7 @@ export async function createPageViaPlaywright(
     cdpUrl: string;
     url: string;
     cdpPolicy?: SsrFPolicy;
+    signal?: AbortSignal;
   } & BrowserNavigationPolicyOptions,
 ): Promise<{
   targetId: string;
@@ -439,17 +500,28 @@ export async function createPageViaPlaywright(
   url: string;
   type: string;
 }> {
+  opts.signal?.throwIfAborted();
   const { browser } = await connectBrowser(opts.cdpUrl, opts.cdpPolicy ?? opts.ssrfPolicy);
+  opts.signal?.throwIfAborted();
   const context = browser.contexts()[0] ?? (await browser.newContext());
+  opts.signal?.throwIfAborted();
   ensureContextState(context);
 
   const page = await context.newPage();
+  const throwIfCreationAborted = async () => {
+    try {
+      opts.signal?.throwIfAborted();
+    } catch (error) {
+      await page.close().catch(() => {});
+      throw error;
+    }
+  };
   ensurePageState(page);
   clearBlockedPageRef(opts.cdpUrl, page);
   const createdTargetId = (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+  await throwIfCreationAborted();
   clearBlockedTarget(opts.cdpUrl, createdTargetId ?? undefined);
 
-  // Navigate to the URL
   const targetUrl = opts.url.trim() || "about:blank";
   if (targetUrl !== "about:blank") {
     const navigationPolicy = withBrowserNavigationPolicy(opts.ssrfPolicy, {
@@ -459,7 +531,7 @@ export async function createPageViaPlaywright(
       url: targetUrl,
       ...navigationPolicy,
     });
-    let response: Response | null = null;
+    let response: Response | null;
     try {
       response = await gotoPageWithNavigationGuard({
         cdpUrl: opts.cdpUrl,
@@ -470,10 +542,13 @@ export async function createPageViaPlaywright(
         browserProxyMode: opts.browserProxyMode,
         targetId: createdTargetId ?? undefined,
       });
+      opts.signal?.throwIfAborted();
     } catch (err) {
-      if (isPolicyDenyNavigationError(err) || err instanceof BlockedBrowserTargetError) {
-        throw err;
+      if (!isPolicyDenyNavigationError(err) && !(err instanceof BlockedBrowserTargetError)) {
+        // This call owns the new page; best-effort cleanup must not replace its navigation error.
+        await page.close().catch(() => {});
       }
+      throw err;
     }
     // OpenClaw owns this newly-created tab: if the post-navigation safety
     // check trips, close the tab we just spawned.
@@ -498,18 +573,14 @@ export async function createPageViaPlaywright(
     }
   }
 
-  // Get the targetId for this page
   const tid = createdTargetId ?? (await pageTargetInfo(page).catch(() => null))?.targetId ?? null;
+  await throwIfCreationAborted();
   if (!tid) {
     throw new Error("Failed to get targetId for new page");
   }
-
-  return {
-    targetId: tid,
-    title: await page.title().catch(() => ""),
-    url: page.url(),
-    type: "page",
-  };
+  const title = await page.title().catch(() => "");
+  await throwIfCreationAborted();
+  return { targetId: tid, title, url: page.url(), type: "page" };
 }
 
 /**
@@ -520,8 +591,10 @@ export async function closePageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
+  opts.signal?.throwIfAborted();
   await page.close();
 }
 
@@ -533,7 +606,9 @@ export async function focusPageByTargetIdViaPlaywright(opts: {
   cdpUrl: string;
   targetId: string;
   ssrfPolicy?: SsrFPolicy;
+  signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
+  opts.signal?.throwIfAborted();
   await page.bringToFront();
 }

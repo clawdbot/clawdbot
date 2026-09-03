@@ -19,7 +19,7 @@ async function createDirectorySymlink(target: string, linkPath: string): Promise
 }
 
 describe("readMemoryFile", () => {
-  it("returns empty text for absent extra paths and rejects non-directory parents", async () => {
+  it("returns not found for absent extra paths and rejects non-directory parents", async () => {
     const tmpRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-read-file-"));
     try {
       const workspaceDir = path.join(tmpRoot, "workspace");
@@ -35,6 +35,7 @@ describe("readMemoryFile", () => {
       });
 
       expect(result).toEqual({
+        status: "not_found",
         text: "",
         path: path.relative(workspaceDir, missingPath).replace(/\\/g, "/"),
       });
@@ -170,6 +171,7 @@ describe("readMemoryFile", () => {
             relPath,
           }),
         ).resolves.toEqual({
+          status: "ok",
           text: "alpha\nbeta",
           path: relPath,
           from: 1,

@@ -77,7 +77,7 @@ Live model tests are split into two layers so failures are isolated:
 - "Direct model" tells you whether the provider/model can answer at all with the given key.
 - "Gateway smoke" tells you whether the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
-The curated model lists below live in `src/agents/live-model-filter.ts` and
+The curated model lists below live in `src/agents/test-helpers/live-model-dynamic-candidates.ts` and
 change over time; treat the arrays there as the source of truth, not this
 page.
 
@@ -176,7 +176,7 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
-  - `OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1` to run a fresh Claude CLI turn plus two native resumes and require at least 90% prompt-cache reuse on the second resume. This probe disables the image, MCP, and model-switch probes.
+  - `OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1` to run a fresh Claude CLI turn, a tool-bearing warmup resume, and a no-tool settlement resume before requiring at least 90% prompt-cache reuse on the following dirty-workspace resume. It also verifies that a thinking-level change rotates the live-session generation and that the next steady resume restores at least 90% reuse. This probe disables the image, MCP, and model-switch probes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=1` to opt into the Claude Sonnet -> Opus same-session continuity probe when the selected model supports a switch target. Off by default, including in Docker recipes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1` to opt into the MCP/tool loopback probe. Off by default in Docker recipes.
 
@@ -218,7 +218,7 @@ pnpm test:docker:live-cli-backend:gemini
 Notes:
 
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
-- `pnpm test:docker:live-cli-backend:claude:cache` requires Anthropic API-key auth. It logs normalized cache usage for both resumes and fails when the second resume falls below 90% reuse.
+- `pnpm test:docker:live-cli-backend:claude:cache` requires Anthropic API-key auth. It logs normalized cache usage for every cache-probe resume and requires at least 90% reuse on both the post-settlement dirty-workspace resume and the steady resume after a thinking-level change.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning plugin, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `codex-cli` is no longer a bundled CLI backend; use `openai/*` with the Codex app-server runtime instead (see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke)).
@@ -584,34 +584,34 @@ Notes:
 
 ## Live: model matrix (what we cover)
 
-Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/live-model-filter.ts`, in this priority order:
+Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/test-helpers/live-model-dynamic-candidates.ts`, in this priority order:
 
-| Provider/model                                | Notes      |
-| --------------------------------------------- | ---------- |
-| `anthropic/claude-opus-5`                     |            |
-| `anthropic/claude-opus-4-8`                   |            |
-| `anthropic/claude-sonnet-5`                   |            |
-| `anthropic/claude-sonnet-4-6`                 |            |
-| `anthropic/claude-opus-4-7`                   |            |
-| `google/gemini-3.1-pro-preview`               | Gemini API |
-| `google/gemini-3.5-flash`                     | Gemini API |
-| `cohere/command-a-plus-05-2026`               |            |
-| `moonshot/kimi-k3`                            |            |
-| `anthropic/claude-opus-4-6`                   |            |
-| `deepseek/deepseek-v4-flash`                  |            |
-| `deepseek/deepseek-v4-pro`                    |            |
-| `minimax/MiniMax-M3`                          |            |
-| `openai/gpt-5.6`                              |            |
-| `openrouter/openai/gpt-5.2-chat`              |            |
-| `openrouter/minimax/minimax-m2.7`             |            |
-| `opencode-go/glm-5`                           |            |
-| `openrouter/ai21/jamba-large-1.7`             |            |
-| `xai/grok-4.6`                                |            |
-| `xai/grok-4.5`                                |            |
-| `xai/grok-4.20-0309-reasoning`                |            |
-| `zai/glm-5.1`                                 |            |
-| `fireworks/accounts/fireworks/models/glm-5p1` |            |
-| `minimax-portal/minimax-m3`                   |            |
+| Provider/model                                      | Notes      |
+| --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5`                           |            |
+| `anthropic/claude-opus-4-8`                         |            |
+| `anthropic/claude-sonnet-5`                         |            |
+| `anthropic/claude-sonnet-4-6`                       |            |
+| `anthropic/claude-opus-4-7`                         |            |
+| `google/gemini-3.1-pro-preview`                     | Gemini API |
+| `google/gemini-3.5-flash`                           | Gemini API |
+| `cohere/command-a-plus-05-2026`                     |            |
+| `moonshot/kimi-k3`                                  |            |
+| `anthropic/claude-opus-4-6`                         |            |
+| `deepseek/deepseek-v4-flash`                        |            |
+| `deepseek/deepseek-v4-pro`                          |            |
+| `minimax/MiniMax-M3`                                |            |
+| `openai/gpt-5.6`                                    |            |
+| `openrouter/openai/gpt-5.2-chat`                    |            |
+| `openrouter/minimax/minimax-m2.7`                   |            |
+| `opencode-go/glm-5`                                 |            |
+| `openrouter/ai21/jamba-large-1.7`                   |            |
+| `xai/grok-4.6`                                      |            |
+| `xai/grok-4.5`                                      |            |
+| `xai/grok-4.20-0309-reasoning`                      |            |
+| `zai/glm-5.1`                                       |            |
+| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:
 
@@ -667,10 +667,10 @@ Live tests discover credentials the same way the CLI does. Practical implication
 - If the CLI works, live tests should find the same keys.
 - If a live test says "no creds", debug the same way you'd debug `openclaw models list` / model selection.
 
-- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what "profile keys" means in the live tests)
+- Per-agent auth profiles: SQLite credential rows in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (this is what "profile keys" means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
 - Legacy OAuth dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
-- Local live runs copy the active config (with `agents.*.workspace` / `agentDir` overrides stripped) and each agent's `auth-profiles.json` - not the rest of that agent's directory, so `workspace/` and `sandboxes/` data never reaches the staged home - plus the legacy `credentials/` dir and supported external CLI auth files/dirs (`.claude.json`, `.claude/.credentials.json`, `.claude/settings*.json`, `.claude/backups`, `.codex/auth.json`, `.codex/config.toml`, `.gemini`, `.minimax`) into a temp test home.
+- Local live runs copy the active config (with `agents.*.workspace` / `agentDir` overrides stripped) and stage each agent's canonical SQLite auth credential/state rows through the auth-store reader/writer APIs, not by copying its database or the rest of its directory. Agent sessions, `workspace/`, and `sandboxes/` data are not staged. The runner also copies the legacy `credentials/` dir and supported external CLI auth files/dirs (`.claude.json`, `.claude/.credentials.json`, `.claude/settings*.json`, `.claude/backups`, `.codex/auth.json`, `.codex/config.toml`, `.gemini`, `.minimax`) into a temp test home.
 
 If you want to rely on env keys, export them before local tests or use the
 Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
@@ -703,7 +703,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Scope:
   - Enumerates every registered image-generation provider plugin
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs each configured provider through the shared image-generation runtime:
     - `<provider>:generate`
@@ -751,7 +751,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Exercises the shared bundled music-generation provider path
   - Currently covers `fal`, `google`, `minimax`, and `openrouter`
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs both declared runtime modes when available:
     - `generate` with prompt-only input
@@ -773,7 +773,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Defaults to the release-safe smoke path: one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
   - Skips FAL by default because provider-side queue latency can dominate release time; pass `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` (or clear the skip list) to run it explicitly
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs only `generate` by default
   - Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform modes when available:

@@ -1,8 +1,8 @@
 // Qa Lab plugin module implements suite planning behavior.
 import path from "node:path";
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import pMap from "p-map";
 import { createQaArtifactRunId } from "./artifact-run-id.js";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "./cli-paths.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
@@ -274,6 +274,7 @@ function collectQaSuiteGatewayRuntimeOptions(
 function collectQaSuiteTransportPolicy(
   scenarios: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"],
 ) {
+  let directMessageOnly = false;
   let requireGroupMention = false;
   let topLevelReplies = false;
   let senderAllowlist: readonly string[] | undefined;
@@ -282,6 +283,7 @@ function collectQaSuiteTransportPolicy(
       continue;
     }
     const policy = scenario.execution.transportPolicy;
+    directMessageOnly ||= policy?.directMessageOnly === true;
     requireGroupMention ||= policy?.requireGroupMention === true;
     topLevelReplies ||= policy?.topLevelReplies === true;
     if (!policy?.senderAllowlist) {
@@ -295,8 +297,9 @@ function collectQaSuiteTransportPolicy(
     }
     senderAllowlist = policy.senderAllowlist;
   }
-  return requireGroupMention || topLevelReplies || senderAllowlist
+  return directMessageOnly || requireGroupMention || topLevelReplies || senderAllowlist
     ? {
+        ...(directMessageOnly ? { directMessageOnly: true as const } : {}),
         ...(requireGroupMention ? { requireGroupMention: true as const } : {}),
         ...(senderAllowlist ? { senderAllowlist } : {}),
         ...(topLevelReplies ? { topLevelReplies: true as const } : {}),
@@ -430,9 +433,8 @@ async function mapQaSuiteWithConcurrency<T, U>(
       }
     })();
   }
-  const results = await pMap(
-    items,
-    async (item, index) => {
+  const { results } = await runTasksWithConcurrency({
+    tasks: items.map((item, index) => async () => {
       if (stopped) {
         return undefined;
       }
@@ -445,12 +447,11 @@ async function mapQaSuiteWithConcurrency<T, U>(
         stopped = true;
       }
       return result;
-    },
-    {
-      concurrency: Math.max(1, Math.floor(concurrency)),
-      stopOnError: true,
-    },
-  );
+    }),
+    limit: Math.max(1, Math.floor(concurrency)),
+    errorMode: "stop",
+    throwOnError: true,
+  });
   const completed: U[] = [];
   for (const result of results) {
     if (result !== undefined) {

@@ -2,8 +2,8 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { SkillStatusEntry } from "../../api/types.ts";
+import { GitHubIdentityController } from "../../features/github-connections/github-identity-controller.ts";
 import { installBrowserHistoryIsolation } from "../../test-helpers/browser-history.ts";
-import { GitHubIdentityController } from "./github-identity-controller.ts";
 import { renderAgentSkills, renderAgentTools } from "./panels-tools-skills.ts";
 
 installBrowserHistoryIsolation();
@@ -20,10 +20,10 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
   githubIdentity.sync({
     client: null,
     connected: false,
-    agentId: "main",
-    config: null,
-    supported: true,
+    target: { kind: "shared", scope: "agent", agentId: "main", config: null },
+    statusReadable: true,
     configurable: false,
+    authorizable: false,
     clientRevision: 0,
   });
   return {
@@ -46,11 +46,36 @@ function createBaseParams(overrides: Partial<Parameters<typeof renderAgentTools>
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: true,
     githubIdentity,
+    onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
     onConfigReload: () => undefined,
     onConfigSave: () => undefined,
     ...overrides,
+  };
+}
+
+function createSkill(
+  name: string,
+  options: { source?: string; bundled?: boolean; blockedByAgentFilter?: boolean } = {},
+): SkillStatusEntry {
+  return {
+    name,
+    description: `${name} skill`,
+    source: options.source ?? "openclaw-managed",
+    bundled: options.bundled ?? false,
+    filePath: `/tmp/skills/${name}/SKILL.md`,
+    baseDir: `/tmp/skills/${name}`,
+    skillKey: name,
+    always: false,
+    disabled: false,
+    blockedByAllowlist: false,
+    blockedByAgentFilter: options.blockedByAgentFilter ?? false,
+    eligible: true,
+    requirements: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    configChecks: [],
+    install: [],
   };
 }
 
@@ -148,7 +173,7 @@ describe("agents tools panel (browser)", () => {
       Array.from(container.querySelectorAll(".settings-section__heading")).map((heading) =>
         heading.textContent?.trim(),
       ),
-    ).toEqual(["Tool Access", "Available Right Now", "GitHub Identity", "Tool Catalog"]);
+    ).toEqual(["Tool Access", "Available Right Now", "GitHub account", "Tool Catalog"]);
     expect(
       Array.from(container.querySelectorAll(".settings-row__title")).some(
         (title) => title.textContent?.trim() === "Quick Presets",
@@ -186,13 +211,23 @@ describe("agents tools panel (browser)", () => {
   it("renders the GitHub identity section with settings rows only", async () => {
     const container = document.createElement("div");
     const params = createBaseParams();
+    const nativeIdentity = {
+      source: "system-detected" as const,
+      credentialKind: "native" as const,
+      credentialState: "available" as const,
+      account: { login: "octocat" },
+      gitAuthor: { name: null, email: null },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable" as const,
+      oauthScopes: [],
+      repositoryGrants: "unknown" as const,
+    };
     params.githubIdentity.status = {
       agentId: "main",
-      source: "system-detected",
-      credentialState: "available",
-      account: { login: "octocat", avatarUrl: "https://example.test/a.png" },
-      gitAuthor: { name: null, email: null },
-      evidence: "github-api",
+      selectedScope: "system",
+      selected: { scope: "system", configured: false, identity: nativeIdentity },
+      effective: nativeIdentity,
     };
     render(renderAgentTools(params), container);
     await Promise.resolve();
@@ -208,7 +243,7 @@ describe("agents tools panel (browser)", () => {
     // markup or nested callouts, per ui/docs/design-system/settings-design.md.
     expect(section.querySelector(".form-grid")).toBeNull();
     expect(section.querySelector(".callout")).toBeNull();
-    expect(section.querySelector(".settings-group .settings-account__avatar")).not.toBeNull();
+    expect(section.querySelector(".settings-group .settings-account__avatar")).toBeNull();
     expect(section.textContent).toContain("@octocat");
     expect(section.querySelector(".settings-status")?.textContent?.trim()).toBe("Verified");
     // Raw wire enums never render; friendly labels replace them.
@@ -218,8 +253,129 @@ describe("agents tools panel (browser)", () => {
       row.querySelector(".settings-row__title")?.textContent?.includes("Git Author"),
     );
     expect(authorRow?.querySelector(".settings-row__value")?.textContent?.trim()).toBe("Not set");
-    expect(section.querySelector(".settings-segmented")).not.toBeNull();
-    expect(section.querySelector(".settings-secret input")).not.toBeNull();
+    expect(section.querySelector(".settings-segmented")).toBeNull();
+    expect(section.querySelector(".settings-secret input")).toBeNull();
+    expect(section.textContent).toContain("Manage connections in Profile");
+    expect(section.textContent).not.toContain("Advanced: agent GitHub override");
+  });
+
+  it("renders only the pinned device link and one-time code while authorization is active", async () => {
+    const container = document.createElement("div");
+    const client = {
+      request: vi.fn(async () => ({
+        requestId: "github-device-11111111111111111111111111111111",
+        userCode: "ABCD-1234",
+        verificationUri: "https://github.com/login/device",
+        expiresInMs: 900_000,
+        pollAfterMs: 60_000,
+      })),
+    } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+    await githubIdentity.startAuthorization();
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("ABCD-1234");
+    const link = container.querySelector<HTMLAnchorElement>(
+      'a[href="https://github.com/login/device"]',
+    );
+    expect(link?.textContent?.trim()).toBe("Open github.com/login/device");
+    expect(link?.target).toBe("_blank");
+    expect(link?.rel.split(/\s+/)).toEqual(expect.arrayContaining(["noopener", "noreferrer"]));
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).not.toContain("github-device-11111111111111111111111111111111");
+    expect(container.querySelector(".settings-segmented")).toBeNull();
+    githubIdentity.dispose();
+  });
+
+  it("keeps complete effective facts when This Agent inherits System", async () => {
+    const container = document.createElement("div");
+    const params = createBaseParams();
+    const effective = {
+      source: "system-configured" as const,
+      credentialKind: "managed-oauth" as const,
+      credentialState: "available" as const,
+      account: { login: "system-user" },
+      gitAuthor: { name: "System Author", email: "system@example.com" },
+      evidence: "github-api" as const,
+      accessExpiresAtMs: 1_900_000_000_000,
+      refreshState: "available" as const,
+      oauthScopes: ["repo", "workflow"],
+      repositoryGrants: "unknown" as const,
+    };
+    params.githubIdentity.status = {
+      agentId: "main",
+      selectedScope: "agent",
+      selected: { scope: "agent", configured: false, identity: null },
+      effective,
+    };
+
+    render(renderAgentTools(params), container);
+    await Promise.resolve();
+
+    expect(container.textContent).toContain("@system-user");
+    expect(container.textContent).toContain("System Author · system@example.com");
+    expect(container.textContent).toContain("Managed GitHub authorization");
+    expect(container.textContent).toContain("repo, workflow");
+    expect(container.textContent).toContain("System GitHub");
+  });
+
+  it("keeps PAT fields hidden until the explicit fallback is selected", async () => {
+    const container = document.createElement("div");
+    const client = { request: vi.fn() } as never;
+    const githubIdentity = new GitHubIdentityController({
+      requestUpdate: () => undefined,
+      runExternalMutation: async () => ({
+        ok: false,
+        reason: "unavailable",
+        error: "not used",
+      }),
+    });
+    githubIdentity.sync({
+      client,
+      connected: true,
+      target: { kind: "shared", scope: "agent", agentId: "main", config: {} },
+      statusReadable: true,
+      configurable: true,
+      authorizable: true,
+      clientRevision: 1,
+    });
+
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).toBeNull();
+    expect(container.textContent).toContain("Use a PAT instead");
+
+    githubIdentity.showPatFallback();
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    expect(container.querySelector(".settings-secret input")).not.toBeNull();
+    expect(container.textContent).not.toContain("Continue with GitHub");
+
+    githubIdentity.busy = true;
+    render(renderAgentTools(createBaseParams({ githubIdentity })), container);
+    await Promise.resolve();
+    const cancel = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find(
+      (button) => button.textContent?.trim() === "Cancel",
+    );
+    expect(cancel?.disabled).toBe(true);
   });
 
   it("shows fallback warning when runtime catalog fails", async () => {
@@ -407,7 +563,10 @@ describe("agents tools panel (browser)", () => {
     ]);
   });
 
-  it("opens the collapsed group and tool row from a live tool chip", async () => {
+  it.each([
+    { reduced: true, behavior: "auto" },
+    { reduced: false, behavior: "smooth" },
+  ] as const)("opens a live tool chip with $behavior scrolling", async ({ reduced, behavior }) => {
     const container = document.createElement("div");
     document.body.append(container);
     render(
@@ -479,9 +638,16 @@ describe("agents tools panel (browser)", () => {
     expect(group.open).toBe(false);
     expect(tool.open).toBe(false);
 
+    const summary = tool.querySelector<HTMLElement>("summary");
+    if (!summary) {
+      container.remove();
+      throw new Error("expected agent tool summary");
+    }
+    const scrollIntoView = vi.fn();
+    tool.scrollIntoView = scrollIntoView;
+    const focus = vi.spyOn(summary, "focus");
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: reduced }));
     const previousUrl = window.location.href;
-    // Shared jsdom workers can observe URL changes before finally/afterEach,
-    // so inspect the intended deep link without mutating browser history.
     const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {});
     try {
       chip.click();
@@ -496,14 +662,194 @@ describe("agents tools panel (browser)", () => {
       expect(requestedUrl).toBeInstanceOf(URL);
       expect((requestedUrl as URL).hash).toBe("#agent-tool-read");
       expect(window.location.href).toBe(previousUrl);
+      expect(scrollIntoView).toHaveBeenCalledWith({ block: "center", behavior });
+      expect(focus).toHaveBeenCalledOnce();
     } finally {
+      vi.unstubAllGlobals();
+      focus.mockRestore();
       replaceState.mockRestore();
       container.remove();
     }
   });
+
+  it.each([
+    {
+      name: "prefix wildcard",
+      tools: { allow: ["web_*"] },
+      expected: { web_fetch: true, web_: true, read: false },
+    },
+    {
+      name: "suffix wildcard",
+      tools: { allow: ["*fetch"] },
+      expected: { web_fetch: true, read: false },
+    },
+    {
+      name: "literal dots in wildcard",
+      tools: { allow: ["mcp.server.*"] },
+      expected: { "mcp.server.tool": true, mcpXserverXtool: false },
+    },
+    {
+      name: "base exec alias and direct deny",
+      tools: { allow: [" BASH "], deny: ["exec"] },
+      expected: { exec: false, apply_patch: true, write: false },
+    },
+    {
+      name: "override exec deny",
+      tools: { profile: "full", deny: ["exec"] },
+      expected: { exec: false, apply_patch: false, write: true },
+    },
+    {
+      name: "group expansion and direct deny",
+      tools: { allow: ["group:fs"], deny: ["write"] },
+      expected: { read: true, write: false, apply_patch: true },
+    },
+  ])("renders policy-controlled switches: $name", async ({ tools, expected }) => {
+    const container = document.createElement("div");
+    render(
+      renderAgentTools(
+        createBaseParams({
+          configForm: {
+            agents: { entries: { main: { default: true, tools } } },
+          },
+          toolsCatalogResult: {
+            agentId: "main",
+            profiles: [{ id: "full", label: "Full" }],
+            groups: [
+              {
+                id: "policy",
+                label: "Policy",
+                source: "core",
+                tools: Object.keys(expected).map((id) => ({
+                  id,
+                  label: id,
+                  description: id,
+                  source: "core" as const,
+                  defaultProfiles: [],
+                })),
+              },
+            ],
+          },
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Object.fromEntries(
+        Array.from(container.querySelectorAll(".agent-tool-card"), (card) => [
+          card.querySelector(".agent-tool-title")?.textContent?.trim(),
+          card.querySelector<HTMLElement & { checked: boolean }>("wa-switch")?.checked,
+        ]),
+      ),
+    ).toEqual(expected);
+  });
 });
 
 describe("agents skills panel (browser)", () => {
+  it("shows matches from default-collapsed groups while filtering", async () => {
+    const container = document.createElement("div");
+    const params: Parameters<typeof renderAgentSkills>[0] = {
+      agentId: "main",
+      canPatchConfig: true,
+      canUpdateConfig: true,
+      report: {
+        workspaceDir: "/tmp/workspace",
+        managedSkillsDir: "/tmp/skills",
+        agentId: "main",
+        skills: [
+          createSkill("Unique Built In Match", {
+            source: "openclaw-bundled",
+            bundled: true,
+          }),
+          createSkill("Installed Distractor"),
+        ],
+      },
+      loading: false,
+      error: null,
+      activeAgentId: "main",
+      configForm: { agents: { entries: { main: { default: true } } } },
+      configLoading: false,
+      configSaving: false,
+      configDirty: false,
+      filter: "",
+      onFilterChange: () => undefined,
+      onRefresh: () => undefined,
+      onToggle: () => undefined,
+      onClear: () => undefined,
+      onDisableAll: () => undefined,
+      onConfigReload: () => undefined,
+      onConfigSave: () => undefined,
+    };
+
+    render(renderAgentSkills(params), container);
+    await Promise.resolve();
+    const builtInGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(builtInGroup?.open).toBe(false);
+
+    render(renderAgentSkills({ ...params, filter: "Unique Built In Match" }), container);
+    await Promise.resolve();
+    const filteredGroup = container.querySelector<HTMLDetailsElement>(".agent-skills-group");
+    expect(container.textContent).toContain("1 shown");
+    expect(filteredGroup?.open).toBe(true);
+    expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
+      "Unique Built In Match",
+    );
+  });
+
+  it("reflects an inherited default skill allowlist", async () => {
+    const container = document.createElement("div");
+
+    render(
+      renderAgentSkills({
+        agentId: "main",
+        canPatchConfig: true,
+        canUpdateConfig: true,
+        report: {
+          workspaceDir: "/tmp/workspace",
+          managedSkillsDir: "/tmp/skills",
+          agentId: "main",
+          agentSkillFilter: ["github"],
+          skills: [createSkill("github"), createSkill("weather", { blockedByAgentFilter: true })],
+        },
+        loading: false,
+        error: null,
+        activeAgentId: "main",
+        configForm: {
+          agents: {
+            defaults: { skills: ["github"] },
+            entries: { main: { default: true } },
+          },
+        },
+        configLoading: false,
+        configSaving: false,
+        configDirty: false,
+        filter: "",
+        onFilterChange: () => undefined,
+        onRefresh: () => undefined,
+        onToggle: () => undefined,
+        onClear: () => undefined,
+        onDisableAll: () => undefined,
+        onConfigReload: () => undefined,
+        onConfigSave: () => undefined,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".callout.info")?.textContent).toContain(
+      "inherits the default skill allowlist",
+    );
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>(".agent-skill-row wa-switch")).map(
+        (toggle) => (toggle as HTMLElement & { checked: boolean }).checked,
+      ),
+    ).toEqual([true, false]);
+    const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons[0]?.disabled).toBe(false);
+    expect(buttons[1]?.disabled).toBe(true);
+  });
+
   it("gates allowlist clearing separately from staged config edits", async () => {
     const container = document.createElement("div");
     render(
@@ -537,9 +883,8 @@ describe("agents skills panel (browser)", () => {
     await Promise.resolve();
 
     const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-    expect(buttons[0]?.disabled).toBe(true);
-    expect(buttons[1]?.disabled).toBe(false);
-    expect(buttons[2]?.disabled).toBe(true);
+    expect(buttons[0]?.disabled).toBe(false);
+    expect(buttons[1]?.disabled).toBe(true);
   });
 
   it("explains an unsatisfied one-of binary requirement", async () => {

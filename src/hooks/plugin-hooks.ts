@@ -8,7 +8,7 @@ import {
   resolvePolicyPluginActivationState,
 } from "../plugins/config-policy.js";
 import { resolveMemorySlotDecision } from "../plugins/config-state.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { hasKind } from "../plugins/slots.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 
@@ -28,9 +28,9 @@ export function resolvePluginHookDirs(params: {
   if (!workspaceDir) {
     return [];
   }
-  const metadataSnapshot = loadPluginMetadataSnapshot({
+  const metadataSnapshot = resolvePluginMetadataSnapshot({
     workspaceDir,
-    config: params.config ?? {},
+    config: params.config,
     env: process.env,
   });
   const registry = metadataSnapshot.manifestRegistry;
@@ -54,6 +54,7 @@ export function resolvePluginHookDirs(params: {
     const activationState = resolvePolicyPluginActivationState({
       id: record.id,
       origin: record.origin,
+      channelIds: record.channels,
       config: normalizedPlugins,
       rootConfig: params.config,
     });

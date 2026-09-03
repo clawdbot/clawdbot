@@ -9,7 +9,7 @@ import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metad
 import { isSecretRefHeaderValueMarker } from "../model-auth-markers.js";
 import { attachModelProviderLocalService } from "../provider-local-service.js";
 import {
-  attachModelProviderMetadataOwners,
+  attachModelProviderRequestRouteFacts,
   attachModelProviderRequestTransport,
   resolveProviderRequestConfig,
   sanitizeConfiguredModelProviderRequest,
@@ -176,7 +176,7 @@ export function buildInlineProviderModels(
         transport: "stream",
       });
       const maxTokens = model.maxTokens ?? entry?.maxTokens;
-      return attachModelProviderMetadataOwners(
+      return attachModelProviderRequestRouteFacts(
         attachModelProviderLocalService(
           attachModelProviderRequestTransport(
             {

@@ -122,16 +122,17 @@ async function extractWithReadability(request: WebContentExtractionRequest) {
   try {
     const [{ Readability }, { parseHTML }] = await loadReadabilityDeps();
     const { document } = parseHTML(cleanHtml, { location: { href: request.url } });
-    const reader = new Readability(document);
+    const textMode = request.extractMode === "text";
+    // Text mode consumes textContent; skip serializing the HTML it would discard.
+    const reader = new Readability(document, textMode ? { serializer: () => "" } : undefined);
     const parsed = reader.parse();
-    if (!parsed?.content) {
+    if (!parsed) {
       return null;
     }
     const title = parsed.title || undefined;
-    const rendered =
-      request.extractMode === "text"
-        ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
-        : htmlToMarkdown(parsed.content);
+    const rendered = textMode
+      ? { text: normalizeWhitespace(parsed.textContent ?? ""), title }
+      : htmlToMarkdown(parsed.content ?? "");
     const text = stripInvisibleUnicode(rendered.text);
     return text ? { text, title: title ?? rendered.title } : null;
   } catch {

@@ -9,6 +9,7 @@ import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { createGatewayHttpTransport } from "./server-runtime-state.js";
 import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { finishGatewayStartup } from "./server-startup-finish.js";
+import { beginMacOSSystemCaWarmupOnce } from "./system-ca-warmup.js";
 
 const loadGatewayStartupPostAttachModule = createLazyRuntimeModule(
   () => import("./server-startup-post-attach.js"),
@@ -28,11 +29,15 @@ export async function startGatewayServerCore(
   const postReadyWorkBarrier = new Promise<void>((resolve) => {
     releasePostReadyWork = resolve;
   });
-  const gatewayKernel = await createGatewayKernel(port, opts);
+  const gatewayKernel = await createGatewayKernel(port, opts, { deferEarlyRuntime: true });
+  if (!gatewayKernel.minimalTestGateway) {
+    // Start the Keychain read early so it overlaps bootstrap; post-attach awaits the
+    // shared promise before plugins can use TLS.
+    void beginMacOSSystemCaWarmupOnce({ log });
+  }
   let startupSettled: Promise<void>;
   const {
     beginClosePrelude,
-    clearFallbackGatewayContextForServer,
     closeOnStartupFailure,
     createCloseHandler,
     sealAndJoinRegisteredSidecarStops,
@@ -69,6 +74,7 @@ export async function startGatewayServerCore(
       kernelRuntime: { ...gatewayKernel, ...transport },
       port,
       opts,
+      bootId: gatewayKernel.bootId,
       log,
       logHealth,
       logWsControl,
@@ -116,10 +122,6 @@ export async function startGatewayServerCore(
           { name: "gateway close prelude", run: runClosePrelude },
           { name: "late sidecar cleanup", run: sealAndJoinRegisteredSidecarStops },
           { name: "gateway close", run: () => close(optsLocal) },
-          {
-            name: "fallback gateway context",
-            run: () => clearFallbackGatewayContextForServer.get()(),
-          },
         ],
         onError: (message) => log.error(message),
       });

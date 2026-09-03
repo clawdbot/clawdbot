@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { projectUpdateStatusResponse } from "../../app/update-overlay-helpers.ts";
 import { i18n } from "../../i18n/index.ts";
 import { renderUpdates } from "./updates.ts";
 
@@ -29,16 +30,20 @@ function createProps(overrides: Partial<UpdatesViewProps> = {}): UpdatesViewProp
       channel: "stable",
     },
     statusBanner: null,
+    recordedAttempt: null,
     configBusy: false,
     canAdmin: true,
     canUpdate: true,
+    canCheckStatus: true,
     canHoldUpdate: true,
     updateBusy: false,
     nowMs: 1_000,
     onChannelChange: vi.fn(),
+    onUpdateChecksChange: vi.fn(),
     onAutomaticUpdatesChange: vi.fn(),
     onUpdateNow: vi.fn(),
     onHoldUpdate: vi.fn(async () => true),
+    onCheckStatus: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -55,10 +60,10 @@ function row(title: string): HTMLElement {
 
 function automaticUpdatesControl(): {
   row: HTMLElement;
-  toggle: HTMLElement;
+  toggle: HTMLElement & { checked: boolean };
 } {
   const automaticRow = row("Automatic updates");
-  const toggle = automaticRow.querySelector<HTMLElement>("wa-switch");
+  const toggle = automaticRow.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
   if (!toggle) {
     throw new Error("Missing automatic updates control");
   }
@@ -138,6 +143,38 @@ describe("renderUpdates", () => {
     const automaticRow = row("Automatic updates");
     expect(automaticRow.textContent).toContain("never installs them automatically");
     expect(automaticRow.querySelector("wa-switch")?.hasAttribute("disabled")).toBe(true);
+  });
+
+  it("lets an admin resume disabled checks while preserving the automatic-update preference", () => {
+    const onUpdateChecksChange = vi.fn();
+    render(
+      renderUpdates(
+        createProps({
+          configObject: {
+            update: { channel: "stable", checkOnStart: false, auto: { enabled: true } },
+          },
+          schedule: { channel: "stable", autoEnabled: false },
+          onUpdateChecksChange,
+        }),
+      ),
+      container,
+    );
+
+    const checks = row("Check for updates").querySelector<HTMLElement & { checked: boolean }>(
+      "wa-switch",
+    );
+    if (!checks) {
+      throw new Error("Missing update checks control");
+    }
+    expect(checks.checked).toBe(false);
+    expect(checks.hasAttribute("disabled")).toBe(false);
+    const automatic = automaticUpdatesControl().toggle;
+    expect(automatic.checked).toBe(true);
+    expect(automatic.hasAttribute("disabled")).toBe(true);
+    expect(row("Automatic updates").textContent).toContain("Check for updates");
+    checks.checked = true;
+    checks.dispatchEvent(new Event("change"));
+    expect(onUpdateChecksChange).toHaveBeenCalledWith(true);
   });
 
   it.each([
@@ -453,6 +490,75 @@ describe("renderUpdates", () => {
     expect(row("Status").querySelector(".settings-status--danger")).not.toBeNull();
   });
 
+  it.each([
+    {
+      label: "a failed build with no recorded after identity",
+      status: "error",
+      stats: {
+        mode: "git",
+        reason: "build-failed",
+        before: { sha: "0123456789abcdef" },
+        steps: [{ name: "build", log: { exitCode: 1, stderrTail: "Type check failed" } }],
+      },
+      before: "0123456789ab",
+      after: "Unknown",
+    },
+    {
+      label: "a skipped update that leaves the installed version unchanged",
+      status: "skipped",
+      stats: {
+        mode: "npm",
+        reason: "managed-service-handoff-unavailable",
+        before: { version: "2026.8.1" },
+        after: { version: "2026.8.1" },
+      },
+      before: "v2026.8.1",
+      after: "v2026.8.1",
+    },
+  ])(
+    "renders recorded identities and recovery actions for $label",
+    ({ status, stats, before, after }) => {
+      const onUpdateNow = vi.fn();
+      const onCheckStatus = vi.fn(async () => undefined);
+      const projected = projectUpdateStatusResponse(
+        { sentinel: { kind: "update", status, ts: 500, stats } },
+        { updateStatusBanner: null, recordedUpdateAttempt: null, heldUpdateCampaignId: null },
+      );
+      render(
+        renderUpdates(
+          createProps({
+            recordedAttempt: projected.recordedUpdateAttempt,
+            statusBanner: projected.updateStatusBanner,
+            onUpdateNow,
+            onCheckStatus,
+          }),
+        ),
+        container,
+      );
+
+      expect(row("Reason code").textContent).toContain(stats.reason);
+      expect(row("Before update").textContent).toContain(before);
+      expect(row("After attempt").textContent).toContain(after);
+      expect(row("After attempt").textContent).not.toContain("v2026.8.2");
+      expect(row("Attempt install type").textContent).toContain(stats.mode);
+      if (status === "error") {
+        expect(row("Failure details").textContent).toContain("Type check failed");
+      }
+      const recovery = row("Recovery");
+      recovery.querySelector<HTMLButtonElement>("button")?.click();
+      recovery.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
+      expect(onCheckStatus).toHaveBeenCalledOnce();
+      expect(onUpdateNow).toHaveBeenCalledOnce();
+      expect(
+        container.querySelector<HTMLAnchorElement>("a[href*='update-troubleshooting']"),
+      ).not.toBeNull();
+      const cliFallback = row("CLI fallback");
+      expect(cliFallback.textContent).toContain("on the Gateway host");
+      expect(cliFallback.textContent).toContain("local coding agent");
+      expect(cliFallback.querySelector("code")?.textContent?.trim()).toBe("openclaw triage");
+    },
+  );
+
   it("keeps read-only facts visible while locking controls for non-admins", () => {
     render(
       renderUpdates(createProps({ canAdmin: false, canUpdate: false, configBusy: true })),
@@ -466,6 +572,9 @@ describe("renderUpdates", () => {
       true,
     );
     expect(row("Automatic updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
+      true,
+    );
+    expect(row("Check for updates").querySelector("wa-switch")?.hasAttribute("disabled")).toBe(
       true,
     );
     expect(row("Update now").querySelector<HTMLButtonElement>("button")?.disabled).toBe(true);

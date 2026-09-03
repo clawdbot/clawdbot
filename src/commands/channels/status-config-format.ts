@@ -23,6 +23,7 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
 
 type ChannelStatusPluginLabel = {
@@ -74,6 +75,7 @@ export async function formatConfigChannelsStatusLines(
     includeSetupFallbackPlugins: true,
   }).filter((plugin) => !requestedChannel || plugin.id === requestedChannel);
   const visibleChannelIds = new Set<string>();
+  const statusLinesStart = lines.length;
   for (const plugin of plugins) {
     visibleChannelIds.add(plugin.id);
     const accountIds = plugin.config.listAccountIds(cfg);
@@ -126,6 +128,9 @@ export async function formatConfigChannelsStatusLines(
     for (const hint of missingHints) {
       lines.push(`- ${hint.label}: ${hint.repairHint}`);
     }
+  }
+  if (lines.length === statusLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
   }
 
   lines.push("");

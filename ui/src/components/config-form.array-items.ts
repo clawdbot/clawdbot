@@ -1,4 +1,4 @@
-import { schemaType, type JsonSchema } from "./config-form.shared.ts";
+import { schemaType, type JsonSchema } from "../lib/config-form-utils.ts";
 
 export function collectAllOfSchemas(schema: JsonSchema): JsonSchema[] {
   const result: JsonSchema[] = [];

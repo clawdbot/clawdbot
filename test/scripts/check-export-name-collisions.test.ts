@@ -222,32 +222,37 @@ describe("export name collision guard", () => {
     ).toEqual([]);
   });
 
-  it("marks collisions exposed by a Plugin SDK module", () => {
-    expect(
-      findExportNameCollisions([
-        { path: "src/one.ts", content: "export const publicCollision = 1;" },
-        { path: "src/two.ts", content: "export function publicCollision() {}" },
+  it("marks repository collisions exposed through a package-backed Plugin SDK module", async () => {
+    await withTempDir("openclaw-export-collisions-sdk-", async (repoRoot) => {
+      await Promise.all([
+        fs.mkdir(path.join(repoRoot, "src/plugin-sdk"), { recursive: true }),
+        fs.mkdir(path.join(repoRoot, "packages"), { recursive: true }),
+      ]);
+      await Promise.all([
+        fs.writeFile(path.join(repoRoot, "src/one.ts"), "export const publicCollision = 1;\n"),
+        fs.writeFile(path.join(repoRoot, "src/two.ts"), "export function publicCollision() {}\n"),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public.ts"),
+          'export * from "./public-star.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "src/plugin-sdk/public-star.ts"),
+          'export * from "../../packages/public.js";\n',
+        ),
+        fs.writeFile(
+          path.join(repoRoot, "packages/public.ts"),
+          "export const publicCollision = true;\n",
+        ),
+      ]);
+
+      expect(await collectRepositoryCollisions(repoRoot)).toEqual([
         {
-          path: "src/plugin-sdk/public.ts",
-          content: 'export * from "./public-star.js";',
+          name: "publicCollision",
+          files: ["src/one.ts", "src/two.ts"],
+          sdk: true,
         },
-        {
-          path: "src/plugin-sdk/public-star.ts",
-          content: 'export * from "../../packages/public.js";',
-        },
-        {
-          path: "packages/public.ts",
-          content: "export const publicCollision = true;",
-          includeDefinitions: false,
-        },
-      ]),
-    ).toEqual([
-      {
-        name: "publicCollision",
-        files: ["src/one.ts", "src/two.ts"],
-        sdk: true,
-      },
-    ]);
+      ]);
+    });
   });
 
   it("rejects debt-baseline updates with the collision trailer", () => {

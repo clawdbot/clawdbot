@@ -1,4 +1,5 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
   classifyGatewayProbePath,
@@ -43,6 +44,14 @@ export function isControlUiApprovalDocumentPath(params: {
   }
   const encodedId = params.pathname.slice(prefix.length);
   return encodedId.length > 0 && !encodedId.includes("/");
+}
+
+/** Focused presentation namespace used only after plugin routing declines it. */
+export function isControlUiFocusDocumentPath(params: {
+  basePath: string;
+  pathname: string;
+}): boolean {
+  return isControlUiFocusPath(params.pathname, params.basePath);
 }
 
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */

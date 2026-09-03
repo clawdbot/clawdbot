@@ -2,17 +2,17 @@
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 
-export function isCurrentSessionEntry(params: {
+export function resolveCurrentSessionEntry(params: {
   agentId: string;
   sessionKey: string;
   storePath: string;
   expected: Pick<SessionEntry, "sessionId" | "lifecycleRevision">;
-}): boolean {
+}): ReturnType<typeof loadSessionEntryReadOnly> {
   const current = loadSessionEntryReadOnly(params);
-  return (
-    current?.sessionId === params.expected.sessionId &&
+  return current?.sessionId === params.expected.sessionId &&
     current.lifecycleRevision === params.expected.lifecycleRevision
-  );
+    ? current
+    : undefined;
 }
 
 export {

@@ -196,6 +196,88 @@ describe("mcp cli OAuth", () => {
     });
   });
 
+  it.each([
+    {
+      name: "per-requester identity and redirect metadata",
+      oauth: {
+        identity: "per-requester",
+        scope: "docs.read",
+        redirectUrl: "https://gateway.example.com/oauth/mcp/callback",
+        clientMetadataUrl: "https://gateway.example.com/oauth/mcp.json",
+      },
+    },
+    {
+      name: "auth-profile binding",
+      oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
+    },
+  ])("preserves $name when updating OAuth scope", async ({ oauth }) => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          url: "https://mcp.example.com",
+          transport: "streamable-http",
+          auth: "oauth",
+          oauth,
+          toolFilter: { include: ["old_*"], exclude: ["admin_*"] },
+        }),
+      ]);
+
+      await runMcpCommand([
+        "mcp",
+        "configure",
+        "docs",
+        "--oauth-scope",
+        "docs.write",
+        "--include",
+        "search",
+      ]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine())).toMatchObject({
+        oauth: { ...oauth, scope: "docs.write" },
+        toolFilter: { include: ["search"], exclude: ["admin_*"] },
+      });
+    });
+  });
+
+  it("does not restore previous OAuth metadata after an explicit clear", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+      await runMcpCommand([
+        "mcp",
+        "set",
+        "docs",
+        JSON.stringify({
+          url: "https://mcp.example.com",
+          auth: "oauth",
+          oauth: { authProfileId: "docs:mcp", scope: "docs.read" },
+        }),
+      ]);
+
+      await runMcpCommand([
+        "mcp",
+        "configure",
+        "docs",
+        "--clear-auth",
+        "--auth",
+        "oauth",
+        "--oauth-scope",
+        "docs.write",
+      ]);
+
+      mockLog.mockClear();
+      await runMcpCommand(["mcp", "show", "docs", "--json"]);
+      expect(JSON.parse(lastLogLine()).oauth).toEqual({ scope: "docs.write" });
+    });
+  });
+
   it("rejects operator login and logout for per-requester OAuth", async () => {
     await withTempHome("openclaw-cli-mcp-home-", async () => {
       const workspaceDir = await createWorkspace();

@@ -15,9 +15,15 @@ import type { MarkdownTableMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessagePresentation } from "../../interactive/payload.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
-import type { PollInput } from "../../polls.js";
 import type { ChatType } from "../chat-type.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
+import type { IdentifierAuthentication } from "../message-access/identifier-authentication.js";
+import type {
+  ChannelMessageSendPollContext,
+  MessageReceipt,
+  MessageReceiptSourceResult,
+  OutboundReplyFacts,
+} from "../message/types.js";
 import type { ChannelId } from "./channel-id.types.js";
 import type { ConversationReadInvocationOrigin } from "./conversation-read-origin.js";
 import type { ChannelMessageActionName as ChannelMessageActionNameFromList } from "./message-action-names.js";
@@ -49,6 +55,7 @@ export type ChannelAgentToolFactory = (params: { cfg?: OpenClawConfig }) => Chan
  */
 export type ChannelMessageActionDiscoveryContext = {
   cfg: OpenClawConfig;
+  chatType?: ChatType | null;
   currentChannelId?: string | null;
   currentChannelProvider?: string | null;
   currentThreadTs?: string | null;
@@ -206,6 +213,7 @@ export type ChannelAccountSnapshot = {
   appTokenStatus?: string;
   signingSecretStatus?: string;
   userTokenStatus?: string;
+  apiCredentialStatus?: "available" | "configured_unavailable" | "missing";
   identity?: string;
   credentialSource?: string;
   secretSource?: string;
@@ -305,6 +313,7 @@ export type ChannelSecurityDmPolicy = {
   allowFromPath: string;
   approveHint: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: (raw: string) => IdentifierAuthentication | undefined;
 };
 
 export type ChannelSecurityContext<ResolvedAccount = unknown> = {
@@ -433,6 +442,8 @@ export type ChannelThreadingAdapter = {
     replyToId?: string | null;
     /** True when replyToId came from an explicit payload target or reply tag. */
     replyToIsExplicit?: boolean;
+    /** Existing payload intent to reply to the current conversation, not an arbitrary target. */
+    replyToCurrent?: boolean;
     replyDelivery?: ReplyDeliveryContext;
   }) => ChannelReplyTransport | null;
   resolveFocusedBinding?: (params: {
@@ -489,6 +500,32 @@ export type ChannelMessagingAdapter = {
    * targets before plugin-specific normalization.
    */
   targetPrefixes?: readonly string[];
+  /** Re-resolve the current owner when channel behavior exceeds generic bindings. */
+  resolveConversationRouteOwner?: (params: {
+    cfg: OpenClawConfig;
+    accountId: string;
+    conversation: {
+      kind: "direct" | "group" | "channel";
+      peerId: string;
+      /** Canonical delivery target when it differs from the routing peer. */
+      target?: string;
+      threadId?: string;
+      nativeChannelId?: string;
+      context?: {
+        parentPeerId?: string;
+        guildId?: string;
+        teamId?: string;
+        memberRoleIds?: string[];
+      };
+    };
+  }) =>
+    // `undefined` delegates to core, `null` denies ownership, and `unavailable`
+    // preserves temporary owner-store outages as retryable delivery failures.
+    | { kind: "agent"; agentId: string }
+    | { kind: "plugin"; pluginId: string; fallbackAgentId: string }
+    | { kind: "unavailable" }
+    | null
+    | undefined;
   /** DM targets rebuilt from session keys require an explicit `user:` kind prefix. */
   directTargetStyle?: "user-prefixed";
   /** Equality rule for ids carried by prefixed outbound targets. */
@@ -682,6 +719,7 @@ export type ChannelMessageActionContext = {
   action: ChannelMessageActionName;
   cfg: OpenClawConfig;
   params: Record<string, unknown>;
+  reply?: OutboundReplyFacts;
   mediaAccess?: OutboundMediaAccess;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
@@ -715,6 +753,11 @@ export type ChannelMessageActionContext = {
   toolContext?: ChannelThreadingToolContext;
   dryRun?: boolean;
   gatewayClientScopes?: readonly string[];
+  /**
+   * Server-owned fact: this caller receives proven-not-sent failures and resends
+   * them. Plugins forward it into durable sends so recovery does not replay too.
+   */
+  deliveryRetryOwner?: "caller";
 };
 
 export type ChannelToolSend = {
@@ -806,26 +849,32 @@ export type ChannelMessageActionAdapter = {
   handleAction?: (ctx: ChannelMessageActionContext) => Promise<AgentToolResult<unknown>>;
 };
 
-export type ChannelPollResult = {
+export type ChannelPollResult = Pick<
+  MessageReceiptSourceResult,
+  "messageId" | "toJid" | "channelId" | "conversationId" | "pollId"
+> & {
   messageId: string;
-  toJid?: string;
-  channelId?: string;
-  conversationId?: string;
-  pollId?: string;
+  receipt?: MessageReceipt;
 };
 
 /** Shared poll input after core has normalized the common poll model. */
-export type ChannelPollContext = {
-  cfg: OpenClawConfig;
-  to: string;
-  poll: PollInput;
-  accountId?: string | null;
-  threadId?: string | null;
-  silent?: boolean;
-  isAnonymous?: boolean;
-  gatewayClientScopes?: readonly string[];
-  /** @internal Refresh durable timing before recipient-visible platform I/O. */
-  onPlatformSendDispatch?: () => Promise<void>;
+export type ChannelPollContext = Pick<
+  ChannelMessageSendPollContext,
+  | "cfg"
+  | "to"
+  | "poll"
+  | "accountId"
+  | "threadId"
+  | "silent"
+  | "isAnonymous"
+  | "gatewayClientScopes"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
+> & {
+  content?: string;
+  /** Trusted originating turn context for channel-owned delivery correlation. */
+  sessionKey?: string;
+  inboundEventKind?: InboundEventKind;
 };
 
 /** Minimal base for all channel probe results. Channel-specific probes extend this. */

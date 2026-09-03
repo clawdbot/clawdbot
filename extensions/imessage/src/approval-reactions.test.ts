@@ -39,9 +39,15 @@ function registerIMessageApprovalReactionTarget(
 vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: resolverMocks.resolveApprovalOverGateway,
 }));
-vi.mock("openclaw/plugin-sdk/error-runtime", () => ({
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
-}));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+  };
+});
 
 function requireExecApprovalMetadata(payload: ReplyPayload): Record<string, unknown> {
   const value = payload.channelData?.execApproval;

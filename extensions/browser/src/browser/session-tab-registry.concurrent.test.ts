@@ -36,7 +36,7 @@ describe("volatile session tab cleanup across Browser plugin bundles", () => {
     first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
     });
 

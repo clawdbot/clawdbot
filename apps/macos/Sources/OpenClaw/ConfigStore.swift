@@ -2,6 +2,10 @@ import Foundation
 import OpenClawProtocol
 
 enum ConfigStore {
+    private struct ConfigWriteAck: Decodable {
+        let hash: String?
+    }
+
     struct Overrides {
         var isRemoteMode: (@Sendable () async -> Bool)?
         var loadLocal: (@MainActor @Sendable () -> [String: Any])?
@@ -59,10 +63,17 @@ enum ConfigStore {
     {
         let overrides = await self.overrideStore.overrides
         if await self.isRemoteMode() {
-            if let override = overrides.saveRemote {
-                try await override(root)
-            } else {
-                try await self.saveToGateway(root)
+            do {
+                if let override = overrides.saveRemote {
+                    try await override(root)
+                } else {
+                    try await self.saveToGateway(root)
+                }
+            } catch {
+                if !self.shouldFallbackToLocalWrite(afterGatewaySaveError: error) {
+                    self.lastHash = nil
+                }
+                throw error
             }
         } else {
             if let override = overrides.saveLocal {
@@ -146,10 +157,13 @@ enum ConfigStore {
         if let baseHash = self.lastHash {
             params["baseHash"] = AnyCodable(baseHash)
         }
-        _ = try await GatewayConnection.shared.requestRaw(
+        let ack: ConfigWriteAck = try await GatewayConnection.shared.requestDecoded(
             method: .configSet,
             params: params,
             timeoutMs: 10000)
+        if let hash = ack.hash, !hash.isEmpty {
+            self.lastHash = hash
+        }
         _ = await self.loadFromGateway()
     }
 
@@ -160,6 +174,16 @@ enum ConfigStore {
 
     static func _testClearOverrides() async {
         await self.overrideStore.setOverride(.init())
+    }
+
+    @MainActor
+    static func _testSetLastHash(_ hash: String?) {
+        self.lastHash = hash
+    }
+
+    @MainActor
+    static func _testLastHash() -> String? {
+        self.lastHash
     }
     #endif
 }

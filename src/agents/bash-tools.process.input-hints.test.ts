@@ -250,3 +250,57 @@ describe("process input-wait hints", () => {
     });
   });
 });
+
+describe("process session list chronology", () => {
+  async function expectProcessListOrder(processTool: ProcessTool, expectedIds: string[]) {
+    const result = await runProcessAction(processTool, { action: "list" });
+    const records = (result.details as { sessions: Array<{ sessionId: string }> }).sessions;
+    expect(records.map(({ sessionId }) => sessionId)).toEqual(expectedIds);
+    expect(
+      textOf(result)
+        .split("\n")
+        .map((line) => line.split(" ")[0]),
+    ).toEqual(expectedIds);
+    for (const record of records) {
+      expect(record).not.toHaveProperty("startOrder");
+    }
+  }
+
+  it("keeps equal-timestamp text and details newest-first across terminal transitions", async () => {
+    const sessions = ["z-oldest", "a-middle", "m-newest"].map((id) => {
+      const session = createProcessSessionFixture({
+        id,
+        startedAt: 1_000,
+        backgrounded: true,
+      });
+      addSession(session);
+      return session;
+    });
+    const processTool = createProcessTool();
+    const expectedIds = ["m-newest", "a-middle", "z-oldest"];
+
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[0]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[2]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+    markExited(sessions[1]!, 0, null, "completed");
+    await expectProcessListOrder(processTool, expectedIds);
+  });
+
+  it("keeps actual start timestamps ahead of registration chronology", async () => {
+    for (const [id, startedAt] of [
+      ["middle-clock", 2_000],
+      ["later-clock", 3_000],
+      ["earlier-clock", 1_000],
+    ] as const) {
+      addSession(createProcessSessionFixture({ id, startedAt, backgrounded: true }));
+    }
+
+    await expectProcessListOrder(createProcessTool(), [
+      "later-clock",
+      "middle-clock",
+      "earlier-clock",
+    ]);
+  });
+});

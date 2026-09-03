@@ -1,4 +1,8 @@
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import {
   appendSkillProposalEvent,
@@ -19,15 +23,16 @@ import {
 import type { SkillProposalEvent, SkillProposalRecord } from "./types.js";
 
 export type PendingSkillProposalTransitionCommit =
-  | { state: "committed"; event?: SkillProposalEvent }
+  | { state: "committed"; event: SkillProposalEvent }
   | { state: "conflict"; current?: SkillProposalRecord };
 
 export function commitPendingSkillProposalTransition(params: {
   expected: SkillProposalRecord;
   record: SkillProposalRecord;
-  event?: NewSkillProposalEvent;
+  event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
   operationLabel: string;
+  invalidateRollback?: boolean;
 }): PendingSkillProposalTransitionCommit {
   ensureSkillWorkshopSchema(params.store);
   return runOpenClawStateWriteTransaction(
@@ -52,10 +57,18 @@ export function commitPendingSkillProposalTransition(params: {
           ...(currentRecord ? { current: currentRecord } : {}),
         };
       }
+      if (params.invalidateRollback) {
+        executeSqliteQuerySync(
+          db,
+          kysely
+            .deleteFrom("skill_workshop_proposal_rollbacks")
+            .where("proposal_id", "=", params.expected.id),
+        );
+      }
       updateProposal(db, current, params.record);
       return {
         state: "committed" as const,
-        ...(params.event ? { event: appendSkillProposalEvent(db, params.event) } : {}),
+        event: appendSkillProposalEvent(db, params.event),
       };
     },
     databaseOptions(params.store),

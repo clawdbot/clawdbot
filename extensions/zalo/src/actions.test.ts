@@ -1,8 +1,8 @@
 // Zalo tests cover actions plugin behavior.
 import http from "node:http";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { zaloMessageActions } from "./actions.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 describe("zaloMessageActions.describeMessageTool", () => {
   it("honors the selected Zalo account during discovery", () => {

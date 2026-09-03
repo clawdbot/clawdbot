@@ -234,8 +234,6 @@ describe("Nested Lists - 3+ Level Deep Nesting", () => {
   });
 });
 
-describe("Nested Lists - Mixed Nesting", () => {});
-
 describe("Nested Lists - Newline Handling", () => {
   it("does not produce triple newlines in nested lists", () => {
     const input = `- Item 1

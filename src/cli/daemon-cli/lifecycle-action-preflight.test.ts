@@ -31,23 +31,11 @@ async function withIsolatedLifecycleState(
 }
 
 describe("getServiceActionPreflightFailure", () => {
-  it.each(["start", "restart"] as const)(
-    "blocks %s when a legacy credential file exists",
-    async (action) => {
-      await withIsolatedLifecycleState(async ({ agentDir }) => {
-        await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");
-
-        await expect(getServiceActionPreflightFailure(action)).resolves.toEqual({
-          message:
-            "Auth profile store ~/state/agents/main/agent/openclaw-agent.sqlite requires legacy credential migration.",
-          hints: ["Run `openclaw doctor --fix`, then retry this command."],
-        });
-      });
-    },
-  );
-
-  it.each(["stop", "uninstall"] as const)(
-    "allows %s with the same pending migration",
+  // A retired credential file no longer blocks the service: the Gateway boots and
+  // marks that auth owner configured-unavailable, so one stale file cannot keep
+  // every other channel and provider offline.
+  it.each(["start", "restart", "stop", "uninstall"] as const)(
+    "allows %s when a legacy credential file exists",
     async (action) => {
       await withIsolatedLifecycleState(async ({ agentDir }) => {
         await fs.writeFile(path.join(agentDir, "auth-profiles.json"), "{}\n");

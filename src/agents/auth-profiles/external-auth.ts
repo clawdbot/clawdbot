@@ -4,11 +4,11 @@
  * and decides which runtime profiles may be persisted back to the store.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-external-auth.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
-import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
 import { isAmbientCredentialAllowedByProviderAuthPin } from "./ambient-auth.js";
 import { cloneAuthProfileStore } from "./clone.js";
-import { CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID } from "./constants.js";
+import { MINIMAX_CLI_PROFILE_ID } from "./constants.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import {
   areOAuthCredentialsEquivalent,
@@ -110,7 +110,8 @@ function resolveExternalAuthProfiles(params: {
       store: params.store,
     },
   });
-  const resolved = resolveExternalCliAuthProfileMap(params);
+  const externalCli = params.externalCli;
+  const resolved = resolveExternalCliAuthProfileMap({ ...params, externalCli });
   const runtimeExternalCliProfileIds = new Set(
     [...resolved.values()]
       .filter((profile) => profile.persistence !== "persisted")
@@ -207,7 +208,8 @@ function hasPersistableExternalCliSyncCandidate(
   if (params?.externalCliProviderIds || params?.externalCliProfileIds) {
     return true;
   }
-  for (const profileId of [CLAUDE_CLI_PROFILE_ID, MINIMAX_CLI_PROFILE_ID]) {
+  // MiniMax keeps its persisted external profile fresh without an explicit scope.
+  for (const profileId of [MINIMAX_CLI_PROFILE_ID]) {
     const credential = store.profiles[profileId];
     if (credential?.type === "oauth") {
       return true;

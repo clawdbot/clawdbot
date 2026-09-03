@@ -6,15 +6,15 @@ import path from "node:path";
 import type { APIMessage } from "discord-api-types/v10";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
   type ChannelIngressQueue,
   DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import {
-  closeOpenClawStateDatabaseForTest,
-  createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { buildDiscordInboundJob } from "./inbound-job.js";
 import { createDiscordIngressMonitor, type DiscordIngressLifecycle } from "./ingress.js";
@@ -535,7 +535,11 @@ describe("createDiscordMessageHandler queue behavior", () => {
           },
         });
         try {
+          // Frozen fake time stamps every admission with the same receipt instant, which
+          // orders the lane by event id and puts "poison" behind "follower". Separate the
+          // admissions so the poison event really is the lane head this case is about.
           await handler(createRawMessage("poison", "lane-a") as never, {} as never);
+          await vi.advanceTimersByTimeAsync(1);
           await handler(createRawMessage("follower", "lane-a") as never, {} as never);
           await handler(createRawMessage("independent", "lane-b") as never, {} as never);
 
@@ -549,15 +553,14 @@ describe("createDiscordMessageHandler queue behavior", () => {
           expect(attempted.filter((id) => id === "poison")).toHaveLength(
             DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
           );
-          await expect(queue.enqueue("poison", {} as DiscordIngressPayload)).resolves.toMatchObject(
-            {
-              kind: "failed",
-              record: { reason: "retry-limit-exceeded" },
-            },
-          );
-          await expect(
-            queue.enqueue("follower", {} as DiscordIngressPayload),
-          ).resolves.toMatchObject({ kind: "completed" });
+          const settled = {} as DiscordIngressPayload;
+          await expect(queue.enqueue("poison", settled)).resolves.toMatchObject({
+            kind: "failed",
+            record: { reason: "retry-limit-exceeded" },
+          });
+          await expect(queue.enqueue("follower", settled)).resolves.toMatchObject({
+            kind: "completed",
+          });
           const runtimeErrors = mockCalls(params.runtime.error as unknown as MockCallSource).map(
             ([message]) => String(message),
           );

@@ -14,15 +14,17 @@ type ToolResultFlushManager = {
   clearPendingToolResults?: (() => void) | undefined;
 };
 
-async function waitForEmbeddedAbortSettle(params: {
+export async function waitForEmbeddedAbortSettle(params: {
   promise: Promise<unknown> | null | undefined;
   runId: string;
   sessionId: string;
+  reason?: "embedded" | "sessions_yield";
 }): Promise<void> {
   if (!params.promise) {
     return;
   }
 
+  const reason = params.reason ?? "embedded";
   let timeout: NodeJS.Timeout | undefined;
   // Abort settlement is advisory cleanup; timeout or errors are logged but do
   // not block disposing attempt-owned resources.
@@ -31,7 +33,7 @@ async function waitForEmbeddedAbortSettle(params: {
       .then(() => "settled" as const)
       .catch((err: unknown) => {
         log.warn(
-          `embedded abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
+          `${reason} abort settle failed: runId=${params.runId} sessionId=${params.sessionId} err=${String(err)}`,
         );
         return "errored" as const;
       }),
@@ -44,7 +46,7 @@ async function waitForEmbeddedAbortSettle(params: {
   }
   if (outcome === "timed_out") {
     log.warn(
-      `embedded abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
+      `${reason} abort settle timed out: runId=${params.runId} sessionId=${params.sessionId} timeoutMs=${EMBEDDED_ABORT_SETTLE_TIMEOUT_MS}`,
     );
   }
 }

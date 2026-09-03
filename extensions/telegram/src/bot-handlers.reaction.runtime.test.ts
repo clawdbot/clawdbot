@@ -7,7 +7,7 @@ import { createTelegramEventBindings } from "./bot-handlers.event-bindings.js";
 import { createTelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
 import { createTelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
+import type { TelegramThreadSpec } from "./thread-spec.js";
 
 const FIRE_EMOJI = "\u{1F525}";
 const FORUM_CHAT_ID = 5678;
@@ -243,7 +243,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
     expect(String(systemEventOptions().sessionKey)).toContain("direct-topic-agent");
     expect(String(systemEventOptions().sessionKey)).toContain(
-      `telegram:group:${FORUM_CHAT_ID}:topic:${FORUM_TOPIC_ID}`,
+      `telegram:group:${FORUM_CHAT_ID}:direct-topic:${FORUM_TOPIC_ID}`,
     );
   });
 

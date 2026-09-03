@@ -4,7 +4,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { withMockedWindowsAclVerificationUnavailable } from "../test-utils/vitest-spies.js";
 import {
@@ -136,51 +136,32 @@ describe("resolveConfiguredSecretInputWithFallback", () => {
     });
   });
 
-  it("falls back when SecretRef cannot be resolved", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-      readFallback: () => "env-fallback-token",
-    });
+  it.each([
+    { source: "env", provider: "default", id: "MISSING_GATEWAY_TOKEN" },
+    { source: "file", provider: "missingfile", id: "value" },
+    { source: "exec", provider: "missingexec", id: "gateway/token" },
+    { source: "store", provider: "missingstore", id: "MISSING_GATEWAY_TOKEN" },
+  ] as const)(
+    "never reads fallback credentials after an unresolved $source SecretRef",
+    async (ref) => {
+      const fallbackCredential = "fallback-secret-must-not-be-read-or-disclosed";
+      const readFallback = vi.fn(() => fallbackCredential);
+      const resolved = await resolveConfiguredSecretInputWithFallback({
+        config: createConfig(ref),
+        env: {} as NodeJS.ProcessEnv,
+        value: ref,
+        path: "gateway.auth.token",
+        readFallback,
+      });
 
-    expect(resolved).toEqual({
-      value: "env-fallback-token",
-      source: "fallback",
-      secretRefConfigured: true,
-    });
-  });
-
-  it("ignores blank fallback values when SecretRef cannot be resolved", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-      readFallback: () => "   ",
-    });
-
-    expect(resolved.value).toBeUndefined();
-    expect(resolved.source).toBeUndefined();
-    expect(resolved.secretRefConfigured).toBe(true);
-    expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
-  });
-
-  it("returns unresolved reason when SecretRef cannot be resolved and no fallback exists", async () => {
-    const resolved = await resolveConfiguredSecretInputWithFallback({
-      config: createConfig("${MISSING_GATEWAY_TOKEN}"),
-      env: {} as NodeJS.ProcessEnv,
-      value: "${MISSING_GATEWAY_TOKEN}",
-      path: "gateway.auth.token",
-    });
-
-    expect(resolved.value).toBeUndefined();
-    expect(resolved.source).toBeUndefined();
-    expect(resolved.secretRefConfigured).toBe(true);
-    expect(resolved.unresolvedRefReason).toContain("gateway.auth.token SecretRef is unresolved");
-    expect(resolved.unresolvedRefReason).toContain("MISSING_GATEWAY_TOKEN");
-  });
+      expect(readFallback).not.toHaveBeenCalled();
+      expect(resolved).toEqual({
+        unresolvedRefReason: `gateway.auth.token SecretRef is unresolved (${ref.source}:${ref.provider}:${ref.id}).`,
+        secretRefConfigured: true,
+      });
+      expect(resolved.unresolvedRefReason).not.toContain(fallbackCredential);
+    },
+  );
 
   it("keeps generic Windows ACL failures byte-compatible", async () => {
     await withMockedWindowsAclVerificationUnavailable(

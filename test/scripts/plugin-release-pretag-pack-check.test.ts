@@ -6,7 +6,8 @@ import {
   runPluginReleasePretagPackCheck,
 } from "../../scripts/plugin-release-pretag-pack-check.ts";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
-import { cleanupTempDirs, makeTempRepoRoot, writeJsonFile } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const { execFileSyncMock } = vi.hoisted(() => ({
   execFileSyncMock: vi.fn(),

@@ -43,13 +43,13 @@ describe("session tab registry", () => {
     trackSessionBrowserTab({
       sessionKey: "Agent:Main:Main",
       targetId: "tab-a",
-      baseUrl: "http://127.0.0.1:9222",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
       profile: "OpenClaw",
     });
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "tab-b",
-      baseUrl: "http://127.0.0.1:9222",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
       profile: "OpenClaw",
     });
     const closeTab = vi.fn(async () => {});
@@ -76,7 +76,7 @@ describe("session tab registry", () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW_TARGET",
-      baseUrl: "http://127.0.0.1:9222",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
       profile: "OpenClaw",
     });
 
@@ -90,11 +90,57 @@ describe("session tab registry", () => {
     );
   });
 
+  it("closes node-proxy tabs through their route-owned raw-target closer", async () => {
+    const closeTarget = vi.fn(async () => ({ status: "closed" as const }));
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "NODE_TARGET",
+      profile: "user",
+      route: { kind: "node-proxy", nodeId: "node-1", closeTarget },
+    });
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"] }),
+    ).resolves.toBe(1);
+    expect(closeTarget).toHaveBeenCalledWith({
+      targetId: "NODE_TARGET",
+      profile: "user",
+      ownership: undefined,
+    });
+    expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+  });
+
+  it("retains node tracking when an opaque handle becomes stale", async () => {
+    const closeTarget = vi
+      .fn<() => Promise<{ status: "closed" }>>()
+      .mockRejectedValueOnce(new Error("404: tab not found"))
+      .mockResolvedValueOnce({ status: "closed" });
+    const onWarn = vi.fn();
+    trackSessionBrowserTab({
+      sessionKey: "agent:main:main",
+      targetId: "chrome-mcp:old-nonce:1",
+      profile: "user",
+      route: { kind: "node-proxy", nodeId: "node-1", closeTarget },
+    });
+
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"], onWarn }),
+    ).resolves.toBe(0);
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: ["agent:main:main"], onWarn }),
+    ).resolves.toBe(1);
+
+    expect(closeTarget).toHaveBeenCalledTimes(2);
+    expect(onWarn).toHaveBeenCalledWith(
+      expect.stringMatching(/failed to close tracked browser tab/i),
+    );
+  });
+
   it("coalesces overlapping lifecycle and sweep cleanup for one volatile target", async () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-tab",
-      baseUrl: "http://127.0.0.1:9222",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9222" },
       profile: "openclaw",
       now: 1_000,
     });
@@ -179,7 +225,7 @@ describe("session tab registry", () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW-A",
-      baseUrl: "http://127.0.0.1:9001",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
       profile: "openclaw",
       aliases: ["shared"],
       now: 1_000,
@@ -187,7 +233,7 @@ describe("session tab registry", () => {
     trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "RAW-B",
-      baseUrl: "http://127.0.0.1:9002",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9002" },
       profile: "openclaw",
       aliases: ["shared"],
       now: 1_000,
@@ -195,7 +241,7 @@ describe("session tab registry", () => {
     touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared",
-      baseUrl: "http://127.0.0.1:9001",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9001" },
       profile: "openclaw",
       now: 9_000,
     });

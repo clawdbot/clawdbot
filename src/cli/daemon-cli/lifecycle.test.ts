@@ -1,5 +1,6 @@
 // Daemon lifecycle tests cover CLI service lifecycle orchestration and cleanup.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockSystemAccountHome } from "../../daemon/service.test-helpers.js";
 import { captureEnv } from "../../test-utils/env.js";
 import {
   expectRestartError,
@@ -22,13 +23,12 @@ const service = {
   restart: vi.fn(),
   stop: vi.fn(),
 };
-const isDefaultInstallIdentity = vi.hoisted(() => vi.fn(() => true));
 
-const runServiceStart = vi.fn();
-const runServiceRestart = vi.fn();
-const runServiceStop = vi.fn();
-const waitForGatewayHealthyListener = vi.fn();
-const waitForGatewayHealthyRestart = vi.fn();
+const runServiceStart = vi.fn(),
+  runServiceRestart = vi.fn(),
+  runServiceStop = vi.fn();
+const waitForGatewayHealthyListener = vi.fn(),
+  waitForGatewayHealthyRestart = vi.fn();
 const terminateStaleGatewayPids = vi.fn();
 const renderGatewayPortHealthDiagnostics = vi.fn(() => ["diag: unhealthy port"]);
 const renderRestartDiagnostics = vi.fn(() => ["diag: unhealthy runtime"]);
@@ -37,40 +37,40 @@ const findVerifiedGatewayListenerPidsOnPortSync = vi.fn<(port: number) => number
 const signalVerifiedGatewayPidSync = vi.fn<(pid: number, signal: "SIGTERM" | "SIGUSR1") => void>();
 const writeGatewayRestartIntentSync = vi.fn();
 const clearGatewayRestartIntentSync = vi.fn();
+const resolveGatewayServiceProbeHosts = vi.fn(
+  async (_params: { env?: Record<string, string | undefined>; command?: unknown }) =>
+    ["127.0.0.1"] as readonly string[],
+);
+const probePortUsage = vi.fn(
+  async (_port: number, _hosts?: readonly string[]) => "free" as "free" | "busy" | "unknown",
+);
 const formatGatewayPidList = vi.fn<(pids: number[]) => string>((pids) => pids.join(", "));
-const probeGateway = vi.fn<
-  (opts: {
-    url: string;
-    auth?: { token?: string; password?: string };
-    timeoutMs: number;
-  }) => Promise<{
-    ok: boolean;
-    configSnapshot: unknown;
-  }>
->();
+const probeGateway =
+  vi.fn<
+    (opts: {
+      url: string;
+      auth?: { token?: string; password?: string };
+      timeoutMs: number;
+    }) => Promise<{ ok: boolean; configSnapshot: unknown }>
+  >();
 const callGatewayCli = vi.fn();
 const isRestartEnabled = vi.fn<(config?: { commands?: unknown }) => boolean>(() => true);
 const loadConfig = vi.hoisted(() => vi.fn(() => ({})));
+const createConfigIO = vi.hoisted(() =>
+  vi.fn((_opts?: { env?: Record<string, string | undefined>; observe?: boolean }) => ({
+    readBestEffortConfig: async () => loadConfig(),
+  })),
+);
 const readActiveGatewayLockPort = vi.hoisted(() => vi.fn<() => Promise<number | undefined>>());
+type LockIdentity = { pid: number; ownerId?: string; createdAt: string; port: number };
 const readActiveGatewayLockIdentity = vi.hoisted(() =>
-  vi.fn<
-    () => Promise<
-      | {
-          pid: number;
-          ownerId?: string;
-          createdAt: string;
-          port: number;
-        }
-      | undefined
-    >
-  >(),
+  vi.fn<() => Promise<LockIdentity | undefined>>(),
 );
 const recoverInstalledLaunchAgent = vi.hoisted(() => vi.fn());
 const repairLoadedGatewayServiceForStart = vi.hoisted(() => vi.fn());
+type SystemdScope = { scope: "user" | "system"; unitName: string; unitPath: string };
 const findInstalledSystemdGatewayScope = vi.hoisted(() =>
-  vi.fn<() => Promise<{ scope: "user" | "system"; unitName: string; unitPath: string } | null>>(
-    async () => null,
-  ),
+  vi.fn<() => Promise<SystemdScope | null>>(async () => null),
 );
 const restartSystemdService = vi.hoisted(() =>
   vi.fn<() => Promise<{ outcome: "completed" }>>(async () => ({ outcome: "completed" })),
@@ -94,10 +94,7 @@ vi.mock("../../config/config.js", () => ({
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
 }));
 
-vi.mock("../../config/paths.js", () => ({
-  isDefaultInstallIdentity: () => isDefaultInstallIdentity(),
-  resolveNativeServiceProfileConflict: () => null,
-}));
+vi.mock("../../config/io.js", () => ({ createConfigIO }));
 
 vi.mock("../../infra/gateway-processes.js", () => ({
   findVerifiedGatewayListenerPidsOnPortSync,
@@ -106,32 +103,24 @@ vi.mock("../../infra/gateway-processes.js", () => ({
   formatGatewayPidList: (pids: number[]) => formatGatewayPidList(pids),
 }));
 
-vi.mock("../../infra/gateway-lock.js", () => ({
-  readActiveGatewayLockPort: () => readActiveGatewayLockPort(),
-  readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
-  isSameGatewayLockIdentity: (
-    previous: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
-    current: { ownerId?: string; pid: number; createdAt: string; startTime?: number },
-  ) =>
-    previous.ownerId && current.ownerId
-      ? previous.ownerId === current.ownerId
-      : previous.pid === current.pid &&
-        previous.createdAt === current.createdAt &&
-        previous.startTime === current.startTime,
-}));
+vi.mock("../../infra/gateway-lock.js", () => {
+  type I = { ownerId?: string; pid: number; createdAt: string; startTime?: number };
+  return {
+    readActiveGatewayLockPort: () => readActiveGatewayLockPort(),
+    readActiveGatewayLockIdentity: () => readActiveGatewayLockIdentity(),
+    isSameGatewayLockIdentity: (a: I, b: I) =>
+      a.ownerId && b.ownerId
+        ? a.ownerId === b.ownerId
+        : a.pid === b.pid && a.createdAt === b.createdAt && a.startTime === b.startTime,
+  };
+});
 
 vi.mock("../../infra/restart-intent.js", () => ({
   writeGatewayRestartIntentSync: (params: unknown) => writeGatewayRestartIntentSync(params),
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),
 }));
 
-vi.mock("../../gateway/probe.js", () => ({
-  probeGateway: (opts: {
-    url: string;
-    auth?: { token?: string; password?: string };
-    timeoutMs: number;
-  }) => probeGateway(opts),
-}));
+vi.mock("../../gateway/probe.js", () => ({ probeGateway }));
 
 vi.mock("../../gateway/call.js", () => ({
   callGatewayCli: (opts: unknown) => callGatewayCli(opts),
@@ -147,10 +136,10 @@ vi.mock("../../daemon/service.js", () => ({
 
 vi.mock("../../daemon/systemd.js", () => ({
   findInstalledSystemdGatewayScope: () => findInstalledSystemdGatewayScope(),
+  refreshLegacySystemdServiceMetadata: vi.fn(async () => false),
   restartSystemdService: () => restartSystemdService(),
   stopSystemdService: () => stopSystemdService(),
 }));
-
 vi.mock("./launchd-recovery.js", () => ({
   recoverInstalledLaunchAgent: (args: { result: "started" | "restarted" }) =>
     recoverInstalledLaunchAgent(args),
@@ -172,7 +161,12 @@ vi.mock("./lifecycle-audit.js", () => ({
     createGatewayLifecycleMutationAudit(params),
 }));
 
-vi.mock("./restart-health.js", () => ({
+vi.mock("../../daemon/gateway-service-probe-hosts.js", () => ({ resolveGatewayServiceProbeHosts }));
+
+vi.mock("../../infra/ports-probe.js", () => ({ probePortUsage }));
+
+vi.mock("./restart-health.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./restart-health.js")>()),
   DEFAULT_RESTART_HEALTH_ATTEMPTS: 120,
   DEFAULT_RESTART_HEALTH_DELAY_MS: 500,
   waitForGatewayHealthyListener,
@@ -265,6 +259,9 @@ describe("runDaemonRestart health checks", () => {
     callGatewayCli.mockReset();
     isRestartEnabled.mockReset();
     loadConfig.mockReset();
+    createConfigIO
+      .mockReset()
+      .mockImplementation(() => ({ readBestEffortConfig: async () => loadConfig() }));
     readActiveGatewayLockPort.mockReset().mockResolvedValue(undefined);
     readActiveGatewayLockIdentity.mockReset();
     recoverInstalledLaunchAgent.mockReset().mockResolvedValue(null);
@@ -272,7 +269,9 @@ describe("runDaemonRestart health checks", () => {
     isTerminalInteractive.mockReset().mockReturnValue(true);
     appendGatewayLifecycleAudit.mockClear();
     createGatewayLifecycleMutationAudit.mockClear();
-    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
+    resolveGatewayServiceProbeHosts.mockReset().mockResolvedValue(["127.0.0.1"]);
+    probePortUsage.mockReset().mockResolvedValue("free");
+    mockSystemAccountHome();
 
     service.readCommand.mockResolvedValue({
       programArguments: ["openclaw", "gateway", "--port", "18789"],
@@ -377,7 +376,7 @@ describe("runDaemonRestart health checks", () => {
     await runDaemonRestart({ json: true });
 
     const restartParams = requireMockCallArg(runServiceRestart, "runServiceRestart");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     expect(() => (restartParams.beforeServiceMutation as () => void)()).toThrow(
       /non-default state dir/,
     );
@@ -784,6 +783,7 @@ describe("runDaemonRestart health checks", () => {
     expect(appendGatewayLifecycleAudit).toHaveBeenCalledWith(
       expect.objectContaining({ action: "stop", mode: "sigterm", pid: 4200 }),
     );
+    expect(service.readCommand).not.toHaveBeenCalled();
     expect(outcome).toEqual({
       result: "stopped",
       message: "Gateway stop signal sent to unmanaged process on port 18789: 4200.",
@@ -802,12 +802,11 @@ describe("runDaemonRestart health checks", () => {
 
     expect(findVerifiedGatewayListenerPidsOnPortSync).toHaveBeenCalledWith(39_471);
     expect(signalVerifiedGatewayPidSync).toHaveBeenCalledWith(4300, "SIGTERM");
-    expect(service.readCommand).not.toHaveBeenCalled();
   });
 
   it("signals a single unmanaged gateway process on restart", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart({ runPostRestartCheck: true });
 
@@ -831,7 +830,7 @@ describe("runDaemonRestart health checks", () => {
 
   it("rejects denied Darwin recovery when no unmanaged listener exists", async () => {
     vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     mockUnmanagedRestart();
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(/non-default state dir/);
@@ -1006,7 +1005,7 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("fails unmanaged restart when multiple gateway listeners are present", async () => {
-    isDefaultInstallIdentity.mockReturnValue(false);
+    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-non-default-service-state";
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200, 4300]);
     mockUnmanagedRestart();
 
@@ -1029,15 +1028,19 @@ describe("runDaemonRestart health checks", () => {
     );
   });
 
-  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+  function mockSystemdScope(unit: string) {
     vi.spyOn(process, "platform", "get").mockReturnValue("linux");
     findInstalledSystemdGatewayScope.mockResolvedValue({
-      scope: "system",
-      unitName: "openclaw.service",
-      unitPath: "/etc/systemd/system/openclaw.service",
+      scope: "system" as const,
+      unitName: unit,
+      unitPath: `/etc/systemd/system/${unit}`,
     });
-    restartSystemdService.mockResolvedValue({ outcome: "completed" });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
+  }
+
+  it("delegates system-scope restart to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
+    mockSystemdScope("openclaw.service");
+    restartSystemdService.mockResolvedValue({ outcome: "completed" });
     mockUnmanagedRestart();
 
     await expect(runDaemonRestart({ json: true })).resolves.toBe(true);
@@ -1048,18 +1051,12 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("surfaces systemd sudo guidance and never signals when restarting a system-scope unit as non-root (openclaw#87577)", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    findInstalledSystemdGatewayScope.mockResolvedValue({
-      scope: "system",
-      unitName: "openclaw.service",
-      unitPath: "/etc/systemd/system/openclaw.service",
-    });
+    mockSystemdScope("openclaw.service");
     restartSystemdService.mockRejectedValue(
       new Error(
         "openclaw.service is a system-scope unit (/etc/systemd/system/openclaw.service); run `sudo systemctl restart openclaw.service` to restart it",
       ),
     );
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     mockUnmanagedRestart();
 
     await expect(runDaemonRestart({ json: true })).rejects.toThrow(
@@ -1071,14 +1068,8 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("delegates system-scope stop to systemctl without unmanaged signaling when root (openclaw#87577)", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    findInstalledSystemdGatewayScope.mockResolvedValue({
-      scope: "system",
-      unitName: "openclaw-gateway.service",
-      unitPath: "/etc/systemd/system/openclaw-gateway.service",
-    });
+    mockSystemdScope("openclaw-gateway.service");
     stopSystemdService.mockResolvedValue(undefined);
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     await expect(runUnmanagedStop()).resolves.toEqual(
       expect.objectContaining({ result: "stopped" }),
     );
@@ -1087,18 +1078,12 @@ describe("runDaemonRestart health checks", () => {
   });
 
   it("surfaces systemd sudo guidance and never signals when stopping a system-scope unit as non-root (openclaw#87577)", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
-    findInstalledSystemdGatewayScope.mockResolvedValue({
-      scope: "system",
-      unitName: "openclaw-gateway.service",
-      unitPath: "/etc/systemd/system/openclaw-gateway.service",
-    });
+    mockSystemdScope("openclaw-gateway.service");
     stopSystemdService.mockRejectedValue(
       new Error(
         "openclaw-gateway.service is a system-scope unit (/etc/systemd/system/openclaw-gateway.service); run `sudo systemctl stop openclaw-gateway.service` to stop it",
       ),
     );
-    findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([4200]);
     await expect(runUnmanagedStop()).rejects.toThrow(
       /sudo systemctl stop openclaw-gateway\.service/,
     );
@@ -1106,14 +1091,49 @@ describe("runDaemonRestart health checks", () => {
     expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
   });
 
-  it("skips unmanaged signaling for pids that are not live gateway processes", async () => {
+  it.each([
+    ["free", undefined],
+    ["busy", "Port 18789 is in use but the owning process could not be identified"],
+    ["unknown", "Could not determine whether port 18789 is still in use"],
+  ] as const)(
+    "handles an unowned gateway port reported as %s",
+    async (portUsage, expectedError) => {
+      findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
+      readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+      probePortUsage.mockResolvedValue(portUsage);
+
+      const outcome = runUnmanagedStop();
+      if (expectedError) {
+        await expect(outcome).rejects.toThrow(expectedError);
+      } else {
+        await expect(outcome).resolves.toBeNull();
+      }
+    },
+  );
+
+  it("resolves port and probe hosts from selected service config/env (no --port arg)", async () => {
+    const serviceCommand = {
+      programArguments: ["openclaw", "gateway"],
+      environment: { OPENCLAW_STATE_DIR: "/tmp/service-state" },
+    };
+    service.readCommand.mockResolvedValue(serviceCommand);
+    loadConfig.mockReturnValue({ gateway: { port: 18789 } });
+    createConfigIO.mockImplementation((opts) => ({
+      readBestEffortConfig: async () => ({
+        gateway: { port: opts?.env?.OPENCLAW_STATE_DIR === "/tmp/service-state" ? 19000 : 18789 },
+      }),
+    }));
+    resolveGatewayPort.mockImplementation((cfg) => {
+      return (cfg as { gateway?: { port?: number } } | undefined)?.gateway?.port ?? 18789;
+    });
     findVerifiedGatewayListenerPidsOnPortSync.mockReturnValue([]);
     readActiveGatewayLockIdentity.mockResolvedValue(undefined);
+    probePortUsage.mockResolvedValue("busy");
 
-    const outcome = await runUnmanagedStop();
-
-    expect(signalVerifiedGatewayPidSync).not.toHaveBeenCalled();
-    expect(appendGatewayLifecycleAudit).not.toHaveBeenCalled();
-    expect(outcome).toBeNull();
+    await expect(runUnmanagedStop()).rejects.toThrow(/Port 19000/);
+    expect(resolveGatewayServiceProbeHosts).toHaveBeenCalledWith(
+      expect.objectContaining({ command: serviceCommand }),
+    );
+    expect(probePortUsage).toHaveBeenCalledWith(19000, ["127.0.0.1"]);
   });
 });

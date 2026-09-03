@@ -168,28 +168,26 @@ function fromSessionBindingInput(params: {
       conversationId: params.input.conversationId,
     }),
   );
+  const targetKind = toTelegramTargetKind(params.input.targetKind);
+  // Runtime metadata follows the target; conversation lifecycle settings still carry forward below.
+  const previous =
+    existing?.targetSessionKey === params.input.targetSessionKey &&
+    existing.targetKind === targetKind
+      ? existing
+      : undefined;
 
   const record: TelegramThreadBindingRecord = {
     accountId: params.accountId,
     conversationId: params.input.conversationId,
-    targetKind: toTelegramTargetKind(params.input.targetKind),
+    targetKind,
     targetSessionKey: params.input.targetSessionKey,
-    agentId:
-      typeof metadata.agentId === "string" && metadata.agentId.trim()
-        ? metadata.agentId.trim()
-        : existing?.agentId,
-    label:
-      typeof metadata.label === "string" && metadata.label.trim()
-        ? metadata.label.trim()
-        : existing?.label,
-    boundBy:
-      typeof metadata.boundBy === "string" && metadata.boundBy.trim()
-        ? metadata.boundBy.trim()
-        : existing?.boundBy,
+    agentId: normalizeOptionalString(metadata.agentId) ?? previous?.agentId,
+    label: normalizeOptionalString(metadata.label) ?? previous?.label,
+    boundBy: normalizeOptionalString(metadata.boundBy) ?? previous?.boundBy,
     boundAt: now,
     lastActivityAt: now,
     metadata: {
-      ...existing?.metadata,
+      ...previous?.metadata,
       ...metadata,
     },
   };

@@ -92,7 +92,7 @@ describe("forced worker environment destruction", () => {
     expect(placementStore.get(REQUEST.sessionId)).toMatchObject({
       state: "failed",
       turnClaim: null,
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(placementStore.listPendingWorkspaceResults()).toEqual([]);
     expect(placementStore.listWorkspaceReconciliationOwners()).toEqual([]);
@@ -116,7 +116,7 @@ describe("forced worker environment destruction", () => {
 
     expect(harness.placements.current()).toMatchObject({
       state: "failed",
-      recoveryError: "Cloud worker result abandoned by forced operator teardown",
+      recoveryError: "Worker result abandoned by forced operator teardown",
     });
     expect(onCleanupError).toHaveBeenCalledWith(
       expect.objectContaining({ message: "destroy pending" }),

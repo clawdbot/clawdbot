@@ -2,7 +2,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
 import { buildAgentRunTerminalOutcome } from "../agent-run-terminal-outcome.js";
-import { normalizeAgentRunTerminalReceipt } from "../agent-run-terminal-receipt.js";
+import {
+  formatAgentRunRouteChange,
+  normalizeAgentRunTerminalReceipt,
+} from "../agent-run-terminal-receipt.js";
 import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
@@ -21,25 +24,32 @@ import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type { FallbackAttempt, ModelFallbackRouteResolution } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackAttemptProvenance,
+  ModelFallbackRouteResolution,
+} from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
+import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
+  classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
 };
 
 type RunEntryCandidate<T> = {
   result: T;
+  classification?: ModelFallbackResultClassification;
   turnAttempt?: ContextEngineTurnAttemptFacts;
 };
 
@@ -120,6 +130,8 @@ type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   sessionOverride: RunEntrySessionOverride;
   abortSignal?: AbortSignal;
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
+  /** Runs once after the successful winner is accepted, before post-turn context commit. */
+  onAcceptedTerminal?: () => void | (() => void) | Promise<void | (() => void)>;
   runCandidate: (provider: string, model: string, options: RunEntryCandidateOptions) => Promise<T>;
 };
 
@@ -186,6 +198,80 @@ function canAdvanceContextEngineTurn(params: {
   );
 }
 
+function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
+  result: T;
+  outcome: "completed" | "exhausted";
+  provider: string;
+  model: string;
+  requestedProvider: string;
+  requestedModel: string;
+  fallbackAttempts: FallbackAttempt[];
+}): T {
+  const currentTrace = params.result.meta.executionTrace;
+  const winnerProvider =
+    params.outcome === "completed" ? (currentTrace?.winnerProvider ?? params.provider) : undefined;
+  const winnerModel =
+    params.outcome === "completed" ? (currentTrace?.winnerModel ?? params.model) : undefined;
+  const outerAttempts: TraceAttempt[] = params.fallbackAttempts.map((attempt) => ({
+    provider: attempt.provider,
+    model: attempt.model,
+    result: attempt.reason === "timeout" ? "timeout" : "candidate_failed",
+    ...(attempt.reason ? { reason: attempt.reason } : {}),
+    ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
+  }));
+  const innerAttempts = (currentTrace?.attempts ?? []).filter(
+    (attempt) => attempt.result !== "success",
+  );
+  const winnerAttempt = currentTrace?.attempts?.findLast(
+    (attempt) =>
+      attempt.result === "success" &&
+      attempt.provider === winnerProvider &&
+      attempt.model === winnerModel,
+  );
+  const attempts = [
+    ...outerAttempts,
+    ...innerAttempts,
+    ...(winnerProvider && winnerModel
+      ? [
+          winnerAttempt ?? {
+            provider: winnerProvider,
+            model: winnerModel,
+            result: "success" as const,
+          },
+        ]
+      : []),
+  ];
+  const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
+  const requested = { provider: params.requestedProvider, model: params.requestedModel };
+  const agentMeta = terminalReceipt
+    ? {
+        ...params.result.meta.agentMeta,
+        terminalReceipt: {
+          ...terminalReceipt,
+          requested,
+          rerouted:
+            terminalReceipt.rerouted ||
+            terminalReceipt.effective.provider !== requested.provider ||
+            terminalReceipt.effective.model !== requested.model,
+        },
+      }
+    : params.result.meta.agentMeta;
+  return {
+    ...params.result,
+    meta: {
+      ...params.result.meta,
+      agentMeta,
+      executionTrace: {
+        ...currentTrace,
+        winnerProvider,
+        winnerModel,
+        attempts: attempts.length > 0 ? attempts : undefined,
+        fallbackUsed: currentTrace?.fallbackUsed === true || outerAttempts.length > 0,
+      },
+    },
+  };
+}
+
 function buildTerminal(params: {
   result: EmbeddedAgentRunResult;
   fallbackExhausted: boolean;
@@ -201,22 +287,35 @@ function buildTerminal(params: {
     timeoutPhase: meta.timeoutPhase,
     providerStarted: meta.providerStarted,
   });
-  const terminalReply =
+  let terminalReply =
     normalizeAgentRunTerminalReplySnapshot(meta.terminalReply) ??
     buildAgentRunTerminalReplySnapshot({
       visibleText: meta.finalAssistantVisibleText,
       rawText: meta.finalAssistantRawText,
       terminalReplyKind: meta.terminalReplyKind,
     });
-  const metadata: Record<string, unknown> = { terminalReply };
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(
-    (meta.agentMeta as { terminalReceipt?: unknown } | undefined)?.terminalReceipt,
+  const normalizedTerminalReceipt = normalizeAgentRunTerminalReceipt(
+    meta.agentMeta?.terminalReceipt,
   );
-  if (terminalReceipt?.runId === params.runId) {
-    metadata.terminalReceipt = {
-      ...terminalReceipt,
-      terminalDisposition: terminalReply.disposition === "visible" ? "visible" : "not-visible",
-    };
+  const terminalReceipt =
+    normalizedTerminalReceipt?.runId === params.runId
+      ? {
+          ...normalizedTerminalReceipt,
+          terminalDisposition:
+            terminalReply.disposition === "visible"
+              ? ("visible" as const)
+              : ("not-visible" as const),
+        }
+      : undefined;
+  const modelRouteChange = formatAgentRunRouteChange(terminalReceipt, params.runId);
+  if (modelRouteChange && terminalReply.disposition === "visible") {
+    // Carry one receipt-owned fact beside assistant text so internal parents can
+    // report the reroute without exposing it through raw external delivery.
+    terminalReply = { ...terminalReply, modelRouteChange };
+  }
+  const metadata: Record<string, unknown> = { terminalReply };
+  if (terminalReceipt) {
+    metadata.terminalReceipt = terminalReceipt;
   }
   if (params.behavior.kind === "channel-delivery" || params.behavior.kind === "followup-delivery") {
     for (const key of [
@@ -370,33 +469,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       ...(params.behavior.kind === "maintenance"
         ? {}
         : {
-            classifyResult: ({
-              result: candidate,
-              provider,
-              model,
-            }: {
-              result: RunEntryCandidate<T>;
-              provider: string;
-              model: string;
-            }) => {
-              const deliveryEvidence =
-                params.behavior.kind === "channel-delivery"
-                  ? params.behavior.readDeliveryEvidence()
-                  : undefined;
-              const classification = classifyEmbeddedAgentRunResultForModelFallback({
-                result: candidate.result,
-                provider,
-                model,
-                ...deliveryEvidence,
-              });
-              const effectiveClassification =
-                params.behavior.kind === "followup-delivery"
-                  ? preserveFollowupResultForDelivery(classification)
-                  : classification;
-              return effectiveClassification && committedSideEffect?.()
-                ? undefined
-                : effectiveClassification;
-            },
+            classifyResult: ({ result }: { result: RunEntryCandidate<T> }) => result.classification,
           }),
       ...(canFallbackAfterError ? { canFallbackAfterError } : {}),
       ...(params.behavior.kind === "maintenance"
@@ -417,27 +490,63 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }),
           }),
       run: async (provider, model, options) => {
+        if (!options) {
+          throw new Error("Model fallback attempt is missing routing provenance");
+        }
         const isFallbackRetry = candidateIndex > 0;
         candidateIndex += 1;
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
+        let classified: { value: ModelFallbackResultClassification } | undefined;
+        const classifyResult = (result: EmbeddedAgentRunResult) => {
+          if (!classified) {
+            const classification =
+              params.behavior.kind === "maintenance"
+                ? undefined
+                : classifyEmbeddedAgentRunResultForModelFallback({
+                    result,
+                    provider,
+                    model,
+                    ...readChannelDeliveryEvidence?.(),
+                  });
+            const effectiveClassification =
+              params.behavior.kind === "followup-delivery"
+                ? preserveFollowupResultForDelivery(classification)
+                : classification;
+            // CLI continuity settles while the session lane is held. The outer
+            // fallback loop consumes this same decision after that owner releases.
+            classified = {
+              value:
+                effectiveClassification && committedSideEffect?.()
+                  ? undefined
+                  : effectiveClassification,
+            };
+          }
+          return classified.value;
+        };
         const result = await params.runCandidate(provider, model, {
+          classifyResult,
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
           isFallbackRetry,
+          modelRoutingProvenance: options.modelRoutingProvenance,
           contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: (facts) => {
             contextEngineTurnCandidate = facts;
             unsettledContextEngineTurnAttempt = facts;
           },
         });
-        return { result, turnAttempt: contextEngineTurnCandidate };
+        return {
+          result,
+          classification: classifyResult(result),
+          turnAttempt: contextEngineTurnCandidate,
+        };
       },
     });
     const abortFields =
       params.behavior.kind === "command-rpc"
         ? resolveAgentRunAbortLifecycleFields(params.abortSignal)
         : {};
-    const result =
+    const candidateResult =
       abortFields.aborted === true
         ? ({
             ...fallbackResult.result.result,
@@ -447,10 +556,20 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             },
           } as T)
         : fallbackResult.result.result;
+    const outcome =
+      fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const);
+    const result = mergeRunEntryExecutionTrace({
+      result: candidateResult,
+      outcome,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+      requestedProvider: params.selection.provider,
+      requestedModel: params.selection.model,
+      fallbackAttempts: fallbackResult.attempts,
+    });
     const settledResult = {
       ...fallbackResult,
-      outcome:
-        fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const),
+      outcome,
       result,
     };
     const terminal = buildTerminal({
@@ -459,25 +578,37 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       behavior: params.behavior,
       runId: params.identity.runId,
     });
-    if (fallbackResult.result.turnAttempt) {
-      if (
-        canAdvanceContextEngineTurn({
-          result,
-          fallbackOutcome: settledResult.outcome,
-          terminal,
-        })
-      ) {
-        await finalizeAcceptedContextEngineTurn({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
-      } else {
-        discardContextEngineTurnAttemptIntent({
-          facts: fallbackResult.result.turnAttempt,
-          lease: contextEngineLogicalTurnLease,
-        });
+    const acceptedTerminal =
+      !params.abortSignal?.aborted &&
+      canAdvanceContextEngineTurn({
+        result,
+        fallbackOutcome: settledResult.outcome,
+        terminal,
+      });
+    let releaseAcceptedTerminalWork: (() => void) | undefined;
+    if (acceptedTerminal) {
+      const acceptedTerminalWork = await params.onAcceptedTerminal?.();
+      if (typeof acceptedTerminalWork === "function") {
+        releaseAcceptedTerminalWork = acceptedTerminalWork;
       }
-      unsettledContextEngineTurnAttempt = undefined;
+    }
+    try {
+      if (fallbackResult.result.turnAttempt) {
+        if (acceptedTerminal) {
+          await finalizeAcceptedContextEngineTurn({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        } else {
+          discardContextEngineTurnAttemptIntent({
+            facts: fallbackResult.result.turnAttempt,
+            lease: contextEngineLogicalTurnLease,
+          });
+        }
+        unsettledContextEngineTurnAttempt = undefined;
+      }
+    } finally {
+      releaseAcceptedTerminalWork?.();
     }
     let sessionOverrideSettled = false;
     const settleSessionOverride = async () => {

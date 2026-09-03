@@ -7,6 +7,7 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-onboard";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechDirectiveTokenParseContext,
@@ -495,18 +496,11 @@ async function synthesizeGoogleTtsPcm(params: {
   speakerName?: string;
   timeoutMs: number;
 }): Promise<Buffer> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      return await synthesizeGoogleTtsPcmOnce(params);
-    } catch (err) {
-      lastError = err;
-      if (!isGoogleTtsRetryableError(err) || attempt > 0) {
-        throw err;
-      }
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  return await retryAsync(() => synthesizeGoogleTtsPcmOnce(params), {
+    attempts: 2,
+    minDelayMs: 0,
+    shouldRetry: isGoogleTtsRetryableError,
+  });
 }
 
 type GoogleTtsSynthesisRequest = Pick<

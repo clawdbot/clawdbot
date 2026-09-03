@@ -17,7 +17,6 @@ import { createMeetingPluginEntryOptions } from "./plugin-entry.js";
 import {
   createMeetingChromeRuntimeBindings,
   createMeetingPluginChromeTransport,
-  createMeetingPluginCliMetadata,
   createMeetingPluginNodeHostHandler,
   createMeetingPluginNodeInvokePolicy,
   createMeetingPluginShellEntry,
@@ -385,7 +384,6 @@ export const MeetingPlatformAdapter = {
   create: createMeetingPlatformAdapter,
   createChromeTransport: createMeetingChromeTransport,
   createChromeRuntimeBindings: createMeetingChromeRuntimeBindings,
-  createCliMetadata: createMeetingPluginCliMetadata,
   createPluginChromeTransport: createMeetingPluginChromeTransport,
   createPluginConfigSchema: createMeetingPluginConfigSchema,
   createPluginNodeHostHandler: createMeetingPluginNodeHostHandler,

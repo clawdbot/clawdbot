@@ -10,8 +10,23 @@ export const PREFS_MIGRATION_KEY = "new-session.migration.v1";
 
 export type NewSessionWhere =
   | { kind: "local" }
-  | { kind: "node"; id: string }
+  | { kind: "auto-device" }
+  | { kind: "device"; id: string }
   | { kind: "cloud"; id: string };
+
+export function resolveNewSessionWhere(params: {
+  cloudProfileId: string;
+  deviceId: string;
+  autoDevice: boolean;
+}): NewSessionWhere {
+  return params.cloudProfileId
+    ? { kind: "cloud", id: params.cloudProfileId }
+    : params.deviceId
+      ? { kind: "device", id: params.deviceId }
+      : params.autoDevice
+        ? { kind: "auto-device" }
+        : { kind: "local" };
+}
 
 export type NewSessionPreference = {
   workspace?: string;
@@ -77,11 +92,11 @@ function normalizeWhere(value: unknown): NewSessionWhere | undefined {
   if (!isRecord(value) || typeof value.kind !== "string") {
     return undefined;
   }
-  if (value.kind === "local") {
-    return { kind: "local" };
+  if (value.kind === "local" || value.kind === "auto-device") {
+    return { kind: value.kind };
   }
   const id = normalizeOptionalString(value.id);
-  return id && (value.kind === "node" || value.kind === "cloud")
+  return id && (value.kind === "device" || value.kind === "cloud")
     ? { kind: value.kind, id }
     : undefined;
 }

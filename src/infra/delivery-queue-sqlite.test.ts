@@ -12,6 +12,7 @@ import { commitStagedDeliveryQueueEntryOnceAcrossNamespaces } from "./delivery-q
 import {
   completeDeliveryQueueEntry,
   countFailedDeliveryQueueEntries,
+  countPendingDeliveryQueueEntries,
   deleteDeliveryQueueEntry,
   getDeliveryQueueEntryStatus,
   loadDeliveryQueueEntries,
@@ -91,7 +92,6 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
       enqueueValid("valid-b");
 
       const entries = loadDeliveryQueueEntries(QUEUE, stateDir);
-      expect(entries).toHaveLength(2);
       expect(entries.map((e) => e.id).toSorted()).toEqual(["valid-a", "valid-b"]);
     });
 
@@ -109,6 +109,24 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
 
       expect(loadDeliveryQueueEntries(QUEUE, stateDir)).toHaveLength(3);
     });
+  });
+
+  it("counts pending rows across only the selected namespaces", () => {
+    enqueueValid("pending");
+    upsertDeliveryQueueEntry({
+      queueName: "other-q",
+      entry: { id: "other", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    upsertDeliveryQueueEntry({
+      queueName: "ignored-q",
+      entry: { id: "ignored", enqueuedAt: Date.now(), retryCount: 0 },
+      stateDir,
+    });
+    completeDeliveryQueueEntry(QUEUE, "pending", stateDir);
+
+    expect(countPendingDeliveryQueueEntries([QUEUE, "other-q"], stateDir)).toBe(1);
+    expect(countPendingDeliveryQueueEntries([], stateDir)).toBe(0);
   });
 
   describe("updateDeliveryQueueEntry with corrupt row", () => {
@@ -650,7 +668,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
           stateDir,
         });
         expect(staleClaimId).toEqual(expect.any(String));
-        vi.setSystemTime(Date.now() + 30_001);
+        vi.setSystemTime(Date.now() + 60_001);
         if (!staleClaimId) {
           throw new Error("test invariant: the original producer claim must be available");
         }
@@ -675,7 +693,7 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
         expect(recoveredClaimId).not.toBe(staleClaimId);
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
           recoveryState: "producer_claimed",
-          availableAt: Date.now() + 30_000,
+          availableAt: Date.now() + 60_000,
           producerClaimId: recoveredClaimId,
         });
         expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)?.platformSendStartedAt).toBeUndefined();
@@ -740,10 +758,10 @@ describe("delivery-queue-sqlite corrupt JSON resilience", () => {
               claimId,
               stateDir,
             }),
-          ).toBe(Date.now() + 30_000);
+          ).toBe(Date.now() + 60_000);
           expect(loadDeliveryQueueEntry(QUEUE, id, stateDir)).toMatchObject({
             recoveryState,
-            availableAt: Date.now() + 30_000,
+            availableAt: Date.now() + 60_000,
             ...(recoveryState === "producer_claimed"
               ? { producerClaimId: claimId }
               : { platformSendAttemptId: claimId }),

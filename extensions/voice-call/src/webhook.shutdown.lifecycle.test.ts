@@ -7,6 +7,8 @@ import type { RealtimeCallHandler } from "./webhook/realtime-handler.js";
 
 describe("VoiceCallWebhookServer shutdown lifecycle", () => {
   it("waits for owned handlers and shares concurrent stop completion", async () => {
+    const config = createVoiceCallBaseConfig({ tunnelProvider: "none" });
+    config.serve.port = 0;
     let releaseHandlerClose: (() => void) | undefined;
     const handlerClose = vi.fn(
       () =>
@@ -16,7 +18,7 @@ describe("VoiceCallWebhookServer shutdown lifecycle", () => {
     );
     const delayedHangup = vi.fn(async () => ({ success: true }));
     const server = new VoiceCallWebhookServer(
-      createVoiceCallBaseConfig({ tunnelProvider: "none" }),
+      config,
       {
         getCallByProviderCallId: vi.fn(() => ({ callId: "call-1" })),
         endCall: delayedHangup,

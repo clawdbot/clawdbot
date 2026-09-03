@@ -1,16 +1,13 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AcpTurnAttachment } from "../../../acp/control-plane/manager.types.js";
+import { resolveInboundConversationResolution } from "../../../channels/conversation-resolution.js";
 import {
   formatConversationTarget,
-  routeFromBindingRecord,
-  routeToDeliveryFields,
+  deliveryContextFromConversation,
 } from "../../../channels/route-projection.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { SessionBindingRecord } from "../../../infra/outbound/session-binding-service.js";
-import {
-  resolveConversationRefForThreadBinding,
-  resolveSpawnChannelAccountId,
-} from "../../spawn-plan.js";
+import { resolveSpawnChannelAccountId } from "../../spawn-plan.js";
 import type { AcpSpawnRequesterState } from "./acp-spawn-requester.js";
 
 type GatewayImageAttachmentInput = {
@@ -49,7 +46,6 @@ export type AcpSpawnBootstrapDeliveryPlan = {
 export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   cfg: OpenClawConfig;
   spawnMode: "run" | "session";
-  requestThreadBinding: boolean;
   effectiveStreamToParent: boolean;
   requester: AcpSpawnRequesterState;
   binding: SessionBindingRecord | null;
@@ -62,7 +58,7 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
   const fallbackThreadId =
     fallbackThreadIdRaw != null ? normalizeOptionalString(String(fallbackThreadIdRaw)) : undefined;
   const deliveryThreadId = boundThreadId ?? fallbackThreadId;
-  const requesterConversationRef = resolveConversationRefForThreadBinding({
+  const requesterConversationRef = resolveInboundConversationResolution({
     cfg: params.cfg,
     channel: params.requester.origin?.channel,
     accountId: params.requester.origin?.accountId,
@@ -83,12 +79,12 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     (params.binding?.conversation.parentConversationId ?? undefined) ===
       (requesterConversationRef.parentConversationId ?? undefined),
   );
-  const boundDeliveryTarget = routeToDeliveryFields(routeFromBindingRecord(params.binding));
+  const boundDeliveryTarget = deliveryContextFromConversation(params.binding?.conversation);
   const inferredDeliveryTo =
     (bindingMatchesRequesterConversation
       ? normalizeOptionalString(params.requester.origin?.to)
       : undefined) ??
-    boundDeliveryTarget.to ??
+    boundDeliveryTarget?.to ??
     normalizeOptionalString(params.requester.origin?.to) ??
     formatConversationTarget({
       channel: params.requester.origin?.channel,
@@ -96,7 +92,7 @@ export function resolveAcpSpawnBootstrapDeliveryPlan(params: {
     });
   const resolvedDeliveryThreadId = bindingMatchesRequesterConversation
     ? fallbackThreadId
-    : (boundDeliveryTarget.threadId ?? deliveryThreadId);
+    : (boundDeliveryTarget?.threadId ?? deliveryThreadId);
   const hasDeliveryTarget = Boolean(params.requester.origin?.channel && inferredDeliveryTo);
 
   // Thread-bound session spawns always deliver inline to their bound thread.

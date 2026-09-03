@@ -11,6 +11,7 @@ import type {
   AgentToolResultMiddlewareRuntime,
   AgentToolResultMiddlewareScope,
 } from "./agent-tool-result-middleware-types.js";
+import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationSource } from "./config-state.js";
@@ -206,6 +207,12 @@ export type PluginDashboardActionVerbRegistration = PluginManifestDashboardActio
   handler: GatewayRequestHandlers[string];
 };
 
+export type PluginBoardWidgetContentKindRegistration = {
+  pluginId: string;
+  pluginKind: string;
+  definition: PluginBoardWidgetContentKind;
+};
+
 type PluginCliBackendRegistration = {
   pluginId: string;
   pluginName?: string;
@@ -331,6 +338,14 @@ type PluginNodeInvokePolicyRegistration = {
   pluginName?: string;
   policy: import("./types.js").OpenClawPluginNodeInvokePolicy;
   pluginConfig?: Record<string, unknown>;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginWidgetPresenterRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  presenter: import("./plugin-registration.types.js").WidgetPresenter;
   source: string;
   rootDir?: string;
 };
@@ -497,6 +512,7 @@ export type PluginRecord = {
   services: string[];
   gatewayDiscoveryServiceIds: string[];
   commands: string[];
+  commandAliases?: PluginManifestRecord["commandAliases"];
   httpRoutes: number;
   hookCount: number;
   configSchema: boolean;
@@ -552,9 +568,11 @@ export type PluginRegistry = {
   gatewayMethodDescriptors: GatewayMethodDescriptor[];
   dashboardDataBindings: Map<string, PluginDashboardDataBindingRegistration>;
   dashboardActionVerbs: Map<string, PluginDashboardActionVerbRegistration>;
+  boardWidgetContentKinds: Map<string, PluginBoardWidgetContentKindRegistration>;
   coreGatewayMethodNames: string[];
   httpRoutes: PluginHttpRouteRegistration[];
   hostedMediaResolvers: PluginHostedMediaResolverRegistration[];
+  widgetPresenters: PluginWidgetPresenterRegistration[];
   mcpServerConnectionResolvers: PluginMcpServerConnectionResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads: PluginReloadRegistration[];

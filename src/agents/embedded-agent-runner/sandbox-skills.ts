@@ -5,6 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
+import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import type {
   SkillEligibilityContext,
   SkillSnapshot,
@@ -18,7 +19,11 @@ type SandboxSkillRuntimeContext = Pick<SandboxContext, "enabled"> &
   Partial<
     Pick<
       SandboxContext,
-      "skillsEligibility" | "skillsWorkspaceDir" | "containerWorkdir" | "workspaceAccess"
+      | "skillsEligibility"
+      | "skillsWorkspaceDir"
+      | "containerWorkdir"
+      | "workspaceAccess"
+      | "skillUsagePaths"
     >
   >;
 
@@ -142,7 +147,9 @@ export function mapSandboxSkillUsagePaths(params: {
 
 export function resolveSandboxSkillRuntimeInputs(params: {
   sandbox?: SandboxSkillRuntimeContext | null;
-  effectiveWorkspace: string;
+  // Fallback skill discovery anchors to the configured agent workspace so
+  // snapshot and fallback paths agree.
+  skillsAnchorWorkspace: string;
   skillsSnapshot?: SkillSnapshot;
 }): {
   skillsEligibility?: SkillEligibilityContext;
@@ -152,7 +159,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
   workspaceOnly: boolean;
 } {
   if (params.sandbox?.enabled === true) {
-    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.effectiveWorkspace;
+    const skillsWorkspaceDir = params.sandbox.skillsWorkspaceDir ?? params.skillsAnchorWorkspace;
     const skillsPromptWorkspaceDir =
       params.sandbox.workspaceAccess === "rw" &&
       params.sandbox.skillsWorkspaceDir &&
@@ -162,20 +169,55 @@ export function resolveSandboxSkillRuntimeInputs(params: {
             ...MATERIALIZED_SKILLS_WORKSPACE_CONTAINER_PARTS,
           )
         : (params.sandbox.containerWorkdir ?? skillsWorkspaceDir);
+    let selectedSnapshot: SkillSnapshot | undefined;
+    if (params.skillsSnapshot?.librarySelections?.length) {
+      const usage = mapSandboxSkillUsagePaths({
+        paths: params.sandbox.skillUsagePaths,
+        skillsWorkspaceDir,
+        skillsPromptWorkspaceDir,
+      });
+      const resolvedSkills = params.skillsSnapshot.resolvedSkills?.map((skill) => {
+        const materialized = usage?.find((item) => item.skillName === skill.name);
+        if (!materialized) {
+          throw new Error(`Selected skill ${skill.name} was not delivered to the sandbox.`);
+        }
+        return {
+          ...skill,
+          filePath: materialized.readPath,
+          baseDir: path.posix.dirname(materialized.readPath),
+        };
+      });
+      if (!resolvedSkills) {
+        throw new Error("Selected skill snapshot must be hydrated before sandbox delivery.");
+      }
+      selectedSnapshot = {
+        ...params.skillsSnapshot,
+        resolvedSkills,
+        prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
+      };
+    }
     return {
       ...(params.sandbox.skillsEligibility
         ? { skillsEligibility: params.sandbox.skillsEligibility }
         : {}),
       skillsPromptWorkspaceDir,
-      skillsSnapshot: undefined,
+      skillsSnapshot: selectedSnapshot,
       skillsWorkspaceDir,
       workspaceOnly: true,
     };
   }
   return {
-    skillsPromptWorkspaceDir: params.effectiveWorkspace,
+    skillsPromptWorkspaceDir: params.skillsAnchorWorkspace,
     skillsSnapshot: params.skillsSnapshot,
-    skillsWorkspaceDir: params.effectiveWorkspace,
+    skillsWorkspaceDir: params.skillsAnchorWorkspace,
     workspaceOnly: false,
   };
+}
+
+/** Rewrites host-generated explicit skill references to the prepared runtime's exact copies. */
+export function remapSkillReferencePaths(text: string, paths?: readonly SkillUsagePath[]): string {
+  return (paths ?? []).reduce(
+    (result, item) => result.replaceAll(item.skillFile, item.readPath),
+    text,
+  );
 }

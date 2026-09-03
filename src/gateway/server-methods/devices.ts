@@ -32,6 +32,7 @@ import {
 } from "../../infra/device-pairing.js";
 import type { DiagnosticSecurityEventInput } from "../../infra/diagnostic-events.js";
 import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
+import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../events.js";
 import { clearRemovedNodeRuntimeState } from "../node-runtime-state.js";
 import { invalidateNodeWakeState } from "../node-wake-state.js";
 import {
@@ -551,6 +552,7 @@ export const deviceHandlers: GatewayRequestHandlers = {
       targetDeviceId: deviceId,
       controlId: "device.pair.rename",
     });
+    context.broadcast(GATEWAY_EVENT_DEVICE_PAIR_CHANGED, {}, { dropIfSlow: true });
     respond(true, { deviceId, label: trimmed }, undefined);
   },
   "device.token.rotate": async ({ params, respond, context, client }) => {
@@ -609,11 +611,13 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Other roles passed the admin guard; only operator tokens inherit the caller's scope cap.
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
     const rotated = await rotateDeviceToken({
       deviceId,
       role,
       scopes,
-      callerScopes: authz.callerScopes,
+      callerScopes,
     });
     if (!rotated.ok) {
       logDeviceTokenRotationDenied({
@@ -732,7 +736,8 @@ export const deviceHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes: authz.callerScopes });
+    const callerScopes = role.trim() === "operator" ? authz.callerScopes : undefined;
+    const revoked = await revokeDeviceToken({ deviceId, role, callerScopes });
     if (!revoked.ok) {
       logDeviceTokenRevocationDenied({
         log: context.logGateway,

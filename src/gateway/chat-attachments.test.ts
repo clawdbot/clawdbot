@@ -39,6 +39,7 @@ import {
 } from "./chat-attachment-policy.js";
 import {
   type ChatAttachment,
+  discardPreparedInboundMedia,
   parseMessageWithAttachments,
   persistInboundImagesForTranscript,
   stripImageMediaMarkers,
@@ -153,6 +154,38 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("discardPreparedInboundMedia", () => {
+  it("deletes only the managed inbound id and reports cleanup failures", async () => {
+    const error = new Error("unlink denied");
+    deleteMediaBufferMock.mockRejectedValueOnce(error);
+    const warn = vi.fn();
+
+    await expect(
+      discardPreparedInboundMedia(
+        [
+          {
+            mediaRef: "media://inbound/managed-id",
+            id: "managed-id",
+            path: "/external/user-owned.png",
+            kind: "image",
+            mimeType: "image/png",
+            label: "user-owned.png",
+            sizeBytes: 42,
+            sourceIndex: 0,
+          },
+        ],
+        { warn },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(deleteMediaBufferMock).toHaveBeenCalledOnce();
+    expect(deleteMediaBufferMock).toHaveBeenCalledWith("managed-id", "inbound");
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("failed to discard prepared inbound media managed-id: unlink denied"),
+    );
+  });
 });
 
 describe("persistInboundImagesForTranscript", () => {

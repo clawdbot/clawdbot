@@ -7,8 +7,10 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
+import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
+import { telegramPlugin } from "./channel.js";
 import { asTelegramClientFetch } from "./client-fetch.js";
 import { createTelegramDraftStream } from "./draft-stream.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -20,6 +22,21 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
+
+const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./rich-blocks.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
+  return {
+    ...actual,
+    markdownToTelegramRichBlocks: (
+      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
+    ) => {
+      richMarkdownProjection.count += 1;
+      return actual.markdownToTelegramRichBlocks(...args);
+    },
+  };
+});
 
 type CapturedRequest = {
   body: Buffer;
@@ -34,6 +51,26 @@ const cfg = {
   channels: { telegram: { botToken: TOKEN } },
   session: { store: "/tmp/openclaw-telegram-transport-payload-test.json" },
 } satisfies OpenClawConfig;
+
+function directMessagesMessage(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    message_id: 41,
+    date: 1_700_000_000,
+    chat: {
+      id: DIRECT_CHAT_ID,
+      type: "supergroup",
+      title: "Channel Direct Messages",
+      is_direct_messages: true,
+    },
+    direct_messages_topic: {
+      topic_id: DIRECT_TOPIC_ID,
+      user: { id: 700, is_bot: false, first_name: "Subscriber" },
+    },
+    from: { id: 700, is_bot: false, first_name: "Subscriber" },
+    text: "button",
+    ...overrides,
+  };
+}
 
 function installTelegramStateRuntimeForTest(): void {
   setTelegramRuntime({
@@ -129,6 +166,7 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
+    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
     installTelegramStateRuntimeForTest();
@@ -181,6 +219,46 @@ describe("Telegram topic transport payloads", () => {
     expect(request && hasMultipartField(request, "document")).toBe(true);
   });
 
+  it("round-trips direct-topic conversation custody into the canonical Bot API field", async () => {
+    const inbound = await buildTelegramMessageContextForTest({
+      message: directMessagesMessage(),
+      options: { forceWasMentioned: true },
+      resolveGroupActivation: () => true,
+    });
+    expect(inbound?.ctxPayload.SessionKey).toContain(
+      `telegram:group:${DIRECT_CHAT_ID}:direct-topic:${DIRECT_TOPIC_ID}`,
+    );
+    const directRef = telegramPlugin.messaging?.resolveInboundConversation?.({
+      to: inbound?.ctxPayload.OriginatingTo,
+      isGroup: true,
+    });
+    expect(directRef?.conversationId).toBe(`${DIRECT_CHAT_ID}:direct-topic:${DIRECT_TOPIC_ID}`);
+    if (!directRef?.conversationId) {
+      throw new Error("expected direct-topic conversation reference");
+    }
+    const persistedRef = structuredClone({
+      conversationId: directRef.conversationId,
+      parentConversationId: directRef.parentConversationId,
+    });
+    const target = telegramPlugin.messaging?.resolveDeliveryTarget?.(persistedRef);
+    if (!target?.to) {
+      throw new Error("expected persisted direct-topic delivery target");
+    }
+    installTelegramStateRuntimeForTest();
+    await sendMessageTelegram(target.to, "roundtrip", {
+      cfg,
+      token: TOKEN,
+      api: bot.api,
+      messageThreadId: target.threadId ? Number(target.threadId) : undefined,
+    });
+
+    const request = requests.find((candidate) => candidate.method === "sendMessage");
+    expect(request && parseJsonBody(request)).toMatchObject({
+      direct_messages_topic_id: DIRECT_TOPIC_ID,
+    });
+    expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+  });
+
   it("serializes local rich delivery through the canonical direct topic field", async () => {
     const richCfg = {
       ...cfg,
@@ -197,6 +275,7 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {
@@ -219,26 +298,13 @@ describe("Telegram topic transport payloads", () => {
   });
 
   it("serializes callback replies through only the canonical direct topic field", async () => {
-    const callbackMessage = {
-      message_id: 41,
-      date: 1_700_000_000,
-      chat: {
-        id: DIRECT_CHAT_ID,
-        type: "supergroup",
-        title: "Channel Direct Messages",
-        is_direct_messages: true,
-      },
+    const callbackMessage = directMessagesMessage({
       message_thread_id: 999,
-      direct_messages_topic: {
-        topic_id: DIRECT_TOPIC_ID,
-        user: { id: 700, is_bot: false, first_name: "Subscriber" },
-      },
-      text: "button",
-    } as Message;
+    }) as unknown as Message;
     const actions = createTelegramCallbackMessageActions({
       bot,
       callbackMessage,
-      isForum: false,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
     });
 
     await actions.replyToCallbackChat("callback reply");
@@ -248,5 +314,75 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+  });
+
+  it.each([
+    {
+      name: "ordinary callbacks",
+      businessConnectionId: undefined,
+      expectedMethod: "deleteMessage",
+      expectedPayload: { chat_id: DIRECT_CHAT_ID, message_id: 41 },
+    },
+    {
+      name: "business callbacks",
+      businessConnectionId: "business-delete-1",
+      expectedMethod: "deleteBusinessMessages",
+      expectedPayload: { business_connection_id: "business-delete-1", message_ids: [41] },
+    },
+  ])("deletes $name through their owning Bot API endpoint", async (testCase) => {
+    const callbackMessage = directMessagesMessage(
+      testCase.businessConnectionId
+        ? { business_connection_id: testCase.businessConnectionId }
+        : {},
+    ) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+
+    await actions.deleteCallbackMessage();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe(testCase.expectedMethod);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual(testCase.expectedPayload);
+  });
+
+  it("removes business media callbacks before sending their text replacement", async () => {
+    const callbackMessage = directMessagesMessage({
+      business_connection_id: "business-media-1",
+      text: undefined,
+      caption: "Choose an action",
+    }) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+    const editMessage = vi
+      .spyOn(bot.api, "editMessageText")
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: there is no text in the message to edit"),
+      );
+
+    try {
+      await actions.editCallbackMessageWithButtons("Replacement", []);
+    } finally {
+      editMessage.mockRestore();
+    }
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "deleteBusinessMessages",
+      "sendMessage",
+    ]);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
+      business_connection_id: "business-media-1",
+      message_ids: [41],
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
+      business_connection_id: "business-media-1",
+      direct_messages_topic_id: DIRECT_TOPIC_ID,
+      text: "Replacement",
+    });
   });
 });

@@ -2,8 +2,9 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
+import { isDirectRunUrl } from "./lib/direct-run.mjs";
 
 const defaultRootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const FULL_GIT_COMMIT_RE = /^[0-9a-f]{40}$/iu;
@@ -139,12 +140,7 @@ export function writeBuildInfo(options: ResolveBuildInfoOptions = {}): string {
   return outputPath;
 }
 
-function isMainModule(): boolean {
-  const argv1 = process.argv[1];
-  return Boolean(argv1 && import.meta.url === pathToFileURL(argv1).href);
-}
-
-if (isMainModule()) {
+if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     writeBuildInfo();
   } catch (error) {

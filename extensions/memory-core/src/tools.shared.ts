@@ -1,61 +1,29 @@
 // Memory Core plugin module implements tools.shared behavior.
-import { optionalFiniteNumberSchema, stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import {
-  listMemoryCorpusSupplements,
-  resolveMemorySearchConfig,
-  resolveSessionAgentIds,
-  type MemoryCorpusSearchResult,
-  type AnyAgentTool,
-  type OpenClawConfig,
+import type {
+  AnyAgentTool,
+  OpenClawConfig,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { Type } from "typebox";
+import {
+  resolveMemoryToolContext,
+  type MemoryToolContract,
+  type MemoryToolOptions,
+} from "./memory-tool-contract.js";
 import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+
+// Core owns this session-store error; Memory Core must preserve its exact code
+// without importing a core-internal module across the plugin boundary.
+const SESSION_CANONICAL_KEY_MIGRATION_REQUIRED = "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED";
+const SESSION_CANONICAL_KEY_MIGRATION_WARNING =
+  "Memory search is unavailable because the session catalog requires canonical-key migration.";
+const SESSION_CANONICAL_KEY_MIGRATION_ACTION =
+  "Stop the Gateway and run openclaw doctor --fix, then restart the Gateway and retry memory_search.";
+
 type MemorySearchManagerResult = Awaited<
   ReturnType<(typeof import("./memory/index.js"))["getMemorySearchManager"]>
 >;
-type MemoryToolOptions = {
-  config?: OpenClawConfig;
-  getConfig?: () => OpenClawConfig | undefined;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  oneShotCliRun?: boolean;
-  acquireLocalService?: MemoryCoreAcquireLocalService;
-};
-
 export const loadMemoryToolRuntime = createLazyRuntimeModule(() => import("./tools.runtime.js"));
-
-export const MemorySearchSchema = Type.Object({
-  query: Type.String(),
-  maxResults: Type.Optional(Type.Integer({ minimum: 1 })),
-  minScore: optionalFiniteNumberSchema(),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all", "sessions"])),
-});
-
-export const MemoryGetSchema = Type.Object({
-  path: Type.String(),
-  from: Type.Optional(Type.Integer()),
-  lines: Type.Optional(Type.Integer()),
-  corpus: Type.Optional(stringEnum(["memory", "wiki", "all"])),
-});
-
-function resolveMemoryToolContext(options: MemoryToolOptions) {
-  const cfg = options.getConfig ? options.getConfig() : options.config;
-  if (!cfg) {
-    return null;
-  }
-  const { sessionAgentId: agentId } = resolveSessionAgentIds({
-    sessionKey: options.agentSessionKey,
-    config: cfg,
-    agentId: options.agentId,
-  });
-  if (!resolveMemorySearchConfig(cfg, agentId)) {
-    return null;
-  }
-  return { cfg, agentId };
-}
 
 export async function getMemoryManagerContextWithPurpose(params: {
   cfg: OpenClawConfig;
@@ -93,21 +61,20 @@ export async function getMemoryManagerContextWithPurpose(params: {
 
 export function createMemoryTool(params: {
   options: MemoryToolOptions;
-  label: string;
-  name: string;
-  description: string;
-  parameters: typeof MemorySearchSchema | typeof MemoryGetSchema;
-  execute: (ctx: { cfg: OpenClawConfig; agentId: string }) => AnyAgentTool["execute"];
+  contract: MemoryToolContract;
+  execute: (
+    ctx: NonNullable<ReturnType<typeof resolveMemoryToolContext>>,
+  ) => AnyAgentTool["execute"];
 }): AnyAgentTool | null {
   const ctx = resolveMemoryToolContext(params.options);
   if (!ctx) {
     return null;
   }
   return {
-    label: params.label,
-    name: params.name,
-    description: params.description,
-    parameters: params.parameters,
+    label: params.contract.label,
+    name: params.contract.name,
+    description: params.contract.describe(ctx.sources),
+    parameters: params.contract.parameters,
     execute: async (toolCallId, toolParams, signal, onUpdate) => {
       const latestCtx = params.options.getConfig ? resolveMemoryToolContext(params.options) : ctx;
       // A live getter makes missing or disabled current config a revocation.
@@ -127,6 +94,9 @@ export function buildMemorySearchUnavailableResult(
   overrides?: {
     warning?: string;
     action?: string;
+    agentId?: string;
+    deadline?: boolean;
+    code?: string;
   },
 ) {
   const reason = (error ?? "memory search unavailable").trim() || "memory search unavailable";
@@ -135,20 +105,34 @@ export function buildMemorySearchUnavailableResult(
   const isMissingNodeSqlite = /missing node:sqlite|no such built-?in module: node:sqlite/.test(
     normalizedReason,
   );
+  // Provenance from the deadline owner, never the message text: a provider
+  // error can read exactly like this tool's timeout.
+  const isSearchDeadline = overrides?.deadline === true;
+  const deadlineAction = overrides?.agentId
+    ? `Retry memory_search after a short wait: a memory-corpus timeout pauses retries for up to a minute. If memory-corpus timeouts persist, run: openclaw memory status --deep --agent ${overrides.agentId}, and rebuild with openclaw memory index --force --agent ${overrides.agentId} only if it reports the index dirty or incomplete`
+    : "Retry memory_search after a short wait. If memory-corpus timeouts persist, inspect this agent's memory index before rebuilding it.";
   const warning =
     overrides?.warning ??
-    (isQuotaError
-      ? "Memory search is unavailable because the embedding provider quota is exhausted."
-      : isMissingNodeSqlite
-        ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
-        : "Memory search is unavailable due to an embedding/provider error.");
+    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
+      ? SESSION_CANONICAL_KEY_MIGRATION_WARNING
+      : isQuotaError
+        ? "Memory search is unavailable because the embedding provider quota is exhausted."
+        : isMissingNodeSqlite
+          ? "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support."
+          : isSearchDeadline
+            ? "Memory search did not finish within its time limit."
+            : "Memory search is unavailable due to an embedding/provider error.");
   const action =
     overrides?.action ??
-    (isQuotaError
-      ? "Top up or switch embedding provider, then retry memory_search."
-      : isMissingNodeSqlite
-        ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
-        : "Check embedding provider configuration and retry memory_search.");
+    (overrides?.code === SESSION_CANONICAL_KEY_MIGRATION_REQUIRED
+      ? SESSION_CANONICAL_KEY_MIGRATION_ACTION
+      : isQuotaError
+        ? "Top up or switch embedding provider, then retry memory_search."
+        : isMissingNodeSqlite
+          ? "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search."
+          : isSearchDeadline
+            ? deadlineAction
+            : "Check embedding provider configuration and retry memory_search.");
   return {
     results: [],
     disabled: true,
@@ -162,55 +146,4 @@ export function buildMemorySearchUnavailableResult(
       error: reason,
     },
   };
-}
-
-export async function searchMemoryCorpusSupplements(params: {
-  query: string;
-  maxResults?: number;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  corpus?: "memory" | "wiki" | "all" | "sessions";
-}): Promise<MemoryCorpusSearchResult[]> {
-  if (params.corpus === "memory" || params.corpus === "sessions") {
-    return [];
-  }
-  const supplements = listMemoryCorpusSupplements();
-  if (supplements.length === 0) {
-    return [];
-  }
-  const results = (
-    await Promise.all(
-      supplements.map(async (registration) => await registration.supplement.search(params)),
-    )
-  ).flat();
-  return results
-    .toSorted((left, right) => {
-      if (left.score !== right.score) {
-        return right.score - left.score;
-      }
-      return left.path.localeCompare(right.path);
-    })
-    .slice(0, Math.max(1, params.maxResults ?? 10));
-}
-
-export async function getMemoryCorpusSupplementResult(params: {
-  lookup: string;
-  fromLine?: number;
-  lineCount?: number;
-  agentId?: string;
-  agentSessionKey?: string;
-  sandboxed?: boolean;
-  corpus?: "memory" | "wiki" | "all" | "sessions";
-}) {
-  if (params.corpus === "memory" || params.corpus === "sessions") {
-    return null;
-  }
-  for (const registration of listMemoryCorpusSupplements()) {
-    const result = await registration.supplement.get(params);
-    if (result) {
-      return result;
-    }
-  }
-  return null;
 }

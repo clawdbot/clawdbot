@@ -1,27 +1,28 @@
 import { createSessionManagerRuntimeRegistry } from "../agent-hooks/session-manager-runtime-registry.js";
 
-type ToolSendReceiptResult = {
+type EmbeddedToolReceiptResult = {
   details: {
-    toolSend: unknown;
+    toolSend?: unknown;
+    messageDelivery?: unknown;
   };
 };
 
-const registry = createSessionManagerRuntimeRegistry<Map<string, ToolSendReceiptResult>>();
+const registry = createSessionManagerRuntimeRegistry<Map<string, EmbeddedToolReceiptResult>>();
 
-export function recordEmbeddedToolSendReceipt(
+export function recordEmbeddedToolReceipt(
   sessionManager: unknown,
   toolCallId: string,
-  toolSend: unknown,
+  details: EmbeddedToolReceiptResult["details"],
 ): void {
-  const receipts = registry.get(sessionManager) ?? new Map<string, ToolSendReceiptResult>();
-  receipts.set(toolCallId, { details: { toolSend } });
+  const receipts = registry.get(sessionManager) ?? new Map<string, EmbeddedToolReceiptResult>();
+  receipts.set(toolCallId, { details });
   registry.set(sessionManager, receipts);
 }
 
-export function consumeEmbeddedToolSendReceipt(
+export function consumeEmbeddedToolReceipt(
   sessionManager: unknown,
   toolCallId: string,
-): ToolSendReceiptResult | undefined {
+): EmbeddedToolReceiptResult | undefined {
   const receipts = registry.get(sessionManager);
   const receipt = receipts?.get(toolCallId);
   if (!receipts || !receipt) {

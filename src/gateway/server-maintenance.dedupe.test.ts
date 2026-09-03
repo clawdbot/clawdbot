@@ -91,14 +91,12 @@ async function stopMaintenanceTimers(timers: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<"drained" | "timed-out">;
   worktreeCleanup: NodeJS.Timeout;
-  skillCuratorCleanup: () => void;
 }) {
   clearInterval(timers.tickInterval);
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
   await timers.stopMediaCleanup();
-  timers.skillCuratorCleanup();
   vi.useRealTimers();
 }
 

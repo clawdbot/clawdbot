@@ -11,6 +11,16 @@ read_when:
 
 The card is durable session state. A reconnect or page reload reads the latest card from the Gateway instead of reconstructing it from tool events or transcript history. The transcript keeps only a short update receipt, not another full copy of the card.
 
+## Adoption
+
+OpenClaw adds a short progress-card reminder only for non-main sessions when a web, iOS, Android, or macOS card renderer is paired with the Gateway and the run is not using the agent's utility model. Channel-only deployments such as a WhatsApp-only Gateway do not receive the reminder.
+
+The reminder says:
+
+> During multi-step work, keep your progress card current with the progress_card tool; the user follows it instead of reading the transcript.
+
+The reminder does not override tool policy. `tools.updatePlan: false` or a matching `tools.deny` entry still removes `progress_card` from the run entirely.
+
 ## Update a card
 
 Both input fields are optional:
@@ -37,12 +47,12 @@ The tool returns a short receipt such as `Progress card updated (rev 4, 1/3 done
 
 ## Format the note
 
-Markdown accepts ordinary formatting, small tables, links, and optional progress bars:
+Choose the representation that makes the current state easiest to scan: use a table for comparisons or metrics, a progress bar for one long operation, and a checklist only when the work is genuinely sequential. Omit the checklist when a table, bar, or sentence says it better, and do not repeat the same facts across the plan and Markdown. Markdown accepts ordinary formatting, links, and optional progress bars:
 
 ```md
-Tests are running.
+<progress aria-label="Tests · 3/7" value="3" max="7"></progress>
 
-<progress value="3" max="7"></progress>
+Tests are running.
 
 | check      | state   |
 | ---------- | ------- |
@@ -50,7 +60,7 @@ Tests are running.
 | live flow  | running |
 ```
 
-The Control UI renders `progress` elements with `value` and `max` attributes. Other raw HTML is stripped by the Markdown sanitizer.
+Put one progress bar first and give it a short `aria-label` with its purpose and current/total values. In the session hovercard, the Agent Notepad pins the bar above the note and shows that label. Other raw HTML is stripped by the Markdown sanitizer.
 
 ## Limits
 
@@ -73,12 +83,12 @@ An empty plan plus empty or whitespace-only Markdown also clears it. A successfu
 
 ## Where the card appears
 
-The current chat shows exactly one live card:
+The current chat keeps exactly one live card in the main conversation:
 
-- When the session rail is visible, the card appears in the rail.
-- At narrow widths where the rail is hidden, the card appears in the collapsible surface beside the composer.
+- The card appears in the collapsible surface inside the composer at every width.
 
-The two placements are mutually exclusive. Other sessions can show their latest card in the sidebar hovercard. All placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+Opening a side panel does not move the card out of the conversation. The placements are mutually exclusive. Hover a session row in the sidebar or a session-reference link in chat to see the same card for that session. All card placements read the same Gateway-backed state and refresh after `progressCard.changed` notifications.
+The composer and dashboard placements show the local time of the last progress update. The hovercard instead shows the current-or-next plan step and its completed/total count, followed by Markdown in a separate Agent Notepad when a note is present.
 
 ## Pin the card to the dashboard
 

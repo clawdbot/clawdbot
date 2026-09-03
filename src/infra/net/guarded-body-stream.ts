@@ -35,18 +35,27 @@ export function wrapGuardedBodyStream(params: {
     }
     finalized = true;
     guardedBodyCleanupRegistry.unregister(cleanupRegistrationToken);
-    try {
-      await cancelReader();
-    } finally {
-      try {
-        reader?.releaseLock();
-      } finally {
+    // Start cancellation before cleanup so its reason reaches the reader, but
+    // let request cleanup abort a retained capture tee before awaiting settlement.
+    const [cancellation, release] = await Promise.allSettled([
+      cancelReader(),
+      (async () => {
         try {
-          await params.cleanup();
-        } catch {
-          // Best effort: guard cleanup must not surface into stream consumers.
+          reader?.releaseLock();
+        } finally {
+          try {
+            await params.cleanup();
+          } catch {
+            // Best effort: guard cleanup must not surface into stream consumers.
+          }
         }
-      }
+      })(),
+    ]);
+    if (release.status === "rejected") {
+      throw release.reason;
+    }
+    if (cancellation.status === "rejected") {
+      throw cancellation.reason;
     }
   };
   const wrappedBody = new ReadableStream<Uint8Array>({

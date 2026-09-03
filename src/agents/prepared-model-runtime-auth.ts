@@ -19,6 +19,7 @@ const authLoaderBySnapshot = new WeakMap<
   object,
   (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>
 >();
+const authByFullCatalog = new WeakMap<object, PreparedModelRuntimeAuth>();
 
 // Secret-bearing state stays lifecycle-owned without becoming part of the public snapshot shape.
 export function setPreparedModelRuntimeAuthStore(
@@ -30,6 +31,17 @@ export function setPreparedModelRuntimeAuthStore(
 
 export function getPreparedModelRuntimeAuthStore(snapshot: object): AuthProfileStore | undefined {
   return authStoreBySnapshot.get(snapshot);
+}
+
+export function setPreparedModelFullCatalogAuth(
+  snapshot: object,
+  auth: PreparedModelRuntimeAuth,
+): void {
+  authByFullCatalog.set(snapshot, auth);
+}
+
+export function getPreparedModelFullCatalogAuth(snapshot: object) {
+  return authByFullCatalog.get(snapshot);
 }
 
 export function setPreparedModelRuntimeAuthLoader(
@@ -62,4 +74,19 @@ export function getPreparedModelRuntimeAuthMaterializations(
   snapshot: object,
 ): readonly RuntimeAuthMaterialization[] {
   return materializationsBySnapshot.get(snapshot) ?? [];
+}
+
+export function copyPreparedModelRuntimeAuthBindings(source: object, target: object): void {
+  const authStore = authStoreBySnapshot.get(source);
+  const authLoader = authLoaderBySnapshot.get(source);
+  const materializations = materializationsBySnapshot.get(source);
+  if (authStore) {
+    authStoreBySnapshot.set(target, authStore);
+  }
+  if (authLoader) {
+    authLoaderBySnapshot.set(target, authLoader);
+  }
+  if (materializations) {
+    materializationsBySnapshot.set(target, materializations);
+  }
 }

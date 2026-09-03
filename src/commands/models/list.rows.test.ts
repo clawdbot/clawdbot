@@ -1,4 +1,5 @@
 // Model list row tests cover rendered row construction for model listing output.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { ModelRow } from "./list.types.js";
@@ -8,15 +9,11 @@ const mocks = vi.hoisted(() => ({
   loadScopedModelCatalogSnapshot: vi.fn(),
   normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   resolveBundledProviderPolicySurface: vi.fn(() => null),
-  shouldSuppressBuiltInModelCore: vi.fn(() => {
-    throw new Error("runtime model suppression should be skipped");
-  }),
-  shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
+  shouldSuppressBuiltInModelCore: vi.fn(() => false),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelCore: mocks.shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
 vi.mock("../../agents/prepared-model-catalog.js", () => ({
@@ -42,6 +39,7 @@ import {
   appendConfiguredProviderRows,
   appendDiscoveredRows,
   appendPreparedModelCatalogRows,
+  loadListModelCatalogSnapshot,
   type RowBuilderContext,
 } from "./list.rows.js";
 
@@ -54,6 +52,20 @@ const authIndex = {
 
 function authEvaluation(availability: boolean | undefined) {
   return { availability, routeResolution: null };
+}
+
+function createRowContext(
+  overrides: Pick<RowBuilderContext, "authIndex"> & Partial<RowBuilderContext>,
+): RowBuilderContext {
+  return {
+    cfg: {},
+    agentDir: "/tmp/openclaw-agent",
+    canonicalizeProvider: normalizeProviderId,
+    configuredByKey: new Map(),
+    discoveredKeys: new Set(),
+    filter: {},
+    ...overrides,
+  };
 }
 
 function requireOnlyRow(rows: ModelRow[]): ModelRow {
@@ -128,15 +140,10 @@ describe("appendPreparedModelCatalogRows", () => {
         routeVariants: [platform, chatgpt],
         staticEntries: [platform],
       },
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: { evaluateModelAuth },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai" },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows)).toMatchObject({
@@ -176,15 +183,10 @@ describe("appendPreparedModelCatalogRows", () => {
         routeVariants: [],
         staticEntries: [entry, entry],
       },
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: { evaluateModelAuth },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "nvidia" },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows)).toMatchObject({
@@ -216,15 +218,10 @@ describe("appendPreparedModelCatalogRows", () => {
         entries: [local, { ...local, id: "remote", baseUrl: "https://models.example/v1" }],
         routeVariants: [local],
       },
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: { evaluateModelAuth: () => authEvaluation(true) },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set<string>(),
         filter: { provider: "ollama", local: true },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     };
 
     await appendPreparedModelCatalogRows(params);
@@ -254,8 +251,7 @@ describe("appendPreparedModelCatalogRows", () => {
     await appendPreparedModelCatalogRows({
       rows,
       seenKeys: new Set(),
-      context: {
-        cfg: {},
+      context: createRowContext({
         agentId: "worker",
         agentDir: "/tmp/openclaw-worker",
         inheritedAuthDir: "/tmp/openclaw-default",
@@ -266,11 +262,8 @@ describe("appendPreparedModelCatalogRows", () => {
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "anthropic" },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).key).toBe("anthropic/claude-opus-4-7");
@@ -286,6 +279,18 @@ describe("appendPreparedModelCatalogRows", () => {
       configuredKeys: [],
     });
     expect(mocks.loadModelCatalogSnapshot).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadListModelCatalogSnapshot", () => {
+  it("opts the unscoped model list into stale catalog refresh", async () => {
+    mocks.loadModelCatalogSnapshot.mockResolvedValue({ entries: [], routeVariants: [] });
+
+    await loadListModelCatalogSnapshot(createRowContext({ authIndex }));
+
+    expect(mocks.loadModelCatalogSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ readOnly: true, refreshFullCatalog: "stale" }),
+    );
   });
 });
 
@@ -307,16 +312,12 @@ describe("appendDiscoveredRows", () => {
           contextWindow: 8192,
         },
       ] as never,
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: { evaluateModelAuth: () => authEvaluation(undefined) },
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBeNull();
@@ -359,9 +360,7 @@ describe("appendDiscoveredRows", () => {
           maxTokens: 128_000,
         },
       ] as never,
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => ({
             availability: true,
@@ -369,11 +368,9 @@ describe("appendDiscoveredRows", () => {
             selectedRoute,
           }),
         },
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows)).toMatchObject({
@@ -403,20 +400,16 @@ describe("appendDiscoveredRows", () => {
           maxTokens: 128_000,
         },
       ] as never,
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => ({
             availability: false,
             routeResolution: { kind: "indeterminate", defaultRuntimeId: "codex" },
           }),
         },
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows)).toMatchObject({
@@ -442,7 +435,7 @@ describe("appendConfiguredRows", () => {
           aliases: [],
         },
       ],
-      context: {
+      context: createRowContext({
         cfg: {
           models: {
             providers: {
@@ -464,16 +457,13 @@ describe("appendConfiguredRows", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),
         },
         availableKeys: new Set(["openai/gpt-5.5"]),
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBeNull();
@@ -506,15 +496,9 @@ describe("appendConfiguredRows", () => {
         },
       ],
       catalogSnapshot: { entries: [catalogEntry], routeVariants: [catalogEntry] },
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: { evaluateModelAuth },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set<string>(),
-        filter: {},
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     // The same physical routes the catalog rows use must inform configured-row
@@ -530,8 +514,8 @@ describe("appendConfiguredRows", () => {
 });
 
 describe("prepared provider catalog projection", () => {
-  it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
-    mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
+  it("omits manifest-suppressed catalog rows", async () => {
+    mocks.shouldSuppressBuiltInModelCore.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
 
     await appendCommittedProviderCatalogRows({
@@ -549,24 +533,19 @@ describe("prepared provider catalog projection", () => {
           contextWindow: 8192,
         },
       ],
-      context: {
+      context: createRowContext({
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
           models: { providers: {} },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth: () => authEvaluation(false),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
-    expect(mocks.shouldSuppressBuiltInModelCore).not.toHaveBeenCalled();
-    expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
+    expect(mocks.shouldSuppressBuiltInModelCore).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",
       baseUrl: "https://api.openai.com/v1",
@@ -599,12 +578,11 @@ describe("prepared provider catalog projection", () => {
           contextWindow: 8192,
         },
       ],
-      context: {
+      context: createRowContext({
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
           models: { providers: {} },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth,
         },
@@ -622,8 +600,7 @@ describe("prepared provider catalog projection", () => {
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     const row = requireOnlyRow(rows);
@@ -660,18 +637,14 @@ describe("prepared provider catalog projection", () => {
           contextWindow: 8192,
         },
       ],
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => authEvaluation(undefined),
         },
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.5"]),
         availableKeys: new Set(["openai/gpt-5.5"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBeNull();
@@ -695,18 +668,14 @@ describe("prepared provider catalog projection", () => {
           contextWindow: 8192,
         },
       ],
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => authEvaluation(true),
         },
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["anthropic/claude-sonnet-4-6"]),
         availableKeys: new Set(),
         filter: { provider: "anthropic", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBe(false);
@@ -730,17 +699,12 @@ describe("prepared provider catalog projection", () => {
           contextWindow: 8192,
         },
       ],
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => authEvaluation(undefined),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBeNull();
@@ -757,7 +721,7 @@ describe("appendConfiguredProviderRows", () => {
     await appendConfiguredProviderRows({
       rows,
       seenKeys: new Set(),
-      context: {
+      context: createRowContext({
         cfg: {
           models: {
             providers: {
@@ -779,20 +743,16 @@ describe("appendConfiguredProviderRows", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex,
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(mocks.normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
     expect(requireOnlyRow(rows).input).toBe("text");
   });
 
-  it("keeps provider normalization for configured provider models", async () => {
+  it("keeps authored input while normalizing configured provider models", async () => {
     mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
       provider: "anthropic",
       id: "claude-sonnet-4-6",
@@ -805,7 +765,7 @@ describe("appendConfiguredProviderRows", () => {
     await appendConfiguredProviderRows({
       rows,
       seenKeys: new Set(),
-      context: {
+      context: createRowContext({
         cfg: {
           models: {
             providers: {
@@ -827,17 +787,16 @@ describe("appendConfiguredProviderRows", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex,
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "anthropic", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
-    expect(requireOnlyRow(rows).input).toBe("text+image");
+    // models.providers is authoritative for configured capabilities. Runtime
+    // normalization may fill provider details but must not add image input the
+    // operator did not configure.
+    expect(requireOnlyRow(rows).input).toBe("text");
   });
 
   it("threads configured model route facts into auth availability", async () => {
@@ -847,7 +806,7 @@ describe("appendConfiguredProviderRows", () => {
     await appendConfiguredProviderRows({
       rows,
       seenKeys: new Set(),
-      context: {
+      context: createRowContext({
         cfg: {
           models: {
             providers: {
@@ -869,16 +828,13 @@ describe("appendConfiguredProviderRows", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth,
         },
         availableKeys: new Set(["openai/gpt-5.6"]),
-        configuredByKey: new Map(),
         discoveredKeys: new Set(["openai/gpt-5.6"]),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBe(false);
@@ -904,7 +860,7 @@ describe("appendConfiguredProviderRows", () => {
     await appendConfiguredProviderRows({
       rows,
       seenKeys: new Set(),
-      context: {
+      context: createRowContext({
         cfg: {
           models: {
             providers: {
@@ -926,15 +882,11 @@ describe("appendConfiguredProviderRows", () => {
             },
           },
         },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth,
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows).available).toBe(true);
@@ -954,16 +906,12 @@ describe("appendAuthenticatedCatalogRows", () => {
     await appendAuthenticatedCatalogRows({
       rows,
       seenKeys: new Set(),
-      context: {
+      context: createRowContext({
         cfg: { models: { mode: "replace" } },
-        agentDir: "/tmp/openclaw-agent",
         authIndex: {
           evaluateModelAuth: () => ({ availability: true, routeResolution: null }),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
-        filter: {},
-      },
+      }),
     });
 
     expect(rows).toEqual([]);
@@ -995,9 +943,7 @@ describe("appendAuthenticatedCatalogRows", () => {
     await appendAuthenticatedCatalogRows({
       rows,
       seenKeys: new Set(),
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         workspaceDir: "/tmp/openclaw-workspace",
         providerDiscoveryProviderIds: ["local-openai"],
         providerRuntimeDiscoveryProviderIds: ["local-openai"],
@@ -1008,11 +954,8 @@ describe("appendAuthenticatedCatalogRows", () => {
             routeResolution: null,
           }),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "local-openai", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(requireOnlyRow(rows)).toMatchObject({
@@ -1023,7 +966,6 @@ describe("appendAuthenticatedCatalogRows", () => {
     expect(mocks.loadScopedModelCatalogSnapshot).toHaveBeenCalledWith({
       cfg: {},
       agentDir: "/tmp/openclaw-agent",
-      inheritedAuthDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/openclaw-workspace",
       providerIds: ["local-openai"],
       runtimeProviderIds: ["local-openai"],
@@ -1052,17 +994,12 @@ describe("appendAuthenticatedCatalogRows", () => {
     await appendAuthenticatedCatalogRows({
       rows,
       seenKeys: new Set(),
-      context: {
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
+      context: createRowContext({
         authIndex: {
           evaluateModelAuth: () => ({ availability: undefined, routeResolution: null }),
         },
-        configuredByKey: new Map(),
-        discoveredKeys: new Set(),
         filter: { provider: "remote-provider", local: false },
-        skipRuntimeModelSuppression: true,
-      },
+      }),
     });
 
     expect(rows).toEqual([]);

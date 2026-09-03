@@ -27,7 +27,6 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     engineBusy: false,
     engineOutcome: null,
     onEngineChange: vi.fn(),
-    onEngineReset: vi.fn(),
     addons: [
       {
         id: "active-memory",
@@ -52,6 +51,7 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
     onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
     memoryImportHref: "/memory-import",
+    canImportMemory: true,
     overview: html`<div class="test-overview"></div>`,
     memories: html`<div class="test-memories"></div>`,
     dreams: html`<div class="test-dreams"></div>`,
@@ -121,6 +121,13 @@ describe("renderMemory", () => {
     expect(container.querySelector("openclaw-agent-select")).toBeNull();
   });
 
+  it("replaces the memory-import link with an admin-required note", () => {
+    const container = renderInto(createProps({ canImportMemory: false }));
+
+    expect(container.querySelector('a[href="/memory-import"]')).toBeNull();
+    expect(container.textContent).toContain("Memory import requires operator.admin access.");
+  });
+
   it("shows the exclusive engine choice as one radio group over installed engines", () => {
     const container = renderInto(createProps());
 
@@ -135,61 +142,16 @@ describe("renderMemory", () => {
     expect(values).toContain("");
   });
 
-  it.each([
-    { selection: { kind: "off" } as const, value: "Off" },
-    {
-      selection: { kind: "pinned", engineId: "memory-core" } as const,
-      value: "memory-core",
-    },
-  ])("keeps reset available without a catalog for $selection.kind", ({ selection, value }) => {
-    const onEngineReset = vi.fn();
-    const container = renderInto(
-      createProps({
-        engineOptions: [],
-        engineSelection: selection,
-        engineState: "unknown",
-        onEngineReset,
-      }),
-    );
-
-    expect(container.textContent).toContain(`Default: OpenClaw Memory`);
-    expect(container.textContent).toContain(value);
-    container.querySelector<HTMLButtonElement>('button[aria-label="Reset to default"]')?.click();
-    expect(onEngineReset).toHaveBeenCalledOnce();
-  });
-
-  it("disables catalog-free reset when the effective mutation gate is closed", () => {
-    const onEngineReset = vi.fn();
-    const container = renderInto(
-      createProps({
-        engineOptions: [],
-        engineSelection: { kind: "off" },
-        engineState: "unknown",
-        engineBusy: true,
-        onEngineReset,
-      }),
-    );
-    const reset = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Reset to default"]',
-    );
-
-    expect(reset?.disabled).toBe(true);
-    reset?.click();
-    expect(onEngineReset).not.toHaveBeenCalled();
-  });
-
   it("reports whether the engine came from config or from the slot default", () => {
     const auto = renderInto(createProps());
     expect(auto.textContent).toContain("falls back to its default owner");
     expect(auto.textContent).toContain("Using default: OpenClaw Memory");
-    expect(auto.querySelector('button[aria-label="Reset to default"]')).toBeNull();
 
     const pinned = renderInto(
       createProps({ engineSelection: { kind: "pinned", engineId: "memory-core" } }),
     );
     expect(pinned.textContent).toContain("pinned in config");
     expect(pinned.textContent).toContain("Default: OpenClaw Memory");
-    expect(pinned.querySelector('button[aria-label="Reset to default"]')).not.toBeNull();
   });
 
   it("keeps a configured missing engine selected and labels it unavailable", () => {
@@ -360,21 +322,23 @@ describe("renderMemory", () => {
       })}`;
 
     const collapsed = renderInto(createProps({ editor: editor(false) }));
-    const show = collapsed.querySelector<HTMLButtonElement>(".config-show-advanced");
-    expect(show?.getAttribute("aria-pressed")).toBe("false");
+    const show = collapsed.querySelector<HTMLDetailsElement>("details.config-advanced-disclosure");
+    expect(show?.open).toBe(false);
     expect(collapsed.textContent).not.toContain("Advanced memory field");
-    show?.click();
+    show!.open = true;
+    show!.dispatchEvent(new Event("toggle"));
     expect(onAdvancedChange).toHaveBeenCalledWith(true);
 
     const expanded = renderInto(createProps({ editor: editor(true) }));
-    const hide = expanded.querySelector<HTMLButtonElement>(".config-show-advanced");
-    expect(hide?.getAttribute("aria-pressed")).toBe("true");
+    const hide = expanded.querySelector<HTMLDetailsElement>("details.config-advanced-disclosure");
+    expect(hide?.open).toBe(true);
     expect(expanded.textContent).toContain("Advanced memory field");
-    hide?.click();
+    hide!.open = false;
+    hide!.dispatchEvent(new Event("toggle"));
     expect(onAdvancedChange).toHaveBeenCalledWith(false);
 
     const overview = renderInto(createProps({ activeTab: "overview", editor: editor(false) }));
-    expect(overview.querySelector(".config-show-advanced")).toBeNull();
+    expect(overview.querySelector("details.config-advanced-disclosure")).toBeNull();
   });
 });
 

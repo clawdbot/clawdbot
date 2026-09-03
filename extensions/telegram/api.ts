@@ -50,7 +50,6 @@ export {
   hasBotMention,
   isBinaryContent,
   normalizeForwardedContext,
-  resetTelegramForumFlagCacheForTest,
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resolveTelegramGroupAllowFromContext,

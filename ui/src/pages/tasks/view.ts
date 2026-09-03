@@ -1,7 +1,13 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
+import "../../styles/tasks.css";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { icon, type IconName } from "../../components/icons.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsPage,
+  renderSettingsSection,
+  renderSettingsStatus,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatMs, formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
@@ -13,7 +19,6 @@ import {
   partitionTasks,
   taskDetail,
   taskRuntimeLabel,
-  taskStatusChipClass,
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
@@ -29,6 +34,7 @@ type TasksProps = {
   canCancel: boolean;
   loading: boolean;
   error: string | null;
+  copyResultError: string | null;
   tasks: TaskSummary[];
   cancellingTaskIds: ReadonlySet<string>;
   sessionRow: (sessionKey: string) => GatewaySessionRow | undefined;
@@ -77,208 +83,178 @@ function renderTask(task: TaskSummary, props: TasksProps) {
   const retainedResult = task.terminalOutcome === "blocked";
   const recoverableDelivery = retainedResult && task.deliveryStatus === "failed";
   const dismissedDelivery = retainedResult && task.deliveryStatus === "dismissed";
+  const showActions =
+    (active && props.canCancel) ||
+    (retainedResult && props.canCopy) ||
+    (recoverableDelivery && props.canCancel);
   return html`
-    <div class="list-item" data-task-id=${task.id}>
-      <div class="list-main">
-        <div class="list-title">${title}</div>
-        <div class="chip-row">
-          <span class="chip ${taskStatusChipClass(task.status)}"
-            >${taskStatusLabel(task.status)}</span
+    <div class="settings-row task-row" data-task-id=${task.id}>
+      <div class="settings-row__text task-row__content">
+        <div class="settings-row__title">${title}</div>
+        <div class="task-row__facts">
+          <span data-task-status
+            >${renderSettingsStatus({
+              kind: taskStatusKind(task.status),
+              label: taskStatusLabel(task.status),
+            })}</span
           >
-          <span class="chip">${taskRuntimeLabel(task)}</span>
+          <span>${taskRuntimeLabel(task)}</span>
           ${task.agentId
-            ? html`<span class="chip">${t("tasksPage.agent", { agent: task.agentId })}</span>`
+            ? html`<span>${t("tasksPage.agent", { agent: task.agentId })}</span>`
             : nothing}
         </div>
-        ${detail ? html`<div class="list-sub">${detail}</div>` : nothing}
+        ${detail ? html`<div class="settings-row__desc">${detail}</div>` : nothing}
         ${retainedResult
-          ? html`<div class="callout warn">
-              ${t(dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked")}
+          ? html`<div class="task-row__warning">
+              <span
+                >${t(
+                  dismissedDelivery ? "tasksPage.deliveryDismissed" : "tasksPage.deliveryBlocked",
+                )}</span
+              >
               ${recoverableDelivery
-                ? html`<div class="muted">${t("tasksPage.duplicateRisk")}</div>`
+                ? html`<span class="muted">${t("tasksPage.duplicateRisk")}</span>`
                 : nothing}
             </div>`
           : nothing}
       </div>
-      <div class="list-meta">
-        ${timestamp > 0
-          ? html`<span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
-          : html`<span>${t("common.na")}</span>`}
-        ${renderSessionLink(task, props)}
-        ${active && props.canCancel
-          ? html`<button
-              class="btn"
-              type="button"
-              aria-label=${t("tasksPage.cancelTask", { title })}
-              ?disabled=${cancelling || !props.connected}
-              @click=${() => props.onCancel(task.taskId)}
-            >
-              ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
-            </button>`
-          : nothing}
-        ${retainedResult && props.canCopy
-          ? html`<button
-              class="btn"
-              type="button"
-              ?disabled=${cancelling || !props.connected}
-              @click=${() => props.onCopyResult(task.taskId)}
-            >
-              ${t("tasksPage.copyResult")}
-            </button>`
-          : nothing}
-        ${recoverableDelivery && props.canCancel
-          ? html`
-              <button
-                class="btn"
-                type="button"
-                ?disabled=${cancelling || !props.connected}
-                @click=${() => props.onRetry(task.taskId)}
-              >
-                ${t("tasksPage.retryDelivery")}
-              </button>
-              <button
-                class="btn"
-                type="button"
-                ?disabled=${cancelling || !props.connected}
-                @click=${() => props.onDismiss(task.taskId)}
-              >
-                ${t("tasksPage.dismissDelivery")}
-              </button>
-            `
+      <div class="settings-row__control task-row__control">
+        <div class="task-row__links">
+          ${timestamp > 0
+            ? html`<span title=${formatMs(timestamp)}>${formatRelativeTimestamp(timestamp)}</span>`
+            : html`<span>${t("common.na")}</span>`}
+          ${renderSessionLink(task, props)}
+        </div>
+        ${showActions
+          ? html`<div class="task-row__actions">
+              ${active && props.canCancel
+                ? html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    aria-label=${t("tasksPage.cancelTask", { title })}
+                    ?disabled=${cancelling || !props.connected}
+                    @click=${() => props.onCancel(task.taskId)}
+                  >
+                    ${cancelling ? t("tasksPage.cancelling") : t("common.cancel")}
+                  </button>`
+                : nothing}
+              ${retainedResult && props.canCopy
+                ? html`<button
+                    class="btn btn--sm"
+                    type="button"
+                    ?disabled=${cancelling || !props.connected}
+                    @click=${() => props.onCopyResult(task.taskId)}
+                  >
+                    ${t("tasksPage.copyResult")}
+                  </button>`
+                : nothing}
+              ${recoverableDelivery && props.canCancel
+                ? html`
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      ?disabled=${cancelling || !props.connected}
+                      @click=${() => props.onRetry(task.taskId)}
+                    >
+                      ${t("tasksPage.retryDelivery")}
+                    </button>
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      ?disabled=${cancelling || !props.connected}
+                      @click=${() => props.onDismiss(task.taskId)}
+                    >
+                      ${t("tasksPage.dismissDelivery")}
+                    </button>
+                  `
+                : nothing}
+            </div>`
           : nothing}
       </div>
     </div>
   `;
 }
 
-type TaskStat = {
-  key: string;
-  iconName: IconName;
-  label: string;
-  value: number;
-  danger?: boolean;
-};
+function taskStatusKind(status: TaskStatus) {
+  switch (status) {
+    case "completed":
+      return "ok";
+    case "failed":
+    case "timed_out":
+      return "danger";
+    case "queued":
+    case "running":
+      return "warn";
+    case "cancelled":
+      return "muted";
+  }
+  return status satisfies never;
+}
 
-function renderSummaryStrip(tasks: readonly TaskSummary[]) {
-  const countByStatus = (...statuses: TaskStatus[]) =>
-    tasks.filter((task) => statuses.includes(task.status)).length;
-  // Timeouts are failures from the operator's point of view; the recent list
-  // still labels them individually.
-  const failed = countByStatus("failed", "timed_out");
-  const stats: TaskStat[] = [
-    {
-      key: "running",
-      iconName: "play",
-      label: t("tasksPage.status.running"),
-      value: countByStatus("running"),
-    },
-    {
-      key: "queued",
-      iconName: "clock",
-      label: t("tasksPage.status.queued"),
-      value: countByStatus("queued"),
-    },
-    {
-      key: "completed",
-      iconName: "check",
-      label: t("tasksPage.status.completed"),
-      value: countByStatus("completed"),
-    },
-    {
-      key: "failed",
-      iconName: "alertTriangle",
-      label: t("tasksPage.status.failed"),
-      value: failed,
-      danger: failed > 0,
-    },
-  ];
-  return html`
-    <section class="card summary-strip">
-      <div class="summary-strip__stats">
-        ${stats.map(
-          (stat) => html`
-            <div
-              class="summary-stat ${stat.danger ? "summary-stat--danger" : ""}"
-              data-stat=${stat.key}
-            >
-              <span class="summary-stat__icon" aria-hidden="true">${icon(stat.iconName)}</span>
-              <div class="summary-stat__copy">
-                <div class="summary-stat__label">${stat.label}</div>
-                <div class="summary-stat__value">${stat.value}</div>
-              </div>
-            </div>
-          `,
-        )}
-      </div>
-    </section>
-  `;
+function countByStatus(tasks: readonly TaskSummary[], ...statuses: TaskStatus[]) {
+  return tasks.filter((task) => statuses.includes(task.status)).length;
+}
+
+function renderHeadingFacts(id: "active" | "recent", tasks: readonly TaskSummary[]) {
+  const facts =
+    id === "active"
+      ? [
+          [countByStatus(tasks, "running"), t("tasksPage.status.running")],
+          [countByStatus(tasks, "queued"), t("tasksPage.status.queued")],
+        ]
+      : [
+          [countByStatus(tasks, "completed"), t("tasksPage.status.completed")],
+          [countByStatus(tasks, "failed", "timed_out"), t("tasksPage.status.failed")],
+        ];
+  return html`<span class="task-heading-facts">
+    ${facts.map(
+      ([value, label], index) => html`
+        ${index > 0 ? html`<span aria-hidden="true">·</span>` : nothing}
+        <span><strong>${value}</strong> ${label}</span>
+      `,
+    )}
+  </span>`;
 }
 
 function renderSection(
   id: "active" | "recent",
   title: string,
-  subtitle: string,
   tasks: readonly TaskSummary[],
   emptyText: string,
   props: TasksProps,
 ) {
-  return html`
-    <section class="card stack" data-task-section=${id}>
-      <div class="row" style="justify-content: space-between; align-items: flex-start; gap: 12px;">
-        <div>
-          <div class="card-title">${title}</div>
-          <div class="card-sub">${subtitle}</div>
-        </div>
-        <div class="muted">
-          ${tasks.length === 1
-            ? t("tasksPage.taskCountOne")
-            : t("tasksPage.taskCount", { count: String(tasks.length) })}
-        </div>
-      </div>
-      ${tasks.length === 0
-        ? html`<div class="muted">${emptyText}</div>`
-        : html`<div class="list">
-            ${repeat(
-              tasks,
-              (task) => task.id,
-              (task) => renderTask(task, props),
-            )}
-          </div>`}
-    </section>
-  `;
+  const rows =
+    tasks.length === 0
+      ? renderSettingsEmpty(emptyText)
+      : repeat(
+          tasks,
+          (task) => task.id,
+          (task) => renderTask(task, props),
+        );
+  return html`<div data-task-section=${id}>
+    ${renderSettingsSection({ title: html`${title}${renderHeadingFacts(id, tasks)}` }, rows)}
+  </div>`;
 }
 
 export function renderTasks(props: TasksProps) {
   const { active, recent } = partitionTasks(props.tasks);
-  return html`
-    <div class="stack">
+  return renderSettingsPage(
+    html`<div class="tasks-page-list">
       ${!props.connected
         ? html`<div class="callout warn">${t("tasksPage.disconnected")}</div>`
         : nothing}
-      ${props.error ? html`<div class="callout danger">${props.error}</div>` : nothing}
-      ${renderSummaryStrip(props.tasks)}
+      ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
+      ${props.copyResultError
+        ? html`<div class="callout danger" role="alert">${props.copyResultError}</div>`
+        : nothing}
       ${props.loading && props.tasks.length === 0
-        ? html`<div class="card muted">${t("tasksPage.loading")}</div>`
+        ? renderSettingsEmpty(t("tasksPage.loading"))
         : nothing}
       ${!props.loading && props.tasks.length === 0
-        ? html`<div class="card muted">${t("tasksPage.empty")}</div>`
+        ? renderSettingsEmpty(t("tasksPage.empty"))
         : nothing}
-      ${renderSection(
-        "active",
-        t("tasksPage.active"),
-        t("tasksPage.activeSub"),
-        active,
-        t("tasksPage.emptyActive"),
-        props,
-      )}
-      ${renderSection(
-        "recent",
-        t("tasksPage.recent"),
-        t("tasksPage.recentSub"),
-        recent,
-        t("tasksPage.emptyRecent"),
-        props,
-      )}
-    </div>
-  `;
+      ${renderSection("active", t("tasksPage.active"), active, t("tasksPage.emptyActive"), props)}
+      ${renderSection("recent", t("tasksPage.recent"), recent, t("tasksPage.emptyRecent"), props)}
+    </div>`,
+    { wide: true },
+  );
 }

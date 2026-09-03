@@ -1,6 +1,5 @@
 // Github Copilot plugin entrypoint registers its OpenClaw integration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { adaptMemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import {
   definePluginEntry,
@@ -27,7 +26,7 @@ import {
 } from "./domain.js";
 import { createGithubCopilotDynamicModelHooks } from "./dynamic-models.js";
 import { githubCopilotMemoryEmbeddingProviderAdapter } from "./embeddings.js";
-import { DEFAULT_COPILOT_MODEL, resolveCopilotExtendedThinkingLevels } from "./model-metadata.js";
+import { DEFAULT_COPILOT_MODEL } from "./model-metadata.js";
 import { PROVIDER_ID } from "./models.js";
 import {
   buildGithubCopilotAuthDoctorHint,
@@ -36,6 +35,7 @@ import {
   parseGithubCopilotApiKey,
   refreshGithubCopilotOAuth,
 } from "./oauth.js";
+import { resolveThinkingProfile } from "./provider-policy-api.js";
 import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
@@ -49,6 +49,7 @@ const COPILOT_ENV_VARS: [string, string, string] = [
   "GITHUB_TOKEN",
 ];
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
+const COPILOT_SECRET_STORE_NAME_PREFIX = "GITHUB_COPILOT_TOKEN";
 
 type GithubCopilotPluginConfig = {
   discovery?: {
@@ -605,6 +606,15 @@ export default definePluginEntry({
         githubToken: result.accessToken,
         githubDomain: normalizedDomain,
       });
+      const persistInline = ctx.secretInputMode === "plaintext";
+      const notes = [
+        ...(starter.notes ?? []),
+        ...(persistInline
+          ? [
+              "Plaintext secret input mode was selected, so the GitHub Copilot token will remain inline in the auth profile and openclaw secrets audit --check will report it.",
+            ]
+          : []),
+      ];
       return {
         profiles: [
           {
@@ -614,9 +624,18 @@ export default definePluginEntry({
               provider: PROVIDER_ID,
               token: result.accessToken,
             },
+            ...(!persistInline
+              ? {
+                  secretStorage: {
+                    kind: "store" as const,
+                    namePrefix: COPILOT_SECRET_STORE_NAME_PREFIX,
+                  },
+                }
+              : {}),
           },
         ],
-        ...starter,
+        ...(starter.defaultModel ? { defaultModel: starter.defaultModel } : {}),
+        ...(notes.length > 0 ? { notes } : {}),
         ...(configPatch ? { configPatch } : {}),
       };
     }
@@ -641,9 +660,7 @@ export default definePluginEntry({
       return await runGitHubCopilotDeviceAuth(ctx, domain);
     }
 
-    api.registerEmbeddingProvider(
-      adaptMemoryEmbeddingProviderAdapter(githubCopilotMemoryEmbeddingProviderAdapter),
-    );
+    api.registerEmbeddingProvider(githubCopilotMemoryEmbeddingProviderAdapter);
 
     api.registerProvider({
       id: PROVIDER_ID,
@@ -702,21 +719,9 @@ export default definePluginEntry({
       refreshOAuth: async (credential) => refreshGithubCopilotOAuth(credential),
       buildAuthDoctorHint: buildGithubCopilotAuthDoctorHint,
       wrapStreamFn: wrapCopilotProviderStream,
-      buildReplayPolicy: ({ modelId }) => buildGithubCopilotReplayPolicy(modelId),
+      buildReplayPolicy: buildGithubCopilotReplayPolicy,
       sanitizeReplayHistory: sanitizeGithubCopilotReplayHistory,
-      resolveThinkingProfile: ({ modelId, compat }) => {
-        const extendedLevels = resolveCopilotExtendedThinkingLevels(modelId, compat);
-        return {
-          levels: [
-            { id: "off" },
-            { id: "minimal" },
-            { id: "low" },
-            { id: "medium" },
-            { id: "high" },
-            ...extendedLevels.map((id) => ({ id })),
-          ],
-        };
-      },
+      resolveThinkingProfile,
       prepareRuntimeAuth: async (ctx) => {
         const source = parseGithubCopilotApiKey(ctx.apiKey);
         const { resolveCopilotRuntimeAuth } = await loadGithubCopilotRuntime();
@@ -732,17 +737,24 @@ export default definePluginEntry({
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
-          request: { headers: buildCopilotRuntimeHeaders() },
+          request: {
+            headers: buildCopilotRuntimeHeaders({ config: ctx.config, headers: ctx.model.headers }),
+          },
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),
       fetchUsageSnapshot: async (ctx) => {
+        const source = parseGithubCopilotApiKey(ctx.token);
         const { fetchCopilotUsage } = await loadGithubCopilotRuntime();
         return await fetchCopilotUsage(
-          ctx.token,
+          source.githubToken,
           ctx.timeoutMs,
           ctx.fetchFn,
-          resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
+          resolveGithubCopilotDomain({
+            env: ctx.env,
+            explicit: source.githubDomain,
+            config: ctx.config,
+          }),
         );
       },
     });

@@ -246,12 +246,13 @@ describe("SQLite auth storage", () => {
       },
     });
 
-    await expect(storage.getApiKey("test-oauth")).rejects.toThrow(
-      "requires legacy credential migration",
-    );
-    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"]).toMatchObject({
-      expires: 1,
-    });
+    // The store already owns this profile, so a retired file appearing mid-call is
+    // leftover bytes: discarding a completed refresh over it would strand the agent
+    // on an expired token. Doctor never overwrites a usable stored credential.
+    await expect(storage.getApiKey("test-oauth")).resolves.toBe("not-a-real");
+    expect(
+      loadPersistedAuthProfileStore(agentDir)?.profiles["test-oauth:default"],
+    ).not.toMatchObject({ expires: 1 });
   });
 
   it("keeps AuthStorage.create(path) as a named SQLite-backed deprecation", () => {
@@ -291,9 +292,9 @@ describe("SQLite auth storage", () => {
     });
     expect(fs.existsSync(legacyPath)).toBe(false);
     fs.writeFileSync(legacyPath, '{"openai":{"key":"fake-late"}}\n');
-    await expect(storage.getApiKey("openai")).rejects.toThrow(
-      "requires legacy credential migration",
-    );
+    // Never read the retired file, but keep serving the migrated store beside it.
+    await expect(storage.getApiKey("openai")).resolves.toBe("fake-openai-key");
+    expect(fs.existsSync(legacyPath)).toBe(true);
   });
 
   it("blocks ambient fallback when the compatibility backend cannot materialize SQLite refs", async () => {

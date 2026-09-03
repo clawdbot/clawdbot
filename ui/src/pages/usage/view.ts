@@ -1,12 +1,16 @@
 // Control UI view renders usage screen content.
 import { html, nothing } from "lit";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
-import { getUsageCacheRefreshTitle } from "./cache-status.ts";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
 import {
@@ -20,12 +24,10 @@ import {
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import {
-  addQueryToken,
   applySuggestionToQuery,
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  downloadTextFile,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
@@ -42,55 +44,9 @@ import {
   renderUsageInsights,
 } from "./view-overview.ts";
 
-function createEmptyUsageTotals(): UsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function addUsageTotals(
-  acc: UsageTotals,
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries?: number;
-  },
-): UsageTotals {
-  acc.input += usage.input;
-  acc.output += usage.output;
-  acc.cacheRead += usage.cacheRead;
-  acc.cacheWrite += usage.cacheWrite;
-  acc.totalTokens += usage.totalTokens;
-  acc.totalCost += usage.totalCost;
-  acc.inputCost += usage.inputCost ?? 0;
-  acc.outputCost += usage.outputCost ?? 0;
-  acc.cacheReadCost += usage.cacheReadCost ?? 0;
-  acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
-  acc.missingCostEntries += usage.missingCostEntries ?? 0;
-  return acc;
-}
-
-function renderUsageLoadingStatus(label: unknown, title?: string) {
+function renderUsageLoadingStatus(label: unknown) {
   return html`
-    <span class="settings-status settings-status--accent" title=${title ?? nothing}>
+    <span class="settings-status settings-status--accent">
       <span class="usage-loading-spinner" aria-hidden="true"></span>
       ${label}
     </span>
@@ -115,9 +71,9 @@ function renderUsageLoadingState(filters: UsageFilterState) {
           </div>
         </div>
         <div class="usage-loading-grid">
-          <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
-          <div class="usage-skeleton-block"></div>
-          <div class="usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block usage-skeleton-block--tall"></div>
+          <div class="skeleton usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block"></div>
         </div>
       </div>
     `,
@@ -143,9 +99,20 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
+function renderProviderUsage(
+  providers: ProviderUsageSnapshot[],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice = stalled
+    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
+    : unavailable
+      ? html`<div class="callout warning usage-callout">
+          ${t("usage.providerUsage.unavailable")}
+        </div>`
+      : nothing;
   if (providers.length === 0) {
-    return nothing;
+    return notice;
   }
   return renderSettingsSection(
     {
@@ -154,6 +121,7 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
       description: t("usage.providerUsage.subtitle"),
     },
     html`
+      ${notice}
       <div class="usage-panel provider-usage-section">
         <div class="provider-usage-grid">
           ${providers.map(
@@ -240,7 +208,7 @@ export function renderUsage(props: UsageProps) {
     agentScopedSessions,
     data.aggregates,
   );
-  const queryTerms = extractQueryTerms(filters.query);
+  const queryTerms = extractQueryTerms(filters.queryDraft);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
     return queryTerms
@@ -281,16 +249,24 @@ export function renderUsage(props: UsageProps) {
 
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
-    return sessions.reduce(
-      (acc, s) => (s.usage ? addUsageTotals(acc, s.usage) : acc),
-      createEmptyUsageTotals(),
-    );
+    const totals = createEmptyCostUsageTotals();
+    for (const session of sessions) {
+      if (session.usage) {
+        addCostUsageTotals(totals, session.usage);
+      }
+    }
+    return totals;
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
   const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
-    const matchingDays = data.costDaily.filter((d) => days.has(d.date));
-    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
+    const totals = createEmptyCostUsageTotals();
+    for (const day of data.costDaily) {
+      if (days.has(day.date)) {
+        addCostUsageTotals(totals, day);
+      }
+    }
+    return totals;
   };
 
   // Compute display totals and count based on filters
@@ -377,7 +353,6 @@ export function renderUsage(props: UsageProps) {
     !data.error &&
     data.sessions.length === 0 &&
     (data.totals?.totalTokens ?? 0) === 0;
-  const cacheStatusTitle = getUsageCacheRefreshTitle(data.cacheStatus);
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
     (insightTotals
@@ -420,7 +395,7 @@ export function renderUsage(props: UsageProps) {
       <wa-dropdown
         class="usage-filter-select"
         placement="bottom-start"
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        @wa-select=${(event: CustomEvent<{ item: { value?: string; checked: boolean } }>) => {
           event.preventDefault();
           const value = event.detail.item.value;
           if (value === "command:select-all") {
@@ -435,12 +410,16 @@ export function renderUsage(props: UsageProps) {
           }
           if (value?.startsWith("option:")) {
             const optionValue = decodeURIComponent(value.slice("option:".length));
-            const token = `${key}:${optionValue}`;
-            const checked = selectedSet.has(normalizeQueryText(optionValue));
             filterActions.onQueryDraftChange(
-              checked
-                ? removeQueryToken(filters.queryDraft, token)
-                : addQueryToken(filters.queryDraft, token),
+              setQueryTokensForKey(
+                filters.queryDraft,
+                key,
+                event.detail.item.checked
+                  ? [...selected, optionValue]
+                  : selected.filter(
+                      (entry) => normalizeQueryText(entry) !== normalizeQueryText(optionValue),
+                    ),
+              ),
             );
           }
         }}
@@ -483,9 +462,7 @@ export function renderUsage(props: UsageProps) {
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("usage.filters.title")}</h2>
             <div class="settings-section__actions">
-              ${data.loading || cacheStatusTitle
-                ? renderUsageLoadingStatus(t("usage.loading.badge"), cacheStatusTitle ?? "")
-                : nothing}
+              ${data.loading ? renderUsageLoadingStatus(t("usage.loading.badge")) : nothing}
               ${isEmpty
                 ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
                 : nothing}
@@ -529,39 +506,36 @@ export function renderUsage(props: UsageProps) {
                         downloadTextFile(
                           `openclaw-usage-sessions-${exportStamp}.csv`,
                           buildSessionsCsv(filteredSessions),
-                          "text/csv",
+                          "text/csv;charset=utf-8",
                         );
                         break;
                       case "daily-csv":
                         downloadTextFile(
                           `openclaw-usage-daily-${exportStamp}.csv`,
                           buildDailyCsv(filteredDaily),
-                          "text/csv",
+                          "text/csv;charset=utf-8",
                         );
                         break;
                       case "json":
-                        downloadTextFile(
-                          `openclaw-usage-${exportStamp}.json`,
-                          JSON.stringify(
-                            {
-                              totals: displayTotals,
-                              sessions: filteredSessions,
-                              daily: filteredDaily,
-                              aggregates: activeAggregates,
-                            },
-                            null,
-                            2,
-                          ),
-                          "application/json",
-                        );
+                        displayActions.onExportJson({
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        });
                         break;
                       case undefined:
                         break;
                     }
                   }}
                 >
-                  <button slot="trigger" type="button" class="btn btn--sm">
-                    ${t("usage.export.label")} ▾
+                  <button
+                    slot="trigger"
+                    type="button"
+                    class="btn btn--sm"
+                    aria-busy=${data.exporting}
+                  >
+                    ${data.exporting ? t("common.loading") : t("usage.export.label")} ▾
                   </button>
                   <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
@@ -571,7 +545,9 @@ export function renderUsage(props: UsageProps) {
                   </wa-dropdown-item>
                   <wa-dropdown-item
                     value="json"
-                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                    ?disabled=${data.exporting ||
+                    data.loading ||
+                    (filteredSessions.length === 0 && filteredDaily.length === 0)}
                   >
                     ${t("usage.export.json")}
                   </wa-dropdown-item>
@@ -781,10 +757,18 @@ export function renderUsage(props: UsageProps) {
             ${data.error
               ? html`<div class="callout danger usage-callout">${data.error}</div>`
               : nothing}
-            ${cacheStatusTitle
+            ${data.cacheRefresh !== "complete"
               ? html`
-                  <div class="callout warning usage-callout usage-cache-warning">
-                    ${t("usage.cacheStatus.warning")} ${cacheStatusTitle}
+                  <div
+                    class="callout warning usage-callout usage-cache-warning"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    ${t(
+                      data.cacheRefresh === "exhausted"
+                        ? "usage.cacheStatus.paused"
+                        : "usage.cacheStatus.warning",
+                    )}
                   </div>
                 `
               : nothing}
@@ -798,7 +782,11 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        ${renderProviderUsage(data.providerUsage)}
+        ${renderProviderUsage(
+          data.providerUsage,
+          data.providerUsageUnavailable,
+          data.providerUsageStalled,
+        )}
         ${isEmpty
           ? renderUsageEmptyState(filterActions.onRefresh)
           : html`
@@ -887,6 +875,8 @@ export function renderUsage(props: UsageProps) {
                         detailActions.onLogFilterHasToolsChange,
                         detailActions.onLogFilterQueryChange,
                         detailActions.onLogFilterClear,
+                        detail.context,
+                        detailActions.onRetryContextWeight,
                         display.contextExpanded,
                         detailActions.onToggleContextExpanded,
                         filterActions.onClearSessions,
@@ -901,5 +891,4 @@ export function renderUsage(props: UsageProps) {
   );
 }
 
-// Exposed for Playwright/Vitest browser unit tests.
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

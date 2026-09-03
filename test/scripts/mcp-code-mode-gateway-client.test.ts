@@ -154,7 +154,7 @@ describe("MCP code-mode gateway Docker client result validation", () => {
     ).toThrow("session log lacks MCP.fixture.lookupNote call");
   });
 
-  it("rejects MCP.$api and tools.search fallback pollution", () => {
+  it("rejects MCP.$api and catalog.search fallback pollution", () => {
     expect(() =>
       validateMcpCodeModeResult(okResponse, {
         ...okMentions,
@@ -166,13 +166,13 @@ describe("MCP code-mode gateway Docker client result validation", () => {
         ...okMentions,
         toolSearchPollution: 1,
       }),
-    ).toThrow("agent should not use tools.search");
+    ).toThrow("agent should not use catalog.search");
   });
 
   it("requires planned exec evidence for the source gateway E2E", () => {
     expect(() =>
       validateMcpCodeModeResult(okResponse, okMentions, {
-        plannedTools: ["tools.search"],
+        plannedTools: ["catalog.search"],
         requireExec: true,
       }),
     ).toThrow("agent did not call code-mode exec");

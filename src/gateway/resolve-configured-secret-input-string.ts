@@ -1,8 +1,8 @@
 // SecretRef-aware Gateway config string resolver.
 // Resolves configured secret inputs and fallback values without leaking values.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveConfigSecretRef } from "../config/resolution-facts.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveSecretInputRef } from "../config/types.secrets.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { secretRefKey } from "../secrets/ref-contract.js";
 import {
@@ -44,7 +44,9 @@ export async function resolveConfiguredSecretInputString(params: {
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{ value?: string; unresolvedRefReason?: string }> {
   const style = params.unresolvedReasonStyle ?? "generic";
-  const { ref } = resolveSecretInputRef({
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });
@@ -110,7 +112,9 @@ async function resolveConfiguredSecretRefOnlyInputString(params: {
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
   unresolvedReasonStyle?: SecretInputUnresolvedReasonStyle;
 }): Promise<{ refConfigured: boolean; value?: string; unresolvedRefReason?: string }> {
-  const { ref } = resolveSecretInputRef({
+  const ref = resolveConfigSecretRef({
+    config: params.config,
+    path: params.path,
     value: params.value,
     defaults: params.config.secrets?.defaults,
   });
@@ -145,7 +149,6 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
   secretRefConfigured: boolean;
 }> {
   const resolved = await resolveConfiguredSecretRefOnlyInputString(params);
-  const readNormalizedFallback = () => normalizeOptionalString(params.readFallback?.());
   const configValue = !resolved.refConfigured ? normalizeOptionalString(params.value) : undefined;
   if (configValue) {
     return {
@@ -155,7 +158,7 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     };
   }
   if (!resolved.refConfigured) {
-    const fallback = readNormalizedFallback();
+    const fallback = normalizeOptionalString(params.readFallback?.());
     if (fallback) {
       // Fallbacks are only returned after direct config is absent, preserving
       // explicit config precedence while still allowing credential stores.
@@ -172,17 +175,6 @@ export async function resolveConfiguredSecretInputWithFallback(params: {
     return {
       value: resolved.value,
       source: "secretRef",
-      secretRefConfigured: true,
-    };
-  }
-
-  const fallback = readNormalizedFallback();
-  if (fallback) {
-    // An unresolved SecretRef does not block fallback credentials. Callers get
-    // both the source and secretRefConfigured flag for warning policy.
-    return {
-      value: fallback,
-      source: "fallback",
       secretRefConfigured: true,
     };
   }

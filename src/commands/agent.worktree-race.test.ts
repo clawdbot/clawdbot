@@ -173,7 +173,11 @@ describe("agent command worktree admission", () => {
         branch: created.branch,
         repoRoot: created.repoRoot,
       });
-      await managedWorktrees.remove({ id: created.id, reason: "manual-delete", force: true });
+      await managedWorktrees.remove({
+        id: created.id,
+        reason: "manual-delete",
+        allowSnapshotLoss: true,
+      });
       expect(getRegistryWorktree(process.env, created.id)?.removedAt).toBeDefined();
 
       let preparationResult: string;

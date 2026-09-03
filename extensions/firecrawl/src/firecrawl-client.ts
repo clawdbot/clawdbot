@@ -13,6 +13,7 @@ import {
   withStrictWebToolsEndpoint,
   writeCache,
 } from "openclaw/plugin-sdk/provider-web-fetch";
+import { resolveSiteName } from "openclaw/plugin-sdk/provider-web-search";
 import { normalizeSecretInput } from "openclaw/plugin-sdk/secret-input";
 import {
   truncateSanitizedExternalContent,
@@ -70,14 +71,6 @@ type FirecrawlSearchItem = {
   published?: string;
   siteName?: string;
 };
-
-async function readFirecrawlJsonResponse(
-  response: Response,
-  label: string,
-  opts?: { maxBytes?: number },
-): Promise<Record<string, unknown>> {
-  return await readProviderJsonObjectResponse(response, label, opts);
-}
 
 type FirecrawlSearchParams = {
   cfg?: OpenClawConfig;
@@ -210,7 +203,7 @@ async function postFirecrawlJson<T>(
   const mode = params.mode ?? (await validateFirecrawlBaseUrl(params.url));
   const withEndpoint =
     mode === "selfHosted" ? withSelfHostedWebToolsEndpoint : withStrictWebToolsEndpoint;
-  return await withEndpoint(
+  const result = await withEndpoint(
     {
       url: params.url,
       timeoutSeconds: params.timeoutSeconds,
@@ -270,15 +263,8 @@ async function postFirecrawlJson<T>(
       return await parse(response);
     },
   );
-}
-
-function resolveSiteName(urlRaw: string): string | undefined {
-  try {
-    const host = new URL(urlRaw).hostname.replace(/^www\./, "");
-    return host || undefined;
-  } catch {
-    return undefined;
-  }
+  params.signal?.throwIfAborted();
+  return result;
 }
 
 function normalizeFirecrawlResultUrl(value: unknown): string | undefined {
@@ -386,7 +372,7 @@ function resolveSearchItems(payload: Record<string, unknown>): FirecrawlSearchIt
       description,
       content,
       published,
-      siteName: resolveSiteName(url),
+      siteName: resolveSiteName(url)?.replace(/^www\./, ""),
     });
   }
   return items;
@@ -483,7 +469,11 @@ export async function runFirecrawlSearch(
       scrapeResults,
     }),
   );
-  const cached = readCache(SEARCH_CACHE, cacheKey);
+  const cacheTtlMs = resolveCacheTtlMs(
+    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
+    DEFAULT_CACHE_TTL_MINUTES,
+  );
+  const cached = readCache(SEARCH_CACHE, cacheKey, cacheTtlMs);
   if (cached) {
     return { ...cached.value, cached: true };
   }
@@ -532,7 +522,10 @@ export async function runFirecrawlSearch(
       ...(params.signal ? { signal: params.signal } : {}),
     },
     async (response) => {
-      const payloadValue = await readFirecrawlJsonResponse(response, "Firecrawl Search API error");
+      const payloadValue = await readProviderJsonObjectResponse(
+        response,
+        "Firecrawl Search API error",
+      );
       if (payloadValue.success === false) {
         const error =
           typeof payloadValue.error === "string"
@@ -556,12 +549,7 @@ export async function runFirecrawlSearch(
     tookMs: Date.now() - start,
     scrapeResults,
   });
-  writeCache(
-    SEARCH_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(SEARCH_CACHE, cacheKey, result, cacheTtlMs);
   return result;
 }
 
@@ -695,16 +683,16 @@ export async function runFirecrawlScrape(
       },
     },
     async (response) => {
-      const payloadLocal = await readFirecrawlJsonResponse(response, "Firecrawl fetch failed", {
+      const data = await readProviderJsonObjectResponse(response, "Firecrawl fetch failed", {
         // Scrape can legitimately return page bodies before maxChars truncates parsed output.
         maxBytes: FIRECRAWL_SCRAPE_RESPONSE_MAX_BYTES,
       });
-      if (payloadLocal.success === false) {
+      if (data.success === false) {
         const detail =
-          typeof payloadLocal.error === "string"
-            ? payloadLocal.error
-            : typeof payloadLocal.message === "string"
-              ? payloadLocal.message
+          typeof data.error === "string"
+            ? data.error
+            : typeof data.message === "string"
+              ? data.message
               : response.statusText;
         throw new Error(
           `Firecrawl fetch failed (${response.status}): ${wrapWebContent(
@@ -713,23 +701,21 @@ export async function runFirecrawlScrape(
           )}`.trim(),
         );
       }
-      return payloadLocal;
+      return data;
     },
   );
-  const result = parseFirecrawlScrapePayload({
+  return parseFirecrawlScrapePayload({
     payload,
     url: params.url,
     extractMode: params.extractMode,
     maxChars,
   });
-  return result;
 }
 
 export const testing = {
   assertFirecrawlScrapeTargetAllowed,
   parseFirecrawlScrapePayload,
   postFirecrawlJson,
-  readFirecrawlJsonResponse,
   resolveEndpoint,
   resolveSearchItems,
 };

@@ -7,7 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   killPidIfAlive,
-  readPidFile,
+  waitForPidFile,
   waitForPidToExit,
   writeForkingNoOutputScript,
 } from "../test-utils/process-tree.js";
@@ -437,6 +437,7 @@ describe("secret ref resolver", () => {
     const scriptPath = await writeForkingNoOutputScript(root);
     const pidPath = path.join(root, "forked.pid");
     let childPid: number | undefined;
+    let resultPromise: Promise<string> | undefined;
     const nativeSetTimeout = globalThis.setTimeout;
     const noOutputTimeouts: Array<() => void> = [];
     const setTimeoutSpy = vi
@@ -450,23 +451,37 @@ describe("secret ref resolver", () => {
       });
 
     try {
-      const resultPromise = resolveExecSecret(scriptPath, {
+      resultPromise = resolveExecSecret(scriptPath, {
         env: { NODE_BINARY: process.execPath, PID_FILE: pidPath },
-        // Preserve production-like startup headroom; the test fires the
-        // re-armed timer only after the readiness byte arrives.
         noOutputTimeoutMs: 1_000,
         timeoutMs: 10_000,
       });
-      await vi.waitFor(() => {
-        expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
-      });
-      childPid = await readPidFile(pidPath);
+      const resultErrorPromise = resultPromise.catch((error: unknown) => error);
+      childPid = await waitForPidFile(pidPath);
+      await vi.waitFor(
+        () => {
+          expect(noOutputTimeouts.length).toBeGreaterThanOrEqual(2);
+        },
+        { timeout: 5_000 },
+      );
       noOutputTimeouts.at(-1)?.();
-      await expect(resultPromise).rejects.toThrow('Exec provider "execmain" produced no output');
+      const error = await resultErrorPromise;
+
+      expect(isProviderScopedSecretResolutionError(error)).toBe(true);
+      if (!isProviderScopedSecretResolutionError(error)) {
+        throw new Error("expected a provider-scoped no-output error");
+      }
+      expect(error).toMatchObject({
+        code: "SECRET_PROVIDER_UNAVAILABLE",
+        source: "exec",
+        provider: "execmain",
+        message: 'Exec provider "execmain" produced no output for 1000ms.',
+      });
       expect(await waitForPidToExit(childPid, 5_000)).toBe(true);
     } finally {
       setTimeoutSpy.mockRestore();
       killPidIfAlive(childPid);
+      await resultPromise?.catch(() => {});
     }
   });
 

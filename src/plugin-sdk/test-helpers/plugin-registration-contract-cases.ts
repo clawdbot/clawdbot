@@ -83,7 +83,7 @@ export const pluginRegistrationContractCases = {
   },
   microsoft: {
     pluginId: "microsoft",
-    speechProviderIds: ["microsoft"],
+    speechProviderIds: ["microsoft", "edge"],
   },
   minimax: {
     pluginId: "minimax",

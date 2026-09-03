@@ -7,10 +7,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -142,39 +143,41 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
     tailEvents?: number;
   },
 ): SqliteTrajectoryRuntimeEventRow[] {
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(scope));
-  const db = getTrajectoryKysely(database.db);
-  const tailEvents =
-    scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
-      ? Math.max(0, Math.floor(scope.tailEvents))
-      : undefined;
-  let query = db
-    .selectFrom("trajectory_runtime_events")
-    .select(["seq", "event_json"])
-    .where("session_id", "=", scope.sessionId)
-    .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
-  const afterSeq = scope.afterSeq;
-  if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
-    query = query.where("seq", ">", Math.floor(afterSeq));
-  }
-  const normalizedMaxEvents =
-    scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
-      ? Math.max(0, Math.floor(scope.maxEvents))
-      : undefined;
-  const maxEvents =
-    tailEvents === undefined
-      ? normalizedMaxEvents
-      : normalizedMaxEvents === undefined
-        ? tailEvents
-        : Math.min(tailEvents, normalizedMaxEvents);
-  if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
-    query = query.limit(Math.max(0, Math.floor(maxEvents)));
-  }
-  const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
-    event: JSON.parse(row.event_json) as TrajectoryEvent,
-    seq: row.seq,
-  }));
-  return tailEvents === undefined ? rows : rows.toReversed();
+  const read = withOpenClawAgentDatabaseReadOnly((database) => {
+    const db = getTrajectoryKysely(database.db);
+    const tailEvents =
+      scope.tailEvents !== undefined && Number.isFinite(scope.tailEvents)
+        ? Math.max(0, Math.floor(scope.tailEvents))
+        : undefined;
+    let query = db
+      .selectFrom("trajectory_runtime_events")
+      .select(["seq", "event_json"])
+      .where("session_id", "=", scope.sessionId)
+      .orderBy("seq", tailEvents === undefined ? "asc" : "desc");
+    const afterSeq = scope.afterSeq;
+    if (afterSeq !== undefined && Number.isFinite(afterSeq)) {
+      query = query.where("seq", ">", Math.floor(afterSeq));
+    }
+    const normalizedMaxEvents =
+      scope.maxEvents !== undefined && Number.isFinite(scope.maxEvents)
+        ? Math.max(0, Math.floor(scope.maxEvents))
+        : undefined;
+    const maxEvents =
+      tailEvents === undefined
+        ? normalizedMaxEvents
+        : normalizedMaxEvents === undefined
+          ? tailEvents
+          : Math.min(tailEvents, normalizedMaxEvents);
+    if (maxEvents !== undefined && Number.isFinite(maxEvents)) {
+      query = query.limit(Math.max(0, Math.floor(maxEvents)));
+    }
+    const rows = executeSqliteQuerySync(database.db, query).rows.map((row) => ({
+      event: JSON.parse(row.event_json) as TrajectoryEvent,
+      seq: row.seq,
+    }));
+    return tailEvents === undefined ? rows : rows.toReversed();
+  }, toDatabaseOptions(scope));
+  return read.found ? read.value : [];
 }
 
 function sweepSqliteTrajectoryRuntimeRetention(
@@ -224,9 +227,9 @@ function readSqliteTrajectoryRuntimeRuns(database: OpenClawAgentDatabase): Traje
       .groupBy(["session_id", "run_id"]),
   ).rows;
   return rows.map((row) => ({
-    newestCreatedAt: normalizeSqliteNumber(row.newest_created_at),
+    newestCreatedAt: sqliteNumber(row.newest_created_at),
     runId: row.run_id,
-    runtimeBytes: normalizeSqliteNumber(row.runtime_bytes),
+    runtimeBytes: sqliteNumber(row.runtime_bytes),
     sessionId: row.session_id,
   }));
 }
@@ -309,7 +312,7 @@ function readNextTrajectorySeq(database: OpenClawAgentDatabase, sessionId: strin
   if (row?.max_seq === null || row?.max_seq === undefined) {
     return 0;
   }
-  return normalizeSqliteNumber(row.max_seq) + 1;
+  return sqliteNumber(row.max_seq) + 1;
 }
 
 function trimSqliteTrajectoryRuntimeWindow(
@@ -361,8 +364,4 @@ function trajectoryJsonlRowBytes(eventJson: string): number {
 
 function readTrajectoryEventTimestamp(event: TrajectoryEvent): number | undefined {
   return parseDateStringTimestampMs(event.ts);
-}
-
-function normalizeSqliteNumber(value: number | bigint): number {
-  return typeof value === "bigint" ? Number(value) : value;
 }

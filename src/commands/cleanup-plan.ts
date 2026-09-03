@@ -43,7 +43,6 @@ export async function resolveCleanupPlanForRemoval(runtime: RuntimeEnv) {
     runtime.error(
       `Cannot safely remove OpenClaw state because workspace configuration could not be resolved: ${issueSummary}. Fix the configuration and retry.`,
     );
-    runtime.exit(1);
     return undefined;
   }
   return buildCleanupPlanForConfig(snapshot.runtimeConfig);

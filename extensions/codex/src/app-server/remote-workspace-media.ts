@@ -1,5 +1,5 @@
 import path from "node:path";
-import { root } from "openclaw/plugin-sdk/file-access-runtime";
+import { isPathStrictlyInside, root } from "openclaw/plugin-sdk/file-access-runtime";
 import { getMediaDir } from "openclaw/plugin-sdk/media-runtime";
 import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import type { CodexCommandExecParams, CodexCommandExecResponse } from "./command-exec-protocol.js";
@@ -236,7 +236,7 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     if (typeof value !== "string") {
       return value;
     }
-    if (isGatewayManagedMediaPath(value, gatewayMediaRoot)) {
+    if (path.isAbsolute(value) && isPathStrictlyInside(gatewayMediaRoot, value)) {
       attachmentEntries += 1;
       gatewayManagedPaths.add(value);
       return value;
@@ -372,19 +372,6 @@ export async function prepareCodexRemoteWorkspaceMessageMedia(params: {
     stagedPaths.set(localPath, saved.path);
   }
   return mapMessageMediaValues(mappedArgs, (value) => stagedPaths.get(value) ?? value);
-}
-
-function isGatewayManagedMediaPath(value: string, mediaRoot: string): boolean {
-  if (!path.isAbsolute(value)) {
-    return false;
-  }
-  const relativePath = path.relative(mediaRoot, value);
-  return Boolean(
-    relativePath &&
-    relativePath !== ".." &&
-    !relativePath.startsWith(`..${path.sep}`) &&
-    !path.isAbsolute(relativePath),
-  );
 }
 
 async function assertGatewayManagedMediaPath(value: string, mediaRoot: string): Promise<void> {

@@ -5,19 +5,26 @@ type RetainedPluginCleanupLogger = {
 
 export async function cleanupRetainedPluginInstallGenerations(params: {
   log: RetainedPluginCleanupLogger;
+  startupInstallPaths: Iterable<string>;
 }): Promise<void> {
   try {
-    // The idle delay spans plugin installs and reloads; protect the current paths,
-    // not the startup snapshot, before deleting any retained generation.
-    const records = (
-      await import("../plugins/installed-plugin-index-records.js")
-    ).loadInstalledPluginIndexInstallRecordsSync();
+    const {
+      clearLoadInstalledPluginIndexInstallRecordsCache,
+      loadInstalledPluginIndexInstallRecordsSync,
+    } = await import("../plugins/installed-plugin-index-records.js");
+    // An external install may have advanced the ledger during the idle delay.
+    // Protect both the desired install and the code still owned by this Gateway.
+    clearLoadInstalledPluginIndexInstallRecordsCache();
+    const records = loadInstalledPluginIndexInstallRecordsSync();
     const { cleanupRetainedManagedNpmInstallGenerations } =
       await import("../plugins/managed-npm-retention.js");
     const removedGenerations = await cleanupRetainedManagedNpmInstallGenerations({
-      activeInstallPaths: Object.values(records).flatMap((record) =>
-        record.installPath ? [record.installPath] : [],
-      ),
+      activeInstallPaths: [
+        ...params.startupInstallPaths,
+        ...Object.values(records).flatMap((record) =>
+          record.installPath ? [record.installPath] : [],
+        ),
+      ],
       onError: (error, projectRoot) =>
         params.log.warn(`failed to clean retained npm generation ${projectRoot}: ${String(error)}`),
     });

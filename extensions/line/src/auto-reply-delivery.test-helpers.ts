@@ -9,7 +9,6 @@ export type LineAutoReplyDeps = Parameters<typeof deliverLineAutoReply>[0]["deps
 type LineAutoReplyTestDeps = {
   deps: LineAutoReplyDeps;
   replyMessageLine: Mock<LineAutoReplyDeps["replyMessageLine"]>;
-  createQuickReplyItems: Mock<(labels: string[]) => { items: string[] }>;
   buildMediaMessage: (
     ...args: Parameters<LineAutoReplyDeps["buildMediaMessage"]>
   ) => Promise<messagingApi.Message>;
@@ -33,23 +32,27 @@ export const createFlexMessage = (altText: string, contents: unknown) => ({
   contents,
 });
 
+/** LINE's wire shape for label-only quick replies, as the plugin builds them. */
+export const createQuickReply = (...labels: string[]) => ({
+  items: labels.map((label) => ({
+    type: "action" as const,
+    action: { type: "message" as const, label, text: label },
+  })),
+});
+
 export const createImageMessage = (url: string) => ({
   type: "image" as const,
   originalContentUrl: url,
   previewImageUrl: url,
 });
 
-const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) =>
-  location.title.trim() && location.address.trim()
-    ? {
-        type: "location" as const,
-        ...location,
-      }
-    : null;
+const createLocationMessage: LineAutoReplyDeps["createLocationMessage"] = (location) => ({
+  type: "location" as const,
+  ...location,
+});
 
 export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoReplyTestDeps {
   const replyMessageLine = vi.fn<LineAutoReplyDeps["replyMessageLine"]>(async () => ({}));
-  const createQuickReplyItems = vi.fn((labels: string[]) => ({ items: labels }));
   const buildMediaMessage: LineAutoReplyDeps["buildMediaMessage"] = vi.fn(
     async (mediaUrl, options) => {
       switch (options.mediaKind) {
@@ -85,7 +88,6 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
     processLineMessage: (text) => ({ text, flexMessages: [] }),
     chunkMarkdownText: (text) => [text],
     replyMessageLine,
-    createQuickReplyItems: createQuickReplyItems as LineAutoReplyDeps["createQuickReplyItems"],
     pushMessagesLine,
     createFlexMessage: createFlexMessage as LineAutoReplyDeps["createFlexMessage"],
     buildMediaMessage,
@@ -96,7 +98,6 @@ export function createDeps(overrides?: Partial<LineAutoReplyDeps>): LineAutoRepl
   return {
     deps,
     replyMessageLine,
-    createQuickReplyItems,
     buildMediaMessage,
     pushMessagesLine,
   };

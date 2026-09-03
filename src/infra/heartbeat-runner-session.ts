@@ -13,18 +13,18 @@ import {
   toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { resolveMainScopedEventSessionKey } from "./event-session-routing.js";
-import { resolveAmbientHeartbeatAgentId, type HeartbeatConfig } from "./heartbeat-runner-config.js";
+import type { HeartbeatConfig } from "./heartbeat-runner-config.js";
 
 export function resolveHeartbeatSessionKey(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,
 ) {
   const sessionCfg = cfg.session;
   const scope = sessionCfg?.scope ?? "per-sender";
-  const resolvedAgentId = normalizeAgentId(agentId ?? resolveAmbientHeartbeatAgentId(cfg));
+  const resolvedAgentId = normalizeAgentId(agentId);
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId });
   const storePath = resolveSessionStorePathCore(sessionCfg?.store, {
@@ -119,7 +119,7 @@ export function resolveHeartbeatSessionKey(
 
 export function resolveHeartbeatSession(
   cfg: OpenClawConfig,
-  agentId?: string,
+  agentId: string,
   heartbeat?: HeartbeatConfig,
   forcedSessionKey?: string,
   env: NodeJS.ProcessEnv = process.env,

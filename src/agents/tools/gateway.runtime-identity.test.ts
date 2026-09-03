@@ -1,23 +1,32 @@
 // Gateway tool runtime-identity tests keep current-turn authority fail closed.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
-import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
+import {
+  createAgentRuntimeApprovalAuthorityValidator,
+  verifyAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
+import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
+import { ExecApprovalManager } from "../../gateway/exec-approval-manager.js";
 import {
   mintMessageActionTurnCapability,
   revokeMessageActionTurnCapability,
 } from "../../gateway/message-action-turn-capability.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
   validateAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { createOperationalRunInstanceRef } from "../admitted-run-context.js";
 import {
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { runWithGatewaySessionSpawnContext } from "./gateway-session-spawn-context.js";
+import { runWithGatewaySessionSpawnParentExecutionIdentity } from "./gateway-session-spawn-execution-identity.js";
 import { callGatewayTool, resolveMessageActionAgentRuntimeIdentityToken } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
@@ -80,16 +89,19 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["cron.remove", { id: "job-1" }, { id: "job-1" }],
     ["wake", { mode: "now", text: "ping" }, { ok: true }],
+    ["question.request", { questions: [] }, { id: "question-1" }],
   ] as const)(
     "marks trusted local %s calls with runtime identity",
     async (method, params, result) => {
       mocks.callGateway.mockResolvedValueOnce(result);
+      const context = {} as GatewayRequestContext;
 
       await withActiveGatewayToolCallerIdentity(
         {
           agentId: "ops",
           sessionKey: "agent:ops:telegram:direct:alice",
           operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+          gatewayContextResolver: () => context,
         },
         async () => await callGatewayTool(method, {}, params),
       );
@@ -98,14 +110,92 @@ describe("gateway tool runtime identity", () => {
     },
   );
 
+  it.each([{}, { gatewayToken: "synthetic-remote-override" }])(
+    "keeps ordinary questions available without local authority: %j",
+    async (opts) => {
+      mocks.callGateway.mockResolvedValueOnce({ id: "question-1" });
+      await withGatewayToolCallerIdentity({ agentId: "ops", sessionKey: "agent:ops:main" }, () =>
+        callGatewayTool("question.request", opts, { questions: [] }),
+      );
+      expect(capturedGatewayCall()).not.toHaveProperty("agentRuntimeIdentityToken");
+    },
+  );
+
+  it.each(["question.request", "node.invoke"])(
+    "omits optional %s identity for independently admitted callers with only ambient context",
+    async (method) => {
+      mocks.callGateway.mockResolvedValueOnce({ ok: true });
+      await withActiveGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          operationalRunInstance: createOperationalRunInstanceRef("independent-run"),
+        },
+        () =>
+          withPluginRuntimeGatewayRequestScope(
+            { context: {} as GatewayRequestContext, isWebchatConnect: () => false },
+            () => callGatewayTool(method, {}, {}),
+          ),
+      );
+      expect(Object.hasOwn(capturedGatewayCall(), "agentRuntimeIdentityToken")).toBe(false);
+    },
+  );
+
+  it.each(["before call", "during mint", "replacement", "before retry"])(
+    "rejects a retired Gateway binding without dropping identity (%s)",
+    async (closure) => {
+      mocks.callGateway.mockResolvedValueOnce({ id: "question-1" });
+      let context: GatewayRequestContext | undefined = {} as GatewayRequestContext;
+      await withActiveGatewayToolCallerIdentity(
+        {
+          agentId: "ops",
+          sessionKey: "agent:ops:main",
+          operationalRunInstance: createOperationalRunInstanceRef("bound-run"),
+          gatewayContextResolver: () => context,
+        },
+        async () => {
+          if (closure === "before call") {
+            context = undefined;
+          } else if (closure === "before retry") {
+            mocks.callGateway.mockReset().mockImplementationOnce(async () => {
+              context = undefined;
+              throw Object.assign(
+                new Error("invalid node.invoke params: unexpected property 'turnSourceChannel'"),
+                {
+                  name: "GatewayClientRequestError",
+                  gatewayCode: "INVALID_REQUEST",
+                  details: { nodeCommandDispatched: false },
+                },
+              );
+            });
+          } else {
+            queueMicrotask(() => {
+              context = closure === "replacement" ? ({} as GatewayRequestContext) : undefined;
+            });
+          }
+          const method = closure === "before retry" ? "node.invoke" : "question.request";
+          await expect(callGatewayTool(method, {}, {})).rejects.toThrow(
+            "admitting Gateway is no longer available",
+          );
+        },
+      );
+      expect(mocks.callGateway).toHaveBeenCalledTimes(closure === "before retry" ? 1 : 0);
+    },
+  );
+
   it("scopes signed session-spawn authority to its Gateway call", async () => {
     mocks.callGateway.mockResolvedValueOnce({ key: "agent:ops:dashboard:child" });
+    const parentExecutionIdentity = createExecutionIdentityAdmissionToken("run-1", {
+      contextId: "parent-context",
+      executionId: "parent-execution",
+    });
 
     await withActiveGatewayToolCallerIdentity(
       {
         agentId: "ops",
         sessionKey: "agent:ops:main",
         operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+        executionIdentityToken: parentExecutionIdentity,
       },
       async () =>
         await runWithGatewaySessionSpawnContext(
@@ -114,11 +204,13 @@ describe("gateway tool runtime identity", () => {
             inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
           },
           () =>
-            callGatewayTool(
-              "sessions.create",
-              {},
-              { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
-              { requireAgentRuntimeIdentity: true },
+            runWithGatewaySessionSpawnParentExecutionIdentity(parentExecutionIdentity, () =>
+              callGatewayTool(
+                "sessions.create",
+                {},
+                { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
+                { requireAgentRuntimeIdentity: true },
+              ),
             ),
         ),
     );
@@ -126,11 +218,130 @@ describe("gateway tool runtime identity", () => {
     await expect(
       verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
     ).resolves.toMatchObject({
+      executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
         completionOwnerSessionKey: "agent:ops:discord:direct:alice",
         inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] },
       },
     });
+  });
+
+  it("does not recover missing forwarded parent evidence from ambient identity", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ key: "agent:ops:dashboard:child" });
+    const ambientToken = createExecutionIdentityAdmissionToken("run-1");
+
+    const identity = await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        operationalRunInstance: createOperationalRunInstanceRef("run-1"),
+        executionIdentityToken: ambientToken,
+      },
+      async () => {
+        await runWithGatewaySessionSpawnContext(
+          withAgentRuntimeExecutionLineage(
+            {
+              inheritedToolPolicy: { version: 1, allow: [], deny: [] },
+            },
+            {
+              relation: "sessions_spawn",
+              requesterRef: "agent:ops:main",
+              controllerRef: "agent:ops:main",
+              depth: 1,
+              applicableGrantRefs: ["tool:sessions_spawn"],
+              localPolicyRefs: [],
+              runtimeAssuranceRefs: ["spawn-runtime:subagent"],
+              targetPolicyRefs: [],
+              externalNativeActions: "observable",
+            },
+          ),
+          () =>
+            callGatewayTool(
+              "sessions.create",
+              {},
+              { parentSessionKey: "agent:ops:main", spawnDepth: 1 },
+              { requireAgentRuntimeIdentity: true },
+            ),
+        );
+        return await verifyAgentRuntimeIdentityToken(
+          capturedGatewayCall().agentRuntimeIdentityToken,
+        );
+      },
+    );
+
+    expect(identity).toBeDefined();
+    expect(identity).not.toHaveProperty("executionIdentity");
+    await expect(
+      verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
+    ).resolves.toBeUndefined();
+  });
+
+  it("redeems spawn lineage once without placing parent facts in the runtime bearer", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ runId: "child-run" });
+    const parentExecutionIdentity = createExecutionIdentityAdmissionToken("run-private", {
+      contextId: "private-parent-context",
+      executionId: "private-parent-execution",
+    });
+    const result = await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey: "agent:ops:main",
+        operationalRunInstance: createOperationalRunInstanceRef("run-private"),
+        executionIdentityToken: parentExecutionIdentity,
+      },
+      async () => {
+        await runWithGatewaySessionSpawnContext(
+          withAgentRuntimeExecutionLineage(
+            { inheritedToolPolicy: { version: 1, allow: ["read"], deny: ["exec"] } },
+            {
+              relation: "sessions_spawn",
+              requesterRef: "private-requester-ref",
+              controllerRef: "private-controller-ref",
+              depth: 2,
+              applicableGrantRefs: ["tool:sessions_spawn"],
+              localPolicyRefs: ["private-local-policy"],
+              runtimeAssuranceRefs: ["spawn-runtime:subagent"],
+              targetPolicyRefs: ["private-target-policy"],
+              externalNativeActions: "observable",
+            },
+          ),
+          () =>
+            runWithGatewaySessionSpawnParentExecutionIdentity(parentExecutionIdentity, () =>
+              callGatewayTool(
+                "agent",
+                {},
+                { sessionKey: "agent:child:main", message: "test", idempotencyKey: "child-run" },
+                { requireAgentRuntimeIdentity: true },
+              ),
+            ),
+        );
+        const token = capturedGatewayCall().agentRuntimeIdentityToken ?? "";
+        const [encodedPayload] = token.split(".");
+        const payload = JSON.parse(
+          Buffer.from(encodedPayload ?? "", "base64url").toString("utf8"),
+        ) as Record<string, unknown>;
+        expect(payload.executionLineageHandoffId).toEqual(expect.any(String));
+        expect(payload).not.toHaveProperty("executionIdentity");
+        expect(payload).not.toHaveProperty("sessionSpawnContext");
+        expect(JSON.stringify(payload)).not.toMatch(
+          /private-parent|private-requester|private-controller|private-local|private-target/,
+        );
+        const verified = await verifyAgentRuntimeIdentityToken(token);
+        const copied = verified ? { ...verified } : undefined;
+        return {
+          identity: verified,
+          facts: resolveExecutionIdentitySpawnFacts(copied),
+          replayFacts: resolveExecutionIdentitySpawnFacts(verified),
+        };
+      },
+    );
+
+    expect(result.identity).toBeDefined();
+    expect(result.facts?.spawnAdmission).toEqual(expect.any(String));
+    expect(result.replayFacts).toBeUndefined();
+    await expect(
+      verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
+    ).resolves.toBeUndefined();
   });
 
   it("mints message action identity only for an exact admitted source turn", async () => {
@@ -232,6 +443,52 @@ describe("gateway tool runtime identity", () => {
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");
   });
 
+  it("invalidates message action identity when its turn capability closes", async () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("run-capability-close");
+    const permissionGeneration = new AbortController();
+    const sessionKey = "agent:ops:telegram:group:room-close";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "ops",
+      runId: operationalRunInstance.runId,
+      sessionKey,
+      sessionId: "session-capability-close",
+    });
+    mintedTurnCapabilities.push(turnCapability);
+
+    await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "ops",
+        sessionKey,
+        operationalRunInstance,
+        approvalSignals: [permissionGeneration.signal],
+      },
+      async () => {
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          turnCapability,
+          runId: operationalRunInstance.runId,
+          sessionId: "session-capability-close",
+        });
+        const identity = await verifyAgentRuntimeIdentityToken(token);
+        expect(identity).toMatchObject({
+          messageActionContext: { turnCapability },
+        });
+        expect(identity).toBeDefined();
+        if (!identity) {
+          return;
+        }
+        const validate = createAgentRuntimeApprovalAuthorityValidator();
+        expect(validate(identity)).toBe(true);
+        permissionGeneration.abort();
+        expect(validate(identity)).toBe(true);
+
+        expect(revokeMessageActionTurnCapability(turnCapability)).toBe(true);
+        expect(validate(identity)).toBe(false);
+      },
+    );
+  });
+
   it("mints split-session message action identity and rejects policy-session substitution", async () => {
     const policySessionKey = "agent:ops:telegram:default:direct:alice";
     const runSessionKey = "agent:ops:main";
@@ -298,6 +555,7 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["exec.approval.request", undefined, false],
     ["plugin.approval.request", "codex", false],
+    ["secrets.store.delete", undefined, false],
     ["exec.approval.request", undefined, true],
     ["plugin.approval.request", "codex", true],
   ] as const)(
@@ -337,6 +595,73 @@ describe("gateway tool runtime identity", () => {
       );
       if (!executionIdentityToken) {
         expect(verified).not.toHaveProperty("executionIdentity");
+      }
+    },
+  );
+
+  it.each(
+    ["exec.approval.request", "plugin.approval.request"].flatMap((method) =>
+      [false, true].map((ambient) => ({ method, ambient })),
+    ),
+  )(
+    "rejects late $method registration after permission change (ambient lifetime: $ambient)",
+    async ({ method, ambient }) => {
+      mocks.callGateway.mockResolvedValue({ id: "approval" });
+      const manager = new ExecApprovalManager({
+        validateAgentRuntimeDelegatedAuthority: validateAgentRunDelegatedAuthority,
+      });
+      const operationalRunInstance = createOperationalRunInstanceRef("run-permission-change");
+      const outerLifetime = new AbortController();
+      const oldGeneration = new AbortController();
+      const nextGeneration = new AbortController();
+      try {
+        await withActiveGatewayToolCallerIdentity(
+          {
+            agentId: "ops",
+            sessionKey: "agent:ops:main",
+            operationalRunInstance,
+            ...(ambient ? { approvalSignals: [outerLifetime.signal] } : {}),
+          },
+          async () => {
+            await callGatewayTool(method, {}, {}, { signal: oldGeneration.signal });
+            const oldIdentity = await verifyAgentRuntimeIdentityToken(
+              capturedGatewayCall().agentRuntimeIdentityToken,
+            );
+            if (!oldIdentity) {
+              throw new Error("Expected signed approval identity");
+            }
+            const oldRecord = manager.create({ command: "echo old" }, 2_000, "old-generation");
+            oldRecord.agentRuntimeDelegatedAuthority = oldIdentity.delegatedAuthority;
+            // The request is already dispatched, but has not registered its pending card.
+            oldGeneration.abort(new Error("Permission change"));
+            expect(() => manager.register(oldRecord, 2_000)).toThrow("no longer active");
+            expect(manager.listPendingRecords()).toHaveLength(0);
+
+            await callGatewayTool(method, {}, {}, { signal: nextGeneration.signal });
+            const nextCall = mocks.callGateway.mock.calls.at(-1)?.[0] as CallGatewayOptions;
+            const nextIdentity = await verifyAgentRuntimeIdentityToken(
+              nextCall.agentRuntimeIdentityToken,
+            );
+            if (!nextIdentity) {
+              throw new Error("Expected replacement approval identity");
+            }
+            const nextRecord = manager.create({ command: "echo new" }, 2_000, "next-generation");
+            nextRecord.agentRuntimeDelegatedAuthority = nextIdentity.delegatedAuthority;
+            const decision = manager.register(nextRecord, 2_000);
+            const waiter = manager.awaitDecision(nextRecord.id);
+            expect(manager.listPendingRecords()).toHaveLength(1);
+            manager.resolve(nextRecord.id, "allow-once");
+            await expect(decision).resolves.toBe("allow-once");
+            expect(manager.projectDecisionIfActive(nextRecord.id, await waiter)).toBe("allow-once");
+          },
+        );
+      } finally {
+        outerLifetime.abort();
+        oldGeneration.abort();
+        nextGeneration.abort();
+        for (const record of manager.listPendingRecords()) {
+          manager.resolve(record.id, "deny");
+        }
       }
     },
   );

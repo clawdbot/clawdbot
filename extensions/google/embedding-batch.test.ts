@@ -1,8 +1,10 @@
 // Google tests cover embedding batch bounded JSON response reads.
 import { createServer } from "node:http";
+import * as embeddingSdk from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runGeminiEmbeddingBatches } from "./embedding-batch.js";
 import type { GeminiEmbeddingClient } from "./embedding-provider.js";
+import { geminiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 // Pass-through so onResponse receives real Response objects (required by
 // readProviderJsonResponse which needs a real .body ReadableStream).
@@ -77,6 +79,18 @@ function makeGeminiClient(
     headers: { "x-goog-api-client": "test-client" },
     apiKeys: ["test-key"],
     ssrfPolicy: undefined,
+  };
+}
+
+function makeGeminiEmbedding2Client(
+  outputDimensionality: number,
+  baseUrl = "https://generativelanguage.googleapis.com/v1beta",
+): GeminiEmbeddingClient {
+  return {
+    ...makeGeminiClient(baseUrl),
+    model: "gemini-embedding-2",
+    modelPath: "models/gemini-embedding-2",
+    outputDimensionality,
   };
 }
 
@@ -207,6 +221,22 @@ function makeOversizedResponse(status = 200): {
 }
 
 describe("Google embedding-batch bounded JSON reads", () => {
+  it("rejects async batch embeddings that do not match the requested dimensions", async () => {
+    stubBatchFetch((stage) => {
+      if (stage !== "download") {
+        return undefined;
+      }
+      return new Response(
+        JSON.stringify({ key: "r0", response: { embedding: { values: [1, 0, 0] } } }),
+        { status: 200 },
+      );
+    });
+
+    await expect(runBatch(singleRequest(), makeGeminiEmbedding2Client(768))).rejects.toThrow(
+      "gemini embeddings failed: expected 768 dimensions, received 3",
+    );
+  });
+
   it("stops before polling status after the batch timeout expires", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(0);
@@ -293,15 +323,25 @@ describe("Google embedding-batch bounded JSON reads", () => {
     expect(response.bodyUsed).toBe(true);
   });
 
-  it("normalizes raw Google Operations and uses the canonical download route", async () => {
+  it.each([
+    { baseUrl: "https://generativelanguage.googleapis.com/v1beta", version: "v1beta", query: "" },
+    {
+      baseUrl: "https://generativelanguage.googleapis.com/v1alpha/?tenant=remote",
+      version: "v1alpha",
+      query: "tenant=remote&",
+    },
+  ])("uses canonical Google file routes for $baseUrl", async ({ baseUrl, version, query }) => {
     const fetchMock = stubBatchFetch();
 
-    const result = await runBatch();
+    const result = await runBatch(singleRequest(), makeGeminiClient(baseUrl));
 
     expect(result.get("r0")).toEqual([1, 0, 0]);
-    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toContain(
-      "https://generativelanguage.googleapis.com/download/v1beta/files/out-0:download?alt=media",
-    );
+    expect(fetchMock.mock.calls.map(([input]) => fetchInputUrl(input))).toEqual([
+      `https://generativelanguage.googleapis.com/upload/${version}/files?${query}uploadType=multipart`,
+      `https://generativelanguage.googleapis.com/${version}/models/gemini-embedding-001:asyncBatchEmbedContent${query ? `?${query.slice(0, -1)}` : ""}`,
+      `https://generativelanguage.googleapis.com/${version}/batches/b-0${query ? `?${query.slice(0, -1)}` : ""}`,
+      `https://generativelanguage.googleapis.com/download/${version}/files/out-0:download?${query}alt=media`,
+    ]);
     for (const [, init] of fetchMock.mock.calls) {
       expect(new Headers(init?.headers).get("x-goog-api-key")).toBe("test-key");
     }
@@ -323,79 +363,164 @@ describe("Google embedding-batch bounded JSON reads", () => {
     );
   });
 
-  it("runs the complete batch lifecycle over loopback HTTP", async () => {
-    let createBody: unknown;
-    const authHeaders: Array<string | undefined> = [];
-    const server = createServer((request, response) => {
-      void (async () => {
-        const url = new URL(request.url ?? "/", "http://127.0.0.1");
-        const apiKey = request.headers["x-goog-api-key"];
-        authHeaders.push(Array.isArray(apiKey) ? apiKey.join(", ") : apiKey);
-        const respondJson = (body: unknown) => {
-          response.writeHead(200, { "content-type": "application/json" });
-          response.end(JSON.stringify(body));
-        };
-        if (url.pathname === "/upload/v1beta/files") {
-          request.resume();
-          await new Promise<void>((resolve) => {
-            request.once("end", () => resolve());
-          });
-          respondJson({ file: { name: "files/input-0" } });
-          return;
-        }
-        if (url.pathname.endsWith(":asyncBatchEmbedContent")) {
-          let body = "";
-          request.setEncoding("utf8");
-          for await (const chunk of request) {
-            body += chunk;
-          }
-          createBody = JSON.parse(body) as unknown;
-          respondJson({
-            name: "batches/b-0",
-            done: false,
-            metadata: { state: "BATCH_STATE_PENDING" },
-          });
-          return;
-        }
-        if (url.pathname === "/v1beta/batches/b-0") {
-          respondJson({
-            name: "batches/b-0",
-            done: true,
-            metadata: { state: "BATCH_STATE_SUCCEEDED" },
-            response: { responsesFile: "files/output-0" },
-          });
-          return;
-        }
-        if (url.pathname === "/v1beta/files/output-0:download") {
-          response.writeHead(200, { "content-type": "application/jsonl" });
-          const line = JSON.stringify({
-            key: "r0",
-            response: { embedding: { values: [1, 0, 0] } },
-          });
-          response.write(line.slice(0, 17));
-          response.end(line.slice(17));
-          return;
-        }
-        response.writeHead(404).end();
-      })().catch((error: unknown) => {
-        response.writeHead(500).end(error instanceof Error ? error.message : String(error));
-      });
-    });
-    const port = await listenLoopbackServer(server);
-
-    try {
-      const result = await runBatch(
-        singleRequest(),
-        makeGeminiClient(`http://127.0.0.1:${port}/v1beta`),
+  it.each([
+    { basePath: "/v1beta", prefix: "", query: "" },
+    { basePath: "/gateway/v1beta/", prefix: "/gateway", query: "?tenant=remote" },
+    { basePath: "/gateway/v1beta/", prefix: "/gateway", query: "?tenant=remote&route=a/" },
+    { basePath: "/gateway/v1beta", prefix: "/gateway", query: "?tenant=/openai/team/" },
+    { basePath: "/gateway/v1beta/openai", prefix: "/gateway", query: "?tenant=remote" },
+  ])(
+    "runs the public adapter over HTTP for $basePath with query $query",
+    async ({ basePath, prefix, query }) => {
+      let createBody: unknown;
+      let uploadBody = "";
+      const observedUrls: string[] = [];
+      const authHeaders: Array<string | undefined> = [];
+      const tenantHeaders: Array<string | undefined> = [];
+      const realSdk = await vi.importActual<typeof embeddingSdk>(
+        "openclaw/plugin-sdk/memory-core-host-engine-embeddings",
       );
+      const remoteHttp = vi
+        .spyOn(embeddingSdk, "withRemoteHttpResponse")
+        .mockImplementation(realSdk.withRemoteHttpResponse);
+      const server = createServer((request, response) => {
+        void (async () => {
+          const url = new URL(request.url ?? "/", "http://127.0.0.1");
+          observedUrls.push(`${request.method} ${url.pathname}${url.search}`);
+          const apiKey = request.headers["x-goog-api-key"];
+          authHeaders.push(Array.isArray(apiKey) ? apiKey.join(", ") : apiKey);
+          const tenant = request.headers["x-proof-tenant"];
+          tenantHeaders.push(Array.isArray(tenant) ? tenant.join(", ") : tenant);
+          const expectedQuery = new URLSearchParams(query);
+          const configuredQuerySurvives = [...expectedQuery].every(
+            ([name, value]) => url.searchParams.get(name) === value,
+          );
+          if (!configuredQuerySurvives) {
+            response.writeHead(400).end(`configured query changed: ${url.pathname}${url.search}`);
+            request.resume();
+            return;
+          }
+          const respondJson = (body: unknown) => {
+            response.writeHead(200, { "content-type": "application/json" });
+            response.end(JSON.stringify(body));
+          };
+          if (url.pathname === `${prefix}/v1beta/models/gemini-embedding-001:embedContent`) {
+            request.resume();
+            respondJson({ embedding: { values: [1, 0, 0] } });
+            return;
+          }
+          if (
+            url.pathname === `${prefix}/upload/v1beta/files` &&
+            url.searchParams.get("uploadType") === "multipart"
+          ) {
+            request.setEncoding("utf8");
+            for await (const chunk of request) {
+              uploadBody += chunk;
+            }
+            respondJson({ file: { name: "files/input-0" } });
+            return;
+          }
+          if (
+            url.pathname === `${prefix}/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent`
+          ) {
+            let body = "";
+            request.setEncoding("utf8");
+            for await (const chunk of request) {
+              body += chunk;
+            }
+            createBody = JSON.parse(body) as unknown;
+            respondJson({
+              name: "batches/b-0",
+              done: false,
+              metadata: { state: "BATCH_STATE_PENDING" },
+            });
+            return;
+          }
+          if (url.pathname === `${prefix}/v1beta/batches/b-0`) {
+            respondJson({
+              name: "batches/b-0",
+              done: true,
+              metadata: { state: "BATCH_STATE_SUCCEEDED" },
+              response: { responsesFile: "files/output-0" },
+            });
+            return;
+          }
+          if (
+            url.pathname === `${prefix}/v1beta/files/output-0:download` &&
+            url.searchParams.get("alt") === "media"
+          ) {
+            response.writeHead(200, { "content-type": "application/jsonl" });
+            const line = JSON.stringify({
+              key: "0",
+              response: { embedding: { values: [1, 0, 0] } },
+            });
+            response.write(line.slice(0, 17));
+            response.end(line.slice(17));
+            return;
+          }
+          response.writeHead(404).end();
+        })().catch((error: unknown) => {
+          response.writeHead(500).end(error instanceof Error ? error.message : String(error));
+        });
+      });
+      const port = await listenLoopbackServer(server);
 
-      expect(result).toEqual(new Map([["r0", [1, 0, 0]]]));
-      expect(createBody).toMatchObject({ batch: { inputConfig: { file_name: "files/input-0" } } });
-      expect(authHeaders).toEqual(["test-key", "test-key", "test-key", "test-key"]);
-    } finally {
-      await closeServer(server);
-    }
-  });
+      try {
+        const adapter = await geminiMemoryEmbeddingProviderAdapter.create({
+          config: {},
+          provider: "gemini",
+          model: "gemini-embedding-001",
+          fallback: "none",
+          remote: {
+            baseUrl: `http://127.0.0.1:${port}${basePath}${query}`,
+            apiKey: "test-key",
+            headers: { "X-Proof-Tenant": "remote" },
+          },
+        });
+        if (!adapter.provider) {
+          throw new Error("Expected a Gemini embedding provider");
+        }
+        await expect(adapter.provider.embed("hello", { inputType: "query" })).resolves.toEqual([
+          1, 0, 0,
+        ]);
+        const result = await adapter.runtime?.batchEmbed?.({
+          agentId: "main",
+          chunks: [{ text: "hello" }],
+          wait: true,
+          concurrency: 1,
+          pollIntervalMs: 1,
+          timeoutMs: 5_000,
+          debug: () => {},
+        });
+
+        expect(result).toEqual([[1, 0, 0]]);
+        const uploadedRequest = uploadBody.split("\r\n\r\n")[2]?.split("\r\n")[0];
+        expect(JSON.parse(uploadedRequest ?? "null")).toEqual({
+          key: "0",
+          request: {
+            content: { parts: [{ text: "hello" }] },
+            taskType: "RETRIEVAL_DOCUMENT",
+            model: "models/gemini-embedding-001",
+          },
+        });
+        expect(createBody).toMatchObject({
+          batch: { inputConfig: { file_name: "files/input-0" } },
+        });
+        expect(authHeaders).toEqual(Array(5).fill("test-key"));
+        expect(tenantHeaders).toEqual(Array(5).fill("remote"));
+        expect(observedUrls.map((value) => value.split("?")[0])).toEqual([
+          `POST ${prefix}/v1beta/models/gemini-embedding-001:embedContent`,
+          `POST ${prefix}/upload/v1beta/files`,
+          `POST ${prefix}/v1beta/models/gemini-embedding-001:asyncBatchEmbedContent`,
+          `GET ${prefix}/v1beta/batches/b-0`,
+          `GET ${prefix}/v1beta/files/output-0:download`,
+        ]);
+      } finally {
+        remoteHttp.mockRestore();
+        await closeServer(server);
+      }
+    },
+  );
 
   it("honors terminal LRO fields when metadata is stale", async () => {
     stubBatchFetch((stage) =>

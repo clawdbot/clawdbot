@@ -58,6 +58,14 @@ class ConversationNotificationsTest {
   }
 
   @Test
+  fun replyIntentTargetsPrivateReceiver() {
+    val intent = conversationNotificationReplyIntent(context, target)
+    val component = requireNotNull(intent.component)
+
+    assertEquals(ConversationReplyReceiver::class.java.name, component.className)
+  }
+
+  @Test
   fun launchIntentIdentityDiffersAcrossConversationTargets() {
     val first = conversationNotificationLaunchIntent(context, target)
     val second =

@@ -1,14 +1,27 @@
+import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import {
+  getInstallationTarget,
+  LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
+} from "../../infra/installation-target-context.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { RuntimeEnv } from "../../runtime.js";
-import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
+import {
+  getAdmittedRunDelegatedAuthority,
+  type PreparedAgentRunAdmission,
+} from "../admitted-run-context.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
@@ -55,6 +68,9 @@ export async function runAcpAgentCommand(params: {
   acpResolution: AcpReadyResolution;
   trackInternalModelRunTarget: (target: AgentRunSessionTarget | undefined) => void;
 }) {
+  if (getInstallationTarget()) {
+    throw new Error(LOCAL_INSTALLATION_TARGET_UNSUPPORTED);
+  }
   const attemptExecutionRuntime = await loadAttemptExecutionRuntime();
   const acpToolTracker = attemptExecutionRuntime.createAcpToolLifecycleTracker();
   const startedAt = Date.now();
@@ -63,6 +79,7 @@ export async function runAcpAgentCommand(params: {
     sessionId: params.sessionId,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
+    projectSessionActive: !params.suppressVisibleSessionEffects,
     ...(params.suppressVisibleSessionEffects ? { isControlUiVisible: false } : {}),
   });
   attemptExecutionRuntime.emitAcpLifecycleStart({
@@ -102,19 +119,67 @@ export async function runAcpAgentCommand(params: {
     const acpImageAttachments = resolveInlineAgentImageAttachments(params.opts.images);
     assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
     const admittedRunContext = await params.preparedRunAdmission.admit("acp");
+    const isElicitationActive = () => {
+      if (
+        params.opts.abortSignal?.aborted === true ||
+        getAdmittedRunDelegatedAuthority(admittedRunContext) === undefined
+      ) {
+        return false;
+      }
+      try {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    const onElicitation = createLazyAcpElicitationHandler({
+      sourceSessionKey: params.opts.inputProvenance?.sourceSessionKey ?? params.sessionKey,
+      targetSessionKey: params.sessionKey,
+      outerRequestId: params.runId,
+      agentId: params.sessionAgentId,
+      runId: params.runId,
+      delivery: {
+        deliver: async (_kind, payload) => {
+          if (!isElicitationActive()) {
+            throw new Error("ACP input request is no longer active.");
+          }
+          if (payload.text) {
+            attemptExecutionRuntime.emitAcpRuntimeEvent({
+              runId: params.runId,
+              toolTracker: acpToolTracker,
+              sessionKey: params.sessionKey,
+              agentId: params.sessionAgentId,
+              abortSignal: params.opts.abortSignal,
+              event: { type: "status", text: payload.text, tag: "elicitation" },
+            });
+          }
+          return true;
+        },
+      },
+      isActive: isElicitationActive,
+    });
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,
       sessionKey: params.sessionKey,
+      agentId: params.sessionAgentId,
       provenance: params.provenance,
       text: params.body,
       attachments: acpImageAttachments.length > 0 ? acpImageAttachments : undefined,
       mode: "prompt",
       requestId: params.runId,
       signal: params.opts.abortSignal,
+      onElicitation,
+      onBeforePrompt: async () => {
+        const recorder = params.opts.userTurnTranscriptRecorder;
+        if (recorder && !recorder.hasPersisted() && !(await recorder.persistApproved())) {
+          throw new Error("ACP input could not enter the session transcript");
+        }
+        params.opts.onExecutionStarted?.();
+      },
       onLifecycle: (event) => {
         if (event.type === "prompt_submitted") {
-          params.opts.onExecutionStarted?.();
           attemptExecutionRuntime.emitAcpPromptSubmitted({
             runId: params.runId,
             sessionKey: params.sessionKey,
@@ -178,6 +243,12 @@ export async function runAcpAgentCommand(params: {
     throw acpError;
   }
 
+  // Execution is settled before persistence; later delivery cancellation remains live below.
+  const endFields = attemptExecutionRuntime.resolveAcpLifecycleEndFields(
+    params.opts.abortSignal,
+    stopReason,
+    resultStatus,
+  );
   const finalTextRaw = visibleTextAccumulator.finalizeRaw();
   const finalText = visibleTextAccumulator.finalize();
   const terminalReply = visibleTextAccumulator.finalizeReplySnapshot();
@@ -205,7 +276,10 @@ export async function runAcpAgentCommand(params: {
     const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
       body: params.body,
       transcriptBody: params.transcriptBody,
-      ...(params.opts.suppressPromptPersistence !== true && params.opts.transcriptMedia?.length
+      userTurnTranscriptRecorder: params.opts.userTurnTranscriptRecorder,
+      ...(!params.opts.userTurnTranscriptRecorder &&
+      params.opts.suppressPromptPersistence !== true &&
+      params.opts.transcriptMedia?.length
         ? {
             userInput: {
               text: params.transcriptBody,
@@ -214,6 +288,10 @@ export async function runAcpAgentCommand(params: {
           }
         : {}),
       finalText: finalTextRaw,
+      terminalOutcome: buildAgentRunTerminalOutcomeFromLifecycleEvent({
+        phase: "end",
+        data: endFields,
+      }),
       sessionId: internalTarget?.sessionId ?? params.sessionId,
       sessionKey: internalTarget?.sessionKey ?? params.sessionKey,
       sessionEntry: internalTarget?.sessionEntry ?? sessionEntry,
@@ -250,9 +328,7 @@ export async function runAcpAgentCommand(params: {
     toolTracker: acpToolTracker,
     agentId: params.sessionAgentId,
     lifecycleGeneration: params.lifecycleGeneration,
-    abortSignal: params.opts.abortSignal,
-    stopReason,
-    resultStatus,
+    endFields,
     terminalReply,
   });
 
@@ -268,7 +344,7 @@ export async function runAcpAgentCommand(params: {
     params.opts.abortSignal,
   );
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-  return await deliverAgentCommandResult({
+  const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.deps,
     runtime: params.runtime,
@@ -280,4 +356,14 @@ export async function runAcpAgentCommand(params: {
     assertDeliveryCurrent: () =>
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
   });
+  // Use the owner's status and current signal: delivery may outlive the result snapshot.
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: "end",
+    data: { status: resultStatus, stopReason },
+    abortSignal: params.opts.abortSignal,
+  });
+  return recordAgentRunTerminalOutcome(
+    deliveryResult,
+    classifyAgentRunTerminalOutcome(outcome) === "success" ? "completed" : "failed",
+  );
 }

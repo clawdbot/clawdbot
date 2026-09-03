@@ -5,12 +5,7 @@ import { inspect } from "node:util";
 import { cancel, isCancel } from "@clack/prompts";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  ConnectErrorDetailCodes,
-  readConnectErrorDetailCode,
-} from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { stylePromptTitle } from "../../packages/terminal-core/src/prompt-style.js";
 import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR, ensureAgentWorkspace } from "../agents/workspace.js";
@@ -34,15 +29,11 @@ import {
   resolveBrowserOpenCommand,
 } from "../infra/browser-open.js";
 import { detectBinary } from "../infra/detect-binary.js";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-  movePathToTrash,
-} from "../infra/fs-safe.js";
+import { canonicalPathFromExistingAncestor, isPathInside } from "../infra/fs-safe.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveConfigDir, shortenHomeInString, shortenHomePath, sleep } from "../utils.js";
 import { VERSION } from "../version.js";
-import { listAgentSessionDirs, removeWorkspaceDirs } from "./cleanup-utils.js";
+import { listAgentSessionDirs, moveToTrash, removeWorkspaceDirs } from "./cleanup-utils.js";
 import type { OnboardMode, ResetScope } from "./onboard-types.js";
 export { randomToken } from "./random-token.js";
 
@@ -192,14 +183,18 @@ export function applyWizardMetadata(
 }
 
 /** Formats the no-GUI SSH tunnel hint for opening the Control UI remotely. */
-export function formatControlUiSshHint(params: { port: number; basePath?: string }): string {
+export function formatControlUiSshHint(params: {
+  port: number;
+  basePath?: string;
+  tlsEnabled: boolean;
+}): string {
   const basePath = normalizeControlUiBasePath(params.basePath);
   const uiPath = basePath ? `${basePath}/` : "/";
-  const localUrl = `http://localhost:${params.port}${uiPath}`;
-  const sshTarget = resolveSshTargetHint();
+  const protocol = params.tlsEnabled ? "https" : "http";
+  const localUrl = `${protocol}://localhost:${params.port}${uiPath}`;
   return [
     "No GUI detected. Open from your computer:",
-    `ssh -N -L ${params.port}:127.0.0.1:${params.port} ${sshTarget}`,
+    `ssh -N -L ${params.port}:127.0.0.1:${params.port} <user>@<host>`,
     "Then open:",
     localUrl,
     "BYOH note: lan, tailnet, and custom bind are currently IPv4-only.",
@@ -212,13 +207,6 @@ export function formatControlUiSshHint(params: { port: number; basePath?: string
     .join("\n");
 }
 
-function resolveSshTargetHint(): string {
-  const user = process.env.USER || process.env.LOGNAME || "user";
-  const conn = process.env.SSH_CONNECTION?.trim().split(/\s+/);
-  const host = conn?.[2] ?? "<host>";
-  return `${user}@${host}`;
-}
-
 /** Ensures workspace bootstrap files and session transcript directories exist. */
 export async function ensureWorkspaceAndSessions(
   workspaceDir: string,
@@ -227,61 +215,21 @@ export async function ensureWorkspaceAndSessions(
     skipBootstrap?: boolean;
     skipOptionalBootstrapFiles?: OptionalBootstrapFileName[];
     agentId: string;
+    beforePersistentApply?: () => void;
   },
 ): Promise<{ bootstrapPending: boolean }> {
   const ws = await ensureAgentWorkspace({
     dir: workspaceDir,
     ensureBootstrapFiles: !options?.skipBootstrap,
     skipOptionalBootstrapFiles: options?.skipOptionalBootstrapFiles,
+    beforePersistentApply: options.beforePersistentApply,
   });
   runtime.log(`Workspace OK: ${shortenHomePath(ws.dir)}`);
   const sessionsDir = resolveSessionTranscriptsDirForAgent(options.agentId);
+  options.beforePersistentApply?.();
   await fs.mkdir(sessionsDir, { recursive: true });
   runtime.log(`Sessions OK: ${shortenHomePath(sessionsDir)}`);
   return { bootstrapPending: ws.bootstrapPending === true };
-}
-
-/** Moves a path to Trash when it exists, logging a manual-delete fallback on failure. */
-export async function moveToTrash(pathname: string, runtime: RuntimeEnv): Promise<boolean> {
-  if (!pathname) {
-    return false;
-  }
-  try {
-    await fs.lstat(pathname);
-  } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT";
-  }
-  try {
-    const targetPath = path.resolve(pathname);
-    const sourcePath = await resolveMoveToTrashSourcePath(targetPath);
-    await movePathToTrash(sourcePath, {
-      allowedRoots: await resolveMoveToTrashAllowedRoots(sourcePath),
-    });
-    runtime.log(`Moved to Trash: ${shortenHomePath(pathname)}`);
-    return true;
-  } catch {
-    runtime.log(`Failed to move to Trash (manual delete): ${shortenHomePath(pathname)}`);
-    return false;
-  }
-}
-
-async function resolveMoveToTrashSourcePath(targetPath: string): Promise<string> {
-  return path.join(await fs.realpath(path.dirname(targetPath)), path.basename(targetPath));
-}
-
-async function resolveMoveToTrashAllowedRoots(targetPath: string): Promise<string[]> {
-  const allowedRoots = [path.dirname(targetPath)];
-  const stat = await fs.lstat(targetPath);
-  if (stat.isSymbolicLink()) {
-    try {
-      // fs-safe resolves valid symlinks before allow-root checks; include the
-      // resolved parent so deleting a configured symlink moves the link itself.
-      allowedRoots.push(path.dirname(await fs.realpath(targetPath)));
-    } catch {
-      // Broken symlinks are handled lexically by fs-safe.
-    }
-  }
-  return uniqueStrings(allowedRoots);
 }
 
 async function assertFullResetPreservesOnboardingLock(workspaceDir: string): Promise<void> {
@@ -350,6 +298,8 @@ function throwIfResetFailed(failures: string[]): void {
 
 type OnboardingGatewayProbeParams = {
   url: string;
+  config?: OpenClawConfig;
+  originScopedDeviceAuth?: boolean;
   token?: string;
   password?: string;
   tlsFingerprint?: string;
@@ -365,6 +315,8 @@ function runOnboardingGatewayProbe(
   const timeoutMs = params.timeoutMs ?? Math.max(1500, params.preauthHandshakeTimeoutMs ?? 0);
   return probeGateway({
     url,
+    ...(params.config ? { config: params.config } : {}),
+    ...(params.originScopedDeviceAuth ? { originScopedDeviceAuth: true } : {}),
     timeoutMs,
     auth: {
       token: params.token,
@@ -399,21 +351,6 @@ export type GatewayConfiguredModelProbeResult =
   | { kind: "reachable-unverified"; detail?: string }
   | { kind: "unreachable"; detail?: string };
 
-const RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES: ReadonlySet<string> = new Set(
-  Object.values(ConnectErrorDetailCodes),
-);
-
-function didProbeReachGateway(probe: GatewayProbeResult): boolean {
-  const connectErrorCode = readConnectErrorDetailCode(probe.connectErrorDetails);
-  const recognizedConnectError =
-    connectErrorCode !== null && RECOGNIZED_GATEWAY_CONNECT_ERROR_CODES.has(connectErrorCode);
-  const serverVersion = probe.server?.version?.trim();
-  const serverConnectionId = probe.server?.connId?.trim();
-  // Opening a WebSocket proves only that something is listening. A Gateway is
-  // established by a hello-ok server identity or its typed connect rejection.
-  return recognizedConnectError || Boolean(serverVersion && serverConnectionId);
-}
-
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
   params: OnboardingGatewayProbeParams,
@@ -425,7 +362,7 @@ export async function probeGatewayConfiguredModel(
     return { kind: "unreachable", detail: summarizeError(err) };
   }
   const detail = probe.error ?? undefined;
-  if (!didProbeReachGateway(probe)) {
+  if (!probe.gatewayReached) {
     return { kind: "unreachable", ...(detail ? { detail } : {}) };
   }
   if (!probe.ok) {
@@ -462,28 +399,24 @@ export async function probeGatewayConfiguredModel(
 }
 
 /** Polls gateway reachability until success or deadline. */
-export async function waitForGatewayReachable(params: {
-  url: string;
-  token?: string;
-  password?: string;
-  /** Total time to wait before giving up. */
-  deadlineMs?: number;
-  /** Per-probe timeout (each probe makes a full gateway health request). */
-  probeTimeoutMs?: number;
-  /** Delay between probes. */
-  pollMs?: number;
-}): Promise<{ ok: boolean; detail?: string }> {
-  const deadlineMs = params.deadlineMs ?? 15_000;
-  const pollMs = resolveTimerTimeoutMs(params.pollMs ?? 400, 400, 0);
-  const probeTimeoutMs = params.probeTimeoutMs ?? 1500;
+export async function waitForGatewayReachable(
+  params: Omit<OnboardingGatewayProbeParams, "timeoutMs"> & {
+    /** Total time to wait before giving up. */
+    deadlineMs?: number;
+    /** Per-probe timeout for the hello-only readiness check. */
+    probeTimeoutMs?: number;
+    /** Delay between probes. */
+    pollMs?: number;
+  },
+): Promise<{ ok: boolean; detail?: string }> {
+  const { deadlineMs = 15_000, pollMs = 400, probeTimeoutMs = 1500, ...probeParams } = params;
+  const pollDelayMs = resolveTimerTimeoutMs(pollMs, 400, 0);
   const startedAt = Date.now();
   let lastDetail: string | undefined;
 
   while (Date.now() - startedAt < deadlineMs) {
     const probe = await probeGatewayReachable({
-      url: params.url,
-      token: params.token,
-      password: params.password,
+      ...probeParams,
       timeoutMs: probeTimeoutMs,
     });
     if (probe.ok) {
@@ -494,7 +427,7 @@ export async function waitForGatewayReachable(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await sleep(Math.min(pollMs, remainingMs));
+    await sleep(Math.min(pollDelayMs, remainingMs));
   }
 
   return { ok: false, detail: lastDetail };

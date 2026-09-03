@@ -83,6 +83,49 @@ export function resolveDefaultSecretProviderAlias(
   return DEFAULT_SECRET_PROVIDER_ALIAS;
 }
 
+/** Builds an environment-backed gateway credential using its configured provider alias. */
+export function createGatewayEnvSecretRef(
+  config: SecretRefDefaultsCarrier,
+  envVarName: string,
+): SecretRef {
+  return {
+    source: "env",
+    provider: resolveDefaultSecretProviderAlias(config, "env", {
+      preferFirstProviderForSource: true,
+    }),
+    id: envVarName,
+  };
+}
+
+/** Whether a source-specific built-in provider owns this selected default alias. */
+export function isBuiltInDefaultSecretProviderRef(
+  config: SecretRefDefaultsCarrier,
+  ref: SecretRef,
+): boolean {
+  const configuredSource = config.secrets?.providers?.[ref.provider]?.source;
+  return (
+    configuredSource !== ref.source &&
+    (ref.source === "env" || ref.source === "store") &&
+    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
+  );
+}
+
+/** Returns the configured provider source when a SecretRef selects an impossible pairing. */
+export function resolveSecretRefProviderSourceMismatch(
+  config: SecretRefDefaultsCarrier,
+  ref: SecretRef,
+): string | null {
+  const configuredSource = config.secrets?.providers?.[ref.provider]?.source;
+  if (
+    !configuredSource ||
+    configuredSource === ref.source ||
+    isBuiltInDefaultSecretProviderRef(config, ref)
+  ) {
+    return null;
+  }
+  return configuredSource;
+}
+
 /** Validates file secret ref ids against the shared JSON-pointer-style contract. */
 export function isValidFileSecretRefId(value: string): boolean {
   if (value === SINGLE_VALUE_FILE_REF_ID) {

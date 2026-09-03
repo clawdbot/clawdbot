@@ -1,7 +1,10 @@
 import {
+  buildCredentialSafetyPrompt,
+  buildDelegationGuidanceSection,
+  buildHarnessVisibleReplyGuidance,
   buildSkillWorkshopPromptSection,
+  resolveMainSessionDelegationMode,
   SKILL_WORKSHOP_TOOL_NAME,
-  TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { listRegisteredPluginAgentPromptGuidance } from "openclaw/plugin-sdk/plugin-runtime";
@@ -15,14 +18,35 @@ import {
   type CodexDynamicToolSpec,
 } from "./protocol.js";
 
+export type CodexThreadPromptContext = Pick<
+  EmbeddedRunAttemptParams,
+  | "config"
+  | "agentId"
+  | "sessionKey"
+  | "modelId"
+  | "disableTools"
+  | "disableMessageTool"
+  | "delegationCapability"
+  | "toolsAllow"
+  | "sourceReplyDeliveryMode"
+  | "promptMode"
+  | "extraSystemPrompt"
+>;
+
 export function buildDeveloperInstructions(
-  params: EmbeddedRunAttemptParams,
+  params: CodexThreadPromptContext,
   options: { dynamicTools?: readonly CodexDynamicToolSpec[] } = {},
 ): string {
   const deferredToolNames = new Set<string>();
+  let secretsToolName: string | undefined;
+  let showWidgetToolName: string | undefined;
+  let dashboardToolName: string | undefined;
+  let portalToolName: string | undefined;
   let hasSkillWorkshop = false;
   let hasSessionsSpawn = false;
   let hasSessionsYield = false;
+  let hasSubagentsList = false;
+  let hasSessionsSend = false;
   let hasSeenDirectNamespace = false;
   let messageToolAvailable = options.dynamicTools ? false : params.disableMessageTool !== true;
   for (const spec of options.dynamicTools ?? []) {
@@ -35,12 +59,27 @@ export function buildDeveloperInstructions(
     }
     for (const tool of spec.type === "namespace" ? spec.tools : [spec]) {
       const name = tool.name.trim();
+      const qualifiedName = spec.type === "namespace" ? `${spec.name}.${name}` : name;
       if (tool.deferLoading === true && name) {
         deferredToolNames.add(name);
+      }
+      if (name === "secrets" && params.disableTools !== true) {
+        secretsToolName ??= qualifiedName;
+      }
+      if (name === "show_widget") {
+        showWidgetToolName ??= qualifiedName;
+      }
+      if (name === "dashboard") {
+        dashboardToolName ??= qualifiedName;
+      }
+      if (name === "portal") {
+        portalToolName ??= qualifiedName;
       }
       hasSkillWorkshop ||= name === SKILL_WORKSHOP_TOOL_NAME;
       hasSessionsSpawn ||= name === "sessions_spawn";
       hasSessionsYield ||= isDirectNamespace && name === "sessions_yield";
+      hasSubagentsList ||= name === "subagents";
+      hasSessionsSend ||= name === "sessions_send";
       messageToolAvailable ||= name === "message";
     }
   }
@@ -48,10 +87,12 @@ export function buildDeveloperInstructions(
     surface: "codex_app_server",
     includeLegacyGlobalGuidance: false,
   }).join("\n");
-  const nativeDelegationAvailable =
+  const delegationGuidanceAvailable =
     params.disableTools !== true &&
     params.delegationCapability !== "report_only" &&
-    !isMessageOnlyCodexSourceReply(params) &&
+    !isMessageOnlyCodexSourceReply(params);
+  const nativeDelegationAvailable =
+    delegationGuidanceAvailable &&
     !isSystemAgentOnlyCodexDynamicToolAllowlist(params.toolsAllow) &&
     !shouldDisableCodexToolSearchForModel(params.modelId);
   const deferredToolDiscoveryGuidance =
@@ -71,28 +112,44 @@ export function buildDeveloperInstructions(
     // models (codex-rs spec_plan add_collaboration_tools). Without this hint
     // models cannot see spawn_agent and grab the always-direct sessions_spawn.
     nativeDelegationAvailable
-      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent`." : ""}`
+      ? `Use Codex native \`spawn_agent\` for Codex subagents. \`spawn_agent\` and the other native collaboration tools may be deferred.${hasSessionsSpawn ? " Use OpenClaw `sessions_spawn` only for OpenClaw or ACP delegation, never as a substitute for `spawn_agent` on internal legwork." : ""}`
       : undefined,
     hasSessionsYield && nativeDelegationAvailable
       ? "When a native child's result belongs in a later turn, end the current turn with `openclaw_direct.sessions_yield`; the completion arrives as the next model-visible input. Use native `wait_agent` only for an intentional same-turn wait when the immediate next step is blocked on the child. Never loop-poll for native child completion."
       : undefined,
-    buildVisibleReplyInstruction(params, messageToolAvailable),
-    TRANSCRIPT_CREDENTIAL_SAFETY_PROMPT,
+    delegationGuidanceAvailable
+      ? buildDelegationGuidanceSection({
+          mode: resolveMainSessionDelegationMode({
+            config: params.config,
+            agentId: params.agentId,
+            sessionKey: params.sessionKey,
+          }),
+          // Subagent/none prompt modes stay lean and must not be told to delegate further.
+          isMinimal: params.promptMode === "minimal" || params.promptMode === "none",
+          hiddenDelegationTool: nativeDelegationAvailable
+            ? "native `spawn_agent`"
+            : hasSessionsSpawn
+              ? "`sessions_spawn`"
+              : "",
+          hasVisibleSessionSpawn: hasSessionsSpawn,
+          hasSessionsYield,
+          hasSubagentsList,
+          hasSessionsSend,
+        }).join("\n")
+      : undefined,
+    buildHarnessVisibleReplyGuidance({
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      messageToolAvailable,
+      uiPresentation:
+        params.disableTools !== true &&
+        params.promptMode !== "minimal" &&
+        params.promptMode !== "none"
+          ? { showWidgetToolName, dashboardToolName, portalToolName }
+          : undefined,
+    }),
+    buildCredentialSafetyPrompt(secretsToolName),
     nativeCommandGuidance,
     params.extraSystemPrompt,
   ];
   return sections.filter((section) => typeof section === "string" && section.trim()).join("\n\n");
-}
-
-function buildVisibleReplyInstruction(
-  params: EmbeddedRunAttemptParams,
-  messageToolAvailable: boolean,
-): string {
-  if (params.sourceReplyDeliveryMode === "message_tool_only" && messageToolAvailable) {
-    return "Visible source replies are not automatically delivered for this run. Use `message(action=send)` for user-visible source-channel output. For progress, set `final=false`. Set `final=true`, or omit it, for the completed reply to the current source conversation; OpenClaw stops after confirming delivery. Do not repeat visible message content in your final answer.";
-  }
-  if (messageToolAvailable) {
-    return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation. Use `message` for supported non-text actions in the current conversation, such as reacting to its current message. Reserve other `message` actions for explicit out-of-band sends or media/file delivery. Reactions are not delivered automatically.";
-  }
-  return "For the current source conversation, reply normally in your final assistant message; OpenClaw will deliver it through the active source conversation.";
 }

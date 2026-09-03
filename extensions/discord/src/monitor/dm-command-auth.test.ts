@@ -5,6 +5,37 @@ import {
   resolveDiscordTextCommandAccess,
 } from "./dm-command-auth.js";
 
+const participantResolutions = vi.hoisted(
+  () =>
+    [] as Array<
+      ReturnType<
+        NonNullable<
+          import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressIdentityDescriptor["resolveParticipant"]
+        >
+      >
+    >,
+);
+vi.mock("openclaw/plugin-sdk/channel-ingress-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-ingress-runtime")>();
+  return {
+    ...actual,
+    defineStableChannelIngressIdentity: (
+      params: Parameters<typeof actual.defineStableChannelIngressIdentity>[0],
+    ) => {
+      const identity = actual.defineStableChannelIngressIdentity(params);
+      return {
+        ...identity,
+        resolveParticipant: (subject) => {
+          const participant = identity.resolveParticipant?.(subject);
+          participantResolutions.push(participant);
+          return participant;
+        },
+      } satisfies typeof identity;
+    },
+  };
+});
+
 const canViewDiscordGuildChannelMock = vi.hoisted(() => vi.fn());
 type DiscordDmIngressAccess = Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
 
@@ -71,6 +102,35 @@ describe("resolveDiscordTextCommandAccess", () => {
     expect(result.commandAccess.authorized).toBe(false);
     expect(result.commandAccess.shouldBlockControlCommand).toBe(true);
   });
+
+  it("applies the PluralKit provenance downgrade to strict group commands", async () => {
+    const ordinary = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender,
+      ownerAllowFrom: ["discord:123"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
+    });
+    const pluralKit = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      ownerAllowFrom: ["pk:pk-member-1"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
+    });
+
+    expect(ordinary.commandAccess.authorized).toBe(true);
+    expect(pluralKit.commandAccess.authorized).toBe(false);
+    expect(pluralKit.commandAccess.shouldBlockControlCommand).toBe(true);
+  });
 });
 
 describe("resolveDiscordDmCommandAccess", () => {
@@ -107,6 +167,19 @@ describe("resolveDiscordDmCommandAccess", () => {
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
+  it("authorizes a matching Discord tag when name matching is enabled", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["alice#0001"],
+      sender: { id: "999", name: "alice", tag: "alice#0001" },
+      allowNameMatching: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.senderAccess.allowed).toBe(true);
   });
 
   it("blocks open DMs when configured allowlist does not match", async () => {
@@ -161,6 +234,7 @@ describe("resolveDiscordDmCommandAccess", () => {
         id: "pk-member-1",
         name: "Echo",
         tag: "Echo",
+        isPluralKit: true,
       },
       allowNameMatching: false,
       readStoreAllowFrom: async () => ["pk:pk-member-1"],
@@ -168,6 +242,39 @@ describe("resolveDiscordDmCommandAccess", () => {
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
+  it("distinguishes Gateway-bound Discord ids from asserted PluralKit member ids", async () => {
+    const ordinary = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["discord:123"],
+      sender,
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const pluralKit = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const compatiblePluralKitDefault = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(ordinary.senderAccess.decision).toBe("allow");
+    expect(pluralKit.senderAccess.decision).toBe("block");
+    expect(compatiblePluralKitDefault.senderAccess.decision).toBe("allow");
   });
 
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
@@ -275,3 +382,32 @@ describe("resolveDiscordDmCommandAccess", () => {
     expect(dmCommandAuthorized(result)).toBe(false);
   });
 });
+
+it.each(["user", "bot", "pluralkit-member", undefined] as const)(
+  "keeps Discord participant kind %s separate without guessing",
+  async (participantKind) => {
+    participantResolutions.length = 0;
+    await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "open",
+      configuredAllowFrom: ["*"],
+      sender: {
+        id: "123",
+        ...(participantKind === "pluralkit-member"
+          ? { isPluralKit: true }
+          : { authorKind: participantKind }),
+      },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+    expect(participantResolutions).toEqual([
+      participantKind
+        ? {
+            domain: participantKind === "pluralkit-member" ? "pluralkit" : "discord",
+            idKind: participantKind,
+            id: "123",
+          }
+        : undefined,
+    ]);
+  },
+);

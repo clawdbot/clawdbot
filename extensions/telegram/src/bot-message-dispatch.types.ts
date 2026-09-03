@@ -35,7 +35,10 @@ export type DispatchTelegramMessageParams = {
   textLimit: number;
   telegramCfg: TelegramAccountConfig;
   telegramDeps?: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "mediaMaxMb" | "ownerAgentId">;
+  opts: Pick<
+    TelegramBotOptions,
+    "token" | "mediaMaxMb" | "ownerAgentId" | "dispatchReplyFromConfig"
+  >;
   retryDispatchErrors?: boolean;
   suppressFailureFallback?: boolean;
   /**
@@ -46,6 +49,7 @@ export type DispatchTelegramMessageParams = {
     admission?: "exclusive" | "cancel-only";
     onAdopted: () => void | Promise<void>;
     onDeferred?: () => void;
+    onDeferredHeartbeat?: () => void;
     onAbandoned?: () => void;
     abortSignal?: AbortSignal;
   };
@@ -119,6 +123,7 @@ export type TelegramQueuedAnswerBlockRotation = {
 export type TelegramBufferedFinalSettlement = {
   visibleReplySent: boolean;
   onPlatformSendDispatch?: () => Promise<void>;
+  assertPlatformSendAuthorized?: () => void;
   bindPendingFinalDelivery?: <T extends ReplyPayload>(payload: T) => T;
   resolve: (result: { visibleReplySent: boolean }) => void;
   reject: (error: unknown) => void;
@@ -135,6 +140,7 @@ type TelegramProgressCompositor = {
   readonly commentaryProgressEnabled: boolean;
   readonly hasStatusHeadline: boolean;
   readonly hasPlanProgress: boolean;
+  getSnapshot: () => { lines: ReadonlyArray<string | ChannelProgressDraftLine> };
   markFinalReplyStarted: () => void;
   markFinalReplyDelivered: () => void;
   beginNewTurn: (options?: { force?: boolean }) => boolean;
@@ -143,7 +149,7 @@ type TelegramProgressCompositor = {
   cancel: () => void;
   pushToolProgress: (
     line?: string | ChannelProgressDraftLine,
-    options?: { toolName?: string; startImmediately?: boolean },
+    options?: { toolName?: string; startImmediately?: boolean; flush?: boolean },
   ) => Promise<boolean>;
   pushReasoningProgress: (text?: string, options?: { snapshot?: boolean }) => Promise<boolean>;
   pushCommentaryProgress: (text?: string, options?: { itemId?: string }) => Promise<boolean>;
@@ -188,10 +194,8 @@ export type TelegramDraftStateSlice = {
 };
 
 export type TelegramProgressStateSlice = {
-  draftEverRendered: boolean;
   finalAnswerDeliveryStarted: boolean;
   finalAnswerDelivered: boolean;
-  sawProgressFinal: boolean;
   verboseProgressActive: () => boolean;
   progressCompositor: TelegramProgressCompositor;
   commentaryProgressEnabled: boolean;

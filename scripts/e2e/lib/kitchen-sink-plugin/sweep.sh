@@ -63,11 +63,25 @@ openclaw_e2e_read_positive_int_env OPENCLAW_DOCKER_E2E_LOG_PRINT_BYTES 65536 >/d
 run_kitchen_sink_openclaw_logged() {
   local label="$1"
   shift
+  run_kitchen_sink_command_logged "$label" openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@"
+}
+
+run_kitchen_sink_fixture_logged() {
+  local label="$1"
+  shift
+  run_kitchen_sink_command_logged "$label" openclaw_e2e_fixture_plugin_command openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" -- "$@"
+}
+
+run_kitchen_sink_command_logged() {
+  local label="$1"
+  shift
   local safe_label="${label//[^[:alnum:]._-]/_}"
   local log_file="${KITCHEN_SINK_TMP_DIR}/${safe_label}.log"
-  if ! openclaw_e2e_maybe_timeout "$KITCHEN_SINK_CLI_TIMEOUT" node "$OPENCLAW_ENTRY" "$@" >"$log_file" 2>&1; then
+  local command_status=0
+  "$@" >"$log_file" 2>&1 || command_status=$?
+  if [[ "$command_status" -ne 0 ]]; then
     print_kitchen_sink_log "$log_file"
-    return 1
+    return "$command_status"
   fi
   print_kitchen_sink_log "$log_file"
 }
@@ -155,11 +169,11 @@ run_success_scenario() {
   echo "Testing ${KITCHEN_SINK_LABEL} install from ${KITCHEN_SINK_SPEC}..."
   local install_args=("$KITCHEN_SINK_SPEC")
   if [ -n "${KITCHEN_SINK_PREINSTALL_SPEC:-}" ]; then
-    run_kitchen_sink_openclaw_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force
+    run_kitchen_sink_fixture_logged "kitchen-sink-preinstall-${KITCHEN_SINK_LABEL}" plugins install "$KITCHEN_SINK_PREINSTALL_SPEC" --force
     assert_kitchen_sink_cutover_preinstalled
     install_args+=("--force")
   fi
-  run_kitchen_sink_openclaw_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}" --force
+  run_kitchen_sink_fixture_logged "kitchen-sink-install-${KITCHEN_SINK_LABEL}" plugins install "${install_args[@]}" --force
   configure_kitchen_sink_runtime
   run_kitchen_sink_openclaw_logged "kitchen-sink-enable-${KITCHEN_SINK_LABEL}" plugins enable "$KITCHEN_SINK_ID"
   run_kitchen_sink_openclaw_capture "${KITCHEN_SINK_TMP_DIR}/kitchen-sink-${KITCHEN_SINK_LABEL}-plugins.json" plugins list --json

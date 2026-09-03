@@ -49,10 +49,6 @@ function buildGitHubZipUrl(repo: string, commit: string): string {
   return url.toString();
 }
 
-function formatSha256Integrity(bytes: Uint8Array): string {
-  return `sha256-${sha256Base64(bytes)}`;
-}
-
 function formatSha512Integrity(bytes: Uint8Array): string {
   const digest = createHash("sha512").update(bytes).digest("base64");
   return `sha512-${digest}`;
@@ -68,6 +64,32 @@ function safePackageTarballName(name: string, version: string): string {
     .replace(/[\\/]+/g, "-")
     .replace(/[^A-Za-z0-9._-]/g, "-");
   return `${base || "package"}-${version}.tgz`;
+}
+
+async function stageClawHubArchive(params: {
+  prefix: string;
+  fileName: string;
+  bytes: Uint8Array;
+  sha256Hex?: string;
+  result?: Omit<ClawHubDownloadResult, "archivePath" | "integrity" | "sha256Hex" | "cleanup">;
+}): Promise<ClawHubDownloadResult> {
+  const sha256Digest =
+    params.sha256Hex ?? Buffer.from(sha256Base64(params.bytes), "base64").toString("hex");
+  const target = await createTempDownloadTarget(params);
+  try {
+    await fs.writeFile(target.path, params.bytes);
+    return {
+      archivePath: target.path,
+      integrity: `sha256-${Buffer.from(sha256Digest, "hex").toString("base64")}`,
+      sha256Hex: sha256Digest,
+      artifact: "archive",
+      ...params.result,
+      cleanup: target.cleanup,
+    };
+  } catch (error) {
+    await target.cleanup().catch(() => undefined);
+    throw error;
+  }
 }
 
 /** Normalizes ClawHub SHA-256 metadata into Subresource Integrity format. */
@@ -175,25 +197,22 @@ export async function downloadClawHubPackageArchive(params: {
       safePackageTarballName(params.name, params.version);
     const rawSpecVersion = response.headers.get("X-ClawHub-ClawPack-Spec-Version");
     const specVersion = parseStrictPositiveInteger(rawSpecVersion);
-    const target = await createTempDownloadTarget({
+    return stageClawHubArchive({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
-    });
-    await fs.writeFile(target.path, bytes);
-    return {
-      archivePath: target.path,
-      integrity: normalizeClawHubSha256Integrity(sha256Digest) ?? formatSha256Integrity(bytes),
+      bytes,
       sha256Hex: sha256Digest,
-      artifact: "clawpack",
-      clawpackHeaderSha256: headerSha256,
-      ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
-        ? { clawpackHeaderSpecVersion: specVersion }
-        : {}),
-      npmIntegrity,
-      npmShasum,
-      npmTarballName,
-      cleanup: target.cleanup,
-    };
+      result: {
+        artifact: "clawpack",
+        clawpackHeaderSha256: headerSha256,
+        ...(typeof specVersion === "number" && Number.isSafeInteger(specVersion) && specVersion >= 0
+          ? { clawpackHeaderSpecVersion: specVersion }
+          : {}),
+        npmIntegrity,
+        npmShasum,
+        npmTarballName,
+      },
+    });
   }
   const search = params.version
     ? { version: params.version }
@@ -216,19 +235,11 @@ export async function downloadClawHubPackageArchive(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: `package archive download for ${params.name}`,
   });
-  const sha256Digest = sha256Hex(bytes);
-  const target = await createTempDownloadTarget({
+  return stageClawHubArchive({
     prefix: "openclaw-clawhub-package",
     fileName: `${params.name}.zip`,
+    bytes,
   });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex: sha256Digest,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
 }
 
 export async function downloadClawHubSkillArchive(params: {
@@ -262,19 +273,11 @@ export async function downloadClawHubSkillArchive(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: `skill archive download for ${params.slug}`,
   });
-  const sha256Digest = sha256Hex(bytes);
-  const target = await createTempDownloadTarget({
+  return stageClawHubArchive({
     prefix: "openclaw-clawhub-skill",
     fileName: `${params.slug}.zip`,
+    bytes,
   });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex: sha256Digest,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
 }
 
 export async function downloadClawHubSkillArchiveUrl(params: {
@@ -304,19 +307,11 @@ export async function downloadClawHubSkillArchiveUrl(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: `skill archive download at ${url.pathname}`,
   });
-  const sha256Digest = sha256Hex(bytes);
-  const target = await createTempDownloadTarget({
+  return stageClawHubArchive({
     prefix: "openclaw-clawhub-skill",
     fileName: "skill.zip",
+    bytes,
   });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex: sha256Digest,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
 }
 
 export async function downloadClawHubGitHubSkillArchive(params: {
@@ -340,17 +335,9 @@ export async function downloadClawHubGitHubSkillArchive(params: {
     timeoutMs: params.timeoutMs,
     resourceLabel: `GitHub source archive for ${params.repo}@${params.commit}`,
   });
-  const sha256Digest = sha256Hex(bytes);
-  const target = await createTempDownloadTarget({
+  return stageClawHubArchive({
     prefix: "openclaw-clawhub-github-skill",
     fileName: `${params.commit}.zip`,
+    bytes,
   });
-  await fs.writeFile(target.path, bytes);
-  return {
-    archivePath: target.path,
-    integrity: formatSha256Integrity(bytes),
-    sha256Hex: sha256Digest,
-    artifact: "archive",
-    cleanup: target.cleanup,
-  };
 }

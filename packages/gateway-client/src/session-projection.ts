@@ -1,25 +1,26 @@
 /** Browser-safe identity and replay rules shared by Gateway conversation clients. */
 
 import { asNullableRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeSessionProjectionRunId,
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+  readSessionProjectionString as readNonemptyString,
+  type SessionMessageEnvelope,
+  type SessionMessageIdentity,
+} from "./session-projection-message-identity.js";
 import { reduceSessionProjectionRunEventImpl } from "./session-projection-run-event.js";
 
-export type SessionMessageEnvelope = {
-  messageId?: unknown;
-  messageSeq?: unknown;
-  clientRunId?: unknown;
-  runId?: unknown;
-  idempotencyKey?: unknown;
-};
-
-export type SessionMessageIdentity = {
-  role: string;
-  id: string | null;
-  sequence: number | null;
-  idempotencyKey: string | null;
-  runId: string | null;
-  isImported: boolean;
-  externalSource: string | null;
-};
+export {
+  normalizeSessionProjectionRunId,
+  readAssistantStreamSegmentIdentity,
+  readSessionMessageIdentity,
+  readSessionMessageSequence,
+} from "./session-projection-message-identity.js";
+export type {
+  SessionMessageEnvelope,
+  SessionMessageIdentity,
+} from "./session-projection-message-identity.js";
 
 export type SessionProjectionScope = {
   sessionKey?: string;
@@ -65,6 +66,7 @@ export type SessionProjectionRunTransition = {
 export type SessionProjectionEntry = {
   message: unknown;
   identity: SessionMessageIdentity | null;
+  afterSequence?: number | null;
   live: boolean;
   pending: boolean;
   pendingRunId: string | null;
@@ -121,65 +123,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "reconnected" }
   );
 
-function readNonemptyString(value: unknown): string | null {
-  return typeof value === "string" ? value.trim() || null : null;
-}
-
-function readPositiveSafeInteger(value: unknown): number | null {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
-}
-
-/** History and status markers carry transcript order even when they have no chat role. */
-export function readSessionMessageSequence(
-  message: unknown,
-  envelope?: SessionMessageEnvelope,
-): number | null {
-  const metadata = readRecord(readRecord(message)?.["__openclaw"]);
-  return readPositiveSafeInteger(metadata?.seq) ?? readPositiveSafeInteger(envelope?.messageSeq);
-}
-
-/** Run ownership normalizes a user-turn suffix without changing its persisted send key. */
-export function normalizeSessionProjectionRunId(value: unknown): string | null {
-  const runId = readNonemptyString(value);
-  return runId?.endsWith(":user") ? runId.slice(0, -":user".length) || null : runId;
-}
-
-/** Persisted transcript facts win over envelope projections and provider-local import IDs. */
-export function readSessionMessageIdentity(
-  message: unknown,
-  envelope?: SessionMessageEnvelope,
-): SessionMessageIdentity | null {
-  const record = readRecord(message);
-  const role = readNonemptyString(record?.role)?.toLowerCase();
-  if (!record || !role) {
-    return null;
-  }
-  const metadata = readRecord(record["__openclaw"]);
-  const importedFrom = readNonemptyString(metadata?.importedFrom);
-  const cliSessionId = readNonemptyString(metadata?.cliSessionId);
-  const externalId = readNonemptyString(metadata?.externalId);
-  const idempotencyKey =
-    readNonemptyString(metadata?.idempotencyKey) ??
-    readNonemptyString(record.idempotencyKey) ??
-    readNonemptyString(envelope?.idempotencyKey) ??
-    readNonemptyString(envelope?.clientRunId);
-  return {
-    role,
-    id: readNonemptyString(metadata?.id) ?? readNonemptyString(envelope?.messageId),
-    sequence: readSessionMessageSequence(message, envelope),
-    idempotencyKey,
-    runId:
-      normalizeSessionProjectionRunId(idempotencyKey) ??
-      normalizeSessionProjectionRunId(envelope?.runId),
-    isImported: Boolean(importedFrom || cliSessionId || externalId),
-    // Imported IDs belong to their provider and CLI session, never the native ID namespace.
-    externalSource:
-      importedFrom && cliSessionId && externalId
-        ? JSON.stringify([importedFrom, cliSessionId, externalId])
-        : null,
-  };
-}
-
 /** Local turns have no durable transcript metadata beyond their own optional send key. */
 export function isLocallyOptimisticSessionMessage(message: unknown): boolean {
   const identity = readSessionMessageIdentity(message);
@@ -203,6 +146,7 @@ function createEntry(
   return {
     message,
     identity,
+    afterSequence: options?.envelope?.afterSequence,
     live: options?.live === true,
     pending: pendingRunId !== null,
     pendingRunId,
@@ -297,18 +241,42 @@ function entryMatches(
   }
   const durableEntry = left.identity?.id ? left : right.identity?.id ? right : null;
   const provisionalEntry = durableEntry === left ? right : durableEntry === right ? left : null;
+  const durableMetadata = readRecord(readRecord(durableEntry?.message)?.["__openclaw"]);
   if (
-    durableEntry?.live &&
-    provisionalEntry?.live &&
-    durableEntry.identity?.role === "assistant" &&
-    provisionalEntry.identity?.role === "assistant" &&
+    durableEntry?.identity?.role === "assistant" &&
+    provisionalEntry?.identity?.role === "assistant" &&
     !durableEntry.identity.isImported &&
     !provisionalEntry.identity.isImported &&
-    !provisionalEntry.identity.id &&
-    durableEntry.identity.runId &&
-    durableEntry.identity.runId === provisionalEntry.identity.runId
+    !provisionalEntry.identity.id
   ) {
-    return true;
+    const durableSegment = readAssistantStreamSegmentIdentity(durableEntry.message);
+    const provisionalSegment = readAssistantStreamSegmentIdentity(provisionalEntry.message);
+    // Terminal cleanup can materialize commentary before cursor history catches up.
+    // Adopt its exact item/run without joining distinct durable rows or equal prose.
+    if (
+      provisionalEntry.identity.sequence === null &&
+      durableSegment?.runId &&
+      durableSegment.runId === provisionalSegment?.runId &&
+      durableSegment.itemId === provisionalSegment.itemId
+    ) {
+      return true;
+    }
+    // History changes retention, not identity: a hydrated row still owns its
+    // unsequenced run projection. Item-keyed commentary remains separate.
+    if (
+      provisionalEntry.live &&
+      provisionalEntry.identity.sequence === null &&
+      (provisionalEntry.afterSequence === undefined ||
+        (provisionalEntry.afterSequence !== null &&
+          durableEntry.identity.sequence !== null &&
+          durableEntry.identity.sequence > provisionalEntry.afterSequence)) &&
+      durableEntry.identity.runId &&
+      durableEntry.identity.runId === provisionalEntry.identity.runId &&
+      (readNonemptyString(durableMetadata?.mirrorOrigin) === null ||
+        durableMetadata?.runTerminal === true)
+    ) {
+      return true;
+    }
   }
   const persisted = left.identity;
   const observed = right.identity;
@@ -322,13 +290,10 @@ function entryMatches(
     !observed.isImported &&
     persisted.id &&
     !observed.id &&
-    ((persisted.sequence !== null && persisted.sequence === observed.sequence) ||
-      (persisted.role === "assistant" &&
-        observed.sequence === null &&
-        persisted.runId !== null &&
-        persisted.runId === observed.runId))
+    persisted.sequence !== null &&
+    persisted.sequence === observed.sequence
   ) {
-    // Only current-scope history can promote an observed native sequence or assistant run.
+    // Only current-scope history can promote an observed native sequence.
     return true;
   }
   if (left.pending && right.pending) {
@@ -349,7 +314,7 @@ function entryMatches(
     !pending.identity.isImported &&
     !authoritative.identity.isImported &&
     pending.pendingRunId &&
-    pending.pendingRunId === authoritative.identity.runId &&
+    pending.pendingRunId === (authoritative.identity.sendId ?? authoritative.identity.runId) &&
     (pending.identity.sequence === null ||
       authoritative.identity.sequence === null ||
       pending.identity.sequence === authoritative.identity.sequence),
@@ -376,14 +341,29 @@ function insertEntry(
           const candidate = entry.identity?.sequence;
           return candidate !== undefined && candidate !== null && candidate > sequence;
         });
-  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+  if (sequence !== undefined && sequence !== null && nextIndex < 0) {
+    nextIndex = entries.length;
+  }
+  if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;
     const terminalMessage = runs?.[runId]?.message;
-    nextIndex = entries.findIndex(
-      (entry) =>
-        entry.identity?.role === "assistant" &&
-        (entry.identity.runId === runId || entry.message === terminalMessage),
-    );
+    const belongsToRun = (entry: SessionProjectionEntry) =>
+      entry.identity?.role === "assistant" &&
+      (entry.identity.runId === runId || entry.message === terminalMessage);
+    if (sequence !== undefined && sequence !== null) {
+      // A run can deliver several replies before its prompt. Move every early
+      // unsequenced reply together; durable sequence always wins over run ownership.
+      const before: SessionProjectionEntry[] = [];
+      const replies: SessionProjectionEntry[] = [];
+      for (const entry of entries.slice(0, nextIndex)) {
+        (entry.identity?.sequence === null && belongsToRun(entry) ? replies : before).push(entry);
+      }
+      return [...before, incoming, ...replies, ...entries.slice(nextIndex)];
+    }
+    const terminalIndex = entries.findIndex(belongsToRun);
+    if (terminalIndex >= 0 && (nextIndex < 0 || terminalIndex < nextIndex)) {
+      nextIndex = terminalIndex;
+    }
   }
   return nextIndex < 0
     ? [...entries, incoming]
@@ -403,15 +383,26 @@ export function projectLiveSessionMessage(
   if (!incoming.identity) {
     return state;
   }
-  const existingIndex = state.entries.findIndex((entry) => entryMatches(entry, incoming));
-  if (existingIndex < 0) {
+  const matches = state.entries.filter((entry) => entryMatches(entry, incoming));
+  const existing =
+    matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
+    (matches.length === 1 ? matches[0] : undefined);
+  if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }
-  const existing = state.entries[existingIndex];
-  if (existing && existing.message === message && existing.live && !existing.pending) {
+  const existingIndex = state.entries.indexOf(existing);
+  if (existing.message === message && existing.live && !existing.pending) {
     return state;
   }
-  if (existing?.pending && incoming.identity.sequence !== null) {
+  if (!existing.pending && existing.identity?.id && !incoming.identity.id) {
+    // A terminal projection carries no transcript identity; adopting it over the
+    // durable row would lose the ID every later snapshot reconciles against.
+    return state;
+  }
+  if (
+    incoming.identity.sequence !== null &&
+    (existing.pending || existing.identity?.sequence === null)
+  ) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(
       ({ identity }, index) =>

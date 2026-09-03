@@ -6,6 +6,7 @@ import type {
   WorkboardMetadata,
   WorkboardStaleState,
   WorkboardStatus,
+  WorkboardTemplateId,
   WorkboardUiState,
 } from "./types.ts";
 
@@ -110,6 +111,7 @@ export function resetDraftState(state: WorkboardUiState) {
   const resolveStaleEdit = state.loaded && state.mutationReadiness === "stale_edit_draft";
   state.draftOpen = false;
   state.editingCardId = null;
+  state.editingCardBase = null;
   state.draftTitle = "";
   state.draftNotes = "";
   state.draftStatus = "todo";
@@ -149,6 +151,79 @@ export function draftPayload(state: WorkboardUiState) {
     sessionKey: state.draftSessionKey,
     ...(state.draftTemplateId ? { templateId: state.draftTemplateId } : {}),
   };
+}
+
+type WorkboardCardDraft = {
+  title: string;
+  notes: string;
+  status: WorkboardStatus;
+  priority: WorkboardCard["priority"];
+  labels: string[];
+  agentId: string;
+  sessionKey: string;
+  templateId: WorkboardTemplateId | "";
+};
+
+function cardDraftPayload(card: WorkboardCard): WorkboardCardDraft {
+  return {
+    title: card.title,
+    notes: card.notes ?? "",
+    status: card.status,
+    priority: card.priority,
+    labels: card.labels,
+    agentId: card.agentId ?? "",
+    sessionKey: workboardCardSessionKey(card) ?? "",
+    templateId: card.metadata?.templateId ?? "",
+  };
+}
+
+export function changedDraftPayload(state: WorkboardUiState): Record<string, unknown> {
+  const base = state.editingCardBase;
+  if (!base) {
+    return {};
+  }
+  const draft: Record<string, unknown> = {
+    ...draftPayload(state),
+    templateId: state.draftTemplateId,
+  };
+  const previous: Record<string, unknown> = cardDraftPayload(base);
+  const patch: Record<string, unknown> = {};
+  for (const key of Object.keys(draft)) {
+    if (JSON.stringify(draft[key]) !== JSON.stringify(previous[key])) {
+      patch[key] = key === "templateId" && draft[key] === "" ? null : draft[key];
+    }
+  }
+  return patch;
+}
+
+export function rebaseWorkboardDraft(state: WorkboardUiState, current: WorkboardCard): void {
+  const changed = new Set(Object.keys(changedDraftPayload(state)));
+  const next = cardDraftPayload(current);
+  if (!changed.has("title")) {
+    state.draftTitle = next.title;
+  }
+  if (!changed.has("notes")) {
+    state.draftNotes = next.notes;
+  }
+  if (!changed.has("status")) {
+    state.draftStatus = next.status;
+  }
+  if (!changed.has("priority")) {
+    state.draftPriority = next.priority;
+  }
+  if (!changed.has("labels")) {
+    state.draftLabels = next.labels.join(", ");
+  }
+  if (!changed.has("agentId")) {
+    state.draftAgentId = next.agentId;
+  }
+  if (!changed.has("sessionKey")) {
+    state.draftSessionKey = next.sessionKey;
+  }
+  if (!changed.has("templateId")) {
+    state.draftTemplateId = next.templateId;
+  }
+  state.editingCardBase = current;
 }
 
 export function isFailedSessionStatus(status: GatewaySessionRow["status"]): boolean {

@@ -96,6 +96,12 @@ describe("Skill Workshop persisted record validation", () => {
       value: shippedRollback,
     });
     expect(parseSkillProposalRecord(shippedProposal)).toBe(shippedProposal);
+    expect(
+      parseSkillProposalRecord({
+        ...shippedProposal,
+        draftFile: "generations/123e4567-e89b-42d3-a456-426614174000/PROPOSAL.md",
+      }),
+    ).not.toBeNull();
     expect(parseSkillProposalRollback(shippedRollback)).toBe(shippedRollback);
   });
 
@@ -117,6 +123,10 @@ describe("Skill Workshop persisted record validation", () => {
   });
 
   it.each([
+    {
+      name: "non-generation draft path",
+      value: { ...shippedProposal, draftFile: "generations/../PROPOSAL.md" },
+    },
     {
       name: "duplicate normalized support paths",
       value: {

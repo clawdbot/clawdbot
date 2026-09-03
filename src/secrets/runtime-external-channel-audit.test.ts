@@ -3,27 +3,32 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PluginOrigin } from "../plugins/plugin-origin.types.js";
 import { getPath } from "./path-utils.js";
+import {
+  assertSecretOwnerAvailable,
+  isTrustedSecretSurfaceUnavailableError,
+} from "./runtime-degraded-state.js";
+import { activateSecretsRuntimeSnapshot } from "./runtime.js";
 
 const {
   getBootstrapChannelSecretsMock,
-  loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPublicArtifactMock,
   loadPluginMetadataSnapshotMock,
 } = vi.hoisted(() => ({
   getBootstrapChannelSecretsMock: vi.fn(),
-  loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(),
+  loadBundledPublicArtifactMock: vi.fn(),
   loadPluginMetadataSnapshotMock: vi.fn(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
   resolvePluginMetadataSnapshot: (params: unknown) => {
     const snapshot = loadPluginMetadataSnapshotMock(params) as { plugins: PluginManifestRecord[] };
-    return {
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    };
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
   },
   listPluginOriginsFromMetadataSnapshot: (snapshot: {
     plugins: Array<{ id: string; origin: PluginOrigin }>;
@@ -31,7 +36,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
-  loadBundledPluginPublicArtifactModuleSync: loadBundledPluginPublicArtifactModuleSyncMock,
+  loadBundledPluginPublicArtifactModuleFromCandidatesSync: loadBundledPublicArtifactMock,
 }));
 
 vi.mock("../channels/plugins/bootstrap-registry.js", () => ({
@@ -94,14 +99,15 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
 }
 
 function mockBundledPublicArtifactMiss() {
-  loadBundledPluginPublicArtifactModuleSyncMock.mockImplementation(
-    (params: { dirName: string; artifactBasename: string }) => {
-      if (params.dirName === "googlechat" && params.artifactBasename === "secret-contract-api.js") {
+  loadBundledPublicArtifactMock.mockImplementation(
+    (params: { dirName: string; artifactCandidates: string[] }) => {
+      if (
+        params.dirName === "googlechat" &&
+        params.artifactCandidates[0] === "secret-contract-api.js"
+      ) {
         return createGoogleChatSecretContractApi();
       }
-      throw new Error(
-        `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-      );
+      return null;
     },
   );
 }
@@ -197,13 +203,13 @@ function expectMetadataBackedContractsWereUsed(
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalled();
   }
   for (const channelId of channelIds) {
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "secret-contract-api.js",
+      artifactCandidates: ["secret-contract-api.js"],
     });
-    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+    expect(loadBundledPublicArtifactMock).not.toHaveBeenCalledWith({
       dirName: channelId,
-      artifactBasename: "contract-api.js",
+      artifactCandidates: ["contract-api.js"],
     });
   }
 }
@@ -218,7 +224,7 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
   beforeEach(() => {
     getBootstrapChannelSecretsMock.mockReset();
     getBootstrapChannelSecretsMock.mockReturnValue(undefined);
-    loadBundledPluginPublicArtifactModuleSyncMock.mockReset();
+    loadBundledPublicArtifactMock.mockReset();
     mockBundledPublicArtifactMiss();
     loadPluginMetadataSnapshotMock.mockReset();
   });
@@ -237,6 +243,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
             },
             voice: {
               enabled: true,
+              realtime: {
+                providers: {
+                  openai: { apiKey: ref("DISCORD_VOICE_REALTIME_API_KEY") },
+                },
+              },
               tts: {
                 providers: {
                   openai: { apiKey: ref("DISCORD_VOICE_TTS_API_KEY") },
@@ -256,6 +267,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
                 },
                 voice: {
                   enabled: true,
+                  realtime: {
+                    providers: {
+                      openai: { apiKey: ref("DISCORD_WORK_VOICE_REALTIME_API_KEY") },
+                    },
+                  },
                   tts: {
                     providers: {
                       openai: { apiKey: ref("DISCORD_WORK_VOICE_TTS_API_KEY") },
@@ -341,9 +357,11 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
         env: {
           DISCORD_TOKEN: "discord-token",
           DISCORD_PLURALKIT_TOKEN: "discord-pluralkit-token",
+          DISCORD_VOICE_REALTIME_API_KEY: "discord-voice-realtime-api-key",
           DISCORD_VOICE_TTS_API_KEY: "discord-voice-tts-api-key",
           DISCORD_WORK_TOKEN: "discord-work-token",
           DISCORD_WORK_PLURALKIT_TOKEN: "discord-work-pluralkit-token",
+          DISCORD_WORK_VOICE_REALTIME_API_KEY: "discord-work-voice-realtime-api-key",
           DISCORD_WORK_VOICE_TTS_API_KEY: "discord-work-voice-tts-api-key",
           FEISHU_APP_SECRET: "feishu-app-secret",
           FEISHU_ENCRYPT_KEY: "feishu-encrypt-key",
@@ -370,9 +388,12 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
       const expectedPaths = {
         "channels.discord.token": "discord-token",
         "channels.discord.pluralkit.token": "discord-pluralkit-token",
+        "channels.discord.voice.realtime.providers.openai.apiKey": "discord-voice-realtime-api-key",
         "channels.discord.voice.tts.providers.openai.apiKey": "discord-voice-tts-api-key",
         "channels.discord.accounts.work.token": "discord-work-token",
         "channels.discord.accounts.work.pluralkit.token": "discord-work-pluralkit-token",
+        "channels.discord.accounts.work.voice.realtime.providers.openai.apiKey":
+          "discord-work-voice-realtime-api-key",
         "channels.discord.accounts.work.voice.tts.providers.openai.apiKey":
           "discord-work-voice-tts-api-key",
         "channels.feishu.appSecret": "feishu-app-secret",
@@ -579,5 +600,61 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     });
     expect(snapshot.warnings).toStrictEqual([]);
     expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it("publishes an unavailable Discord realtime provider owner as a typed redacted error", async () => {
+    const records = configureExternalChannelRecords(["discord"]);
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          discord: {
+            accounts: {
+              work: {
+                enabled: true,
+                voice: {
+                  enabled: true,
+                  mode: "agent-proxy",
+                  realtime: {
+                    provider: "grok-voice",
+                    providers: {
+                      xai: { apiKey: ref("MISSING_XAI_REALTIME_API_KEY") },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      allowUnavailableSecretOwners: true,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expect(snapshot.degradedOwners).toMatchObject([
+      {
+        ownerKind: "capability",
+        ownerId: "discord:voice:realtime:work:xai",
+        reason: "secret reference was not found",
+      },
+    ]);
+    activateSecretsRuntimeSnapshot(snapshot);
+
+    let failure: unknown;
+    try {
+      assertSecretOwnerAvailable("capability", "discord:voice:realtime:work:xai");
+    } catch (error) {
+      failure = error;
+    }
+    expect(isTrustedSecretSurfaceUnavailableError(failure)).toBe(true);
+    expect(failure).toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "capability",
+      ownerId: "discord:voice:realtime:work:xai",
+      paths: ["channels.discord.accounts.work.voice.realtime.providers.xai.apiKey"],
+    });
+    expect(String(failure)).not.toContain("MISSING_XAI_REALTIME_API_KEY");
+    expectMetadataBackedContractsWereUsed(["discord"]);
   });
 });

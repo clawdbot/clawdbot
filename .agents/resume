@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+node_bin="$HOME/.local/share/openclaw-orb/node/current/bin"
+
+cd "$repo_root"
+
+if [[ ! -x "$node_bin/node" ]]; then
+  echo "[orb resume] Node toolchain is missing; run .agents/setup" >&2
+  exit 1
+fi
+
+export PATH="$node_bin:$PATH"
+
+if [[ ! -x "$node_bin/pnpm" ]]; then
+  "$node_bin/corepack" enable --install-directory "$node_bin"
+fi
+
+node --input-type=module -e '
+  import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
+  if (!isSupportedOpenClawNodeVersion(process.version)) process.exit(1);
+'
+
+package_manager="$(node -p 'require("./package.json").packageManager')"
+expected_pnpm="${package_manager#pnpm@}"
+expected_pnpm="${expected_pnpm%%+*}"
+actual_pnpm="$(pnpm --version)"
+if [[ "$actual_pnpm" != "$expected_pnpm" ]]; then
+  echo "[orb resume] Expected pnpm $expected_pnpm, found $actual_pnpm; run .agents/setup" >&2
+  exit 1
+fi
+
+printf '[orb resume] Ready: Node %s, pnpm %s\n' "$(node --version)" "$actual_pnpm"

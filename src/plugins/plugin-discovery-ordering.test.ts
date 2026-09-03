@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { discoverOpenClawPlugins } from "./discovery.js";
+import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./discovery.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -113,6 +113,28 @@ describe("deterministic plugin discovery ownership", () => {
 
     expect(discovery.candidates.map((candidate) => candidate.idHint)).toEqual(["zeta", "alpha"]);
   });
+
+  it.each([false, true])(
+    "keeps the first configured alias for each physical source (alias first: %s)",
+    (aliasFirst) => {
+      const stateRoot = createTemporaryRoot();
+      const pluginRoot = path.join(stateRoot, "plugin");
+      const aliasRoot = path.join(stateRoot, "alias");
+      createPlugin({ pluginRoot, pluginId: "ordered-plugin" });
+      fs.symlinkSync(pluginRoot, aliasRoot, process.platform === "win32" ? "junction" : "dir");
+      const loadPaths = (aliasFirst ? [aliasRoot, pluginRoot] : [pluginRoot, aliasRoot]).map(
+        (root) => path.join(root, "index.cjs"),
+      );
+      const env = {
+        OPENCLAW_STATE_DIR: path.join(stateRoot, "state"),
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      };
+      const runtime = discoverOpenClawPlugins({ extraPaths: loadPaths, installRecords: {}, env });
+      const configured = discoverConfiguredPluginLoadPaths({ loadPaths, env, deduplicate: true });
+      expect(runtime.candidates.map((candidate) => candidate.source)).toEqual([loadPaths[0]]);
+      expect(configured.candidates).toEqual(runtime.candidates);
+    },
+  );
 
   it("keeps bundled dist-opt-out source plugin discovery deterministic", () => {
     const packageRoot = createTemporaryRoot();

@@ -1,4 +1,4 @@
-import { resolveSystemAgentTargetAgentId } from "../agents/agent-scope-config.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 // OpenClaw overview gathers config, agent, tool, docs, source, and gateway status.
 import { listAgentEntries, resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import {
@@ -139,14 +139,14 @@ function resolveFastTestReferences(env: NodeJS.ProcessEnv): OpenClawReferencePat
 }
 
 export async function loadSystemAgentOverview(
-  opts: { env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
+  opts: { agentId?: string; env?: NodeJS.ProcessEnv; deps?: SystemAgentOverviewDependencies } = {},
 ): Promise<SystemAgentOverview> {
   const env = opts.env ?? process.env;
   const deps = opts.deps ?? {};
   const readSnapshot = deps.readConfigFileSnapshot ?? readConfigFileSnapshot;
   const snapshot = await readSnapshot();
   const cfg = snapshot.runtimeConfig ?? snapshot.sourceConfig ?? {};
-  const defaultAgentId = resolveSystemAgentTargetAgentId(cfg);
+  const defaultAgentId = resolveAmbientOwnerAgentId(cfg, opts.agentId);
   const defaultModel =
     resolveAgentEffectiveModelPrimary(cfg, defaultAgentId) ??
     resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model);

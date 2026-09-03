@@ -1,6 +1,7 @@
 // Main auto-reply pipeline: prepares context, runs commands, and dispatches agents.
 import fs from "node:fs/promises";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isImplicitAcpWorkspaceCandidate } from "../../agents/agent-scope-config.js";
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   resolveAutoFallbackPrimaryProbe,
@@ -24,6 +25,7 @@ import { type OpenClawConfig, getRuntimeConfig } from "../../config/config.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { isSessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
 import { logVerbose } from "../../globals.js";
+import { createAbortError, isAbortError } from "../../infra/abort-signal.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { isFastTestRuntimeEnv } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -37,6 +39,7 @@ import {
   ModelSelectionLockedError,
 } from "../../sessions/model-overrides.js";
 import { ensureSessionDiffBaseline } from "../../sessions/session-diff-baseline.js";
+import { resolveStoredModelOverride } from "../../sessions/stored-model-overrides.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   sessionDeliveryChannel,
@@ -50,6 +53,7 @@ import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import { normalizeThinkLevel, normalizeVerboseLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
+import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
 import {
@@ -83,15 +87,12 @@ import {
 } from "./pending-final-delivery.js";
 import { getPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { attachProgressNarratorToReplyOptions } from "./progress-narrator.js";
-import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { createReplyTimingTracker, isReplyProfilerEnabled } from "./reply-timing-tracker.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import { initSessionState, resolveReplySessionPreprocessingState } from "./session.js";
 import { mergeSkillFilters } from "./skill-filter.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
-import {
-  isStaleHeartbeatAutoFallbackOverride,
-  resolveStoredModelOverride,
-} from "./stored-model-override.js";
+import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -206,12 +207,15 @@ function canSelfServeLocalPaths(params: {
   }
   const policySessionKey = resolveRuntimePolicySessionKey({
     cfg: params.cfg,
+    agentId: params.agentId,
     ctx: params.ctx,
     sessionKey: params.sessionKey,
   });
   const sandboxed = resolveSandboxRuntimeStatus({
     cfg: params.cfg,
-    sessionKey: policySessionKey,
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    classificationSessionKey: policySessionKey,
   }).sandboxed;
   if (
     (sandboxed && !params.stagedPathsAvailable) ||
@@ -286,6 +290,7 @@ function withExtractedFileImages(
 async function applyLinkUnderstandingIfNeeded(params: {
   ctx: MsgContext;
   cfg: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<boolean> {
   if (!hasLinkCandidate(params.ctx)) {
     return false;
@@ -295,6 +300,9 @@ async function applyLinkUnderstandingIfNeeded(params: {
     await applyLinkUnderstanding(params);
     return true;
   } catch (err) {
+    if (isAbortError(err)) {
+      throw err;
+    }
     linkUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `link understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
@@ -319,10 +327,13 @@ export async function getReplyFromConfig(
       isFastTestEnv,
       configOverride,
     });
-  // Profiler spans stay inert unless diagnostics enable `profiler` or
-  // `reply.profiler`, so normal replies do not pay per-stage Date.now/array
-  // bookkeeping while we can still split resolver costs on demand.
-  const resolverTiming = createReplyTimingTracker({ log: replyResolverTimingLog, config: cfg });
+  // Retain preparation timings before a stall happens. Whole-turn summaries
+  // include inference and tools, so only profiling warns on their duration.
+  const profilerEnabled = isReplyProfilerEnabled({ config: cfg });
+  const resolverTiming = createReplyTimingTracker({
+    log: replyResolverTimingLog,
+    enabled: profilerEnabled,
+  });
   const useFastTestBootstrap = resolverTiming.measureSync("reply.resolve_fast_test_bootstrap", () =>
     shouldUseReplyFastTestBootstrap({
       isFastTestEnv,
@@ -339,6 +350,16 @@ export async function getReplyFromConfig(
   const finalized = resolverTiming.measureSync("reply.finalize_context", () =>
     finalizeInboundContext(ctx),
   );
+  // Resolve legacy text-slash source lanes before any session-scoped work.
+  // The explicit steer command itself still flows through normal command and
+  // prepared-reply handling; this only gives that path the active owner's key.
+  const explicitSteerTargetSessionKey = resolverTiming.measureSync(
+    "reply.resolve_explicit_steer_target",
+    () => resolveActiveExplicitSteerSessionKey({ cfg, ctx: finalized }),
+  );
+  if (explicitSteerTargetSessionKey) {
+    finalized.CommandTargetSessionKey = explicitSteerTargetSessionKey;
+  }
   const initialAgentScope = resolverTiming.measureSync("reply.resolve_agent_scope", () => {
     const targetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
     const resolvedAgentSessionKey = targetSessionKey || finalized.SessionKey;
@@ -432,6 +453,8 @@ export async function getReplyFromConfig(
       "";
     const heartbeatRef = heartbeatRaw
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: heartbeatRaw,
           defaultProvider,
           aliasIndex,
@@ -492,6 +515,7 @@ export async function getReplyFromConfig(
         provider,
         model,
         workspaceDir: workspaceDirForNativeCommand,
+        preparedModelCatalog,
         typing,
         opts: optsWithSkillFilter,
         skillFilter: mergedSkillFilter,
@@ -501,6 +525,23 @@ export async function getReplyFromConfig(
     logResolverTiming("completed", "native_slash_command_fast_path");
     return nativeSlashCommandFastReply.reply;
   }
+  const optsWithCommandQueueOverride = nativeSlashCommandFastReply.queueModeOverride
+    ? { ...optsWithSkillFilter, queueModeOverride: nativeSlashCommandFastReply.queueModeOverride }
+    : optsWithSkillFilter;
+
+  const acpWorkspaceProvisioningInput = isImplicitAcpWorkspaceCandidate(cfg, agentId)
+    ? await traceGetReplyPhase("reply.resolve_acp_workspace_provisioning", async () => {
+        // Implicit ACP agents need the live session's ACP meta (per-session cwd
+        // from /acp spawn --cwd or /acp cwd) before workspace scaffolding runs.
+        const state = resolveReplySessionPreprocessingState({ ctx: finalized, cfg });
+        return {
+          cfg,
+          agentId,
+          sessionKey: state.sessionKey,
+          ...(state.sessionEntry ? { sessionEntry: state.sessionEntry } : {}),
+        };
+      })
+    : { cfg, agentId, ...(agentSessionKey ? { sessionKey: agentSessionKey } : {}) };
 
   const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
     useFastTestBootstrap
@@ -509,6 +550,9 @@ export async function getReplyFromConfig(
           dir: workspaceDirRaw,
           ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
           skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+          provisioning: await (
+            await import("../../agents/acp-workspace-provisioning.js")
+          ).resolveAcpAgentWorkspaceProvisioningForTurn(acpWorkspaceProvisioningInput),
         }),
   );
   const workspaceDir = workspace.dir;
@@ -523,6 +567,7 @@ export async function getReplyFromConfig(
       stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
+        agentId,
         sessionKey: agentSessionKey,
         workspaceDir,
       }),
@@ -572,8 +617,15 @@ export async function getReplyFromConfig(
       applyLinkUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
+        signal: internalOptsWithSkillFilter?.abortSignal,
       }),
     );
+  }
+  // Cleanup may resolve after cancellation; hooks must stay inside the reply lifetime.
+  if (internalOptsWithSkillFilter?.abortSignal?.aborted) {
+    throw createAbortError("Reply canceled during preprocessing", {
+      cause: internalOptsWithSkillFilter.abortSignal.reason,
+    });
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -602,6 +654,7 @@ export async function getReplyFromConfig(
               : {}),
             pinExpectedExistingSession:
               internalOptsWithSkillFilter?.pinExpectedExistingSession === true,
+            newlyCreatedSessionId: internalOptsWithSkillFilter?.newlyCreatedSessionId,
             requestedSessionId: internalOptsWithSkillFilter?.requestedSessionId,
             resumeRequestedSession: internalOptsWithSkillFilter?.resumeRequestedSession,
             signal: internalOptsWithSkillFilter?.abortSignal,
@@ -646,6 +699,8 @@ export async function getReplyFromConfig(
     initialSessionEntry,
     sessionEntryHandle,
     previousSessionEntry,
+    previousSessionMemory,
+    previousSessionResetMessages,
     sessionStore,
     sessionKey,
     sessionId,
@@ -669,9 +724,16 @@ export async function getReplyFromConfig(
   }
   // Utility-model narration is turn-local decoration. Initialize the durable
   // session first, then keep it completely outside model-locked native runs.
-  const optsWithSessionSkillOverrides = sessionEntry.toolOverrides?.skills
-    ? { ...optsWithSkillFilter, skillOverrides: sessionEntry.toolOverrides.skills }
-    : optsWithSkillFilter;
+  const admittedSessionSettings =
+    // SAFETY: Gateway dispatch owns this internal extension and forwards the same options object here.
+    (optsWithCommandQueueOverride as RuntimeInternalGetReplyOptions | undefined)
+      ?.admittedSessionSettings;
+  const turnToolOverrides = admittedSessionSettings
+    ? admittedSessionSettings.toolOverrides
+    : sessionEntry.toolOverrides;
+  const optsWithSessionSkillOverrides = turnToolOverrides?.skills
+    ? { ...optsWithCommandQueueOverride, skillOverrides: turnToolOverrides.skills }
+    : optsWithCommandQueueOverride;
   const resolvedOpts = attachProgressNarratorToReplyOptions({
     cfg,
     agentId,
@@ -782,6 +844,8 @@ export async function getReplyFromConfig(
   const resolvedChannelModelOverride =
     channelModelOverride && !hasResolvedHeartbeatModelOverride && !sessionModelSelectionLocked
       ? resolveModelRefFromString({
+          cfg,
+          agentId,
           raw: channelModelOverride.model,
           defaultProvider,
           aliasIndex,
@@ -840,13 +904,13 @@ export async function getReplyFromConfig(
         primaryModel,
       })
     : undefined;
-  const hasEffectiveSessionModelOverride =
-    hasSessionModelOverride &&
+  const hasEffectiveStoredModelOverride =
+    Boolean(storedModelOverride || hasSessionModelOverride) &&
     !staleHeartbeatAutoFallbackOverride &&
     !staleLegacyAutoFallbackWithoutOrigin;
   if (
     !hasResolvedHeartbeatModelOverride &&
-    !hasEffectiveSessionModelOverride &&
+    !hasEffectiveStoredModelOverride &&
     resolvedChannelModelOverride
   ) {
     provider = resolvedChannelModelOverride.ref.provider;
@@ -946,7 +1010,9 @@ export async function getReplyFromConfig(
         autoFallbackPrimaryProbe,
       }),
     );
-    logResolverTiming("completed", "fast_directive_prepared_reply");
+    if (profilerEnabled) {
+      logResolverTiming("completed", "fast_directive_prepared_reply");
+    }
     return fastReplyResult;
   }
 
@@ -1041,6 +1107,8 @@ export async function getReplyFromConfig(
       storePath,
       sessionEntry,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       onObservedReplyDelivery: resolvedOpts?.onObservedReplyDelivery,
       workspaceDir,
     });
@@ -1067,6 +1135,8 @@ export async function getReplyFromConfig(
       ...(initialSessionEntry ? { initialSessionEntry } : {}),
       allowCreateSessionEntry: useFastTestBootstrap && initialSessionEntry === undefined,
       previousSessionEntry,
+      previousSessionMemory,
+      previousSessionResetMessages,
       sessionStore,
       sessionKey,
       storePath,
@@ -1110,6 +1180,8 @@ export async function getReplyFromConfig(
   directives = inlineActionResult.directives;
   cleanedBody = inlineActionResult.cleanedBody;
   const explicitSkillSelections = inlineActionResult.explicitSkillSelections;
+  const queueModeOverride = inlineActionResult.queueModeOverride;
+  const preparedReplyOpts = withExtractedFileImages(resolvedOpts, extractedFileImages);
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
   const runAutoFallbackPrimaryProbe = directives.hasModelDirective
     ? undefined
@@ -1204,6 +1276,7 @@ export async function getReplyFromConfig(
         ctx,
         sessionCtx,
         cfg,
+        agentId,
         sessionKey,
         workspaceDir,
       }),
@@ -1273,7 +1346,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
+      opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,
       timeoutMs,
       isNewSession,
@@ -1290,7 +1363,9 @@ export async function getReplyFromConfig(
       autoFallbackPrimaryProbe: runAutoFallbackPrimaryProbe,
     }),
   );
-  logResolverTiming("completed", "prepared_reply");
+  if (profilerEnabled) {
+    logResolverTiming("completed", "prepared_reply");
+  }
   return replyResult;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

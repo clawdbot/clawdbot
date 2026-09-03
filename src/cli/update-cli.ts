@@ -3,7 +3,8 @@ import type { Command } from "commander";
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { defaultRuntime } from "../runtime.js";
+import { POST_CORE_UPDATE_ENV } from "../infra/update-post-core-context.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { inheritOptionFromParent } from "./command-options.js";
 import { formatHelpExamples } from "./help-format.js";
 import { isJsonOutputModeActive } from "./json-output-mode.js";
@@ -13,11 +14,7 @@ import type {
   UpdateStatusOptions,
   UpdateWizardOptions,
 } from "./update-cli/shared.js";
-import { updateStatusCommand } from "./update-cli/status.js";
-import { updateCommand, updateFinalizeCommand } from "./update-cli/update-command.js";
-import { updateWizardCommand } from "./update-cli/wizard.js";
-
-export { updateCommand, updateFinalizeCommand, updateStatusCommand, updateWizardCommand };
+import { UPDATE_OPTION_SPECS } from "./update-option-specs.js";
 export type {
   UpdateCommandOptions,
   UpdateFinalizeOptions,
@@ -30,7 +27,7 @@ function inheritedUpdateJson(command?: Command): boolean {
 }
 
 function handleUpdateCommandError(error: unknown): void {
-  if (isJsonOutputModeActive(process.argv)) {
+  if (error instanceof ExitError || isJsonOutputModeActive(process.argv)) {
     throw error;
   }
   defaultRuntime.error(formatErrorMessage(error));
@@ -49,8 +46,7 @@ function inheritedUpdateTimeout(
 }
 
 type CommanderUpdateOptions = Record<string, unknown> & {
-  acknowledgeClawhubRisk?: boolean;
-  acknowledgeClawHubRisk?: boolean;
+  acceptCapabilities?: boolean;
   channel?: string;
   dryRun?: boolean;
   json?: boolean;
@@ -60,28 +56,23 @@ type CommanderUpdateOptions = Record<string, unknown> & {
   yes?: boolean;
 };
 
-function normalizeCommanderClawHubRiskOption(opts: CommanderUpdateOptions): boolean {
-  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
-}
-
-function inheritedUpdateClawHubRisk(command?: Command): boolean {
-  return Boolean(
-    inheritOptionFromParent<boolean>(command, "acknowledgeClawhubRisk") ??
-    inheritOptionFromParent<boolean>(command, "acknowledgeClawHubRisk"),
-  );
-}
-
-function rejectUnsupportedInheritedUpdateDryRun(command: Command): boolean {
-  if (!inheritOptionFromParent<boolean>(command, "dryRun")) {
-    return false;
-  }
-
-  handleUpdateCommandError(
-    new Error(
-      `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
-    ),
-  );
-  return true;
+// Leaves opt into dry-run explicitly; unsupported leaves reject it before owner work.
+function createUpdateLeafAction(
+  action: (opts: Record<string, unknown>, command: Command) => Promise<void>,
+  options: { supportsDryRun?: boolean } = {},
+) {
+  return async (opts: Record<string, unknown>, command: Command) => {
+    try {
+      if (!options.supportsDryRun && inheritOptionFromParent<boolean>(command, "dryRun")) {
+        throw new Error(
+          `--dry-run is not supported for \`openclaw update ${command.name()}\`. Run \`openclaw update --dry-run\` instead.`,
+        );
+      }
+      await action(opts, command);
+    } catch (err) {
+      handleUpdateCommandError(err);
+    }
+  };
 }
 
 function registerUpdateFinalizationCommand(update: Command, name: string, hidden: boolean) {
@@ -92,17 +83,17 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
     .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel before repair")
     .option("--timeout <seconds>", "Timeout for update repair steps in seconds (default: 1800)")
     .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings during post-update plugin sync",
-      false,
-    )
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option("--no-restart", "Accepted for update command parity; repair never restarts")
     .addHelpText(
       "after",
       () =>
         `\n${theme.heading("Examples:")}\n${formatHelpExamples([
           ["openclaw update repair", "Rerun post-update doctor and plugin convergence."],
+          [
+            "openclaw update repair --accept-capabilities",
+            "Accept reviewed plugin capability changes during repair.",
+          ],
           ["openclaw update repair --channel beta", "Repair against the beta update channel."],
           ["openclaw update repair --json", "JSON output for automation."],
         ])}\n\n${theme.heading("Notes:")}\n${theme.muted(
@@ -111,12 +102,9 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts, actionCommand) => {
-      try {
-        if (rejectUnsupportedInheritedUpdateDryRun(actionCommand)) {
-          return;
-        }
-
+    .action(
+      createUpdateLeafAction(async (opts, actionCommand) => {
+        const { updateFinalizeCommand } = await import("./update-cli/update-command-finalize.js");
         await updateFinalizeCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(actionCommand),
           channel:
@@ -124,14 +112,14 @@ function registerUpdateFinalizationCommand(update: Command, name: string, hidden
             inheritOptionFromParent<string>(actionCommand, "channel"),
           timeout: inheritedUpdateTimeout(opts, actionCommand),
           yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(actionCommand, "yes")),
+          acceptCapabilities:
+            Boolean(opts.acceptCapabilities) ||
+            Boolean(inheritOptionFromParent<boolean>(actionCommand, "acceptCapabilities")),
           restart: false,
-          acknowledgeClawHubRisk:
-            normalizeCommanderClawHubRiskOption(opts) || inheritedUpdateClawHubRisk(actionCommand),
+          deferCompletionCache: hidden && process.env[POST_CORE_UPDATE_ENV]?.trim() === "1",
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 }
 
 /** Attach the update command group to the root CLI. */
@@ -139,22 +127,11 @@ export function registerUpdateCli(program: Command) {
   program.enablePositionalOptions();
   const update = program
     .command("update")
-    .description("Update OpenClaw and inspect update channel status")
-    .option("--json", "Output result as JSON", false)
-    .option("--no-restart", "Skip restarting the gateway service after a successful update")
-    .option("--dry-run", "Preview update actions without making changes", false)
-    .option("--channel <stable|extended-stable|beta|dev>", "Persist update channel (git + npm)")
-    .option(
-      "--tag <dist-tag|version|spec>",
-      "Override the package target for this update (dist-tag, version, or package spec)",
-    )
-    .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
-    .option("--yes", "Skip confirmation prompts (non-interactive)", false)
-    .option(
-      "--acknowledge-clawhub-risk",
-      "Acknowledge ClawHub release trust warnings during post-update plugin sync",
-      false,
-    )
+    .description("Update OpenClaw and inspect update channel status");
+  for (const [flags, description, defaultValue] of UPDATE_OPTION_SPECS) {
+    update.option(flags, description, defaultValue);
+  }
+  update
     .addHelpText("after", () => {
       const examples = [
         ["openclaw update", "Update a source checkout (git)"],
@@ -165,13 +142,12 @@ export function registerUpdateCli(program: Command) {
         ["openclaw update --channel beta", "Switch to beta channel (git + npm)"],
         ["openclaw update --channel dev", "Switch to dev channel (git + npm)"],
         ["openclaw update --tag beta", "One-off update to a dist-tag or version"],
-        ["openclaw update --tag main", "One-off package update from GitHub main"],
         ["openclaw update --dry-run", "Preview actions without changing anything"],
         ["openclaw update --no-restart", "Update without restarting the service"],
         ["openclaw update --json", "Output result as JSON"],
         ["openclaw update --yes", "Non-interactive (accept downgrade prompts)"],
+        ["openclaw update --accept-capabilities", "Accept reviewed plugin capability changes"],
         ["openclaw update repair", "Repair stranded post-update plugin state"],
-        ["openclaw update --acknowledge-clawhub-risk", "Acknowledge ClawHub plugin trust warnings"],
         ["openclaw update wizard", "Interactive update wizard"],
         ["openclaw --update", "Shorthand for openclaw update"],
       ] as const;
@@ -187,11 +163,11 @@ ${theme.heading("Switch channels:")}
   - Use --channel stable|extended-stable|beta|dev to persist the update channel in config
   - Run openclaw update status to see the active channel and source
   - Use --tag <dist-tag|version|spec> for a one-off package update without persisting
-  - Use --tag main for a one-off package update from GitHub main
+  - Use --channel dev for the moving GitHub main checkout; package installs reject --tag main
 
 ${theme.heading("Non-interactive:")}
   - Use --yes to accept downgrade prompts
-  - Use --acknowledge-clawhub-risk only after reviewing ClawHub plugin trust warnings
+  - Use --accept-capabilities to accept each plugin's reviewed capability changes
   - Combine with --channel/--tag/--no-restart/--json/--timeout as needed
   - Use --dry-run to preview actions without writing config/installing/restarting
 
@@ -208,6 +184,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
     })
     .action(async (opts: CommanderUpdateOptions) => {
       try {
+        const { updateCommand } = await import("./update-cli/update-command.js");
         await updateCommand({
           json: Boolean(opts.json),
           restart: Boolean(opts.restart),
@@ -216,12 +193,43 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           tag: opts.tag,
           timeout: opts.timeout,
           yes: Boolean(opts.yes),
-          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+          acceptCapabilities: Boolean(opts.acceptCapabilities),
         });
       } catch (err) {
         handleUpdateCommandError(err);
       }
     });
+
+  update
+    .command("cleanup")
+    .description("Retire verified update recovery originals after acknowledging rollback loss")
+    .option("--dry-run", "Inspect recovery metadata without writes", false)
+    .option("--json", "Output one JSON result; never implies consent", false)
+    .option("--yes", "Acknowledge permanent loss of the selected rollback originals", false)
+    .action(
+      createUpdateLeafAction(
+        async (opts, command) => {
+          for (const key of ["channel", "tag", "timeout", "restart", "acceptCapabilities"]) {
+            if (
+              update.getOptionValueSource(key) &&
+              update.getOptionValueSource(key) !== "default"
+            ) {
+              throw new Error(
+                `--${key === "restart" ? "no-restart" : key === "acceptCapabilities" ? "accept-capabilities" : key} is not supported for openclaw update cleanup.`,
+              );
+            }
+          }
+          const { updateCleanupCommand } = await import("./update-cli/cleanup.js");
+          await updateCleanupCommand({
+            dryRun:
+              Boolean(opts.dryRun) || Boolean(inheritOptionFromParent<boolean>(command, "dryRun")),
+            json: Boolean(opts.json) || inheritedUpdateJson(command),
+            yes: Boolean(opts.yes) || Boolean(inheritOptionFromParent<boolean>(command, "yes")),
+          });
+        },
+        { supportsDryRun: true },
+      ),
+    );
 
   registerUpdateFinalizationCommand(update, "repair", false);
   registerUpdateFinalizationCommand(update, "finalize", true);
@@ -229,24 +237,23 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
   update
     .command("wizard")
     .description("Interactive update wizard")
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .addHelpText(
       "after",
       `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}\n`,
     )
-    .action(async (opts, command) => {
-      try {
-        if (rejectUnsupportedInheritedUpdateDryRun(command)) {
-          return;
-        }
-
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateWizardCommand } = await import("./update-cli/wizard.js");
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
+          acceptCapabilities:
+            Boolean(opts.acceptCapabilities) ||
+            Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 
   update
     .command("status")
@@ -266,14 +273,13 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
           "Docs:",
         )} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/update")}`,
     )
-    .action(async (opts, command) => {
-      try {
+    .action(
+      createUpdateLeafAction(async (opts, command) => {
+        const { updateStatusCommand } = await import("./update-cli/status.js");
         await updateStatusCommand({
           json: Boolean(opts.json) || inheritedUpdateJson(command),
           timeout: inheritedUpdateTimeout(opts, command),
         });
-      } catch (err) {
-        handleUpdateCommandError(err);
-      }
-    });
+      }),
+    );
 }

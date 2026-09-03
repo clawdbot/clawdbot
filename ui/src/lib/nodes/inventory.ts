@@ -6,11 +6,35 @@ import { asFiniteNumber as optionalNumber } from "@openclaw/normalization-core/n
 // renders one row per machine instead of one row per historical keypair.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { z } from "zod";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { PairedDevice } from "./index.ts";
 
 type NodeApprovalState = "approved" | "pending-approval" | "pending-reapproval" | "unapproved";
+type NodeWorkerSlots = { total: number; available: number };
 type NodeWorkerBundleStatus = { status: "installed"; version: string } | { status: "missing" };
+
+const hostStatsSchema = z
+  .object({
+    cpuCount: z.number().int().positive(),
+    loadAverage: z
+      .tuple([z.number().nonnegative(), z.number().nonnegative(), z.number().nonnegative()])
+      .optional(),
+    memoryTotalBytes: z.number().positive(),
+    memoryFreeBytes: z.number().nonnegative(),
+    diskTotalBytes: z.number().positive().optional(),
+    diskAvailableBytes: z.number().nonnegative().optional(),
+    updatedAtMs: z.number().nonnegative(),
+  })
+  .refine(
+    (stats) =>
+      stats.memoryFreeBytes <= stats.memoryTotalBytes &&
+      (stats.diskAvailableBytes === undefined ||
+        stats.diskTotalBytes === undefined ||
+        stats.diskAvailableBytes <= stats.diskTotalBytes),
+  );
+
+type NodeHostStats = z.infer<typeof hostStatsSchema>;
 
 /** Typed projection of one raw `node.list` row. */
 type NodeListEntry = {
@@ -28,7 +52,9 @@ type NodeListEntry = {
   commands: string[];
   approvalState?: NodeApprovalState;
   pendingRequestId?: string;
+  workerSlots?: NodeWorkerSlots;
   workerBundle?: NodeWorkerBundleStatus;
+  hostStats?: NodeHostStats;
   connected: boolean;
   paired: boolean;
   connectedAtMs?: number;
@@ -81,6 +107,28 @@ function stringList(value: unknown): string[] {
     .filter((entry): entry is string => entry !== undefined);
 }
 
+function parseWorkerSlots(value: unknown): NodeWorkerSlots | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const keys = Object.keys(value);
+  const total = value.total;
+  const available = value.available;
+  return keys.length === 2 &&
+    keys.includes("total") &&
+    keys.includes("available") &&
+    typeof total === "number" &&
+    typeof available === "number" &&
+    Number.isSafeInteger(total) &&
+    Number.isSafeInteger(available) &&
+    total >= 1 &&
+    total <= 1_024 &&
+    available >= 0 &&
+    available <= total
+    ? { total, available }
+    : undefined;
+}
+
 function parseWorkerBundleStatus(value: unknown): NodeWorkerBundleStatus | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -119,7 +167,9 @@ function parseNodeListEntry(raw: Record<string, unknown>): NodeListEntry | null 
         ? (approvalState as NodeApprovalState)
         : undefined,
     pendingRequestId: normalizeOptionalString(raw.pendingRequestId),
+    workerSlots: parseWorkerSlots(raw.workerSlots),
     workerBundle: parseWorkerBundleStatus(raw.workerBundle),
+    hostStats: hostStatsSchema.safeParse(raw.hostStats).data,
     connected: raw.connected === true,
     paired: raw.paired === true,
     connectedAtMs: optionalNumber(raw.connectedAtMs),
@@ -388,4 +438,17 @@ export function resolveInventoryRemoval(entry: DeviceInventoryEntry): {
     // other roles (or tokenless records) need the device-level removal too.
     removeDevice: Boolean(entry.device) && (nonNodeRoles.length > 0 || entry.roles.length === 0),
   };
+}
+
+export function presenceConnectivitySignature(entries: PresenceEntry[]): string {
+  const states = new Map<string, "connected" | "offline">();
+  for (const entry of entries) {
+    const id = (entry.deviceId ?? entry.instanceId)?.trim().toLowerCase();
+    if (!id || entry.mode?.trim().toLowerCase() === "gateway") {
+      continue;
+    }
+    const key = entry.roles?.includes("node") ? `${id}:node` : id;
+    states.set(key, entry.reason?.trim().toLowerCase() === "disconnect" ? "offline" : "connected");
+  }
+  return JSON.stringify([...states].toSorted(([left], [right]) => left.localeCompare(right)));
 }

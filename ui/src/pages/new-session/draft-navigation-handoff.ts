@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import * as catalog from "./catalog-target.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
 
@@ -12,7 +13,7 @@ export function retainDraft(
 ) {
   submission.draftPersistence.persistNow();
   const owner = context?.gateway.snapshot.client;
-  if (!context || !owner || submission.submitting || submission.pendingCloud.sessionKey) {
+  if (!context || !owner || submission.submitting || submission.pendingPlacement.sessionKey) {
     return;
   }
   const routeKey = openedFor ?? catalog.routeKeyFromSearch(window.location.search);
@@ -21,6 +22,7 @@ export function retainDraft(
     paneId: NEW_SESSION_DRAFT_PANE_ID,
     scopeKey: routeKey,
     message: messageOwnerKey === routeKey ? submission.message : "",
+    mentions: messageOwnerKey === routeKey ? submission.mentions : undefined,
     attachments: submission.attachmentDraft.take(),
     fallbacks: {},
   });
@@ -31,6 +33,7 @@ export function restoreDraft(
   submission: DraftSubmissionFlow,
   routeKey: string,
   ownedMessage: string,
+  ownedMentions?: readonly HumanMention[],
 ) {
   submission.draftPersistence.selectRoute(routeKey);
   const owner = context?.gateway.snapshot.client;
@@ -42,18 +45,22 @@ export function restoreDraft(
           scopeKey: routeKey,
         })
       : null;
-  if (ownedMessage || draft) {
-    submission.restoreMessage(ownedMessage || draft?.message || "");
-  }
   if (draft) {
-    submission.attachmentDraft.restore(draft.attachments);
+    submission.restoreDraftState({
+      message: ownedMessage || draft.message || "",
+      mentions: ownedMessage ? ownedMentions : draft.mentions,
+      attachments: draft.attachments,
+      visibility: submission.visibility,
+    });
+  } else if (ownedMessage) {
+    submission.restoreMessage(ownedMessage, ownedMentions);
   }
   activateDraft(submission, routeKey);
   return routeKey;
 }
 
 export function activateDraft(submission: DraftSubmissionFlow, routeKey: string) {
-  if (!submission.pendingCloud.sessionKey) {
+  if (!submission.pendingPlacement.sessionKey) {
     submission.draftPersistence.activateRoute(routeKey);
   }
 }
@@ -63,10 +70,10 @@ export function restoreDraftOwner(
   gatewayUrl: string,
   recoveryScope: string,
 ) {
-  submission.restorePendingCloudRecovery(gatewayUrl, recoveryScope);
+  submission.restorePendingPlacementRecovery(gatewayUrl, recoveryScope);
   submission.draftPersistence.setOwner(
     gatewayUrl,
     recoveryScope,
-    Boolean(submission.pendingCloud.sessionKey),
+    Boolean(submission.pendingPlacement.sessionKey),
   );
 }

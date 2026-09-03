@@ -178,7 +178,7 @@ describe("durable session tab registry", () => {
     first.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "bridge-tab",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("REMOTE-NATIVE"),
     });
@@ -211,7 +211,7 @@ describe("durable session tab registry", () => {
     registry.trackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       ownership: ownership("NATIVE-BRIDGE"),
       now: 2_000,
@@ -220,14 +220,14 @@ describe("durable session tab registry", () => {
     registry.touchSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
       now: 3_000,
     });
     registry.untrackSessionBrowserTab({
       sessionKey: "agent:main:main",
       targetId: "shared-target",
-      baseUrl: "http://127.0.0.1:9999",
+      route: { kind: "browser-control", baseUrl: "http://127.0.0.1:9999" },
       profile: "remote",
     });
 

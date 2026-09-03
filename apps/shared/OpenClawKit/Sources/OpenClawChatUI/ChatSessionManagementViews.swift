@@ -137,6 +137,9 @@ struct ChatSessionInspectorDetails: Equatable {
     }
 
     private static func runState(for session: OpenClawChatSessionEntry) -> String? {
+        if self.normalized(session.status)?.lowercased() == "queued" {
+            return String(localized: "Queued")
+        }
         if session.hasActiveRun == true || session.hasActiveSubagentRun == true {
             return String(localized: "Running")
         }

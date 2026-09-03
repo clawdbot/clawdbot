@@ -59,4 +59,37 @@ describe("plugin tools MCP client bridge", () => {
       await server.close();
     }
   });
+
+  it("delivers resolved tool failures as MCP errors", async () => {
+    const content = [{ type: "text", text: "backend unavailable" }];
+    const tool = {
+      name: "memory_search",
+      description: "Search memory",
+      parameters: { type: "object", properties: {} },
+      execute: vi.fn().mockResolvedValue({
+        content,
+        details: { status: "failed", error: "backend unavailable" },
+      }),
+    } as unknown as AnyAgentTool;
+    const server = createPluginToolsMcpServer({
+      config: { plugins: { enabled: true } } as OpenClawConfig,
+      tools: [tool],
+    });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const client = new Client(
+      { name: "plugin-tools-error-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+    try {
+      const result = await client.callTool({ name: "memory_search", arguments: {} });
+
+      expect(result.content).toEqual(content);
+      expect(result.isError).toBe(true);
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
 });

@@ -19,7 +19,11 @@ import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-sna
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { listManifestInstalledChannelIds } from "../channel-setup/discovery.js";
 import { listTrustedChannelPluginCatalogEntries } from "../channel-setup/trusted-catalog.js";
-import { formatChannelAccountLabel, requireValidChannelConfig } from "./shared.js";
+import {
+  formatChannelAccountLabel,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
+  requireValidChannelConfig,
+} from "./shared.js";
 
 export type ChannelsListOptions = {
   json?: boolean;
@@ -341,11 +345,7 @@ export async function channelsListCommand(
   }
   if (accountLines.length === 0 && catalogOnlyLines.length === 0) {
     lines.push(
-      theme.muted(
-        showAll
-          ? "- no chat channels found"
-          : "- no configured chat channels (run `openclaw channels list --all` to see installable channels)",
-      ),
+      theme.muted(showAll ? "- no chat channels found" : NO_CONFIGURED_CHAT_CHANNELS_LINE),
     );
   } else {
     for (const line of accountLines) {

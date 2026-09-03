@@ -137,6 +137,50 @@ describe("context-engine turn outbox", () => {
     ).toBeUndefined();
   });
 
+  it("keeps a row pending when its persisted payload has no state", async () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-state-"));
+    tempDirs.push(stateDir);
+    const database = openOpenClawAgentDatabase({
+      agentId: "main",
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const payload = createPayload({
+      advancementKey: "session-a:missing-state",
+      databasePath: database.path,
+      sequence: 1,
+      sessionId: "session-a",
+    });
+    enqueueContextEngineTurnCommit({ database, engineId: "test", payload });
+    database.db
+      .prepare(
+        "UPDATE context_engine_turn_outbox SET payload_json = '{}' WHERE advancement_key = ?",
+      )
+      .run(payload.boundary.admission.logicalTurnId);
+    const commitTurn = vi.fn(async () => ({ status: "committed" as const }));
+    const engine = {
+      info: { id: "test", name: "Test" },
+      ingest: async () => ({ ingested: true }),
+      assemble: async ({ messages }) => ({ messages, estimatedTokens: 0 }),
+      compact: async () => ({ ok: true, compacted: false }),
+      commitTurn,
+    } satisfies ContextEngine;
+
+    const result = await drainContextEngineTurnOutbox({
+      database,
+      engine,
+      engineId: "test",
+      warn: vi.fn(),
+    });
+
+    expect(result.pending).toBe(true);
+    expect(commitTurn).not.toHaveBeenCalled();
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get(payload.boundary.admission.logicalTurnId),
+    ).toBeDefined();
+  });
+
   it("drains prior work before fresh-turn assembly and records dispatch admission", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-recovery-"));
     tempDirs.push(stateDir);
@@ -372,7 +416,7 @@ describe("context-engine turn outbox", () => {
     });
   });
 
-  it("retains unrecoverable accepted recovery as a blocking marker", async () => {
+  it("retains unrecoverable accepted recovery as a terminal marker without blocking later turns", async () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-context-outbox-blocked-"));
     tempDirs.push(stateDir);
     const database = openOpenClawAgentDatabase({
@@ -417,6 +461,17 @@ describe("context-engine turn outbox", () => {
       expect.stringContaining("blocked unrecoverable turn advancement"),
     );
 
+    enqueueContextEngineTurnCommit({
+      database,
+      engineId: "test",
+      payload: createPayload({
+        advancementKey: "session-a:later-ready",
+        databasePath: database.path,
+        sequence: 3,
+        sessionId: "session-a",
+      }),
+    });
+
     const engine = {
       info: {
         id: "test",
@@ -445,22 +500,43 @@ describe("context-engine turn outbox", () => {
       deferDisposalUntil: vi.fn(),
       dispose: vi.fn(async () => undefined),
     } satisfies ContextEngineLogicalTurnLease;
+    const currentAdmission = {
+      ...payload.boundary.admission,
+      logicalTurnId: "session-a:current",
+    };
 
     await drainPendingContextEngineTurnsBeforeRun({
-      admission: payload.boundary.admission,
+      admission: currentAdmission,
       lease,
       warn,
     });
 
-    expect(engine.commitTurn).not.toHaveBeenCalled();
-    expect(degradeBeforeStart).toHaveBeenCalledWith(
-      "pending durable turn advancement could not be completed before the next turn",
+    expect(engine.commitTurn).toHaveBeenCalledOnce();
+    expect(engine.commitTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ advancementKey: "session-a:later-ready" }),
     );
+    expect(degradeBeforeStart).not.toHaveBeenCalled();
     expect(
       database.db
         .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
         .get(payload.boundary.admission.logicalTurnId),
     ).toBeDefined();
+    expect(
+      database.db
+        .prepare("SELECT 1 FROM context_engine_turn_outbox WHERE advancement_key = ?")
+        .get("session-a:later-ready"),
+    ).toBeUndefined();
+    expect(
+      JSON.parse(
+        (
+          database.db
+            .prepare(
+              "SELECT payload_json FROM context_engine_turn_outbox WHERE advancement_key = ?",
+            )
+            .get(currentAdmission.logicalTurnId) as { payload_json: string }
+        ).payload_json,
+      ),
+    ).toMatchObject({ state: "admitted" });
   });
 
   it("does not let later same-session turns overtake a failed commit", async () => {

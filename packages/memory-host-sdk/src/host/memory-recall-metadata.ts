@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { INVALID_PROJECT_ANNOTATION_KEY } from "./internal.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./openclaw-runtime-kysely.js";
+import type { MemoryOriginClass, MemorySessionKind } from "./types.js";
 
 type MemoryRecallMetadataDatabase = {
   memory_index_chunks: {
@@ -16,6 +17,13 @@ type MemoryRecallMetadataDatabase = {
     importance: number | null;
     triggers: string | null;
     project_key: string | null;
+  };
+  memory_index_chunk_provenance: {
+    chunk_id: string;
+    origin_class: MemoryOriginClass;
+    session_kind: MemorySessionKind;
+    observed_at: number;
+    supersedes_key: string | null;
   };
 };
 
@@ -137,6 +145,7 @@ function readCuratedCandidateBatch(params: {
   let query = getNodeSqliteKysely<MemoryRecallMetadataDatabase>(params.db)
     .selectFrom("memory_index_chunks as chunk")
     .leftJoin("memory_index_chunk_recall_metadata as metadata", "metadata.chunk_id", "chunk.id")
+    .innerJoin("memory_index_chunk_provenance as provenance", "provenance.chunk_id", "chunk.id")
     .select([
       "chunk.id as id",
       "chunk.path as path",
@@ -147,9 +156,14 @@ function readCuratedCandidateBatch(params: {
       "metadata.importance as importance",
       "metadata.triggers as triggers",
       "metadata.project_key as project_key",
+      "provenance.origin_class as origin_class",
+      "provenance.session_kind as session_kind",
+      "provenance.observed_at as observed_at",
+      "provenance.supersedes_key as supersedes_key",
     ])
     .where("chunk.source", "=", "memory")
-    .where("chunk.path", "in", ["MEMORY.md", "USER.md"]);
+    .where("chunk.path", "in", ["MEMORY.md", "USER.md"])
+    .where("provenance.origin_class", "in", ["owner", "agent"]);
   if (params.requireProject) {
     query = query.where("metadata.project_key", "is not", null);
   }

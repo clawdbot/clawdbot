@@ -5,6 +5,9 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import {
   isCliRuntimeModelBackendForProvider,
   listCliRuntimeModelBackendBindings,
@@ -12,6 +15,7 @@ import {
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   resolveProviderIdForAuth,
@@ -150,7 +154,9 @@ export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   return (
     selectedAuth === "unknown" ||
     (Boolean(selectedAuth?.startsWith("api-key")) &&
-      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
+      (activeAuth.startsWith("oauth") ||
+        activeAuth.startsWith("token") ||
+        activeAuth.startsWith("native")))
   );
 }
 
@@ -187,15 +193,11 @@ function resolveRuntimeAuthProvider(provider: string, params: RuntimeAuthAliasPa
 function resolveProfileRuntimeAlias(
   params: RuntimeAuthAliasParams & {
     provider: string;
-    profileId: string;
+    profileProvider: string | undefined;
   },
 ): string | undefined {
-  const profile = params.cfg?.auth?.profiles?.[params.profileId];
-  if (!profile?.provider) {
-    return undefined;
-  }
   const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(profile.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
   if (!provider || !profileProvider) {
     return undefined;
   }
@@ -218,27 +220,35 @@ function resolveCliRuntimeFromAuthProfile(
   params: RuntimeAuthAliasParams & {
     provider: string;
     authProfileId?: string;
+    agentId?: string;
   },
 ): string | undefined {
-  if (!params.cfg?.auth?.profiles) {
-    return undefined;
-  }
+  const configuredProfiles = params.cfg?.auth?.profiles ?? {};
+  // Login and auth-order commands own the credential store, not config metadata.
+  // Reuse its published snapshot without reopening SQLite on a request path.
+  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined,
+    resolveLegacyInheritedAuthDir(params.cfg ?? {}),
+  );
   if (params.authProfileId?.trim()) {
+    const profileId = params.authProfileId.trim();
     return resolveProfileRuntimeAlias({
       ...params,
       provider: params.provider,
-      profileId: params.authProfileId.trim(),
+      profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
     });
   }
 
   const provider = normalizeProviderId(params.provider);
   const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const orderedProfileIds = [
-    ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
-    ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
-  ];
-  for (const profileId of orderedProfileIds) {
-    const profile = params.cfg.auth.profiles[profileId];
+  const selection = resolveExplicitAuthOrderSelection({
+    storeOrder: store?.order,
+    configuredOrder: params.cfg?.auth?.order,
+    providerKey: provider,
+    providerAuthKey,
+  });
+  for (const profileId of selection.order ?? []) {
+    const profile = configuredProfiles[profileId] ?? store?.profiles[profileId];
     if (!profile?.provider) {
       continue;
     }
@@ -249,11 +259,21 @@ function resolveCliRuntimeFromAuthProfile(
     return resolveProfileRuntimeAlias({
       ...params,
       provider,
-      profileId,
+      profileProvider: profile.provider,
     });
   }
 
-  const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
+  if (
+    selection.order !== undefined &&
+    (selection.order.length === 0 ||
+      selection.order.some((profileId) => store?.profiles[profileId] !== undefined))
+  ) {
+    // Keep empty orders and existing stored profiles authoritative. Only an order
+    // of missing profiles may use the canonical stale-profile repair below.
+    return undefined;
+  }
+
+  const compatibleProfileIds = Object.entries(configuredProfiles)
     .filter(([, profile]) => {
       if (!profile?.provider) {
         return false;
@@ -269,7 +289,7 @@ function resolveCliRuntimeFromAuthProfile(
     ? resolveProfileRuntimeAlias({
         ...params,
         provider,
-        profileId,
+        profileProvider: configuredProfiles[profileId]?.provider,
       })
     : undefined;
 }

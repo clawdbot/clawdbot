@@ -4,7 +4,6 @@ import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion"
 import type { Insertable, Selectable } from "kysely";
 import { loadSessionEntryReadOnly } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import type { DmScope } from "../config/types.base.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -901,13 +900,12 @@ export function registerSessionStateWatch(
   }
 }
 
-/** Register the personal agent's main session to observe one routed group session. */
+/** Register the agent's main session to observe one routed group session. */
 export function registerMainSessionGroupWatch(
   params: {
     sessionKey: string;
     agentId: string;
     entry?: SessionEntry;
-    dmScope: DmScope;
     mainKey?: string;
   },
   options: OpenClawStateDatabaseOptions & { now?: number } = {},
@@ -919,33 +917,14 @@ export function registerMainSessionGroupWatch(
     agentId: params.agentId,
     mainKey: params.mainKey,
   });
+  // groupScope already chose the routed key: "main" is the watcher itself,
+  // while every distinct group key is a per-group target. dmScope is orthogonal.
   if (params.sessionKey === watcherSessionKey) {
     return false;
   }
   const now = options.now ?? Date.now();
   try {
     const { db: readDb } = openOpenClawStateDatabase(options);
-    if (params.dmScope !== "main") {
-      if (!isAmbientGroupWatchCursor(readCursor(readDb, watcherSessionKey, params.sessionKey))) {
-        return false;
-      }
-      runOpenClawStateWriteTransaction(({ db }) => {
-        // Recheck provenance in the write transaction: an explicit registration
-        // may have promoted this pair after the read-only preflight.
-        if (!isAmbientGroupWatchCursor(readCursor(db, watcherSessionKey, params.sessionKey))) {
-          return;
-        }
-        executeSqliteQuerySync(
-          db,
-          getSessionStateKysely(db)
-            .deleteFrom("session_watch_cursors")
-            .where("target_session_key", "=", params.sessionKey)
-            .where("watcher_session_key", "=", watcherSessionKey)
-            .where("provenance", "=", SESSION_WATCH_PROVENANCE_AMBIENT_GROUP),
-        );
-      }, options);
-      return false;
-    }
     // This runs on every human group turn. Keep the steady-state path read-only;
     // the transaction below is only for first registration and its race recheck.
     if (readCursor(readDb, watcherSessionKey, params.sessionKey)) {

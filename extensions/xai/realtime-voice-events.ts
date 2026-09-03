@@ -72,8 +72,7 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         this.responseActive = true;
         this.responseCreateInFlight = false;
         this.markQueue = [];
-        this.lastAssistantItemId = null;
-        this.responseStartTimestamp = null;
+        this.assistantAudioItem = null;
         this.resetAssistantTranscript();
         return;
       case "response.output_audio.delta": {
@@ -87,12 +86,16 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
             "xAI realtime voice stream returned malformed base64 audio data",
           );
         }
-        this.emitAudioWithPlaybackMark(Buffer.from(canonicalAudio, "base64"));
-        if (event.item_id && event.item_id !== this.lastAssistantItemId) {
-          this.lastAssistantItemId = event.item_id;
-          this.responseStartTimestamp = this.latestMediaTimestamp;
-        } else if (this.responseStartTimestamp === null) {
-          this.responseStartTimestamp = this.latestMediaTimestamp;
+        const audio = Buffer.from(canonicalAudio, "base64");
+        this.emitAudioWithPlaybackMark(audio);
+        if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
+          this.assistantAudioItem = {
+            itemId: event.item_id,
+            bytes: audio.byteLength,
+            startTimestamp: this.latestMediaTimestamp,
+          };
+        } else if (this.assistantAudioItem) {
+          this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;
         return;
@@ -136,7 +139,6 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
         this.config.onError?.(new Error(readXaiRealtimeErrorDetail(event.error)));
         return;
       case "response.done": {
-        const status = event.response?.status;
         const output = Array.isArray(event.response?.output)
           ? event.response.output.filter(isRecord)
           : [];
@@ -154,11 +156,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
           }
         };
         try {
-          invoke(() => this.config.onResponseDone?.(outcome));
-          invoke(emitBridgeEvent);
+          // Deliver output before completion retires its response owner. Tool callbacks
+          // may close the connection, so remaining output must recheck that owner.
           invoke(() => {
-            if (status === "completed") {
+            if (outcome.status === "completed") {
               for (const [itemId, toolCall] of this.toolCallBuffers) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitToolCallOnce({
                   itemId,
                   callId: toolCall.callId,
@@ -167,8 +172,14 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
                 });
               }
               for (const item of output) {
+                if (!this.acceptsEvent(connection)) {
+                  return;
+                }
                 this.emitCompletedToolCall(item, event);
               }
+            }
+            if (!this.acceptsEvent(connection)) {
+              return;
             }
             const terminalTranscript = output
               .filter((item) => item.type === "message" && item.role === "assistant")
@@ -183,6 +194,8 @@ export abstract class XaiRealtimeVoiceEvents extends XaiRealtimeVoiceProtocol {
               .join("");
             this.flushAssistantTranscript(terminalTranscript);
           });
+          invoke(() => this.config.onResponseDone?.(outcome));
+          invoke(emitBridgeEvent);
         } finally {
           // Keep the response active through terminal tool discovery: callbacks can
           // submit results synchronously and must not start the next response early.

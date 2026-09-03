@@ -31,7 +31,7 @@ function applySystemAgentModelSelectionWithModules(
     throw new Error(`Could not resolve configured agent "${params.targetAgentId}".`);
   }
   const targetAgentId = normalizedTarget?.value;
-  const agentId = targetAgentId ?? agentScope.resolveDefaultAgentId(nextConfig);
+  const agentId = agentScope.resolveAmbientOwnerAgentId(nextConfig, targetAgentId);
   const roster = agentScope.listAgentEntries(nextConfig);
   if (targetAgentId && !roster.some((entry) => normalizeAgentId(entry.id) === targetAgentId)) {
     throw new Error(`Could not resolve configured agent "${targetAgentId}".`);

@@ -1,4 +1,6 @@
+import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import type { HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type { CommandLaneTaskMarker } from "../../process/command-queue.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
@@ -8,9 +10,11 @@ import type { CronRunReceiptHandle } from "../store/run-receipt-store.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
+  CronCompletionStatus,
   CronDeliveryTrace,
   CronJob,
   CronNextCheckProposal,
+  CronResolvedDeliveryState,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -42,9 +46,12 @@ export type TimedCronRunOutcome = CronRunOutcome &
     jobId: string;
     job: CronJob;
     taskRunId?: string;
+    completionStatus: CronCompletionStatus;
+    deliveryState: CronResolvedDeliveryState;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
     delivery?: CronDeliveryTrace;
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
     activeJobMarker?: CronActiveJobMarker;
@@ -61,7 +68,11 @@ export type TimedCronRunOutcome = CronRunOutcome &
 
 export type CronJobRunResult = CronRunOutcome &
   Pick<CronRunTelemetry, "provider"> & {
+    completionStatus?: CronCompletionStatus;
+    deliveryState?: CronResolvedDeliveryState;
     deliveryError?: string;
+    deliverySuppressionReason?: NormalizeReplySkipReason;
+    delivery?: CronDeliveryTrace;
     delivered?: boolean;
     deliveryAttempted?: boolean;
     startedAt: number;
@@ -98,7 +109,10 @@ export type StartupCatchupCandidate = {
 export type StartupDeferredJob = {
   jobId: string;
   delayMs?: number;
-  configRevision: string;
+  scheduleIdentity: string | undefined;
+  createdAtMs: number;
+  payloadKind: CronJob["payload"]["kind"];
+  scheduleActivatedAtMs: number | undefined;
   nextRunAtMs: number | undefined;
   lastRunAtMs: number | undefined;
   lastRunStatus: CronRunStatus | undefined;
@@ -119,6 +133,8 @@ export type ExecuteJobCoreOptions = {
   onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
   onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   onLaneWait?: (info?: { waiting?: boolean }) => void;
+  onHeartbeatExecutionStarted?: (opts: HeartbeatWakeRequest & { agentId: string }) => void;
+  executionIdentity?: import("./state.js").CronExecutionIdentityAdmission;
   /** Revalidates the durable run fence after awaited planning and before effects. */
   assertRunCurrent?: () => void;
   streamBatch?: string;
@@ -128,9 +144,13 @@ export type ExecuteJobCoreOptions = {
   streamSourceIdentity?: string;
 };
 
-/** Script payloads run headlessly even when their notifications target main. */
+/** Payloads that execute outside the main session own cancellable task-run state. */
 export function runsDetachedFromMainSession(job: CronJob): boolean {
-  return job.sessionTarget !== "main" || job.payload.kind === "script";
+  return (
+    job.sessionTarget !== "main" ||
+    job.payload.kind === "script" ||
+    job.payload.kind === "skillCollectionReview"
+  );
 }
 
 export function resolveMainSessionCronDeliveryContext(

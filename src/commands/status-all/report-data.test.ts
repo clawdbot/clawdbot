@@ -5,11 +5,12 @@ const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(async () => ({ path: "/tmp/openclaw.json" })),
   inspectPortUsage: vi.fn(async () => null),
   resolveGatewayBindHost: vi.fn(async () => "127.0.0.1"),
-  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => null),
+  resolveStatusGatewayDiagnosticsSafe: vi.fn(async () => ({ ok: true, value: {} })),
   resolveStatusGatewayHealthSafe: vi.fn(async () => undefined),
   resolveNodeExecEligibility: vi.fn(() => ({ canExec: false })),
   loadExecApprovalsReadOnly: vi.fn(() => ({ version: 1, agents: {} })),
   buildWorkspaceSkillStatus: vi.fn(() => null),
+  resolveStatusSummaryFromOverview: vi.fn(async () => ({})),
 }));
 
 vi.mock("../../agents/exec-defaults.js", () => ({
@@ -53,13 +54,16 @@ vi.mock("../status-update-restart.ts", () => ({
 vi.mock("../status.gateway-connection.ts", () => ({
   resolveStatusAllConnectionDetails: () => [],
 }));
+vi.mock("../status.scan-overview.ts", () => ({
+  resolveStatusSummaryFromOverview: mocks.resolveStatusSummaryFromOverview,
+}));
 
 import { buildStatusAllReportData } from "./report-data.js";
 
 describe("buildStatusAllReportData", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue(null);
+    mocks.resolveStatusGatewayDiagnosticsSafe.mockResolvedValue({ ok: true, value: {} });
     mocks.resolveStatusGatewayHealthSafe.mockResolvedValue(undefined);
   });
 
@@ -94,6 +98,7 @@ describe("buildStatusAllReportData", () => {
     expect(mocks.inspectPortUsage).toHaveBeenCalledWith(18789, {
       probeHosts: ["127.0.0.1"],
     });
+    expect(mocks.resolveStatusSummaryFromOverview).toHaveBeenCalledOnce();
   });
 
   it("collects delivery and exporter stability projections in parallel", async () => {
@@ -113,6 +118,7 @@ describe("buildStatusAllReportData", () => {
         agentStatus: { agents: [], defaultId: null },
         channels: { rows: [], details: [] },
         channelIssues: [],
+        runtimeDegradation: { degradedSecretOwners: [], degradedPlugins: [] },
         osSummary: { label: "test" },
       } as never,
       daemon: {} as never,
@@ -134,6 +140,7 @@ describe("buildStatusAllReportData", () => {
         }),
       ],
     ]);
+    expect(mocks.resolveStatusSummaryFromOverview).not.toHaveBeenCalled();
   });
 
   it("uses the configured system agent for workspace skill diagnosis", async () => {

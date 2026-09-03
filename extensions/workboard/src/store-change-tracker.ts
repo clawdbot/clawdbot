@@ -34,6 +34,40 @@ export class WorkboardChangeTracker {
   trackCardStore(store: WorkboardCardStore): WorkboardCardStore {
     return {
       ...this.track(store),
+      registerIfAbsent: async (key, value) => {
+        const inserted = await store.registerIfAbsent(key, value);
+        if (inserted) {
+          this.mutationRevision += 1;
+        }
+        return inserted;
+      },
+      registerIfUpdatedAt: async (key, value, expectedUpdatedAt) => {
+        const updated = await store.registerIfUpdatedAt(key, value, expectedUpdatedAt);
+        if (updated) {
+          this.mutationRevision += 1;
+        }
+        return updated;
+      },
+      deleteIfUpdatedAt: async (key, expectedUpdatedAt) => {
+        const deleted = await store.deleteIfUpdatedAt(key, expectedUpdatedAt);
+        if (deleted) {
+          this.mutationRevision += 1;
+        }
+        return deleted;
+      },
+      claimIfOwnerAvailable: async (key, value, expectedUpdatedAt, ownerId, now) => {
+        const result = await store.claimIfOwnerAvailable(
+          key,
+          value,
+          expectedUpdatedAt,
+          ownerId,
+          now,
+        );
+        if (result === "updated") {
+          this.mutationRevision += 1;
+        }
+        return result;
+      },
       listBoardAggregates: async () => await store.listBoardAggregates(),
     };
   }

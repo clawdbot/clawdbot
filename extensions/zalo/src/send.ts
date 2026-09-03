@@ -161,11 +161,29 @@ export async function sendMessageZalo(
   const { context } = resolved;
 
   if (options.mediaUrl && (options.mediaUrl.trim() || !text)) {
-    return sendPhotoZalo(context.chatId, options.mediaUrl, {
-      ...options,
-      token: context.token,
-      caption: text || options.caption,
-    });
+    const photoUrl = options.mediaUrl.trim();
+    if (!photoUrl) {
+      return {
+        ok: false,
+        error: "No photo URL provided",
+        receipt: createZaloSendReceipt({ chatId: context.chatId, kind: "media" }),
+      };
+    }
+    const caption = text || options.caption;
+    return await runZaloSend(
+      "Failed to send photo",
+      { chatId: context.chatId, kind: "media" },
+      () =>
+        sendPhoto(
+          context.token,
+          {
+            chat_id: context.chatId,
+            photo: photoUrl,
+            caption: caption !== undefined ? truncateUtf16Safe(caption, 2000) : undefined,
+          },
+          context.fetcher,
+        ),
+    );
   }
 
   return await runZaloSend("Failed to send message", { chatId: context.chatId, kind: "text" }, () =>
@@ -177,39 +195,5 @@ export async function sendMessageZalo(
       },
       context.fetcher,
     ),
-  );
-}
-
-async function sendPhotoZalo(
-  chatId: string,
-  photoUrl: string,
-  options: ZaloSendOptions = {},
-): Promise<ZaloSendResult> {
-  const resolved = resolveSendContextOrFailure(chatId, options);
-  if ("failure" in resolved) {
-    return resolved.failure;
-  }
-  const { context } = resolved;
-
-  if (!photoUrl?.trim()) {
-    return {
-      ok: false,
-      error: "No photo URL provided",
-      receipt: createZaloSendReceipt({ chatId: context.chatId, kind: "media" }),
-    };
-  }
-
-  return await runZaloSend("Failed to send photo", { chatId: context.chatId, kind: "media" }, () =>
-    (async () =>
-      sendPhoto(
-        context.token,
-        {
-          chat_id: context.chatId,
-          photo: photoUrl.trim(),
-          caption:
-            options.caption !== undefined ? truncateUtf16Safe(options.caption, 2000) : undefined,
-        },
-        context.fetcher,
-      ))(),
   );
 }

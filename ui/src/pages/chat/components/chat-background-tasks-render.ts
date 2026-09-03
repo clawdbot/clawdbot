@@ -2,9 +2,10 @@ import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../../components/icons.ts";
 import { renderPanelEmptyState } from "../../../components/panel-empty-state.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
-import { isActiveTask, partitionTasks } from "../../../lib/tasks/data.ts";
+import { partitionTasks } from "../../../lib/tasks/data.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
 import { renderTaskRow } from "./chat-background-task-row.ts";
 import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
@@ -17,7 +18,6 @@ export function renderBackgroundTasksToggle(
   }
   const expanded = !backgroundTasks.collapsed;
   const label = t(expanded ? "chat.backgroundTasks.collapse" : "chat.backgroundTasks.show");
-  const activeCount = backgroundTasks.tasks?.filter(isActiveTask).length ?? 0;
   return html`<openclaw-tooltip .content=${label}>
     <button
       class="btn btn--ghost btn--icon chat-icon-btn chat-tasks-toggle"
@@ -27,8 +27,10 @@ export function renderBackgroundTasksToggle(
       @click=${backgroundTasks.onToggleCollapsed}
     >
       ${icons.listChecks}
-      ${!expanded && activeCount > 0
-        ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true">${activeCount}</span>`
+      ${!expanded && backgroundTasks.activeCount > 0
+        ? html`<span class="chat-tasks-toggle__badge" aria-hidden="true"
+            >${backgroundTasks.activeCount}</span
+          >`
         : nothing}
     </button>
   </openclaw-tooltip>`;
@@ -109,12 +111,12 @@ export function renderBackgroundTasksRail(
         ? html`<div class="chat-tasks-rail__state">${t("tasksPage.disconnected")}</div>`
         : nothing}
       ${backgroundTasks.error
-        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error">
+        ? html`<div class="chat-tasks-rail__state chat-tasks-rail__state--error" role="alert">
             ${backgroundTasks.error}
           </div>`
         : nothing}
       ${backgroundTasks.loading && !loaded
-        ? html`<div class="chat-tasks-rail__state">${t("chat.backgroundTasks.loading")}</div>`
+        ? renderPanelLoadingSkeleton("tasks", t("chat.backgroundTasks.loading"))
         : nothing}
       ${empty
         ? renderPanelEmptyState({

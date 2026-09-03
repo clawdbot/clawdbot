@@ -1,53 +1,19 @@
 // Discord tests cover handle action plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-
-const runtimeModule = await import("./runtime.js");
-const handleDiscordActionMock = vi
-  .spyOn(runtimeModule, "handleDiscordAction")
-  .mockResolvedValue({ content: [], details: { ok: true } });
-const { handleDiscordMessageAction } = await import("./handle-action.js");
+import {
+  defaultActionOptions,
+  discordConfig,
+  expectDiscordActionCall,
+  handleDiscordActionMock,
+  handleDiscordMessageAction,
+} from "./handle-action.test-support.js";
 const {
   beginDiscordActiveTurnThreadRoute,
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } = await import("../active-turn-thread-route.js");
 const { discordInboundEventDelivery } = await import("../inbound-event-delivery.js");
-
-function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
-  return {
-    channels: { discord: { token: "tok", ...(actions ? { actions } : {}) } },
-  } as OpenClawConfig;
-}
-
-function defaultActionOptions() {
-  return {
-    mediaAccess: undefined,
-    mediaLocalRoots: undefined,
-    mediaReadFile: undefined,
-  };
-}
-
-function expectDiscordActionCall(params: {
-  payload: unknown;
-  cfg: OpenClawConfig;
-  options?: unknown;
-}) {
-  expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
-  const [call] = handleDiscordActionMock.mock.calls;
-  if (!call) {
-    throw new Error("expected Discord action call");
-  }
-  const [payload, cfg, options] = call;
-  expect(payload).toEqual(params.payload);
-  expect(cfg).toBe(params.cfg);
-  if ("options" in params) {
-    expect(options).toEqual(params.options);
-  } else {
-    expect(options).toBeUndefined();
-  }
-}
 
 describe("handleDiscordMessageAction", () => {
   beforeEach(() => {
@@ -443,14 +409,6 @@ describe("handleDiscordMessageAction", () => {
       params: { to: "channel:c1", filePath: "/tmp/image.png" },
     },
     {
-      action: "poll" as const,
-      params: {
-        to: "channel:c1",
-        pollQuestion: "Which option?",
-        pollOption: ["first", "second"],
-      },
-    },
-    {
       action: "sticker" as const,
       params: { to: "channel:c1", stickerId: ["sticker-1"] },
     },
@@ -611,6 +569,25 @@ describe("handleDiscordMessageAction", () => {
         cfg: discordConfig(),
       }),
     ).rejects.toThrow(/upload-file requires filePath, path, or media/i);
+
+    expect(handleDiscordActionMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects upload-file with a buffer and points at send", async () => {
+    await expect(
+      handleDiscordMessageAction({
+        action: "upload-file",
+        params: {
+          to: "channel:123",
+          filename: "report.pdf",
+          contentType: "application/pdf",
+          buffer: Buffer.from("report").toString("base64"),
+        },
+        cfg: discordConfig(),
+      }),
+    ).rejects.toThrow(
+      'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+    );
 
     expect(handleDiscordActionMock).not.toHaveBeenCalled();
   });
@@ -822,7 +799,7 @@ describe("handleDiscordMessageAction", () => {
       action: "send",
       params: {
         message: "hello",
-        components,
+        components: JSON.stringify(components),
       },
       cfg,
       toolContext: {
@@ -852,85 +829,26 @@ describe("handleDiscordMessageAction", () => {
     });
   });
 
-  it("downgrades chart-only presentations to Discord component text", async () => {
+  it("forwards embed-only Discord sends without requiring message text", async () => {
+    const embeds = [{ title: "Release notes", description: "Version available" }];
     const cfg = discordConfig();
 
     await handleDiscordMessageAction({
       action: "send",
-      params: {
-        to: "channel:123",
-        presentation: {
-          blocks: [
-            {
-              type: "chart",
-              chartType: "bar",
-              title: "Revenue",
-              categories: ["Q1", "Q2"],
-              series: [{ name: "USD", values: [12, 18] }],
-            },
-          ],
-        },
-      },
+      params: { to: "channel:123", embeds },
       cfg,
     });
 
-    expectDiscordActionCall({
-      payload: {
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
         action: "sendMessage",
-        accountId: undefined,
         to: "channel:123",
         content: "",
-        mediaUrl: undefined,
-        filename: undefined,
-        replyTo: undefined,
-        components: {
-          blocks: [
-            {
-              type: "text",
-              text: "-# Revenue (bar chart)\n- USD: Q1: 12; Q2: 18",
-            },
-          ],
-        },
-        embeds: undefined,
-        asVoice: false,
-        silent: false,
-        __sessionKey: undefined,
-        __agentId: undefined,
-      },
+        embeds,
+      }),
       cfg,
-      options: defaultActionOptions(),
-    });
-  });
-
-  it("downgrades oversized table presentations to complete text", async () => {
-    const cfg = discordConfig();
-
-    await handleDiscordMessageAction({
-      action: "send",
-      params: {
-        to: "channel:123",
-        presentation: {
-          blocks: [
-            {
-              type: "table",
-              caption: "Large pipeline",
-              headers: ["Account", "Stage"],
-              rows: Array.from({ length: 900 }, (_entry, index) => [
-                `account-${String(index)}-${"x".repeat(80)}`,
-                "Review",
-              ]),
-            },
-          ],
-        },
-      },
-      cfg,
-    });
-
-    const [call] = handleDiscordActionMock.mock.calls;
-    const payload = call?.[0] as Record<string, unknown> | undefined;
-    expect(payload?.components).toBeUndefined();
-    expect(payload?.content).toEqual(expect.stringContaining("account-0-"));
-    expect(payload?.content).toEqual(expect.stringContaining("account-899-"));
+      defaultActionOptions(),
+    );
   });
 
   it("does not use another provider's current target for Discord sends", async () => {

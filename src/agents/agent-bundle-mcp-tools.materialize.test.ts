@@ -4,7 +4,7 @@ import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { validateToolArguments } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
-import { getPluginToolMeta } from "../plugins/tools.js";
+import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
@@ -18,6 +18,7 @@ import type {
 import { applyEmbeddedAttemptToolsAllow } from "./embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { getMcpAppViewLease } from "./mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "./mcp-ui-resource.test-support.js";
+import { isToolResultError } from "./tool-result-error.js";
 
 const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
@@ -92,6 +93,18 @@ function makeToolRuntime(
   };
 }
 
+async function executeMcpToolResult(result: CallToolResult) {
+  const runtime = await materializeBundleMcpToolsForRun({
+    runtime: makeToolRuntime({ result }),
+  });
+  return await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
+    "call-bundle-probe",
+    {},
+    undefined,
+    undefined,
+  );
+}
+
 describe("createBundleMcpToolRuntime", () => {
   afterEach(() => {
     mcpUiResourceTesting.clearViewStore();
@@ -135,7 +148,9 @@ describe("createBundleMcpToolRuntime", () => {
       "demo__hidden_tool",
       "demo__model_tool",
     ]);
-    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({ mode: "auto" });
+    expect(getPluginToolMeta(runtime.appTools![0]!)?.mcp?.codexApproval).toEqual({
+      mode: undefined,
+    });
     expect(
       applyEmbeddedAttemptToolsAllow(runtime.appTools ?? [], ["demo__model_tool"], {
         toolMeta: (tool) => getPluginToolMeta(tool),
@@ -234,6 +249,7 @@ describe("createBundleMcpToolRuntime", () => {
     expect(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").executionMode).toBe(
       "sequential",
     );
+    expect(runtime.tools[0]?.resultContentSource).toBe("network");
     expect(
       getPluginToolMeta(expectDefined(runtime.tools[0], "runtime.tools[0] test invariant")),
     ).toMatchObject({
@@ -270,88 +286,109 @@ describe("createBundleMcpToolRuntime", () => {
     );
   });
 
-  it("keeps structuredContent visible when MCP tools also return text content", async () => {
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        result: {
-          content: [{ type: "text", text: "pong" }],
-          structuredContent: {
-            threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-            content: "pong",
-          },
-          isError: false,
-        },
-      }),
+  it("preserves recovery text alongside structuredContent", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "authentication expired; run login" }],
+      structuredContent: { retryable: true },
+      isError: false,
     });
 
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
-
-    expectTextContentBlock(
-      result.content[0],
-      `structuredContent:\n${JSON.stringify(
-        {
-          threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-          content: "pong",
-        },
-        null,
-        2,
-      )}`,
-    );
-    expect(result.content).toHaveLength(1);
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "retryable": true\n}' },
+      { type: "text", text: "authentication expired; run login" },
+    ]);
     expect(result.details).toEqual({
       mcpServer: "bundleProbe",
       mcpTool: "bundle_probe",
-      structuredContent: {
-        threadId: "019e6cdb-8e7f-7cb2-891f-9edb689f6fc7",
-        content: "pong",
-      },
+      structuredContent: { retryable: true },
     });
   });
 
-  it("preserves non-text MCP content alongside structuredContent without duplicating mirrored text", async () => {
+  it("preserves text and non-text MCP content alongside structuredContent", async () => {
     const structuredContent = { description: "captured screenshot" };
-    const runtime = await materializeBundleMcpToolsForRun({
-      runtime: makeToolRuntime({
-        result: {
-          content: [
-            { type: "text", text: "captured screenshot" },
-            { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
-            {
-              type: "resource_link",
-              uri: "https://example.com/report",
-              name: "report",
-              title: "Report",
-            },
-            { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
-            { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
-          ],
-          structuredContent,
+    const result = await executeMcpToolResult({
+      content: [
+        { type: "text", text: "captured screenshot" },
+        { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
+        {
+          type: "resource_link",
+          uri: "https://example.com/report",
+          name: "report",
+          title: "Report",
         },
-      }),
+        { type: "resource", resource: { uri: "memo://one", text: "memo body" } },
+        { type: "audio", data: "AAAA", mimeType: "audio/mpeg" },
+      ],
+      structuredContent,
     });
-
-    const result = await expectDefined(runtime.tools[0], "runtime.tools[0] test invariant").execute(
-      "call-bundle-probe",
-      {},
-      undefined,
-      undefined,
-    );
 
     expect(result.content).toEqual([
       {
         type: "text",
         text: `structuredContent:\n${JSON.stringify(structuredContent, null, 2)}`,
       },
+      { type: "text", text: "captured screenshot" },
       { type: "image", data: "aW1hZ2U=", mimeType: "image/png" },
       { type: "text", text: "[Report] https://example.com/report" },
       { type: "text", text: "memo body" },
       { type: "text", text: "[audio audio/mpeg]" },
     ]);
+  });
+
+  it("deduplicates exact structured JSON mirrors without dropping near matches", async () => {
+    const structuredContent = { zeta: 2, alpha: 1 };
+    const result = await executeMcpToolResult({
+      content: [
+        { type: "text", text: JSON.stringify(structuredContent, null, 2) },
+        { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
+      ],
+      structuredContent,
+    });
+
+    expect(result.content).toEqual([
+      {
+        type: "text",
+        text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}',
+      },
+      { type: "text", text: 'Result metadata: {"alpha":1,"zeta":2}' },
+    ]);
+  });
+
+  it("marks isError through the tool-result owner while preserving recovery text", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "authentication expired; run login" }],
+      structuredContent: { retryable: true },
+      isError: true,
+    });
+
+    expect(result.content).toContainEqual({
+      type: "text",
+      text: "authentication expired; run login",
+    });
+    expect(result.details).toMatchObject({
+      status: "error",
+      structuredContent: { retryable: true },
+    });
+    expect(isToolResultError(result)).toBe(true);
+  });
+
+  it("renders structured-only results in deterministic key order", async () => {
+    const result = await executeMcpToolResult({
+      content: [],
+      structuredContent: { zeta: 2, alpha: 1 },
+    });
+
+    expect(result.content).toEqual([
+      { type: "text", text: 'structuredContent:\n{\n  "alpha": 1,\n  "zeta": 2\n}' },
+    ]);
+  });
+
+  it("keeps text-only results unchanged", async () => {
+    const result = await executeMcpToolResult({
+      content: [{ type: "text", text: "plain result" }],
+    });
+
+    expect(result.content).toEqual([{ type: "text", text: "plain result" }]);
   });
 
   it("coerces non-text/image MCP tool-result blocks to text (resource_link/resource/audio)", async () => {
@@ -484,6 +521,46 @@ describe("createBundleMcpToolRuntime", () => {
 
   it("exposes MCP resource and prompt utility tools when advertised", async () => {
     const base = makeToolRuntime({ tools: [], serverName: "knowledge" });
+    const publicResults = {
+      prompts_get: {
+        description: "Brief the user",
+        messages: [
+          {
+            role: "user",
+            content: {
+              type: "text",
+              text: "Summarize MCP",
+              annotations: { audience: ["assistant"] },
+              _meta: { promptBlock: "preserved" },
+            },
+          },
+        ],
+      },
+      prompts_list: {
+        prompts: [{ name: "brief", _meta: { promptEntry: "preserved" } }],
+        nextCursor: "prompt-page-two",
+      },
+      resources_list: {
+        resources: [
+          {
+            uri: "memo://one",
+            name: "memo",
+            annotations: { priority: 0.5 },
+            _meta: { resourceEntry: "preserved" },
+          },
+        ],
+        nextCursor: "resource-page-two",
+      },
+      resources_read: {
+        contents: [{ uri: "memo://one", text: "memo text", _meta: { content: "preserved" } }],
+      },
+    };
+    const privateResults = Object.fromEntries(
+      Object.entries(publicResults).map(([operation, value]) => [
+        operation,
+        { ...value, _meta: { privateState: `${operation}-must-not-leak` } },
+      ]),
+    );
     const runtime = await materializeBundleMcpToolsForRun({
       runtime: {
         ...base,
@@ -502,12 +579,10 @@ describe("createBundleMcpToolRuntime", () => {
           },
           tools: [],
         }),
-        listResources: async () => [{ uri: "memo://one", name: "memo" }],
-        readResource: async (_serverName, uri) => ({
-          contents: [{ uri, text: "memo text" }],
-        }),
-        listPrompts: async () => [{ name: "brief" }],
-        getPrompt: async (_serverName, name, args) => ({ name, args }),
+        listResources: async () => privateResults.resources_list,
+        readResource: async () => privateResults.resources_read,
+        listPrompts: async () => privateResults.prompts_list,
+        getPrompt: async () => privateResults.prompts_get,
       },
     });
 
@@ -518,19 +593,30 @@ describe("createBundleMcpToolRuntime", () => {
       "knowledge__resources_read",
     ]);
 
-    const read = await runtime.tools
-      .find((tool) => tool.name === "knowledge__resources_read")!
-      .execute("call-read", { uri: "memo://one" }, undefined, undefined);
-
-    expectTextContentBlock(
-      read.content[0],
-      JSON.stringify({ contents: [{ uri: "memo://one", text: "memo text" }] }, null, 2),
-    );
-    expect(read.details).toMatchObject({
-      mcpServer: "knowledge",
-      mcpOperation: "resources_read",
-      untrustedMcpOutput: true,
-    });
+    for (const [operation, args] of [
+      ["prompts_get", { name: "brief" }],
+      ["prompts_list", {}],
+      ["resources_list", {}],
+      ["resources_read", { uri: "memo://one" }],
+    ] as const) {
+      const tool = expectDefined(
+        runtime.tools.find((candidate) => candidate.name === `knowledge__${operation}`),
+        `${operation} utility tool`,
+      );
+      const result = await tool.execute(`call-${operation}`, args, undefined, undefined);
+      expectTextContentBlock(result.content[0], JSON.stringify(publicResults[operation], null, 2));
+      expect(result.details).toMatchObject({
+        mcpServer: "knowledge",
+        mcpOperation: operation,
+        untrustedMcpOutput: true,
+      });
+      expect(tool.resultContentSource).toBe("network");
+      expect(expectDefined(privateResults[operation], `${operation} private source`)._meta).toEqual(
+        {
+          privateState: `${operation}-must-not-leak`,
+        },
+      );
+    }
 
     await expect(
       runtime.tools
@@ -828,5 +914,57 @@ describe("createBundleMcpToolRuntime", () => {
         arguments: { parent: { page_id: "page-id" } },
       }),
     ).toEqual({ parent: { page_id: "page-id" } });
+  });
+
+  it("keeps root fields callable when an MCP input schema uses a root union (#128743)", async () => {
+    const inputSchema = {
+      type: "object",
+      title: "MessagesReplyInput",
+      additionalProperties: false,
+      required: ["thread_id"],
+      properties: {
+        thread_id: { type: "string", minLength: 1, maxLength: 128 },
+        body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        task_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        turn_grant_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+      },
+      anyOf: [
+        { required: ["body"], properties: { body: { type: "string" } } },
+        { required: ["body_file"], properties: { body_file: { type: "string" } } },
+      ],
+    };
+    const runtime = await materializeBundleMcpToolsForRun({
+      runtime: makeToolRuntime({
+        serverName: "aihub",
+        tools: [
+          {
+            serverName: "aihub",
+            safeServerName: "aihub",
+            toolName: "messages_reply",
+            inputSchema,
+            fallbackDescription: "Reply to a message",
+          },
+        ],
+      }),
+    });
+    const tool = expectDefined(runtime.tools[0], "runtime.tools[0] test invariant");
+
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call-inline-body",
+        name: tool.name,
+        arguments: { thread_id: "thread-1", body: "hello" },
+      }),
+    ).not.toThrow();
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call-body-file",
+        name: tool.name,
+        arguments: { thread_id: "thread-1", body_file: "/tmp/body.md" },
+      }),
+    ).not.toThrow();
   });
 });

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { constants as fsConstants, createWriteStream, type Stats } from "node:fs";
+import { createWriteStream, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,10 @@ import {
   extractArchive,
 } from "../infra/archive.js";
 import { createBackupLinkCache } from "../infra/backup-volatile-stat-cache.js";
+import {
+  getPublishFileExclusiveFailureDetails,
+  publishFileNoClobber,
+} from "../infra/directory-durability.js";
 import { formatErrorMessage as errorMessage } from "../infra/errors.js";
 import { root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -306,8 +310,8 @@ export async function backupFleetCell(params: {
         },
         [manifestPath, dataTarget, authTarget],
       ),
-      // Stream to a same-directory temp path first: a killed process must not
-      // leave a truncated file under the final archive name.
+      // Finish streaming into a same-directory temp path before publication;
+      // filesystems without hard-link support still need a non-atomic copy.
       createWriteStream(tempArchivePath, { flags: "wx", mode: 0o600 }),
     );
     // A single large file can stream past the lease TTL without a filter
@@ -338,7 +342,25 @@ export async function backupFleetCell(params: {
         `Fleet backup refuses a file name its restore path rules would reject: ${unrestorablePath}. Rename the file inside the cell and retry.`,
       );
     }
-    await publishArchive(tempArchivePath, archivePath);
+    try {
+      await publishFileNoClobber(tempArchivePath, archivePath, {
+        strategy: "link-or-copy",
+        durability: "degrade",
+      });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
+          cause: error,
+        });
+      }
+      if (getPublishFileExclusiveFailureDetails(error)?.cleanup === "unknown") {
+        throw new Error(
+          `Fleet backup publication failed: ${errorMessage(error)}. A partial archive may remain at ${archivePath}; inspect or remove it before retrying.`,
+          { cause: error },
+        );
+      }
+      throw error;
+    }
     return {
       tenant: params.record.tenantId,
       archivePath,
@@ -353,41 +375,9 @@ export async function backupFleetCell(params: {
   }
 }
 
-// Publish with no-overwrite semantics after every check passed: hard-link the
-// temp file to the final name when supported, else exclusive copy. EEXIST from
-// either path means another process owns the destination.
-async function publishArchive(tempArchivePath: string, archivePath: string): Promise<void> {
-  try {
-    await fs.link(tempArchivePath, archivePath);
-    return;
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    if (code !== "ENOTSUP" && code !== "EOPNOTSUPP" && code !== "EPERM") {
-      throw error;
-    }
-  }
-  try {
-    await fs.copyFile(tempArchivePath, archivePath, fsConstants.COPYFILE_EXCL);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing fleet backup archive: ${archivePath}`, {
-        cause: error,
-      });
-    }
-    await fs.rm(archivePath, { force: true }).catch(() => undefined);
-    throw error;
-  }
-}
-
 function isAllowedRestorePath(rawPath: string): boolean {
-  // Fleet archives use POSIX separators only. A literal backslash would
-  // validate as one path but extract as another on POSIX, so it is rejected
-  // outright at both backup and restore time.
+  // Backup writes canonical POSIX names; restore receives fs-safe's canonical
+  // paths. Reject raw aliases here when validating backup source names.
   if (rawPath.includes("\\")) {
     return false;
   }

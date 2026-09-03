@@ -14,7 +14,10 @@ import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerUsageStreamTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -24,12 +27,15 @@ class ChatControllerUsageStreamTest {
     val runId: String,
   )
 
+  @OptIn(ExperimentalCoroutinesApi::class)
   private suspend fun TestScope.startRun(): StartedRun {
     val gateway = ScriptedGateway(json)
     gateway.respondChatSend(status = "started")
+    gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
     gateway.respondWith("question.list", """{"questions":[]}""")
-    val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
-    controller.handleGatewayEvent("health", null)
+    val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+    controller.load("main")
+    runCurrent()
     assertTrue(controller.sendMessageAwaitAcceptance("count this", "off", emptyList()))
     return StartedRun(controller, gateway, requireNotNull(gateway.lastRunId))
   }
@@ -98,7 +104,7 @@ class ChatControllerUsageStreamTest {
   fun activeBooleanWithoutRunIdUsesStableSessionFallback() =
     runTest {
       val gateway = ScriptedGateway(json)
-      val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
+      val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":[]}}""",
@@ -112,10 +118,33 @@ class ChatControllerUsageStreamTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun activeRunIdTombstoneClearsExactIdsWhileOmissionPreservesThem() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+      controller.handleGatewayEvent("sessions.changed", advertise("run-exact"))
+      assertEquals("run-exact", controller.selectedActiveRunPresentation.value.runId)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true}}""",
+      )
+      assertEquals("run-exact", controller.selectedActiveRunPresentation.value.runId)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":null}}""",
+      )
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      assertNull(controller.selectedActiveRunPresentation.value.runId)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun idlessReplacementRunGetsANewStartedAtClockKey() =
     runTest {
       val gateway = ScriptedGateway(json)
-      val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
+      val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
       controller.handleGatewayEvent(
         "sessions.changed",
         """{"reason":"patch","session":{"key":"main","agentId":"main","status":"running","hasActiveRun":true,"activeRunIds":[],"startedAt":100}}""",
@@ -136,7 +165,7 @@ class ChatControllerUsageStreamTest {
   fun terminalTombstoneIgnoresLaterStartAndUsageUntilOwnershipRemoval() =
     runTest {
       val gateway = ScriptedGateway(json)
-      val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
+      val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
       controller.handleGatewayEvent("sessions.changed", advertise("server-run"))
       controller.handleGatewayEvent("agent", usagePayload("server-run", 1L, "20"))
       controller.handleGatewayEvent(
@@ -196,6 +225,7 @@ class ChatControllerUsageStreamTest {
     runTest {
       val gateway = ScriptedGateway(json)
       gateway.respondWith("question.list", """{"questions":[]}""")
+      gateway.respondWith("chat.history", historyResponse("session-1", emptyList()))
       val requestSeen = CompletableDeferred<String>()
       val releaseAck = CompletableDeferred<Unit>()
       gateway.respond("chat.send") { paramsJson ->
@@ -209,8 +239,9 @@ class ChatControllerUsageStreamTest {
         releaseAck.await()
         """{"runId":"server-run","status":"started"}"""
       }
-      val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
-      controller.handleGatewayEvent("health", null)
+      val controller = ChatController(scope = backgroundScope, commandOutbox = backgroundScope.createChatCommandOutbox(), cacheScope = { ChatCacheScope("gateway-test", 1L) }, json = json, requestGateway = gateway::request)
+      controller.load("main")
+      runCurrent()
       val send = async { controller.sendMessageAwaitAcceptance("hello", "off", emptyList()) }
       val clientRunId = requestSeen.await()
       runCurrent()
@@ -218,6 +249,7 @@ class ChatControllerUsageStreamTest {
 
       releaseAck.complete(Unit)
       assertTrue(send.await())
+      runCurrent()
       val after = controller.selectedActiveRunPresentation.value
 
       assertEquals(clientRunId, before.runId)

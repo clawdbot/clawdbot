@@ -4,7 +4,7 @@ import "../../components/app-sidebar.ts";
 import { createGateway, createSessions, mountSidebar } from "../app-sidebar.ts";
 
 describe("AppSidebar outbox attention badges", () => {
-  it("shows draft pencils only for inactive sessions with stored composer text", async () => {
+  it("shows draft pencils for active and inactive sessions with stored composer text", async () => {
     const draftKey = "agent:main:draft-thread";
     const activeDraftKey = "agent:main:active-draft-thread";
     const plainKey = "agent:main:plain-thread";
@@ -25,7 +25,7 @@ describe("AppSidebar outbox attention badges", () => {
     expect(draftBadge?.getAttribute("aria-label")).toBe("Unsent draft");
     expect(
       sidebar.querySelector(`[data-session-key="${activeDraftKey}"] .session-row-badge--draft`),
-    ).toBeNull();
+    ).not.toBeNull();
     expect(
       sidebar.querySelector(`[data-session-key="${plainKey}"] .session-row-badge--draft`),
     ).toBeNull();

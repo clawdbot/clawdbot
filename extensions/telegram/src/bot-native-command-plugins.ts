@@ -182,7 +182,7 @@ export async function executeTelegramPluginCommand(
     sessionKey: dispatch.targetSessionKey,
   });
   const from = dispatch.isGroup
-    ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec.id)
+    ? buildTelegramGroupFrom(dispatch.chatId, dispatch.threadSpec)
     : `telegram:${dispatch.chatId}`;
   const to =
     dispatch.threadSpec.scope === "direct-messages"

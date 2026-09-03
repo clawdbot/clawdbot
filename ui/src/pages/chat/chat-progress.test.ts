@@ -1,199 +1,179 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  resetWorkingProgress,
+  resolveTurnRecap,
+  resolveWorkingProgress,
+  type TurnRecapWatch,
+} from "./chat-progress.ts";
 
 const SESSION = "agent:main:main";
-const PREVIOUS_ENDED_AT = 900_000;
-const RUN_ENDED_AT = 1_000_000;
 
-const doneRow = (endedAt: number, runtimeMs = 51_000, outputTokens?: number) => ({
-  status: "done",
-  endedAt,
-  runtimeMs,
-  ...(outputTokens === undefined ? {} : { outputTokens }),
-});
-
-describe("resolveTurnRecap", () => {
+describe("resolveWorkingProgress", () => {
   beforeEach(() => resetWorkingProgress());
   afterEach(() => resetWorkingProgress());
 
-  it("resolves once a fresh terminal stamp lands, then sticks", () => {
-    // Indicator up: previous run's terminal stamp becomes the baseline.
-    expect(resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    // Indicator settles but only the stale row is visible so far.
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    // Fresh terminal patch: recap resolves and keeps resolving.
-    const row = doneRow(RUN_ENDED_AT, 51_000, 485);
-    expect(resolveTurnRecap(SESSION, false, row)).toEqual({
-      runtimeMs: 51_000,
-      outputTokens: 485,
-    });
-    expect(resolveTurnRecap(SESSION, false, row)).toEqual({
-      runtimeMs: 51_000,
-      outputTokens: 485,
-    });
+  it("prefers observed stream identity over a future queued send", () => {
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        1_000,
+        [
+          {
+            id: "future-send",
+            text: "Run next",
+            createdAt: 2_000,
+            sendRunId: "future-run",
+            sendState: "waiting-reconnect",
+            sendAttempts: 1,
+          },
+        ],
+        [{ ts: 1_000, runId: "active-run" }],
+        [],
+      ),
+    ).toMatchObject({ runId: "active-run" });
+  });
+});
+
+describe("resolveTurnRecap", () => {
+  let host: { turnRecapWatch: TurnRecapWatch | null };
+  const runId = "watched-run";
+  const doneRow = { lastRunId: runId, status: "done" as const, runtimeMs: 14_000 };
+  const usage = (outputTokens: number, owner = runId) =>
+    new Map([[owner, { outputTokens, seq: 1 }]]);
+  const resolve = (params: Omit<Parameters<typeof resolveTurnRecap>[1], "sessionKey"> = {}) =>
+    resolveTurnRecap(host, { sessionKey: SESSION, ...params });
+  const watch = () => resolve({ indicator: { runId } });
+
+  beforeEach(() => {
+    host = { turnRecapWatch: null };
   });
 
-  it("does not show the previous turn's token count when the usage persist lags", () => {
-    // Terminal stamp and usage persist are separate writes: the fresh-endedAt
-    // row still carries the previous turn's outputTokens (10).
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10));
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10))).toEqual({
+  it("matches the watched run instead of inferring identity from session-row values", () => {
+    expect(watch()).toBeNull();
+    expect(
+      resolve({ row: { ...doneRow, lastRunId: "previous-run" }, usageByRun: usage(690) }),
+    ).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual({
+      runId,
       runtimeMs: 14_000,
-      outputTokens: null,
+      outputTokens: 690,
     });
   });
 
-  it("falls back to the watched run's live usage counter for a lagging row", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 120);
-    // Counter grows while the run streams; the watch keeps the max.
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 695);
-    // Usage map entry died at lifecycle end: settle renders pass null.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10), null)).toEqual({
+  it("reconciles usage arriving after the first completed recap", () => {
+    watch();
+    expect(resolve({ row: doneRow, usageByRun: usage(690) })).toEqual({
+      runId,
+      runtimeMs: 14_000,
+      outputTokens: 690,
+    });
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toEqual({
+      runId,
       runtimeMs: 14_000,
       outputTokens: 695,
     });
-  });
-
-  it("prefers the row's tokens once the usage persist has landed", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 690);
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 695))).toEqual({
+    expect(resolve({ row: doneRow, usageByRun: usage(680) })).toEqual({
+      runId,
       runtimeMs: 14_000,
-      outputTokens: 695,
+      outputTokens: 680,
     });
   });
 
-  it("rejects the previous turn's row even seconds after this run started", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    // Rapid back-to-back turns: the old done row stays stale forever, and so
-    // does any regressed (out-of-order) stamp.
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT - 5_000))).toBeNull();
+  it("retains a matching terminal that arrives before the indicator disappears", () => {
+    expect(resolve({ indicator: { runId }, row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(resolve()).toEqual({ runId, runtimeMs: 14_000, outputTokens: 695 });
   });
 
-  it("expires an unresolved watch instead of matching a later run", () => {
-    vi.useFakeTimers({ now: 1_000_000 });
-    try {
-      // A queued send showed the claw but the run never started.
-      resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-      expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-      vi.advanceTimersByTime(31_000);
-      expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-      // A cron/background completion minutes later cannot claim the turn.
-      expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).toBeNull();
-    } finally {
-      vi.useRealTimers();
-    }
+  it("keeps a resolved recap against unwatched terminal rows and usage", () => {
+    watch();
+    const recap = resolve({ row: doneRow, usageByRun: usage(695) });
+    expect(
+      resolve({
+        row: { ...doneRow, lastRunId: "foreign-run", runtimeMs: 1_000 },
+        usageByRun: usage(900, "foreign-run"),
+      }),
+    ).toEqual(recap);
   });
 
-  it("consumes the watch on a fresh done row without runtime data", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    expect(resolveTurnRecap(SESSION, false, { status: "done", endedAt: RUN_ENDED_AT })).toBeNull();
-    // The watch concluded; a later completion cannot attach.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 1_000))).toBeNull();
-  });
-
-  it("treats a cleared baseline (run start patch seen) as stale-free", () => {
-    // Start patch cleared endedAt before the watch began.
-    expect(resolveTurnRecap(SESSION, true, { status: "running" })).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 2_000))).toEqual({
-      runtimeMs: 2_000,
+  it("waits for runtime data without borrowing another run's count", () => {
+    watch();
+    expect(
+      resolve({ row: { lastRunId: runId, status: "done" }, usageByRun: usage(900, "foreign-run") }),
+    ).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(900, "foreign-run") })).toEqual({
+      runId,
+      runtimeMs: 14_000,
       outputTokens: null,
     });
   });
 
-  it("never resolves without having watched a working indicator", () => {
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).toBeNull();
-  });
-
-  it("consumes a watch whose baseline row was never observed", () => {
-    // Session row unavailable for the entire watch (capped list, still loading).
-    expect(resolveTurnRecap(SESSION, true, undefined)).toBeNull();
-    // The row appears only after settle, carrying the PREVIOUS run's stamp:
-    // with no baseline it must not pass as this turn's terminal.
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).toBeNull();
-  });
-
-  it("adopts the first row observed mid-watch as the baseline", () => {
-    expect(resolveTurnRecap(SESSION, true, undefined)).toBeNull();
-    // Row loads while the claw is still up, showing the previous stamp.
-    expect(resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    // Normal settle: only a fresh stamp resolves.
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 6_000))).toEqual({
-      runtimeMs: 6_000,
-      outputTokens: null,
-    });
-  });
-
-  it("forfeits the turn when a terminal stamp changes mid-watch", () => {
-    // Watch starts after the run-start patch cleared endedAt.
-    expect(resolveTurnRecap(SESSION, true, { status: "running" })).toBeNull();
-    // A terminal lands while the claw is still up: attribution is ambiguous
-    // (early own-terminal, delayed prior run, other device) — consume quietly.
-    expect(resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(PREVIOUS_ENDED_AT))).toBeNull();
-    // Later stamps (e.g. a cron run) must not attach to the forfeited turn.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 4_000))).toBeNull();
-  });
-
-  it("forfeits a failed turn whose terminal raced the indicator", () => {
-    resolveTurnRecap(SESSION, true, { status: "running" });
-    // The watched run fails while its claw is still visible.
-    resolveTurnRecap(SESSION, true, { status: "failed", endedAt: RUN_ENDED_AT });
+  it("reports equal counts on consecutive runs and preserves a known zero", () => {
+    watch();
+    expect(resolve({ row: doneRow, usageByRun: usage(0) })?.outputTokens).toBe(0);
+    const nextRunId = "next-run";
+    expect(resolve({ indicator: { runId: nextRunId }, row: doneRow })).toBeNull();
+    expect(resolve({ row: doneRow })).toBeNull();
     expect(
-      resolveTurnRecap(SESSION, false, { status: "failed", endedAt: RUN_ENDED_AT }),
-    ).toBeNull();
-    // A background run's later success cannot masquerade as this turn.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 60_000))).toBeNull();
+      resolve({ row: { ...doneRow, lastRunId: nextRunId }, usageByRun: usage(0, nextRunId) }),
+    ).toEqual({ runId: nextRunId, runtimeMs: 14_000, outputTokens: 0 });
   });
 
-  it("freezes the first resolved recap against later unwatched terminals", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    const settled = resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 51_000, 485));
-    expect(settled).toEqual({ runtimeMs: 51_000, outputTokens: 485 });
-    // A background/cron run finishing later must not rewrite the recap.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 90_000, 7_000, 42))).toEqual(
-      settled,
-    );
+  it.each(["failed", "timeout", "killed"] as const)(
+    "stays quiet for a watched %s run",
+    (status) => {
+      watch();
+      expect(resolve({ row: { ...doneRow, status }, usageByRun: usage(695) })).toBeNull();
+      expect(
+        resolve({
+          row: { ...doneRow, lastRunId: "foreign-run" },
+          usageByRun: usage(900, "foreign-run"),
+        }),
+      ).toBeNull();
+    },
+  );
+
+  it("never invents a watch from history or an unidentified queued indicator", () => {
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
+    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 
-  it("hides the recap as soon as the next run's indicator appears", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 51_000, 485))).toEqual({
-      runtimeMs: 51_000,
-      outputTokens: 485,
-    });
-    // Next turn: indicator visible again — recap gone before its terminal row changes.
-    expect(resolveTurnRecap(SESSION, true, doneRow(RUN_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT))).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 1_000, 2_000, 12))).toEqual({
-      runtimeMs: 2_000,
-      outputTokens: 12,
-    });
+  it("clears the previous recap when a new queued turn has no run identity yet", () => {
+    watch();
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
+    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 
-  it("stays quiet for failed runs but ignores stale failed rows", () => {
-    resolveTurnRecap(SESSION, true, {
-      status: "failed",
-      endedAt: PREVIOUS_ENDED_AT,
-    });
-    // Stale failed row from before this run must not consume the watch.
-    expect(
-      resolveTurnRecap(SESSION, false, { status: "failed", endedAt: PREVIOUS_ENDED_AT }),
-    ).toBeNull();
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 3_000))).toEqual({
-      runtimeMs: 3_000,
-      outputTokens: null,
-    });
-  });
+  it.each(["agent", "gateway"])(
+    "invalidates a settled global recap when its %s changes",
+    (owner) => {
+      const params = {
+        sessionKey: "global",
+        agentId: "first",
+        gatewayClient: createTestGatewayClient(() => null),
+        usageByRun: usage(695),
+      };
+      resolveTurnRecap(host, { ...params, indicator: { runId } });
+      expect(resolveTurnRecap(host, { ...params, row: doneRow })).not.toBeNull();
+      const replacement =
+        owner === "agent"
+          ? { ...params, agentId: "second" }
+          : { ...params, gatewayClient: createTestGatewayClient(() => null) };
+      expect(resolveTurnRecap(host, { ...replacement, row: doneRow })).toBeNull();
+      expect(resolveTurnRecap(host, { ...params, row: doneRow })).toBeNull();
+    },
+  );
 
-  it("consumes the watch on a fresh failed row", () => {
-    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT));
-    expect(
-      resolveTurnRecap(SESSION, false, { status: "failed", endedAt: RUN_ENDED_AT }),
-    ).toBeNull();
-    // A later done stamp belongs to some other run; the watch is gone.
-    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT + 1_000))).toBeNull();
+  it("isolates watches by pane and resets them on session changes", () => {
+    const other = { turnRecapWatch: null };
+    watch();
+    const params = { sessionKey: SESSION, row: doneRow, usageByRun: usage(695) };
+    expect(resolveTurnRecap(other, params)).toBeNull();
+    expect(resolveTurnRecap(host, params)).not.toBeNull();
+    expect(resolveTurnRecap(host, { ...params, sessionKey: "other-session" })).toBeNull();
+    expect(resolveTurnRecap(host, params)).toBeNull();
   });
 });

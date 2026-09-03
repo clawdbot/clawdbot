@@ -28,8 +28,19 @@ vi.mock("../plugins/runtime.js", () => ({
   getActivePluginRegistryVersion: () => mocks.pluginRegistryVersion,
 }));
 
-const { invalidateConfigGetResponseCache, readConfigGetResponse } =
+const { invalidateConfigGetResponseCache, readConfigGetResponse: readConfigGetResponseImpl } =
   await import("./config-get-response.js");
+
+const revisionProjector = {
+  projectRawHash: (hash: string) => `raw-token:${hash}`,
+  projectResolvedHash: (hash: string) => `resolved-token:${hash}`,
+};
+
+function readConfigGetResponse(
+  params: Omit<Parameters<typeof readConfigGetResponseImpl>[0], "revisionProjector">,
+) {
+  return readConfigGetResponseImpl({ ...params, revisionProjector });
+}
 
 const activeWatcher = () => "active" as const;
 const disabledWatcher = () => "disabled" as const;
@@ -39,6 +50,7 @@ function configSnapshot(sourceConfig: OpenClawConfig): ConfigFileSnapshot {
     path: "/tmp/openclaw.json",
     exists: true,
     raw: JSON.stringify(sourceConfig),
+    hash: "raw-1",
     parsed: sourceConfig,
     sourceConfig,
     resolved: sourceConfig,
@@ -106,7 +118,7 @@ describe("config.get response cache", () => {
     ).rejects.toThrow("transient read failure");
     await expect(
       readConfigGetResponse({ getHotReloadStatus: activeWatcher, loadUiHints }),
-    ).resolves.toMatchObject({ appliedConfigHash: "applied-1" });
+    ).resolves.toMatchObject({ appliedConfigHash: "resolved-token:applied-1" });
 
     expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(2);
   });

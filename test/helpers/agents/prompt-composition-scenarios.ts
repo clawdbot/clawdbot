@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { buildBootstrapPromptWarning } from "../../../src/agents/bootstrap-budget-warning.js";
 import {
-  appendBootstrapPromptWarning,
   analyzeBootstrapBudget,
   buildBootstrapInjectionStats,
+  buildBootstrapPromptWarningNotice,
 } from "../../../src/agents/bootstrap-budget.js";
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
@@ -84,6 +84,7 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
+  bootstrapTruncationNotice?: string;
   silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userDate, toolNames } = buildCommonSystemParams(
@@ -103,6 +104,7 @@ function buildSystemPrompt(params: {
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
     contextFiles: params.contextFiles,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 
@@ -587,60 +589,52 @@ async function createBootstrapWarningScenario(workspaceDir: string): Promise<Pro
   if (!analysis.hasTruncation) {
     throw new Error("bootstrap-warning scenario expected truncated bootstrap context");
   }
-  const warningFirst = buildBootstrapPromptWarning({
-    analysis,
-    mode: "once",
-    seenSignatures: [],
-  });
-  const warningSeen = buildBootstrapPromptWarning({
-    analysis,
-    mode: "once",
-    seenSignatures: warningFirst.warningSignaturesSeen,
-    previousSignature: warningFirst.signature,
-  });
-  const warningAlways = buildBootstrapPromptWarning({
+  const warning = buildBootstrapPromptWarning({
     analysis,
     mode: "always",
-    seenSignatures: warningFirst.warningSignaturesSeen,
-    previousSignature: warningFirst.signature,
+    seenSignatures: [],
   });
+  const truncationNotice = buildBootstrapPromptWarningNotice(warning.lines);
+  if (!truncationNotice) {
+    throw new Error("bootstrap-warning scenario expected a truncation notice");
+  }
   return {
     scenario: "bootstrap-warning",
-    focus: "Workspace bootstrap truncation warnings inside # Project Context",
+    focus: "Workspace bootstrap truncation notice inside the system prompt",
     expectedStableSystemAfterTurnIds: ["t2", "t3"],
     turns: [
       {
         id: "t1",
-        label: "First warning emission",
+        label: "First truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
+          bootstrapTruncationNotice: truncationNotice,
         }),
-        bodyPrompt: appendBootstrapPromptWarning("hello", warningFirst.lines),
-        notes: ["Warning is appended to the turn body", "System prompt should stay stable"],
+        bodyPrompt: "hello",
+        notes: ["Notice rides in the system prompt", "Turn body stays the raw user text"],
       },
       {
         id: "t2",
-        label: "Same truncation signature after once-mode dedupe",
+        label: "Second truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
+          bootstrapTruncationNotice: truncationNotice,
         }),
-        bodyPrompt: appendBootstrapPromptWarning("hello again", warningSeen.lines),
-        notes: ["Once-mode removes warning lines", "Only the body tail changes now"],
+        bodyPrompt: "hello again",
+        notes: ["Stable truncation state keeps the system prompt byte-identical"],
       },
       {
         id: "t3",
-        label: "Always-mode warning",
+        label: "Third truncated turn",
         systemPrompt: buildSystemPrompt({
           workspaceDir,
           contextFiles,
+          bootstrapTruncationNotice: truncationNotice,
         }),
-        bodyPrompt: appendBootstrapPromptWarning("one more turn", warningAlways.lines),
-        notes: [
-          "Always-mode keeps warning in the body prompt tail",
-          "System prompt remains stable",
-        ],
+        bodyPrompt: "one more turn",
+        notes: ["Body prompts never carry truncation warnings"],
       },
     ],
   };

@@ -1,5 +1,5 @@
 // Mantis Publish Pr Evidence tests cover mantis publish pr evidence script behavior.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -7,7 +7,6 @@ import {
   loadEvidenceManifest,
   publishArtifactFiles,
   renderEvidenceComment,
-  shouldPublishPrComment,
 } from "../../scripts/mantis/publish-pr-evidence.mjs";
 
 const tempDirs: string[] = [];
@@ -30,7 +29,7 @@ function writeFixtureManifest() {
   writeFileSync(
     manifestPath,
     JSON.stringify({
-      schemaVersion: 1,
+      schemaVersion: 2,
       id: "discord-status-reactions",
       title: "Mantis Discord Status Reactions QA",
       summary: "Mantis reran the scenario.",
@@ -38,11 +37,13 @@ function writeFixtureManifest() {
       comparison: {
         baseline: {
           expected: "queued-only",
+          expectationMet: true,
           sha: "aaa",
           status: "fail",
         },
         candidate: {
           expected: "queued -> thinking -> done",
+          expectationMet: true,
           sha: "bbb",
           status: "pass",
         },
@@ -79,6 +80,23 @@ function writeFixtureManifest() {
 }
 
 describe("scripts/mantis/publish-pr-evidence", () => {
+  it("selects only Mantis-owned status comments", () => {
+    const source = readFileSync("scripts/mantis/publish-pr-evidence.mjs", "utf8");
+
+    expect(source).toContain('.user.login == "openclaw-mantis[bot]"');
+  });
+
+  it("keeps required booleans for sibling trusted evidence producers", () => {
+    const manifestPath = writeFixtureManifest();
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    delete manifest.comparison.candidate.expectationMet;
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    expect(() => loadEvidenceManifest(manifestPath)).toThrow(
+      "Mantis evidence comparison.candidate.expectationMet must be a boolean.",
+    );
+  });
+
   it("renders a manifest-driven PR comment with inline screenshots and video links", () => {
     const manifest = loadEvidenceManifest(writeFixtureManifest());
     const body = renderEvidenceComment({
@@ -103,7 +121,48 @@ describe("scripts/mantis/publish-pr-evidence", () => {
       "[Baseline change MP4](https://qa.openclaw.ai/mantis/discord/pr-1/run-1/baseline-change.mp4)",
     );
     expect(body).not.toContain("raw.githubusercontent.com");
-    expect(body).toContain("- Overall: `true`");
+    expect(body).toContain("- Overall: `pass`");
+  });
+
+  it("renders trusted lane digests and their count differential", () => {
+    const manifest = loadEvidenceManifest(writeFixtureManifest());
+    manifest.comparison = {
+      baseline: {
+        digest:
+          "2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+        expected: "baseline behavior",
+        expectationMet: true,
+        sha: "aaa",
+        status: "pass",
+      },
+      candidate: {
+        digest:
+          "2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+        expected: "candidate behavior",
+        expectationMet: true,
+        sha: "bbb",
+        status: "pass",
+      },
+      differential: "bot messages 2→3 · deletes 1→0",
+      outcome: "pass",
+      pass: true,
+    };
+
+    const body = renderEvidenceComment({
+      manifest,
+      marker: "<!-- mantis-discord-status-reactions -->",
+      rawBase: "https://qa.openclaw.ai/mantis/discord/pr-1/run-1",
+    });
+
+    expect(body).toContain(
+      "- Baseline: `pass` at `aaa` — baseline behavior · facts: 2 sent · 2 bot messages · 1 edit · 1 delete · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+    );
+    expect(body).toContain(
+      "- Candidate (PR merged onto main): `pass` at `bbb` — candidate behavior · facts: 2 sent · 3 bot messages · 1 edit · 0 deletes · 3 provider requests · 134s observed · attempt 1 · sent: `/queue followup`",
+    );
+    expect(body).toContain(
+      "- Differential (trusted facts): bot messages 2→3 · deletes 1→0\n- Overall: `pass`",
+    );
   });
 
   it("uploads manifest artifacts to R2-compatible object storage", async () => {
@@ -322,7 +381,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     writeFileSync(
       manifestPath,
       JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         id: "slack-desktop-smoke",
         title: "Mantis Slack Desktop Smoke QA",
         summary: "Mantis could not finish VM setup.",
@@ -330,6 +389,7 @@ describe("scripts/mantis/publish-pr-evidence", () => {
         comparison: {
           candidate: {
             expected: "Slack QA and VM gateway setup pass",
+            expectationMet: false,
             sha: "bbb",
             status: "fail",
           },
@@ -381,107 +441,8 @@ describe("scripts/mantis/publish-pr-evidence", () => {
     });
 
     expect(body).toContain("Summary: Mantis could not finish VM setup.");
-    expect(body).toContain("- Overall: `false`");
+    expect(body).toContain("- Overall: `fail`");
     expect(body).not.toContain("<img ");
-  });
-
-  it("renders a successful no-visual-proof manifest without media tables", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
-    tempDirs.push(dir);
-    const manifestPath = path.join(dir, "mantis-evidence.json");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        artifacts: [],
-        comparison: {
-          baseline: {
-            expected: "no visible Telegram Desktop delta",
-            status: "skipped",
-          },
-          candidate: {
-            expected: "no visible Telegram Desktop delta",
-            status: "skipped",
-          },
-          pass: true,
-        },
-        id: "telegram-desktop-proof",
-        scenario: "telegram-desktop-proof",
-        schemaVersion: 1,
-        summary:
-          "Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
-        title: "Mantis Telegram Desktop Proof",
-      }),
-    );
-
-    const manifest = loadEvidenceManifest(manifestPath);
-    const body = renderEvidenceComment({
-      manifest,
-      marker: "<!-- mantis-telegram-desktop-proof -->",
-      rawBase:
-        "https://raw.githubusercontent.com/openclaw/openclaw/qa-artifacts/mantis/telegram-desktop/pr-1/run-1",
-      requestSource: "issue_comment",
-      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl:
-        "https://github.com/openclaw/openclaw/tree/qa-artifacts/mantis/telegram-desktop/pr-1/run-1",
-    });
-
-    expect(manifest.artifacts.map((artifact) => artifact.targetPath)).toEqual([
-      "mantis-evidence.json",
-    ]);
-    expect(body).toContain(
-      "Summary: Mantis did not generate before/after GIFs because this PR changes CI wiring only.",
-    );
-    expect(body).toContain("- Overall: `true`");
-    expect(body).not.toContain("<table");
-    expect(body).not.toContain("<img ");
-    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(true);
-    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
-  });
-
-  it("does not publish PR comments for Telegram capture infrastructure failures", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "mantis-evidence-test-"));
-    tempDirs.push(dir);
-    const manifestPath = path.join(dir, "mantis-evidence.json");
-    writeFileSync(
-      manifestPath,
-      JSON.stringify({
-        artifacts: [],
-        comparison: {
-          baseline: {
-            expected: "no acceptable native Telegram Desktop visual artifact",
-            status: "skipped",
-          },
-          candidate: {
-            expected: "no acceptable native Telegram Desktop visual artifact",
-            status: "skipped",
-          },
-          pass: false,
-        },
-        id: "telegram-desktop-proof",
-        scenario: "telegram-desktop-proof",
-        schemaVersion: 1,
-        summary:
-          "Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
-        title: "Mantis Telegram Desktop Proof",
-      }),
-    );
-
-    const manifest = loadEvidenceManifest(manifestPath);
-    const body = renderEvidenceComment({
-      manifest,
-      marker: "<!-- mantis-telegram-desktop-proof -->",
-      rawBase: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1",
-      requestSource: "pull_request_target",
-      runUrl: "https://github.com/openclaw/openclaw/actions/runs/1",
-      treeUrl: "https://artifacts.openclaw.ai/mantis/telegram-desktop/pr-1/run-1/index.json",
-    });
-
-    expect(body).toContain(
-      "Summary: Mantis could not capture Telegram Desktop proof because native Telegram Desktop opened to the logged-out welcome screen.",
-    );
-    expect(body).toContain("- Overall: `false`");
-    expect(shouldPublishPrComment(manifest, { requestSource: "issue_comment" })).toBe(false);
-    expect(shouldPublishPrComment(manifest, { requestSource: "pull_request_target" })).toBe(false);
   });
 
   it("rejects artifact paths that escape the manifest directory", () => {
@@ -497,9 +458,13 @@ describe("scripts/mantis/publish-pr-evidence", () => {
             path: "../outside.json",
           },
         ],
+        comparison: {
+          candidate: { expected: "artifact path is contained", expectationMet: true },
+          pass: true,
+        },
         id: "bad",
         scenario: "bad",
-        schemaVersion: 1,
+        schemaVersion: 2,
         title: "Bad",
       }),
     );

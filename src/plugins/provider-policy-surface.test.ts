@@ -16,6 +16,7 @@ describe("direct provider policy surface", () => {
     const resolveModelRoutes = vi.fn();
     const isResponseModelEquivalent = vi.fn();
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
+      deprecatedProfileIds: ["demo:legacy"],
       resolveModelRoutes,
       isResponseModelEquivalent,
     }));
@@ -36,6 +37,7 @@ describe("direct provider policy surface", () => {
 
     expect(surface?.resolveModelRoutes).toBe(resolveModelRoutes);
     expect(surface?.isResponseModelEquivalent).toBe(isResponseModelEquivalent);
+    expect(surface?.deprecatedProfileIds).toEqual(["demo:legacy"]);
     expect(loadBundledPluginPublicArtifactModuleSync).toHaveBeenCalledWith({
       dirName: "openai",
       artifactBasename: "provider-policy-api.js",

@@ -38,12 +38,14 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
   options: {
     defaultAgentId: string;
     env?: NodeJS.ProcessEnv;
+    registeredDatabases?: readonly { agentId: string; path: string }[];
     onDiagnostic?: (diagnostic: SessionStoreTargetCollisionDiagnostic) => void;
   },
 ): SessionStoreTarget[] {
   // Ownership must not fall back while the authoritative registry is unreadable:
   // doing so can project the same physical DB under a different configured default.
-  const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env: options.env });
+  const registeredDatabases =
+    options.registeredDatabases ?? listOpenClawRegisteredAgentDatabases({ env: options.env });
   const grouped = new Map<
     string,
     Array<{ target: SessionStoreTarget; databaseOwnerAgentId?: string; shared: boolean }>
@@ -63,9 +65,6 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
     [...groups.keys()].find((candidate) => isSameDatabasePath(candidate, pathname)) ??
     path.resolve(pathname);
   for (const target of targets) {
-    const resolvedUnsuffixedPath = path.resolve(
-      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
-    );
     const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
       defaultAgentId: options.defaultAgentId,
@@ -81,6 +80,13 @@ export function dedupeSessionStoreTargetsBySqliteTarget(
       ...(resolved.agentId ? { databaseOwnerAgentId: normalizeAgentId(resolved.agentId) } : {}),
     });
     grouped.set(sqlitePath, group);
+    // Exact shared locators do not allocate legacy per-agent suffixes.
+    if (resolved.shared) {
+      continue;
+    }
+    const resolvedUnsuffixedPath = path.resolve(
+      resolveUnsuffixedSqliteTargetFromSessionStorePath(target.storePath).path ?? target.storePath,
+    );
     const unsuffixedPath = resolvePhysicalGroupKey(logicalGroups, resolvedUnsuffixedPath);
     const logicalGroup = logicalGroups.get(unsuffixedPath) ?? [];
     logicalGroup.push({

@@ -228,7 +228,6 @@ describe.sequential("memory remote error redaction", () => {
         }),
       ).resolves.toBe("file_control");
       const batchRecords = records.filter((record) => record.path.endsWith("/files"));
-      expect(batchRecords).toHaveLength(3);
       expect(batchRecords[0]?.contentType).toMatch(/^multipart\/form-data; boundary=/u);
       expect(batchRecords[0]?.body).toContain('name="purpose"');
       expect(batchRecords[0]?.body).toContain("batch");

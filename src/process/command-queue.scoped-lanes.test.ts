@@ -3,8 +3,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   enqueueCommandInLane,
-  getActiveTaskCount,
   getCommandLaneSnapshot,
+  getTotalQueueSize,
   resetCommandLane,
   setCommandLaneConcurrency,
 } from "./command-queue.js";
@@ -75,7 +75,7 @@ describe("scoped command lane lifecycle", () => {
       expect(results).toEqual(Array.from({ length: 10 }, (_, index) => index));
       expect(peakActiveRuns).toBe(10);
       expect(activeRuns).toBe(0);
-      expect(getActiveTaskCount()).toBe(0);
+      expect(getTotalQueueSize()).toBe(0);
       expect(lanes.size).toBe(baselineSize);
       for (const lane of laneNames) {
         expect(lanes.has(lane)).toBe(false);
@@ -182,7 +182,6 @@ describe("scoped command lane lifecycle", () => {
       CommandLane.SystemAgent,
       CommandLane.Cron,
       CommandLane.CronNested,
-      CommandLane.SkillWorkshopReview,
       CommandLane.Subagent,
       CommandLane.Nested,
     ];

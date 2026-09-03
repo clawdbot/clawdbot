@@ -27,7 +27,7 @@ export function resolvePluginPackageUninstallPlan(
   ];
 }
 
-export function prepareConfigForPendingPluginDirectoryRemovalSet(
+export function prepareConfigForDisabledPluginSet(
   config: OpenClawConfig,
   pluginIds: readonly string[],
 ): OpenClawConfig {

@@ -60,7 +60,7 @@ export const WorktreesRemoveParamsSchema = closedObject({
 export const WorktreesRemoveResultSchema = closedObject({
   removed: Type.Boolean(),
   snapshotRef: Type.Optional(NonEmptyString),
-  /** Why the pre-removal snapshot failed; present only on forced removals that continued without one. */
+  /** Why the pre-removal snapshot failed; removal may have stopped or continued without one. */
   snapshotError: Type.Optional(NonEmptyString),
 });
 

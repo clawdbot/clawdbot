@@ -79,7 +79,7 @@ afterAll(() => {
 function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
   const state: DreamingState = {
-    ...createDreamingState(),
+    ...createDreamingState({ selectedAgentId: "main" }),
     client: {
       request,
     } as unknown as DreamingState["client"],
@@ -247,7 +247,7 @@ describe("dreaming controller", () => {
 
     await loadDreamingStatus(state);
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     const status = state.dreamingStatus;
     expect(status).toBe(payload.dreaming);
     expect(status?.enabled).toBe(true);
@@ -288,6 +288,25 @@ describe("dreaming controller", () => {
     expect(request).toHaveBeenCalledWith("doctor.memory.status", {
       agentId: "research-analyst",
     });
+  });
+
+  it("does not request agent-scoped resources or actions without a selected agent", async () => {
+    const { state, request } = createState();
+    state.selectedAgentId = null;
+    state.hello = gatewayHelloForMethods(
+      ["wiki.importInsights", "wiki.overview", "doctor.memory.backfillDreamDiary"],
+      ["operator.write"],
+    );
+
+    await Promise.all([
+      loadDreamingStatus(state),
+      loadDreamDiary(state),
+      loadWikiImportInsights(state),
+      loadWikiOverview(state),
+    ]);
+
+    await expect(backfillDreamDiary(state)).resolves.toBe(false);
+    expect(request).not.toHaveBeenCalled();
   });
 
   it("starts a new selected-agent status load and ignores stale completions", async () => {
@@ -473,7 +492,7 @@ describe("dreaming controller", () => {
 
     await loadWikiImportInsights(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "main" });
     expect(state.wikiImportInsights?.totalItems).toBe(2);
     expect(state.wikiImportInsights?.totalClusters).toBe(1);
     expect(state.wikiImportInsights?.clusters).toHaveLength(1);
@@ -548,7 +567,7 @@ describe("dreaming controller", () => {
 
     await loadWikiImportInsights(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.importInsights", {});
+    expect(request).toHaveBeenCalledWith("wiki.importInsights", { agentId: "main" });
     expect(state.wikiImportInsights?.totalItems).toBe(1);
     expect(state.wikiImportInsights?.totalClusters).toBe(1);
     expect(state.wikiImportInsightsError).toBeNull();
@@ -567,6 +586,7 @@ describe("dreaming controller", () => {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
@@ -598,6 +618,7 @@ describe("dreaming controller", () => {
       sourceType: "chatgpt",
       totalItems: 1,
       totalClusters: 1,
+      truncated: false,
       clusters: [],
     };
     state.wikiImportInsightsError = "unknown method: wiki.importInsights";
@@ -666,7 +687,7 @@ describe("dreaming controller", () => {
 
     await loadWikiOverview(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.overview", {});
+    expect(request).toHaveBeenCalledWith("wiki.overview", { agentId: "main" });
     expect(state.wikiOverview?.totalItems).toBe(1);
     expect(state.wikiOverview?.totalPages).toBe(2);
     expect(state.wikiOverview?.pageCounts.source).toBe(1);
@@ -749,7 +770,7 @@ describe("dreaming controller", () => {
 
     await loadWikiOverview(state);
 
-    expect(request).toHaveBeenCalledWith("wiki.overview", {});
+    expect(request).toHaveBeenCalledWith("wiki.overview", { agentId: "main" });
     expect(state.wikiOverview?.totalItems).toBe(0);
     expect(state.wikiOverview?.totalPages).toBe(0);
     expect(state.wikiOverview?.pageCounts).toEqual({
@@ -775,6 +796,7 @@ describe("dreaming controller", () => {
     state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,
@@ -815,6 +837,7 @@ describe("dreaming controller", () => {
     state.wikiOverview = {
       totalItems: 1,
       totalPages: 1,
+      truncated: false,
       pageCounts: {
         synthesis: 1,
         entity: 0,
@@ -1074,7 +1097,7 @@ describe("dreaming controller", () => {
 
     await loadDreamDiary(state);
 
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryPath).toBe("DREAMS.md");
     expect(state.dreamDiaryContent).toBe("## Dream Diary\n- recurring glacier thoughts");
     expect(state.dreamDiaryError).toBeNull();
@@ -1253,9 +1276,9 @@ describe("dreaming controller", () => {
     const ok = await backfillDreamDiary(state);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.backfillDreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("backfilled diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
@@ -1318,9 +1341,9 @@ describe("dreaming controller", () => {
     const ok = await resetDreamDiary(state);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetDreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamDiaryContent).toBeNull();
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
@@ -1345,9 +1368,11 @@ describe("dreaming controller", () => {
     const ok = await resetGroundedShortTerm(state);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.resetGroundedShortTerm", {
+      agentId: "main",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionLoading).toBe(false);
   });
@@ -1378,9 +1403,11 @@ describe("dreaming controller", () => {
     const ok = await repairDreamingArtifacts(state);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
-    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.repairDreamingArtifacts", {
+      agentId: "main",
+    });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
+    expect(request).not.toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("keep existing diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",
@@ -1415,9 +1442,9 @@ describe("dreaming controller", () => {
     const ok = await dedupeDreamDiary(state);
 
     expect(ok).toBe(true);
-    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", {});
-    expect(request).toHaveBeenCalledWith("doctor.memory.status", {});
+    expect(request).toHaveBeenCalledWith("doctor.memory.dedupeDreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.dreamDiary", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("doctor.memory.status", { agentId: "main" });
     expect(state.dreamDiaryContent).toBe("deduped diary");
     expect(state.dreamDiaryActionMessage).toEqual({
       kind: "success",

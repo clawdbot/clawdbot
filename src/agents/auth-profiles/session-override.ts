@@ -1,16 +1,14 @@
-/**
- * Session-level auth profile override rotation.
- * Keeps automatic profile choice stable within a session while still rotating
- * across new sessions, compactions, provider changes, and cooldowns.
- */
+/** Keeps automatic auth profiles stable within sessions while rotating at lifecycle boundaries. */
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
+import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
-  resolveAuthProfileOrder,
+  resolveAuthProfileOrderWithMetadata,
 } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import {
@@ -18,6 +16,9 @@ import {
   isModelScopedCooldownReason,
 } from "../auth-profiles/usage-state.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
+import { splitTrailingAuthProfile } from "../model-ref-profile.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
+import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
 
 const sessionAccessorLoader = createLazyImportLoader(
   () => import("../../config/sessions/session-accessor.js"),
@@ -35,6 +36,21 @@ type SessionAuthProfileOverrideState = Pick<
 >;
 type SessionAuthProfileOverrideSnapshot = SessionAuthProfileOverrideState &
   Pick<SessionEntry, "sessionId">;
+type SessionAuthProfileOverrideResult = {
+  profileId: string | undefined;
+  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+};
+
+function profileAuthRequirement(params: {
+  cfg: OpenClawConfig;
+  store: ReturnType<typeof ensureAuthProfileStore> | undefined;
+  profileId: string;
+}): ProviderModelRouteAuthRequirement | undefined {
+  return resolveProviderModelRouteAuthRequirement(
+    params.store?.profiles[params.profileId]?.type ??
+      params.cfg.auth?.profiles?.[params.profileId]?.mode,
+  );
+}
 
 function applySessionAuthProfileOverrideState(
   entry: SessionEntry,
@@ -226,10 +242,10 @@ export async function clearSessionAuthProfileOverride(params: {
   });
 }
 
-/** Resolves and optionally rotates the session auth-profile override. */
-export async function resolveSessionAuthProfileOverride(params: {
+async function resolveSessionAuthProfileOverride(params: {
   cfg: OpenClawConfig;
   provider: string;
+  modelId: string;
   agentDir: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
@@ -237,7 +253,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   storePath?: string;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
-}): Promise<string | undefined> {
+}): Promise<SessionAuthProfileOverrideResult> {
   const {
     cfg,
     provider,
@@ -249,7 +265,7 @@ export async function resolveSessionAuthProfileOverride(params: {
     isNewSession,
   } = params;
   if (!sessionEntry || !sessionStore || !sessionKey) {
-    return sessionEntry?.authProfileOverride;
+    return { profileId: sessionEntry?.authProfileOverride, store: undefined };
   }
 
   const hasConfiguredAuthProfiles =
@@ -260,18 +276,20 @@ export async function resolveSessionAuthProfileOverride(params: {
     !hasConfiguredAuthProfiles &&
     !hasAnyAuthProfileStoreSource(agentDir)
   ) {
-    return undefined;
+    return { profileId: undefined, store: undefined };
   }
 
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const providers = uniqueProviders(provider, params.acceptedProviderIds);
-  const order = [
-    ...new Set(
-      providers.flatMap((candidateProvider) =>
-        resolveAuthProfileOrder({ cfg, store, provider: candidateProvider }),
-      ),
-    ),
-  ];
+  const orderResolutions = providers.map((candidateProvider) =>
+    resolveAuthProfileOrderWithMetadata({
+      cfg,
+      store,
+      provider: candidateProvider,
+      forModel: sessionEntry.model,
+    }),
+  );
+  const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
@@ -298,7 +316,7 @@ export async function resolveSessionAuthProfileOverride(params: {
 
   // Explicit user pins are strict until the profile disappears or changes provider.
   if (source === "user" && current) {
-    return current;
+    return { profileId: current, store };
   }
 
   // Automatic pins must stay inside the currently configured rotation order.
@@ -308,7 +326,7 @@ export async function resolveSessionAuthProfileOverride(params: {
   }
 
   if (order.length === 0) {
-    return undefined;
+    return { profileId: undefined, store };
   }
 
   if (order.every((profileId) => isProfileGloballyInCooldown(store, profileId))) {
@@ -333,61 +351,86 @@ export async function resolveSessionAuthProfileOverride(params: {
       });
       const latestProfileId = latest?.authProfileOverride;
       const latestSource = resolveSessionAuthProfileOverrideSource(latest);
-      return latestProfileId &&
-        latestSource === "user" &&
-        isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
-        ? latestProfileId
-        : undefined;
+      return {
+        profileId:
+          latestProfileId &&
+          latestSource === "user" &&
+          isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
+            ? latestProfileId
+            : undefined,
+        store,
+      };
     }
-    return undefined;
+    return { profileId: undefined, store };
   }
 
   const isProfileUnavailableForSessionModel = (profileId: string) =>
     isProfileInCooldown(store, profileId, undefined, sessionEntry.model);
-  const pickFirstAvailable = () =>
-    order.find((profileId) => !isProfileUnavailableForSessionModel(profileId)) ?? order[0];
-  const pickNextAvailable = (active: string) => {
-    const startIndex = order.indexOf(active);
-    if (startIndex < 0) {
-      return pickFirstAvailable();
-    }
-    for (let offset = 1; offset <= order.length; offset += 1) {
-      const candidate = order[(startIndex + offset) % order.length];
-      if (candidate && !isProfileUnavailableForSessionModel(candidate)) {
-        return candidate;
-      }
-    }
-    return order[startIndex] ?? order[0];
-  };
-
+  const currentUnavailable = current ? isProfileUnavailableForSessionModel(current) : false;
   const compactionCount = sessionEntry.compactionCount ?? 0;
   const storedCompaction =
     typeof sessionEntry.authProfileOverrideCompactionCount === "number"
       ? sessionEntry.authProfileOverrideCompactionCount
       : compactionCount;
-  const replacementForUnusableCurrent =
-    current && isProfileUnavailableForSessionModel(current)
-      ? order.find(
-          (profileId) => profileId !== current && !isProfileUnavailableForSessionModel(profileId),
-        )
+  // A healthy automatic fallback yields when an explicit preference is eligible to retry,
+  // preventing a metered backup from staying pinned. The real request proves recovery.
+  const retryableHigherPriorityProfile =
+    source === "auto" && !currentUnavailable && compactionCount <= storedCompaction && current
+      ? orderResolutions
+          .filter((resolution) => resolution.hasExplicitOrder)
+          .flatMap((resolution) => {
+            const currentOrderIndex = resolution.profileIds.indexOf(current);
+            return currentOrderIndex > 0 ? resolution.profileIds.slice(0, currentOrderIndex) : [];
+          })
+          .find(
+            (profileId) =>
+              (store.usageStats?.[profileId]?.failureCounts?.rate_limit ?? 0) > 0 &&
+              !isProfileUnavailableForSessionModel(profileId),
+          )
       : undefined;
-  if (replacementForUnusableCurrent) {
-    current = undefined;
-  }
+  const shouldRotateCurrent =
+    Boolean(current) &&
+    !isNewSession &&
+    (currentUnavailable ||
+      compactionCount > storedCompaction ||
+      retryableHigherPriorityProfile !== undefined);
+
+  // Provider artifacts own persisted route stickiness; runtime planning owns cross-route failover.
+  const routeResolution =
+    shouldRotateCurrent && !retryableHigherPriorityProfile
+      ? resolveProviderModelRoutes({ provider, modelId: params.modelId, config: cfg })
+      : null;
+  const currentAuthRequirement =
+    current && routeResolution?.kind === "routes" && routeResolution.routes.length > 1
+      ? profileAuthRequirement({ cfg, store, profileId: current })
+      : undefined;
+  const rotationOrder = currentAuthRequirement
+    ? order.filter(
+        (profileId) => profileAuthRequirement({ cfg, store, profileId }) === currentAuthRequirement,
+      )
+    : order;
+  const pickAvailable = (active?: string) => {
+    const startIndex = active ? rotationOrder.indexOf(active) : -1;
+    for (let offset = 1; offset <= rotationOrder.length; offset += 1) {
+      const candidate = rotationOrder[(startIndex + offset) % rotationOrder.length];
+      if (candidate && !isProfileUnavailableForSessionModel(candidate)) {
+        return candidate;
+      }
+    }
+    return rotationOrder[startIndex] ?? rotationOrder[0];
+  };
 
   let next = current;
-  if (replacementForUnusableCurrent) {
-    next = replacementForUnusableCurrent;
-  } else if (isNewSession) {
-    next = current ? pickNextAvailable(current) : pickFirstAvailable();
-  } else if (current && compactionCount > storedCompaction) {
-    next = pickNextAvailable(current);
-  } else if (!current || isProfileUnavailableForSessionModel(current)) {
-    next = pickFirstAvailable();
+  if (retryableHigherPriorityProfile) {
+    next = retryableHigherPriorityProfile;
+  } else if (isNewSession || shouldRotateCurrent) {
+    next = pickAvailable(currentUnavailable ? undefined : current);
+  } else if (!current) {
+    next = pickAvailable();
   }
 
   if (!next) {
-    return current;
+    return { profileId: current, store };
   }
   const shouldPersist =
     next !== sessionEntry.authProfileOverride ||
@@ -407,5 +450,72 @@ export async function resolveSessionAuthProfileOverride(params: {
     });
   }
 
-  return next;
+  return { profileId: next, store };
+}
+
+type SessionAuthSelection = {
+  profileId: string;
+  source: "auto" | "user";
+  routeRequirement: ProviderModelRouteAuthRequirement | undefined;
+};
+
+/** Resolves the session credential and its prepared route facts. */
+export async function resolveSessionAuthSelection(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  modelId: string;
+  configuredProfileId?: string;
+  harnessRuntime?: string;
+  agentDir: string;
+  sessionEntry?: SessionEntry;
+  sessionStore?: Record<string, SessionEntry>;
+  sessionKey?: string;
+  storePath?: string;
+  isNewSession: boolean;
+}): Promise<SessionAuthSelection | undefined> {
+  const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
+    provider: params.provider,
+    harnessRuntime: params.harnessRuntime,
+    config: params.cfg,
+  });
+  const { profileId: rotatedProfileId, store } = await resolveSessionAuthProfileOverride({
+    ...params,
+    modelId: splitTrailingAuthProfile(params.modelId).model,
+    acceptedProviderIds,
+  });
+  const rotatedSource = rotatedProfileId
+    ? params.sessionEntry?.authProfileOverride?.trim() === rotatedProfileId
+      ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
+      : "auto"
+    : undefined;
+  const rotatedUserProfileId = rotatedSource === "user" ? rotatedProfileId : undefined;
+  const configuredProfileId = params.configuredProfileId?.trim() || undefined;
+  const authStore =
+    store ??
+    (configuredProfileId
+      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
+      : undefined);
+  if (
+    configuredProfileId &&
+    (!authStore ||
+      !isProfileForProvider({
+        cfg: params.cfg,
+        providers: uniqueProviders(params.provider, acceptedProviderIds),
+        profileId: configuredProfileId,
+        store: authStore,
+      }))
+  ) {
+    throw new Error(
+      `Auth profile "${configuredProfileId}" is not configured for ${params.provider}.`,
+    );
+  }
+  const profileId = rotatedUserProfileId ?? configuredProfileId ?? rotatedProfileId;
+  if (!profileId) {
+    return undefined;
+  }
+  return {
+    profileId,
+    source: rotatedUserProfileId || configuredProfileId ? "user" : (rotatedSource ?? "auto"),
+    routeRequirement: profileAuthRequirement({ cfg: params.cfg, store: authStore, profileId }),
+  };
 }

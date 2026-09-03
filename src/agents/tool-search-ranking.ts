@@ -1,8 +1,28 @@
-// Lexical ranking shared by Tool Search results and directory-mode hydration.
-//
-// Both surfaces answer the same question — "which tools does this query mean?" —
-// so they index and score through here rather than keeping separate heuristics
-// that can disagree about the same catalog.
+// Lexical ranking for the OpenClaw Tool Search runtime.
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+
+/** Collects property names and descriptions from a JSON-Schema-shaped value. */
+export function readParameterText(parameters: unknown, depth = 0): string {
+  if (depth > 4 || !isRecord(parameters)) {
+    return "";
+  }
+  const parts: string[] = [];
+  const description = parameters.description;
+  if (typeof description === "string") {
+    parts.push(description);
+  }
+  const properties = parameters.properties;
+  if (isRecord(properties)) {
+    for (const [name, child] of Object.entries(properties)) {
+      parts.push(name, readParameterText(child, depth + 1));
+    }
+  }
+  const items = parameters.items;
+  if (items !== undefined) {
+    parts.push(readParameterText(items, depth + 1));
+  }
+  return parts.filter(Boolean).join(" ");
+}
 
 /** BM25 term-frequency saturation. Standard Okapi default. */
 const BM25_K1 = 1.2;
@@ -261,8 +281,7 @@ function stemVariants(word: string): string[] {
 export function tokenizeDocument(input: string): string[] {
   return splitWords(input)
     .filter((word) => !STOPWORDS.has(word))
-    .flatMap(stemVariants)
-    .filter(Boolean);
+    .flatMap(stemVariants);
 }
 
 /**
@@ -279,10 +298,10 @@ function normalizeTrigger(word: string): string {
 }
 
 const NORMALIZED_EXPANSIONS: ReadonlyArray<{
-  triggers: ReadonlySet<string>;
+  triggers: readonly string[];
   add: readonly string[];
 }> = QUERY_EXPANSIONS.map((group) => ({
-  triggers: new Set(group.terms.map(normalizeTrigger)),
+  triggers: group.terms.map(normalizeTrigger),
   add: group.add.map(stem),
 }));
 
@@ -299,12 +318,12 @@ type WeightedTerm = { term: string; weight: number };
 export function tokenizeQuery(input: string): WeightedTerm[] {
   const words = splitWords(input).filter((word) => !STOPWORDS.has(word));
   const weights = new Map<string, number>();
-  for (const term of words.flatMap(stemVariants).filter(Boolean)) {
+  for (const term of words.flatMap(stemVariants)) {
     weights.set(term, 1);
   }
   const triggers = new Set(words.map(normalizeTrigger));
   for (const group of NORMALIZED_EXPANSIONS) {
-    if (![...group.triggers].some((trigger) => triggers.has(trigger))) {
+    if (!group.triggers.some((trigger) => triggers.has(trigger))) {
       continue;
     }
     for (const addition of group.add) {
@@ -317,29 +336,34 @@ export function tokenizeQuery(input: string): WeightedTerm[] {
 
 type RankedDocument<T> = { value: T; terms: readonly string[] };
 
+type IndexedDocument<T> = { readonly value: T; readonly length: number; readonly position: number };
+
 type LexicalIndex<T> = {
-  documents: ReadonlyArray<{ value: T; termCounts: ReadonlyMap<string, number>; length: number }>;
-  documentFrequency: ReadonlyMap<string, number>;
+  postings: ReadonlyMap<string, ReadonlyMap<IndexedDocument<T>, number>>;
+  documentCount: number;
   averageLength: number;
 };
 
 export function buildLexicalIndex<T>(documents: ReadonlyArray<RankedDocument<T>>): LexicalIndex<T> {
-  const documentFrequency = new Map<string, number>();
-  const prepared = documents.map((document) => {
-    const termCounts = new Map<string, number>();
+  const postings = new Map<string, Map<IndexedDocument<T>, number>>();
+  const documentCount = documents.length;
+  let totalLength = 0;
+  documents.forEach((document, position) => {
+    const indexed = { value: document.value, length: document.terms.length, position };
     for (const term of document.terms) {
-      termCounts.set(term, (termCounts.get(term) ?? 0) + 1);
+      let matches = postings.get(term);
+      if (!matches) {
+        matches = new Map();
+        postings.set(term, matches);
+      }
+      matches.set(indexed, (matches.get(indexed) ?? 0) + 1);
     }
-    for (const term of termCounts.keys()) {
-      documentFrequency.set(term, (documentFrequency.get(term) ?? 0) + 1);
-    }
-    return { value: document.value, termCounts, length: document.terms.length };
+    totalLength += indexed.length;
   });
-  const totalLength = prepared.reduce((sum, document) => sum + document.length, 0);
   return {
-    documents: prepared,
-    documentFrequency,
-    averageLength: prepared.length > 0 ? totalLength / prepared.length : 0,
+    postings,
+    documentCount,
+    averageLength: documentCount > 0 ? totalLength / documentCount : 0,
   };
 }
 
@@ -360,32 +384,33 @@ export function scoreLexical<T>(
   index: LexicalIndex<T>,
   queryTerms: readonly WeightedTerm[],
 ): Array<{ value: T; score: number; matchedLiteral: boolean }> {
-  if (queryTerms.length === 0 || index.documents.length === 0) {
+  if (queryTerms.length === 0 || index.documentCount === 0) {
     return [];
   }
-  const total = index.documents.length;
+  const total = index.documentCount;
   const results: Array<{ value: T; score: number; matchedLiteral: boolean }> = [];
-  for (const document of index.documents) {
-    let score = 0;
-    let matchedLiteral = false;
-    for (const { term, weight } of queryTerms) {
-      const frequency = document.termCounts.get(term);
-      if (!frequency) {
-        continue;
+  for (const { term, weight } of queryTerms) {
+    const matches = index.postings.get(term);
+    if (!matches) {
+      continue;
+    }
+    const matching = matches.size;
+    const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
+    for (const [document, frequency] of matches) {
+      let result = results[document.position];
+      if (!result) {
+        result = { value: document.value, score: 0, matchedLiteral: false };
+        results[document.position] = result;
       }
       if (weight >= 1) {
-        matchedLiteral = true;
+        result.matchedLiteral = true;
       }
-      const matching = index.documentFrequency.get(term) ?? 0;
-      const idf = Math.log(1 + (total - matching + 0.5) / (matching + 0.5));
       const normalized = index.averageLength > 0 ? document.length / index.averageLength : 1;
-      score +=
+      result.score +=
         (weight * (idf * (frequency * (BM25_K1 + 1)))) /
         (frequency + BM25_K1 * (1 - BM25_B + BM25_B * normalized));
     }
-    if (score > 0) {
-      results.push({ value: document.value, score, matchedLiteral });
-    }
   }
-  return results;
+  // Sparse slots keep document positions; filter skips holes and preserves catalog order.
+  return results.filter((result) => result.score > 0);
 }

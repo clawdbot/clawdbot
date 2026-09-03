@@ -147,6 +147,7 @@ async function resolveBody(overrides: Partial<BodyParams> = {}) {
     chatId,
     senderId: String(chatId),
     senderUsername: "",
+    threadSpec: { scope: "none" },
     effectiveGroupAllow: normalizeAllowFrom([]),
     effectiveDmAllow: normalizeAllowFrom([]),
     requireMention: false,
@@ -273,16 +274,6 @@ describe("resolveTelegramInboundBody", () => {
     (result) => expect(result?.rawBody).toBe("Forwarded rich text"),
   );
 
-  it("extracts markdown and html rich-message text", async () => {
-    const markdownResult = await resolvePrivate(
-      richMessage({ markdown: "Forwarded **markdown**" }),
-    );
-    const htmlResult = await resolvePrivate(richMessage({ html: "<p>Forwarded html</p>" }));
-
-    expect(markdownResult?.rawBody).toBe("Forwarded **markdown**");
-    expect(htmlResult?.rawBody).toBe("Forwarded html");
-  });
-
   privateBodyTest(
     "extracts visible text from canonical rich-message block fields",
     richMessage({
@@ -313,16 +304,14 @@ describe("resolveTelegramInboundBody", () => {
       blocks: [
         {
           type: "table",
-          caption: [
-            { type: "plain", text: "Total " },
-            { type: "bold", text: "Q1" },
-          ],
+          caption: ["Total ", { type: "bold", text: "Q1" }],
+          cells: [[{ text: "42", align: "right", valign: "middle" }]],
         },
       ],
     }),
     (result) => {
-      expect(result?.rawBody).toBe("Total Q1");
-      expect(result?.bodyText).toBe("Total Q1");
+      expect(result?.rawBody).toBe("Total Q1\n42");
+      expect(result?.bodyText).toBe("Total Q1\n42");
     },
   );
 

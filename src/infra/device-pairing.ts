@@ -1,7 +1,9 @@
 // Manages device pairing requests, records, metadata, and node pairing state.
 import { createHash, randomUUID } from "node:crypto";
+import { resolveStateDir } from "../config/paths.js";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { isProgressCardRendererClient } from "../utils/message-channel.js";
 import { revokeDeviceBootstrapTokensForDevice } from "./device-bootstrap.js";
 import {
   cloneDevicePairingTokens,
@@ -21,7 +23,7 @@ import {
 } from "./device-pairing-state.js";
 import {
   loadPairedDevicePairingStoreRecord,
-  persistDevicePairingStoreState as persistState,
+  persistDevicePairingStoreState,
   updatePairedDevicePresenceInTransaction,
 } from "./device-pairing-store.js";
 import type {
@@ -43,13 +45,8 @@ export type NodePairingGeneration = {
   key: string;
 };
 
-export type NodePairingIdentity = {
-  nodeId: string;
-  key: string;
-};
-
 export type NodePairingState = {
-  identity: NodePairingIdentity;
+  identity: { nodeId: string; key: string };
   generation: NodePairingGeneration | null;
 };
 
@@ -83,6 +80,31 @@ type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
+
+// Pairing mutations own invalidation, so this single-slot cache keeps SQLite out
+// of attempt hot paths without serving a removed or newly approved renderer.
+let pairedCardRendererCache: { stateDir: string; value: Promise<boolean> } | undefined;
+
+export function invalidatePairedCardRendererCache(): void {
+  pairedCardRendererCache = undefined;
+}
+
+/** Return whether this Gateway has a paired client that can render progress cards. */
+export function hasPairedCardRenderer(baseDir?: string): Promise<boolean> {
+  const stateDir = baseDir ?? resolveStateDir();
+  if (pairedCardRendererCache?.stateDir !== stateDir) {
+    const value = listDevicePairingReadOnly(stateDir)
+      .then(({ paired }) => paired.some(isProgressCardRendererClient))
+      .catch(() => false);
+    pairedCardRendererCache = { stateDir, value };
+  }
+  return pairedCardRendererCache.value;
+}
+
+function persistState(...args: Parameters<typeof persistDevicePairingStoreState>): void {
+  persistDevicePairingStoreState(...args);
+  invalidatePairedCardRendererCache();
+}
 
 /**
  * Internal seam for the paired-device node-surface module: run one
@@ -158,7 +180,9 @@ export function hasEffectivePairedDeviceRole(
 }
 
 /** Resolve the authenticated node pairing independently of surface approval. */
-function resolveNodePairingIdentity(device: PairedDevice | null): NodePairingIdentity | null {
+function resolveNodePairingIdentity(
+  device: PairedDevice | null,
+): NodePairingState["identity"] | null {
   if (!device || !hasEffectivePairedDeviceRole(device, "node")) {
     return null;
   }
@@ -207,20 +231,17 @@ export function resolveNodePairingGeneration(
   return { nodeId: device.deviceId, key };
 }
 
-/** Clear node-surface cache state when its owning pairing generation changes. */
-export function clearNodePairingGenerationBins(
+/** Clear node runtime facts when their owning pairing generation changes. */
+export function clearNodePairingGenerationState(
   device: PairedDevice,
   previousGeneration: NodePairingGeneration | null,
 ): void {
   const nextGeneration = resolveNodePairingGeneration(device);
-  if (
-    previousGeneration?.key === nextGeneration?.key ||
-    !device.nodeSurface ||
-    device.nodeSurface.bins === undefined
-  ) {
+  if (previousGeneration?.key === nextGeneration?.key || !device.nodeSurface) {
     return;
   }
   delete device.nodeSurface.bins;
+  delete device.nodeSurface.sessionHost;
 }
 
 /** Resolve connection identity and optional approved surface generation from one row. */

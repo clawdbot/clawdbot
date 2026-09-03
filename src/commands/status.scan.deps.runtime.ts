@@ -20,6 +20,7 @@ export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
   purpose: "status";
+  inspectSources: true;
 }): Promise<{ manager: StatusMemoryManager | null }> {
   const { manager } = await getActiveMemorySearchManagerCore(params);
   if (!manager) {

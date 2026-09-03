@@ -4,7 +4,7 @@
  */
 import { createRequire } from "node:module";
 import path from "node:path";
-import { runExec } from "openclaw/plugin-sdk/process-runtime";
+import { isPidAlive, runExec } from "openclaw/plugin-sdk/process-runtime";
 import { CODEX_ACP_PACKAGE, LEGACY_CODEX_ACP_PACKAGE } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
@@ -304,15 +304,6 @@ function uniquePids(processes: AcpxProcessInfo[]): number[] {
   );
 }
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function terminatePids(
   pids: number[],
   deps: AcpxProcessCleanupDeps | undefined,
@@ -339,7 +330,7 @@ async function terminatePids(
   }
   await sleep(750);
   for (const pid of terminated) {
-    if (deps?.killProcess || isProcessAlive(pid)) {
+    if (deps?.killProcess || isPidAlive(pid)) {
       try {
         killProcess(pid, "SIGKILL");
       } catch {

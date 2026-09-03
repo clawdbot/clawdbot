@@ -1,7 +1,6 @@
 // Target resolver combines plugin id heuristics, cached directory searches,
 // live fallback lookups, and normalized fallback targets.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type {
   ChannelDirectoryEntry,
@@ -11,6 +10,7 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
+import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
   ambiguousTargetError,
   missingTargetError,
@@ -101,6 +101,12 @@ function normalizeQuery(value: string): string {
   return normalizeLowercaseStringOrEmpty(value);
 }
 
+// Message CLI actions run against a scoped registry handle without process-root
+// activation, so bare getChannelPlugin cannot see installed channel plugins there.
+function resolveTargetChannelPlugin(channel: ChannelId) {
+  return getRuntimeVisibleChannelPlugin(channel);
+}
+
 function stripTargetPrefixes(value: string, channel?: ChannelId, plugin?: ChannelPlugin): string {
   const providerPrefixes = [channel, plugin?.id, ...(plugin?.messaging?.targetPrefixes ?? [])]
     .map((prefix) => prefix?.trim().toLowerCase() ?? "")
@@ -127,7 +133,7 @@ export function formatTargetDisplay(params: {
   display?: string;
   kind?: ChannelDirectoryEntryKind;
 }): string {
-  const plugin = getChannelPlugin(params.channel);
+  const plugin = resolveTargetChannelPlugin(params.channel);
   if (plugin?.messaging?.formatTargetDisplay) {
     return plugin.messaging.formatTargetDisplay({
       target: params.target,
@@ -190,7 +196,9 @@ function detectTargetKind(
   if (!trimmed) {
     return "group";
   }
-  const inferredChatType = (plugin ?? getChannelPlugin(channel))?.messaging?.inferTargetChatType?.({
+  const inferredChatType = (
+    plugin ?? resolveTargetChannelPlugin(channel)
+  )?.messaging?.inferTargetChatType?.({
     to: raw,
   });
   if (inferredChatType === "direct") {
@@ -290,7 +298,7 @@ async function listDirectoryEntries(params: {
   source: "cache" | "live";
   plugin?: ChannelPlugin;
 }): Promise<ChannelDirectoryEntry[]> {
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const directory = plugin?.directory;
   if (!directory) {
     return [];
@@ -426,7 +434,7 @@ async function resolveMessagingTarget(params: {
 }): Promise<ResolveMessagingTargetResult> {
   const raw = normalizeChannelTargetInput(params.input);
   if (!raw) {
-    const plugin = params.plugin ?? getChannelPlugin(params.channel);
+    const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
     return {
       ok: false,
       error: missingTargetError(
@@ -435,7 +443,7 @@ async function resolveMessagingTarget(params: {
       ),
     };
   }
-  const plugin = params.plugin ?? getChannelPlugin(params.channel);
+  const plugin = params.plugin ?? resolveTargetChannelPlugin(params.channel);
   const providerLabel = plugin?.meta?.label ?? params.channel;
   const hint = plugin?.messaging?.targetResolver?.hint;
   const kind = detectTargetKind(params.channel, raw, params.preferredKind, plugin);

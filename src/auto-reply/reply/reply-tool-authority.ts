@@ -1,8 +1,14 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveConversationCapabilityProfile } from "../../agents/conversation-capability-profile.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { readToolAllowlistIntersection } from "../../agents/tool-policy.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import type { SessionEntry } from "../../config/sessions.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import type { RuntimeMsgContext } from "../templating.js";
+import { resolveOriginMessageProvider } from "./origin-routing.js";
 import type { FollowupRun } from "./queue.js";
 import type {
   ReplyToolAuthorityOverlay,
@@ -17,6 +23,55 @@ type ReplyToolAuthoritySnapshot = {
   disableTools: boolean;
   run: FollowupRun["run"];
 };
+
+/** Projects current inbound facts against the active run's frozen authority snapshot. */
+export function resolveInboundReplyToolAuthorityOverlay(params: {
+  ctx: RuntimeMsgContext;
+  sessionEntry?: Pick<SessionEntry, "permissionMode" | "spawnedBy" | "toolOverrides">;
+  senderIsOwner: boolean;
+  toolsAllow?: string[];
+  disableTools: boolean;
+}): ReplyToolAuthorityOverlay {
+  const { ctx } = params;
+  return {
+    permissionMode: params.sessionEntry?.permissionMode,
+    toolOverrides: params.sessionEntry?.toolOverrides,
+    originatingChannel: ctx.OriginatingChannel,
+    messageProvider: resolveOriginMessageProvider({
+      originatingChannel: ctx.OriginatingChannel,
+      provider: ctx.Provider ?? ctx.Surface,
+    }),
+    chatType: normalizeChatType(ctx.ChatType),
+    agentAccountId: ctx.AccountId,
+    conversationToolPolicy: ctx.ConversationToolPolicy,
+    groupId: resolveGroupSessionKey(ctx)?.id,
+    groupChannel:
+      normalizeOptionalString(ctx.GroupChannel) ?? normalizeOptionalString(ctx.GroupSubject),
+    groupSpace: normalizeOptionalString(ctx.GroupSpace),
+    memberRoleIds: Array.isArray(ctx.MemberRoleIds)
+      ? ctx.MemberRoleIds.map((roleId) => normalizeOptionalString(roleId)).filter(
+          (roleId): roleId is string => Boolean(roleId),
+        )
+      : undefined,
+    spawnedBy: normalizeOptionalString(params.sessionEntry?.spawnedBy),
+    senderId: normalizeOptionalString(ctx.SenderId),
+    senderName: normalizeOptionalString(ctx.SenderName),
+    senderUsername: normalizeOptionalString(ctx.SenderUsername),
+    senderE164: normalizeOptionalString(ctx.SenderE164),
+    senderIsOwner: params.senderIsOwner,
+    inputProvenance: ctx.InputProvenance,
+    trustedInternalHandoff: undefined,
+    scheduledToolPolicy: undefined,
+    runtimePluginToolGrant: undefined,
+    toolsAllow: params.toolsAllow,
+    disableTools: params.disableTools,
+    traceAuthorized:
+      params.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+    approvalReviewerDeviceId: normalizeOptionalString(ctx.ApprovalReviewerDeviceId),
+    clientCaps: ctx.GatewayClientCaps,
+    toolBindings: ctx.GatewayRunToolBindings,
+  };
+}
 
 function snapshotFollowupRunToolAuthority(run: FollowupRun): ReplyToolAuthoritySnapshot {
   return {
@@ -48,6 +103,8 @@ function applyReplyToolAuthorityOverlay(
     disableTools: overlay.disableTools,
     run: {
       ...snapshot.run,
+      permissionMode: overlay.permissionMode,
+      toolOverrides: overlay.toolOverrides,
       messageProvider: overlay.messageProvider,
       chatType: overlay.chatType,
       agentAccountId: overlay.agentAccountId,
@@ -84,7 +141,9 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
   const policySessionKey = execution.runtimePolicySessionKey ?? execution.sessionKey;
   const sandboxRuntime = resolveSandboxRuntimeStatus({
     cfg: execution.config,
-    sessionKey: policySessionKey,
+    agentId: execution.agentId,
+    sessionKey: execution.sessionKey,
+    classificationSessionKey: policySessionKey,
   });
   const capabilityProfile = resolveConversationCapabilityProfile({
     config: execution.config,
@@ -132,6 +191,7 @@ function resolveReplyToolAuthoritySnapshotFingerprint(
         agentDir: execution.agentDir,
         workspaceDir: execution.workspaceDir,
         cwd: execution.cwd,
+        permissionMode: execution.permissionMode,
         toolOverrides: execution.toolOverrides,
         execOverrides: execution.execOverrides,
         elevatedLevel: execution.elevatedLevel,

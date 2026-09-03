@@ -130,7 +130,6 @@ function createRejectedExecution(order: string[] = []): FollowupExecutionResult 
       drain: vi.fn(async () => {
         order.push("progress-drained");
       }),
-      visibleToolErrorObserved: () => false,
     },
   } as FollowupExecutionResult;
 }
@@ -222,23 +221,30 @@ describe("createFollowupRunner", () => {
     expect(turn.operation.fail).not.toHaveBeenCalled();
   });
 
-  it("consumes a turn that fails after canonical execution starts", async () => {
+  it("does not replay a returned execution when terminal delivery fails", async () => {
     const typing = createTypingController();
     const turn = createTurn();
+    const execution = createRejectedExecution();
+    const failure = new Error("terminal delivery failed");
     state.admit.mockResolvedValue({ kind: "admitted", turn });
-    state.execute.mockImplementation(async ({ onExecutionStarted }) => {
-      onExecutionStarted?.();
-      throw new Error("execution failed after start");
+    state.execute.mockResolvedValue(execution);
+    state.account.mockResolvedValue(undefined);
+    state.resolveDecision.mockReturnValue({
+      kind: "deliver",
+      payloads: [{ text: "terminal failure", isError: true }],
     });
+    state.deliver.mockRejectedValue(failure);
 
     await createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
       turn.queued,
     );
 
     expect(state.execute).toHaveBeenCalledOnce();
+    expect(state.account).toHaveBeenCalledOnce();
+    expect(state.deliver).toHaveBeenCalledOnce();
     expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
-    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", expect.any(Error));
+    expect(turn.operation.fail).toHaveBeenCalledWith("run_failed", failure);
   });
 
   it("holds the reply operation through progress drain, accounting, and delivery", async () => {

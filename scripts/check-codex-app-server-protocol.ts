@@ -29,6 +29,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadItem.ts",
     snippets: [
+      "delivery: AgentMessageDelivery | null",
       'type: "contextCompaction"',
       'type: "dynamicToolCall"',
       'type: "commandExecution"',
@@ -78,7 +79,7 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   },
   {
     file: "v2/AppsReadParams.ts",
-    snippets: ["appIds: Array<string>", "includeTools?: boolean"],
+    snippets: ["appIds: Array<string>", "threadId?: string | null", "includeTools?: boolean"],
   },
   {
     file: "v2/AppsReadResponse.ts",
@@ -128,6 +129,14 @@ const checks: Array<{ file: string; snippets: string[] }> = [
       "filePath: AbsolutePathBuf",
       "overriddenMetadata: OverriddenMetadata | null",
     ],
+  },
+  {
+    file: "v2/ConfigLayerSource.ts",
+    snippets: ['type: "packagedDefaults"', "file: AbsolutePathBuf"],
+  },
+  {
+    file: "v2/ConfigReadParams.ts",
+    snippets: ["includeLayers?: boolean", "cwd?: string | null"],
   },
   {
     file: "v2/InstalledApp.ts",
@@ -198,10 +207,43 @@ const checks: Array<{ file: string; snippets: string[] }> = [
   {
     file: "v2/ThreadStartParams.ts",
     snippets: [
+      "projectId?: string | null",
       "permissions?: string | null",
       "dynamicTools?: Array<DynamicToolSpec> | null",
       "experimentalRawEvents",
     ],
+  },
+  {
+    file: "v2/Thread.ts",
+    snippets: ["projectId: string | null"],
+  },
+  {
+    file: "v2/Model.ts",
+    snippets: ["multiAgentVersion: MultiAgentVersion | null"],
+  },
+  {
+    file: "v2/CodexErrorInfo.ts",
+    snippets: ['"misalignmentPolicyViolation"'],
+  },
+  {
+    file: "v2/McpResourceReadParams.ts",
+    snippets: [
+      "threadId?: string | null",
+      "originCallId?: string | null",
+      "connectorId?: string | null",
+    ],
+  },
+  {
+    file: "v2/McpResourceReadResponse.ts",
+    snippets: ["originCallId: string | null"],
+  },
+  {
+    file: "v2/StrictReviewRequiredNotification.ts",
+    snippets: ["threadId: string", "turnId: string", "startedAtMs: number"],
+  },
+  {
+    file: "v2/AgentMessageDelivery.ts",
+    snippets: ['"async"'],
   },
   {
     file: "v2/TurnStartParams.ts",
@@ -291,14 +333,11 @@ import type {
   CodexErrorNotification,
   CodexGetAccountResponse,
   CodexModelListResponse,
-  CodexThreadForkParams,
+  CodexServerNotification,
   CodexThreadForkResponse,
-  CodexThreadResumeParams,
   CodexThreadResumeResponse,
-  CodexThreadStartParams,
   CodexThreadStartResponse,
   CodexTurnEnvironmentParams,
-  CodexTurnStartParams,
   v2,
 } from ${JSON.stringify(protocolImport)};
 import type { AppSummary } from ${JSON.stringify(generatedImport("v2/AppSummary.ts"))};
@@ -317,8 +356,11 @@ import type { ConfigWriteResponse } from ${JSON.stringify(generatedImport("v2/Co
 import type { DynamicToolCallParams } from ${JSON.stringify(generatedImport("v2/DynamicToolCallParams.ts"))};
 import type { DynamicToolSpec } from ${JSON.stringify(generatedImport("v2/DynamicToolSpec.ts"))};
 import type { ErrorNotification } from ${JSON.stringify(generatedImport("v2/ErrorNotification.ts"))};
+import type { ConfigReadParams } from ${JSON.stringify(generatedImport("v2/ConfigReadParams.ts"))};
 import type { GetAccountResponse } from ${JSON.stringify(generatedImport("v2/GetAccountResponse.ts"))};
 import type { MarketplaceLoadErrorInfo } from ${JSON.stringify(generatedImport("v2/MarketplaceLoadErrorInfo.ts"))};
+import type { McpResourceReadParams } from ${JSON.stringify(generatedImport("v2/McpResourceReadParams.ts"))};
+import type { McpResourceReadResponse } from ${JSON.stringify(generatedImport("v2/McpResourceReadResponse.ts"))};
 import type { ModelListResponse } from ${JSON.stringify(generatedImport("v2/ModelListResponse.ts"))};
 import type { PluginInstalledParams } from ${JSON.stringify(generatedImport("v2/PluginInstalledParams.ts"))};
 import type { PluginInstalledResponse } from ${JSON.stringify(generatedImport("v2/PluginInstalledResponse.ts"))};
@@ -336,9 +378,12 @@ import type { ThreadResumeParams } from ${JSON.stringify(generatedImport("v2/Thr
 import type { ThreadResumeResponse } from ${JSON.stringify(generatedImport("v2/ThreadResumeResponse.ts"))};
 import type { ThreadStartParams } from ${JSON.stringify(generatedImport("v2/ThreadStartParams.ts"))};
 import type { ThreadStartResponse } from ${JSON.stringify(generatedImport("v2/ThreadStartResponse.ts"))};
+import type { StrictReviewRequiredNotification } from ${JSON.stringify(generatedImport("v2/StrictReviewRequiredNotification.ts"))};
 import type { TurnEnvironmentParams } from ${JSON.stringify(generatedImport("v2/TurnEnvironmentParams.ts"))};
 import type { TurnInterruptParams } from ${JSON.stringify(generatedImport("v2/TurnInterruptParams.ts"))};
 import type { TurnStartParams } from ${JSON.stringify(generatedImport("v2/TurnStartParams.ts"))};
+import type { TurnSteerParams } from ${JSON.stringify(generatedImport("v2/TurnSteerParams.ts"))};
+import type { TurnSteerResponse } from ${JSON.stringify(generatedImport("v2/TurnSteerResponse.ts"))};
 
 declare const openClawAppsInstalledParams: CodexAppServerRequestParams<"app/installed">;
 const generatedAppsInstalledParams: AppsInstalledParams = openClawAppsInstalledParams;
@@ -371,18 +416,31 @@ declare const openClawDynamicToolSpec: CodexDynamicToolSpec;
 const generatedDynamicToolSpec: DynamicToolSpec = openClawDynamicToolSpec;
 declare const openClawTurnEnvironmentParams: CodexTurnEnvironmentParams;
 const generatedTurnEnvironmentParams: TurnEnvironmentParams = openClawTurnEnvironmentParams;
-declare const openClawThreadStartParams: CodexThreadStartParams;
+declare const openClawThreadStartParams: CodexAppServerRequestParams<"thread/start">;
 const generatedThreadStartParams: ThreadStartParams = openClawThreadStartParams;
-declare const openClawThreadResumeParams: CodexThreadResumeParams;
+declare const openClawThreadResumeParams: CodexAppServerRequestParams<"thread/resume">;
 const generatedThreadResumeParams: ThreadResumeParams = openClawThreadResumeParams;
-declare const openClawThreadForkParams: CodexThreadForkParams;
+declare const openClawThreadForkParams: CodexAppServerRequestParams<"thread/fork">;
 const generatedThreadForkParams: ThreadForkParams = openClawThreadForkParams;
 declare const openClawThreadDeleteParams: CodexAppServerRequestParams<"thread/delete">;
 const generatedThreadDeleteParams: ThreadDeleteParams = openClawThreadDeleteParams;
 declare const openClawTurnInterruptParams: CodexAppServerRequestParams<"turn/interrupt">;
 const generatedTurnInterruptParams: TurnInterruptParams = openClawTurnInterruptParams;
-declare const openClawTurnStartParams: CodexTurnStartParams;
+declare const openClawTurnStartParams: CodexAppServerRequestParams<"turn/start">;
 const generatedTurnStartParams: TurnStartParams = openClawTurnStartParams;
+declare const openClawTurnSteerParams: CodexAppServerRequestParams<"turn/steer">;
+const generatedTurnSteerParams: TurnSteerParams = openClawTurnSteerParams;
+// Method-map omissions must not silently weaken required wire fields to unknown.
+// @ts-expect-error Thread resume requires its target thread.
+const threadResumeWithoutThread: CodexAppServerRequestParams<"thread/resume"> = {};
+// @ts-expect-error Starting a turn requires its input.
+const turnStartWithoutInput: CodexAppServerRequestParams<"turn/start"> = { threadId: "thread" };
+// @ts-expect-error Steering requires the active-turn precondition.
+const turnSteerWithoutExpectedTurn: CodexAppServerRequestParams<"turn/steer"> = { threadId: "thread", input: [] };
+declare const openClawMcpResourceReadParams: CodexAppServerRequestParams<"mcpServer/resource/read">;
+const generatedMcpResourceReadParams: McpResourceReadParams = openClawMcpResourceReadParams;
+declare const openClawConfigReadParams: CodexAppServerRequestParams<"config/read">;
+const generatedConfigReadParams: ConfigReadParams = openClawConfigReadParams;
 
 declare const generatedAppsInstalledResponse: AppsInstalledResponse;
 const openClawAppsInstalledResponse: CodexAppServerRequestResult<"app/installed"> =
@@ -437,9 +495,25 @@ declare const generatedGetAccountResponse: GetAccountResponse;
 const openClawGetAccountResponse: CodexGetAccountResponse = generatedGetAccountResponse;
 declare const generatedModelListResponse: ModelListResponse;
 const openClawModelListResponse: CodexModelListResponse = generatedModelListResponse;
+declare const generatedMcpResourceReadResponse: McpResourceReadResponse;
+const openClawMcpResourceReadResponse: CodexAppServerRequestResult<"mcpServer/resource/read"> =
+  generatedMcpResourceReadResponse;
+declare const generatedStrictReviewRequiredNotification: StrictReviewRequiredNotification;
+type OpenClawStrictReviewRequiredNotification = Extract<
+  CodexServerNotification,
+  { method: "autoApprovalReview/strictReviewRequired" }
+>;
+const openClawStrictReviewRequiredNotification: OpenClawStrictReviewRequiredNotification = {
+  method: "autoApprovalReview/strictReviewRequired",
+  params: generatedStrictReviewRequiredNotification,
+};
 declare const generatedThreadDeleteResponse: ThreadDeleteResponse;
 const openClawThreadDeleteResponse: CodexAppServerRequestResult<"thread/delete"> =
   generatedThreadDeleteResponse;
+declare const generatedTurnSteerResponse: TurnSteerResponse;
+const openClawTurnSteerResponse: CodexAppServerRequestResult<"turn/steer"> =
+  generatedTurnSteerResponse;
+const generatedExactTurnSteerResponse: TurnSteerResponse = openClawTurnSteerResponse;
 
 // Thread and turn bodies are normalized behind checked-in JSON schemas. Their
 // raw generated shapes must not be confused with the projector-facing types.
@@ -456,21 +530,19 @@ const openClawThreadStartResponse: Omit<CodexThreadStartResponse, "thread"> =
 export {};
 `;
   await fs.writeFile(probePath, probe);
+  const probeConfigPath = path.join(sourceRoot, "openclaw-protocol-compatibility.tsconfig.json");
+  await fs.writeFile(
+    probeConfigPath,
+    JSON.stringify({
+      extends: path.resolve("tsconfig.json"),
+      compilerOptions: { rootDir: process.cwd() },
+      files: [probePath],
+      include: [],
+    }),
+  );
   const result = spawnSync(
     process.execPath,
-    [
-      "scripts/run-tsgo.mjs",
-      "--ignoreConfig",
-      "--noEmit",
-      "--allowImportingTsExtensions",
-      "--strict",
-      "--skipLibCheck",
-      "--module",
-      "nodenext",
-      "--moduleResolution",
-      "nodenext",
-      probePath,
-    ],
+    ["scripts/run-tsgo.mjs", "--project", probeConfigPath],
     { cwd: process.cwd(), encoding: "utf8" },
   );
   if (result.error) {

@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { parseArgs, promisify } from "node:util";
+import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { createComputerTool } from "../../src/agents/tools/computer-tool.js";
 import { listNodes } from "../../src/agents/tools/nodes-utils.js";
 
@@ -124,12 +125,6 @@ function wireResult(result: ToolResult): JsonRecord {
     }
   }
   throw new Error(`missing structured result: ${resultText(result)}`);
-}
-
-function record(value: unknown): JsonRecord | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as JsonRecord)
-    : undefined;
 }
 
 function records(value: unknown): JsonRecord[] {

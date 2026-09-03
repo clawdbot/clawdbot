@@ -297,7 +297,7 @@ Run a workflow file with args:
 | `pipeline`       | required    | Inline pipeline string, or a path ending in `.lobster`/`.yaml`/`.yml`/`.json` for a workflow file.           |
 | `cwd`            | gateway cwd | Relative working directory; must resolve inside the gateway working directory (absolute paths are rejected). |
 | `timeoutMs`      | `20000`     | Aborts the run if exceeded.                                                                                  |
-| `maxStdoutBytes` | `512000`    | Aborts the run if captured stdout or stderr exceeds this size.                                               |
+| `maxStdoutBytes` | `512000`    | Aborts if captured stdout, stderr, or the embedded JSON result exceeds this size.                            |
 | `argsJson`       | -           | JSON string of args for a workflow file (ignored for inline pipelines).                                      |
 
 ### `resume`
@@ -320,7 +320,7 @@ Passing `flowControllerId` and `flowGoal` on `run` (or `flowId` and
 `flowExpectedRevision` on `resume`) drives the call through the plugin
 runtime's managed [Task Flow](/automation/taskflow) API instead of returning
 a bare envelope: OpenClaw creates or resumes a durable flow record, applies the
-Lobster envelope to it (`waiting` on approval, `succeeded`/`failed` on
+Lobster envelope to it (`waiting` on approval, `succeeded`/`failed`/`cancelled` on
 completion), and returns `{ ok, envelope, flow, mutation }`. This mode requires
 a bound Task Flow runtime and is intended for plugin/controller code that needs
 durable flow state across gateway restarts, not typical ad hoc agent use.
@@ -350,13 +350,6 @@ small JSON files under the Lobster state directory (`~/.lobster/state` by
 default, override with `LOBSTER_STATE_DIR`); the token itself only encodes a
 pointer to that state, not the full pipeline state.
 
-## OpenProse
-
-OpenProse pairs well with Lobster: use `/prose` to orchestrate multi-agent
-prep, then run a Lobster pipeline for deterministic approvals. If a Prose
-program needs Lobster, allow the `lobster` tool for sub-agents via
-`tools.subagents.tools`. See [OpenProse](/prose).
-
 ## Safety
 
 - **Local in-process only** - workflows execute inside the gateway process; no
@@ -372,6 +365,7 @@ program needs Lobster, allow the `lobster` tool for sub-agents via
 | ------------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | `lobster runtime timed out`                                   | Pipeline exceeded `timeoutMs`. Increase it or split the pipeline.                |
 | `lobster stdout exceeded maxStdoutBytes` (or `stderr`)        | Captured output exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
+| `lobster runtime result exceeded maxStdoutBytes`              | The JSON result exceeded the cap. Raise `maxStdoutBytes` or reduce output.       |
 | `run --args-json must be valid JSON`                          | `argsJson` (workflow-file runs) failed to parse. Fix the JSON string.            |
 | `lobster runtime failed` (or another `runtime_error` message) | The embedded runtime returned an error envelope. Check gateway logs for details. |
 

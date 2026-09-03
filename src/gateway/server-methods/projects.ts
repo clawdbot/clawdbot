@@ -18,12 +18,13 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listRegistryWorktrees } from "../../agents/worktrees/registry.js";
 import { managedWorktrees, type ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { ProjectCloneError } from "../../projects/project-clone-runtime.js";
 import {
-  deleteClonedProjectCheckout,
   materializeProjectClone,
+  removeClonedProjectCheckout,
 } from "../../projects/project-clone.js";
 import {
   listProjectRegistry,
@@ -87,7 +88,7 @@ const PROJECTS_LIST_MAX_RAW_CANDIDATES = Math.max(
 
 function folderDisplayName(folder: string): string {
   const trimmed = folder.replace(/[\\/]+$/u, "");
-  return path.posix.basename(trimmed) || path.win32.basename(trimmed) || folder;
+  return trimmed.split(/[\\/]/u).at(-1) || folder;
 }
 
 function checkoutName(checkoutPath: string): string {
@@ -181,8 +182,8 @@ function listProjectRecents(
   const candidates = Object.entries(store)
     .filter(
       ([, entry]) =>
-        entry.createdActor?.type === "human" &&
-        Boolean(entry.createdActor.id && profileIds.has(entry.createdActor.id)),
+        Boolean(sessionCreatorProfileId(entry.createdActor)) &&
+        Boolean(entry.createdActor?.id && profileIds.has(entry.createdActor.id)),
     )
     .toSorted(
       ([leftKey, left], [rightKey, right]) =>
@@ -286,11 +287,12 @@ async function listObservedProjects(
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
 ): Promise<ProjectSummary[]> {
-  const { store } = loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), {
+  const cfg = context.getRuntimeConfig();
+  const { store } = loadCombinedSessionStoreForGatewayCore(cfg, {
     projection: "list",
   });
   const rawCandidates: RawProjectCandidate[] = [];
-  const visibilityFilter = createSessionListEntryFilter({ client });
+  const visibilityFilter = createSessionListEntryFilter({ client, cfg });
   const canSeeAll = !visibilityFilter;
   for (const [sessionKey, entry] of Object.entries(store)) {
     if (visibilityFilter && !visibilityFilter(sessionKey, entry)) {
@@ -386,6 +388,43 @@ async function listObservedProjects(
 
   // M5: merge operator-enabled device checkout advertisements at this seam.
   return projectCandidatesToSummaries(candidates);
+}
+
+function findProjectCheckoutReference(
+  cfg: Parameters<typeof listProjectRegistry>[0],
+  repoRoot: string,
+): string | undefined {
+  const normalizedRoot = path.resolve(repoRoot);
+  const workspaceReference = listProjectRegistry(cfg).find(
+    (candidate) =>
+      candidate.source === "workspace" && path.resolve(candidate.repoRoot) === normalizedRoot,
+  );
+  const worktreeReference = listRegistryWorktrees(process.env).find(
+    (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
+  );
+  const sessionReference = Object.entries(
+    loadCombinedSessionStoreForGatewayCore(cfg, { projection: "list" }).store,
+  ).find(([, entry]) => {
+    if (entry.archivedAt) {
+      return false;
+    }
+    const sessionRoot = entry.worktree?.repoRoot;
+    if (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) {
+      return true;
+    }
+    const cwd = entry.spawnedCwd;
+    return Boolean(
+      cwd &&
+      (path.resolve(cwd) === normalizedRoot || isPathInside(normalizedRoot, path.resolve(cwd))),
+    );
+  });
+  return workspaceReference
+    ? `agent workspace ${workspaceReference.displayName}`
+    : worktreeReference
+      ? `managed worktree ${worktreeReference.name}`
+      : sessionReference
+        ? `session ${sessionReference[0]}`
+        : undefined;
 }
 
 export function createProjectsHandlers(service: ProjectWorktreeService): GatewayRequestHandlers {
@@ -555,15 +594,19 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
       if (!assertValidParams(params, validateProjectsRemoveParams, "projects.remove", respond)) {
         return;
       }
-      const project = resolveProjectRegistry(context.getRuntimeConfig(), params.id);
-      if (!project || project.source === "workspace") {
+      const respondUnknownProject = () => {
         respond(
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${params.id}`),
         );
+      };
+      const project = resolveProjectRegistry(context.getRuntimeConfig(), params.id);
+      if (!project || project.source === "workspace") {
+        respondUnknownProject();
         return;
       }
+      let removed: boolean;
       if (params.deleteCheckout) {
         if (project.source !== "cloned") {
           respond(
@@ -576,56 +619,36 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           );
           return;
         }
-        const normalizedRoot = path.resolve(project.repoRoot);
-        const worktreeReference = listRegistryWorktrees(process.env).find(
-          (worktree) => !worktree.removedAt && path.resolve(worktree.repoRoot) === normalizedRoot,
-        );
-        const sessionReference = Object.entries(
-          loadCombinedSessionStoreForGatewayCore(context.getRuntimeConfig(), {
-            projection: "list",
-          }).store,
-        ).find(([, entry]) => {
-          if (entry.archivedAt) {
-            return false;
-          }
-          const sessionRoot = entry.worktree?.repoRoot;
-          if (sessionRoot && path.resolve(sessionRoot) === normalizedRoot) {
-            return true;
-          }
-          const cwd = entry.spawnedCwd;
-          return Boolean(
-            cwd &&
-            (path.resolve(cwd) === normalizedRoot ||
-              isPathInside(normalizedRoot, path.resolve(cwd))),
-          );
-        });
-        if (worktreeReference || sessionReference) {
-          const reference = worktreeReference
-            ? `managed worktree ${worktreeReference.name}`
-            : `session ${sessionReference?.[0]}`;
+        try {
+          removed = await removeClonedProjectCheckout(project, () => {
+            const reference = findProjectCheckoutReference(
+              context.getRuntimeConfig(),
+              project.repoRoot,
+            );
+            if (reference) {
+              throw new ProjectCheckoutError(
+                `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+              );
+            }
+          });
+        } catch (error) {
           respond(
             false,
             undefined,
             errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `Project checkout is still referenced by ${reference}. Remove that reference before deleting the checkout.`,
+              error instanceof ProjectCheckoutError
+                ? ErrorCodes.INVALID_REQUEST
+                : ErrorCodes.UNAVAILABLE,
+              formatErrorMessage(error),
             ),
           );
           return;
         }
-        try {
-          await deleteClonedProjectCheckout(project);
-        } catch (error) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
-          return;
-        }
+      } else {
+        removed = removeProjectRegistry(params.id);
       }
-      if (!removeProjectRegistry(params.id)) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `unknown project id: ${params.id}`),
-        );
+      if (!removed) {
+        respondUnknownProject();
         return;
       }
       respond(true, { removed: true }, undefined);

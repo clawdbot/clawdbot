@@ -8,7 +8,7 @@ import {
 import { formatErrorMessage } from "../infra/errors.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { recordBackupRunOutcome } from "../state/backup-run-records.js";
+import { recordBackupOutcomeBestEffort } from "./backup-shared.js";
 
 type BackupVerifyRuntime = typeof import("./backup-verify.js");
 
@@ -45,6 +45,7 @@ export async function backupCreateCommand(
     }
     if (!opts.dryRun) {
       recordBackupOutcomeBestEffort(runtime, {
+        kind: "archive",
         archivePath,
         status: "ok",
       });
@@ -58,24 +59,12 @@ export async function backupCreateCommand(
   } catch (error) {
     if (!opts.dryRun) {
       recordBackupOutcomeBestEffort(runtime, {
+        kind: "archive",
         archivePath,
         status: "failed",
         error: formatErrorMessage(error),
       });
     }
     throw error;
-  }
-}
-
-function recordBackupOutcomeBestEffort(
-  runtime: RuntimeEnv,
-  params: { archivePath: string; status: "ok" | "failed"; error?: string },
-): void {
-  try {
-    recordBackupRunOutcome({ kind: "archive", ...params });
-  } catch (error) {
-    runtime.error(
-      `Warning: the backup outcome could not be recorded: ${formatErrorMessage(error)}`,
-    );
   }
 }

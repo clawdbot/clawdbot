@@ -1,5 +1,6 @@
 import Foundation
 import OpenClawKit
+import OpenClawProtocol
 import OSLog
 
 private let transportEventsLogger = Logger(subsystem: "ai.openclaw", category: "OpenClawChatUI")
@@ -22,18 +23,28 @@ extension OpenClawChatViewModel {
     }
 
     func handleTransportEvent(_ evt: OpenClawChatTransportEvent) {
+        guard !self.isTransportDetached else { return }
         switch evt {
         case let .health(ok):
             let reconnected = ok && !self.healthOK
             applyTransportHealth(ok)
             if reconnected {
+                let session = self.currentSessionSnapshot()
+                Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
                 self.scheduleProgressCardFetch()
                 Task { [weak self] in await self?.refreshQuestions() }
                 Task { [weak self] in await self?.refreshSwarmCapability() }
+                Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
+            } else if !ok {
+                self.modelAvailabilityIsSessionScoped = false
+                self.invalidateComposerCapabilities()
             }
         case .tick:
             let context = self.currentSessionSnapshot()
             Task { await self.pollHealthIfNeeded(force: false, sessionSnapshot: context) }
+        case .chatMetadataChanged:
+            let session = self.currentSessionSnapshot()
+            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
         case let .sessionsChanged(change):
             self.handleSessionsChangedEvent(change)
         case let .sessionObserver(digest):
@@ -58,13 +69,26 @@ extension OpenClawChatViewModel {
             self.resolveQuestionEvent(resolved)
             self.reconcileQuestionsAfterEvent()
         case .routeChanged:
+            // A replacement route may be a different Gateway, so a cached
+            // known-absent store must not authorize the legacy plan fallback
+            // against a new Gateway that dual-emits both sources.
+            self.progressCardStoreAvailable = nil
             self.clearProgressCard()
             self.swarmEnabled = false
+            self.modelAvailabilityIsSessionScoped = false
             self.resetSwarmProgress()
             Task { [weak self] in await self?.refreshSwarmCapability() }
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             let session = self.currentSessionSnapshot()
+            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
             Task { [weak self] in await self?.refreshSubagentActivities(sessionSnapshot: session) }
         case .seqGap:
+            self.modelAvailabilityIsSessionScoped = false
+            let session = self.currentSessionSnapshot()
+            Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
+            self.invalidateComposerCapabilities()
+            Task { [weak self] in await self?.loadComposerCapabilities(force: true) }
             self.errorText = nil
             self.swarmEnabled = false
             self.resetSwarmProgress()
@@ -167,6 +191,14 @@ extension OpenClawChatViewModel {
         }
         guard change.reason == "patch" || change.reason == "command-metadata" else { return }
         self.requestSessionsRefresh()
+        guard let eventSessionKey,
+              self.matchesCurrentSessionKey(
+                  incoming: eventSessionKey,
+                  agentId: change.agentId,
+                  current: self.sessionKey)
+        else { return }
+        let session = self.currentSessionSnapshot()
+        Task { [weak self] in await self?.fetchModels(sessionSnapshot: session) }
     }
 
     private func handleLifecycleSessionChange(
@@ -253,9 +285,14 @@ extension OpenClawChatViewModel {
             existing: existing,
             snapshot: snapshot,
             phase: phase,
-            runID: runID)
+            activeRunIDs: change.activeRunIds,
+            activeRunIDsPresent: change.activeRunIdsPresent,
+            color: change.color,
+            colorPresent: change.colorPresent)
         self.sessions = OpenClawChatSessionListOrganizer.organize(updated)
-        self.persistSessionsToCache(self.sessions)
+        self.persistSessionsToCache(
+            self.sessions,
+            agentID: self.currentSessionSnapshot().deliveryAgentID)
         return .merged
     }
 
@@ -320,11 +357,15 @@ extension OpenClawChatViewModel {
         existing: OpenClawChatSessionEntry,
         snapshot: OpenClawChatSessionEntry,
         phase: String,
-        runID: String?) -> OpenClawChatSessionEntry
+        activeRunIDs: [String]?,
+        activeRunIDsPresent: Bool,
+        color: String?,
+        colorPresent: Bool) -> OpenClawChatSessionEntry
     {
-        let isTerminal = phase == "end" || phase == "error"
-        let existingActiveRunIDs = existing.activeRunIds?.compactMap { Self.normalizedRunID($0) } ?? []
         var merged = existing
+        if colorPresent {
+            merged.color = color
+        }
         merged.updatedAt = snapshot.updatedAt ?? existing.updatedAt
         merged.status = snapshot.status ?? existing.status
         merged.hasActiveRun = snapshot.hasActiveRun ?? existing.hasActiveRun
@@ -334,16 +375,8 @@ extension OpenClawChatViewModel {
             merged.lastRunError = snapshot.lastRunError ?? existing.lastRunError
         }
 
-        if let activeRunIDs = snapshot.activeRunIds {
+        if activeRunIDsPresent {
             merged.activeRunIds = activeRunIDs
-        } else if phase == "start", let runID {
-            merged.activeRunIds = existingActiveRunIDs.contains(runID)
-                ? existingActiveRunIDs
-                : existingActiveRunIDs + [runID]
-            merged.hasActiveRun = true
-        } else if isTerminal, let runID {
-            merged.activeRunIds = existingActiveRunIDs.filter { $0 != runID }
-            merged.hasActiveRun = merged.activeRunIds?.isEmpty == false
         }
 
         switch phase {
@@ -398,11 +431,30 @@ extension OpenClawChatViewModel {
     }
 
     private func handleSessionMessageEvent(_ payload: OpenClawSessionMessageEventPayload) {
-        guard let message = payload.message else { return }
-        let sanitized = Self.stripInboundMetadata(from: message)
         let isCurrentSession = payload.sessionKey.map {
             self.matchesCurrentSessionKey(incoming: $0, agentId: payload.agentId, current: self.sessionKey)
         } ?? true
+        if isCurrentSession, payload.hasActiveRun != nil || payload.activeRunIdsPresent {
+            let change = OpenClawChatSessionsChangedEvent(
+                sessionKey: payload.sessionKey,
+                agentId: payload.agentId,
+                reason: "message",
+                hasActiveRun: payload.hasActiveRun,
+                activeRunIds: payload.activeRunIds,
+                activeRunIdsPresent: payload.activeRunIdsPresent)
+            if let projected = ChatSessionSidebarModel.applying(
+                sessionChange: change,
+                to: self.sessions,
+                activeAgentId: self.activeAgentId)
+            {
+                self.sessions = projected
+            }
+            if payload.activeRunIdsPresent {
+                self.updateActiveSessionRunIDs(payload.activeRunIds ?? [])
+            }
+        }
+        guard let message = payload.message else { return }
+        let sanitized = Self.stripInboundMetadata(from: message)
         // Confirmation is gateway-scoped, not presentation-scoped. A flush
         // can drain session A while session B is visible, and A's event must
         // still retire its durable row before this handler returns early.
@@ -596,6 +648,7 @@ extension OpenClawChatViewModel {
             content: message.content,
             timestamp: Date().timeIntervalSince1970 * 1000,
             transcriptMessageID: message.transcriptMessageID,
+            transcriptRunID: message.transcriptRunID,
             isTruncated: message.isTruncated,
             idempotencyKey: message.idempotencyKey,
             toolCallId: message.toolCallId,
@@ -639,9 +692,32 @@ extension OpenClawChatViewModel {
         switch evt.stream {
         case "assistant":
             if let text = evt.data["text"]?.value as? String {
+                self.liveRunStateByRunID[evt.runId, default: ChatLiveRunState()].hasAgentAssistantText = true
                 self.updateActiveSessionRunWithoutChatSnapshot(false)
                 self.updateStreamingAssistantText(text)
             }
+        case "plan":
+            // Released Gateways through v2026.8.x lack progressCard.get and only emit stream:"plan".
+            // Rendering these only when the store is known-absent keeps a dual-emitting Gateway from
+            // fighting the durable card. SUNSET 2026-10-18: this fallback is a fixed cutover window,
+            // not a permanent contract. On that date delete it together with the Gateway's legacy
+            // stream:"plan" dual-emit and the Android twin in ChatController.kt. Tracked: #125639.
+            guard self.progressCardStoreAvailable == false else { return }
+            guard evt.data["phase"]?.value as? String == "update" else { return }
+            let steps = Self.parseLegacyProgressCardSteps(evt.data["steps"])
+            guard !steps.isEmpty else {
+                self.clearProgressCard()
+                return
+            }
+            self.legacyProgressCardRevision &+= 1
+            let explanation = (evt.data["explanation"]?.value as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            self.applyProgressCard(ProgressCard(
+                sessionkey: self.sessionKey,
+                revision: self.legacyProgressCardRevision,
+                updatedat: evt.ts ?? 0,
+                markdown: explanation?.isEmpty == false ? explanation : nil,
+                steps: steps))
         case "tool":
             guard let phase = evt.data["phase"]?.value as? String else { return }
             guard let name = evt.data["name"]?.value as? String else { return }
@@ -845,8 +921,12 @@ extension OpenClawChatViewModel {
             sessionSnapshot: sessionSnapshot,
             armID: armID)
         else { return false }
+        // Live events advance ownership while history is in flight. A superseded snapshot
+        // must not let message shape retire a run the gateway still reports in flight.
+        if refresh.applied, !refresh.runSnapshotApplied { return true }
         if case let .failed(message)? = terminalState {
             if refresh.applied,
+               !refresh.hasInFlightRun,
                let timestamp,
                self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
             {
@@ -858,7 +938,7 @@ extension OpenClawChatViewModel {
             self.updateStreamingAssistantText(nil)
             return false
         }
-        if refresh.applied, refresh.runSnapshotApplied, refresh.supportsInFlightRunState {
+        if refresh.applied, refresh.supportsInFlightRunState {
             if refresh.hasInFlightRun {
                 return true
             }
@@ -891,7 +971,7 @@ extension OpenClawChatViewModel {
             self.finishPendingRun(runId: runId, terminalState: .completed)
             return false
         }
-        guard let timestamp else { return true }
+        guard !refresh.hasInFlightRun, let timestamp else { return true }
         return !self.clearPendingRunIfAssistantMessagePresent(runId: runId, after: timestamp)
     }
 

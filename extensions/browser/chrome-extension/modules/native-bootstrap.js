@@ -1,3 +1,4 @@
+import { randomRelayBase64Url } from "./relay-auth-v2-crypto.js";
 import { ACCESS_MODE_ALL, parsePairingString } from "./relay-core.js";
 
 const NATIVE_HOST_NAME = "ai.openclaw.browser_bootstrap";
@@ -54,15 +55,6 @@ function nativeResponse(value, nonce) {
   return { kind: "malformed" };
 }
 
-function randomNonce() {
-  const hex = crypto.randomUUID().replaceAll("-", "");
-  let binary = "";
-  for (let offset = 0; offset < hex.length; offset += 2) {
-    binary += String.fromCharCode(Number.parseInt(hex.slice(offset, offset + 2), 16));
-  }
-  return btoa(binary).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/u, "");
-}
-
 function isHostMissing(error) {
   const message = String(error?.message ?? error).toLowerCase();
   return RETRYABLE_HOST_ERRORS.some((candidate) => message.includes(candidate));
@@ -96,6 +88,29 @@ function sendNativeBootstrap(chromeApi, request) {
       finish(reject, error);
     }
   });
+}
+
+const RELAY_ENSURE_STATUSES = new Set(["spawned", "running", "skipped"]);
+
+/** Ask the native host to start the standalone relay daemon when nothing serves the relay port. */
+export async function requestRelayEnsure(relayPort, chromeApi = chrome) {
+  const nonce = randomRelayBase64Url(crypto, 16);
+  let response;
+  try {
+    response = await sendNativeBootstrap(chromeApi, { v: 1, op: "ensure_relay", nonce, relayPort });
+  } catch {
+    return { status: "unavailable" };
+  }
+  if (
+    hasExactKeys(response, ["v", "ok", "nonce", "relay"]) &&
+    response.v === 1 &&
+    response.ok === true &&
+    response.nonce === nonce &&
+    RELAY_ENSURE_STATUSES.has(response.relay)
+  ) {
+    return { status: response.relay };
+  }
+  return { status: "unavailable" };
 }
 
 /** Own coalescing, retry policy, opt-out, and late-response revocation. */
@@ -148,7 +163,7 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
       if (state.state === "manual_required") {
         return { status: "manual_required", code: state.failureCode };
       }
-      const nonce = randomNonce();
+      const nonce = randomRelayBase64Url(crypto, 16);
       let response;
       try {
         response = await sendNativeBootstrap(chromeApi, {

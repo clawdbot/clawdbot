@@ -235,7 +235,9 @@ async function writeAuditRecoveryProgress(params: {
     mkdir: false,
     mode: 0o600,
   });
-  const opened = await params.root.open(progressRelativePath);
+  const opened = await params.root.openWritable(progressRelativePath, {
+    writeMode: "update",
+  });
   try {
     await opened.handle.chmod(0o600);
     await opened.handle.sync();
@@ -353,7 +355,9 @@ async function stageAuditRecoveryRestore(params: {
     },
   });
   await params.root.create(stagingRelativePath, journalRaw, { mode: 0o600 });
-  const staged = await params.root.open(stagingRelativePath);
+  const staged = await params.root.openWritable(stagingRelativePath, {
+    writeMode: "update",
+  });
   try {
     await staged.handle.chmod(0o600);
     await staged.handle.sync();

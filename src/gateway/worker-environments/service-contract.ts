@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { DevicePlacementRequirement } from "../../agents/harness/types.js";
 import type {
   WorkerDesktopApp,
   WorkerMachineOption,
@@ -34,6 +35,7 @@ export function deriveEnvironmentIntent(idempotencyKey: string): {
 export type WorkerEnvironmentServiceRecord = {
   environmentId: string;
   providerId: string;
+  profileId: string;
   leaseId: string | null;
   nodeDeviceId?: string | null;
   sharedHost: boolean | null;
@@ -65,7 +67,8 @@ export type WorkerDesktopLaunchResult = {
 export type WorkerEnvironmentServiceContract = {
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
-  supportsExecutionMode?(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
+  inventoryVersion(): number;
+  supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   create(
     profileId: string,
@@ -93,6 +96,7 @@ export type WorkerPlacementDispatchRequest = {
   agentId: string;
   profileId: string;
   executionMode: WorkerPlacementExecutionMode;
+  devicePlacement?: DevicePlacementRequirement;
   idempotencyKey?: string;
   deviceId?: string;
   machineClass?: string;
@@ -102,9 +106,25 @@ export type WorkerPlacementDispatchRequest = {
   };
 };
 
+export type WorkerPlacementDispatchAdmission = <T>(
+  request: Pick<WorkerPlacementDispatchRequest, "sessionId" | "sessionKey" | "agentId">,
+  run: (signal?: AbortSignal) => Promise<T>,
+  authorize?: () => void,
+) => Promise<T>;
+
+/** Canonical admission rejected the session owner, not a caller or process cancellation. */
+export class WorkerPlacementAdmissionTargetError extends Error {
+  readonly code = "invalid_state";
+}
+
 export type WorkerPlacementMoveDestination = Pick<
   WorkerPlacementDispatchRequest,
-  "profileId" | "executionMode" | "deviceId" | "machineClass" | "inheritedProfile"
+  | "profileId"
+  | "executionMode"
+  | "devicePlacement"
+  | "deviceId"
+  | "machineClass"
+  | "inheritedProfile"
 >;
 
 export type WorkerPlacementReclaimRequest = {
@@ -116,20 +136,29 @@ export type WorkerPlacementReclaimRequest = {
 export type WorkerPlacementMoveRequest = WorkerPlacementReclaimRequest & {
   source: WorkerPlacementMoveSource;
   target: WorkerPlacementMoveTarget;
+  abandonSource?: true;
 };
+
+/** Closure-bound request authority; in-process only and never part of durable placement intent. */
+export type WorkerPlacementAuthorization = () => void;
 
 // Leaf dispatch contract: GatewayRequestContext must not import the dispatch
 // runtime (it reaches agents/plugins and closes an import cycle through core).
 export type WorkerPlacementDispatchContract = {
   dispatch(
     request: WorkerPlacementDispatchRequest,
+    onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   move?(
     request: WorkerPlacementMoveRequest,
     onTransition?: (placement: WorkerSessionPlacementRecord) => void,
+    authorize?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "active" }>>;
   reclaim?(
     request: WorkerPlacementReclaimRequest,
+    authorize?: WorkerPlacementAuthorization,
+    beforeDrain?: WorkerPlacementAuthorization,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "local" | "reclaimed" }>>;
   forceDestroyEnvironment?(
     environmentId: string,

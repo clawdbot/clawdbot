@@ -12,6 +12,7 @@ import {
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
+import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
 import { getDetachedTaskLifecycleRuntime } from "../../tasks/detached-task-runtime.js";
 import {
   findTaskByRunId,
@@ -27,6 +28,7 @@ import { registerPluginSubagentRunFromGateway } from "./agent-task-tracking.js";
 import {
   applyGatewaySubagentRegistryTestDeps,
   getAgentTestMocks,
+  operatorWriteCliClient,
   makeContext,
   type AgentHandlerArgs,
   type AgentCommandCall,
@@ -43,6 +45,7 @@ import {
   operatorWriteGatewayClient,
   resetAgentTaskRegistryForTests,
   waitForAgentCommandCall,
+  waitForAgentCommandCallAfter,
   invokeAgent,
   describe0AfterEach0,
 } from "./agent.test-harness.js";
@@ -111,8 +114,8 @@ describe("gateway agent handler", () => {
     );
 
     expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
-    const error = expectRespondError(respond, { code: ErrorCodes.UNAVAILABLE });
-    expectStringFieldContains(error, "message", "quarantined after restart recovery exhaustion");
+    const error = expectRespondError(respond, { code: ErrorCodes.INVALID_REQUEST });
+    expectStringFieldContains(error, "message", "ended during restart recovery");
   });
 
   it("rejects ordinary work while restart recovery exhaustion is being tombstoned", async () => {
@@ -192,6 +195,7 @@ describe("gateway agent handler", () => {
       useTestStateDir(root);
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -201,6 +205,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run"), {
@@ -235,7 +240,7 @@ describe("gateway agent handler", () => {
           },
           list: [{ id: "main", default: true }, { id: "work" }],
         },
-      };
+      } satisfies typeof mocks.loadConfigReturn;
       mocks.listAgentIds.mockReturnValue(["main", "work"]);
       mocks.loadConfigReturn = cfg;
       mocks.loadSessionEntry.mockReturnValue({
@@ -270,6 +275,7 @@ describe("gateway agent handler", () => {
           pluginRuntimeOwnerId: "memory-core",
         },
       };
+      const initialCommandCallCount = mocks.agentCommand.mock.calls.length;
 
       const respond = await invokeAgent(
         {
@@ -283,6 +289,7 @@ describe("gateway agent handler", () => {
           client: pluginClient,
         },
       );
+      await waitForAgentCommandCallAfter(initialCommandCallCount);
 
       const acceptedPayload = respond.mock.calls.find(
         ([ok, payload]) =>
@@ -534,7 +541,7 @@ describe("gateway agent handler", () => {
         const childSessionKey = "agent:main:subagent:registry-fail";
         const cfg = {
           session: { mainKey: "main", scope: "per-sender" },
-        };
+        } satisfies typeof mocks.loadConfigReturn;
         mocks.loadConfigReturn = cfg;
         mocks.loadSessionEntry.mockReturnValue({
           cfg,
@@ -687,6 +694,7 @@ describe("gateway agent handler", () => {
       resetAgentTaskRegistryForTests();
       primeMainAgentRun();
       mocks.agentCommand.mockRejectedValueOnce(new Error("agent unavailable"));
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -696,6 +704,7 @@ describe("gateway agent handler", () => {
         },
         { reqId: "task-registry-agent-run-error" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-error"), {
@@ -718,6 +727,7 @@ describe("gateway agent handler", () => {
         meta: { durationMs: 100, aborted: true },
       });
       const context = makeContext();
+      const commandCallCount = mocks.agentCommand.mock.calls.length;
 
       await invokeAgent(
         {
@@ -727,6 +737,7 @@ describe("gateway agent handler", () => {
         },
         { context, reqId: "task-registry-agent-run-aborted" },
       );
+      await waitForAgentCommandCallAfter(commandCallCount);
 
       await waitForAssertion(() => {
         expectRecordFields(findTaskByRunId("task-registry-agent-run-aborted"), {
@@ -1458,45 +1469,58 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("emits provider failure messages without the internal error class name", async () => {
-    const message =
-      "The selected model was not found by the provider. Check the model id or choose a different model.";
-    mocks.agentCommand.mockRejectedValueOnce(
-      new FailoverError(message, {
+  it.each([false, true])(
+    "emits provider failures and optional diagnostics without class names: %s",
+    async (withDiagnostic) => {
+      const message =
+        "The selected model was not found by the provider. Check the model id or choose a different model.";
+      const failure = new FailoverError(message, {
         reason: "model_not_found",
         provider: "ollama",
         model: "definitely-not-a-real-model:latest",
-      }),
-    );
-    const context = makeContext();
-    const respond = vi.fn();
-    const runId = "agent-run-model-not-found";
+      });
+      const diagnostic = "stderr: earlier request timed out; Rate limit exceeded";
+      if (withDiagnostic) {
+        attachErrorDiagnostic(failure, diagnostic);
+      }
+      const displayed = withDiagnostic ? `${message}\n${diagnostic}` : message;
+      mocks.agentCommand.mockRejectedValueOnce(failure);
+      const context = makeContext();
+      const respond = vi.fn();
+      const runId = "agent-run-model-not-found";
 
-    dispatchAgentRunFromGateway({
-      ingressOpts: {
-        message: "hi",
-        sessionKey: "agent:badmodel:main",
-        allowModelOverride: false,
-      },
-      runId,
-      dedupeKeys: [`agent:${runId}`],
-      abortController: new AbortController(),
-      cleanupAbortController: vi.fn(),
-      io: createAgentTurnIo(respond),
-      context,
-      taskTrackingMode: "none",
-    });
+      dispatchAgentRunFromGateway({
+        ingressOpts: {
+          message: "hi",
+          sessionKey: "agent:badmodel:main",
+          allowModelOverride: false,
+        },
+        runId,
+        dedupeKeys: [`agent:${runId}`],
+        abortController: new AbortController(),
+        cleanupAbortController: vi.fn(),
+        io: createAgentTurnIo(respond),
+        context,
+        taskTrackingMode: "none",
+      });
 
-    await waitForAssertion(() => {
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        { runId, status: "error", summary: message },
-        expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
-        { runId, error: message },
-      );
-      expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
-    });
-  });
+      await waitForAssertion(() => {
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          { runId, status: "error", summary: message },
+          expect.objectContaining({ code: ErrorCodes.UNAVAILABLE, message }),
+          { runId, error: message },
+        );
+        expect(context.dedupe.get(`agent:${runId}`)?.error?.message).toBe(message);
+        expect(failure.message).toBe(message);
+        expect(failure.reason).toBe("model_not_found");
+      });
+      await expect(waitForAgentJob({ runId, timeoutMs: 0 })).resolves.toMatchObject({
+        status: "error",
+        error: displayed,
+      });
+    },
+  );
 
   it("does not overwrite operator-cancelled async gateway agent tasks after late completion", async () => {
     await withTestDir({ prefix: "openclaw-gateway-agent-task-cancelled-" }, async (root) => {
@@ -1737,7 +1761,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callValue) => callValue[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -2088,7 +2112,7 @@ describe("gateway agent handler", () => {
       vi.advanceTimersByTime(100);
       expect(broadcastToConnIds.mock.calls.map((callLocal) => callLocal[1]?.reason)).toEqual([
         "create",
-        "send",
+        "agent.input.settled",
       ]);
     } finally {
       vi.useRealTimers();
@@ -2315,7 +2339,7 @@ describe("gateway agent handler", () => {
     );
     expect(globalLoadCalls.length).toBeGreaterThan(0);
     for (const [, options] of globalLoadCalls) {
-      expect(options).toEqual({ agentId: "work", clone: false });
+      expect(options).toMatchObject({ agentId: "work", clone: false });
     }
   });
 
@@ -2366,7 +2390,7 @@ describe("gateway agent handler", () => {
     );
     expect(globalLoadCalls.length).toBeGreaterThan(0);
     for (const [, options] of globalLoadCalls) {
-      expect(options).toEqual({ agentId: "ops", clone: false });
+      expect(options).toMatchObject({ agentId: "ops", clone: false });
     }
   });
 
@@ -2463,7 +2487,7 @@ describe("gateway agent handler", () => {
         context,
         client: {
           connId: "conn-1",
-          connect: { caps: ["tool-events"] },
+          connect: { ...operatorWriteCliClient().connect, caps: ["tool-events"] },
         } as never,
       },
     );
@@ -2553,7 +2577,7 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves selected-global agent id on cached accepted responses", async () => {
+  it("preserves accepted session and runtime metadata on cached responses", async () => {
     const context = makeContext();
     mocks.listAgentIds.mockReturnValue(["main", "work"]);
     mocks.loadConfigReturn = {
@@ -2569,6 +2593,11 @@ describe("gateway agent handler", () => {
         sessionKey: "global",
         agentId: "work",
         status: "accepted",
+        runtime: {
+          harness: "claude-cli",
+          provider: "anthropic",
+          model: "claude-sonnet-4-6",
+        },
       },
     });
     const respond = vi.fn();
@@ -2588,6 +2617,11 @@ describe("gateway agent handler", () => {
       sessionKey: "global",
       agentId: "work",
       status: "in_flight",
+      runtime: {
+        harness: "claude-cli",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+      },
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });

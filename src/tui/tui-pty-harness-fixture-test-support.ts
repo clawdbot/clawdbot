@@ -3,15 +3,20 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { TUI_PTY_ASSISTANT_FIXTURE_SCRIPT } from "./tui-pty-assistant-fixture-test-support.js";
 import { TUI_PTY_GAP_HISTORY_FIXTURE_SCRIPT } from "./tui-pty-gap-fixture-test-support.js";
 import {
   waitForFixtureLogEntry,
   type FixtureLogEntry,
 } from "./tui-pty-harness-assertion-test-support.js";
+import { TUI_PTY_RECONNECT_FIXTURE } from "./tui-pty-reconnect-fixture-test-support.js";
 import { TUI_PTY_RENDERING_FIXTURE_SCRIPT } from "./tui-pty-rendering-test-support.js";
 import { TUI_PTY_RESET_FIXTURE } from "./tui-pty-reset-fixture-test-support.js";
+import { tuiPtyRuntimeEntrypoints } from "./tui-pty-runtime-test-support.js";
+import { TUI_PTY_STARTUP_SESSION_FIXTURE } from "./tui-pty-startup-session-fixture-test-support.js";
 import { TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT } from "./tui-pty-subscription-fixture-test-support.js";
+import { TUI_PTY_TASK_FIXTURE } from "./tui-pty-task-fixture-test-support.js";
 import { startPty, type PtyRun } from "./tui-pty-test-support.js";
 
 export * from "./tui-pty-harness-assertion-test-support.js";
@@ -26,11 +31,12 @@ export async function disposeActiveTuiFixtures(): Promise<void> {
   }
 }
 
-export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
+export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv; execPath?: string } = {}) {
   const tempDir = await mkdtemp(path.join(tmpdir(), "openclaw-tui-pty-"));
   const scriptPath = await writeTuiPtyFixtureScript(tempDir);
   const logPath = path.join(tempDir, "fixture-log.jsonl");
-  const run = startPty(process.execPath, ["--import", "tsx", scriptPath], {
+  const execPath = opts.execPath ?? process.execPath;
+  const run = startPty(execPath, resolveRuntimeWorkerArgv(pathToFileURL(scriptPath), execPath), {
     activeRuns,
     cwd: process.cwd(),
     env: {
@@ -58,30 +64,27 @@ export async function startTuiFixture(opts: { env?: NodeJS.ProcessEnv } = {}) {
 export async function writeTuiPtyFixtureScript(dir: string) {
   // Temp files sit outside the repo package scope; .mts preserves the ESM contract under tsx.
   const scriptPath = path.join(dir, "run-tui-pty-fixture.mts");
-  const tuiModuleUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui.ts")).href;
-  const payloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/agents/embedded-agent-runner/run/payloads.ts"),
+  const tuiModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.tui).href;
+  const payloadsModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.embeddedPayloads).href;
+  const replyPayloadModuleUrl = resolveRuntimeWorkerUrl(tuiPtyRuntimeEntrypoints.replyPayload).href;
+  const outboundPayloadsModuleUrl = resolveRuntimeWorkerUrl(
+    tuiPtyRuntimeEntrypoints.outboundPayloads,
   ).href;
-  const replyPayloadModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/auto-reply/reply-payload.ts"),
-  ).href;
-  const outboundPayloadsModuleUrl = pathToFileURL(
-    path.join(process.cwd(), "src/infra/outbound/payloads.ts"),
-  ).href;
+  const tuiBackendTypeUrl = pathToFileURL(path.join(process.cwd(), "src/tui/tui-backend.ts")).href;
   await writeFile(
     scriptPath,
     `
-      import { appendFileSync, existsSync, watch } from "node:fs";
-      import { dirname } from "node:path";
+      import { appendFileSync, existsSync, watchFile, unwatchFile } from "node:fs";
       import { buildEmbeddedRunPayloads } from ${JSON.stringify(payloadsModuleUrl)};
       import { getReplyPayloadMetadata } from ${JSON.stringify(replyPayloadModuleUrl)};
       import { normalizeReplyPayloadsForDelivery } from ${JSON.stringify(outboundPayloadsModuleUrl)};
-      import type { TuiBackend } from ${JSON.stringify(tuiModuleUrl.replace("/tui.ts", "/tui-backend.ts"))};
+      import type { TuiBackend } from ${JSON.stringify(tuiBackendTypeUrl)};
       import { runTui } from ${JSON.stringify(tuiModuleUrl)};
 
       const actionLogPath = process.env.OPENCLAW_TUI_PTY_LOG_PATH;
       const gatewayStatus = process.env.OPENCLAW_TUI_PTY_GATEWAY_STATUS ?? "fixture gateway ok";
       const startupDelayMs = Number(process.env.OPENCLAW_TUI_PTY_STARTUP_DELAY_MS ?? 0);
+      ${TUI_PTY_STARTUP_SESSION_FIXTURE.variables}
       const footerModel = process.env.OPENCLAW_TUI_PTY_MODEL;
       const footerThinkingLevel = process.env.OPENCLAW_TUI_PTY_THINKING_LEVEL;
       let verboseLevel = process.env.OPENCLAW_TUI_PTY_VERBOSE_LEVEL;
@@ -98,8 +101,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ...(thinkingLabel ? [{ id: "fixture-thinking", label: thinkingLabel }] : []),
         ...(safeThinkingLabel ? [{ id: "fixture-thinking-safe", label: safeThinkingLabel }] : []),
       ];
-      const disconnectReason = process.env.OPENCLAW_TUI_PTY_DISCONNECT_REASON;
-      let disconnectPending = disconnectReason !== undefined;
+      ${TUI_PTY_RECONNECT_FIXTURE.variables}
       const enablePickerFixture = process.env.OPENCLAW_TUI_PTY_PICKER_FIXTURE === "1";
       const pickerModelValue = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_VALUE ?? "fixture-provider/fixture-model-2";
       const pickerModelName = process.env.OPENCLAW_TUI_PTY_PICKER_MODEL_NAME ?? "Fixture 2";
@@ -143,16 +145,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ? pluginApproval(initialPluginApprovalSessionKey)
         : null;
       let pendingPluginApprovalRun: { runId: string; sessionKey: string } | null = null;
-      let pendingTaskSuggestion: {
-        id: string;
-        title: string;
-        prompt: string;
-        tldr: string;
-        cwd: string;
-        sessionKey: string;
-        agentId: string;
-        createdAt: number;
-      } | null = null;
+      ${TUI_PTY_TASK_FIXTURE.variables}
 
       function record(method: string, payload?: unknown) {
         if (!actionLogPath) {
@@ -167,10 +160,13 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         const entryFastMode = isModeSource ? true : isModeTarget ? undefined : fastMode;
         const entryVerboseLevel = isModeSource ? "full" : isModeTarget ? undefined : verboseLevel;
         const entryTraceLevel = isModeSource ? "raw" : isModeTarget ? modeTargetTraceLevel : undefined;
-        const entryReasoningLevel = isModeSource ? "stream" : undefined;
         return {
           key,
-          displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main",
+          ...(isModeSource
+            ? { displayName: "Production incident" }
+            : isModeTarget
+              ? {}
+              : { displayName: key === pickerSessionKey ? pickerSessionDisplayName : "Main" }),
           model: currentModel,
           modelProvider: "fixture-provider",
           contextTokens: 128,
@@ -178,7 +174,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           ...(currentThinkingLevel ? { thinkingLevel: currentThinkingLevel } : {}),
           ...(entryVerboseLevel ? { verboseLevel: entryVerboseLevel } : {}),
           ...(entryTraceLevel ? { traceLevel: entryTraceLevel } : {}),
-          ...(entryReasoningLevel ? { reasoningLevel: entryReasoningLevel } : {}),
+          ...(isModeSource ? { reasoningLevel: "stream" } : {}),
           thinkingLevels,
         };
       }
@@ -194,14 +190,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         onDisconnected?: TuiBackend["onDisconnected"];
         onGap?: TuiBackend["onGap"];
 
-        emitDisconnect() {
-          if (!disconnectPending || disconnectReason === undefined) {
-            return;
-          }
-          disconnectPending = false;
-          record("disconnect");
-          this.onDisconnected?.(disconnectReason);
-        }
+        ${TUI_PTY_RECONNECT_FIXTURE.disconnect}
 
         start() {
           if (pendingPluginApproval) {
@@ -217,13 +206,9 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         ${TUI_PTY_SESSION_SUBSCRIPTION_FIXTURE_SCRIPT}
 
         async sendChat(opts: Parameters<TuiBackend["sendChat"]>[0]) {
-          record("sendChat", {
-            sessionKey: opts.sessionKey,
-            message: opts.message,
-            deliver: opts.deliver,
-            thinking: opts.thinking,
-          });
+          record("sendChat", opts);
           const runId = opts.runId ?? "run-pty-fixture";
+          ${TUI_PTY_RECONNECT_FIXTURE.sendChat}
           if (opts.message.startsWith("live reply dedupe proof: ")) {
             const reply = opts.message.endsWith("first") ? "TUI_LIVE_FIRST" : "TUI_LIVE_SECOND";
             const userSequence = ++liveReplySequence;
@@ -400,16 +385,16 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             }, 5);
           }
           const isSourceReplyProof = opts.message === "message tool only source reply proof";
-          const isXaiLimitProof = opts.message === "xai limit proof";
           setTimeout(() => {
-            if (isXaiLimitProof) {
+            if (opts.message === "xai limit proof" || opts.message === "provider failure proof") {
               this.onEvent?.({
                 event: "chat",
                 payload: {
                   runId,
                   sessionKey: opts.sessionKey,
+                  seq: 0,
                   state: "error",
-                  errorMessage: xaiLimitError,
+                  errorMessage: opts.message === "xai limit proof" ? xaiLimitError : "fixture provider failed",
                 },
               });
               return;
@@ -463,6 +448,8 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           record("loadHistory", { sessionKey });
           const gapHistory = loadGapHistory(sessionKey);
           if (gapHistory) { return gapHistory; }
+          ${TUI_PTY_RECONNECT_FIXTURE.loadHistory}
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.loadHistory}
           if (liveReplyHistory.length > 0) {
             return { messages: [...liveReplyHistory] };
           }
@@ -510,9 +497,12 @@ export async function writeTuiPtyFixtureScript(dir: string) {
         }
 
         async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]) {
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.listSessionsSetup}
           record("listSessions", {
+            ...opts,
             purpose: opts?.includeDerivedTitles ? "picker" : "refresh",
           });
+          ${TUI_PTY_STARTUP_SESSION_FIXTURE.listSessionsDelay}
           const sessions = enablePickerFixture
             ? [
                 sessionEntry("main"),
@@ -523,11 +513,14 @@ export async function writeTuiPtyFixtureScript(dir: string) {
                 },
               ]
             : [];
+          const visibleSessions = sessions.filter(
+            (session) => session.key !== "global" || opts?.includeGlobal === true,
+          );
           return {
             ts: Date.now(),
             path: "",
-            count: sessions.length,
-            sessions,
+            count: visibleSessions.length,
+            sessions: visibleSessions,
             defaults: {
               model: currentModel,
               modelProvider: "fixture-provider",
@@ -585,6 +578,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
 
         async getGatewayStatus() {
           record("getGatewayStatus");
+          this.reconnectSessionSubscription();
           this.emitDisconnect();
           return gatewayStatus;
         }
@@ -641,30 +635,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
           return { ok: true };
         }
 
-        async listTaskSuggestions() {
-          record("listTaskSuggestions", { pending: Boolean(pendingTaskSuggestion) });
-          return pendingTaskSuggestion ? [pendingTaskSuggestion] : [];
-        }
-
-        async acceptTaskSuggestion(taskId: string) {
-          record("acceptTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "accepted" },
-          });
-          return { taskId, key: "agent:main:task-pty" };
-        }
-
-        async dismissTaskSuggestion(taskId: string) {
-          record("dismissTaskSuggestion", { taskId });
-          pendingTaskSuggestion = null;
-          this.onEvent?.({
-            event: "task.suggestion",
-            payload: { action: "resolved", taskId, resolution: "dismissed" },
-          });
-          return { taskId, dismissed: true };
-        }
+        ${TUI_PTY_TASK_FIXTURE.methods}
       }
 
       async function main() {
@@ -678,6 +649,7 @@ export async function writeTuiPtyFixtureScript(dir: string) {
             session: { scope: "per-sender", mainKey: "main" },
           },
           deliver: process.env.OPENCLAW_TUI_PTY_DELIVER === "1",
+          session: process.env.OPENCLAW_TUI_PTY_SESSION,
           thinking: launchThinkingLevel,
           message: initialMessage,
           historyLimit: 5,

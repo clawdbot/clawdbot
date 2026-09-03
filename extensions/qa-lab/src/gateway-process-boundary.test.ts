@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import {
   assertQaGatewayCredentialLeaseQuarantine,
   createQaGatewayProcessBoundaryController,
@@ -120,6 +121,19 @@ describe("gateway process boundary", () => {
       expect(evidence.launches).toEqual([
         expect.objectContaining({ generation: prepared.generation }),
       ]);
+
+      // Whitespace leaves JSON valid, but oversized verification output must not
+      // authenticate a truncated proof as a complete response.
+      await fs.appendFile(
+        `${prepared.identityFilePath}.runtime`,
+        " ".repeat(QA_CHILD_STDOUT_MAX_BYTES),
+      );
+      await expect(controller.markReady(identity)).rejects.toThrow("proxy stdout exceeded");
+
+      await fs.writeFile(launcherPath, '#!/bin/sh\ncat "$3.runtime" >&2\nexit 7\n');
+      await expect(controller.markReady(identity)).rejects.toThrow(
+        "proxy exited 7 (stderr truncated)",
+      );
 
       const malformed = await controller.prepare({
         args: ["gateway", "run"],

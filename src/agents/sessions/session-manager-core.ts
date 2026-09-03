@@ -3,6 +3,10 @@ import {
   replaceTranscriptEventsSync,
   type SessionTranscriptRuntimeTarget,
 } from "../../config/sessions/session-accessor.js";
+import {
+  readSessionTranscriptBoundedActiveContextCore,
+  type SessionTranscriptBoundedActiveContext,
+} from "../../config/sessions/session-accessor.sqlite-active-context.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import {
@@ -23,6 +27,11 @@ import type {
 } from "./session-manager-types.js";
 
 export type SessionManagerPersistenceTarget = SessionTranscriptRuntimeTarget;
+export type SessionManagerBoundedContextLimits = { maxBytes: number; maxEvents: number };
+export type SessionManagerBoundedContext = Pick<
+  SessionTranscriptBoundedActiveContext,
+  "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges" | "boundaryCount"
+> & { limits: SessionManagerBoundedContextLimits };
 
 export class SessionManagerCore {
   migrated = false;
@@ -32,6 +41,7 @@ export class SessionManagerCore {
   protected opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   protected byId: Map<string, SessionEntry> = new Map();
   protected opaqueParentsById: Map<string, string | null> = new Map();
+  private boundedFirstKeptById = new Map<string, string>();
   protected logicalParentsById: Map<string, string | null> = new Map();
   protected invalidLeafControlIds: Set<string> = new Set();
   protected labelsById: Map<string, string> = new Map();
@@ -42,36 +52,64 @@ export class SessionManagerCore {
   protected pendingDeliberateAppend = false;
   protected persistenceTarget: SessionManagerPersistenceTarget | undefined;
   protected persistenceHeaderPending = false;
+  protected boundedContextLimits: SessionManagerBoundedContextLimits | undefined;
+  protected boundedContextIncomplete = false;
+  protected persistedBoundaryCount: number | undefined;
 
   constructor(
     cwd: string,
     persistenceTarget?: SessionManagerPersistenceTarget,
     loadedEntries?: FileEntry[],
+    boundedContext?: SessionManagerBoundedContext,
   ) {
     this.cwd = cwd;
     this.persistenceTarget = persistenceTarget;
+    this.boundedContextLimits = boundedContext?.limits;
+    this.boundedContextIncomplete = boundedContext !== undefined;
+    this.persistedBoundaryCount = boundedContext?.boundaryCount;
     if (persistenceTarget || loadedEntries) {
-      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? []);
+      this.setLoadedSessionTarget(persistenceTarget, loadedEntries ?? [], boundedContext);
     } else {
       this.newSession();
     }
   }
 
   setSessionTarget(target: SessionManagerPersistenceTarget): void {
-    const entries = loadTranscriptEventsSync(target) as FileEntry[];
+    const bounded = this.boundedContextLimits
+      ? readSessionTranscriptBoundedActiveContextCore(target, this.boundedContextLimits)
+      : undefined;
+    const entries = (bounded?.events ?? loadTranscriptEventsSync(target)) as FileEntry[];
+    this.boundedContextIncomplete = bounded !== undefined;
+    this.persistedBoundaryCount = bounded?.boundaryCount;
     const header = entries.find(
       (entry) => typeof entry === "object" && entry !== null && entry.type === "session",
     );
-    this.setLoadedSessionTarget(target, entries);
+    this.setLoadedSessionTarget(target, entries, bounded);
     if (header?.cwd) {
       this.cwd = header.cwd;
     }
   }
 
+  /** Active-only loads can omit sibling rows even when they fit the context limits. */
+  protected ensureCompletePersistedHistory(): void {
+    if (!this.persistenceTarget || !this.boundedContextIncomplete) {
+      return;
+    }
+    const limits = this.boundedContextLimits;
+    this.boundedContextLimits = undefined;
+    this.setSessionTarget(this.persistenceTarget);
+    this.boundedContextLimits = limits;
+  }
+
   protected setLoadedSessionTarget(
     target: SessionManagerPersistenceTarget | undefined,
     entries: FileEntry[],
+    bounded?: Pick<
+      SessionTranscriptBoundedActiveContext,
+      "activeLeafEntryId" | "opaqueParents" | "firstKeptRanges"
+    >,
   ): void {
+    this.boundedFirstKeptById.clear();
     const partitioned = partitionSessionFileEntries(entries);
     // Only a physically empty transcript may initialize lazily. Opaque persisted rows still need
     // a canonical header, or runtime would silently replace malformed history with a fresh session.
@@ -97,6 +135,25 @@ export class SessionManagerCore {
       partitioned.fileEntriesByOriginalIndex,
     );
     this.buildIndex();
+    if (bounded) {
+      for (const [id, parentId] of bounded.opaqueParents) {
+        this.opaqueParentsById.set(id, parentId);
+      }
+      this.appendParentId = bounded.activeLeafEntryId;
+      for (const [boundaryId, range] of bounded.firstKeptRanges) {
+        // An empty retained slice starts at the boundary itself, never at an
+        // earlier ancestor. Opaque entries do not become model-context cut points.
+        let firstKeptEntryId = boundaryId;
+        for (let index = range.startIndex; index < range.endIndex; index++) {
+          const entry = partitioned.fileEntriesByOriginalIndex[index];
+          if (isIndexedSessionEntry(entry)) {
+            firstKeptEntryId = entry.id;
+            break;
+          }
+        }
+        this.boundedFirstKeptById.set(boundaryId, firstKeptEntryId);
+      }
+    }
   }
 
   reloadPersistedTranscript(): void {
@@ -130,6 +187,7 @@ export class SessionManagerCore {
     this.opaqueFileEntries = [];
     this.byId.clear();
     this.opaqueParentsById.clear();
+    this.boundedFirstKeptById.clear();
     this.logicalParentsById.clear();
     this.invalidLeafControlIds.clear();
     this.labelsById.clear();
@@ -323,6 +381,13 @@ export class SessionManagerCore {
     if (normalized.parentId === normalized.id) {
       normalized = { ...normalized, parentId: null };
     }
+    const boundedFirstKept = this.boundedFirstKeptById.get(normalized.id);
+    if (
+      boundedFirstKept !== undefined &&
+      (normalized.type === "compaction" || normalized.type === "reset")
+    ) {
+      normalized = { ...normalized, firstKeptEntryId: boundedFirstKept };
+    }
     if (
       (normalized.type === "compaction" || normalized.type === "reset") &&
       normalized.firstKeptEntryId !== undefined &&
@@ -414,9 +479,7 @@ export class SessionManagerCore {
   ): SessionLeafControl {
     return {
       type: "leaf",
-      id: generateSessionEntryId({
-        has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
-      }),
+      id: generateSessionEntryId(),
       parentId,
       timestamp: new Date().toISOString(),
       targetId: this.leafId,

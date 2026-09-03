@@ -5,6 +5,7 @@ import { createSubsystemLogger, type SubsystemLogger } from "../logging/subsyste
 // The cache-state module keeps this lifecycle edge off the kysely value graph
 // so cold control-plane paths using transactions do not load kysely.
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
+import { shouldReportSqliteLockFailure } from "./sqlite-busy-timeout.js";
 
 const transactionDepthByDatabase = new WeakMap<DatabaseSync, number>();
 
@@ -150,7 +151,7 @@ function execTimedTransactionStep(params: {
     return elapsedMs;
   } catch (error) {
     const elapsedMs = Date.now() - startedAt;
-    if (isSqliteLockError(error)) {
+    if (isSqliteLockError(error) && shouldReportSqliteLockFailure(params.db)) {
       const sqliteErrcode = sqliteExtendedResultCode(error);
       const sqlitePrimaryCode = sqlitePrimaryResultCode(error);
       transactionLogger(params.options).warn("SQLite transaction lock wait failed", {

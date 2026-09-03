@@ -87,8 +87,8 @@ For self-hosted instances, point `baseUrl` to your local server (for example
 ## Migrating existing memory
 
 If you have existing workspace memory files (`USER.md`, `MEMORY.md`,
-`IDENTITY.md`, `memory/`, `canvas/`), `openclaw honcho setup` detects and
-offers to migrate them.
+`IDENTITY.md`, `memory/`), `openclaw honcho setup` detects and offers to
+migrate them.
 
 <Info>
 Migration is non-destructive - files are uploaded to Honcho. Originals are

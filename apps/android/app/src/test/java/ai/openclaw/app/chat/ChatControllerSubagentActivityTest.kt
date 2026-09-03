@@ -9,7 +9,10 @@ import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerSubagentActivityTest {
   private val json = Json { ignoreUnknownKeys = true }
 
@@ -119,6 +122,92 @@ class ChatControllerSubagentActivityTest {
     }
 
   @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun expiredTerminalRedeliveryStaysHiddenUntilANewWorkingLifecycle() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+
+      advanceTimeBy(60_000)
+      runCurrent()
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed", terminalSummary = "Late duplicate"))
+      assertTrue(controller.subagentActivities.value.isEmpty())
+
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "running"))
+      assertEquals(
+        "running",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .status,
+      )
+
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+      assertEquals(
+        "completed",
+        controller.subagentActivities.value
+          .getValue("task-1")
+          .status,
+      )
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun deletionAndScopeResetsAllowANewTerminalObservation() =
+    runTest {
+      listOf("deleted", "seqGap", "session").forEach { boundary ->
+        val controller = newController()
+        controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+        advanceTimeBy(60_000)
+        runCurrent()
+
+        when (boundary) {
+          "deleted" -> controller.handleGatewayEvent("task", "{\"action\":\"deleted\",\"taskId\":\"task-1\"}")
+          "seqGap" -> controller.handleGatewayEvent("seqGap", null)
+          "session" -> controller.switchSession("other")
+        }
+
+        controller.handleGatewayEvent(
+          "task",
+          taskPayload(
+            id = "task-1",
+            status = "completed",
+            sessionKey = if (boundary == "session") "other" else "main",
+          ),
+        )
+        assertTrue("$boundary must clear the expired observation", "task-1" in controller.subagentActivities.value)
+      }
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun terminalObservationLimitEvictsOnlyTheOldestExpiredTasks() =
+    runTest {
+      val controller = newController()
+      controller.handleGatewayEvent("task", taskPayload(id = "still-running", status = "running"))
+      repeat(101) { index ->
+        controller.handleGatewayEvent("task", taskPayload(id = "task-$index", status = "completed"))
+      }
+
+      advanceTimeBy(1)
+      controller.handleGatewayEvent("task", taskPayload(id = "pending-expiry", status = "completed"))
+      advanceTimeBy(59_999)
+      runCurrent()
+      assertEquals(setOf("still-running", "pending-expiry"), controller.subagentActivities.value.keys)
+
+      controller.handleGatewayEvent("task", taskPayload(id = "task-1", status = "completed"))
+      assertEquals(setOf("still-running", "pending-expiry"), controller.subagentActivities.value.keys)
+
+      controller.handleGatewayEvent("task", taskPayload(id = "task-0", status = "completed"))
+      assertEquals(setOf("still-running", "pending-expiry", "task-0"), controller.subagentActivities.value.keys)
+
+      advanceTimeBy(1)
+      runCurrent()
+      assertEquals(setOf("still-running", "task-0"), controller.subagentActivities.value.keys)
+    }
+
+  @Test
   fun sessionSwitchClearsActivityButParentRunCleanupDoesNot() =
     runTest {
       val controller = newController()
@@ -162,8 +251,10 @@ class ChatControllerSubagentActivityTest {
   private fun TestScope.newController(): ChatController =
     ChatController(
       scope = backgroundScope,
+      commandOutbox = backgroundScope.createChatCommandOutbox(),
+      cacheScope = { ChatCacheScope("gateway-test", 1L) },
       json = json,
-      requestGateway = { _, _ -> "{}" },
+      requestGateway = { method, _ -> emptyChatGatewayResponse(method) },
     )
 
   private fun taskPayload(

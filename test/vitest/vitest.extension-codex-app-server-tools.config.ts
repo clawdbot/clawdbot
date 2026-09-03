@@ -1,7 +1,7 @@
 // Vitest extension codex app server tools config wires the extension codex app server tools test shard.
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-function createExtensionCodexAppServerToolsVitestConfig(
+export function createExtensionCodexAppServerToolsVitestConfig(
   env: Record<string, string | undefined> = process.env,
 ) {
   return createScopedVitestConfig(

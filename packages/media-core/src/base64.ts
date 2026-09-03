@@ -37,8 +37,6 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
-const CANONICALIZE_BASE64_CHUNK_SIZE = 8192;
-
 function isBase64DataChar(code: number): boolean {
   return (
     (code >= 0x41 && code <= 0x5a) ||
@@ -67,25 +65,26 @@ function base64DataValue(code: number): number {
  * base64 only when the input has valid alphabet, padding, and length.
  */
 export function canonicalizeBase64(base64: string): string | undefined {
-  const chunks: string[] = [];
-  let current = "";
-  let cleanedLength = 0;
+  // Single validating pass; the output buffer is allocated lazily on the first
+  // whitespace and bounded by the input length, so canonical input returns
+  // unchanged with zero allocations and no input shape multiplies intermediates.
+  let out: Buffer | undefined;
+  let outLen = 0;
   let padding = 0;
   let sawPadding = false;
   let lastDataCode = 0;
 
-  const append = (char: string): void => {
-    current += char;
-    cleanedLength += 1;
-    if (current.length >= CANONICALIZE_BASE64_CHUNK_SIZE) {
-      chunks.push(current);
-      current = "";
-    }
-  };
-
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
     if (code <= 0x20) {
+      if (out === undefined) {
+        // First whitespace: backfill the validated prefix [0, i).
+        out = Buffer.allocUnsafe(base64.length - 1);
+        for (let j = 0; j < i; j += 1) {
+          out[j] = base64.charCodeAt(j);
+        }
+        outLen = i;
+      }
       continue;
     }
     if (code === 0x3d) {
@@ -94,32 +93,31 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-      append("=");
-      continue;
-    }
-    if (sawPadding || !isBase64DataChar(code)) {
+    } else if (sawPadding || !isBase64DataChar(code)) {
       return undefined;
+    } else {
+      lastDataCode = code;
     }
-    lastDataCode = code;
-    append(base64[i] ?? "");
+    if (out !== undefined) {
+      out[outLen] = code;
+      outLen += 1;
+    }
   }
+  const cleanedLength = out === undefined ? base64.length : outLen;
   if (cleanedLength === 0) {
     return undefined;
   }
   const remainder = cleanedLength % 4;
-  if (remainder !== 0) {
-    if (sawPadding || remainder === 1) {
-      return undefined;
-    }
-    current += "=".repeat(4 - remainder);
+  if (remainder !== 0 && (sawPadding || remainder === 1)) {
+    return undefined;
   }
   const effectivePadding = remainder === 0 ? padding : 4 - remainder;
   const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
   if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
     return undefined;
   }
-  if (current) {
-    chunks.push(current);
-  }
-  return chunks.join("");
+  // Every kept character was validated against the base64 alphabet (ASCII),
+  // so a latin1 decode reproduces them exactly.
+  const cleaned = out === undefined ? base64 : out.subarray(0, outLen).toString("latin1");
+  return remainder === 0 ? cleaned : cleaned + "=".repeat(4 - remainder);
 }

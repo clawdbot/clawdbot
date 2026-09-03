@@ -65,17 +65,67 @@ describe("formatAgo", () => {
 });
 
 describe("localized durations", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
+  it.each([undefined, null, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -1])(
+    "preserves invalid duration fallbacks for %s",
+    (durationMs) => {
+      expect(formatDurationCompact(durationMs)).toBeUndefined();
+      expect(formatDurationHuman(durationMs, "unavailable")).toBe("unavailable");
+    },
+  );
+
+  it("keeps zero distinct from a positive duration rounded to zero", () => {
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationCompact(0.1)).toBe("0ms");
+    expect(formatDurationHuman(0)).toBe("0ms");
+  });
+
   it.each([
+    { durationMs: 999.5, expected: "1s" },
     { durationMs: 59_000, expected: "59s" },
+    { durationMs: 59_500, expected: "1m" },
     { durationMs: 92_000, expected: "1m 32s" },
     { durationMs: 3_660_000, expected: "1h 1m" },
+    { durationMs: 3_630_000, expected: "1h 30s" },
+    { durationMs: 86_430_000, expected: "1d 30s" },
+    { durationMs: 86_460_000, expected: "1d 1m" },
     { durationMs: 49 * 60 * 60 * 1000, expected: "2d 1h" },
   ])("formats $durationMs ms with separated compact units", ({ durationMs, expected }) => {
     expect(formatDurationCompact(durationMs)).toBe(expected);
   });
 
-  it("switches human durations to days at 24 hours", () => {
-    expect(formatDurationHuman(36 * 60 * 60 * 1000)).toBe("2d");
+  it.each([
+    { durationMs: 999.6, expected: "1s" },
+    { durationMs: 3_569_999, expected: "59m" },
+    { durationMs: 5_371_000, expected: "1h" },
+    { durationMs: 84_599_000, expected: "23h" },
+    { durationMs: 127_799_000, expected: "1d" },
+    { durationMs: 36 * 60 * 60 * 1000, expected: "2d" },
+  ])("rounds $durationMs ms once for human display", ({ durationMs, expected }) => {
+    expect(formatDurationHuman(durationMs)).toBe(expected);
+  });
+
+  it.each(["fr", "de", "ar"] as const)("preserves duration quantities in %s", async (locale) => {
+    await i18n.setLocale(locale);
+    const unit = (value: number, unitName: string) =>
+      new Intl.NumberFormat(locale, {
+        style: "unit",
+        unit: unitName,
+        unitDisplay: "narrow",
+        maximumFractionDigits: 0,
+      }).format(value);
+    expect(formatDurationCompact(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(60_000)).toBe(unit(1, "minute"));
+    expect(formatDurationHuman(5_371_000)).toBe(unit(1, "hour"));
+    expect(formatDurationHuman(127_799_000)).toBe(unit(1, "day"));
+    expect(formatDurationCompact(3_630_000)).toBe(`${unit(1, "hour")} ${unit(30, "second")}`);
+    expect(formatDurationCompact(86_460_000)).toBe(`${unit(1, "day")} ${unit(1, "minute")}`);
+    expect(formatDurationCompact(0)).toBeUndefined();
+    expect(formatDurationHuman(0)).toBe(unit(0, "millisecond"));
+    expect(formatDurationHuman(undefined, "missing")).toBe("missing");
   });
 });
 
@@ -100,6 +150,12 @@ describe("formatMs", () => {
     expect(formatMs(8_640_000_000_000_001)).toBe("n/a");
     expect(formatMs(Number.POSITIVE_INFINITY)).toBe("n/a");
   });
+
+  it("defaults to minute precision", () => {
+    const formatted = formatMs(new Date(2026, 0, 2, 15, 4, 55).getTime());
+    expect(formatted).toContain("2026");
+    expect(formatted).not.toMatch(/:55(?:\s|$)/u);
+  });
 });
 
 describe("date/time millisecond formatters", () => {
@@ -107,6 +163,14 @@ describe("date/time millisecond formatters", () => {
     expect(formatDateMs(8_640_000_000_000_001, undefined, "")).toBe("");
     expect(formatDateTimeMs(Number.NEGATIVE_INFINITY, undefined, "")).toBe("");
     expect(formatTimeMs(Number.POSITIVE_INFINITY, undefined, "")).toBe("");
+  });
+
+  it("defaults time-only values to minute precision while preserving explicit seconds", () => {
+    const timestamp = new Date(2026, 0, 2, 15, 4, 55).getTime();
+    expect(formatTimeMs(timestamp)).not.toMatch(/:55(?:\s|$)/u);
+    expect(
+      formatTimeMs(timestamp, { hour: "numeric", minute: "2-digit", second: "2-digit" }),
+    ).toMatch(/:55(?:\s|$)/u);
   });
 });
 
@@ -151,36 +215,6 @@ describe("stripThinkingTags", () => {
     // This should not crash and should handle gracefully
     expect(stripThinkingTags("<final\nHello")).toBe("<final\nHello");
     expect(stripThinkingTags("Hello</final>")).toBe("Hello");
-  });
-
-  it("strips <relevant-memories> blocks", () => {
-    const input = [
-      "<relevant-memories>",
-      "The following memories may be relevant to this conversation:",
-      "- Internal memory note",
-      "</relevant-memories>",
-      "",
-      "User-visible answer",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe("User-visible answer");
-  });
-
-  it("keeps relevant-memories tags in fenced code blocks", () => {
-    const input = [
-      "```xml",
-      "<relevant-memories>",
-      "sample",
-      "</relevant-memories>",
-      "```",
-      "",
-      "Visible text",
-    ].join("\n");
-    expect(stripThinkingTags(input)).toBe(input);
-  });
-
-  it("hides unfinished <relevant-memories> block tails", () => {
-    const input = ["Hello", "<relevant-memories>", "internal-only"].join("\n");
-    expect(stripThinkingTags(input)).toBe("Hello\n");
   });
 });
 

@@ -10,7 +10,11 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-function bootstrapResponse(serverVersion: string): Response {
+function bootstrapResponse(
+  serverVersion: string,
+  automaticallyFetchFavicons = false,
+  communityInvite = true,
+): Response {
   const payload: ControlUiBootstrapConfig = {
     basePath: "",
     assistantName: "Assistant",
@@ -19,6 +23,8 @@ function bootstrapResponse(serverVersion: string): Response {
     serverVersion,
     terminalEnabled: false,
     cliAgentsEnabled: true,
+    automaticallyFetchFavicons,
+    communityInvite,
     pluginFrameGrants: [],
   };
   return new Response(JSON.stringify(payload), {
@@ -32,6 +38,34 @@ afterEach(() => {
 });
 
 describe("createApplicationConfigCapability", () => {
+  it("keeps invitations hidden until bootstrap enables them and accepts later opt-outs", async () => {
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(bootstrapResponse("test"))
+      .mockResolvedValueOnce(bootstrapResponse("test", false, false));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
+    const listener = vi.fn();
+    const unsubscribe = config.subscribe(listener);
+
+    expect(config.current.communityInvite).toBe(false);
+    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: true });
+    await expect(config.refresh()).resolves.toMatchObject({ communityInvite: false });
+    expect(listener).toHaveBeenLastCalledWith(expect.objectContaining({ communityInvite: false }));
+    unsubscribe();
+  });
+
+  it("stays fail closed before bootstrap and accepts the Gateway favicon setting", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => bootstrapResponse("test", true));
+    vi.stubGlobal("fetch", fetchMock);
+    const config = createApplicationConfigCapability({ resourceBasePath: "/openclaw" });
+
+    expect(config.current.automaticallyFetchFavicons).toBe(false);
+    await expect(config.refresh()).resolves.toMatchObject({ automaticallyFetchFavicons: true });
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("/openclaw/control-ui-config.json");
+    expect(config.current.automaticallyFetchFavicons).toBe(true);
+  });
+
   it("returns null for a superseded bootstrap response", async () => {
     const firstResponse = deferred<Response>();
     const secondResponse = deferred<Response>();
@@ -40,7 +74,7 @@ describe("createApplicationConfigCapability", () => {
       .mockImplementationOnce(() => firstResponse.promise)
       .mockImplementationOnce(() => secondResponse.promise);
     vi.stubGlobal("fetch", fetchMock);
-    const config = createApplicationConfigCapability({ basePath: "" });
+    const config = createApplicationConfigCapability({ resourceBasePath: "" });
 
     const firstRefresh = config.refresh();
     const secondRefresh = config.refresh();

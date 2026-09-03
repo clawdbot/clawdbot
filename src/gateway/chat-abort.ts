@@ -49,6 +49,8 @@ export type ChatAbortControllerEntry = {
   agentRunDelegatedAuthority?: AgentRunDelegatedAuthority;
   agentId?: string;
   startedAtMs: number;
+  /** False until lane admission reaches the execution boundary. */
+  executionStarted?: boolean;
   expiresAtMs: number;
   ownerConnId?: string;
   ownerDeviceId?: string;
@@ -101,22 +103,53 @@ export type RestartRecoveryCandidate = {
   observedAt?: number;
 };
 
-type InFlightRunSnapshot = {
+export type InFlightRunSnapshot = {
   runId: string;
   text: string;
   startedAt?: number;
+  /**
+   * True when the in-flight run is owned by the embedded-run registry and can
+   * only be cancelled through the session-owned abort path (sessions.abort),
+   * never through run-specific chat.abort. Control UI uses this to keep Stop
+   * routing session-scoped for recovered embedded runs.
+   */
+  sessionAbortable?: boolean;
   plan?: ChatRunPlanSnapshot;
   events?: AgentEventPayload[];
 };
 
+export function projectInFlightRunSnapshot(params: {
+  chatRunState: Pick<ChatRunState, "resolveBuffer" | "runs">;
+  runId: string;
+  startedAtMs?: number;
+  sessionAbortable?: boolean;
+}): InFlightRunSnapshot {
+  const run = params.chatRunState.runs.get(params.runId);
+  const projected = projectLiveAssistantBufferedText(
+    params.chatRunState.resolveBuffer(params.runId).text,
+    { suppressLeadFragments: true },
+  );
+  const plan = run?.planSnapshot;
+  const events = run?.progressSnapshot?.events;
+  return {
+    runId: params.runId,
+    text: projected.suppress ? "" : projected.text,
+    ...(params.startedAtMs === undefined ? {} : { startedAt: params.startedAtMs }),
+    ...(params.sessionAbortable ? { sessionAbortable: true } : {}),
+    ...(plan ? { plan } : {}),
+    ...(events?.length ? { events } : {}),
+  };
+}
+
 type RegisteredChatAbortController = {
   controller: AbortController;
-  registered: boolean;
-  entry?: ChatAbortControllerEntry;
-  markExecutionStarted: () => void;
+  markExecutionStarted: () => boolean;
   bindAgentRunDelegatedAuthority: (authority: AgentRunDelegatedAuthority) => void;
-  cleanup: (opts?: { force?: boolean }) => void;
-};
+  cleanup: () => void;
+} & (
+  | { registered: true; entry: ChatAbortControllerEntry }
+  | { registered: false; entry?: undefined }
+);
 
 export function isChatStopCommandText(text: string): boolean {
   return isAbortRequestText(text);
@@ -217,33 +250,34 @@ export function registerChatAbortController(params: {
   let executionStarted = false;
   const markExecutionStarted = () => {
     if (executionStarted) {
-      return;
+      return false;
     }
     const entry = params.chatAbortControllers.get(params.runId);
-    if (entry?.controller !== controller || controller.signal.aborted || entry.kind !== "agent") {
-      return;
+    if (entry?.controller !== controller || controller.signal.aborted) {
+      return false;
+    }
+    executionStarted = true;
+    entry.executionStarted = true;
+    if (entry.kind !== "agent") {
+      return true;
     }
     const now = Date.now();
-    executionStarted = true;
     if (!isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
-      return;
+      return true;
     }
     entry.expiresAtMs = resolveAgentRunExpiresAtMs({
       now,
       timeoutMs: params.timeoutMs,
     });
+    return true;
   };
-  const cleanup = (opts?: { force?: boolean }) => {
+  const cleanup = () => {
     const entry = params.chatAbortControllers.get(params.runId);
     if (entry?.controller === controller) {
       // This registration carries the exact operational instance. Close its
       // capability before terminal cleanup can observe a same-run successor.
       if (entry.agentRunDelegatedAuthority) {
         releaseAgentRunDelegatedAuthority(entry.agentRunDelegatedAuthority);
-      }
-      if (opts?.force === true) {
-        removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
-        return;
       }
       entry.registrationCleanupRequested = true;
       // Terminal event handling owns final removal once the event has been
@@ -255,12 +289,19 @@ export function registerChatAbortController(params: {
       if (persistence) {
         void persistence
           .then(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
+              entry.projectSessionTerminalPersistence = undefined;
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           })
           .catch(() => {
-            if (params.chatAbortControllers.get(params.runId)?.controller === controller) {
+            if (
+              params.chatAbortControllers.get(params.runId)?.controller === controller &&
+              entry.projectSessionTerminalPersistence === persistence
+            ) {
               removeChatAbortControllerEntry(params.chatAbortControllers, params.runId, entry);
             }
           });
@@ -294,6 +335,7 @@ export function registerChatAbortController(params: {
     operationalRunInstance: params.operationalRunInstance,
     agentId: normalizeActiveAgentId(params.agentId),
     startedAtMs: now,
+    executionStarted: false,
     expiresAtMs:
       explicitExpiresAtMs ??
       resolveChatRunExpiresAtMs({ now: rawNow, timeoutMs: params.timeoutMs }),
@@ -412,20 +454,11 @@ export function resolveInFlightRunSnapshot(params: {
   // only at completion — so there is nothing to show mid-run, but the client
   // should still adopt the run and show a `streaming` status (not idle) and
   // render the result cleanly when it lands.
-  const run = params.chatRunState.runs.get(best.runId);
-  const projected = projectLiveAssistantBufferedText(
-    params.chatRunState.resolveBuffer(best.runId).text,
-    { suppressLeadFragments: true },
-  );
-  const plan = run?.planSnapshot;
-  const events = run?.progressSnapshot?.events;
-  return {
+  return projectInFlightRunSnapshot({
+    chatRunState: params.chatRunState,
     runId: best.runId,
-    text: projected.suppress ? "" : projected.text,
-    startedAt: best.startedAtMs,
-    ...(plan ? { plan } : {}),
-    ...(events?.length ? { events } : {}),
-  };
+    startedAtMs: best.startedAtMs,
+  });
 }
 
 export function boundInFlightRunSnapshotForChatHistory(params: {
@@ -447,6 +480,7 @@ export function boundInFlightRunSnapshotForChatHistory(params: {
   let bounded: InFlightRunSnapshot = {
     runId: params.snapshot.runId,
     text: "",
+    ...(params.snapshot.sessionAbortable ? { sessionAbortable: true } : {}),
     ...(params.snapshot.events ? { events: [] } : {}),
     ...(params.snapshot.plan ? { plan: { steps: [] } } : {}),
   };
@@ -628,7 +662,7 @@ export function abortChatRunById(
     return { aborted: false };
   }
 
-  const bufferedText = ops.chatRunState.resolveBuffer(runId).text;
+  const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {
@@ -676,7 +710,8 @@ export function abortChatRunById(
       aborted: true,
       stopReason,
       ...(active.toolErrorSummary ? { toolErrorSummary: active.toolErrorSummary } : {}),
-      startedAt: active.startedAtMs,
+      // Pre-execution admission time is not an execution start.
+      startedAt: active.executionStarted === false ? undefined : active.startedAtMs,
       endedAt: Date.now(),
     },
   });
@@ -687,6 +722,7 @@ export function abortChatRunById(
     active.projectSessionTerminalObservedAt === undefined &&
     !active.projectSessionTerminalPersistence
   ) {
+    active.projectSessionTerminalPending = false;
     removeChatAbortControllerEntry(ops.chatAbortControllers, runId, active);
   }
   ops.agentRunSeq.delete(runId);

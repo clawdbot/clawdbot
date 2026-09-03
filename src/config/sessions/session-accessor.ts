@@ -5,6 +5,18 @@
  * Runtime callers import this barrel instead of storage-specific modules.
  */
 export * from "./session-history.js";
+export {
+  bindSessionPendingInputSources,
+  listSessionPendingInputReceipts,
+  listSessionPendingInputs,
+  readSessionPendingInput,
+  readSessionSubmittedInput,
+  stageSessionPendingInput,
+  withSessionPendingInputPersistence,
+  type SessionPendingInput,
+  type SessionPendingInputPage,
+  type SessionPendingInputReceipt,
+} from "./session-accessor.pending-inputs.js";
 export type {
   BranchSessionFromCompactionCheckpointParams,
   DeleteSessionEntryLifecycleParams,
@@ -59,6 +71,7 @@ export type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntryPatchResult,
+  SessionEntryReadScope,
   SessionEntryReadView,
   SessionEntryReplacement,
   SessionEntryReplacementSnapshot,
@@ -100,7 +113,6 @@ export type {
   SessionTranscriptWriteLockAccessorContext,
   SessionTranscriptWriteScope,
   SessionTranscriptWriteTransactionContext,
-  TemporarySessionMappingPreservationResult,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -136,7 +148,6 @@ export {
   listSessionChildEntriesReadOnly,
   listSessionEntriesCore,
   listSessionEntriesReadOnly,
-  listSessionEntriesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepair,
   rehomeSessionDeliveryReferencesForCanonicalRepairBatch,
   listSessionEntryKeysReadOnly,
@@ -149,6 +160,7 @@ export {
   patchSessionEntryTarget,
   patchSessionEntryWithKey,
   readSessionUpdatedAtCore,
+  readSessionStoreSummaryReadOnly,
   replaceSessionEntry,
   replaceSessionEntrySync,
   resolveSessionEntryAccessTarget,
@@ -187,6 +199,17 @@ export {
   type SessionParticipantRecord,
 } from "./session-accessor.sqlite-participant-projection.js";
 export {
+  listCanonicalSessionRepairFacts,
+  loadCanonicalSessionRepairEntries,
+  scanDoctorSessionEntriesStrict,
+  scanDoctorSessionEntriesTolerant,
+  type CanonicalSessionRepairFact,
+} from "./session-accessor.sqlite-canonical-inventory.js";
+export {
+  iterateDoctorSessionKeyBatches,
+  rewriteDoctorSessionEntries,
+} from "./session-accessor.sqlite-doctor-rewrite.js";
+export {
   applySessionEntryLifecycleMutation,
   applySessionEntryReplacements,
   applySessionPatchProjection,
@@ -196,7 +219,6 @@ export {
   cleanupPluginHostSessionStore,
   cleanupSessionLifecycleArtifactsCore,
   deleteSessionEntryLifecycle,
-  preserveTemporarySessionMapping,
   purgeDeletedAgentSessionEntries,
   resetSessionEntryLifecycle,
   restoreSessionFromCompactionCheckpoint,
@@ -233,6 +255,7 @@ export {
   readLatestTranscriptAssistantText,
   readTranscriptEventAtSeqSync,
   readTranscriptRawDelta,
+  readTranscriptStatsBatchReadOnlySync,
   readTranscriptStatsSync,
   replaceTranscriptEvents,
   replaceTranscriptEventsSync,
@@ -259,9 +282,6 @@ export {
   readSessionTranscriptBoundedMessageTailPage,
   readRecentSessionTranscriptMessageEvents,
   readSessionTranscriptActivePathEntryRelation,
-  readSessionTranscriptMessageAnchorPage,
-  readSessionTranscriptMessageEventById,
-  readSessionTranscriptMessageEventCount,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
   readSessionTranscriptVisibleMessageDeltaCore,
@@ -284,6 +304,7 @@ export {
   type SessionTranscriptWatermark,
 } from "./session-accessor.sqlite-transcript-watermark.js";
 export {
+  bindSessionTranscriptStoreScope,
   resolveConcreteSessionStorePath,
   resolveSessionTranscriptDatabasePath,
   resolveSessionTranscriptReadTarget,

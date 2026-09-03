@@ -1,12 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveNpmJsonEntries } from "./npm-json-output.mts";
 
-// 2026.3.12 ballooned to ~213.6 MiB unpacked and correlated with low-memory
-// startup/doctor OOM reports. 2026.4.12 intentionally stages Matrix runtime
-// dependencies, including crypto wasm, so packaged installs do not miss Docker
-// and gateway runtime dependencies. Keep the budget below the 2026.3.12 bloat
-// level while allowing that mirrored runtime surface.
-const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 202 * 1024 * 1024;
+// Both bundled fs-safe loader layouts need all native targets (~31 MiB),
+// alongside mirrored runtime dependencies and bundled documentation. Keep the
+// remaining headroom bounded so accidental build/pack duplication still fails.
+const NPM_PACK_UNPACKED_SIZE_BUDGET_BYTES = 235 * 1024 * 1024;
 
 function formatMiB(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;

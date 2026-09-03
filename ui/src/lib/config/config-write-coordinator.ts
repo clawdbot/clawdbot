@@ -1,9 +1,9 @@
 import { asNullableRecord as asConfigRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { cloneConfigObject, serializeConfigForm } from "../config-form-utils.ts";
+import { cloneConfigObject } from "../config-form-utils.ts";
 import {
-  applyConfigSnapshot,
+  rebaseConfigDraft,
   removeConfigFormValue,
   resetConfigPendingChanges,
   serializeFormForSubmit,
@@ -18,6 +18,7 @@ import {
   executeConfigExternalMutation,
   loadConfig,
   patchConfig,
+  refreshDraft,
   saveConfig,
   teardownFlushConfigDraft,
   type ConfigPatchBuildResult,
@@ -48,7 +49,7 @@ type ConfigWriteCoordinatorContext = {
   trackLoad: (key: "config" | "schema", promise: Promise<unknown>) => Promise<void>;
   resetLoads: () => void;
   resetConfigLoad: () => void;
-  refreshConnectionState: () => Promise<boolean>;
+  refreshConnectionState: (beforeApplySnapshot?: () => void) => Promise<boolean>;
   canCallConfigMethod: (
     method: ConfigMethod,
     options?: { requireAdvertisement?: boolean },
@@ -111,6 +112,14 @@ export function createConfigWriteCoordinator({
   // a post-apply write is meaningless while the gateway restarts, so the
   // teardown flush fail-closes on them).
   let manualFlightInfo: { raw: string; ackHash: string | null } | null = null;
+  const canDispatchConfigMutation = (method: ConfigMethod): boolean => {
+    const allowed = canCallConfigMethod(method);
+    if (!allowed && state.connected) {
+      state.lastError = t("configView.adminRequired");
+      publish();
+    }
+    return allowed;
+  };
   const clearAutoSaveDraftConnection = () => {
     autoSaveDraftConnection = null;
     autoSaveRequiresExplicitSubmit = false;
@@ -118,9 +127,19 @@ export function createConfigWriteCoordinator({
       state.configAutoSaveStatus = "idle";
     }
   };
+  const pauseAutoSaveDraftConnection = () => {
+    autoSaveRequiresExplicitSubmit = true;
+    // Conflict outranks the reconnect latch: the snapshot is still stale.
+    if (state.configFormMode === "form" && state.configAutoSaveStatus !== "conflict") {
+      state.configAutoSaveStatus = "paused";
+    }
+  };
   const captureAutoSaveDraftConnection = () => {
+    if (autoSaveRequiresExplicitSubmit) {
+      pauseAutoSaveDraftConnection();
+      return;
+    }
     if (
-      autoSaveRequiresExplicitSubmit ||
       autoSaveDraftConnection ||
       !state.client ||
       !state.connected ||
@@ -153,7 +172,7 @@ export function createConfigWriteCoordinator({
     autoSaveDraftConnection.client === state.client &&
     autoSaveDraftConnection.epoch === currentConfigConnectionEpoch(state);
   const reconcileAutoSaveDraftConnection = () => {
-    if (state.configFormDirty && state.configFormMode === "form") {
+    if (state.configFormDirty) {
       captureAutoSaveDraftConnection();
     } else if (autoSaveInFlight === null && manualSubmitInFlight === null) {
       clearAutoSaveDraftConnection();
@@ -383,15 +402,13 @@ export function createConfigWriteCoordinator({
   };
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
-    const connected = snapshot.phase === "connected";
-    const connectionChanged = state.connected !== connected;
+    const connectionChanged = state.connected !== (snapshot.phase === "connected");
     state.client = snapshot.client;
-    state.connected = connected;
+    state.connected = snapshot.phase === "connected";
     state.applySessionKey = snapshot.sessionKey;
     if (clientChanged || connectionChanged) {
       const draftBelongsToPreviousConnection =
-        state.configFormMode === "form" &&
-        (state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null);
+        state.configFormDirty || autoSaveInFlight !== null || manualSubmitInFlight !== null;
       resetLoads();
       // A dead prior-connection flight must not keep the reconnected owner's
       // explicit-operation FIFO waiting forever.
@@ -407,11 +424,7 @@ export function createConfigWriteCoordinator({
         // Save/Apply or reload before the new Gateway may receive it. The
         // latch must be visible: without a rendered state the form looks
         // normal while every subsequent edit silently never saves.
-        autoSaveRequiresExplicitSubmit = true;
-        // Conflict outranks the latch: that snapshot is stale regardless.
-        if (state.configAutoSaveStatus !== "conflict") {
-          state.configAutoSaveStatus = "paused";
-        }
+        pauseAutoSaveDraftConnection();
       }
       if (autoSaveInFlight !== null || manualSubmitInFlight !== null) {
         // The epoch guard already blocks these flights from mutating state;
@@ -449,13 +462,16 @@ export function createConfigWriteCoordinator({
           // A revert made while the write was in flight reads clean (the ack
           // never rebased the originals), so the reload below would replace
           // it with the committed bytes. Capture it for restoration.
-          const draftFormBefore =
-            state.configFormMode === "form" && !state.configFormDirty && state.configForm
-              ? cloneConfigObject(state.configForm)
-              : null;
-          const draftRawBefore = draftFormBefore ? serializeConfigForm(draftFormBefore) : null;
-          const reconcile = refreshConnectionState();
-          void reconcile.then((loaded) => {
+          const captureDraft = () => ({
+            form: cloneConfigObject(state.configForm ?? {}),
+            raw: state.configRaw,
+            mode: state.configFormMode,
+            submittedRaw: state.configFormDirty ? serializeFormForSubmit(state) : state.configRaw,
+          });
+          let draftBefore: ReturnType<typeof captureDraft> | null = null;
+          void refreshConnectionState(() => {
+            draftBefore = state.configFormDirty ? null : captureDraft();
+          }).then((loaded) => {
             if (isDisposed()) {
               return;
             }
@@ -474,43 +490,30 @@ export function createConfigWriteCoordinator({
             // other server content keeps the old base and conflicts instead
             // of clobbering a foreign writer.
             if (interruptedRaw !== null && state.configSnapshot?.raw === interruptedRaw) {
-              const freshHash = state.configSnapshot.hash ?? null;
               if (state.configSnapshot.appliedConfigHash === undefined) {
                 state.configNeedsApply = true;
               }
-              if (state.configFormDirty) {
-                if (serializeFormForSubmit(state) === interruptedRaw) {
-                  // The lost acknowledgement was the only missing event: the
-                  // retained bytes are already authoritative, so no draft
-                  // remains to submit on the replacement connection.
-                  applyConfigSnapshot(state, state.configSnapshot, {
-                    discardPendingChanges: true,
-                  });
-                  clearAutoSaveDraftConnection();
-                } else {
-                  state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
-                }
-              } else if (
-                draftFormBefore &&
-                draftRawBefore !== null &&
-                draftRawBefore !== interruptedRaw
-              ) {
-                // Reverted-while-in-flight: the clean-looking pre-reload
-                // draft differs from the committed bytes, so it was a real
-                // revert. Restore it as a dirty draft on the fresh base so
-                // the rescheduled autosave writes it back.
-                state.configForm = draftFormBefore;
-                state.configRaw = draftRawBefore;
-                state.configFormMode = "form";
+              const pendingDraft = state.configFormDirty ? captureDraft() : draftBefore;
+              // Rebase originals and hash together, then retain newer edits or
+              // a pre-ack revert. Raw bytes and mode stay manual-save-only.
+              if (pendingDraft && pendingDraft.submittedRaw !== interruptedRaw) {
+                rebaseConfigDraft(state);
+                state.configForm = pendingDraft.form;
+                state.configRaw = pendingDraft.raw;
+                state.configFormMode = pendingDraft.mode;
                 state.configFormDirty = true;
-                state.configDraftBaseHash = freshHash ?? state.configDraftBaseHash;
+                pauseAutoSaveDraftConnection();
+              } else {
+                resetConfigPendingChanges(state);
+                state.configAutoSaveStatus = "idle";
+                clearAutoSaveDraftConnection();
               }
             }
             publish();
             reconcileAppliedRefresh();
           });
         } else {
-          void refreshConnectionState().then(() => reconcileAppliedRefresh());
+          void refreshDraft(state, refreshConnectionState, publish, reconcileAppliedRefresh);
         }
       }
     }
@@ -559,25 +562,22 @@ export function createConfigWriteCoordinator({
       false,
       {
         flushScheduledDraft: true,
-        canDispatch: () => canCallConfigMethod("config.patch"),
+        canDispatch: () => canDispatchConfigMutation("config.patch"),
       },
     ).finally(() => {
       scheduleAutoSave();
     });
   };
+  const mutateDraft = (mutation: () => void) => {
+    mutate(mutation);
+    reconcileAutoSaveDraftConnection();
+    scheduleAutoSave();
+  };
   return {
     prepareDiscard: drainWritesForDiscard,
-    patchForm: (path, value) => {
-      mutate(() => updateConfigFormValue(state, path, value));
-      reconcileAutoSaveDraftConnection();
-      scheduleAutoSave();
-    },
-    removeFormValue: (path) => {
-      mutate(() => removeConfigFormValue(state, path));
-      reconcileAutoSaveDraftConnection();
-      scheduleAutoSave();
-    },
-    setRaw: (value) => mutate(() => updateConfigRawValue(state, value)),
+    patchForm: (path, value) => mutateDraft(() => updateConfigFormValue(state, path, value)),
+    removeFormValue: (path) => mutateDraft(() => removeConfigFormValue(state, path)),
+    setRaw: (value) => mutateDraft(() => updateConfigRawValue(state, value)),
     resetDraft: () => {
       cancelScheduledAutoSave();
       mutate(() => resetConfigPendingChanges(state));
@@ -643,7 +643,7 @@ export function createConfigWriteCoordinator({
     },
     save: (options = {}) => {
       const canDispatch = () =>
-        canCallConfigMethod("config.set") && (options.canDispatch?.() ?? true);
+        canDispatchConfigMutation("config.set") && (options.canDispatch?.() ?? true);
       return !canDispatch()
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
@@ -669,7 +669,7 @@ export function createConfigWriteCoordinator({
           );
     },
     apply: () =>
-      !canCallConfigMethod("config.apply")
+      !canDispatchConfigMutation("config.apply")
         ? Promise.resolve(false)
         : afterPendingWritesSettled(
             async () => {
@@ -686,7 +686,9 @@ export function createConfigWriteCoordinator({
                 return false;
               }
               try {
-                const applied = await applyConfig(state, () => canCallConfigMethod("config.apply"));
+                const applied = await applyConfig(state, () =>
+                  canDispatchConfigMutation("config.apply"),
+                );
                 reconcileAutoSaveDraftConnection();
                 return applied;
               } finally {
@@ -694,10 +696,10 @@ export function createConfigWriteCoordinator({
               }
             },
             false,
-            { canDispatch: () => canCallConfigMethod("config.apply") },
+            { canDispatch: () => canDispatchConfigMutation("config.apply") },
           ),
     stageDefaultAgent: (agentId) => {
-      if (!canCallConfigMethod("config.set")) {
+      if (!canDispatchConfigMutation("config.set")) {
         return false;
       }
       const changed = stageDefaultAgentConfigEntry(state, agentId);
@@ -712,11 +714,11 @@ export function createConfigWriteCoordinator({
     // scheduled autosave into a flight first (the settle below drains it) and
     // re-arm the debounce after so a dirty form is never left timer-less.
     patch: (options) =>
-      canCallConfigMethod("config.patch") && (options.canDispatch?.() ?? true)
+      canDispatchConfigMutation("config.patch") && (options.canDispatch?.() ?? true)
         ? queueConfigPatch(() => ({ options }))
         : Promise.resolve(false),
     patchFromSnapshot: (build) =>
-      canCallConfigMethod("config.patch")
+      canDispatchConfigMutation("config.patch")
         ? queueConfigPatch(() => {
             const config = resolveEditableSnapshotConfig(state.configSnapshot);
             return config
@@ -726,7 +728,7 @@ export function createConfigWriteCoordinator({
         : Promise.resolve(false),
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
-      options: RuntimeConfigExternalMutationOptions = {},
+      options: RuntimeConfigExternalMutationOptions<T> = {},
     ): Promise<RuntimeConfigExternalMutationResult<T>> => {
       const mutationClient = state.client;
       const mutationConnectionEpoch = currentConfigConnectionEpoch(state);

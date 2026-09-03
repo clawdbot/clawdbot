@@ -25,6 +25,7 @@ vi.mock("node:child_process", async () => {
 });
 
 let killProcessTree: typeof import("./kill-tree.js").killProcessTree;
+let signalPtySessionTree: typeof import("./kill-tree.js").signalPtySessionTree;
 let signalProcessTree: typeof import("./kill-tree.js").signalProcessTree;
 
 function expectTaskkillCall(index: number, args: string[]) {
@@ -55,7 +56,7 @@ describe("killProcessTree", () => {
   let killSpy: ReturnType<typeof vi.spyOn>;
 
   beforeAll(async () => {
-    ({ killProcessTree, signalProcessTree } = await import("./kill-tree.js"));
+    ({ killProcessTree, signalProcessTree, signalPtySessionTree } = await import("./kill-tree.js"));
   });
 
   beforeEach(() => {
@@ -389,6 +390,28 @@ describe("killProcessTree", () => {
       expect(killSpy).toHaveBeenCalledTimes(1);
       expect(killSpy).toHaveBeenCalledWith(-7777, "SIGTERM");
       expect(killSpy).not.toHaveBeenCalledWith(-7777, "SIGKILL");
+    });
+  });
+
+  it("rescans a PTY session for job-control groups created after the first snapshot", async () => {
+    killSpy.mockImplementation(() => true);
+    spawnSyncMock
+      .mockReturnValueOnce({ status: 0, stdout: "ttys001\n" })
+      .mockReturnValueOnce({ status: 0, stdout: "9000 9000\n9001 9001\n" })
+      .mockReturnValueOnce({ status: 0, stdout: "9002 9002\n" });
+
+    await withMockedPlatform("darwin", async () => {
+      signalPtySessionTree(9000, "SIGKILL");
+
+      expect(spawnSyncMock).toHaveBeenCalledTimes(3);
+      expect(spawnSyncMock.mock.calls[1]?.[1]).toEqual(["-t", "ttys001", "-o", "pid=,pgid="]);
+      expect(spawnSyncMock.mock.calls[2]?.[1]).toEqual(spawnSyncMock.mock.calls[1]?.[1]);
+      expect(killSpy).toHaveBeenCalledWith(-9002, "SIGKILL");
+      expect(killSpy).toHaveBeenCalledWith(9002, "SIGKILL");
+      const leaderGroupCall = killSpy.mock.calls.findIndex((call: unknown[]) => call[0] === -9000);
+      expect(spawnSyncMock.mock.invocationCallOrder[2]).toBeLessThan(
+        killSpy.mock.invocationCallOrder[leaderGroupCall]!,
+      );
     });
   });
 

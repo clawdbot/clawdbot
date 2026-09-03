@@ -20,12 +20,12 @@ import {
   buildProviderRequestDispatcherPolicy,
   resolveProviderRequestPolicyConfig,
   type ModelProviderRequestTransportOverrides,
-  type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
 import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
+import { bufferToBlobPart } from "../plugin-sdk/blob-runtime.js";
 import {
   executeProviderOperationWithRetry,
   isTransientProviderHttpStatus,
@@ -62,7 +62,7 @@ export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?
   return baseName;
 }
 
-/** Builds provider-compatible multipart form data for audio transcription requests. */
+/** Places options before the audio file so streaming multipart parsers can apply them. */
 export function buildAudioTranscriptionFormData(params: {
   buffer: Buffer;
   fileName?: string;
@@ -70,17 +70,16 @@ export function buildAudioTranscriptionFormData(params: {
   fields?: Record<string, string | number | boolean | undefined>;
 }): FormData {
   const form = new FormData();
-  const bytes = new Uint8Array(params.buffer);
-  const blob = new Blob([bytes], {
+  const blob = new Blob([bufferToBlobPart(params.buffer)], {
     type: params.mime ?? "application/octet-stream",
   });
-  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
   for (const [name, value] of Object.entries(params.fields ?? {})) {
     const text = typeof value === "string" ? value.trim() : value == null ? "" : String(value);
     if (text) {
       form.append(name, text);
     }
   }
+  form.append("file", blob, resolveAudioTranscriptionUploadFileName(params.fileName, params.mime));
   return form;
 }
 
@@ -386,7 +385,6 @@ type ResolvedProviderHttpRequestConfig = {
   allowPrivateNetwork: boolean;
   headers: Headers;
   dispatcherPolicy?: PinnedDispatcherPolicy;
-  requestConfig: ResolvedProviderRequestConfig;
 };
 
 type ResolvedProviderHttpRequestConfigWithOriginTrust = ResolvedProviderHttpRequestConfig & {
@@ -430,11 +428,7 @@ function resolveProviderHttpRequestConfigWithOriginTrustInternal(params: {
     allowPrivateNetwork: requestConfig.allowPrivateNetwork,
     headers,
     dispatcherPolicy: buildProviderRequestDispatcherPolicy(requestConfig),
-    requestConfig,
-    trustConfiguredBaseUrlOrigin:
-      !requestConfig.privateNetworkExplicitlyDenied &&
-      (requestConfig.policy.endpointClass === "custom" ||
-        requestConfig.policy.endpointClass === "local"),
+    trustConfiguredBaseUrlOrigin: requestConfig.trustConfiguredBaseUrlOrigin,
   };
 }
 
@@ -447,7 +441,6 @@ export function resolveProviderHttpRequestConfig(
     allowPrivateNetwork: resolved.allowPrivateNetwork,
     headers: resolved.headers,
     dispatcherPolicy: resolved.dispatcherPolicy,
-    requestConfig: resolved.requestConfig,
   };
 }
 

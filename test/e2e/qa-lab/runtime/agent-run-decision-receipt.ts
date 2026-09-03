@@ -9,7 +9,10 @@ import {
   QA_EVIDENCE_FILENAME,
   type QaEvidenceSummaryJson,
 } from "../../../../extensions/qa-lab/src/evidence-summary.js";
-import { startQaGatewayChild } from "../../../../extensions/qa-lab/src/gateway-child.js";
+import {
+  createQaGatewayChild,
+  type QaGatewayChild,
+} from "../../../../extensions/qa-lab/src/gateway-child.js";
 import { startQaMockOpenAiServer } from "../../../../extensions/qa-lab/src/providers/mock-openai/server.js";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
@@ -17,6 +20,7 @@ import {
   GatewayClient,
   startGatewayClientWhenEventLoopReady,
 } from "../../../../src/plugin-sdk/gateway-runtime.js";
+import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.js";
 
 const SCENARIO_ID = "agent-run-decision-receipt";
@@ -46,11 +50,11 @@ function parseOptions(argv: readonly string[]): ProducerOptions {
   };
 }
 
-function parseJson<T>(raw: string, label: string): T {
+function parseJson(raw: string, label: string): AuditRunInspectResult {
   try {
-    return JSON.parse(raw) as T;
+    return JSON.parse(raw) as AuditRunInspectResult;
   } catch (error) {
-    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`);
+    throw new Error(`${label} was not JSON: ${formatErrorMessage(error)}`, { cause: error });
   }
 }
 
@@ -58,10 +62,7 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function findApprovalRunId(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  approvalId: string,
-): string {
+function findApprovalRunId(gateway: QaGatewayChild, approvalId: string): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -94,9 +95,7 @@ function findApprovalRunId(
   }
 }
 
-function assertNoGenericApprovalDuplicate(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): void {
+function assertNoGenericApprovalDuplicate(gateway: QaGatewayChild): void {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -109,11 +108,18 @@ function assertNoGenericApprovalDuplicate(
       .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
       .get("execution_decision_facts");
     if (table) {
-      const count = database
-        .prepare("SELECT COUNT(*) AS count FROM execution_decision_facts")
-        .get() as { count: number };
-      if (count.count !== 0) {
-        throw new Error("operator approval was duplicated into execution_decision_facts");
+      const rows = database
+        .prepare(
+          `SELECT action_family, reason_code, owner
+           FROM execution_decision_facts
+           WHERE owner = 'tool-action' AND reason_code = 'generic_action_attributed'
+           ORDER BY occurred_at, receipt_id`,
+        )
+        .all();
+      if (rows.length !== 0) {
+        throw new Error(
+          `operator approval was duplicated into execution_decision_facts: ${JSON.stringify(rows)}`,
+        );
       }
     }
   } finally {
@@ -121,10 +127,7 @@ function assertNoGenericApprovalDuplicate(
   }
 }
 
-function readApprovalToolCallRef(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-  approvalId: string,
-): string {
+function readApprovalToolCallRef(gateway: QaGatewayChild, approvalId: string): string {
   const stateDir = gateway.runtimeEnv.OPENCLAW_STATE_DIR;
   if (!stateDir) {
     throw new Error("QA Gateway did not expose its isolated state directory");
@@ -146,8 +149,14 @@ function readApprovalToolCallRef(
 }
 
 function requireDeniedApproval(result: AuditRunInspectResult) {
-  const receipt = result.decisions.find(
-    (candidate) => candidate.source.owner === "operator_approvals",
+  const receipt = result.decisionDisplays.find(
+    (
+      candidate,
+    ): candidate is typeof candidate & {
+      provenance: { state: "verified"; producer: "operator-approval" };
+    } =>
+      candidate.provenance.state === "verified" &&
+      candidate.provenance.producer === "operator-approval",
   );
   if (!receipt) {
     throw new Error("audit inspection omitted the authoritative approval receipt");
@@ -156,9 +165,9 @@ function requireDeniedApproval(result: AuditRunInspectResult) {
     receipt.decision.outcome !== "denied" ||
     receipt.decision.reasonCode !== "operator_approval_denied_by_reviewer" ||
     receipt.enforcement.coverageState !== "enforced" ||
-    !receipt.enforcement.policyRefs.includes("operator-approval:human-decision") ||
+    receipt.enforcement.policyCount !== 2 ||
     receipt.enforcement.contextFieldsUsed.join(",") !== "contextId,executionId,runId" ||
-    receipt.enforcement.grantRefs.length !== 0 ||
+    receipt.enforcement.grantCount !== 0 ||
     receipt.remediation[0]?.code !== "review_and_request_again"
   ) {
     throw new Error("approval receipt did not preserve denial, enforcement, and remediation");
@@ -167,7 +176,7 @@ function requireDeniedApproval(result: AuditRunInspectResult) {
 }
 
 async function waitForPendingApproval(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
+  gateway: QaGatewayChild,
   agentFailure: () => string | undefined,
 ): Promise<string> {
   const deadline = Date.now() + 30_000;
@@ -186,9 +195,7 @@ async function waitForPendingApproval(
   throw new Error("trusted agent exec approval did not become pending");
 }
 
-async function startApprovalRoute(
-  gateway: Awaited<ReturnType<typeof startQaGatewayChild>>,
-): Promise<GatewayClient> {
+async function startApprovalRoute(gateway: QaGatewayChild): Promise<GatewayClient> {
   let resolveConnected!: () => void;
   let rejectConnected!: (error: Error) => void;
   const connected = new Promise<void>((resolve, reject) => {
@@ -224,10 +231,11 @@ async function startApprovalRoute(
 
 async function runProof(options: ProducerOptions): Promise<string> {
   const mock = await startQaMockOpenAiServer();
-  let gateway: Awaited<ReturnType<typeof startQaGatewayChild>> | undefined;
+  const gatewayOwner = createQaGatewayChild();
+  let gateway: QaGatewayChild | undefined;
   let approvalRoute: GatewayClient | undefined;
   try {
-    gateway = await startQaGatewayChild({
+    gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
@@ -295,24 +303,24 @@ async function runProof(options: ProducerOptions): Promise<string> {
     ) {
       throw new Error("audit text omitted approval reason, durability, or remediation");
     }
-    const before = parseJson<AuditRunInspectResult>(
+    const before = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
       "pre-restart decision inspection",
     );
     const receipt = requireDeniedApproval(before);
-    const firstPage = parseJson<AuditRunInspectResult>(
+    const firstPage = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--limit", "1", "--json"]),
       "first decision page",
     );
     if (firstPage.nextDecisionCursor?.startsWith("a:") !== true) {
       throw new Error("first decision page omitted its opaque approval cursor");
     }
-    const legacyResume = parseJson<AuditRunInspectResult>(
+    const legacyResume = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--cursor", "001", "--json"]),
       "legacy numeric decision continuation",
     );
     requireDeniedApproval(legacyResume);
-    const opaqueResume = parseJson<AuditRunInspectResult>(
+    const opaqueResume = parseJson(
       await gateway.runCli([
         "audit",
         "--run",
@@ -333,7 +341,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     assertNoGenericApprovalDuplicate(gateway);
 
     await gateway.restartAfterStateMutation(async () => {});
-    const after = parseJson<AuditRunInspectResult>(
+    const after = parseJson(
       await gateway.runCli(["audit", "--run", runId, "--explain", "--json"]),
       "post-restart decision inspection",
     );
@@ -355,7 +363,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
             outcome: receipt.decision.outcome,
             reasonCode: receipt.decision.reasonCode,
             coverageState: receipt.enforcement.coverageState,
-            sourceOwner: receipt.source.owner,
+            provenanceProducer: receipt.provenance.producer,
             remediationCode: receipt.remediation[0]?.code,
           },
           firstAnswerPreserved: true,
@@ -375,7 +383,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
     return `run=${runId}; denied approval projected before/after Gateway replacement; result sha256=${sha256(serialized)}`;
   } finally {
     await approvalRoute?.stopAndWait().catch(() => approvalRoute?.stop());
-    await gateway?.stop().catch(() => undefined);
+    await stopQaGatewayFixture(gatewayOwner).catch(() => undefined);
     await mock.stop();
   }
 }
@@ -436,7 +444,7 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
     .then((exitCode) => {
       process.exitCode = exitCode;
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       console.error(formatErrorMessage(error));
       process.exitCode = 1;
     });

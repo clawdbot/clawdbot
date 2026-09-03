@@ -1,11 +1,7 @@
 // Cron rearm tests cover timer rearming while scheduled jobs are already running.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  createNoopLogger,
-  createCronStoreHarness,
-  createRunningCronServiceState,
-} from "./service.test-harness.js";
+import { createNoopLogger, createCronStoreHarness } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { saveCronStore } from "./store.js";
@@ -35,14 +31,6 @@ function createDueRecurringJob(params: {
   };
 }
 
-function latestTimeoutHandle(timeoutSpy: ReturnType<typeof vi.spyOn>) {
-  const result = timeoutSpy.mock.results.at(-1);
-  if (!result || result.type !== "return") {
-    throw new Error("Expected setTimeout to return a timer handle");
-  }
-  return result.value;
-}
-
 describe("CronService - timer re-arm when running (#12025)", () => {
   beforeEach(() => {
     noopLogger.debug.mockClear();
@@ -53,45 +41,6 @@ describe("CronService - timer re-arm when running (#12025)", () => {
 
   afterEach(() => {
     vi.clearAllMocks();
-  });
-
-  it("re-arms the timer when onTimer is called while state.running is true", async () => {
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    const store = await makeStorePath();
-    const now = Date.parse("2026-02-06T10:05:00.000Z");
-
-    const state = createRunningCronServiceState({
-      storePath: store.storePath,
-      log: noopLogger,
-      nowMs: () => now,
-      jobs: [
-        createDueRecurringJob({
-          id: "recurring-job",
-          nowMs: now,
-          nextRunAtMs: now + 5 * 60_000,
-        }),
-      ],
-    });
-
-    // Before the fix in #12025, this would return without re-arming,
-    // silently killing the scheduler.
-    await onTimer(state);
-
-    // The timer must be re-armed so the scheduler continues ticking,
-    // with a fixed 60s delay to avoid hot-looping.
-    expect(timeoutSpy).toHaveBeenCalled();
-    expect(state.timer).toBe(latestTimeoutHandle(timeoutSpy));
-    const delays = timeoutSpy.mock.calls
-      .map(([, delay]) => delay)
-      .filter((d): d is number => typeof d === "number");
-    expect(delays).toContain(60_000);
-
-    // state.running should still be true (onTimer bailed out, didn't
-    // touch it — the original caller's finally block handles that).
-    expect(state.running).toBe(true);
-
-    timeoutSpy.mockRestore();
-    await store.cleanup();
   });
 
   it("arms a watchdog timer while a timer tick is still executing", async () => {

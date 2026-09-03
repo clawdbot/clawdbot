@@ -7,7 +7,9 @@ export type WorkerSessionToolSource = {
   agentId: string;
   sessionKey: string;
   sessionId: string;
-  turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]>;
+  turnClaim: NonNullable<WorkerConnectionIdentity["turnClaim"]> & {
+    owner: { kind: "worker"; environmentId: string; ownerEpoch: number };
+  };
   entry: NonNullable<ReturnType<typeof loadGatewaySessionEntryReadOnly>["entry"]>;
 };
 
@@ -59,7 +61,7 @@ export function resolveWorkerSessionToolSource(params: {
     agentId: placement.agentId,
     sessionKey: placement.sessionKey,
     sessionId: identity.sessionId,
-    turnClaim: claim,
+    turnClaim: { ...claim, owner: claim.owner },
     entry: loaded.entry,
   };
 }
@@ -67,7 +69,6 @@ export function resolveWorkerSessionToolSource(params: {
 export function resolveWorkerSessionToolTarget(params: {
   source: WorkerSessionToolSource;
   requestedSessionKey: string;
-  placements: WorkerSessionPlacementStore;
 }): WorkerSessionToolTarget {
   const loaded = loadGatewaySessionEntryReadOnly(params.requestedSessionKey);
   const entry = loaded.entry;
@@ -108,18 +109,12 @@ export function resolveWorkerSessionToolTarget(params: {
   if (!parentToChild && !childToParent && !siblingToSibling) {
     throw new Error("Worker sessions_send target is outside the authorized session tree");
   }
-  const targetPlacement = params.placements.get(targetSessionId);
-  if (
-    !targetPlacement ||
-    targetPlacement.state !== "active" ||
-    targetPlacement.sessionKey !== loaded.canonicalKey
-  ) {
-    throw new Error("Worker sessions_send target is not an active cloud session incarnation");
-  }
+  // Session identity owns messaging authority. Target turn admission chooses
+  // its execution placement, including Gateway-local or reclaimed workers.
   return {
-    agentId: targetPlacement.agentId,
-    sessionKey: targetPlacement.sessionKey,
-    sessionId: targetPlacement.sessionId,
+    agentId: loaded.agentId,
+    sessionKey: loaded.canonicalKey,
+    sessionId: targetSessionId,
     ...(siblingToSibling && sourceParent && sourceParentId
       ? { topologyParent: { sessionKey: sourceParent, sessionId: sourceParentId } }
       : {}),

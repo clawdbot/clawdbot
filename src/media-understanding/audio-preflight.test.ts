@@ -65,6 +65,27 @@ describe("transcribeFirstAudio", () => {
     },
   );
 
+  it("transcribes an opaque audio source identified by separate filename metadata", async () => {
+    runAudioTranscriptionMock.mockResolvedValueOnce({
+      transcript: "voice note transcript",
+      attachments: [],
+    });
+    const ctx: MsgContext = {
+      Body: "<media:audio>",
+      media: [
+        {
+          url: "https://cdn.example.test/download/opaque",
+          fileName: "voice.ogg",
+          contentType: "application/octet-stream",
+        },
+      ],
+    };
+
+    await expect(transcribeFirstAudio({ ctx, cfg: {} })).resolves.toBe("voice note transcript");
+    expect(runAudioTranscriptionMock).toHaveBeenCalledOnce();
+    expect(ctx.media?.[0]?.transcribed).toBe(true);
+  });
+
   it("skips audio preflight when audio config is explicitly disabled", async () => {
     const transcript = await transcribeFirstAudio({
       ctx: {

@@ -82,8 +82,7 @@ describe("resolveCachedMessageThreadSpec", () => {
     const session = sessionRuntime.resolveTelegramSessionState({
       chatId: CHAT_ID,
       isGroup: true,
-      isForum: true,
-      messageThreadId: TOPIC_ID,
+      threadSpec: { id: TOPIC_ID, scope: "forum" },
       senderId: 10,
       runtimeCfg: cfg,
     });

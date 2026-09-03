@@ -983,4 +983,63 @@ describe("CORE_HEALTH_CHECKS", () => {
       }),
     );
   });
+
+  it("distinguishes migratable model refs from unknown providers and unconfirmed models", async () => {
+    const check = getCheck(createCoreHealthChecks(), "core/doctor/model-references");
+
+    const findings = await check.detect({
+      mode: "doctor",
+      runtime,
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai-codex/gpt-5.6-sol",
+              fallbacks: [
+                "codex-cli/gpt-5.6-sol",
+                "groq/llama3-70b-8192",
+                "groq/llama-3.3-70b-versatile",
+                "openai/not-in-the-local-catalog",
+              ],
+            },
+            imageModel: { primary: "no-such-provider/no-such-model" },
+          },
+        },
+      },
+    });
+
+    for (const [source, target, severity] of [
+      ["openai-codex/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["codex-cli/gpt-5.6-sol", "openai/gpt-5.6-sol", "warning"],
+      ["groq/llama3-70b-8192", "groq/llama-3.3-70b-versatile", "info"],
+    ] as const) {
+      expect(findings).toContainEqual(
+        expect.objectContaining({
+          severity,
+          target: source,
+          message: `Configured model "${source}" is a legacy reference. Doctor can migrate it to "${target}".`,
+          fixHint: `Run \`openclaw doctor --fix\` to migrate this model reference to "${target}".`,
+        }),
+      );
+    }
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          severity: "info",
+          target: "openai/not-in-the-local-catalog",
+          fixHint:
+            "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+        }),
+        expect.objectContaining({
+          severity: "warning",
+          target: "no-such-provider/no-such-model",
+          fixHint:
+            "Install a plugin that declares this provider, configure it under models.providers, or remove the model reference.",
+        }),
+      ]),
+    );
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
+    );
+  });
 });

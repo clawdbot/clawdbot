@@ -1,5 +1,9 @@
 // Provider-specific media stream frame parsing and serialization.
 
+import {
+  asNullableRecord,
+  asOptionalObjectRecord,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { canonicalizeVoiceCallMediaBase64 } from "../media-base64.js";
 
 /** Normalized inbound media stream frame. */
@@ -41,9 +45,7 @@ function parseTimestampMs(value: unknown): number | undefined {
 function tryParseJson(rawMessage: string): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(rawMessage) as unknown;
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
-    }
+    return asNullableRecord(parsed);
   } catch {
     /* fall through */
   }
@@ -55,10 +57,7 @@ function readRecordField(
   record: Record<string, unknown>,
   field: string,
 ): Record<string, unknown> | undefined {
-  const value = record[field];
-  return typeof value === "object" && value !== null
-    ? (value as Record<string, unknown>)
-    : undefined;
+  return asOptionalObjectRecord(record[field]);
 }
 
 /** Parse a common provider media frame. */

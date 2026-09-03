@@ -4,6 +4,7 @@ import { createGatewayServerActiveWorkInspectors } from "./server-active-work.js
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
+  agentTerminalOwner,
   baseOpenRequest,
   makeFakePty,
   taskAgentOwner,
@@ -74,9 +75,7 @@ describe("gateway server active work inspectors", () => {
         owner: taskAgentOwner("agent:main:cron:job-1:run:run-1", "task-1"),
       }),
     );
-    await terminalSessions.open(
-      baseOpenRequest({ owner: { kind: "agent", agentSessionKey: "agent:main:main" } }),
-    );
+    await terminalSessions.open(baseOpenRequest({ owner: agentTerminalOwner("agent:main:main") }));
     const inspectors = createGatewayServerActiveWorkInspectors({
       cron: {},
       chatAbortControllers: new Map(),
@@ -88,7 +87,7 @@ describe("gateway server active work inspectors", () => {
     >);
 
     expect(inspectors.getTerminalSessions?.()).toBe(2);
-    expect(terminalSessions.closeAgentSessions("task-1")).toBe(1);
+    expect(terminalSessions.closeTaskSessions("task-1")).toBe(1);
     expect(inspectors.getTerminalSessions?.()).toBe(1);
     expect(taskPty.killed).toBe(true);
     expect(persistentPty.killed).toBe(false);

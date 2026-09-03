@@ -1,4 +1,5 @@
 // Agent command tests cover local agent runs, session routing, and command runtime behavior.
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -19,17 +20,24 @@ import * as modelSelectionModule from "../agents/model-selection.js";
 import { loadPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { managedWorktrees } from "../agents/worktrees/service.js";
 import { BASE_THINKING_LEVELS } from "../auto-reply/thinking.shared.js";
+import { readAgentRunTerminalOutcome } from "../channels/turn/agent-run-terminal-outcome.js";
 import * as runtimeSnapshotModule from "../config/runtime-snapshot.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {
   listSessionEntriesCore,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
+  replaceTranscriptEvents,
 } from "../config/sessions/session-accessor.js";
+import { addSessionMember, listSessionMembers } from "../config/sessions/session-sharing-store.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
+import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { buildOutboundBaseSessionKey } from "../infra/outbound/base-session-key.js";
 import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
@@ -44,6 +52,7 @@ import {
   loadVisibleSkills,
   loadWorkspaceSkills,
 } from "../skills/loading/workspace-skill-loader.js";
+import { resolveReusableWorkspaceSkillSnapshot } from "../skills/runtime/session-snapshot.js";
 import type { SkillEntry } from "../skills/types.js";
 import {
   createDirectOutboundTestAdapter,
@@ -139,6 +148,19 @@ vi.mock("../agents/thinking-runtime.js", () => ({
         entry.id === params.model &&
         entry.reasoning !== undefined,
     ) ?? false,
+  needsThinkHydration: (
+    catalog: Array<{ id: string; provider: string; reasoning?: boolean }> | undefined,
+    provider: string,
+    model: string,
+    agentRuntime: string,
+  ) =>
+    agentRuntime !== "openclaw" ||
+    !catalog?.some(
+      (entry) =>
+        entry.provider.toLowerCase() === provider.toLowerCase() &&
+        entry.id === model &&
+        entry.reasoning !== undefined,
+    ),
   normalizeThinkingCatalogProviders: <T extends { provider: string }>(catalog: T[]) =>
     catalog.map((entry) => ({ ...entry, provider: entry.provider.toLowerCase() })),
   resolveCandidateThinkingLevel: ({ level }: { level?: string }) => level,
@@ -286,7 +308,7 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
         onAgentEvent: params.onAgentEvent,
       } as never);
     }),
-    sessionFileHasContent: vi.fn(async () => false),
+    sessionTranscriptHasContent: vi.fn(async () => false),
   };
 });
 
@@ -313,9 +335,10 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
         payloads?: Array<{ text?: string; mediaUrl?: string | null }>;
       }) => {
         const payloads = params.payloads ?? [];
+        const deliveryResult = { payloads, meta: params.result.meta ?? {} };
         if (params.opts.json) {
-          params.runtime.log(JSON.stringify({ payloads, meta: params.result.meta ?? {} }));
-          return;
+          params.runtime.log(JSON.stringify(deliveryResult));
+          return deliveryResult;
         }
         if (params.opts.deliver && params.opts.channel === "telegram" && params.opts.to) {
           for (const payload of payloads) {
@@ -325,13 +348,14 @@ vi.mock("../agents/command/delivery.runtime.js", () => {
               verbose: false,
             });
           }
-          return;
+          return deliveryResult;
         }
         for (const payload of payloads) {
           if (payload.text) {
             params.runtime.log(payload.text);
           }
         }
+        return deliveryResult;
       },
     ),
   };
@@ -373,8 +397,6 @@ const runtime = createThrowingTestRuntime();
 async function withTempHome<T>(fn: (home: string) => Promise<T>): Promise<T> {
   return withTempHomeBase(fn, {
     prefix: "openclaw-agent-",
-    skipHomeCleanup: true,
-    skipSessionCleanup: true,
   });
 }
 
@@ -577,6 +599,361 @@ beforeEach(() => {
 });
 
 describe("agentCommand", () => {
+  it.each([false, true])(
+    "runs BOOT.md with an existing SQLite boot session and cleans up after failure=%s",
+    async (fail) => {
+      await withTempHome(async (home) => {
+        const storePath = path.join(home, "sessions.json");
+        const cfg = mockConfig(home, storePath, undefined, undefined, [
+          { id: "main", default: true },
+        ]);
+        const workspaceDir = path.join(home, "openclaw");
+        fs.mkdirSync(workspaceDir, { recursive: true });
+        fs.writeFileSync(path.join(workspaceDir, "BOOT.md"), "Check status.");
+        const priorScope = { storePath, sessionKey: "agent:main:boot", sessionId: "previous-boot" };
+        await replaceSessionEntry(priorScope, {
+          sessionId: priorScope.sessionId,
+          updatedAt: Date.now(),
+          label: "Previous boot",
+          visibility: "read-only",
+        });
+        const transcript = [
+          { type: "session", id: priorScope.sessionId, cwd: workspaceDir },
+          {
+            type: "message",
+            id: "old-message",
+            parentId: null,
+            message: { role: "user", content: "Keep this history." },
+          },
+        ];
+        await replaceTranscriptEvents(priorScope, transcript);
+        const priorEntry = loadSessionEntry(priorScope);
+        const { member } = addSessionMember(priorScope, {
+          identityId: "boot-history-reader",
+          addedBy: "operator",
+        });
+        const bootSessions = new Map<string, string>();
+        vi.mocked(runEmbeddedAgent).mockImplementation(async (params) => {
+          const sessionKey = expectDefined(params.sessionKey, "boot session key");
+          expect(params.sessionId).not.toBe(priorScope.sessionId);
+          expect(getBootEchoContextForSession(sessionKey)).toContain("Check status.");
+          bootSessions.set(sessionKey, params.sessionId);
+          await replaceTranscriptEvents({ storePath, sessionKey, sessionId: params.sessionId }, [
+            { type: "session", id: params.sessionId, cwd: workspaceDir },
+          ]);
+          if (fail) {
+            throw new Error("boot runtime failed");
+          }
+          return createDefaultAgentResult();
+        });
+
+        for (let restart = 0; restart < 2; restart++) {
+          const result = await runBootOnce({ cfg, deps: {}, workspaceDir });
+          expect(result).toEqual(
+            fail
+              ? { status: "failed", reason: "agent run failed: boot runtime failed" }
+              : { status: "ran" },
+          );
+          expect(vi.mocked(runEmbeddedAgent).mock.calls).toHaveLength(restart + 1);
+          expect(loadSessionEntry(priorScope)).toEqual(priorEntry);
+          expect(await loadTranscriptEvents(priorScope)).toEqual(transcript);
+          expect(listSessionMembers(priorScope)).toEqual([member]);
+          expect(listSessionEntriesCore({ storePath }).map(({ sessionKey }) => sessionKey)).toEqual(
+            [priorScope.sessionKey],
+          );
+          for (const [sessionKey, sessionId] of bootSessions) {
+            expect(getBootEchoContextForSession(sessionKey)).toBeUndefined();
+            expect(await loadTranscriptEvents({ storePath, sessionKey, sessionId })).toEqual([]);
+          }
+        }
+        expect(bootSessions.size).toBe(2);
+      });
+    },
+  );
+
+  it.each([
+    { name: "completed stop", meta: { stopReason: "stop" }, outcome: "completed" },
+    {
+      name: "structured blocked result",
+      meta: {
+        replayInvalid: true,
+        livenessState: "blocked" as const,
+        finalAssistantVisibleText: "Prompt exceeds model context",
+        finalAssistantRawText: "Prompt exceeds model context",
+        error: { kind: "context_overflow" as const, message: "Prompt exceeds model context" },
+      },
+      outcome: "failed",
+    },
+    { name: "cancelled result", meta: { aborted: true, stopReason: "stop" }, outcome: "failed" },
+    {
+      name: "provider timeout",
+      meta: { aborted: true, stopReason: "timeout", timeoutPhase: "provider" as const },
+      outcome: "failed",
+    },
+    { name: "yielded turn", meta: { yielded: true }, outcome: "completed" },
+    {
+      name: "exhausted fallback",
+      meta: {
+        error: {
+          kind: "incomplete_turn" as const,
+          message: "Incomplete terminal response",
+          fallbackSafe: true,
+          terminalPresentation: true,
+        },
+      },
+      outcome: "failed",
+    },
+    { name: "callback error", meta: {}, fault: "callback", outcome: "failed" },
+    { name: "late cancellation", meta: {}, fault: "abort", outcome: "failed" },
+  ])(
+    "hands off the terminal outcome after real delivery projection: $name",
+    async ({ meta, outcome, fault }) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const controller = new AbortController();
+        const text = meta.error?.message ?? "ok";
+        const rawResult = {
+          ...createDefaultAgentResult(),
+          payloads: [{ text, ...(meta.error ? { isError: true } : {}) }],
+          meta: { ...createDefaultAgentResult().meta, ...meta },
+        };
+        vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
+          if (fault === "callback") {
+            await params.onAgentEvent?.({
+              stream: "lifecycle",
+              data: { phase: "finishing", error: "Deferred provider failure" },
+            });
+          }
+          return rawResult;
+        });
+        const actualDelivery = await vi.importActual<
+          typeof import("../agents/command/delivery.js")
+        >("../agents/command/delivery.js");
+        vi.mocked(deliverAgentCommandResult).mockImplementationOnce(async (params) => {
+          const projected = await actualDelivery.deliverAgentCommandResult(params);
+          if (fault === "abort") {
+            controller.abort();
+          }
+          return projected;
+        });
+
+        const result = await agentCommand(
+          { message: "probe", agentId: "main", json: true, abortSignal: controller.signal },
+          runtime,
+        );
+
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+        expect(result?.payloads).toEqual([{ text, mediaUrl: null }]);
+        expect(vi.mocked(runtime.log).mock.calls.at(-1)?.[0]).toBe(JSON.stringify(result, null, 2));
+        expect(readAgentRunTerminalOutcome(rawResult)).toBeUndefined();
+        expect(readAgentRunTerminalOutcome(result)).toBe(outcome);
+      });
+    },
+  );
+
+  it("keeps best-effort delivery failure separate from the completed run outcome", async () => {
+    await withTempHome(async (home) => {
+      mockConfig(home, path.join(home, "sessions.json"));
+      const actualDelivery = await vi.importActual<typeof import("../agents/command/delivery.js")>(
+        "../agents/command/delivery.js",
+      );
+      vi.mocked(deliverAgentCommandResult).mockImplementationOnce(
+        actualDelivery.deliverAgentCommandResult,
+      );
+
+      const result = await agentCommand(
+        {
+          message: "probe",
+          agentId: "main",
+          json: true,
+          deliver: true,
+          channel: "webchat",
+          bestEffortDeliver: true,
+        },
+        runtime,
+      );
+
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      expect(result?.deliveryStatus).toMatchObject({ status: "failed", succeeded: false });
+      expect(readAgentRunTerminalOutcome(result)).toBe("completed");
+    });
+  });
+
+  it.each(["rejection", "cancellation"] as const)(
+    "settles deferred cleanup %s before handing off the reply",
+    async (fault) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const controller = new AbortController();
+        const failure = new Error("Deferred cleanup failed");
+        vi.mocked(attemptExecutionRuntime.runAgentAttempt).mockImplementationOnce(
+          async (params) => {
+            params.deferredLifecycle?.adopt({
+              complete: async () => {
+                if (fault === "rejection") {
+                  throw failure;
+                }
+                controller.abort();
+              },
+              discard: () => {},
+            });
+            return createDefaultAgentResult();
+          },
+        );
+
+        const command = agentCommand(
+          { message: "probe", agentId: "main", abortSignal: controller.signal },
+          runtime,
+        );
+        if (fault === "rejection") {
+          await expect(command).rejects.toBe(failure);
+        } else {
+          expect(readAgentRunTerminalOutcome(await command)).toBe("failed");
+        }
+        expect(runtime.log).toHaveBeenCalledWith("ok");
+      });
+    },
+  );
+
+  it("carries an external cwd into the direct agent session skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const executionWorkspace = path.join(home, "external-repo");
+      mockConfig(home, store);
+
+      await agentCommand(
+        {
+          message: "inspect this repo",
+          agentId: "main",
+          cwd: executionWorkspace,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(executionWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
+  it.each([
+    ["local", undefined, false],
+    ["local", true, false],
+    ["ingress", undefined, true],
+    ["ingress", true, false],
+  ] as const)(
+    "owns skill watching for %s runs with oneShotCliRun=%s",
+    async (entrypoint, oneShotCliRun, watch) => {
+      await withTempHome(async (home) => {
+        mockConfig(home, path.join(home, "sessions.json"));
+        const opts = { message: "inspect skills", agentId: "main", oneShotCliRun };
+        if (entrypoint === "ingress") {
+          await agentCommandFromIngress({ ...opts, allowModelOverride: false }, runtime);
+        } else {
+          await agentCommand(opts, runtime);
+        }
+
+        expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+          expect.objectContaining({ watch }),
+        );
+      });
+    },
+  );
+
+  it("does not scaffold an implicit ACP workspace when the command supplies cwd", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const repository = path.join(home, "repository");
+      const configuredWorkspace = path.join(repository, ".openclaw", "workspace");
+      fs.mkdirSync(repository, { recursive: true });
+      execFileSync("git", ["-C", repository, "init", "-b", "main"]);
+      fs.writeFileSync(path.join(repository, "README.md"), "base\n");
+      execFileSync("git", ["-C", repository, "add", "README.md"]);
+      mockConfig(home, store, { workspace: configuredWorkspace }, undefined, [
+        { id: "codex", runtime: { type: "acp", acp: { agent: "codex" } } },
+      ]);
+      const actualWorkspace =
+        await vi.importActual<typeof import("../agents/workspace.js")>("../agents/workspace.js");
+      vi.mocked(ensureAgentWorkspace).mockImplementationOnce((params) =>
+        actualWorkspace.ensureAgentWorkspace(params),
+      );
+
+      const prepared = await prepareAgentCommandExecution(
+        {
+          message: "inspect this repo",
+          agentId: "codex",
+          sessionId: "explicit-cwd-acp",
+          cwd: repository,
+        },
+        runtime,
+      );
+      expect(prepared.workspaceDir).toBe(configuredWorkspace);
+      const implicitWorkspace = configuredWorkspace;
+
+      expect(fs.existsSync(implicitWorkspace)).toBe(true);
+      expect(fs.existsSync(path.join(implicitWorkspace, "AGENTS.md"))).toBe(false);
+      expect(fs.existsSync(path.join(implicitWorkspace, ".git"))).toBe(false);
+      expect(() => execFileSync("git", ["-C", repository, "add", "-A"])).not.toThrow();
+    });
+  });
+
+  it("uses the recorded canonical workspace for a managed-worktree skill snapshot", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:dashboard:managed-worktree";
+      const canonicalWorkspace = path.join(home, "project");
+      fs.mkdirSync(canonicalWorkspace, { recursive: true });
+      execFileSync("git", ["-C", canonicalWorkspace, "init", "-b", "main"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "config", "user.name", "OpenClaw Test"]);
+      execFileSync("git", [
+        "-C",
+        canonicalWorkspace,
+        "config",
+        "user.email",
+        "openclaw-test@example.invalid",
+      ]);
+      fs.writeFileSync(path.join(canonicalWorkspace, "README.md"), "base\n");
+      execFileSync("git", ["-C", canonicalWorkspace, "add", "README.md"]);
+      execFileSync("git", ["-C", canonicalWorkspace, "commit", "-m", "initial"]);
+      mockConfig(home, store);
+      const worktree = await managedWorktrees.create({
+        repoRoot: canonicalWorkspace,
+        name: "managed",
+        ownerKind: "session",
+        ownerId: sessionKey,
+      });
+      await writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "managed-worktree-session",
+          spawnedCwd: worktree.path,
+          worktree: {
+            id: worktree.id,
+            branch: worktree.branch,
+            repoRoot: worktree.repoRoot,
+            canonicalWorkspaceDir: canonicalWorkspace,
+          },
+        },
+      });
+
+      await agentCommandFromIngress(
+        {
+          message: "inspect this repo",
+          sessionKey,
+          allowModelOverride: false,
+        },
+        runtime,
+      );
+
+      expect(resolveReusableWorkspaceSkillSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          executionSkillsDir: path.join(canonicalWorkspace, "skills"),
+        }),
+      );
+    });
+  });
+
   it.each(["Echo $PATH exactly.", String.raw`Keep \$release_notes literal.`])(
     "does not discover skills for literal dollar input: %s",
     async (message) => {
@@ -768,6 +1145,7 @@ describe("agentCommand", () => {
             agentId: "main",
             runId: "public-ingress-run",
             allowModelOverride: false,
+            senderIsOwner: true,
             mainRestartRecoveryAdmitted: true,
             mainRestartRecoveryAttempt: 1,
             mainRestartRecoveryOwnerLease: {
@@ -796,6 +1174,9 @@ describe("agentCommand", () => {
         expect(prepare).toHaveBeenCalledWith(
           expect.objectContaining({ admission: undefined, runId: "public-ingress-run" }),
         );
+        expect(
+          vi.mocked(attemptExecutionRuntime.runAgentAttempt).mock.calls.at(-1)?.[0].opts,
+        ).toMatchObject({ senderIsOwner: false });
       } finally {
         prepare.mockRestore();
         if (priorDescriptor) {
@@ -1184,7 +1565,7 @@ describe("agentCommand", () => {
           },
           runtime,
         ),
-      ).rejects.toThrow(`Session "${sessionKey}" changed while starting work. Retry.`);
+      ).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
       expect(runEmbeddedAgent).not.toHaveBeenCalled();
     });
   });
@@ -2256,16 +2637,18 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:incident-42");
 
-      await agentCommand({ message: "hi", agentId: "ops", sessionKey: "global" }, runtime);
+      for (const sessionKey of ["global", "unknown"]) {
+        await agentCommand({ message: "hi", agentId: "ops", sessionKey }, runtime);
 
-      callArgs = getLastEmbeddedCall();
-      expect(callArgs?.agentId).toBe("ops");
-      expect(callArgs?.sessionKey).toBe("agent:ops:global");
-      expectSqliteSessionFileMarker({
-        agentId: "ops",
-        sessionFile: callArgs?.sessionFile,
-        storePath: store,
-      });
+        callArgs = getLastEmbeddedCall();
+        expect(callArgs?.agentId).toBe("ops");
+        expect(callArgs?.sessionKey).toBe(sessionKey);
+        expectSqliteSessionFileMarker({
+          agentId: "ops",
+          sessionFile: callArgs?.sessionFile,
+          storePath: store,
+        });
+      }
     });
   });
 

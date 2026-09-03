@@ -2,19 +2,19 @@
 import { isAbsolute, resolve } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Command } from "commander";
-import { listAgentIds } from "openclaw/plugin-sdk/agent-runtime";
+import { listAgentIds, resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-scope-runtime";
 import {
   exitCodeFromFindings,
   healthFindingMeetsSeverity,
   parseHealthFindingSeverity,
   readConfigFileSnapshot,
   resolveAgentWorkspaceDir,
-  resolveDefaultAgentId,
   type HealthCheckContext,
   type HealthFinding,
 } from "openclaw/plugin-sdk/health";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { defaultRuntime as cliRuntime } from "openclaw/plugin-sdk/runtime";
+import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import { POLICY_FIX_METADATA_BY_CHECK_ID } from "./doctor/fix-metadata.js";
 import { POLICY_CHECK_IDS, evaluatePolicy } from "./doctor/register.js";
 import {
@@ -23,17 +23,10 @@ import {
 } from "./policy-conformance.js";
 import { createPolicyAttestation } from "./policy-state.js";
 
-type PolicyCommandRuntime = {
-  writeStdout(value: string): void;
-  error(value: string): void;
-  sleep?(ms: number): Promise<void>;
-};
-
 interface PolicyCheckOptions {
   readonly agent?: string;
   readonly json?: boolean;
   readonly severityMin?: string;
-  readonly cwd?: string;
 }
 
 interface PolicyWatchOptions extends PolicyCheckOptions {
@@ -46,7 +39,6 @@ interface PolicyCompareOptions {
   readonly baseline?: string;
   readonly policy?: string;
   readonly json?: boolean;
-  readonly cwd?: string;
 }
 
 type PolicyCheckReport = {
@@ -58,18 +50,6 @@ type PolicyCheckReport = {
   readonly findings: readonly Record<string, unknown>[];
   readonly expectedAttestationHash?: string;
   readonly exitCode: 0 | 1;
-};
-
-const defaultRuntime: PolicyCommandRuntime = {
-  writeStdout(value) {
-    process.stdout.write(value);
-  },
-  error(value) {
-    cliRuntime.error(value);
-  },
-  sleep(ms) {
-    return sleep(ms);
-  },
 };
 
 export function registerPolicyCli(program: Command): void {
@@ -109,11 +89,8 @@ export function registerPolicyCli(program: Command): void {
     });
 }
 
-async function policyCompareCommand(
-  options: PolicyCompareOptions,
-  runtime: PolicyCommandRuntime = defaultRuntime,
-): Promise<number> {
-  try {
+async function policyCompareCommand(options: PolicyCompareOptions): Promise<number> {
+  return runPolicyCommand(async () => {
     if (options.baseline === undefined || options.baseline.trim() === "") {
       throw new Error("Missing required --baseline value.");
     }
@@ -121,63 +98,51 @@ async function policyCompareCommand(
     const report = await buildPolicyConformanceReport({
       baselinePath: options.baseline,
       policyPath,
-      cwd: options.cwd,
     });
-    writePolicyConformanceReport(report, options, runtime);
+    writePolicyConformanceReport(report, options);
     return report.ok ? 0 : 1;
-  } catch (err) {
-    runtime.error(err instanceof Error ? err.message : String(err));
-    return 2;
-  }
+  });
 }
 
-async function policyCheckCommand(
-  options: PolicyCheckOptions,
-  runtime: PolicyCommandRuntime = defaultRuntime,
-): Promise<number> {
-  try {
-    const report = await buildPolicyCheckReport(options, runtime, "policy check");
-    writePolicyCheckReport(report, options, runtime);
+async function policyCheckCommand(options: PolicyCheckOptions): Promise<number> {
+  return runPolicyCommand(async () => {
+    const report = await buildPolicyCheckReport(options, "policy check");
+    writePolicyCheckReport(report, options);
     return report.exitCode;
-  } catch (err) {
-    runtime.error(err instanceof Error ? err.message : String(err));
-    return 2;
-  }
+  });
 }
 
-async function policyWatchCommand(
-  options: PolicyWatchOptions,
-  runtime: PolicyCommandRuntime = defaultRuntime,
-): Promise<number> {
-  try {
+async function policyWatchCommand(options: PolicyWatchOptions): Promise<number> {
+  return runPolicyCommand(async () => {
     const intervalMs = normalizeWatchIntervalMs(options.intervalMs);
     let previousKey: string | undefined;
     for (;;) {
-      const report = await buildPolicyCheckReport(options, runtime, "policy watch");
+      const report = await buildPolicyCheckReport(options, "policy watch");
       const status = policyWatchStatus(report);
       const key = `${status}:${report.attestation?.attestationHash ?? ""}:${report.exitCode}`;
       if (previousKey === undefined || previousKey !== key || options.once === true) {
-        writePolicyWatchReport(report, status, options, runtime);
+        writePolicyWatchReport(report, status, options);
         previousKey = key;
       }
       if (options.once === true) {
         return status === "stale" ? 1 : report.exitCode;
       }
-      if (runtime.sleep !== undefined) {
-        await runtime.sleep(intervalMs);
-      } else {
-        await sleep(intervalMs);
-      }
+      await sleep(intervalMs);
     }
+  });
+}
+
+async function runPolicyCommand(run: () => Promise<number>): Promise<number> {
+  try {
+    return await run();
   } catch (err) {
-    runtime.error(err instanceof Error ? err.message : String(err));
+    cliRuntime.error(err instanceof Error ? err.message : String(err));
     return 2;
   }
 }
 
 async function buildPolicyCheckReport(
   options: PolicyCheckOptions,
-  runtime: PolicyCommandRuntime,
   ownerSurface: "policy check" | "policy watch",
 ): Promise<PolicyCheckReport> {
   const severityMin =
@@ -207,17 +172,18 @@ async function buildPolicyCheckReport(
     };
   }
   const cfg = snapshot.valid ? policyCommandConfig(snapshot.config) : {};
-  const cwd =
-    options.cwd ??
-    resolveAgentWorkspaceDir(cfg, resolvePolicyCommandAgentId(cfg, options.agent, ownerSurface));
+  const cwd = resolveAgentWorkspaceDir(
+    cfg,
+    resolvePolicyCommandAgentId(cfg, options.agent, ownerSurface),
+  );
   const ctx: HealthCheckContext = {
     mode: "lint",
     runtime: {
       log(value) {
-        runtime.writeStdout(`${String(value)}\n`);
+        process.stdout.write(`${String(value)}\n`);
       },
       error(value) {
-        runtime.error(String(value));
+        cliRuntime.error(String(value));
       },
       exit(code) {
         process.exitCode = code;
@@ -290,7 +256,7 @@ function resolvePolicyCommandAgentId(
     const agentId = normalizeAgentId(requestedAgentId);
     if (!listAgentIds(cfg).includes(agentId)) {
       throw new Error(
-        `Unknown agent id "${requestedAgentId}". Run \`openclaw agents list\` to see configured agents.`,
+        `Unknown agent id "${requestedAgentId}". Run ${formatCliCommand("openclaw agents list")} to see configured agents.`,
       );
     }
     return agentId;
@@ -319,22 +285,16 @@ async function policyCompareCandidatePath(options: PolicyCompareOptions): Promis
   if (isAbsolute(policyPath)) {
     return policyPath;
   }
-  const cwd =
-    options.cwd ??
-    resolveAgentWorkspaceDir(
-      snapshot.config,
-      resolvePolicyCommandAgentId(snapshot.config, options.agent, "policy compare"),
-    );
+  const cwd = resolveAgentWorkspaceDir(
+    snapshot.config,
+    resolvePolicyCommandAgentId(snapshot.config, options.agent, "policy compare"),
+  );
   return resolve(cwd, policyPath);
 }
 
-function writePolicyCheckReport(
-  report: PolicyCheckReport,
-  options: PolicyCheckOptions,
-  runtime: PolicyCommandRuntime,
-): void {
+function writePolicyCheckReport(report: PolicyCheckReport, options: PolicyCheckOptions): void {
   if (options.json === true || !process.stdout.isTTY) {
-    runtime.writeStdout(
+    process.stdout.write(
       JSON.stringify({
         ok: report.ok,
         attestation: report.attestation,
@@ -347,18 +307,18 @@ function writePolicyCheckReport(
   } else if (report.findings.length === 0) {
     const policyHash = report.attestation?.policy?.hash ?? "missing";
     const evidenceHash = report.attestation?.workspace.hash ?? "unavailable";
-    runtime.writeStdout(
+    process.stdout.write(
       `policy check: no findings (policy ${policyHash}, evidence ${evidenceHash})\n`,
     );
   } else {
-    runtime.writeStdout(`policy check: ${report.findings.length} finding(s)\n`);
+    process.stdout.write(`policy check: ${report.findings.length} finding(s)\n`);
     for (const finding of report.findings) {
       const where = typeof finding.path === "string" ? ` ${finding.path}` : "";
       const line = typeof finding.line === "number" ? `:${finding.line}` : "";
       const severity = typeof finding.severity === "string" ? finding.severity : "unknown";
       const checkId = typeof finding.checkId === "string" ? finding.checkId : "unknown";
       const message = typeof finding.message === "string" ? finding.message : "";
-      runtime.writeStdout(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
+      process.stdout.write(`  [${severity}] ${checkId}${where}${line} - ${message}\n`);
     }
   }
 }
@@ -366,23 +326,22 @@ function writePolicyCheckReport(
 function writePolicyConformanceReport(
   report: PolicyConformanceReport,
   options: PolicyCompareOptions,
-  runtime: PolicyCommandRuntime,
 ): void {
   if (options.json === true || !process.stdout.isTTY) {
-    runtime.writeStdout(JSON.stringify(report) + "\n");
+    process.stdout.write(JSON.stringify(report) + "\n");
     return;
   }
   if (report.findings.length === 0) {
-    runtime.writeStdout(
+    process.stdout.write(
       `policy compare: no findings (${report.policyPath} is at least as strict as ${report.baselinePath}; ${report.rulesChecked} rule(s) checked)\n`,
     );
     return;
   }
-  runtime.writeStdout(
+  process.stdout.write(
     `policy compare: ${report.findings.length} finding(s) (${report.rulesChecked} rule(s) checked)\n`,
   );
   for (const finding of report.findings) {
-    runtime.writeStdout(`  [${finding.severity}] ${finding.checkId} - ${finding.message}\n`);
+    process.stdout.write(`  [${finding.severity}] ${finding.checkId} - ${finding.message}\n`);
   }
 }
 
@@ -390,10 +349,9 @@ function writePolicyWatchReport(
   report: PolicyCheckReport,
   status: "clean" | "findings" | "stale",
   options: PolicyWatchOptions,
-  runtime: PolicyCommandRuntime,
 ): void {
   if (options.json === true || !process.stdout.isTTY) {
-    runtime.writeStdout(
+    process.stdout.write(
       JSON.stringify({
         status,
         ok: report.ok,
@@ -405,18 +363,18 @@ function writePolicyWatchReport(
     return;
   }
   if (status === "stale") {
-    runtime.writeStdout(
+    process.stdout.write(
       `policy watch: accepted attestation is stale (current ${report.attestation?.attestationHash}, expected ${report.expectedAttestationHash}). Review policy check output, then update the supervisor/gateway accepted attestation.\n`,
     );
     return;
   }
   if (status === "findings") {
-    runtime.writeStdout(
+    process.stdout.write(
       `policy watch: ${report.findings.length} finding(s); accepted attestation cannot be updated until policy check is clean.\n`,
     );
     return;
   }
-  runtime.writeStdout(
+  process.stdout.write(
     `policy watch: clean (attestation ${report.attestation?.attestationHash}, evidence ${report.attestation?.workspace.hash})\n`,
   );
 }

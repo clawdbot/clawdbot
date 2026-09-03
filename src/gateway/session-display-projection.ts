@@ -5,7 +5,8 @@ import { extractAssistantPhaseText } from "../shared/chat-message-content.js";
 import { stripEnvelope } from "./chat-sanitize.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
-const SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS = 240;
+const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
+const SESSION_DISPLAY_PROJECTION_MAX_CHARS = 800;
 
 type SessionDisplayProjection = {
   role: "user" | "assistant";
@@ -39,7 +40,7 @@ function extractUserText(message: Record<string, unknown>): string | undefined {
   return typeof message.text === "string" ? message.text : undefined;
 }
 
-/** Projects one transcript row onto the bounded text shared by session-list consumers. */
+/** Projects one transcript row onto visible text within the shared display budget. */
 export function projectSessionDisplayMessage(
   message: unknown,
   options: SessionDisplayProjectionOptions = {},
@@ -67,9 +68,10 @@ export function projectSessionDisplayMessage(
   if (!text) {
     return null;
   }
+  const requestedMaxChars = options.maxChars ?? SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS;
   const limit = Math.min(
-    SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS,
-    Math.max(20, Math.floor(options.maxChars ?? SESSION_LAST_MESSAGE_PREVIEW_MAX_CHARS)),
+    SESSION_DISPLAY_PROJECTION_MAX_CHARS,
+    Math.max(20, Math.floor(requestedMaxChars)),
   );
   return {
     role,

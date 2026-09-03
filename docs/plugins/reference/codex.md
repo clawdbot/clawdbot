@@ -16,7 +16,7 @@ Codex app-server harness and native session catalog.
 
 ## Surface
 
-commands: `/codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
+CLI commands: `openclaw codex`; slash commands: `/codex`; contracts: `mediaUnderstandingProviders`, `migrationProviders`, `tools`, `webSearchProviders`
 
 ## Related docs
 

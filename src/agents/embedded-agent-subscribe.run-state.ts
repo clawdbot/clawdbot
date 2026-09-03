@@ -1,70 +1,16 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { createInlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
 import { createEmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
 import type { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.handlers.types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import { createThinkingTagStreamState } from "./embedded-agent-utils.js";
-import { mediaUrlsFromGeneratedAttachments } from "./generated-attachments.js";
-import { hasGeneratedMediaCompletionEvent } from "./internal-event-contract.js";
-import type { AgentInternalEvent } from "./internal-events.js";
-
-function collectPendingMediaFromInternalEvents(
-  events: SubscribeEmbeddedAgentSessionParams["internalEvents"],
-): {
-  mediaUrls: string[];
-  attachments: NonNullable<AgentInternalEvent["attachments"]>;
-  trustByUrl: Map<string, boolean>;
-} {
-  if (!events?.length) {
-    return { mediaUrls: [], attachments: [], trustByUrl: new Map() };
-  }
-  const pending: string[] = [];
-  const attachments: NonNullable<AgentInternalEvent["attachments"]> = [];
-  const indexByUrl = new Map<string, number>();
-  const trustedByUrl = new Map<string, boolean>();
-  for (const event of events) {
-    const generatedMediaEvent = hasGeneratedMediaCompletionEvent([event]);
-    const attachmentByUrl = new Map(
-      (event.attachments ?? []).flatMap((attachment) => {
-        const reference = normalizeOptionalString(
-          attachment.path ?? attachment.url ?? attachment.mediaUrl ?? attachment.filePath,
-        );
-        return reference ? [[reference, attachment] as const] : [];
-      }),
-    );
-    const mediaUrls = [
-      ...(Array.isArray(event.mediaUrls) ? event.mediaUrls : []),
-      ...mediaUrlsFromGeneratedAttachments(event.attachments),
-    ];
-    for (const mediaUrl of mediaUrls) {
-      const normalized = normalizeOptionalString(mediaUrl) ?? "";
-      if (!normalized) {
-        continue;
-      }
-      const metadata = attachmentByUrl.get(normalized);
-      const existingIndex = indexByUrl.get(normalized);
-      if (existingIndex !== undefined) {
-        trustedByUrl.set(normalized, trustedByUrl.get(normalized) === true || generatedMediaEvent);
-        if (metadata && Object.keys(attachments[existingIndex] ?? {}).length === 0) {
-          attachments[existingIndex] = metadata;
-        }
-        continue;
-      }
-      indexByUrl.set(normalized, pending.length);
-      trustedByUrl.set(normalized, generatedMediaEvent);
-      pending.push(normalized);
-      attachments.push(metadata ?? {});
-    }
-  }
-  return { mediaUrls: pending, attachments, trustByUrl: trustedByUrl };
-}
+import { collectAgentInternalEventMedia } from "./internal-events.js";
 
 export function createEmbeddedAgentSubscribeState(
   params: SubscribeEmbeddedAgentSessionParams,
 ): EmbeddedAgentSubscribeState {
   const reasoningMode = params.reasoningMode ?? "off";
   const canShowReasoning = params.thinkingLevel !== "off";
-  const initialPendingToolMedia = collectPendingMediaFromInternalEvents(params.internalEvents);
+  const initialPendingToolMedia = collectAgentInternalEventMedia(params.internalEvents);
   return {
     assistantTexts: [],
     toolMetas: [],
@@ -77,7 +23,6 @@ export function createEmbeddedAgentSubscribeState(
     itemCompletedCount: 0,
     assistantTurnCount: 0,
     lastToolError: undefined,
-    lastToolRecovery: undefined,
     blockReplyBreak: params.blockReplyBreak ?? "text_end",
     reasoningMode,
     includeReasoning: reasoningMode === "on" && canShowReasoning,
@@ -89,33 +34,34 @@ export function createEmbeddedAgentSubscribeState(
       canShowReasoning &&
       typeof params.onReasoningStream === "function",
     deltaBuffer: "",
+    streamBlockText: "",
+    streamBlockOffset: 0,
     thinkingTagStream: createThinkingTagStreamState(),
-    blockBuffer: "",
+    deltaBufferIsCommentary: false,
+    hasFlushedPartialText: false,
     // Track if a streamed chunk opened a <think> block (stateful across chunks).
     blockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
     partialBlockState: { thinking: false, final: false, inlineCode: createInlineCodeState() },
-    lastStreamedAssistant: undefined,
-    lastStreamedAssistantCleaned: undefined,
-    emittedAssistantUpdate: false,
+    assistantStream: undefined,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
     lastDeliveredBlockReplyText: undefined,
     deferBlockReplyDelivery: typeof params.onBeforeTerminalDelivery === "function",
     deferredBlockReplies: [],
-    deferredAssistantEvents: [],
     toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
+    assistantMessageStartIndex: 0,
     lastAssistantStreamContentIndex: undefined,
     lastAssistantStreamItemId: undefined,
     lastAssistantTextMessageIndex: -1,
+    lastAssistantTextContentIndex: undefined,
+    lastAssistantTextItemId: undefined,
     lastAssistantTextNormalized: undefined,
     lastAssistantTextTrimmed: undefined,
     assistantTextBaseline: 0,
     suppressBlockChunks: false, // Avoid late chunk inserts after final text merge.
     lastReasoningSent: undefined,
-    pendingAssistantUsage: undefined,
-    assistantUsageCommitted: false,
     compactionInFlight: false,
     lastCompactionTokensAfter: undefined,
     pendingCompactionRetry: 0,
@@ -143,7 +89,9 @@ export function createEmbeddedAgentSubscribeState(
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,
     pendingToolMediaTrustByUrl: initialPendingToolMedia.trustByUrl,
+    toolAutoDeliveryMediaUrls: new Set(),
     pendingToolAudioAsVoice: false,
+    pendingToolMediaDeliveryFailed: false,
     hasToolMediaBlockReply: false,
     visibleBlockReplyCount: 0,
     pendingAssistantReplyDirectives: undefined,

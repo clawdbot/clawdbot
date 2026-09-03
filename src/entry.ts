@@ -14,6 +14,7 @@ import {
 import { applyCliProfileEnv, parseCliProfileArgs } from "./cli/profile.js";
 import type { RootHelpRenderOptions } from "./cli/program/root-help.js";
 import { isNativeHookRelayArgv } from "./cli/respawn-policy.js";
+import { withCliProcessScope } from "./cli/runtime-cleanup-scope.js";
 import {
   configureGatewayStartupTraceConsoleFormatting,
   createGatewayDispatchStartupTrace,
@@ -24,6 +25,7 @@ import {
   resolveEntryInstallRoot,
   respawnWithoutOpenClawCompileCacheIfNeeded,
 } from "./entry.compile-cache.js";
+import { installDistEsmResolveFastPath } from "./entry.esm-resolve-fast-path.js";
 import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { tryHandleRootVersionFastPath } from "./entry.version-fast-path.js";
 import { normalizeEnv } from "./infra/env.js";
@@ -119,6 +121,7 @@ if (
 } else {
   const entryFile = fileURLToPath(import.meta.url);
   const installRoot = resolveEntryInstallRoot(entryFile);
+  installDistEsmResolveFastPath(import.meta.url);
   process.title = "openclaw";
   ensureOpenClawExecMarkerOnProcess();
   installProcessWarningFilter();
@@ -203,7 +206,7 @@ if (
       gatewayEntryStartupTrace.mark("argv");
 
       if (!tryHandleRootVersionFastPath(process.argv)) {
-        await runMainOrRootHelp(process.argv);
+        await withCliProcessScope(() => runMainOrRootHelp(process.argv));
       }
     }
   }

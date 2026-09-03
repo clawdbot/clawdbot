@@ -10,8 +10,8 @@ import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import { resetSkillsRefreshForTest } from "./refresh.test-support.js";
 import { mergeRemoteNodeSkillEntries, replaceRemoteNodeSkills } from "./remote-skills.js";
 
-vi.mock("../../infra/device-pairing-node.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../infra/device-pairing-node.js")>();
+vi.mock("../../infra/device-pairing-node-facts.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/device-pairing-node-facts.js")>();
   return { ...actual, updatePairedNodeBins: vi.fn(async () => true) };
 });
 

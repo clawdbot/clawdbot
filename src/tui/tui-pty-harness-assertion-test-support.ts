@@ -209,7 +209,7 @@ function replayTerminalState(
   if (!terminalOutputIsComplete(raw)) {
     return undefined;
   }
-  for (const segment of ansiSequences.splitAnsiSegments(raw)) {
+  for (const segment of ansiSequences.iterateAnsiSegments(raw)) {
     if (segment.kind === "text") {
       // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
       // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.
@@ -415,19 +415,6 @@ async function assertTerminalAttackPrefixSanitized(
   );
 }
 
-function hasStatusFrame(
-  raw: string,
-  markers: string[],
-  status: RegExp,
-  dimensions: PtyTerminalDimensions,
-) {
-  return latestFrameHasRow(
-    raw,
-    dimensions,
-    (row) => markers.every((marker) => row.includes(marker)) && status.test(row),
-  );
-}
-
 async function exerciseSelectorOutputSafety(
   startFixture: StartTuiPtyFixture,
   startupTimeoutMs: number,
@@ -588,8 +575,20 @@ async function exerciseGatewayOutputSafety(
     for (const attack of systemAttacks) {
       expect(raw).not.toContain(attack);
     }
-    expect(hasStatusFrame(fixture.run.output(), idlePayload.markers, /\| idle/u, fixture.run)).toBe(
-      true,
+    expect(
+      latestFrameHasRow(
+        fixture.run.output(),
+        fixture.run,
+        (row) =>
+          idlePayload.markers.every((marker) => row.includes(marker)) && /\| idle/u.test(row),
+      ),
+    ).toBe(true);
+    await waitForSynchronizedFrameRows(
+      fixture.run,
+      (rows) =>
+        rows.some((row) => row.includes("gateway reconnected after transport loss")) &&
+        rows.some((row) => row.includes("local ready | idle")),
+      startupTimeoutMs,
     );
 
     const helpOffset = fixture.run.visibleOutput().length;
@@ -646,11 +645,8 @@ async function exerciseMarkdownAndAutocompleteOutputSafety(
     await fixture.run.write("\x14", { delay: false });
     await commandAssertion;
 
-    await fixture.run.write("\x1b", { delay: false });
-    await sleep(50);
-    await fixture.run.write("\x15", { delay: false });
-    await sleep(50);
-    await fixture.run.write("/think ", { delay: false });
+    // Ctrl+U replaces the input without a lone Escape absorbing it as an Alt chord over SSH.
+    await fixture.run.write("\x15/think ", { delay: false });
     await fixture.run.waitForOutput("T08_SAFE_THINKING", 5_000);
     const raw = fixture.run.output();
     expect(thinking.markers.some((marker) => raw.includes(marker))).toBe(false);

@@ -1,12 +1,21 @@
-// Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
+// Control UI E2E tests cover session-list event scope through the Gateway WebSocket.
+import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../../../src/shared/session-list-limits.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI session-list event scope",
 });
+const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
+
+async function openSessionFilters(page: Page) {
+  await page.getByRole("button", { name: "Filters" }).click();
+  await page.locator("wa-popover.sessions-filter-popover[open]").waitFor();
+}
 
 // Browser contexts preserve test isolation; keep one process warm for this file.
 let page: Page | undefined;
@@ -66,6 +75,7 @@ suite.define(() => {
       kind: "direct",
       label: hiddenLabel,
       updatedAt: 2,
+      archived: false,
     });
 
     await expect
@@ -113,7 +123,10 @@ suite.define(() => {
       ],
       ts: 1,
     };
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const context = await suite.browser.newContext({
+      viewport: { height: 800, width: 1200 },
+      ...(captureUiProof ? { recordVideo: { dir: suite.artifactDir } } : {}),
+    });
     const currentPage = await context.newPage();
     page = currentPage;
     const gateway = await installMockGateway(currentPage, {
@@ -149,10 +162,25 @@ suite.define(() => {
           entries.every(([key, value]) => record[key] === value)
         );
       });
+    const capture = async (stage: string) => {
+      if (!captureUiProof) {
+        return;
+      }
+      await currentPage.screenshot({
+        path: path.join(suite.artifactDir, `${stage}.png`),
+        animations: "disabled",
+        fullPage: true,
+      });
+      await writeFile(
+        path.join(suite.artifactDir, `${stage}.json`),
+        JSON.stringify(await gateway.getRequests("sessions.list"), null, 2),
+      );
+    };
 
     await currentPage.goto(`${suite.server.baseUrl}sessions`);
     const visibleRow = currentPage.getByText(visibleLabel, { exact: true }).first();
     await visibleRow.waitFor({ timeout: 10_000 });
+    await capture("before-startup-roster");
 
     const startupAndPageRequests = await gateway.getRequests("sessions.list");
     expect(startupAndPageRequests[0]?.params).toEqual({
@@ -162,7 +190,7 @@ suite.define(() => {
       includeGlobal: true,
       includeLastMessage: true,
       includeUnknown: true,
-      limit: 50,
+      limit: SIDEBAR_SESSION_ROSTER_LIMIT,
     });
     expect
       .soft((await exactPageQueries()).map((request) => request.params))
@@ -170,6 +198,7 @@ suite.define(() => {
 
     await gateway.resolveDeferred("sessions.list", visibleResponse);
     await visibleRow.waitFor();
+    await capture("after-startup-roster");
 
     const stabilityDeadline = Date.now() + 500;
     do {
@@ -231,7 +260,7 @@ suite.define(() => {
       (request) =>
         (request.params as { includeUnknown?: unknown } | undefined)?.includeUnknown === true,
     )?.params as Record<string, unknown> | undefined;
-    expect(sidebarParams).toMatchObject({ limit: 50 });
+    expect(sidebarParams).toMatchObject({ limit: SIDEBAR_SESSION_ROSTER_LIMIT });
     expect(sidebarParams).not.toHaveProperty("activeMinutes");
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
@@ -245,6 +274,7 @@ suite.define(() => {
     expect(initialPageParams).toMatchObject({ limit: 50 });
     expect(initialPageParams).not.toHaveProperty("activeMinutes");
 
+    await openSessionFilters(currentPage);
     const activeMinutes = sessionsPage.getByLabel("Updated within");
     const limit = sessionsPage.getByLabel("Limit");
     await expect.poll(() => activeMinutes.inputValue()).toBe("");
@@ -295,6 +325,7 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}sessions`);
     await gateway.waitForRequest("sessions.list");
+    await openSessionFilters(currentPage);
     const activeMinutes = currentPage.getByLabel("Updated within");
     const limit = currentPage.getByLabel("Limit");
     const cases = [

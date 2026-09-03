@@ -28,6 +28,9 @@ export class SessionProgressCardController implements ReactiveController {
     return this.store?.get(this.sessionKey) ?? null;
   }
 
+  dismiss = (card: ProgressCard): Promise<boolean> =>
+    this.store?.dismiss(card) ?? Promise.resolve(false);
+
   hostUpdate(): void {
     this.synchronize();
   }

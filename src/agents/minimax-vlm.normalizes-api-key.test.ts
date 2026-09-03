@@ -458,6 +458,64 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
     expect(pullCount).toBeLessThanOrEqual(18);
     expect(canceled).toBe(true);
   });
+
+  it.each([
+    {
+      channel: "error body",
+      response: (authorization: string) =>
+        new Response(`echoed ${authorization}`, { status: 401, statusText: "Unauthorized" }),
+    },
+    {
+      channel: "reason phrase",
+      response: (authorization: string) =>
+        new Response("", { status: 401, statusText: `echoed ${authorization}` }),
+    },
+    {
+      channel: "Trace-Id",
+      response: (authorization: string) =>
+        new Response("bad", {
+          status: 401,
+          statusText: "Unauthorized",
+          headers: { "Trace-Id": `echoed ${authorization}` },
+        }),
+    },
+    {
+      channel: "application status message",
+      response: (authorization: string) =>
+        new Response(
+          JSON.stringify({
+            base_resp: { status_code: 1001, status_msg: `echoed ${authorization}` },
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        ),
+    },
+  ])("redacts the sent credential when reflected through $channel", async ({ response }) => {
+    const needle = "mm-short-7";
+    fetchWithSsrFGuardMock.mockImplementationOnce(
+      async (request: { init?: { headers?: HeadersInit } }) => {
+        const authorization = new Headers(request.init?.headers).get("Authorization");
+        expect(authorization).toBe(`Bearer ${needle}`);
+        return {
+          response: response(authorization ?? ""),
+          release: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
+          finalUrl: "https://api.minimax.io/v1/coding_plan/vlm",
+        };
+      },
+    );
+
+    const error = await minimaxUnderstandImage({
+      apiKey: needle,
+      prompt: "hi",
+      imageDataUrl: "data:image/png;base64,AAAA",
+      apiHost: "https://api.minimax.io",
+    }).catch((caught: unknown) => caught);
+
+    if (!(error instanceof Error)) {
+      throw new Error("expected MiniMax VLM request to throw an Error");
+    }
+    expect(error.message).not.toContain(needle);
+    expect(error.message).toContain("***");
+  });
 });
 
 describe("isMinimaxVlmModel", () => {

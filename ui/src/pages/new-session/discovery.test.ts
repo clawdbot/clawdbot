@@ -1,116 +1,35 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
 import {
-  isDraftNodeSessionEligible,
+  draftCloudProfileSupportsExecutionMode,
   readDraftCloudProfiles,
   readDraftEnvironments,
-  readDraftNodes,
 } from "./discovery.ts";
 
-describe("readDraftNodes", () => {
-  it("ignores non-record array entries without throwing", () => {
-    expect(
-      readDraftNodes([
-        null,
-        undefined,
-        42,
-        "node",
-        [],
-        [[{ nodeId: "nested", connected: true, commands: ["system.run"] }]],
-        { nodeId: " valid ", connected: true, commands: ["system.run", "fs.listDir"] },
-      ]),
-    ).toEqual([
-      {
-        nodeId: "valid",
-        displayName: "valid",
-        platform: undefined,
-        deviceFamily: undefined,
-        modelIdentifier: undefined,
-        remoteIp: undefined,
-        connected: true,
-        canExec: true,
-        canBrowse: true,
-      },
+describe("draftCloudProfileSupportsExecutionMode", () => {
+  it.each([
+    { name: "worker turns", executionMode: "worker-turn" },
+    { name: "remote execution", executionMode: "remote-exec" },
+  ] as const)(
+    "rejects $name when the provider advertises no placement modes",
+    ({ executionMode }) => {
+      expect(
+        draftCloudProfileSupportsExecutionMode(
+          { id: "lifecycle-only", providerId: "crabbox" },
+          executionMode,
+        ),
+      ).toBe(false);
+    },
+  );
+
+  it("does not treat the singular display projection as a placement capability", () => {
+    const [profile] = readDraftCloudProfiles([
+      { id: "legacy", providerId: "crabbox", executionMode: "worker-turn" },
     ]);
-  });
-
-  it("keeps execution capability independent from connectivity", () => {
-    expect(
-      readDraftNodes([
-        {
-          nodeId: "offline",
-          connected: false,
-          commands: ["system.run", "fs.listDir"],
-        },
-      ]),
-    ).toEqual([
-      {
-        nodeId: "offline",
-        displayName: "offline",
-        platform: undefined,
-        deviceFamily: undefined,
-        modelIdentifier: undefined,
-        remoteIp: undefined,
-        connected: false,
-        canExec: true,
-        canBrowse: false,
-      },
-    ]);
-  });
-
-  it("keeps only the exact structured update-required issue", () => {
-    const issue = {
-      code: "update-required",
-      action: "update-and-reconnect",
-      updateCommand: "openclaw update",
-      headlessReconnectCommand: "openclaw node restart",
-    };
-    expect(
-      readDraftNodes([
-        {
-          nodeId: "outdated",
-          connected: true,
-          commands: ["system.run"],
-          issues: [issue, { ...issue, headlessReconnectCommand: "legacy restart" }],
-        },
-      ])[0]?.issues,
-    ).toEqual([issue]);
-    expect(
-      readDraftEnvironments([{ id: "node:outdated", type: "node", issues: [issue] }])[0]?.issues,
-    ).toEqual([issue]);
-  });
-
-  it("uses capability, connection, and update state for session eligibility", () => {
-    const nodes = readDraftNodes([
-      { nodeId: "eligible", connected: true, commands: ["system.run"] },
-      { nodeId: "offline", connected: false, commands: ["system.run"] },
-      { nodeId: "no-exec", connected: true, commands: ["fs.listDir"] },
-      {
-        nodeId: "outdated",
-        connected: true,
-        commands: ["system.run"],
-        issues: [
-          {
-            code: "update-required",
-            action: "update-and-reconnect",
-            updateCommand: "openclaw update",
-            headlessReconnectCommand: "openclaw node restart",
-          },
-        ],
-      },
-    ]);
-    const eligibility = Object.fromEntries(
-      nodes.map((node) => [node.nodeId, isDraftNodeSessionEligible(node)]),
-    );
-
-    expect(eligibility).toEqual({
-      eligible: true,
-      "no-exec": false,
-      offline: false,
-      outdated: false,
-    });
+    expect(draftCloudProfileSupportsExecutionMode(profile!, "worker-turn")).toBe(false);
   });
 });
+
 describe("readDraftCloudProfiles", () => {
   it("keeps closed profile summaries in stable order", () => {
     expect(
@@ -121,26 +40,35 @@ describe("readDraftCloudProfiles", () => {
           id: " zeta ",
           providerId: " static-ssh ",
           trust: "disposable",
+          executionMode: "worker-turn",
           settings: { token: "hidden" },
         },
         {
           id: "aws",
           providerId: "crabbox",
           trust: "persistent",
+          executionMode: "worker-turn",
+          executionModes: ["worker-turn", "remote-exec"],
           machines: [
             {
               id: "standard",
               label: "Standard",
-              description: "Balanced capacity",
+              cpu: 32,
+              memoryGb: 64,
               default: true,
             },
-            { id: "fast", label: "Fast", description: "More compute" },
+            { id: "fast", label: "Fast", cpu: 0, memoryGb: 127.5 },
             { id: "fast", label: "Duplicate" },
             { id: "", label: "Invalid" },
           ],
         },
         { id: "legacy", providerId: "static-ssh" },
-        { id: "invalid-trust", providerId: "crabbox", trust: "temporary" },
+        {
+          id: "invalid-trust",
+          providerId: "crabbox",
+          trust: "temporary",
+          executionMode: "sandbox",
+        },
         { id: "", providerId: "crabbox" },
         { id: "missing-provider" },
       ]),
@@ -149,38 +77,136 @@ describe("readDraftCloudProfiles", () => {
         id: "aws",
         providerId: "crabbox",
         trust: "persistent",
+        executionModes: ["worker-turn", "remote-exec"],
         machines: [
           {
             id: "standard",
             label: "Standard",
-            description: "Balanced capacity",
+            cpu: 32,
+            memoryGb: 64,
             default: true,
           },
-          { id: "fast", label: "Fast", description: "More compute" },
+          { id: "fast", label: "Fast" },
         ],
       },
-      { id: "invalid-trust", providerId: "crabbox", trust: undefined },
-      { id: "legacy", providerId: "static-ssh", trust: undefined },
-      { id: "zeta", providerId: "static-ssh", trust: "disposable" },
+      {
+        id: "invalid-trust",
+        providerId: "crabbox",
+        trust: undefined,
+      },
+      {
+        id: "legacy",
+        providerId: "static-ssh",
+        trust: undefined,
+      },
+      {
+        id: "zeta",
+        providerId: "static-ssh",
+        trust: "disposable",
+      },
     ]);
   });
+
+  it.each([
+    { name: "empty", executionModes: [] },
+    { name: "unknown", executionModes: ["sandbox"] },
+    { name: "duplicate", executionModes: ["remote-exec", "remote-exec"] },
+    { name: "out-of-order", executionModes: ["remote-exec", "worker-turn"] },
+    { name: "oversized", executionModes: ["worker-turn", "remote-exec", "worker-turn"] },
+  ])(
+    "keeps a present $name mode set closed instead of using its primary-mode fallback",
+    ({ executionModes }) => {
+      expect(
+        readDraftCloudProfiles([
+          {
+            id: "aws",
+            providerId: "crabbox",
+            executionMode: "remote-exec",
+            executionModes,
+          },
+        ]),
+      ).toEqual([
+        {
+          id: "aws",
+          providerId: "crabbox",
+          trust: undefined,
+          executionModes: [],
+        },
+      ]);
+    },
+  );
 });
 
 describe("readDraftEnvironments", () => {
+  it("keeps only the exact update-required issue contract", () => {
+    const issue = {
+      code: "update-required",
+      action: "update-and-reconnect",
+      updateCommand: "openclaw update",
+      headlessReconnectCommand: "openclaw node restart",
+    };
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:outdated",
+          type: "node",
+          status: "available",
+          issues: [issue, { ...issue, headlessReconnectCommand: "legacy restart" }],
+        },
+      ])[0]?.issues,
+    ).toEqual([issue]);
+  });
+
+  it("normalizes command inventory and keeps only closed required-command state", () => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          status: "available",
+          capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+          invocableCommands: [" z.command ", "camera.snap", "camera.snap", "x".repeat(129), ""],
+          requiredNodeCommand: { command: " codex.exec-server.stdio.v1 ", state: "unauthorized" },
+        },
+        {
+          id: "node:invalid-state",
+          type: "node",
+          status: "available",
+          requiredNodeCommand: { command: "runtime.exec", state: "unknown" },
+        },
+      ]),
+    ).toEqual([
+      { id: "node:invalid-state", type: "node", status: "available" },
+      {
+        id: "node:runner",
+        type: "node",
+        status: "available",
+        capabilities: ["codex.exec-server.stdio.v1", "camera.snap"],
+        invocableCommands: ["camera.snap", "z.command"],
+        requiredNodeCommand: {
+          command: "codex.exec-server.stdio.v1",
+          state: "unauthorized",
+        },
+      },
+    ]);
+  });
+
   it("keeps the closed environment types while rejecting malformed entries", () => {
     expect(
       readDraftEnvironments([
-        { id: "gateway", type: "local", label: "Gateway" },
-        { id: "node:macbook", type: "node" },
-        { id: "worker:aws", type: "worker" },
-        { id: "future", type: "future" },
-        { id: "", type: "node" },
-        { id: "missing-type" },
+        { id: "gateway", type: "local", label: "Gateway", status: "available" },
+        { id: "node:macbook", type: "node", status: "unavailable" },
+        { id: "worker:aws", type: "worker", status: "starting" },
+        { id: "future", type: "future", status: "available" },
+        { id: "", type: "node", status: "available" },
+        { id: "missing-type", status: "available" },
+        { id: "missing-status", type: "node" },
+        { id: "unknown-status", type: "node", status: "online" },
       ]),
     ).toEqual([
-      { id: "gateway", type: "local" },
-      { id: "node:macbook", type: "node" },
-      { id: "worker:aws", type: "worker" },
+      { id: "gateway", type: "local", label: "Gateway", status: "available" },
+      { id: "node:macbook", type: "node", status: "unavailable" },
+      { id: "worker:aws", type: "worker", status: "starting" },
     ]);
   });
 
@@ -190,8 +216,11 @@ describe("readDraftEnvironments", () => {
         {
           id: "node:macbook",
           type: "node",
+          label: " Build Mac ",
+          status: "available",
           platform: " darwin ",
           sessionHost: false,
+          workerSlots: { total: 4, available: 2 },
           lastConnectedAtMs: 1_000.9,
           lastDisconnectedAtMs: 2_000,
           lastSeenAtMs: 1_500,
@@ -202,6 +231,7 @@ describe("readDraftEnvironments", () => {
         {
           id: "node:malformed",
           type: "node",
+          status: "error",
           platform: { name: "linux" },
           sessionHost: "yes",
           trust: "temporary",
@@ -212,8 +242,11 @@ describe("readDraftEnvironments", () => {
       {
         id: "node:macbook",
         type: "node",
+        label: "Build Mac",
+        status: "available",
         platform: "darwin",
         sessionHost: false,
+        workerSlots: { total: 4, available: 2 },
         lastConnectedAtMs: 1_000,
         lastDisconnectedAtMs: 2_000,
         lastSeenAtMs: 1_500,
@@ -221,7 +254,36 @@ describe("readDraftEnvironments", () => {
         trust: "persistent",
         capabilities: ["camera.snap", "custom.unknown", "system.run"],
       },
-      { id: "node:malformed", type: "node" },
+      { id: "node:malformed", type: "node", status: "error" },
+    ]);
+  });
+
+  it.each([
+    ["fractional", { total: 2.5, available: 1 }],
+    ["zero total", { total: 0, available: 0 }],
+    ["oversized", { total: 1_025, available: 1 }],
+    ["overcommitted", { total: 2, available: 3 }],
+    ["extra key", { total: 2, available: 1, queued: 1 }],
+  ])("retains the environment while dropping %s worker slots", (_name, workerSlots) => {
+    expect(
+      readDraftEnvironments([
+        {
+          id: "node:runner",
+          type: "node",
+          label: "Runner",
+          status: "available",
+          sessionHost: true,
+          workerSlots,
+        },
+      ]),
+    ).toEqual([
+      {
+        id: "node:runner",
+        type: "node",
+        label: "Runner",
+        status: "available",
+        sessionHost: true,
+      },
     ]);
   });
 });

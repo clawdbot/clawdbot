@@ -1,12 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import {
-  extractStoredAssistantText,
-  stripToolMessages,
-} from "../agents/tools/chat-history-text.js";
-import {
-  isSessionTranscriptProjectionUnavailableError,
-  readSessionTranscriptBoundedMessageTailPage,
-} from "../config/sessions/session-accessor.sqlite-active-events.js";
+import { extractStoredAssistantText } from "../agents/tools/chat-history-text.js";
+import { readSessionTranscriptBoundedMessageTailPage } from "../config/sessions/session-accessor.sqlite-active-events.js";
 import { redactToolPayloadText } from "../logging/redact.js";
 import type {
   SessionCompanionContextMessage,
@@ -73,10 +67,23 @@ function readMessageTimestamp(message: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
 }
 
-function sanitizeContextMessages(messages: unknown[]): SessionCompanionContextMessage[] {
-  return stripToolMessages(messages).flatMap((message): SessionCompanionContextMessage[] => {
+function appendContextMessages(
+  events: Array<{ event: unknown }>,
+  messages: SessionCompanionContextMessage[],
+): void {
+  // Keep newest-first context across pages; older discarded rows need no text work.
+  for (
+    let index = events.length - 1;
+    index >= 0 && messages.length < CONTEXT_MAX_MESSAGES;
+    index--
+  ) {
+    const event = events[index]?.event;
+    if (!event || typeof event !== "object") {
+      continue;
+    }
+    const message = (event as { message?: unknown }).message;
     if (!message || typeof message !== "object") {
-      return [];
+      continue;
     }
     const role = (message as { role?: unknown }).role;
     const text =
@@ -85,37 +92,24 @@ function sanitizeContextMessages(messages: unknown[]): SessionCompanionContextMe
         : role === "user"
           ? extractUserText(message)
           : undefined;
-    return text && (role === "assistant" || role === "user")
-      ? [{ role, text, ts: readMessageTimestamp(message) }]
-      : [];
-  });
+    if (text && (role === "assistant" || role === "user")) {
+      messages.push({ role, text, ts: readMessageTimestamp(message) });
+    }
+  }
 }
 
 function selectContextMessages(messages: SessionCompanionContextMessage[]) {
   const selected: SessionCompanionContextMessage[] = [];
   let bytes = 2;
-  for (const message of messages.toReversed()) {
-    if (selected.length >= CONTEXT_MAX_MESSAGES) {
-      break;
-    }
+  for (const message of messages) {
     const messageBytes = Buffer.byteLength(JSON.stringify(message), "utf8") + 1;
     if (bytes + messageBytes > CONTEXT_MAX_BYTES) {
       break;
     }
-    selected.unshift(message);
+    selected.push(message);
     bytes += messageBytes;
   }
-  return selected;
-}
-
-function readPageMessages(events: Array<{ event: unknown }>): unknown[] {
-  return events.flatMap(({ event }) => {
-    if (!event || typeof event !== "object") {
-      return [];
-    }
-    const message = (event as { message?: unknown }).message;
-    return message && typeof message === "object" ? [message] : [];
-  });
+  return selected.toReversed();
 }
 
 async function readSessionCompanionContext(params: {
@@ -142,6 +136,7 @@ async function readSessionCompanionContext(params: {
     let rawBytes = 0;
     let scannedMessages = 0;
     let totalMessages = 0;
+    let stoppedAtOlderByteBoundary = false;
     let snapshot:
       | {
           activeLeafEntryId?: string | null;
@@ -150,7 +145,7 @@ async function readSessionCompanionContext(params: {
           totalMessages: number;
         }
       | undefined;
-    let contextMessages: SessionCompanionContextMessage[] = [];
+    const contextMessages: SessionCompanionContextMessage[] = [];
     while (
       contextMessages.length < CONTEXT_MAX_MESSAGES &&
       scannedMessages < CONTEXT_READ_MAX_SCANNED_MESSAGES
@@ -163,7 +158,7 @@ async function readSessionCompanionContext(params: {
         ),
         offset,
       });
-      if (params.signal?.aborted || page.events.length !== page.scannedMessages) {
+      if (params.signal?.aborted) {
         return { kind: "unavailable" };
       }
       const pageSnapshot = {
@@ -182,18 +177,33 @@ async function readSessionCompanionContext(params: {
         return { kind: "unavailable" };
       }
       totalMessages = page.totalMessages;
+      const pageIsPartial = page.newestContiguousEventCount !== page.scannedMessages;
+      // Sparse bounded pages may include older rows beyond an oversized gap.
+      // Only the contiguous newest suffix is authoritative companion context.
+      const pageEvents =
+        page.newestContiguousEventCount === page.events.length
+          ? page.events
+          : page.events.slice(page.events.length - page.newestContiguousEventCount);
       rawBytes += page.serializedBytes;
       scannedMessages += page.scannedMessages;
       offset += page.scannedMessages;
-      contextMessages = [
-        ...sanitizeContextMessages(readPageMessages(page.events)),
-        ...contextMessages,
-      ].slice(-CONTEXT_MAX_MESSAGES);
+      appendContextMessages(pageEvents, contextMessages);
+      if (pageIsPartial) {
+        if (contextMessages.length === 0) {
+          return { kind: "unavailable" };
+        }
+        stoppedAtOlderByteBoundary = true;
+        break;
+      }
       if (page.scannedMessages === 0 || offset >= totalMessages) {
         break;
       }
     }
-    if (contextMessages.length < CONTEXT_MAX_MESSAGES && offset < totalMessages) {
+    if (
+      contextMessages.length < CONTEXT_MAX_MESSAGES &&
+      offset < totalMessages &&
+      !stoppedAtOlderByteBoundary
+    ) {
       return { kind: "unavailable" };
     }
     const fence = readSessionTranscriptBoundedMessageTailPage(scope, {
@@ -219,10 +229,7 @@ async function readSessionCompanionContext(params: {
         sessionId,
       },
     };
-  } catch (error) {
-    if (isSessionTranscriptProjectionUnavailableError(error)) {
-      return { kind: "unavailable" };
-    }
+  } catch {
     return { kind: "unavailable" };
   }
 }

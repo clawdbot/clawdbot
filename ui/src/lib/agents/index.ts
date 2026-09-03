@@ -1,5 +1,6 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
+  AgentsFilesGetResult,
   AgentsFilesListResult,
   AgentsListResult,
   ModelCatalogEntry,
@@ -74,7 +75,6 @@ type AgentFilesStatus = {
 type AgentCapabilityState = {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  listRevision: number;
   agentsLoading: boolean;
   agentsError: string | null;
   agentsList: AgentsListResult | null;
@@ -82,17 +82,13 @@ type AgentCapabilityState = {
 
 export type AgentCapability = {
   readonly state: AgentCapabilityState;
-  adoptList: (
-    result: AgentsListResult,
-    client: GatewayBrowserClient,
-    expectedRevision?: number,
-  ) => boolean;
   ensureList: () => Promise<AgentsListResult | null>;
   refreshList: () => Promise<AgentsListResult | null>;
   files: (agentId: string | null | undefined) => AgentFilesStatus;
   invalidateFiles: (agentIds: readonly (string | null | undefined)[]) => void;
   ensureFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
   refreshFiles: (agentId: string) => Promise<AgentsFilesListResult | null>;
+  recordFile: (result: AgentsFilesGetResult) => void;
   subscribe: (listener: (state: AgentCapabilityState) => void) => () => void;
   dispose: () => void;
 };
@@ -244,7 +240,6 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
-    listRevision: 0,
     agentsLoading: false,
     agentsError: null,
     agentsList: null,
@@ -254,11 +249,12 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const fileRequestOwners = new Map<string, symbol>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
+  let listRevision = 0;
   let agentsRequest: Promise<AgentsListResult | null> | null = null;
 
   const retireAgentsRequest = () => {
     agentsRequest = null;
-    state.listRevision += 1;
+    listRevision += 1;
     state.agentsLoading = false;
   };
 
@@ -288,13 +284,16 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     if (agentsRequest && !force) {
       return agentsRequest;
     }
-    const revision = ++state.listRevision;
+    if (state.agentsList && !force) {
+      return state.agentsList;
+    }
+    const revision = ++listRevision;
     state.agentsLoading = true;
     state.agentsError = null;
     publish();
     const request = loadAgentsList(scope.client)
       .then((result) => {
-        const current = lifecycle.isCurrent(scope) && state.listRevision === revision;
+        const current = lifecycle.isCurrent(scope) && listRevision === revision;
         if (current) {
           state.agentsList = result;
           state.agentsError = null;
@@ -302,7 +301,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         return current ? result : null;
       })
       .catch((err: unknown) => {
-        if (lifecycle.isCurrent(scope) && state.listRevision === revision) {
+        if (lifecycle.isCurrent(scope) && listRevision === revision) {
           state.agentsError = isMissingOperatorReadScopeError(err)
             ? formatMissingOperatorReadScopeMessage("agent list")
             : formatUiError(err);
@@ -310,7 +309,7 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
         return null;
       })
       .finally(() => {
-        const currentRequest = state.listRevision === revision;
+        const currentRequest = listRevision === revision;
         if (currentRequest) {
           agentsRequest = null;
         }
@@ -378,7 +377,9 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connected = snapshot.phase === "connected";
-    lifecycle.transition(snapshot);
+    if (!lifecycle.transition(snapshot)) {
+      return;
+    }
     state.client = snapshot.client;
     state.connected = connected;
     if (clientChanged || !connected) {
@@ -398,17 +399,6 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
   return {
     get state() {
       return state;
-    },
-    adoptList(result, client, expectedRevision = state.listRevision) {
-      if (state.client !== client || !state.connected || state.listRevision !== expectedRevision) {
-        return false;
-      }
-      // Startup adoption retires older direct loads so late completions cannot overwrite it.
-      retireAgentsRequest();
-      state.agentsList = result;
-      state.agentsError = null;
-      publish();
-      return true;
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
@@ -434,6 +424,31 @@ export function createAgentCapability(gateway: AgentGateway): AgentCapability {
     },
     ensureFiles: (agentId) => loadFiles(agentId, false),
     refreshFiles: (agentId) => loadFiles(agentId, true),
+    recordFile({ agentId, file }) {
+      const status = fileStatus(agentId);
+      if (!status.list) {
+        // Reconnect/config invalidation can clear the list while an editor
+        // remains open. Rebuild the full list after the confirmed operation.
+        void loadFiles(agentId, true);
+        return;
+      }
+      // A confirmed file result supersedes lists already in flight. Retain the
+      // full canonical list so their awaiting callers can still read it.
+      fileRequests.delete(agentId);
+      fileRequestOwners.delete(agentId);
+      const entry = { ...file };
+      delete entry.content;
+      const entries = status.list.files;
+      status.list = {
+        ...status.list,
+        files: entries.some((existing) => existing.name === entry.name)
+          ? entries.map((existing) => (existing.name === entry.name ? entry : existing))
+          : [...entries, entry],
+      };
+      status.loading = false;
+      status.error = null;
+      publish();
+    },
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);

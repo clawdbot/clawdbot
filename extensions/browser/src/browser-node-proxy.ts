@@ -12,23 +12,29 @@ import {
   browserProxyUploadUnavailableMessage,
 } from "./browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "./browser-node-fallback.js";
+import type { BrowserNodeTarget } from "./browser-node-routing.js";
 import {
   BROWSER_PROXY_ERROR_ENVELOPE,
+  BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
   parseBrowserProxyFailure,
+  parseBrowserProxyRoute,
   type BrowserProxyEnvelope,
-  type BrowserProxySuccess,
+  type BrowserProxyRoute,
 } from "./browser-proxy-envelope.js";
 import {
   isBrowserProxyUploadRequest,
   prepareBrowserProxyUploadRequest,
 } from "./browser-proxy-upload.js";
 import {
-  applyBrowserProxyPaths,
   callGatewayTool,
   fetchBrowserJson,
-  persistBrowserProxyFiles,
+  persistBrowserProxyResultFiles,
 } from "./browser-tool.runtime.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
+import {
+  parseBrowserSessionTabCloseResult,
+  type BrowserSessionTabRoute,
+} from "./browser/session-tab-route.js";
 
 const logger = createSubsystemLogger("browser");
 const DEFAULT_BROWSER_PROXY_TIMEOUT_MS = 20_000;
@@ -41,7 +47,7 @@ class BrowserNodeSafeFallbackError extends Error {
   }
 }
 
-type BrowserProxyRequest = ((params: {
+export type BrowserProxyRequest = ((params: {
   method: string;
   path: string;
   query?: Record<string, string | number | boolean | undefined>;
@@ -51,6 +57,7 @@ type BrowserProxyRequest = ((params: {
   signal?: AbortSignal;
 }) => Promise<unknown>) & {
   isHostFallbackActive: () => boolean;
+  route: () => BrowserProxyRoute | undefined;
 };
 
 function unwrapBrowserProxyPayload(
@@ -82,7 +89,7 @@ async function callBrowserProxy(params: {
   timeoutMs?: number;
   profile?: string;
   signal?: AbortSignal;
-}): Promise<BrowserProxySuccess> {
+}): Promise<BrowserProxyEnvelope> {
   // Reserve both watchdog windows before clamping so timer saturation cannot
   // make an outer watchdog expire alongside the browser action.
   const proxyTimeoutMs = Math.min(
@@ -145,12 +152,11 @@ async function callBrowserProxy(params: {
     throw error;
   }
   const parsed = unwrapBrowserProxyPayload(payload);
-  const failure = parseBrowserProxyFailure(parsed);
-  if (failure) {
-    const { status, body } = failure.error;
-    throw new BrowserServiceError(body.error, "reason" in body ? body : undefined, status);
-  }
-  if (!parsed || typeof parsed !== "object" || !("result" in parsed)) {
+  if (
+    !parsed ||
+    typeof parsed !== "object" ||
+    (!("result" in parsed) && !parseBrowserProxyFailure(parsed))
+  ) {
     const selectedNode = truncateUtf16Safe(params.nodeLabel?.trim() || params.nodeId, 256);
     throw new Error(
       `Browser proxy returned an invalid response from node ${JSON.stringify(selectedNode)}. Retry with action=status target="host" to check Gateway host browser control.`,
@@ -178,16 +184,12 @@ async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0
 }
 
 export function createBrowserNodeProxyRequest(params: {
-  nodeTarget: {
-    nodeId: string;
-    label?: string;
-    commands?: string[];
-    pendingDeclaredCommands?: string[];
-  };
+  nodeTarget: BrowserNodeTarget;
   allowAutomaticHostFallback: boolean;
   signal?: AbortSignal;
 }): BrowserProxyRequest {
-  let hostFallbackActive = false;
+  let target: "auto" | "node" | "host" = params.allowAutomaticHostFallback ? "auto" : "node";
+  let route: BrowserProxyRoute | undefined;
   const dispatch = async (request: Parameters<BrowserProxyRequest>[0]) => {
     // Bind cancellation once so every node action and its safe host fallback
     // inherit their execution signal without overriding an explicit request.
@@ -195,7 +197,7 @@ export function createBrowserNodeProxyRequest(params: {
       request.signal || params.signal
         ? { ...request, signal: request.signal ?? params.signal }
         : request;
-    if (hostFallbackActive) {
+    if (target === "host") {
       return await callLocalBrowserControl(requestWithSignal);
     }
     try {
@@ -204,19 +206,30 @@ export function createBrowserNodeProxyRequest(params: {
         nodeLabel: params.nodeTarget.label,
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
-        allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        allowAutomaticHostFallback: target === "auto",
         ...requestWithSignal,
       });
-      const mapping = await persistBrowserProxyFiles(proxy.files);
-      applyBrowserProxyPaths(proxy.result, mapping);
-      return proxy.result;
+      // A follow-up snapshot or setting belongs to the browser that already
+      // handled this action, even if that node subsequently becomes unavailable.
+      target = "node";
+      route = parseBrowserProxyRoute(proxy);
+      const failure = parseBrowserProxyFailure(proxy);
+      if (failure) {
+        const { status, body } = failure.error;
+        throw new BrowserServiceError(body.error, body, status);
+      }
+      if (!("result" in proxy)) {
+        throw new Error("Browser proxy returned a failure without an error payload.");
+      }
+      return await persistBrowserProxyResultFiles(proxy.result, proxy.files);
     } catch (error) {
-      if (!params.allowAutomaticHostFallback || !(error instanceof BrowserNodeSafeFallbackError)) {
+      if (target !== "auto" || !(error instanceof BrowserNodeSafeFallbackError)) {
         throw error;
       }
       // These failures are detected before route dispatch. Retrying any later
       // failure could duplicate a mutating browser action.
-      hostFallbackActive = true;
+      target = "host";
+      route = undefined;
       logger.warn(
         `browser node ${params.nodeTarget.label ?? params.nodeTarget.nodeId} unavailable before dispatch (${error.message}); falling back to Gateway host`,
       );
@@ -224,6 +237,39 @@ export function createBrowserNodeProxyRequest(params: {
     }
   };
   return Object.assign(dispatch, {
-    isHostFallbackActive: () => hostFallbackActive,
+    isHostFallbackActive: () => target === "host",
+    route: () => route,
   });
+}
+
+export function createBrowserNodeSessionTabRoute(
+  nodeTarget: BrowserNodeTarget,
+): Extract<BrowserSessionTabRoute, { kind: "node-proxy" }> {
+  return {
+    kind: "node-proxy",
+    nodeId: nodeTarget.nodeId,
+    closeTarget: async (tab) => {
+      const cleanupProxy = createBrowserNodeProxyRequest({
+        nodeTarget,
+        allowAutomaticHostFallback: false,
+      });
+      if (tab.ownership?.status === "durable") {
+        return parseBrowserSessionTabCloseResult(
+          await cleanupProxy({
+            method: "POST",
+            path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+            body: { ownership: tab.ownership },
+            profile: tab.profile,
+          }),
+        );
+      }
+      await cleanupProxy({
+        method: "DELETE",
+        path: `/tabs/${encodeURIComponent(tab.targetId)}`,
+        query: { targetIdMode: "raw" },
+        profile: tab.profile,
+      });
+      return { status: "closed" };
+    },
+  };
 }

@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { measureUtf8AppendBytes } from "../transports/openai-transport-shared.js";
+import { finalizeTerminalToolCallArguments } from "../transports/transport-stream-shared.js";
+import type { ToolCall } from "../types.js";
 
 type ChatCompletionToolCallDelta = ChatCompletionChunk.Choice.Delta.ToolCall;
 const MAX_BUFFERED_TOOL_CALL_ARGUMENT_BYTES = 256_000;
@@ -17,6 +19,49 @@ type OpenAICompletionsToolCallFinalizationOptions<TBlock extends object> = {
   allowSilentToolCallPromotion?: boolean;
   onConfirmedToolCall?: (block: TBlock, contentIndex: number) => void;
 };
+
+/** Keep encrypted provider reasoning attached to the first matching tool call. */
+export function createOpenAIEncryptedToolCallReasoningTracker() {
+  const firstBlocks = new Map<string, ToolCall>();
+  const pendingDetails = new Map<string, string>();
+  return {
+    rememberToolCall(id: string, block: ToolCall) {
+      if (!id || firstBlocks.has(id)) {
+        return;
+      }
+      firstBlocks.set(id, block);
+      const pendingDetail = pendingDetails.get(id);
+      if (pendingDetail) {
+        block.thoughtSignature = pendingDetail;
+        pendingDetails.delete(id);
+      }
+    },
+    consumeDetails(details: unknown) {
+      if (!Array.isArray(details)) {
+        return;
+      }
+      for (const detail of details) {
+        if (
+          !isRecord(detail) ||
+          detail.type !== "reasoning.encrypted" ||
+          typeof detail.id !== "string" ||
+          detail.id.length === 0 ||
+          typeof detail.data !== "string" ||
+          detail.data.length === 0
+        ) {
+          continue;
+        }
+        const serializedDetail = JSON.stringify(detail);
+        const matchingBlock = firstBlocks.get(detail.id);
+        if (matchingBlock) {
+          matchingBlock.thoughtSignature = serializedDetail;
+        } else {
+          pendingDetails.set(detail.id, serializedDetail);
+        }
+      }
+    },
+  };
+}
 
 /** Normalize the SDK's legacy single-function lane into its modern tool-call shape. */
 export function createOpenAICompletionsToolCallDeltaNormalizer(): (
@@ -218,31 +263,34 @@ export function finalizeOpenAICompletionsToolCalls<TBlock extends object>(
     return;
   }
 
-  for (const block of output.content) {
-    if (!isToolCall(block)) {
-      continue;
-    }
-    const toolCall = block as { name?: unknown; arguments?: unknown; partialArgs?: unknown };
-    let completeArguments: unknown;
-    try {
-      completeArguments =
-        typeof toolCall.partialArgs === "string" && toolCall.partialArgs.trim().length > 0
-          ? (JSON.parse(toolCall.partialArgs) as unknown)
-          : undefined;
-    } catch {
-      completeArguments = undefined;
-    }
-    if (
-      typeof toolCall.name !== "string" ||
-      toolCall.name.trim().length === 0 ||
-      !isRecord(completeArguments)
-    ) {
-      output.stopReason = "error";
-      output.errorMessage = "Provider returned an incomplete or malformed tool call";
-      output.content = output.content.filter((candidate) => !isToolCall(candidate));
-      return;
-    }
-    toolCall.arguments = completeArguments;
+  type FinalToolCall = TBlock & {
+    name?: unknown;
+    arguments: Record<string, unknown>;
+    partialArgs?: unknown;
+  };
+  const toolCalls = output.content.filter(isToolCall) as FinalToolCall[];
+  const rejectToolCalls = () => {
+    output.stopReason = "error";
+    output.errorMessage = "Provider returned an incomplete or malformed tool call";
+    output.content = output.content.filter((candidate) => !isToolCall(candidate));
+  };
+  if (
+    toolCalls.some(
+      (call) =>
+        typeof call.name !== "string" ||
+        call.name.trim().length === 0 ||
+        typeof call.partialArgs !== "string" ||
+        call.partialArgs.trim().length === 0,
+    )
+  ) {
+    rejectToolCalls();
+    return;
+  }
+  try {
+    finalizeTerminalToolCallArguments(toolCalls, (call) => call.partialArgs);
+  } catch {
+    rejectToolCalls();
+    return;
   }
 
   for (let contentIndex = 0; contentIndex < output.content.length; contentIndex += 1) {

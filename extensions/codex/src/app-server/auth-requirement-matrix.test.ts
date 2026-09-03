@@ -11,7 +11,7 @@ const AGENT_DIR = "/tmp/openclaw-codex-auth-matrix";
 const SUBSCRIPTION_REQUIRED_ERROR = "subscription profile required";
 const SUBSCRIPTION_UNUSABLE_ERROR = "subscription profile unusable";
 
-type StoredProfileKind = "oauth" | "api_key" | "none";
+type StoredProfileKind = "oauth" | "api_key" | "unusable" | "none";
 type AuthRequirement = "subscription" | "api-key" | undefined;
 
 function buildStore(kind: StoredProfileKind): AuthProfileStore {
@@ -34,10 +34,11 @@ function buildStore(kind: StoredProfileKind): AuthProfileStore {
       order: { openai: ["openai:default"] },
     };
   }
+  const key = kind === "unusable" ? "" : "matrix-api-key";
   return {
     version: 1,
     profiles: {
-      "openai:default": { type: "api_key", provider: "openai", key: "matrix-api-key" },
+      "openai:default": { type: "api_key", provider: "openai", key },
     },
     order: { openai: ["openai:default"] },
   };
@@ -128,13 +129,13 @@ const HANDOFF_MATRIX: {
     homeScope: "user",
     authRequirement: "api-key",
     storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
   {
     homeScope: "user",
     authRequirement: "api-key",
     storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
   {
     homeScope: "user",
@@ -146,13 +147,19 @@ const HANDOFF_MATRIX: {
     homeScope: "user",
     authRequirement: "subscription",
     storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
+  },
+  {
+    homeScope: "user",
+    authRequirement: "subscription",
+    storedProfile: "unusable",
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
   {
     homeScope: "user",
     authRequirement: "subscription",
     storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
   {
     homeScope: "user",
@@ -164,13 +171,13 @@ const HANDOFF_MATRIX: {
     homeScope: "user",
     authRequirement: undefined,
     storedProfile: "api_key",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
   {
     homeScope: "user",
     authRequirement: undefined,
     storedProfile: "none",
-    expected: { outcome: "native", nativeAuthProfile: false },
+    expected: { outcome: "native", nativeAuthProfile: true },
   },
 ];
 
@@ -211,10 +218,11 @@ describe("Codex app-server auth requirement matrix", () => {
         });
         return;
       }
-      expect(resolved).toEqual({
-        authProfileId,
-        nativeAuthProfile: expected.nativeAuthProfile,
-      });
+      expect(resolved).toEqual(
+        homeScope === "user"
+          ? { nativeAuthProfile: true }
+          : { authProfileId, nativeAuthProfile: expected.nativeAuthProfile },
+      );
       expect(resolved).not.toHaveProperty("preparedAuth");
     },
   );

@@ -6,6 +6,7 @@ import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/re
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema, resolveVoiceCallConfig, type VoiceCallConfig } from "./config.js";
 import type { CallManager } from "./manager.js";
+import type { MediaStreamConfig } from "./media-stream.js";
 import type { VoiceCallProvider } from "./providers/base.js";
 import { MockProvider } from "./providers/mock.js";
 import { PlivoProvider } from "./providers/plivo.js";
@@ -128,10 +129,16 @@ const createCall = (startedAt: number): CallRecord => ({
   processedEventIds: [],
 });
 
+const automaticReplyManagerStub = {
+  createAutoResponseGuard: () => ({ isCurrent: () => true, release: () => {} }),
+  invalidateAutoResponse: () => {},
+};
+
 const createManager = (calls: CallRecord[]) => {
   const endCall = vi.fn(async () => ({ success: true }));
   const processEvent = vi.fn<CallManager["processEvent"]>(() => ({ kind: "processed" }));
   const manager = {
+    ...automaticReplyManagerStub,
     getActiveCalls: () => calls,
     endCall,
     processEvent,
@@ -349,7 +356,7 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
     try {
       await server.start();
       expect(mocks.getRealtimeTranscriptionProvider).not.toHaveBeenCalled();
-      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null);
+      expect(mocks.listRealtimeTranscriptionProviders).toHaveBeenCalledWith(null, ["openai"]);
       const mediaStreamHandler = server.getMediaStreamHandler();
       if (!mediaStreamHandler) {
         throw new Error("expected media stream handler");
@@ -364,6 +371,7 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
   it("records media stream Talk events on the active call metadata", async () => {
     const call = createCall(Date.now());
     const manager = {
+      ...automaticReplyManagerStub,
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
         providerCallId === "provider-call-1" ? call : undefined,
@@ -372,6 +380,7 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       speakInitialMessage: vi.fn(async () => {}),
     } as unknown as CallManager;
     const config = createConfig({
+      provider: "twilio",
       streaming: {
         ...createConfig().streaming,
         enabled: true,
@@ -383,7 +392,7 @@ describe("VoiceCallWebhookServer realtime transcription provider selection", () 
       },
     });
 
-    const server = new VoiceCallWebhookServer(config, manager, provider);
+    const server = new VoiceCallWebhookServer(config, manager, createTwilioStreamingProvider());
     try {
       await server.start();
       const mediaHandler = server.getMediaStreamHandler() as unknown as {
@@ -429,6 +438,7 @@ describe("VoiceCallWebhookServer media stream authorization", () => {
       const call = createCall(Date.now());
       const getCallByProviderCallId = vi.fn(() => call);
       const manager = {
+        ...automaticReplyManagerStub,
         getActiveCalls: () => [call],
         getCallByProviderCallId,
         endCall: vi.fn(async () => ({ success: true })),
@@ -2204,6 +2214,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     call.sessionKey = "agent:top:voice:15550001111";
     const speak = vi.fn(async () => ({ success: true }));
     const manager = {
+      ...automaticReplyManagerStub,
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       speak,
     } as unknown as CallManager;
@@ -2234,18 +2245,23 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     const params = requireFirstMockCall(
       mocks.generateVoiceResponse.mock.calls,
       "classic voice response",
-    )[0] as { agentId?: string; voiceConfig?: VoiceCallConfig } | undefined;
+    )[0] as
+      | { agentId?: string; senderIsOwner?: boolean; voiceConfig?: VoiceCallConfig }
+      | undefined;
     expect(params?.voiceConfig?.agentId).toBe("top");
     expect(params?.agentId).toBe("support");
+    expect(params).toHaveProperty("senderIsOwner", undefined);
     expect(speak).toHaveBeenCalledWith(call.callId, "Hello back", {
       listenAfterPlayback: true,
     });
   });
 
-  it("does not replay a completed response after early playback", async () => {
+  it("marks inbound calls as non-owners and does not replay an early response", async () => {
     const call = createCall(Date.now());
+    call.direction = "inbound";
     const speak = vi.fn(async () => ({ success: true }));
     const manager = {
+      ...automaticReplyManagerStub,
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       speak,
     } as unknown as CallManager;
@@ -2274,12 +2290,14 @@ describe("VoiceCallWebhookServer classic response routing", () => {
     expect(speak.mock.calls).toEqual([
       [call.callId, "Spoken before compaction. Final detail.", { listenAfterPlayback: true }],
     ]);
+    expect(mocks.generateVoiceResponse.mock.calls[0]?.[0]).toHaveProperty("senderIsOwner", false);
   });
 
   it("logs only char counts for inbound user text, early AI text, and final AI text", async () => {
     const call = createCall(Date.now());
     const speak = vi.fn(async () => ({ success: true }));
     const manager = {
+      ...automaticReplyManagerStub,
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       speak,
     } as unknown as CallManager;
@@ -2417,13 +2435,14 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     const call = createCall(Date.now() - 1_000);
     call.providerCallId = "CA-stream-1";
 
-    const endCall = vi.fn(async () => ({ success: true }));
+    const endCall = vi.fn(async () => ({ success: false, error: "carrier unavailable" }));
     const speakInitialMessage = vi.fn(async () => {});
     const getCallByProviderCallId = vi.fn((providerCallId: string) =>
       providerCallId === "CA-stream-1" ? call : undefined,
     );
 
     const manager = {
+      ...automaticReplyManagerStub,
       getActiveCalls: () => [call],
       getCallByProviderCallId,
       endCall,
@@ -2504,6 +2523,9 @@ describe("VoiceCallWebhookServer stream disconnect grace", () => {
     expect(messages).toContain(
       `[voice-call] Call finalization requested reason=stream-disconnect-grace-expired callId=${call.callId} providerCallId=CA-stream-1`,
     );
+    expect(messages).toContain(
+      `[voice-call] Failed to auto-end call ${call.callId}: carrier unavailable`,
+    );
 
     await server.stop();
   });
@@ -2519,15 +2541,12 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
   const getMediaCallbacks = (server: VoiceCallWebhookServer) =>
     server.getMediaStreamHandler() as unknown as {
-      config: {
-        onSpeechStart?: (providerCallId: string) => void;
-        onTranscript?: (providerCallId: string, transcript: string) => void;
-        onPartialTranscript?: (providerCallId: string, partial: string) => void;
-      };
+      config: MediaStreamConfig;
     };
 
   it("logs transcript counts without logging transcript content", async () => {
     const manager = {
+      ...automaticReplyManagerStub,
       getActiveCalls: () => [],
       getCallByProviderCallId: vi.fn(() => undefined),
       endCall: vi.fn(async () => ({ success: true })),
@@ -2564,8 +2583,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       const transcript = `${"a".repeat(199)}\uD83D\uDE80tail`;
       const partialText = "user is saying something sensitive";
       const callbacks = getMediaCallbacks(server).config;
-      callbacks.onTranscript?.("CA-utf16", transcript);
-      callbacks.onPartialTranscript?.("CA-partial", partialText);
+      callbacks.onTranscript?.("CA-utf16", transcript, "MZ-log");
+      callbacks.onPartialTranscript?.("CA-partial", partialText, "MZ-log");
 
       expectPrivateLogMetadata({
         messages,
@@ -2603,6 +2622,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       return { kind: "processed" };
     });
     const manager = {
+      ...automaticReplyManagerStub,
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
         providerCallId === call.providerCallId ? call : undefined,
@@ -2639,10 +2659,10 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
     try {
       const media = getMediaCallbacks(server);
-      media.config.onSpeechStart?.("CA-barge");
-      media.config.onTranscript?.("CA-barge", "hello");
-      media.config.onSpeechStart?.("CA-barge");
-      media.config.onTranscript?.("CA-barge", "hello again");
+      media.config.onSpeechStart?.("CA-barge", "MZ-barge");
+      media.config.onTranscript?.("CA-barge", "hello", "MZ-barge");
+      media.config.onSpeechStart?.("CA-barge", "MZ-barge");
+      media.config.onTranscript?.("CA-barge", "hello again", "MZ-barge");
       expect(clearTtsQueue).not.toHaveBeenCalled();
       expect(handleInboundResponse).not.toHaveBeenCalled();
       expect(processEvent).not.toHaveBeenCalled();
@@ -2652,8 +2672,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
       }
       call.state = "listening";
 
-      media.config.onSpeechStart?.("CA-barge");
-      media.config.onTranscript?.("CA-barge", "hello after greeting");
+      media.config.onSpeechStart?.("CA-barge", "MZ-barge");
+      media.config.onTranscript?.("CA-barge", "hello after greeting", "MZ-barge");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(handleInboundResponse).toHaveBeenCalledTimes(1);
       expect(processEvent).toHaveBeenCalledTimes(1);
@@ -2689,6 +2709,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
         : { kind: "processed" },
     );
     const manager = {
+      ...automaticReplyManagerStub,
       getActiveCalls: () => [call],
       getCallByProviderCallId: (providerCallId: string) =>
         providerCallId === call.providerCallId ? call : undefined,
@@ -2721,8 +2742,8 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
 
     try {
       const media = getMediaCallbacks(server);
-      media.config.onSpeechStart?.("CA-inbound");
-      media.config.onTranscript?.("CA-inbound", "hello");
+      media.config.onSpeechStart?.("CA-inbound", "MZ-inbound");
+      media.config.onTranscript?.("CA-inbound", "hello", "MZ-inbound");
       expect(clearTtsQueue).toHaveBeenCalledTimes(2);
       expect(processEvent).toHaveBeenCalledTimes(1);
       const event = requireFirstMockCall(processEvent.mock.calls, "inbound processed event")[0] as

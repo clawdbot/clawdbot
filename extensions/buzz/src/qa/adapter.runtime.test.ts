@@ -113,6 +113,31 @@ describe("Buzz QA transport adapter", () => {
     );
   });
 
+  it("delegates the profile credential source to the shared manager", async () => {
+    const adapter = await createBuzzQaTransportAdapter({
+      adapterOptions: {},
+      channelId: "buzz",
+      credentials: credentialHost,
+      driver: "live",
+      messages: {
+        addInboundMessage: vi.fn(),
+        addOutboundMessage: vi.fn(),
+        editMessage: vi.fn(),
+      },
+      outputDir: ".artifacts/qa-e2e/buzz",
+    });
+
+    try {
+      expect(readBuzzQaCredentialFile).not.toHaveBeenCalled();
+      expect(acquireQaCredentialLease).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "buzz", source: undefined }),
+      );
+    } finally {
+      await adapter.cleanup?.();
+      await adapter.cleanupAfterGatewayStop?.();
+    }
+  });
+
   it("sends a portable mentioned message through the native Buzz relay driver", async () => {
     const addInboundMessage = vi.fn(async (input) => ({
       ...input,

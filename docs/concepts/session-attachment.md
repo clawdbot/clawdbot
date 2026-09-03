@@ -72,15 +72,12 @@ ten recent candidates, so clients can ask you for a longer prefix without
 guessing. See [Control UI URLs](/web/urls) for the complete literal encoding and
 stability contract.
 
-### Current and older Gateways
+### Gateway version requirement
 
-Current Gateways resolve short references at the session store owner. The
-Control UI and CLI then use the returned canonical key.
-
-An older Gateway may reject the additive `shortId` selector. The Control UI can
-fall back to its older bounded list search, scanning at most five pages. The CLI
-does not recreate that paging policy: it tells you to copy the full session key
-from that Gateway's Control UI or upgrade the Gateway.
+The Gateway resolves short references at the session store owner, and the
+Control UI and CLI use the returned canonical key. Short links require a current
+Gateway. If an older or custom Gateway rejects the `shortId` selector, upgrade
+it or use a full session key.
 
 ## Choose how to continue
 

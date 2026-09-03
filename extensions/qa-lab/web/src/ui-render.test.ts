@@ -460,9 +460,9 @@ describe("QA Lab UI evidence render", () => {
                   runner: {
                     availability: "local",
                     command:
-                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
+                      "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
                     lane: "web-ui-playwright",
-                    workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+                    workflow: "external/ci/ux-matrix.yml#matrix-local",
                   },
                   stage: "first-run",
                   status: "pass",
@@ -477,9 +477,9 @@ describe("QA Lab UI evidence render", () => {
                   runner: {
                     availability: "local",
                     command:
-                      "node --import tsx scripts/qa/ux-matrix-evidence-producer.ts --artifact-base .artifacts/qa-e2e/ux-matrix",
+                      "node external/qa/ux-matrix-producer.mjs --artifact-base .artifacts/external-qa/ux-matrix",
                     lane: "cli-status",
-                    workflow: ".github/workflows/ux-matrix-qa.yml#ux-matrix-local",
+                    workflow: "external/ci/ux-matrix.yml#matrix-local",
                   },
                   stage: "first-run",
                   status: "proof-gap",

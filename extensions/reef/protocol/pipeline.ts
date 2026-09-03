@@ -39,7 +39,16 @@ export interface ReviewApproval {
   approvalDigest: string;
 }
 
-export type ReviewGate = (request: ReviewRequest) => Promise<ReviewApproval | undefined>;
+export type ReviewDecisionState = "none" | "pending" | { approved: boolean };
+
+// lookup runs BEFORE any guard call on redelivery: a pending review must
+// short-circuit without re-classifying, or every redelivery becomes a fresh
+// roll of a stochastic classifier and a single stray "allow" bypasses the
+// owner's still-pending review (observed live before this contract existed).
+export interface ReviewGate {
+  lookup(approvalDigest: string): Promise<ReviewDecisionState>;
+  request(request: ReviewRequest): Promise<ReviewApproval | undefined>;
+}
 
 export class PipelineError extends Error {
   constructor(
@@ -234,6 +243,13 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
         error.stage === "guard" &&
         error.verdict?.decision === "deny"
       ) {
+        // A guard_failure deny records that the classifier was unavailable,
+        // not that the content is disallowed. Terminal rejection here would
+        // convert one provider hiccup into a signed, peer-visible rejection;
+        // rethrow instead so the claim releases and redelivery retries.
+        if (error.verdict.category === "guard_failure") {
+          throw error;
+        }
         await refreshClaim();
         const receipt = await completeRejection(
           options,
@@ -353,7 +369,42 @@ async function classifyWithReview(
     text,
     policyVersion: options.policyVersion,
   };
-  let verdict = admitVerdict(
+  // The recorded review decision owns redelivery: consult it before spending a
+  // guard call. Short-circuits write no audit entries — the original verdict
+  // and review request are already in the chain, and a pending message can be
+  // re-attempted every poll without growing it.
+  const existingDecision = (await options.reviewGate?.lookup(approvalDigest)) ?? "none";
+  if (existingDecision === "pending") {
+    throw new PipelineError(
+      "review",
+      "review approval pending",
+      undefined,
+      undefined,
+      "pending",
+      approvalDigest,
+    );
+  }
+  if (existingDecision !== "none" && !existingDecision.approved) {
+    throw new PipelineError(
+      "review",
+      "review explicitly denied",
+      undefined,
+      undefined,
+      "denied",
+      approvalDigest,
+    );
+  }
+  if (existingDecision !== "none") {
+    return classifyApprovedDelivery(options, request, {
+      id,
+      direction,
+      source,
+      destination,
+      proposalHash,
+      approvalDigest,
+    });
+  }
+  const verdict = admitVerdict(
     await options.guard.classify(request),
     options.guard.pinnedModel,
     request.policyVersion,
@@ -377,7 +428,7 @@ async function classifyWithReview(
     );
   }
   if (verdict.decision === "review") {
-    const approval = await options.reviewGate?.({
+    const approval = await options.reviewGate?.request({
       id,
       from: source,
       to: destination,
@@ -416,33 +467,58 @@ async function classifyWithReview(
         approvalDigest,
       );
     }
-    await appendAudit(options.audit, "review_approval", {
+    return classifyApprovedDelivery(options, request, {
       id,
-      from: source,
-      to: destination,
       direction,
-      bodyHash: proposalHash,
+      source,
+      destination,
+      proposalHash,
       approvalDigest,
-      approved: true,
     });
-    verdict = admitVerdict(
-      await options.guard.classify(request),
-      options.guard.pinnedModel,
-      request.policyVersion,
-    );
-    await appendAudit(options.audit, "guard_verdict", {
-      id,
-      from: source,
-      to: destination,
-      direction,
-      bodyHash: proposalHash,
-      approvalDigest,
-      afterApproval: true,
-      ...verdict,
-    });
-    if (verdict.decision === "deny") {
-      throw new PipelineError("guard", "guard denied approved message", verdict);
-    }
+  }
+  return verdict;
+}
+
+// One post-approval classification per delivery attempt, whether the approval
+// arrived inside the original call or before a relay redelivery.
+async function classifyApprovedDelivery(
+  options: GuardedPipelineOptions,
+  request: GuardRequest,
+  context: {
+    id: string;
+    direction: GuardDirection;
+    source: string;
+    destination: string;
+    proposalHash: string;
+    approvalDigest: string;
+  },
+): Promise<Verdict> {
+  await appendAudit(options.audit, "review_approval", {
+    id: context.id,
+    from: context.source,
+    to: context.destination,
+    direction: context.direction,
+    bodyHash: context.proposalHash,
+    approvalDigest: context.approvalDigest,
+    approved: true,
+  });
+  const verdict = admitVerdict(
+    await options.guard.classify(request),
+    options.guard.pinnedModel,
+    request.policyVersion,
+  );
+  await appendAudit(options.audit, "guard_verdict", {
+    id: context.id,
+    from: context.source,
+    to: context.destination,
+    direction: context.direction,
+    bodyHash: context.proposalHash,
+    approvalDigest: context.approvalDigest,
+    afterApproval: true,
+    ...verdict,
+  });
+  if (verdict.decision === "deny") {
+    throw new PipelineError("guard", "guard denied approved message", verdict);
   }
   return verdict;
 }

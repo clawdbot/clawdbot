@@ -118,7 +118,7 @@ describe("BoardWidgetSandboxHost", () => {
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
     expect(fetchMock).toHaveBeenCalledWith(
       "https://gateway.example/__openclaw__/board/weather?bt=ticket",
-      { cache: "no-store" },
+      { cache: "no-store", signal: expect.any(AbortSignal) },
     );
     expect(postMessage).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -184,6 +184,7 @@ describe("BoardWidgetSandboxHost", () => {
       sandboxOrigin: "https://sandbox.example",
       sandboxUrl: SANDBOX_URL,
       sourceOrigin: "https://gateway.example",
+      controlUiBaseUrl: "https://control.example/openclaw",
       resolveFrameUrl: () => "/widget",
       confirmPrompt: () => true,
       onFrameUrl: vi.fn(),
@@ -218,7 +219,11 @@ describe("BoardWidgetSandboxHost", () => {
 
     expect(hostMessage).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: { type: "openclaw:widget-host-init", ticket: "ticket" },
+        data: {
+          type: "openclaw:widget-host-init",
+          ticket: "ticket",
+          controlUiBaseUrl: "https://control.example/openclaw",
+        },
       }),
     );
   });
@@ -949,15 +954,22 @@ describe("BoardWidgetSandboxHost", () => {
     let resolveFirstFetch: (response: Response) => void = () => {};
     const frame = document.createElement("iframe");
     document.body.append(frame);
-    const fetchMock = vi
-      .fn<() => Promise<Response>>()
-      .mockImplementationOnce(
-        async () =>
-          await new Promise<Response>((resolve) => {
-            resolveFirstFetch = resolve;
-          }),
-      )
-      .mockResolvedValueOnce(new Response("<!doctype html><p>resumed</p>"));
+    const sourceUrl = "https://gateway.example/widget";
+    const originalFetch = globalThis.fetch.bind(globalThis);
+    let sourceFetches = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (url !== sourceUrl) {
+        return await originalFetch(input, init);
+      }
+      sourceFetches += 1;
+      if (sourceFetches === 1) {
+        return await new Promise<Response>((resolve) => {
+          resolveFirstFetch = resolve;
+        });
+      }
+      return new Response("<!doctype html><p>resumed</p>");
+    });
     vi.stubGlobal("fetch", fetchMock);
     const onLoaded = vi.fn();
     const host = new BoardWidgetSandboxHost({
@@ -985,7 +997,7 @@ describe("BoardWidgetSandboxHost", () => {
         },
       }),
     );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(sourceFetches).toBe(1));
 
     host.setActive(false);
     resolveFirstFetch(new Response("<!doctype html><p>stale</p>"));
@@ -994,7 +1006,7 @@ describe("BoardWidgetSandboxHost", () => {
 
     host.setActive(true);
     await vi.waitFor(() => expect(onLoaded).toHaveBeenCalledOnce());
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(sourceFetches).toBe(2);
     host.dispose();
   });
 

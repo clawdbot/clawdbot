@@ -13,10 +13,10 @@ import {
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { inspectPersistedInstalledPluginIndexInstallRecordsSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
+import { writePersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store-write.js";
 import {
   readPersistedInstalledPluginIndexSync,
   resolveInstalledPluginIndexStorePath,
-  writePersistedInstalledPluginIndex,
   type InstalledPluginIndexStoreOptions,
 } from "../../../plugins/installed-plugin-index-store.js";
 import {
@@ -32,7 +32,7 @@ const DOCTOR_PLUGIN_ID_ALIASES: Readonly<Record<string, readonly string[]>> = {
   openai: ["openai-codex"],
 };
 
-type PluginRegistryInstallMigrationPreflight =
+type PluginRegistryDoctorMigrationPreflight =
   | {
       /** Migration action selected before reading or writing registry state. */
       action: "skip-existing";
@@ -42,20 +42,20 @@ type PluginRegistryInstallMigrationPreflight =
       current: InstalledPluginIndex;
     }
   | {
-      action: "migrate";
+      action: "initialize" | "migrate";
       filePath: string;
     };
 
-type PluginRegistryInstallMigrationResult =
+type PluginRegistryDoctorMigrationResult =
   | {
       status: "skip-existing" | "dry-run";
       migrated: false;
-      preflight: PluginRegistryInstallMigrationPreflight;
+      preflight: PluginRegistryDoctorMigrationPreflight;
     }
   | {
       status: "migrated";
       migrated: true;
-      preflight: PluginRegistryInstallMigrationPreflight;
+      preflight: PluginRegistryDoctorMigrationPreflight;
       current: InstalledPluginIndex;
     };
 
@@ -64,33 +64,33 @@ export class InvalidPluginInstallRecordStateError extends Error {}
 function invalidPersistedInstallRecordMessage(filePath: string): string {
   return [
     `Persisted plugin install records are invalid at ${filePath}.`,
-    "Stop the Gateway, back up this database, delete only the installed_plugin_index row with index_key='installed-plugin-index' using SQLite tooling, then rerun `openclaw doctor --fix` to rebuild it.",
+    "Stop the Gateway, back up this database, delete only the config_machine_state row with state_key='plugins.installedIndex' using SQLite tooling, then rerun `openclaw doctor --fix` to rebuild it.",
   ].join(" ");
 }
 
 const INVALID_CONFIG_INSTALL_RECORD_MESSAGE =
   "plugins.installs contains invalid records. Back up openclaw.json, correct or remove the invalid retired plugins.installs record, then rerun `openclaw doctor --fix`.";
 
-export type PluginRegistryInstallMigrationParams = LoadInstalledPluginIndexParams &
+export type PluginRegistryDoctorMigrationParams = LoadInstalledPluginIndexParams &
   InstalledPluginIndexStoreOptions & {
     dryRun?: boolean;
     existsSync?: (path: string) => boolean;
     readConfig?: () => Promise<OpenClawConfig> | OpenClawConfig;
   };
 
-/** Decide whether plugin install registry migration should run for this environment. */
-export function preflightPluginRegistryInstallMigration(
-  params: PluginRegistryInstallMigrationParams = {},
-): PluginRegistryInstallMigrationPreflight {
+/** Decide whether Doctor should migrate the plugin registry in this environment. */
+export function preflightPluginRegistryDoctorMigration(
+  params: PluginRegistryDoctorMigrationParams = {},
+): PluginRegistryDoctorMigrationPreflight {
   const filePath = resolveInstalledPluginIndexStorePath(params);
   const persistedState = inspectPersistedInstalledPluginIndexInstallRecordsSync(params);
   if (persistedState.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(invalidPersistedInstallRecordMessage(filePath));
   }
-  if (
-    params.config &&
-    inspectShippedPluginInstallConfigRecords(params.config).status === "invalid"
-  ) {
+  const configInstallState = params.config
+    ? inspectShippedPluginInstallConfigRecords(params.config)
+    : undefined;
+  if (configInstallState?.status === "invalid") {
     throw new InvalidPluginInstallRecordStateError(INVALID_CONFIG_INSTALL_RECORD_MESSAGE);
   }
   const pathExists = params.existsSync ?? fs.existsSync;
@@ -103,15 +103,24 @@ export function preflightPluginRegistryInstallMigration(
         current: currentRegistry,
       };
     }
+    // Install records without a readable index is a half-written registry, not a fresh root:
+    // report it as a migration so doctor keeps warning and rebuilds from what survived.
+    if (persistedState.status !== "missing") {
+      return { action: "migrate", filePath };
+    }
   }
+  const hasConfigInstallRecords =
+    configInstallState?.status === "valid" && Object.keys(configInstallState.records).length > 0;
+  // Only a caller that supplied config can prove nothing is left to migrate. Without config, or with
+  // retired plugins.installs records still present, stay on "migrate" so the warning is not lost.
   return {
-    action: "migrate",
+    action: params.config && !hasConfigInstallRecords ? "initialize" : "migrate",
     filePath,
   };
 }
 
 async function readMigrationConfig(
-  params: PluginRegistryInstallMigrationParams,
+  params: PluginRegistryDoctorMigrationParams,
 ): Promise<OpenClawConfig> {
   if (params.config) {
     return params.config;
@@ -288,11 +297,11 @@ function listMigrationRelevantPluginRecords(params: {
   });
 }
 
-/** Persist a migrated plugin install registry from legacy config/install records when needed. */
-export async function migratePluginRegistryForInstall(
-  params: PluginRegistryInstallMigrationParams = {},
-): Promise<PluginRegistryInstallMigrationResult> {
-  const preflight = preflightPluginRegistryInstallMigration(params);
+/** Persist Doctor's migrated plugin registry from legacy config/install records when needed. */
+export async function migratePluginRegistryForDoctor(
+  params: PluginRegistryDoctorMigrationParams = {},
+): Promise<PluginRegistryDoctorMigrationResult> {
+  const preflight = preflightPluginRegistryDoctorMigration(params);
   if (preflight.action === "skip-existing") {
     return { status: "skip-existing", migrated: false, preflight };
   }

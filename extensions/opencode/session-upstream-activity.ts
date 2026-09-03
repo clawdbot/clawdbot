@@ -1,3 +1,4 @@
+import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
 import {
   isExternalUserText,
   normalizeUserText,
@@ -41,24 +42,6 @@ type OpenCodeMarker = {
 const OPENCODE_EXPORT_CONCURRENCY = 4;
 const OPENCODE_REPLAY_LOOKBACK_USER_MESSAGES = 50;
 const OPENCODE_SHELL_SENTINEL = "The following tool was executed by the user";
-
-async function mapConcurrent<T, R>(
-  values: T[],
-  limit: number,
-  mapper: (value: T) => Promise<R>,
-): Promise<R[]> {
-  const results: R[] = [];
-  results.length = values.length;
-  let nextIndex = 0;
-  const workers = Array.from({ length: Math.min(limit, values.length) }, async () => {
-    while (nextIndex < values.length) {
-      const index = nextIndex++;
-      results[index] = await mapper(values[index]!);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 function sqlString(value: string): string {
   return `'${value.replaceAll("'", "''")}'`;
@@ -409,10 +392,8 @@ export async function checkOpenCodeUpstreamActivity(
     // A failed batch read confirms nothing about whether any thread still exists.
     return [];
   }
-  const outcomes = await mapConcurrent(
-    eligible,
-    OPENCODE_EXPORT_CONCURRENCY,
-    async (probe): Promise<SessionUpstreamActivity | undefined> => {
+  const { results: outcomes } = await runTasksWithConcurrency({
+    tasks: eligible.map((probe) => async (): Promise<SessionUpstreamActivity | undefined> => {
       const indicator = indicators.get(probe.threadId);
       if (!indicator) {
         return { kind: "missing", sessionKey: probe.sessionKey };
@@ -423,7 +404,9 @@ export async function checkOpenCodeUpstreamActivity(
         // Export failures are transient reads, not evidence that a thread was deleted.
         return undefined;
       }
-    },
-  );
+    }),
+    limit: OPENCODE_EXPORT_CONCURRENCY,
+    throwOnError: true,
+  });
   return outcomes.filter((outcome): outcome is SessionUpstreamActivity => outcome !== undefined);
 }

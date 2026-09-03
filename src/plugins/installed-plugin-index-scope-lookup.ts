@@ -31,6 +31,7 @@ type ModelSupportOwner = {
 };
 
 export type InstalledPluginIndexScopeLookup = {
+  addAgentHarnessOwners: (target: Set<string>, ids: readonly string[]) => void;
   addChannelContributionOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectChannelOwners: (target: Set<string>, ids: readonly string[]) => void;
   addDirectProviderOwners: (target: Set<string>, ids: readonly string[]) => void;
@@ -41,6 +42,7 @@ export type InstalledPluginIndexScopeLookup = {
     scopePluginIds: ReadonlySet<string>,
   ) => boolean;
   hasChannelContributionOwners: (ids: readonly string[]) => boolean;
+  hasAgentHarnessOwners: (ids: readonly string[]) => boolean;
   hasCompleteConfigPathActivationMetadata: () => boolean;
   hasDirectChannelOwners: (ids: readonly string[]) => boolean;
   hasInstalledPluginIds: (ids: Iterable<string>) => boolean;
@@ -130,6 +132,7 @@ function modelSupportOwnerMatches(owner: ModelSupportOwner, modelId: string): bo
 }
 
 function buildLookupMaps(index: InstalledPluginIndex): {
+  agentHarnessOwners: OwnerMap;
   channelContributionOwners: OwnerMap;
   directChannelOwners: OwnerMap;
   directProviderOwners: OwnerMap;
@@ -138,6 +141,7 @@ function buildLookupMaps(index: InstalledPluginIndex): {
   pluginIdsByLowercase: ReadonlyMap<string, string>;
   providerContributionOwners: OwnerMap;
 } {
+  const agentHarnessOwners = new Map<string, string[]>();
   const channelContributionOwners = new Map<string, string[]>();
   const directChannelOwners = new Map<string, string[]>();
   const directProviderOwners = new Map<string, string[]>();
@@ -153,6 +157,9 @@ function buildLookupMaps(index: InstalledPluginIndex): {
       appendOwner(directProviderOwners, plugin.pluginId, plugin.pluginId);
       appendOwner(channelContributionOwners, plugin.pluginId, plugin.pluginId);
       appendOwner(providerContributionOwners, plugin.pluginId, plugin.pluginId);
+    }
+    for (const runtimeId of plugin.startup.agentHarnesses) {
+      appendOwner(agentHarnessOwners, runtimeId, plugin.pluginId);
     }
 
     appendOwner(directChannelOwners, plugin.packageChannel?.id, plugin.pluginId);
@@ -187,6 +194,7 @@ function buildLookupMaps(index: InstalledPluginIndex): {
   }
 
   return {
+    agentHarnessOwners: freezeOwnerMap(agentHarnessOwners),
     channelContributionOwners: freezeOwnerMap(channelContributionOwners),
     directChannelOwners: freezeOwnerMap(directChannelOwners),
     directProviderOwners: freezeOwnerMap(directProviderOwners),
@@ -207,6 +215,7 @@ export function createInstalledPluginIndexScopeLookup(
     return lowercase ? (maps.pluginIdsByLowercase.get(lowercase) ?? normalized) : normalized;
   };
   return {
+    addAgentHarnessOwners: (target, ids) => addOwners(target, maps.agentHarnessOwners, ids),
     addChannelContributionOwners: (target, ids) =>
       addOwners(target, maps.channelContributionOwners, ids),
     addDirectChannelOwners: (target, ids) => addOwners(target, maps.directChannelOwners, ids),
@@ -237,6 +246,7 @@ export function createInstalledPluginIndexScopeLookup(
       });
     },
     hasChannelContributionOwners: (ids) => hasOwners(maps.channelContributionOwners, ids),
+    hasAgentHarnessOwners: (ids) => hasOwners(maps.agentHarnessOwners, ids),
     hasCompleteConfigPathActivationMetadata: () =>
       index.plugins.every(
         (plugin) =>

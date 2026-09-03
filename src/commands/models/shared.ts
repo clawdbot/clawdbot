@@ -1,5 +1,7 @@
 /** Shared helpers for model commands that read or mutate model config. */
-import { resolveAgentDir, resolveDefaultAgentId, listAgentIds } from "../../agents/agent-scope.js";
+
+import { resolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import { listAgentIds, resolveAgentDir, resolveSoleAgentId } from "../../agents/agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -18,7 +20,11 @@ import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../con
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { AgentModelConfig } from "../../config/types.agents-shared.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { canonicalizeModelCatalogProviderRef } from "./provider-aliases.js";
+import { inspectModelReference } from "./model-reference-validation.js";
+import {
+  canonicalizeModelCatalogProviderRef,
+  createModelCatalogProviderAliasCanonicalizer,
+} from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
 export { ensureFlagCompatibility } from "./list.options.js";
@@ -54,7 +60,10 @@ type UpdateConfigContext = {
 
 /** Reads source config, applies a mutator, and writes only the source-form config. */
 export async function updateConfig(
-  mutator: (cfg: OpenClawConfig, context: UpdateConfigContext) => OpenClawConfig,
+  mutator: (
+    cfg: OpenClawConfig,
+    context: UpdateConfigContext,
+  ) => OpenClawConfig | Promise<OpenClawConfig>,
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -65,7 +74,7 @@ export async function updateConfig(
   const runtimeConfig = structuredClone(snapshot.runtimeConfig ?? snapshot.config);
   // Mutate source config so SecretRefs and unresolved placeholders do not get
   // overwritten by runtime-resolved secret values.
-  const next = mutator(sourceConfig, { runtimeConfig });
+  const next = await mutator(sourceConfig, { runtimeConfig });
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
@@ -109,59 +118,65 @@ function resolveAuthoredModelAliasTarget(params: {
   return resolved?.alias ? resolved.ref : undefined;
 }
 
-/** Resolves model reference strings to canonical provider/model keys. */
+/** Resolves model reference strings to index-aligned canonical provider/model keys. */
 export function resolveModelKeysFromEntries(params: {
   cfg: OpenClawConfig;
   entries: readonly string[];
-}): string[] {
+}): Array<string | undefined> {
   const aliasIndex = buildModelAliasIndex({
     cfg: params.cfg,
     defaultProvider: DEFAULT_PROVIDER,
   });
-  return params.entries
-    .map((entry) =>
-      resolveModelRefFromString({
-        raw: entry,
-        defaultProvider: DEFAULT_PROVIDER,
-        aliasIndex,
-      }),
-    )
-    .filter((entry): entry is NonNullable<typeof entry> => Boolean(entry))
-    .map((entry) => modelKey(entry.ref.provider, entry.ref.model));
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({ cfg: params.cfg });
+  return params.entries.map((entry) => {
+    const resolved = resolveModelRefFromString({
+      raw: entry,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+    });
+    const ref = resolved ? canonicalizer.ref(resolved.ref) : undefined;
+    return ref ? modelKey(ref.provider, ref.model) : undefined;
+  });
 }
 
-/** Validates an optional agent id against configured agents. */
-export function resolveKnownAgentId(params: {
-  cfg: OpenClawConfig;
-  rawAgentId?: string | null;
-}): string | undefined {
-  const raw = params.rawAgentId?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  const agentId = normalizeAgentId(raw);
-  const knownAgents = listAgentIds(params.cfg);
-  if (!knownAgents.includes(agentId)) {
+function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
+  const agentId = normalizeAgentId(rawAgentId);
+  if (!listAgentIds(cfg).includes(agentId)) {
     throw new Error(
-      `Unknown agent id "${raw}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
+      `Unknown agent id "${rawAgentId}". Use "${formatCliCommand("openclaw agents list")}" to see configured agents.`,
     );
   }
   return agentId;
 }
 
-/** Resolves the selected model-command agent and its profile directory. */
+type ModelsTargetMode = { kind: "read"; agentDirOverride?: string } | { kind: "mutation" };
+
+/** Resolves model-command scope and retains configured auth ownership through read overrides. */
 export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
-  rawAgentId?: string,
+  rawAgentId: string | undefined,
+  mode: ModelsTargetMode,
 ): {
   agentId: string;
   agentDir: string;
 } {
-  const agentId =
-    resolveKnownAgentId({ cfg, rawAgentId }) ??
-    resolveDefaultAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." });
+  const requested = rawAgentId?.trim();
+  if (rawAgentId !== undefined && !requested) {
+    throw new Error("--agent must not be blank");
+  }
+  const requestedAgentId = requested ? resolveKnownAgentId(cfg, requested) : undefined;
+  const resolvedAgentId =
+    mode.kind === "read"
+      ? resolveAmbientOwnerAgentId(cfg, requestedAgentId, {
+          surface: "model inspection",
+          hint: "Pass --agent <id> or set agents.defaults.systemAgent.agentId.",
+        })
+      : (requestedAgentId ??
+        resolveSoleAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." }));
+  const agentId = resolveKnownAgentId(cfg, resolvedAgentId);
+  const agentDirOverride = mode.kind === "read" ? mode.agentDirOverride : undefined;
   const agentDir = resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
+  return { agentId, agentDir: agentDirOverride ?? agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */
@@ -236,21 +251,9 @@ export function applyDefaultModelPrimaryUpdate(params: {
   resolveCfg?: OpenClawConfig;
   modelRaw: string;
   field: "model" | "imageModel";
+  resolvedTarget?: { provider: string; model: string };
 }): OpenClawConfig {
-  const resolved =
-    params.resolveCfg && params.resolveCfg !== params.cfg
-      ? (resolveAuthoredModelAliasTarget({
-          raw: params.modelRaw,
-          cfg: params.cfg,
-        }) ??
-        resolveModelTarget({
-          raw: params.modelRaw,
-          cfg: params.resolveCfg,
-        }))
-      : resolveModelTarget({
-          raw: params.modelRaw,
-          cfg: params.cfg,
-        });
+  const resolved = params.resolvedTarget ?? resolveDefaultModelPrimaryTarget(params);
   const nextModels = {
     ...params.cfg.agents?.defaults?.models,
   } as Record<string, AgentModelEntryConfig>;
@@ -272,6 +275,49 @@ export function applyDefaultModelPrimaryUpdate(params: {
       },
     },
   };
+}
+
+function resolveDefaultModelPrimaryTarget(params: {
+  cfg: OpenClawConfig;
+  resolveCfg?: OpenClawConfig;
+  modelRaw: string;
+}): { provider: string; model: string } {
+  return params.resolveCfg && params.resolveCfg !== params.cfg
+    ? (resolveAuthoredModelAliasTarget({ raw: params.modelRaw, cfg: params.cfg }) ??
+        resolveModelTarget({ raw: params.modelRaw, cfg: params.resolveCfg }))
+    : resolveModelTarget({ raw: params.modelRaw, cfg: params.cfg });
+}
+
+/** Validates and persists one default text/image model selection. */
+export async function updateDefaultModelPrimaryConfig(params: {
+  modelRaw: string;
+  field: "model" | "imageModel";
+}): Promise<{ updated: OpenClawConfig; warning?: string }> {
+  let warning: string | undefined;
+  const updated = await updateConfig((cfg, context) => {
+    const resolvedTarget = resolveDefaultModelPrimaryTarget({
+      cfg,
+      resolveCfg: context.runtimeConfig,
+      modelRaw: params.modelRaw,
+    });
+    const inspection = inspectModelReference({ cfg: context.runtimeConfig, ref: resolvedTarget });
+    if (inspection.status === "unknown-provider") {
+      throw new Error(
+        `Unknown model provider "${inspection.provider}". Install a plugin that declares it or configure it under models.providers before selecting "${inspection.ref}". Config was not changed.`,
+      );
+    }
+    if (inspection.status === "unknown-model") {
+      warning = `Warning: Model "${inspection.ref}" is not in the local model catalog for provider "${inspection.provider}". The provider is installed or configured, so the selection was saved; verify the model ID if it is not a newly released or self-hosted model.`;
+    }
+    return applyDefaultModelPrimaryUpdate({
+      cfg,
+      resolveCfg: context.runtimeConfig,
+      modelRaw: params.modelRaw,
+      field: params.field,
+      resolvedTarget,
+    });
+  });
+  return { updated, ...(warning ? { warning } : {}) };
 }
 
 export { modelKey };

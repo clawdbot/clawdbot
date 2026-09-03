@@ -1,20 +1,29 @@
 /**
  * QuickJS worker for Code Mode guest execution and suspended VM snapshots.
  */
-import { parentPort, workerData } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { EvalFlags, JSException, QuickJS, type JSValueHandle } from "quickjs-wasi";
+import { EvalFlags, JSException, QuickJS, type JSValueHandle, type Snapshot } from "quickjs-wasi";
+import { serveWorkerTasks } from "../infra/worker-task-pool.js";
 import { CODE_MODE_CONTROLLER_SOURCE } from "./code-mode-controller-source.js";
-import { boundCodeModeResult, toCodeModeJsonSafe as toJsonSafe } from "./code-mode-json.js";
+import {
+  boundCodeModeError,
+  captureCodeModeOutput,
+  captureCodeModeValue,
+  EMPTY_CODE_MODE_OUTPUT,
+} from "./code-mode-json.js";
 import type { CodeModeApiVirtualFile } from "./code-mode-namespaces.js";
+import { prepareSource } from "./code-mode-source.js";
 import type {
   CodeModeConfig,
+  CodeModeLanguage,
   CodeModeNamespaceDescriptor,
   CodeModeWorkerPayload,
-  CodeModeWorkerThreadResult as CodeModeWorkerResult,
+  CodeModeVmResult as CodeModeWorkerResult,
+  CodeModeWorkerThreadResult,
   PendingBridgeRequest,
   SettledBridgeRequest,
 } from "./code-mode-worker-types.js";
+import { ToolInputError } from "./tool-input-error.js";
 class CodeModeWorkerFailure extends Error {
   readonly code: Extract<CodeModeWorkerResult, { status: "failed" }>["code"];
 
@@ -34,8 +43,13 @@ type VmRun = {
   didTimeout: () => boolean;
 };
 
-// Each worker handles exactly one exec/resume payload, so cancellations are run-scoped.
-const canceledBridgeRequestIds: string[] = [];
+// Workers are reusable; every VM owns its own bridge state, including failures
+// and cancellations, so a later session cannot inherit a previous run's state.
+type BridgeState = {
+  pendingRequests: PendingBridgeRequest[];
+  canceledRequestIds: string[];
+  admissionFailure?: CodeModeWorkerFailure;
+};
 
 // QuickJS error stacks are backtrace frames only ("    at file:line:col"), with
 // no leading "Name: message" header like V8. Returning .stack alone therefore
@@ -64,9 +78,22 @@ function buildUserSource(code: string): string {
   return `globalThis.__openclawResult = (async () => {\n${code}\n})()`;
 }
 
+function trackPromiseRejection(
+  promise: JSValueHandle,
+  reason: JSValueHandle,
+  handled: boolean,
+): void {
+  const vm = promise.vm;
+  vm.global
+    .getProp("__openclawTrackRejection")
+    .consume((track) =>
+      vm.callFunction(track, vm.undefined, promise, reason, handled ? vm.true : vm.false).dispose(),
+    );
+}
+
 function createHostRequestHandler(params: {
   vm: QuickJS;
-  pendingRequests: PendingBridgeRequest[];
+  bridge: BridgeState;
   config: CodeModeConfig;
 }): (
   this: JSValueHandle,
@@ -75,14 +102,17 @@ function createHostRequestHandler(params: {
   bridgeId?: JSValueHandle,
 ) => JSValueHandle {
   return (methodHandle, argsHandle, bridgeIdHandle) => {
-    if (params.pendingRequests.length >= params.config.maxPendingToolCalls) {
-      throw new Error("too many pending code mode tool calls");
+    if (params.bridge.pendingRequests.length >= params.config.maxPendingToolCalls) {
+      params.bridge.admissionFailure ??= new CodeModeWorkerFailure(
+        "invalid_input",
+        "too many pending code mode tool calls",
+      );
+      throw params.bridge.admissionFailure;
     }
     const method = methodHandle.toString();
     if (
       method !== "search" &&
       method !== "describe" &&
-      method !== "call" &&
       method !== "callValue" &&
       method !== "nodes" &&
       method !== "yield" &&
@@ -108,12 +138,12 @@ function createHostRequestHandler(params: {
     if (!id?.startsWith(`bridge:${method}:`) || !/^bridge:[A-Za-z]+:[1-9]\d*$/u.test(id)) {
       throw new Error("invalid code mode bridge id");
     }
-    if (params.pendingRequests.some((request) => request.id === id)) {
+    if (params.bridge.pendingRequests.some((request) => request.id === id)) {
       throw new Error("duplicate code mode bridge id");
     }
     // The guest receives only an opaque id. Host-side tool execution and policy
     // happen after the worker returns a waiting snapshot.
-    params.pendingRequests.push({
+    params.bridge.pendingRequests.push({
       id,
       method,
       args: Array.isArray(args) ? args : [],
@@ -124,104 +154,70 @@ function createHostRequestHandler(params: {
 
 function createHostCancelRequestHandler(params: {
   vm: QuickJS;
-  pendingRequests: PendingBridgeRequest[];
+  bridge: BridgeState;
 }): (this: JSValueHandle, id: JSValueHandle) => JSValueHandle {
   return (idHandle) => {
     const id = idHandle.toString();
-    const index = params.pendingRequests.findIndex((request) => request.id === id);
+    const index = params.bridge.pendingRequests.findIndex((request) => request.id === id);
     if (index >= 0) {
       // Return the cancellation to the parent owner as well as removing it
       // locally; restored requests may already have a live host operation.
-      params.pendingRequests.splice(index, 1);
-      canceledBridgeRequestIds.push(id);
+      params.bridge.pendingRequests.splice(index, 1);
+      params.bridge.canceledRequestIds.push(id);
     }
     return params.vm.undefined;
   };
 }
 
-async function createVm(params: {
-  wasmModule: WebAssembly.Module;
-  catalog: unknown[];
-  apiFiles: CodeModeApiVirtualFile[];
-  namespaces: CodeModeNamespaceDescriptor[];
-  swarmEnabled: boolean;
-  config: CodeModeConfig;
-  pendingRequests: PendingBridgeRequest[];
-}): Promise<VmRun> {
-  const startedAt = Date.now();
+async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Promise<VmRun> {
+  const startedAt = performance.now();
   let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
-  const vm = await QuickJS.create({
-    wasm: params.wasmModule,
-    memoryLimit: params.config.memoryLimitBytes,
+  const deadlineReached = () => performance.now() - startedAt >= input.config.timeoutMs;
+  const options = {
+    wasm: input.wasmModule,
+    memoryLimit: input.config.memoryLimitBytes,
     timezoneOffset: 0,
+    onUnhandledRejection: trackPromiseRejection,
     interruptHandler: () => {
       timedOut = deadlineReached();
       return timedOut;
     },
-  });
-  vm.hostToHandle(params.catalog).consume((handle) =>
-    vm.global.setProp("__openclawCatalog", handle),
-  );
-  vm.hostToHandle(params.namespaces).consume((handle) =>
-    vm.global.setProp("__openclawNamespaces", handle),
-  );
-  vm.hostToHandle(params.apiFiles).consume((handle) =>
-    vm.global.setProp("__openclawApiFiles", handle),
-  );
-  vm.hostToHandle(params.swarmEnabled).consume((handle) =>
-    vm.global.setProp("__openclawSwarmEnabled", handle),
-  );
-  vm.newFunction(
-    "__openclawHostRequest",
-    createHostRequestHandler({
-      vm,
-      pendingRequests: params.pendingRequests,
-      config: params.config,
-    }),
-  ).consume((hostRequest) => vm.global.setProp("__openclawHostRequest", hostRequest));
-  vm.newFunction(
-    "__openclawHostCancelRequest",
-    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
-  ).consume((hostCancelRequest) =>
-    vm.global.setProp("__openclawHostCancelRequest", hostCancelRequest),
-  );
-  vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
-  return { vm, didTimeout: () => timedOut || deadlineReached() };
-}
-
-async function restoreVm(params: {
-  wasmModule: WebAssembly.Module;
-  snapshotBytes: Uint8Array;
-  config: CodeModeConfig;
-  pendingRequests: PendingBridgeRequest[];
-}): Promise<VmRun> {
-  const startedAt = Date.now();
-  let timedOut = false;
-  const deadlineReached = () => Date.now() - startedAt >= params.config.timeoutMs;
-  const snapshot = QuickJS.deserializeSnapshot(params.snapshotBytes);
-  const vm = await QuickJS.restore(snapshot, {
-    wasm: params.wasmModule,
-    memoryLimit: params.config.memoryLimitBytes,
-    timezoneOffset: 0,
-    interruptHandler: () => {
-      timedOut = deadlineReached();
-      return timedOut;
-    },
-  });
-  vm.registerHostCallback(
-    "__openclawHostRequest",
-    createHostRequestHandler({
-      vm,
-      pendingRequests: params.pendingRequests,
-      config: params.config,
-    }),
-  );
-  vm.registerHostCallback(
-    "__openclawHostCancelRequest",
-    createHostCancelRequestHandler({ vm, pendingRequests: params.pendingRequests }),
-  );
-  return { vm, didTimeout: () => timedOut || deadlineReached() };
+  };
+  const vm =
+    input.kind === "resume"
+      ? await QuickJS.restore(input.snapshot, options)
+      : await QuickJS.create(options);
+  try {
+    const callbacks = [
+      ["__openclawHostRequest", createHostRequestHandler({ vm, bridge, config: input.config })],
+      ["__openclawHostCancelRequest", createHostCancelRequestHandler({ vm, bridge })],
+    ] as const;
+    for (const [name, callback] of callbacks) {
+      if (input.kind === "resume") {
+        // The snapshot owns the original function identities. Rebind callbacks
+        // by name without recreating globals the controller deliberately hides.
+        vm.registerHostCallback(name, callback);
+      } else {
+        vm.newFunction(name, callback).consume((handle) => vm.global.setProp(name, handle));
+      }
+    }
+    if (input.kind === "exec") {
+      for (const [name, value] of [
+        ["__openclawCatalog", input.catalog],
+        ["__openclawNamespaces", input.namespaces],
+        ["__openclawApiFiles", input.apiFiles ?? []],
+        ["__openclawSwarmEnabled", input.swarmEnabled === true],
+        ["__openclawMaxPendingToolCalls", input.config.maxPendingToolCalls],
+      ] as const) {
+        vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
+      }
+      vm.evalCode(CODE_MODE_CONTROLLER_SOURCE, "openclaw-code-mode:controller.js").dispose();
+    }
+    return { vm, didTimeout: () => timedOut || deadlineReached() };
+  } catch (error) {
+    vm.dispose();
+    throw error;
+  }
 }
 
 function takeOutput(vm: QuickJS): unknown[] {
@@ -241,19 +237,17 @@ function takeOutputSafely(vm: QuickJS): unknown[] {
   }
 }
 
-function boundWorkerResult(
+function captureWorkerResult(
   result: CodeModeWorkerResult,
   config: CodeModeConfig,
-): CodeModeWorkerResult {
-  const bounded = boundCodeModeResult({
-    output: result.output,
-    ...(result.status === "completed" ? { value: result.value } : {}),
-    maxOutputBytes: config.maxOutputBytes,
-  });
+): CodeModeWorkerThreadResult {
+  const output = captureCodeModeOutput(result.output, config.maxOutputBytes);
   if (result.status === "completed") {
-    return { ...result, output: bounded.output, value: bounded.value };
+    return { ...result, output, value: captureCodeModeValue(result.value, config.maxOutputBytes) };
   }
-  return { ...result, output: bounded.output };
+  return result.status === "failed"
+    ? { ...result, output, error: boundCodeModeError(result.error, config.maxOutputBytes) }
+    : { ...result, output };
 }
 
 function failedWorkerResult(
@@ -293,7 +287,7 @@ function workerFailureResult(params: {
 
 async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Promise<unknown> {
   if (!resultHandle.isPromise) {
-    return toJsonSafe(vm.dump(resultHandle));
+    return serializeCompletedCatalogHandles(vm, resultHandle);
   }
   const settled = await vm.resolvePromise(resultHandle);
   if ("error" in settled) {
@@ -319,25 +313,36 @@ async function readCompletedResult(vm: QuickJS, resultHandle: JSValueHandle): Pr
       throw new Error(text);
     });
   }
-  return settled.value.consume((value) => toJsonSafe(vm.dump(value)));
+  return settled.value.consume((value) => serializeCompletedCatalogHandles(vm, value));
+}
+
+function serializeCompletedCatalogHandles(vm: QuickJS, value: JSValueHandle): unknown {
+  return vm.global
+    .getProp("__openclawSerializeCatalogHandles")
+    .consume((serialize) =>
+      vm.callFunction(serialize, vm.undefined, value).consume((serialized) => vm.dump(serialized)),
+    );
 }
 
 function waitingResult(params: {
   vm: QuickJS;
-  pendingRequests: PendingBridgeRequest[];
+  bridge: BridgeState;
   settlementMode: Extract<CodeModeWorkerResult, { status: "waiting" }>["settlementMode"];
   output: unknown[];
   config: CodeModeConfig;
 }): CodeModeWorkerResult {
-  const snapshotBytes = QuickJS.serializeSnapshot(params.vm.snapshot());
-  if (snapshotBytes.byteLength > params.config.maxSnapshotBytes) {
+  const snapshot = params.vm.snapshot();
+  // Preserve the encoded-size cap, but serialize only metadata: the snapshot
+  // already owns transferable memory, so the storage codec would copy it again.
+  const metadata = QuickJS.serializeSnapshot({ ...snapshot, memory: new Uint8Array() });
+  if (snapshot.memory.byteLength + metadata.byteLength > params.config.maxSnapshotBytes) {
     throw new CodeModeWorkerFailure("snapshot_limit_exceeded", "code mode snapshot limit exceeded");
   }
   return {
     status: "waiting",
-    snapshotBytes,
-    pendingRequests: params.pendingRequests,
-    canceledRequestIds: canceledBridgeRequestIds,
+    snapshot,
+    pendingRequests: params.bridge.pendingRequests,
+    canceledRequestIds: params.bridge.canceledRequestIds,
     settlementMode: params.settlementMode,
     output: params.output,
   };
@@ -346,7 +351,7 @@ function waitingResult(params: {
 async function runVmExecution(params: {
   vm: QuickJS;
   didTimeout: () => boolean;
-  pendingRequests: PendingBridgeRequest[];
+  bridge: BridgeState;
   config: CodeModeConfig;
   prepare: () => void;
 }): Promise<CodeModeWorkerResult> {
@@ -354,20 +359,23 @@ async function runVmExecution(params: {
   try {
     params.prepare();
     params.vm.executePendingJobs();
+    if (params.bridge.admissionFailure) {
+      throw params.bridge.admissionFailure;
+    }
     output = takeOutput(params.vm);
     const resultHandle = params.vm.global.getProp("__openclawResult");
     try {
       const promisePending = resultHandle.isPromise && resultHandle.promiseState === 0;
-      if (promisePending && params.pendingRequests.length === 0) {
+      if (promisePending && params.bridge.pendingRequests.length === 0) {
         throw new Error("code mode promise is pending without host work");
       }
-      const requiredPendingRequestIds = params.pendingRequests.map((request) => request.id);
+      const requiredPendingRequestIds = params.bridge.pendingRequests.map((request) => request.id);
       if (promisePending || requiredPendingRequestIds.length > 0) {
         // Native await does not expose Promise ownership. Every dispatched
         // call remains required, including detached calls and race branches.
         return waitingResult({
           vm: params.vm,
-          pendingRequests: params.pendingRequests,
+          bridge: params.bridge,
           settlementMode: promisePending
             ? { kind: "awaiting" }
             : { kind: "draining", requiredRequestIds: requiredPendingRequestIds },
@@ -376,6 +384,12 @@ async function runVmExecution(params: {
         });
       }
       const value = await readCompletedResult(params.vm, resultHandle);
+      // Check only after all host work and microtasks settle. Catches attached
+      // after an await (including a restored snapshot) still own their errors.
+      using rejection = params.vm.global
+        .getProp("__openclawUnhandledRejection")
+        .consume((read) => params.vm.callFunction(read, params.vm.undefined));
+      await readCompletedResult(params.vm, rejection);
       return { status: "completed", value, output };
     } finally {
       resultHandle.dispose();
@@ -392,48 +406,42 @@ async function runVmExecution(params: {
   }
 }
 
-async function runExec(input: Extract<CodeModeWorkerPayload, { kind: "exec" }>) {
-  const pendingRequests: PendingBridgeRequest[] = [];
-  const { vm, didTimeout } = await createVm({
-    wasmModule: input.wasmModule,
-    catalog: input.catalog,
-    apiFiles: input.apiFiles ?? [],
-    namespaces: input.namespaces,
-    swarmEnabled: input.swarmEnabled === true,
-    config: input.config,
-    pendingRequests,
-  });
+async function run(input: CodeModeWorkerPayload): Promise<CodeModeWorkerResult> {
+  const startedAt = performance.now();
+  const source =
+    input.kind === "exec"
+      ? await prepareSource({ code: input.source, language: input.language, config: input.config })
+      : "";
+  const config = {
+    ...input.config,
+    timeoutMs: Math.min(
+      input.config.timeoutMs - (performance.now() - startedAt),
+      input.kind === "exec" ? (input.executionTimeoutMs ?? Infinity) : Infinity,
+    ),
+  };
+  if (config.timeoutMs <= 0) {
+    throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded");
+  }
+  // Restored promises retain bridge IDs; unresolved siblings are not redispatched.
+  const bridge: BridgeState = {
+    pendingRequests: input.kind === "resume" ? [...(input.pendingRequests ?? [])] : [],
+    canceledRequestIds: [],
+  };
+  const { vm, didTimeout } = await createVm({ ...input, config }, bridge);
   return runVmExecution({
     vm,
     didTimeout,
-    pendingRequests,
-    config: input.config,
+    bridge,
+    config,
     prepare: () => {
-      vm.evalCode(
-        buildUserSource(input.source),
-        "openclaw-code-mode:user.js",
-        EvalFlags.ASYNC,
-      ).dispose();
-    },
-  });
-}
-
-async function runResume(input: Extract<CodeModeWorkerPayload, { kind: "resume" }>) {
-  // Restored promises keep their original bridge ids; do not redispatch calls
-  // that are still running when a faster sibling resumes this snapshot.
-  const pendingRequests: PendingBridgeRequest[] = [...(input.pendingRequests ?? [])];
-  const { vm, didTimeout } = await restoreVm({
-    wasmModule: input.wasmModule,
-    snapshotBytes: input.snapshotBytes,
-    config: input.config,
-    pendingRequests,
-  });
-  return runVmExecution({
-    vm,
-    didTimeout,
-    pendingRequests,
-    config: input.config,
-    prepare: () => {
+      if (input.kind === "exec") {
+        vm.evalCode(
+          buildUserSource(`${input.prelude ?? ""}${source}`),
+          "openclaw-code-mode:user.js",
+          EvalFlags.ASYNC,
+        ).dispose();
+        return;
+      }
       vm.global.getProp("__openclawSettleBridge").consume((settle) => {
         for (const request of input.settledRequests) {
           const id = vm.newString(request.id);
@@ -460,19 +468,28 @@ function isQuickJsWasmModule(value: unknown): value is WebAssembly.Module {
   return Object.prototype.toString.call(value) === "[object WebAssembly.Module]";
 }
 
-async function main(): Promise<CodeModeWorkerResult> {
-  const input = workerData as unknown;
+async function main(input: unknown): Promise<CodeModeWorkerThreadResult> {
   if (!isRecord(input) || !isRecord(input.config) || !isQuickJsWasmModule(input.wasmModule)) {
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   }
   const config = input.config as CodeModeConfig;
   try {
+    if (config.timeoutMs <= 0) {
+      throw new CodeModeWorkerFailure("timeout", "code mode timeout exceeded");
+    }
     if (input.kind === "exec" && typeof input.source === "string") {
-      return boundWorkerResult(
-        await runExec({
+      return captureWorkerResult(
+        await run({
           kind: "exec",
           wasmModule: input.wasmModule,
           source: input.source,
+          language: input.language as CodeModeLanguage | undefined,
+          prelude: typeof input.prelude === "string" ? input.prelude : undefined,
+          executionTimeoutMs:
+            typeof input.executionTimeoutMs === "number" ? input.executionTimeoutMs : undefined,
           config,
           catalog: Array.isArray(input.catalog) ? input.catalog : [],
           apiFiles: Array.isArray(input.apiFiles)
@@ -486,12 +503,14 @@ async function main(): Promise<CodeModeWorkerResult> {
         config,
       );
     }
-    if (input.kind === "resume" && input.snapshotBytes instanceof Uint8Array) {
-      return boundWorkerResult(
-        await runResume({
+    // SAFETY: This process's QuickJS workers produce snapshots; the host returns them unchanged.
+    const snapshot = input.snapshot as Snapshot | undefined;
+    if (input.kind === "resume" && snapshot?.memory instanceof Uint8Array) {
+      return captureWorkerResult(
+        await run({
           kind: "resume",
           wasmModule: input.wasmModule,
-          snapshotBytes: input.snapshotBytes,
+          snapshot,
           config,
           settledRequests: Array.isArray(input.settledRequests)
             ? (input.settledRequests as SettledBridgeRequest[])
@@ -503,20 +522,28 @@ async function main(): Promise<CodeModeWorkerResult> {
         config,
       );
     }
-    return failedWorkerResult("invalid_input", "invalid code mode worker input");
+    return {
+      ...failedWorkerResult("invalid_input", "invalid code mode worker input"),
+      output: EMPTY_CODE_MODE_OUTPUT,
+    };
   } catch (error) {
     const timedOut = isQuickJsInterruptedError(error);
     const code = timedOut
       ? "timeout"
       : error instanceof CodeModeWorkerFailure
         ? error.code
-        : "internal_error";
-    return failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error));
+        : error instanceof ToolInputError
+          ? "invalid_input"
+          : "internal_error";
+    return captureWorkerResult(
+      failedWorkerResult(code, timedOut ? "code mode timeout exceeded" : errorMessage(error)),
+      config,
+    );
   }
 }
 
-if (parentPort) {
-  Reflect.apply(Reflect.get(parentPort, "postMessage") as (message: unknown) => void, parentPort, [
-    await main(),
-  ]);
-}
+serveWorkerTasks(main, {
+  transferList: (result) =>
+    // SAFETY: QuickJS.snapshot allocates a dedicated, transferable ArrayBuffer.
+    result.status === "waiting" ? [result.snapshot.memory.buffer as ArrayBuffer] : [],
+});

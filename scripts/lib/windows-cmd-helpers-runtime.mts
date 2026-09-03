@@ -1,13 +1,10 @@
 // Typed bridge to the plain-Node Windows command helpers.
-const runtimeSpecifier = "../windows-cmd-helpers.mjs";
-const runtime: unknown = await import(runtimeSpecifier);
+import { isRecord } from "./record-shared.mjs";
 
-function isRuntimeRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
+const runtime: unknown = await import("../windows-cmd-helpers.mjs");
 
 function runtimeFunction(name: string): (...args: unknown[]) => unknown {
-  if (!isRuntimeRecord(runtime) || !(name in runtime)) {
+  if (!isRecord(runtime) || !(name in runtime)) {
     throw new Error(`windows command helper is missing ${name}`);
   }
   const value = runtime[name];

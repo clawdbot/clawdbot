@@ -273,6 +273,7 @@ export function createAgentEventAuditRecorder(options?: {
     options?.writer ??
     createAuditEventWriter({
       ...(options?.stateDir ? { stateDir: options.stateDir } : {}),
+      onContention: (message) => log.warn(message),
       onError: (error) => {
         if (!persistenceFailureWarned) {
           persistenceFailureWarned = true;

@@ -82,12 +82,11 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         if (event.item_id && event.item_id !== this.assistantAudioItem?.itemId) {
           this.assistantAudioItem = {
             itemId: event.item_id,
-            bytes: 0,
+            bytes: audio.byteLength,
             startTimestamp: this.latestMediaTimestamp,
           };
-        }
-        // Playback clocks can lead provider output, but truncate cannot exceed item audio.
-        if (this.assistantAudioItem) {
+        } else if (this.assistantAudioItem) {
+          // Playback clocks can lead provider output, but truncate cannot exceed item audio.
           this.assistantAudioItem.bytes += audio.byteLength;
         }
         this.responseActive = true;
@@ -153,22 +152,22 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
-        const rejectedEventId = readRealtimeErrorEventId(event.error);
-        if (rejectedEventId && rejectedEventId === this.standaloneSpeechEventId) {
-          this.responseCreateInFlight = false;
-          this.standaloneSpeechActive = false;
-          this.standaloneSpeechEventId = null;
-          this.config.onError?.(new Error(detail));
-          if (this.standaloneSpeechQueue.length > 0) {
-            this.flushStandaloneSpeech();
-          } else if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          }
-          return;
-        }
+        const error = isRecord(event.error) ? event.error : undefined;
+        // Validation errors can omit event_id. The response parameter still belongs
+        // to our single pending create; an explicit id always overrides that evidence.
+        const rejectedEventId =
+          readRealtimeErrorEventId(event.error) ??
+          (this.responseCreateInFlight &&
+          error?.type === "invalid_request_error" &&
+          typeof error.param === "string" &&
+          (error.param === "response" || error.param.startsWith("response."))
+            ? (this.manualResponseCreateEventId ?? this.standaloneSpeechEventId)
+            : undefined);
+        const rejectsStandaloneSpeech =
+          this.standaloneSpeechEventId !== null && rejectedEventId === this.standaloneSpeechEventId;
         const rejectsManualResponseCreate =
           this.manualResponseCreateEventId !== null &&
-          readRealtimeErrorEventId(event.error) === this.manualResponseCreateEventId;
+          rejectedEventId === this.manualResponseCreateEventId;
         if (
           rejectsManualResponseCreate &&
           detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)
@@ -196,14 +195,18 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
           }
           return;
         }
-        if (rejectsManualResponseCreate) {
-          this.responseCreateInFlight = false;
-          this.manualResponseCreateEventId = null;
-          if (this.responseCreatePending) {
-            this.flushPendingResponseCreate();
-          } else {
-            this.restoreAutoRespondAfterManualResponse();
-          }
+        if (rejectsManualResponseCreate || rejectsStandaloneSpeech) {
+          // Rejected creates never emit response.done. Retire the same response owner
+          // so transports release speech and reentrant callbacks drain only afterward.
+          this.handleResponseDone(
+            {
+              type: "response.done",
+              response: { status: "failed", status_details: { error: event.error } },
+            },
+            connection,
+            () => this.config.onError?.(new Error(detail)),
+          );
+          return;
         }
         this.config.onError?.(new Error(detail));
       }
@@ -316,11 +319,12 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
       }
     };
     try {
-      invoke(() => this.config.onResponseDone?.(outcome));
-      invoke(emitServerEvent);
+      // Terminal output still belongs to this response until observers retire its owner.
       invoke(() => {
         providerTerminated = this.handleCompletedResponse(event, connection);
       });
+      invoke(() => this.config.onResponseDone?.(outcome));
+      invoke(emitServerEvent);
     } finally {
       // response.done owns response state regardless of observer success. A fatal tool
       // boundary still clears state, but must not start queued work on a closing socket.

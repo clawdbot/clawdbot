@@ -246,6 +246,7 @@ export function resolveRequesterToolPolicies(
       ? resolveSenderToolPolicy({
           config: params.config,
           agentId: params.agentId,
+          sessionKey: params.sessionKey,
           messageProvider: params.messageProvider,
           senderId: params.senderId,
           senderName: params.senderName,

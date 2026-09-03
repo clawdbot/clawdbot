@@ -868,6 +868,94 @@ describe("cron tool authority defaults", () => {
   });
 });
 
+describe("condition trigger syntax validation", () => {
+  const now = Date.parse("2026-07-18T12:00:00.000Z");
+  const malformedScript = "const x = ;";
+  const input = (script = "return { fire: true }") => ({
+    name: "condition-job",
+    enabled: true,
+    schedule: { kind: "every" as const, everyMs: 60_000 },
+    sessionTarget: "main" as const,
+    wakeMode: "now" as const,
+    payload: { kind: "systemEvent" as const, text: "changed" },
+    trigger: { script },
+  });
+
+  it.each([
+    ["creation", "create"],
+    ["replacement", "patch"],
+    ["declarative convergence", "declarative"],
+  ] as const)("rejects malformed trigger scripts on %s", (_name, mutation) => {
+    const state = createMockState(now, { scriptPayloadsEnabled: true });
+    const mutate = (script: string) => {
+      if (mutation === "create") {
+        createJob(state, input(script));
+        return;
+      }
+      const job = createJob(state, input());
+      if (mutation === "patch") {
+        applyJobPatch(job, { trigger: { script } });
+        return;
+      }
+      applyDeclarativeJobSpec(job, input(script), {
+        enabledExplicit: true,
+        nowMs: now,
+      });
+    };
+
+    expect(() => mutate(malformedScript)).toThrow(
+      "cron trigger script has a syntax error: Unexpected token (line 1, column 10)",
+    );
+    expect(() => mutate("   ")).toThrow("cron trigger script must not be empty");
+  });
+
+  it.each([
+    ["top-level await", "await tools.wait(1); return { fire: true }"],
+    ["top-level return", "return { fire: true }"],
+  ])("accepts %s in trigger scripts", (_name, script) => {
+    expect(() => createJob(createMockState(now), input(script))).not.toThrow();
+  });
+
+  it.each([
+    ["rename", { name: "renamed condition" }],
+    ["disable", { enabled: false }],
+    ["clear", { trigger: null }],
+  ] as const)("allows %s for legacy malformed triggers while triggers are disabled", (_, patch) => {
+    const job = createJob(createMockState(now), input());
+    job.trigger = { script: malformedScript };
+
+    applyJobPatch(job, patch, { cronConfig: { triggers: { enabled: false } } });
+    if (!("trigger" in patch)) {
+      expect(job).toMatchObject(patch);
+    }
+    expect(job.trigger).toEqual("trigger" in patch ? undefined : { script: malformedScript });
+  });
+
+  it("replaces a legacy malformed trigger with a valid script", () => {
+    const job = createJob(createMockState(now), input());
+    job.trigger = { script: malformedScript };
+
+    applyJobPatch(job, { trigger: { script: "return { fire: false }" } });
+
+    expect(job.trigger).toEqual({ script: "return { fire: false }" });
+  });
+
+  it("clears a legacy malformed trigger when a disabled declaration omits it", () => {
+    const job = createJob(createMockState(now), input());
+    job.trigger = { script: malformedScript };
+    const { trigger: _trigger, ...declaration } = input();
+
+    expect(() =>
+      applyDeclarativeJobSpec(job, declaration, {
+        enabledExplicit: false,
+        nowMs: now,
+        cronConfig: { triggers: { enabled: false } },
+      }),
+    ).not.toThrow();
+    expect(job.trigger).toBeUndefined();
+  });
+});
+
 describe("script payload validation", () => {
   const now = Date.parse("2026-07-18T12:00:00.000Z");
   const input = (
@@ -1621,7 +1709,7 @@ describe("recomputeNextRuns", () => {
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 
-  it("preserves pending startup catch-up deferrals until the deferred slot is reached", () => {
+  it("preserves pending startup catch-up deferrals until the occurrence is consumed", () => {
     const now = Date.parse("2026-05-05T12:00:00.000Z");
     const deferred = Date.parse("2026-05-05T12:02:00.000Z");
     const job: CronJob = {
@@ -1650,8 +1738,8 @@ describe("recomputeNextRuns", () => {
         nowMs: deferred,
         repairFutureCronNextRunAtMs: true,
       }),
-    ).toBe(true);
-    expect(job.state.startupCatchupAtMs).toBeUndefined();
+    ).toBe(false);
+    expect(job.state.startupCatchupAtMs).toBe(deferred);
     expect(job.state.nextRunAtMs).toBe(deferred);
   });
 

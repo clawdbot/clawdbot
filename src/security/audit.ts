@@ -1369,6 +1369,7 @@ export async function runSecurityAuditCore(
   findings.push(...auditNonDeep.collectSmallModelRiskFindings({ cfg, env }));
   findings.push(...auditNonDeep.collectExposureMatrixFindings(cfg));
   findings.push(...auditNonDeep.collectLikelyMultiUserSetupFindings(cfg));
+  findings.push(...auditNonDeep.collectCrossAgentSessionAccessFindings(cfg));
 
   if (context.includeFilesystem) {
     findings.push(

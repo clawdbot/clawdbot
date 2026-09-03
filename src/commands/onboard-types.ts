@@ -106,6 +106,7 @@ export type OnboardOptions = OnboardDynamicProviderOptions & {
   nodeManager?: NodeManagerChoice;
   remoteUrl?: string;
   remoteToken?: string;
+  remotePassword?: string;
   importFrom?: string;
   importSource?: string;
   importSecrets?: boolean;

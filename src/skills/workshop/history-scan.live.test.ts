@@ -6,9 +6,9 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { formatSkillExperienceReviewTranscript } from "./experience-review-prompt.js";
 import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import { runSkillHistoryScanReview } from "./history-scan-review.js";
+import { formatSkillHistoryScanTranscript } from "./history-scan-transcript-content.js";
 import { listSkillProposals } from "./service.js";
 
 const LIVE =
@@ -22,6 +22,8 @@ let workspaceDir = "";
 function liveConfig(): OpenClawConfig {
   const modelId = process.env.OPENCLAW_LIVE_SKILL_HISTORY_MODEL ?? "gpt-5.6-luna";
   return {
+    // This eval needs only OpenAI and the built-in Workshop tool.
+    plugins: { allow: ["openai"] },
     models: {
       providers: {
         openai: {
@@ -77,7 +79,7 @@ function session(
         !Array.isArray(message) &&
         (message as { role?: unknown }).role === "assistant",
     ).length,
-    transcript: formatSkillExperienceReviewTranscript(messages),
+    transcript: formatSkillHistoryScanTranscript(messages, 80_000),
   };
 }
 

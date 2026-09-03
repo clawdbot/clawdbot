@@ -9,10 +9,11 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
+import { resolveSkillProposalName } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
-  readProposalSupportFiles,
+  SkillProposalDraftMissingError,
   readSkillProposal,
   readSkillProposalManifest,
   readSkillProposalRecord,
@@ -49,18 +50,35 @@ export async function listSkillProposals(
   const store = storeOptions(options.env);
   const scope = proposalScope(options);
   const manifest = await readSkillProposalManifest(store, scope);
+  const missingDrafts = new Set<string>();
   // Every reconciliation takes the same collection lease. Serialize them so a
   // large manifest cannot make its own waiters exhaust the bounded lease wait.
   for (const proposal of manifest.proposals) {
     if (proposal.kind !== "create" || proposal.status !== "pending") {
       continue;
     }
-    const read = await readSkillProposal(proposal.id, store, scope);
+    let read: SkillProposalReadResult | null;
+    try {
+      read = await readSkillProposal(proposal.id, store, scope);
+    } catch (error) {
+      if (!(error instanceof SkillProposalDraftMissingError)) {
+        throw error;
+      }
+      missingDrafts.add(error.proposalId);
+      continue;
+    }
     if (read) {
       await reconcilePendingCreateProposal(read, options);
     }
   }
-  return await readSkillProposalManifest(store, scope);
+  const reconciled = await readSkillProposalManifest(store, scope);
+  // Freshly read manifest rows are locally owned; mark degraded entries in place.
+  for (const proposal of reconciled.proposals) {
+    if (missingDrafts.has(proposal.id)) {
+      proposal.degradedState = "draft-missing";
+    }
+  }
+  return reconciled;
 }
 
 export async function getSkillProposalRunProgress(
@@ -95,10 +113,7 @@ export async function inspectSkillProposal(
   if (!read) {
     return null;
   }
-  return await hydrateProposalSupportFiles(
-    await reconcilePendingCreateProposal(read, options),
-    options.env,
-  );
+  return await reconcilePendingCreateProposal(read, options);
 }
 
 export async function resolvePendingSkillProposal(input: {
@@ -139,7 +154,7 @@ export async function resolvePendingSkillProposal(input: {
   if (matches.length > 1) {
     const candidates = matches
       .slice(0, 8)
-      .map((proposal) => `${proposal.id} (${proposal.skillKey})`)
+      .map((proposal) => `${proposal.id} (${resolveSkillProposalName(proposal.kind, proposal)})`)
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }
@@ -249,19 +264,6 @@ async function reconcilePendingCreateProposal(
     });
   }
   return reconciled.read;
-}
-
-async function hydrateProposalSupportFiles(
-  read: SkillProposalReadResult,
-  env?: NodeJS.ProcessEnv,
-): Promise<SkillProposalReadResult> {
-  const supportFiles = await readProposalSupportFiles(read.record, storeOptions(env));
-  return supportFiles.length === 0
-    ? read
-    : {
-        ...read,
-        supportFiles: supportFiles.map((file) => ({ path: file.path, content: file.content })),
-      };
 }
 
 function proposalMatchesName(

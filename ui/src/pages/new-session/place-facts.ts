@@ -3,7 +3,7 @@ import { formatDurationCompact, formatRelativeTimestamp } from "../../lib/format
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import type { DraftEnvironment } from "./discovery.ts";
 
-const MAX_PLACE_MENU_FACTS = 4;
+export const MAX_PLACE_MENU_FACTS = 4;
 const CAPABILITY_FACT_KEYS = {
   camera: "newSession.capabilityCamera",
   location: "newSession.capabilityLocation",
@@ -43,20 +43,18 @@ export function environmentMenuFacts(
   options: { connected?: boolean; nowMs?: number } = {},
 ): string[] {
   const updateIssue = environment?.issues?.find((issue) => issue.code === "update-required");
-  if (updateIssue) {
-    return [
-      t("newSession.nodeUpdateRequired", {
-        updateCommand: updateIssue.updateCommand,
-        restartCommand: updateIssue.headlessReconnectCommand,
-      }),
-    ];
-  }
   const lifecycle = environmentLifecycleFact({
     environment,
     connected: options.connected ?? true,
     nowMs: options.nowMs ?? Date.now(),
   });
-  const facts = lifecycle ? [lifecycle] : [];
+  const priorityFact = updateIssue
+    ? t("newSession.nodeUpdateRequired", {
+        updateCommand: updateIssue.updateCommand,
+        restartCommand: updateIssue.headlessReconnectCommand,
+      })
+    : lifecycle;
+  const facts = priorityFact ? [priorityFact] : [];
   if (environment?.platform) {
     facts.push(prettifyPlatform(environment.platform));
   }

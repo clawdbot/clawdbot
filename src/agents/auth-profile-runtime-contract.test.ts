@@ -12,9 +12,9 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { resolveOpenAIRuntimeProvider } from "./openai-routing.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
-import { resetProviderAuthAliasMapCacheForTest } from "./provider-auth-aliases.test-support.js";
 import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 
 const pluginMetadataMocks = vi.hoisted(() => ({
@@ -22,7 +22,8 @@ const pluginMetadataMocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: pluginMetadataMocks.getCurrentPluginMetadataSnapshot,
 }));
 
@@ -91,7 +92,7 @@ function providerRuntimeConfig(provider: string, runtime: string): OpenClawConfi
 
 describe("Auth profile runtime contract - embedded OpenClaw and CLI adapter", () => {
   beforeEach(() => {
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
     pluginMetadataMocks.getCurrentPluginMetadataSnapshot.mockClear();
     pluginMetadataMocks.loadPluginMetadataSnapshot.mockReset().mockReturnValue(authAliasMetadata);
   });

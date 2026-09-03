@@ -3,7 +3,6 @@ import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js"
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
 import { parseSkillFrontmatter, resolveSkillInvocationPolicy } from "../loading/frontmatter.js";
-import { computeSkillPromptVersion } from "../loading/skill-version.js";
 import type { ParsedSkillFrontmatter, SkillEntry } from "../types.js";
 import { bumpSkillsSnapshotVersion } from "./refresh-state.js";
 
@@ -236,7 +235,6 @@ export function mergeRemoteNodeSkillEntries(
         readContent: skill.content,
         filePath,
         baseDir: filePath.slice(0, -"/SKILL.md".length),
-        promptVersion: computeSkillPromptVersion(skill.content),
         source: "openclaw-node",
         sourceInfo: createSyntheticSourceInfo(filePath, {
           source: "openclaw-node",

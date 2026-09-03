@@ -205,4 +205,68 @@ describe("runRespawnChildWithSignalBridge", () => {
       },
     );
   });
+
+  it("settles a spawn error when the child has no pid", () => {
+    const { child } = createChild();
+    const onError = vi.fn();
+    const exit = vi.fn();
+
+    runRespawnChildWithSignalBridge({
+      command: "missing-command",
+      args: [],
+      env: {},
+      runtime: {
+        spawn: vi.fn(() => child) as unknown as typeof spawn,
+        attachChildProcessBridge: vi.fn(),
+        exit: exit as unknown as (code?: number) => never,
+      },
+      onError,
+    });
+
+    const error = new Error("spawn failed");
+    child.emit("error", error);
+
+    expect(onError).toHaveBeenCalledWith(error);
+    expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps escalation active across repeated operational errors", () => {
+    vi.useFakeTimers();
+    const { child, kill } = createChild(5678);
+    const onError = vi.fn();
+    const exit = vi.fn();
+    let onSignal: ((signal: NodeJS.Signals) => void) | undefined;
+
+    try {
+      runRespawnChildWithSignalBridge({
+        command: "/usr/bin/node",
+        args: ["/repo/openclaw/dist/entry.js"],
+        env: {},
+        runtime: {
+          spawn: vi.fn(() => child) as unknown as typeof spawn,
+          attachChildProcessBridge: vi.fn((_child, options) => {
+            onSignal = options?.onSignal;
+            return { detach: vi.fn() };
+          }),
+          exit: exit as unknown as (code?: number) => never,
+        },
+        onError,
+      });
+
+      onSignal?.("SIGTERM");
+      child.emit("error", new Error("first signal delivery failed"));
+      child.emit("error", new Error("second signal delivery failed"));
+      vi.advanceTimersByTime(2_000);
+
+      expect(onError).not.toHaveBeenCalled();
+      expect(exit).not.toHaveBeenCalled();
+      expect(kill).toHaveBeenNthCalledWith(1, "SIGTERM");
+      expect(kill).toHaveBeenNthCalledWith(2, process.platform === "win32" ? "SIGTERM" : "SIGKILL");
+
+      child.emit("exit", null, "SIGKILL");
+      expect(exit).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

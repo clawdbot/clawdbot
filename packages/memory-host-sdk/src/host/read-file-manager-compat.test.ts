@@ -5,6 +5,13 @@ import path from "node:path";
 import { readMemoryFile } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+function requireMemoryReadSuccess(result: Awaited<ReturnType<typeof readMemoryFile>>) {
+  if (result.status === "not_found") {
+    throw new Error(`expected memory content for ${result.path}`);
+  }
+  return result;
+}
+
 describe("MemoryIndexManager.readFile", () => {
   let workspaceDir: string;
   let memoryDir: string;
@@ -34,14 +41,14 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.rm(workspaceDir, { recursive: true, force: true });
   });
 
-  it("returns empty text when the requested file does not exist", async () => {
+  it("returns not found when the requested file does not exist", async () => {
     const relPath = "memory/2099-01-01.md";
     const result = await readMemoryFile({
       workspaceDir,
       extraPaths: [],
       relPath,
     });
-    expect(result).toEqual({ text: "", path: relPath });
+    expect(result).toEqual({ status: "not_found", text: "", path: relPath });
   });
 
   it("returns content slices when the file exists", async () => {
@@ -58,6 +65,7 @@ describe("MemoryIndexManager.readFile", () => {
       lines: 1,
     });
     expect(result).toEqual({
+      status: "ok",
       text: "line 2\n\n[More content available. Use from=3 to continue.]",
       path: relPath,
       from: 2,
@@ -77,11 +85,13 @@ describe("MemoryIndexManager.readFile", () => {
       "utf-8",
     );
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+      }),
+    );
 
     expect(result.path).toBe(relPath);
     expect(result.from).toBe(1);
@@ -104,12 +114,14 @@ describe("MemoryIndexManager.readFile", () => {
       "utf-8",
     );
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-      from: 21,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+        from: 21,
+      }),
+    );
 
     expect(result.from).toBe(21);
     expect(result.lines).toBe(120);
@@ -130,13 +142,15 @@ describe("MemoryIndexManager.readFile", () => {
       "utf-8",
     );
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-      defaultLines: 5,
-      maxChars: 220,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+        defaultLines: 5,
+        maxChars: 220,
+      }),
+    );
 
     expect(result.from).toBe(1);
     expect(result.lines).toBeLessThanOrEqual(5);
@@ -158,7 +172,7 @@ describe("MemoryIndexManager.readFile", () => {
       from: 10,
       lines: 5,
     });
-    expect(result).toEqual({ text: "", path: relPath, from: 10, lines: 0 });
+    expect(result).toEqual({ status: "ok", text: "", path: relPath, from: 10, lines: 0 });
   });
 
   it("caps returned text to the default max chars and exposes continuation metadata", async () => {
@@ -171,11 +185,13 @@ describe("MemoryIndexManager.readFile", () => {
       "utf-8",
     );
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+      }),
+    );
 
     expect(result.truncated).toBe(true);
     expect(result.nextFrom).toBeGreaterThan(1);
@@ -190,11 +206,13 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, `1: ${"x".repeat(20_000)}`, "utf-8");
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+      }),
+    );
 
     expect(result.truncated).toBe(true);
     expect(result.lines).toBe(1);
@@ -209,11 +227,13 @@ describe("MemoryIndexManager.readFile", () => {
     await fs.mkdir(path.dirname(absPath), { recursive: true });
     await fs.writeFile(absPath, [`1: ${"x".repeat(20_000)}`, "line 2"].join("\n"), "utf-8");
 
-    const result = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [],
-      relPath,
-    });
+    const result = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [],
+        relPath,
+      }),
+    );
 
     expect(result.truncated).toBe(true);
     expect(result.lines).toBe(1);
@@ -234,6 +254,7 @@ describe("MemoryIndexManager.readFile", () => {
     });
 
     expect(result).toEqual({
+      status: "ok",
       text: "alpha\nbeta\ngamma",
       path: relPath,
       from: 1,
@@ -241,7 +262,7 @@ describe("MemoryIndexManager.readFile", () => {
     });
   });
 
-  it("returns empty text when the file disappears after stat", async () => {
+  it("returns not found when the file disappears after stat", async () => {
     const relPath = "memory/transient.md";
     const absPath = path.join(workspaceDir, relPath);
     await fs.mkdir(path.dirname(absPath), { recursive: true });
@@ -268,7 +289,7 @@ describe("MemoryIndexManager.readFile", () => {
         extraPaths: [],
         relPath,
       });
-      expect(result).toEqual({ text: "", path: relPath });
+      expect(result).toEqual({ status: "not_found", text: "", path: relPath });
     } finally {
       openSpy.mockRestore();
     }
@@ -296,17 +317,20 @@ describe("MemoryIndexManager.readFile", () => {
         relPath: "extra/extra.md",
       }),
     ).resolves.toEqual({
+      status: "ok",
       path: "extra/extra.md",
       text: "Extra content.",
       from: 1,
       lines: 1,
     });
 
-    const oversized = await readMemoryFile({
-      workspaceDir,
-      extraPaths: [extraDir],
-      relPath: "extra/oversized.md",
-    });
+    const oversized = requireMemoryReadSuccess(
+      await readMemoryFile({
+        workspaceDir,
+        extraPaths: [extraDir],
+        relPath: "extra/oversized.md",
+      }),
+    );
     expect(oversized.truncated).toBe(true);
     expect(oversized.text).not.toContain("use read on the source file");
 

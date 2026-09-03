@@ -161,7 +161,8 @@
 
 .run-inspector__code-list,
 .run-inspector__remediation-list,
-.run-inspector__candidate-list {
+.run-inspector__candidate-list,
+.run-inspector__receipt-list {
   display: grid;
   gap: var(--space-2);
   margin: 0;
@@ -171,6 +172,83 @@
 .run-inspector__candidate-list li {
   display: grid;
   gap: var(--space-1);
+}
+
+.run-inspector__receipt-list {
+  list-style: none;
+  padding-left: 0;
+}
+
+.run-inspector__receipt-list a {
+  display: grid;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  color: var(--text);
+  text-decoration: none;
+}
+
+.run-inspector__receipt-list a:hover {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+
+.run-inspector__receipt-list a:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.run-inspector__receipt-list a[aria-current="true"] {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+
+.run-inspector__receipt-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.run-inspector__receipt-badge {
+  display: inline-flex;
+  width: fit-content;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--space-2);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+}
+
+.run-inspector__receipt-badge--allowed,
+.run-inspector__receipt-badge--enforced {
+  border-color: color-mix(in srgb, var(--ok) 60%, var(--border));
+}
+
+.run-inspector__receipt-badge--denied,
+.run-inspector__receipt-badge--unknown,
+.run-inspector__receipt-badge--unsupported,
+.run-inspector__receipt-badge--unattributed {
+  border-color: color-mix(in srgb, var(--warn) 60%, var(--border));
+}
+
+.run-inspector__receipt-detail {
+  display: grid;
+  gap: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.run-inspector__receipt-detail h4,
+.run-inspector__receipt-detail h5,
+.run-inspector__receipt-detail h6,
+.run-inspector__receipt-detail p {
+  margin: 0;
+}
+
+.run-inspector__receipt-detail > section {
+  display: grid;
+  gap: var(--space-2);
 }
 
 @media (max-width: 768px) {

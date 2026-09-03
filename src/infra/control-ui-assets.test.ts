@@ -80,7 +80,7 @@ vi.mock("../process/exec.js", () => ({
 
 let ensureControlUiAssetsBuilt: typeof import("./control-ui-assets.js").ensureControlUiAssetsBuilt;
 let isControlUiStartupAssetsReady: typeof import("./control-ui-assets.js").isControlUiStartupAssetsReady;
-let resolveControlUiDistIndexHealth: typeof import("./control-ui-assets.js").resolveControlUiDistIndexHealth;
+let resolveControlUiAssetHealth: typeof import("./control-ui-assets.js").resolveControlUiAssetHealth;
 let isPackageProvenControlUiRootSync: typeof import("./control-ui-assets.js").isPackageProvenControlUiRootSync;
 let resolveControlUiRootOverrideSync: typeof import("./control-ui-assets.js").resolveControlUiRootOverrideSync;
 let resolveControlUiRootSync: typeof import("./control-ui-assets.js").resolveControlUiRootSync;
@@ -91,7 +91,7 @@ describe("control UI assets helpers (fs-mocked)", () => {
     ({
       ensureControlUiAssetsBuilt,
       isControlUiStartupAssetsReady,
-      resolveControlUiDistIndexHealth,
+      resolveControlUiAssetHealth,
       isPackageProvenControlUiRootSync,
       resolveControlUiRootOverrideSync,
       resolveControlUiRootSync,
@@ -107,19 +107,30 @@ describe("control UI assets helpers (fs-mocked)", () => {
     vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReset().mockReturnValue(null);
   });
 
-  it("reports health for missing + existing dist assets", async () => {
+  it("distinguishes unresolved, missing, incomplete, and ready startup bundles", async () => {
     const root = abs("fixtures/health");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
 
-    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+    await expect(resolveControlUiAssetHealth({ argv1: "" })).resolves.toEqual({
+      kind: "missing-index",
+      indexPath: null,
+    });
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "missing-index",
       indexPath,
-      exists: false,
     });
 
-    setFile(indexPath, "<html></html>\n");
-    await expect(resolveControlUiDistIndexHealth({ root })).resolves.toEqual({
+    setFile(indexPath, '<script src="./assets/startup.js"></script>');
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "incomplete",
       indexPath,
-      exists: true,
+      missingAsset: "assets/startup.js",
+    });
+
+    setFile(path.join(root, "dist", "control-ui", "assets", "startup.js"));
+    await expect(resolveControlUiAssetHealth({ root })).resolves.toEqual({
+      kind: "ready",
+      indexPath,
     });
   });
 

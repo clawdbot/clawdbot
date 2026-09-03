@@ -80,6 +80,20 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
         runTurn: vi.fn(async function* () {}),
         setConfigOption: vi.fn(async () => {}),
         setMode: vi.fn(async () => {}),
+        startTurn: vi.fn((input: { requestId: string }) => ({
+          requestId: input.requestId,
+          promptStarted: Promise.resolve(),
+          events: (async function* () {
+            yield {
+              type: "text_delta" as const,
+              stream: "output" as const,
+              text: "progress",
+            };
+          })(),
+          result: Promise.resolve({ status: "completed" as const, stopReason: "end_turn" }),
+          cancel: vi.fn(async () => {}),
+          closeStream: vi.fn(async () => {}),
+        })),
         __options: options,
       };
     }),
@@ -680,12 +694,17 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("registers the backend lazily without importing ACPX runtime when startup probe is disabled", async () => {
+  it("registers the backend lazily and forwards sessions and turns when startup probe is disabled", async () => {
     process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     delete process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE;
     const workspaceDir = testWorkspace.dir;
     const ctx = createServiceContext(workspaceDir);
     const service = createAcpxRuntimeService(ctx);
+    const sessionsDir = path.join(workspaceDir, "state", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    for (const id of ["global", "openclaw-owner-v1-existing", "agent:free:acp:test"]) {
+      await fs.writeFile(path.join(sessionsDir, `${encodeURIComponent(id)}.json`), "{}");
+    }
 
     await service.start(ctx);
 
@@ -695,6 +714,16 @@ describe("createAcpxRuntimeService", () => {
     }
     const backendRuntime = backend.runtime as {
       ensureSession(input: { agent: string; mode: string; sessionKey: string }): Promise<unknown>;
+      startTurn(input: {
+        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
+        text: string;
+        mode: string;
+        requestId: string;
+      }): {
+        promptStarted: Promise<void>;
+        events: AsyncIterable<unknown>;
+        result: Promise<unknown>;
+      };
     };
     expect(typeof backendRuntime.ensureSession).toBe("function");
     expect(backend.healthy).toBeUndefined();
@@ -707,60 +736,13 @@ describe("createAcpxRuntimeService", () => {
     });
 
     expect(acpxRuntimeConstructorMock).toHaveBeenCalledOnce();
+    expect(acpxRuntimeConstructorMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        elicitationModes: ["form", "url"],
+        openclawLegacyBareSessionKeys: new Set(["global", "openclaw-owner-v1-existing"]),
+      }),
+    );
     expect(backend.healthy).toBeUndefined();
-
-    await service.stop?.(ctx);
-  });
-
-  it("forwards startTurn through the lazily resolved default runtime", async () => {
-    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
-    const workspaceDir = testWorkspace.dir;
-    const ctx = createServiceContext(workspaceDir);
-    const startTurn = vi.fn((input: { requestId: string }) => ({
-      requestId: input.requestId,
-      events: (async function* () {
-        yield {
-          type: "text_delta" as const,
-          stream: "output" as const,
-          text: "legacy progress",
-        };
-      })(),
-      result: Promise.resolve({ status: "completed" as const, stopReason: "end_turn" }),
-      cancel: vi.fn(async () => {}),
-      closeStream: vi.fn(async () => {}),
-    }));
-    acpxRuntimeConstructorMock.mockImplementationOnce(function AcpxRuntime(options: unknown) {
-      return {
-        ...createMockRuntime({
-          startTurn,
-        }),
-        getCapabilities: vi.fn(async () => ({ controls: [] })),
-        getStatus: vi.fn(async () => ({ summary: "ready" })),
-        prepareFreshSession: vi.fn(async () => {}),
-        setConfigOption: vi.fn(async () => {}),
-        setMode: vi.fn(async () => {}),
-        __options: options,
-      };
-    });
-    const service = createAcpxRuntimeService(ctx);
-
-    await service.start(ctx);
-
-    const backend = getAcpRuntimeBackend("acpx");
-    if (!backend) {
-      throw new Error("expected ACPX runtime backend");
-    }
-    const backendRuntime = backend.runtime as {
-      startTurn(input: {
-        handle: { sessionKey: string; backend: string; runtimeSessionName: string };
-        text: string;
-        mode: string;
-        requestId: string;
-      }): {
-        events: AsyncIterable<unknown>;
-        result: Promise<unknown>;
-      };
-    };
     const turn = backendRuntime.startTurn({
       handle: {
         sessionKey: "agent:codex:acp:test",
@@ -771,6 +753,7 @@ describe("createAcpxRuntimeService", () => {
       mode: "prompt",
       requestId: "turn-1",
     });
+    await expect(turn.promptStarted).resolves.toBeUndefined();
     await expect(turn.result).resolves.toEqual({
       status: "completed",
       stopReason: "end_turn",
@@ -784,10 +767,10 @@ describe("createAcpxRuntimeService", () => {
       {
         type: "text_delta",
         stream: "output",
-        text: "legacy progress",
+        text: "progress",
       },
     ]);
-    expect(startTurn).toHaveBeenCalledOnce();
+    expect(acpxRuntimeConstructorMock.mock.results[0]?.value.startTurn).toHaveBeenCalledOnce();
 
     await service.stop?.(ctx);
   });

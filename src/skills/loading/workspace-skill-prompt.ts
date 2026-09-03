@@ -1,6 +1,7 @@
 // Workspace skill prompt helpers render bounded catalogs and reusable snapshots.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
@@ -9,7 +10,7 @@ import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "
 import { resolveSkillKey } from "./frontmatter.js";
 import { escapeSkillXml, type Skill } from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
-import { formatSkillsForPromptBounded } from "./skill-prompt-limits.js";
+import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
 
 const skillsLogger = createSubsystemLogger("skills");
@@ -23,6 +24,8 @@ type WorkspaceSkillBuildOptions = {
   skillFilter?: string[];
   skillOverrides?: Record<string, boolean>;
   eligibility?: SkillEligibilityContext;
+  preserveEntryOrder?: boolean;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
 function resolveWorkspaceSkillPromptState(
@@ -35,13 +38,20 @@ function resolveWorkspaceSkillPromptState(
   const resolvedSkills = promptEntries.map((entry) => entry.skill);
   const limits = opts?.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
-  const prompt = formatSkillsForPromptBounded({
+  const prepared = prepareSkillsForPrompt({
     skills: compactPromptSkills(resolvedSkills),
     maxSkillsInPrompt: limits?.maxSkillsInPrompt,
     maxSkillsPromptChars: agentLimits?.maxSkillsPromptChars ?? limits?.maxSkillsPromptChars,
     remoteNote,
+    preserveOrder: opts?.preserveEntryOrder,
   });
-  return { eligible, prompt, resolvedSkills, skillFilter };
+  const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
+  return {
+    eligible,
+    prompt: prepared.prompt,
+    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    skillFilter,
+  };
 }
 
 export function buildSkillSnapshot(
@@ -79,6 +89,7 @@ type ResolveSkillsPromptParams = {
   agentId?: string;
   eligibility?: SkillEligibilityContext;
   loadEntries?: () => SkillEntry[];
+  preserveEntryOrder?: boolean;
 };
 
 function buildSkillsPromptFromEntries(
@@ -93,6 +104,7 @@ function buildSkillsPromptFromEntries(
     config: params.config,
     agentId: params.agentId,
     eligibility: params.eligibility,
+    preserveEntryOrder: params.preserveEntryOrder,
   }).prompt;
   return prompt.trim() ? prompt : "";
 }

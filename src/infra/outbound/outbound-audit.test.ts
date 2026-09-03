@@ -111,7 +111,6 @@ describe("outbound audit projection", () => {
       unsubscribe();
     }
 
-    expect(events).toHaveLength(2);
     expect(events.map((event) => event.sourceId)).toEqual([
       "message:outbound:queue:queue-1:payload:0",
       "message:outbound:queue:queue-1:payload:1",

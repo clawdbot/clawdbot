@@ -27,9 +27,14 @@ function pullRequest(
 
 function createPullRequestPane(sessions: SessionCapability) {
   const request = vi.fn().mockResolvedValue({ subscribed: true });
+  const partialSessions = sessions as Partial<SessionCapability>;
+  const sessionCapability = {
+    ...sessions,
+    pullRequestSummary: partialSessions.pullRequestSummary ?? vi.fn(() => undefined),
+  } as SessionCapability;
   const harness = createTestChatPane({
     client: { request } as unknown as GatewayBrowserClient,
-    sessions,
+    sessions: sessionCapability,
   });
   harness.pane.context.gateway.snapshot.hello = {
     features: { methods: [SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD] },
@@ -41,6 +46,12 @@ function emitSnapshot(
   emitGatewayEvent: (event: string, payload: unknown) => void,
   sessionKey: string,
   snapshot: {
+    branch?: {
+      owner: string;
+      repo: string;
+      branch: string;
+      createUrl?: string;
+    };
     pullRequests: ControlUiSessionPullRequest[];
     rateLimited: boolean;
     status: "ready" | "rate-limited" | "unavailable";
@@ -54,7 +65,7 @@ function emitSnapshot(
 describe("chat pane pushed pull request state", () => {
   it("does not let a previous session delta clobber the current PR state", async () => {
     const { pane, state, emitGatewayEvent } = createPullRequestPane({
-      capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+      capturePullRequestEpoch: vi.fn(() => ({})),
       setPullRequestSummary: vi.fn(),
     } as unknown as SessionCapability);
 
@@ -78,7 +89,7 @@ describe("chat pane pushed pull request state", () => {
   });
 
   it("subscribes and publishes pushed live PR state", async () => {
-    const epoch = Symbol("pr-refresh");
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
     const { pane, request, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => epoch),
@@ -108,7 +119,7 @@ describe("chat pane pushed pull request state", () => {
   it("retains the current PR when a pushed summary is truncated", async () => {
     const current = pullRequest(999, "draft");
     const older = Array.from({ length: 20 }, (_value, index) => pullRequest(index + 1, "closed"));
-    const epoch = Symbol("pr-refresh");
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
     const { pane, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => epoch),
@@ -144,10 +155,44 @@ describe("chat pane pushed pull request state", () => {
     expect(pane.sessionPullRequests).toEqual([]);
   });
 
+  it("clears the pane snapshot while a structural replacement is pending", async () => {
+    const epoch = {};
+    const setPullRequestSummary = vi.fn();
+    const { pane, emitGatewayEvent } = createPullRequestPane({
+      capturePullRequestEpoch: vi.fn(() => epoch),
+      setPullRequestSummary,
+    } as unknown as SessionCapability);
+    await pane.refreshSessionPullRequests();
+    emitSnapshot(emitGatewayEvent, "agent:main:current", {
+      branch: {
+        owner: "openclaw",
+        repo: "openclaw",
+        branch: "feature/demo",
+        createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
+      },
+      pullRequests: [pullRequest(111532, "open")],
+      rateLimited: false,
+      status: "ready",
+    });
+    await pane.refreshSessionPullRequests();
+    expect(pane.sessionPullRequests).toHaveLength(1);
+
+    emitGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:current",
+      agentId: "main",
+      reason: "branch-switch",
+    });
+    await pane.refreshSessionPullRequests();
+
+    expect(pane.sessionPullRequests).toEqual([]);
+    expect(pane.sessionPullRequestsBranch).toBeUndefined();
+    expect(setPullRequestSummary).toHaveBeenLastCalledWith("agent:main:current", undefined, epoch);
+  });
+
   it("preserves shared PR state for an empty rate-limited snapshot", async () => {
     const setPullRequestSummary = vi.fn();
     const { pane, emitGatewayEvent } = createPullRequestPane({
-      capturePullRequestEpoch: vi.fn(() => Symbol("pr-refresh")),
+      capturePullRequestEpoch: vi.fn(() => ({})),
       setPullRequestSummary,
     } as unknown as SessionCapability);
     await pane.refreshSessionPullRequests();
@@ -162,7 +207,7 @@ describe("chat pane pushed pull request state", () => {
   });
 
   it("publishes merged PR state after the PR settles", async () => {
-    const epoch = Symbol("pr-refresh");
+    const epoch = {};
     const setPullRequestSummary = vi.fn();
     const { pane, emitGatewayEvent } = createPullRequestPane({
       capturePullRequestEpoch: vi.fn(() => epoch),

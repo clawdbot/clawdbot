@@ -1,12 +1,14 @@
 /** Tests ACP session metadata persistence, joins, and migration helpers. */
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../../state/openclaw-state-ownership-operations.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import {
   listAcpSessionEntries,
@@ -125,6 +127,46 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
+  it("reads metadata under external state ownership without write admission", async () => {
+    await withTestDir({ prefix: "openclaw-acp-read-only-owner-" }, async (dir) => {
+      const env = { OPENCLAW_STATE_DIR: dir };
+      const externalEnv = { ...env, OPENCLAW_SUPERVISOR_MODE: "external" };
+      const cfg = {
+        agents: { ownership: "explicit", entries: { main: {} } },
+      } satisfies OpenClawConfig;
+      const databasePath = path.join(dir, "state", "openclaw.sqlite");
+      const storePath = path.join(dir, "agents", "main", "agent", "openclaw-agent.sqlite");
+      const sessionKey = "agent:main:proof";
+      await replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey },
+        { sessionId: "proof-session", updatedAt: 100 },
+      );
+      await upsertAcpSessionMeta({
+        cfg,
+        databasePath,
+        env,
+        sessionKey,
+        mutate: () => ({
+          backend: "acpx",
+          agent: "codex",
+          runtimeSessionName: "proof-runtime",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 100,
+        }),
+      });
+      closeOpenClawStateDatabaseForTest();
+      claimOpenClawStateOwnership("test-supervisor", { env: externalEnv });
+      closeOpenClawStateDatabaseForTest();
+      const before = fs.readFileSync(databasePath);
+
+      expect(readAcpSessionMeta({ cfg, databasePath, env, sessionKey })).toMatchObject({
+        runtimeSessionName: "proof-runtime",
+      });
+      expect(fs.readFileSync(databasePath)).toEqual(before);
+    });
+  });
+
   it("keeps identical bare keys isolated by explicit agent owner", async () => {
     await withTestDir({ prefix: "openclaw-acp-pair-owner-" }, async (dir) => {
       const storePath = path.join(dir, "sessions.json");
@@ -177,7 +219,7 @@ describe("ACP session metadata SQLite store", () => {
     });
   });
 
-  it("batch-loads and rekeys legacy bare metadata for the stable store owner", async () => {
+  it("batch-loads legacy bare metadata without rekeying during a read", async () => {
     await withTestDir({ prefix: "openclaw-acp-batch-owner-" }, async (dir) => {
       const databasePath = path.join(dir, "state", "openclaw.sqlite");
       const cfg = {
@@ -224,8 +266,19 @@ describe("ACP session metadata SQLite store", () => {
         })?.runtimeSessionName,
       ).toBe("legacy-global");
       expect(
-        readAcpSessionMetaForEntry({ databasePath, sessionKey: "global", entry }),
-      ).toBeUndefined();
+        readAcpSessionMetaForEntry({ databasePath, sessionKey: "global", entry })
+          ?.runtimeSessionName,
+      ).toBe("legacy-global");
+      const database = new DatabaseSync(databasePath, {
+        readOnly: true,
+      });
+      try {
+        expect(
+          database.prepare("SELECT session_key FROM acp_sessions ORDER BY session_key").all(),
+        ).toEqual([{ session_key: "global" }]);
+      } finally {
+        database.close();
+      }
     });
   });
 
@@ -447,7 +500,15 @@ describe("ACP session metadata SQLite store", () => {
       const storedEntry = readStoredAcpSessionEntry({ storePath, sessionKey });
       expect(storedEntry?.sessionId).toEqual(expect.any(String));
       expect(storedEntry?.updatedAt).toEqual(expect.any(Number));
+      expect(storedEntry?.sessionStartedAt).toBeGreaterThan(200);
       expect(storedEntry?.acp).toBeUndefined();
+      expect(readAcpSessionEntry({ cfg, databasePath, sessionKey })?.acp?.runtimeSessionName).toBe(
+        "codex-new",
+      );
+      expect(readAcpSessionMeta({ cfg, databasePath, sessionKey })?.runtimeSessionName).toBe(
+        "codex-new",
+      );
+      expect(await listAcpSessionEntries({ cfg, databasePath })).toHaveLength(1);
     });
   });
 

@@ -9,11 +9,8 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { issueDeviceBootstrapToken, verifyDeviceBootstrapToken } from "./device-bootstrap.js";
 import { approveBootstrapDevicePairing, approveDevicePairing } from "./device-pairing-approval.js";
-import {
-  approveNodePairing,
-  requestNodePairing,
-  updatePairedNodeBins,
-} from "./device-pairing-node.js";
+import { updatePairedNodeBins, updatePairedNodeSessionHost } from "./device-pairing-node-facts.js";
+import { approveNodePairing, requestNodePairing } from "./device-pairing-node.js";
 import {
   loadDevicePairingStoreState,
   persistDeviceBootstrapTokenRecords,
@@ -27,6 +24,7 @@ import {
 } from "./device-pairing-tokens.js";
 import {
   getPairedDevice,
+  hasPairedCardRenderer,
   hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
@@ -1025,6 +1023,15 @@ describe("device pairing tokens", () => {
     await expect(updatePairedNodeBins("node-1", ["retired-bin"], original, baseDir)).resolves.toBe(
       true,
     );
+    await expect(
+      updatePairedNodeSessionHost({
+        nodeId: "node-1",
+        sessionHost: true,
+        expectedPairingGeneration: original,
+        isConnectionCurrent: () => true,
+        baseDir,
+      }),
+    ).resolves.toBe(true);
 
     const rotated = await rotateDeviceToken({
       deviceId: "node-1",
@@ -1046,6 +1053,7 @@ describe("device pairing tokens", () => {
     ).resolves.toBe(false);
     const paired = await getPairedDevice("node-1", baseDir);
     expect(paired?.nodeSurface?.bins).toBeUndefined();
+    expect(paired?.nodeSurface?.sessionHost).toBeUndefined();
     expect(paired?.lastSeenAtMs).toBeUndefined();
     expect(paired?.lastSeenReason).toBeUndefined();
   });
@@ -2211,60 +2219,117 @@ describe("device pairing tokens", () => {
     await expect(removePairedDevice("device-1", baseDir)).resolves.toBeNull();
   });
 
-  test("clears APNs only when a node reapproval changes installation identity", async () => {
+  test.each([
+    { clientId: "openclaw-control-ui", platform: undefined, expected: true },
+    { clientId: "webchat-ui", platform: undefined, expected: true },
+    { clientId: "openclaw-ios", platform: undefined, expected: true },
+    { clientId: "openclaw-android", platform: undefined, expected: true },
+    { clientId: "openclaw-macos", platform: undefined, expected: true },
+    { clientId: "cli", platform: "web", expected: true },
+    { clientId: "cli", platform: "ios", expected: true },
+    { clientId: "cli", platform: "android", expected: true },
+    { clientId: "cli", platform: "macos", expected: true },
+    { clientId: "cli", platform: "darwin", expected: true },
+    { clientId: "cli", platform: "linux", expected: false },
+  ])(
+    "detects paired card renderer client=$clientId platform=$platform",
+    async ({ clientId, platform, expected }) => {
+      const baseDir = await suiteRootTracker.make("renderer-case");
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
+      const request = await requestDevicePairing(
+        {
+          deviceId: "renderer-device",
+          publicKey: "renderer-public-key",
+          clientId,
+          platform,
+          role: "operator",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir);
+
+      await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(expected);
+    },
+  );
+
+  test("invalidates the card renderer cache when removing a paired device", async () => {
     const baseDir = await makeDevicePairingDir();
-    await setupPairedNodeDevice(baseDir);
-    const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
-    await approveNodePairing(
-      nodePairing.request.requestId,
-      { callerScopes: ["operator.pairing"] },
-      baseDir,
-    );
-    await registerApnsRegistration({
-      nodeId: "node-1",
-      transport: "direct",
-      token: "ABCD1234ABCD1234ABCD1234ABCD1234",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      baseDir,
-    });
+    await setupPairedBrowserOperatorDevice(baseDir);
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(true);
 
-    const sameInstallationRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(sameInstallationRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
-      token: "abcd1234abcd1234abcd1234abcd1234",
-    });
+    await removePairedDevice("browser-device-1", baseDir);
 
-    const replacementRepair = await requestDevicePairing(
-      {
-        deviceId: "node-1",
-        publicKey: "public-key-node-1-replacement",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    await expect(
-      approveDevicePairing(replacementRepair.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toMatchObject({
-      status: "approved",
-      nodePairingGenerationChanged: true,
-    });
-    await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+    await expect(hasPairedCardRenderer(baseDir)).resolves.toBe(false);
   });
+
+  test.each(["owner", "bootstrap"] as const)(
+    "clears APNs only when a $approval reapproval changes installation identity",
+    async (approval) => {
+      const baseDir = await makeDevicePairingDir();
+      await setupPairedNodeDevice(baseDir);
+      const nodePairing = await requestNodePairing({ nodeId: "node-1" }, baseDir);
+      await approveNodePairing(
+        nodePairing.request.requestId,
+        { callerScopes: ["operator.pairing"] },
+        baseDir,
+      );
+      await registerApnsRegistration({
+        nodeId: "node-1",
+        transport: "direct",
+        token: "ABCD1234ABCD1234ABCD1234ABCD1234",
+        topic: "ai.openclaw.ios",
+        environment: "sandbox",
+        baseDir,
+      });
+      const approve = async (requestId: string) =>
+        approval === "owner"
+          ? await approveDevicePairing(requestId, { callerScopes: [] }, baseDir)
+          : await approveBootstrapDevicePairing(
+              requestId,
+              PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              baseDir,
+            );
+
+      const sameInstallationRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(sameInstallationRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(sameInstallationRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toMatchObject({
+        token: "abcd1234abcd1234abcd1234abcd1234",
+      });
+
+      const replacementRepair = await requestDevicePairing(
+        {
+          deviceId: "node-1",
+          publicKey: "public-key-node-1-replacement",
+          role: "node",
+          scopes: [],
+        },
+        baseDir,
+      );
+      await expect(approve(replacementRepair.request.requestId)).resolves.toMatchObject({
+        status: "approved",
+        nodePairingGenerationChanged: true,
+      });
+      expect(
+        (await listDevicePairing(baseDir)).pending.map((request) => request.requestId),
+      ).not.toContain(replacementRepair.request.requestId);
+      await expect(loadApnsRegistration("node-1", baseDir)).resolves.toBeNull();
+    },
+  );
 
   test("clears generation-owned node bins on public-key replacement", async () => {
     const baseDir = await makeDevicePairingDir();

@@ -108,10 +108,18 @@ function renderPendingDevice(req: PendingDevice, props: DevicesProps, paired?: P
           : nothing}
       </div>
       <div class="settings-row__control">
-        <button class="btn btn--sm" @click=${() => props.onDeviceApprove(req.requestId)}>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
+          @click=${() => props.onDeviceApprove(req.requestId)}
+        >
           ${t("devices.inventory.approve")}
         </button>
-        <button class="btn btn--sm" @click=${() => props.onDeviceReject(req.requestId)}>
+        <button
+          class="btn btn--sm"
+          ?disabled=${!props.canManagePairing}
+          @click=${() => props.onDeviceReject(req.requestId)}
+        >
           ${t("devices.inventory.reject")}
         </button>
       </div>

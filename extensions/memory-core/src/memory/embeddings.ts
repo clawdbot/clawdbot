@@ -28,9 +28,10 @@ export type EmbeddingProviderResult = {
   runtime?: EmbeddingProviderRuntime;
 };
 
-type CreateEmbeddingProviderOptions = MemoryEmbeddingProviderCreateOptions & {
+type CreateEmbeddingProviderOptions = Omit<MemoryEmbeddingProviderCreateOptions, "dimensions"> & {
   provider: EmbeddingProviderRequest;
   fallback: EmbeddingProviderFallback;
+  outputDimensionality?: number;
   acquireLocalService?: MemoryCoreAcquireLocalService;
 };
 
@@ -54,15 +55,21 @@ function getAdapter(
   throw new Error(`Unknown memory embedding provider: ${id}`);
 }
 
-function resolveProviderModel(
+function resolveAdapterCreateOptions(
   adapter: MemoryEmbeddingProviderAdapter,
-  requestedModel: string,
-): string {
-  const trimmed = requestedModel.trim();
-  if (trimmed) {
-    return trimmed;
-  }
-  return adapter.defaultModel ?? "";
+  options: CreateEmbeddingProviderOptions,
+): MemoryEmbeddingProviderCreateOptions {
+  const { outputDimensionality, ...base } = options;
+  const createOptions = {
+    ...base,
+    fallback: "none",
+    model: options.model.trim() || adapter.defaultModel || "",
+    ...(typeof outputDimensionality === "number" ? { dimensions: outputDimensionality } : {}),
+  };
+  return {
+    ...createOptions,
+    model: adapter.normalizeModel?.(createOptions) ?? createOptions.model,
+  };
 }
 
 export function resolveEmbeddingProviderFallbackModel(
@@ -85,17 +92,6 @@ export function resolveEmbeddingProviderFallbackRemote(
   return Object.keys(sharedRemote).length > 0 ? sharedRemote : undefined;
 }
 
-export function resolveEmbeddingProviderAdapterId(
-  providerId: string,
-  config?: MemoryEmbeddingProviderCreateOptions["config"],
-): string | undefined {
-  try {
-    return getAdapter(providerId, config).id;
-  } catch {
-    return undefined;
-  }
-}
-
 export function resolveEmbeddingProviderAdapterTransport(
   providerId: string,
   config?: MemoryEmbeddingProviderCreateOptions["config"],
@@ -112,19 +108,13 @@ export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingPr
     options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
   try {
     const adapter = getAdapter(provider, options.config);
-    const model = resolveProviderModel(adapter, options.model);
-    const identity = adapter.resolveIndexIdentity?.({
-      ...options,
-      provider,
-      model,
-    });
-    return identity
-      ? {
-          provider: { id: adapter.id, model: identity.model },
-          cacheKeyData: identity.cacheKeyData,
-          aliases: identity.aliases,
-        }
-      : undefined;
+    const createOptions = resolveAdapterCreateOptions(adapter, { ...options, provider });
+    const identity = adapter.resolveIndexIdentity?.(createOptions);
+    return {
+      provider: { id: adapter.id, model: identity?.model ?? createOptions.model },
+      cacheKeyData: identity?.cacheKeyData,
+      aliases: identity?.aliases,
+    };
   } catch {
     return undefined;
   }
@@ -134,10 +124,7 @@ async function createWithAdapter(
   adapter: MemoryEmbeddingProviderAdapter,
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
-  const createOptions = {
-    ...options,
-    model: resolveProviderModel(adapter, options.model),
-  };
+  const createOptions = resolveAdapterCreateOptions(adapter, options);
   const result = await adapter.create(createOptions);
   return {
     provider: result.provider,

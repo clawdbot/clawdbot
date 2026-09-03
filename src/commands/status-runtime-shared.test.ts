@@ -16,12 +16,7 @@ const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
   getDaemonStatusSummary: vi.fn(),
   getNodeDaemonStatusSummary: vi.fn(),
-  resolveReadOnlyChannelPluginsForConfig: vi.fn(),
   resolveModelAuthLabel: vi.fn(),
-}));
-
-vi.mock("../channels/plugins/read-only.js", () => ({
-  resolveReadOnlyChannelPluginsForConfig: mocks.resolveReadOnlyChannelPluginsForConfig,
 }));
 
 vi.mock("../infra/provider-usage.js", () => ({
@@ -78,44 +73,9 @@ describe("status-runtime-shared", () => {
     mocks.getDaemonStatusSummary.mockResolvedValue({ label: "LaunchAgent" });
     mocks.getNodeDaemonStatusSummary.mockResolvedValue({ label: "node" });
     mocks.resolveModelAuthLabel.mockReturnValue(undefined);
-    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
-      plugins: [{ id: "telegram" }],
-      configuredChannelIds: ["telegram"],
-      missingConfiguredChannelIds: [],
-    });
   });
 
   it("resolves the shared security audit payload", async () => {
-    await resolveStatusSecurityAudit({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-    });
-
-    expect(mocks.runSecurityAudit).toHaveBeenCalledWith({
-      config: { gateway: {} },
-      sourceConfig: { gateway: {} },
-      deep: false,
-      includeFilesystem: true,
-      includeChannelSecurity: true,
-      loadPluginSecurityCollectors: false,
-      plugins: [{ id: "telegram" }],
-    });
-    expect(mocks.resolveReadOnlyChannelPluginsForConfig).toHaveBeenCalledWith(
-      { gateway: {} },
-      {
-        activationSourceConfig: { gateway: {} },
-        includeSetupFallbackPlugins: false,
-      },
-    );
-  });
-
-  it("lets the security audit load configured channel plugins when read-only discovery is incomplete", async () => {
-    mocks.resolveReadOnlyChannelPluginsForConfig.mockReturnValue({
-      plugins: [],
-      configuredChannelIds: ["external"],
-      missingConfiguredChannelIds: ["external"],
-    });
-
     await resolveStatusSecurityAudit({
       config: { gateway: {} },
       sourceConfig: { gateway: {} },
@@ -448,18 +408,35 @@ describe("status-runtime-shared", () => {
   });
 
   it("requests the typed exporter stability projection", async () => {
-    await resolveStatusGatewayDiagnosticsSafe({
-      config: { gateway: {} },
-      timeoutMs: 4321,
-      gatewayReachable: true,
-      type: "telemetry.exporter",
-    });
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        timeoutMs: 4321,
+        gatewayReachable: true,
+        type: "telemetry.exporter",
+      }),
+    ).resolves.toEqual({ ok: true, value: { ok: true } });
 
     expect(mocks.callGateway).toHaveBeenCalledWith({
       method: "diagnostics.stability",
       params: { limit: 1000, type: "telemetry.exporter" },
       timeoutMs: 4321,
       config: { gateway: {} },
+    });
+  });
+
+  it("preserves failed gateway diagnostics as a typed result", async () => {
+    mocks.callGateway.mockRejectedValueOnce(new Error("diagnostics probe timed out"));
+
+    await expect(
+      resolveStatusGatewayDiagnosticsSafe({
+        config: { gateway: {} },
+        timeoutMs: 4321,
+        gatewayReachable: true,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      error: "Error: diagnostics probe timed out",
     });
   });
 
@@ -497,7 +474,6 @@ describe("status-runtime-shared", () => {
       includeFilesystem: true,
       includeChannelSecurity: true,
       loadPluginSecurityCollectors: false,
-      plugins: [{ id: "telegram" }],
     });
   });
 

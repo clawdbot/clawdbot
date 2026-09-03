@@ -183,10 +183,13 @@ describe("gateway candidate connection", () => {
   });
 
   it("never carries origin-bound Access credentials to another candidate host", async () => {
-    const credentials = { clientId: "cf-pinned-id", clientSecret: "cf-pinned-secret" };
+    const credentials = { clientId: "test-key", clientSecret: "test-secret" };
     createConnection(new Map([[candidates[0]!, credentials]]));
 
-    expect(mocks.options[0]?.cloudflareAccess).toEqual(credentials);
+    expect(mocks.options[0]?.edgeAuthHeaders).toEqual({
+      "CF-Access-Client-Id": credentials.clientId,
+      "CF-Access-Client-Secret": credentials.clientSecret,
+    });
     mocks.options[0]?.onClose?.(1006, "transport unavailable", {
       phase: "pre-hello",
       socketOpened: false,
@@ -197,6 +200,6 @@ describe("gateway candidate connection", () => {
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
 
     expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");
-    expect(mocks.options[1]?.cloudflareAccess).toBeUndefined();
+    expect(mocks.options[1]?.edgeAuthHeaders).toBeUndefined();
   });
 });

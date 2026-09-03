@@ -25,7 +25,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -38,6 +38,7 @@ describe("status daemon summary", () => {
     });
 
     const summary = await getDaemonStatusSummary();
+    expect(summary.loaded).toBe(true);
     expect(summary.runtimeShort).toBe("running (pid 1234)");
     expect(summary.layout?.execStart).toBe("/usr/bin/node /opt/openclaw/dist/entry.js gateway");
     expect(summary.layout?.sourceScope).toBe("system");
@@ -48,7 +49,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd user",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -80,7 +81,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "systemd user",
       installed: true,
-      loaded: true,
+      loadState: { status: "loaded" },
       managedByOpenClaw: true,
       externallyManaged: false,
       loadedText: "enabled",
@@ -104,7 +105,7 @@ describe("status daemon summary", () => {
     mocks.readServiceStatusSummary.mockResolvedValueOnce({
       label: "Gateway service",
       installed: false,
-      loaded: false,
+      loadState: { status: "unknown", detail: "Gateway service install not supported on aix" },
       managedByOpenClaw: false,
       externallyManaged: false,
       loadedText: "not installed",
@@ -116,6 +117,7 @@ describe("status daemon summary", () => {
     expect(mocks.resolveGatewayService).toHaveBeenCalled();
     expect(summary.label).toBe("Gateway service");
     expect(summary.installed).toBe(false);
+    expect(summary.loaded).toBeNull();
     expect(summary.runtimeShort).toBe("unknown (Gateway service install not supported on aix)");
   });
 });

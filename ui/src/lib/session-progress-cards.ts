@@ -1,14 +1,17 @@
 import type {
   ProgressCard,
   ProgressCardGetResult,
+  ProgressCardPutResult,
   ProgressCardStep,
 } from "@openclaw/gateway-protocol";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isGatewayMethodAdvertised } from "./gateway-methods.ts";
 
 const PROGRESS_CARD_GET_METHOD = "progressCard.get";
+const PROGRESS_CARD_PUT_METHOD = "progressCard.put";
 const PROGRESS_CARD_CHANGED_EVENT = "progressCard.changed";
 const CACHE_LIMIT = 100;
 
@@ -23,6 +26,7 @@ export type SessionProgressCardStore = {
   watch: (owner: object, sessionKeys: readonly string[]) => void;
   unwatch: (owner: object) => void;
   load: (sessionKey: string) => Promise<ProgressCard | null>;
+  dismiss: (card: ProgressCard) => Promise<boolean>;
   get: (sessionKey: string) => ProgressCard | null | undefined;
   getError: (sessionKey: string) => SessionProgressCardLoadError | undefined;
   subscribe: (listener: () => void) => () => void;
@@ -57,7 +61,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
   }
   const markdown = card.markdown;
   const revision = card.revision;
-  const updatedAt = card.updatedAt;
+  const updatedAt = asDateTimestampMs(card.updatedAt);
   const rawSteps = card.steps;
   if (
     card.sessionKey !== sessionKey ||
@@ -66,7 +70,7 @@ function parseProgressCard(value: unknown, sessionKey: string): ProgressCard | n
     typeof revision !== "number" ||
     !Number.isInteger(revision) ||
     revision < 1 ||
-    typeof updatedAt !== "number" ||
+    updatedAt === undefined ||
     !Number.isInteger(updatedAt)
   ) {
     throw new Error("Progress card response did not match the requested session");
@@ -289,6 +293,26 @@ function createStore(gateway: ApplicationGateway): SessionProgressCardStore {
     watch,
     unwatch: (owner) => watch(owner, []),
     load,
+    dismiss: async (card) => {
+      const client = gateway.snapshot.client;
+      if (!client) {
+        return false;
+      }
+      const result = await client.request<ProgressCardPutResult>(PROGRESS_CARD_PUT_METHOD, {
+        sessionKey: card.sessionKey,
+        expectedRevision: card.revision,
+      });
+      const resultCard = parseProgressCard(result, card.sessionKey);
+      const dismissed = resultCard === null;
+      if (dismissed && cache.get(card.sessionKey)?.revision === card.revision) {
+        remember(card.sessionKey, { card: null, revision: null });
+        notify();
+      } else if (resultCard) {
+        remember(card.sessionKey, { card: resultCard, revision: resultCard.revision });
+        notify();
+      }
+      return dismissed;
+    },
     get: (sessionKey) => cache.get(sessionKey)?.card,
     getError: (sessionKey) => errors.get(sessionKey),
     subscribe: (listener) => {

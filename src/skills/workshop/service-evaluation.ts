@@ -21,11 +21,7 @@ import {
 import { readRequiredProposal } from "./service-query.js";
 import { readSkillProposalEvents, recordSkillProposalEvaluation } from "./store-evaluation.js";
 import { assertSkillProposalEvaluationWithinLimit } from "./store-record.js";
-import {
-  hashSkillProposalContent,
-  readProposalSupportFiles,
-  withSkillProposalTargetLock,
-} from "./store.js";
+import { hashSkillProposalContent, withSkillProposalTargetLock } from "./store.js";
 import type {
   SkillProposalEvaluateInput,
   SkillProposalEvaluateResult,
@@ -38,6 +34,18 @@ const MAX_EVALUATION_FINDINGS = 200;
 const MAX_EVALUATION_METRICS = 64;
 
 export class SkillProposalCreateTargetConflictError extends Error {}
+
+export class SkillProposalRevisionChangedError extends Error {
+  constructor(
+    readonly expectedRevisionHash: string,
+    readonly currentRevisionHash: string,
+  ) {
+    super(
+      `Skill proposal revision changed (expected ${expectedRevisionHash}, current ${currentRevisionHash}); reload and retry.`,
+    );
+    this.name = "SkillProposalRevisionChangedError";
+  }
+}
 
 export async function evaluateSkillProposal(
   input: SkillProposalEvaluateInput,
@@ -69,7 +77,6 @@ export async function evaluateSkillProposal(
       if (hashSkillProposalContent(read.content) !== read.record.draftHash) {
         throw new Error("Proposal draft changed without updating proposal metadata.");
       }
-      const supportFiles = await readProposalSupportFiles(read.record, storeOptions(input.env));
       if (
         shouldRunEvaluators &&
         read.record.kind === "create" &&
@@ -84,7 +91,7 @@ export async function evaluateSkillProposal(
         bundles: shouldRunEvaluators
           ? await buildSkillProposalEvaluationBundles({
               proposal: read,
-              supportFiles,
+              supportFiles: read.supportFiles ?? [],
             })
           : undefined,
       };
@@ -167,11 +174,6 @@ export async function evaluateSkillProposal(
       ) {
         throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
       }
-      try {
-        await readProposalSupportFiles(current.record, storeOptions(input.env));
-      } catch {
-        throw new Error(`Skill proposal ${read.record.id} changed while evaluation was running.`);
-      }
       if (bundles) {
         let currentTargetTreeSha256: string;
         try {
@@ -215,9 +217,7 @@ export function listSkillProposalEvents(
 export function assertExpectedRevisionHash(actual: string, expected?: string): void {
   const normalized = normalizeOptionalString(expected);
   if (normalized && normalized !== actual) {
-    throw new Error(
-      `Skill proposal revision changed (expected ${normalized}, current ${actual}); reload and retry.`,
-    );
+    throw new SkillProposalRevisionChangedError(normalized, actual);
   }
 }
 

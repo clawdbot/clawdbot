@@ -1,6 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { resolveUsageProviderId } from "../../../../src/infra/provider-usage.shared.js";
 // Merges gateway provider signals (auth status, live usage/quota, local session
 // cost) into one card list for the Models settings page.
 import type {
@@ -16,6 +15,11 @@ import type {
   ModelCatalogProviderOutcome,
 } from "../../api/types.ts";
 import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import {
+  canonicalModelAuthProviderId,
+  isMonitoredAuthProvider,
+  listEffectiveModelAuthProviders,
+} from "../../lib/model-auth.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
@@ -75,17 +79,14 @@ type ModelProviderCardsInput = {
 type CardDraft = {
   ids: Set<string>;
   card: ModelProviderCard;
-  hasAuthRow: boolean;
-  /** True when usage came from usage.status (richer than the auth-status embed). */
-  hasUsageSnapshot: boolean;
+  hasModelAuth: boolean;
 };
 
 // Canonicalize alias provider ids (claude-cli → anthropic, minimax-* →
 // minimax) with the same table the gateway uses, so one subscription stays
 // one card even when the optional auth-status usage embed is missing.
 function canonicalProviderId(provider: string): string {
-  const normalized = provider.trim().toLowerCase();
-  return resolveUsageProviderId(normalized) ?? normalized;
+  return canonicalModelAuthProviderId(provider);
 }
 
 function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAuthKind {
@@ -98,34 +99,6 @@ function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAu
     default:
       return "api-key";
   }
-}
-
-const AUTH_KIND_SEVERITY: readonly ModelProviderAuthKind[] = [
-  "expired",
-  "missing",
-  "expiring",
-  "ok",
-  "api-key",
-];
-
-// Two auth rows can share one card (provider alias ids); surface the most
-// urgent credential state and the combined profile count.
-function mergeAuth(
-  current: ModelProviderAuthSummary | undefined,
-  next: ModelProviderAuthSummary,
-): ModelProviderAuthSummary {
-  if (!current) {
-    return next;
-  }
-  const worse =
-    AUTH_KIND_SEVERITY.indexOf(next.kind) < AUTH_KIND_SEVERITY.indexOf(current.kind)
-      ? next
-      : current;
-  return {
-    kind: worse.kind,
-    profileCount: current.profileCount + next.profileCount,
-    ...(worse.expiryLabel ? { expiryLabel: worse.expiryLabel } : {}),
-  };
 }
 
 function findDraft(drafts: CardDraft[], ids: string[]): CardDraft | undefined {
@@ -149,8 +122,7 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       modelCount: 0,
       availableModelCount: 0,
     },
-    hasAuthRow: false,
-    hasUsageSnapshot: false,
+    hasModelAuth: false,
   };
   drafts.push(draft);
   return draft;
@@ -184,7 +156,7 @@ function addLogoutTarget(
 
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
- * has an auth row, catalog models (the default models.list view only contains
+ * has model-provider auth, catalog models (the default models.list view only contains
  * configured or auth-backed entries), a live usage snapshot, or recorded
  * local spend. Model presence alone is enough: a configured API-key provider
  * with a broken credential reports available=false and no auth row, and the
@@ -271,11 +243,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       draft.ids.add(candidate);
     }
     draft.card.displayName = provider.displayName || draft.card.displayName;
-    draft.card.auth = mergeAuth(draft.hasAuthRow ? draft.card.auth : undefined, {
-      kind: authKindForProvider(provider),
-      profileCount: provider.profiles.length,
-      ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
-    });
     draft.card.profiles.push(...provider.profiles);
     if (provider.apiKey || provider.profiles.length > 0) {
       addProviderId(draft.card.credentialProviderIds, provider.provider);
@@ -288,7 +255,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         .map((profile) => profile.profileId),
     );
     draft.card.apiKey ??= provider.apiKey;
-    draft.hasAuthRow = true;
+    // Generic auth discovery also includes tool-only API keys; those alone do not make a model card.
+    draft.hasModelAuth ||= isMonitoredAuthProvider(provider) || apiKeyCapabilities.has(id);
     const usage = provider.usage;
     if (usage && !draft.card.usage) {
       draft.card.usage = {
@@ -298,6 +266,17 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         ...(usage.summary ? { summary: usage.summary } : {}),
         ...(usage.plan ? { plan: usage.plan } : {}),
         ...(usage.billing?.length ? { billing: usage.billing } : {}),
+      };
+    }
+  }
+
+  for (const provider of listEffectiveModelAuthProviders(input.authStatus?.providers ?? [])) {
+    const draft = findDraft(drafts, [canonicalProviderId(provider.provider)]);
+    if (draft) {
+      draft.card.auth = {
+        kind: authKindForProvider(provider),
+        profileCount: provider.profiles.length,
+        ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
       };
     }
   }
@@ -314,7 +293,6 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     // usage.status snapshots carry cost history and errors that the
     // auth-status embed drops, so they win when both are present.
     draft.card.usage = snapshot;
-    draft.hasUsageSnapshot = true;
   }
 
   for (const entry of input.costByProvider ?? []) {
@@ -341,9 +319,8 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   return drafts
     .filter(
       (draft) =>
-        draft.hasAuthRow ||
+        draft.hasModelAuth ||
         (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
-        draft.hasUsageSnapshot ||
         Boolean(draft.card.usage) ||
         draft.card.modelCount > 0 ||
         Boolean(draft.card.catalogStatus) ||
@@ -389,6 +366,8 @@ export function buildSelectableDefaultModels(
     (model) => model.available !== false || selected.has(modelCatalogRef(model)),
   );
   const seen = new Set(selectable.map(modelCatalogRef));
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
   for (const ref of selected) {
     if (seen.has(ref)) {
       continue;
@@ -401,7 +380,7 @@ export function buildSelectableDefaultModels(
           model.alias?.trim().toLowerCase() === normalized || model.id.trim() === ref.trim(),
       );
       selectable.push({
-        ...(match ?? { provider: "", id: ref, name: ref, available: false }),
+        ...(match ?? { provider: "", id: ref, name: ref, ...availability }),
         selectionRef: ref,
       });
       continue;
@@ -410,7 +389,7 @@ export function buildSelectableDefaultModels(
       provider: ref.slice(0, slash),
       id: ref.slice(slash + 1),
       name: ref,
-      available: false,
+      ...availability,
     });
   }
   return selectable;

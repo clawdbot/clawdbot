@@ -26,7 +26,7 @@ describe("node worker bundle transfer service", () => {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: "node",
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: "available" },
+    workerHost: { enabled: true, capacity: { total: 2, available: 2 } },
     commands: [],
   };
 
@@ -61,11 +61,13 @@ describe("node worker bundle transfer service", () => {
     expect(
       service.authorize({ token: prepared.token, bundleHash: prepared.input.build.bundleHash }),
     ).toBeUndefined();
-    await expect(service.file(admission!)).resolves.toEqual({
-      path: tarballPath,
-      bytes: 6,
-      sha256: "b".repeat(64),
-    });
+    const file = await service.openFile(admission!);
+    try {
+      expect(file).toMatchObject({ bytes: 6, sha256: "b".repeat(64) });
+      await expect(file!.handle.readFile("utf8")).resolves.toBe("bundle");
+    } finally {
+      await file?.handle.close();
+    }
 
     authorized = false;
     expect(service.isAuthorizationCurrent(admission!)).toBe(false);

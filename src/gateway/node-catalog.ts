@@ -40,9 +40,11 @@ type KnownNodeApprovedSource = {
   caps: string[];
   commands: string[];
   permissions?: Record<string, boolean>;
+  sessionHost?: boolean;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
+  lastHostStats?: PairedDeviceNode["lastHostStats"];
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -132,9 +134,11 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     caps: entry.caps ?? [],
     commands: filterPublicNodeCommands(entry.commands ?? []),
     permissions: entry.permissions,
+    sessionHost: entry.sessionHost,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
     lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
+    lastHostStats: entry.lastHostStats,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -226,6 +230,7 @@ function buildEffectiveKnownNode(entry: {
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   sessionHost: boolean;
+  workerSlots?: NodeListNode["workerSlots"];
   workerBundle?: NodeListNode["workerBundle"];
   issues?: NodeListNode["issues"];
 }): NodeListNode {
@@ -236,6 +241,7 @@ function buildEffectiveKnownNode(entry: {
     pendingNodePairing,
     live,
     sessionHost,
+    workerSlots,
     workerBundle,
     issues,
   } = entry;
@@ -245,6 +251,7 @@ function buildEffectiveKnownNode(entry: {
     live?.connectedAtMs,
   );
   const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
+  const hostStats = live ? live.hostStats : nodePairing?.lastHostStats;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -308,6 +315,8 @@ function buildEffectiveKnownNode(entry: {
     ),
     computerUse: live?.computerUse,
     sessionHost,
+    ...(hostStats ? { hostStats: structuredClone(hostStats) } : {}),
+    ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
     ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
     ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
@@ -359,6 +368,7 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
   workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
   issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
@@ -413,7 +423,12 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
-        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        // Live inventory is authoritative while connected; stored consent is
+        // only the offline identity hint and never carries live capacity.
+        sessionHost: live
+          ? params.sessionHostNodeIds?.has(nodeId) === true
+          : nodePairing?.sessionHost === true,
+        workerSlots: params.workerSlotsByNodeId?.get(nodeId),
         workerBundle: params.workerBundleByNodeId?.get(nodeId),
         issues: params.issuesByNodeId?.get(nodeId),
       }),

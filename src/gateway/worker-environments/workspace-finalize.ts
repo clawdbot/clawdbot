@@ -1,8 +1,15 @@
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type {
   WorkerWorkspaceQuiescence,
   WorkerWorkspaceReconcileResult,
 } from "./tunnel-contract.js";
+import {
+  createWorkspaceReconcileMetrics,
+  type WorkspaceReconcileMetrics,
+} from "./workspace-hash-memo.js";
 import type { WorkerWorkspaceApplyResult } from "./workspace-reconcile.js";
+
+const workspaceReconcileLog = createSubsystemLogger("gateway/worker-workspace");
 
 export class WorkerWorkspaceFinalFenceError extends Error {
   readonly reclaimDisposition: "retry" | "preserve-result";
@@ -38,11 +45,27 @@ const workspaceReconcileReporters = new WeakMap<
   (outcome: WorkspaceReconcileOutcome) => void
 >();
 
-export function registerWorkspaceReconcileReporter(
-  reconciliation: WorkerWorkspaceReconcileResult,
-  reporter: (outcome: WorkspaceReconcileOutcome) => void,
-): void {
-  workspaceReconcileReporters.set(reconciliation, reporter);
+/** Runs one reconciliation with shared metrics and logs them once the final fence settles. */
+export async function runInstrumentedWorkspaceReconcile(
+  run: (metrics: WorkspaceReconcileMetrics) => Promise<WorkerWorkspaceReconcileResult>,
+): Promise<WorkerWorkspaceReconcileResult> {
+  const metrics = createWorkspaceReconcileMetrics();
+  const startedAt = performance.now();
+  const report = (outcome: WorkspaceReconcileOutcome) => {
+    workspaceReconcileLog.debug("worker workspace reconcile completed", {
+      outcome,
+      durationMs: performance.now() - startedAt,
+      ...metrics,
+    });
+  };
+  try {
+    const reconciliation = await run(metrics);
+    workspaceReconcileReporters.set(reconciliation, report);
+    return reconciliation;
+  } catch (error) {
+    report("failed");
+    throw error;
+  }
 }
 
 function reportWorkspaceReconcile(

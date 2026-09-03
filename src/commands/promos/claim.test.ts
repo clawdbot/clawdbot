@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
@@ -68,7 +69,7 @@ vi.mock("../../cli/prompt.js", () => ({
 }));
 
 vi.mock("../../plugins/enable.js", () => ({
-  enablePluginInConfig: mocks.enablePluginInConfig,
+  enablePluginWithCapabilityConsent: mocks.enablePluginInConfig,
 }));
 
 vi.mock("../codex-runtime-plugin-install.js", () => ({
@@ -139,11 +140,11 @@ beforeEach(() => {
   mocks.hasAvailableAuthForProvider.mockResolvedValue(true);
   mocks.resolveManifestProviderAuthChoice.mockReturnValue(authChoice);
   mocks.resolveProviderInstallCatalogEntry.mockReturnValue(undefined);
-  mocks.loadManifestMetadataSnapshot.mockReturnValue({
-    manifestRegistry: {
+  mocks.loadManifestMetadataSnapshot.mockReturnValue(
+    createPluginMetadataSnapshotFixture({
       plugins: [{ id: "openrouter", packageName: "@openclaw/openrouter-provider" }],
-    },
-  });
+    }),
+  );
   mocks.promptYesNo.mockResolvedValue(false);
   mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
     config: cfg,
@@ -436,19 +437,22 @@ describe("promosClaimCommand", () => {
     );
   });
 
-  it("refuses to claim when the provider plugin is blocked by policy", async () => {
-    mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
-      config: cfg,
-      enabled: false,
-      pluginId,
-      reason: "denylisted",
-    }));
+  it.each(["denylisted", "requires capability consent"])(
+    "refuses to claim when the provider plugin %s",
+    async (reason) => {
+      mocks.enablePluginInConfig.mockImplementation((cfg: unknown, pluginId: string) => ({
+        config: cfg,
+        enabled: false,
+        pluginId,
+        reason,
+      }));
 
-    await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
-      /plugin policy/,
-    );
-    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-  });
+      await expect(promosClaimCommand("spring-models", {}, makeRuntime())).rejects.toThrow(
+        /plugin policy/,
+      );
+      expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    },
+  );
 
   it("maps 404 responses to a friendly not-found error", async () => {
     const requestError = new ClawHubRequestError({

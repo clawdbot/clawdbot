@@ -58,7 +58,6 @@ describe("resolveGatewayAuthTokenForService Windows diagnostics", () => {
       cfg,
       env,
       unresolvedReasonStyle: "detailed",
-      envFallback: "always",
     });
   });
 });

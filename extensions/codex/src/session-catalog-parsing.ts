@@ -211,7 +211,7 @@ export function requireOnlyKeys(
   }
 }
 
-export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
+export function readPageParams(value: unknown): CodexSessionCatalogPageParams & { limit: number } {
   if (!isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -228,7 +228,9 @@ export function readPageParams(value: unknown): CodexSessionCatalogPageParams {
   };
 }
 
-export function readGatewayParams(value: unknown): CodexSessionCatalogParams {
+export function readGatewayParams(
+  value: unknown,
+): CodexSessionCatalogParams & { limitPerHost: number } {
   if (value !== undefined && !isRecord(value)) {
     throw new CatalogParamsError("Codex session catalog parameters must be an object");
   }
@@ -438,7 +440,9 @@ export function filterCatalogPageByTitle(
   return {
     ...page,
     sessions: page.sessions.filter((session) =>
-      session.name?.toLocaleLowerCase().includes(searchTerm.toLocaleLowerCase()),
+      (session.name ?? session.fallbackName)
+        ?.toLocaleLowerCase()
+        .includes(searchTerm.toLocaleLowerCase()),
     ),
   };
 }

@@ -19,11 +19,7 @@ vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal
   };
 });
 
-import {
-  formatMatrixAudioTranscript,
-  isMatrixAudioContent,
-  resolveMatrixPreflightAudioTranscript,
-} from "./preflight-audio.js";
+import { isMatrixAudioContent, resolveMatrixPreflightAudioTranscript } from "./preflight-audio.js";
 
 const cfg = {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
 
@@ -38,14 +34,6 @@ describe("isMatrixAudioContent", () => {
     expect(isMatrixAudioContent({ msgtype: "m.image", mimetype: "image/png" })).toBe(false);
     expect(isMatrixAudioContent({ msgtype: "m.file", mimetype: "application/pdf" })).toBe(false);
     expect(isMatrixAudioContent({ mimetype: "audio/ogg" })).toBe(false);
-  });
-});
-
-describe("formatMatrixAudioTranscript", () => {
-  it("wraps transcripts with untrusted machine-generated framing", () => {
-    expect(formatMatrixAudioTranscript('say "hi"\nthen go')).toBe(
-      `[Audio transcript (machine-generated, untrusted)]: ${JSON.stringify('say "hi"\nthen go')}`,
-    );
   });
 });
 

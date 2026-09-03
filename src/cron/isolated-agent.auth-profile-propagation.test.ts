@@ -10,7 +10,7 @@ import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   resolveConfiguredModelRefMock,
-  resolveSessionAuthProfileOverrideMock,
+  resolveSessionAuthSelectionMock,
   runEmbeddedAgentMock,
 } from "./isolated-agent/run.test-harness.js";
 
@@ -57,7 +57,11 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       provider: "openrouter",
       model: "moonshotai/kimi-k2.5",
     });
-    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openrouter:default");
+    resolveSessionAuthSelectionMock.mockResolvedValue({
+      profileId: "openrouter:default",
+      source: "auto",
+      routeRequirement: "api-key",
+    });
     mockRunCronFallbackPassthrough();
 
     const result = await runCronIsolatedAgentTurn(

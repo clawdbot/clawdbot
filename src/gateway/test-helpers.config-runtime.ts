@@ -13,149 +13,184 @@ import { migratePersistedImplicitMainRoster } from "../config/legacy.roster.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { AgentBinding } from "../config/types.agents.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
+import { validateConfigObjectWithPlugins } from "../config/validation.js";
+import { writeJsonAtomic } from "../infra/json-files.js";
 import { writeConfigMachineState } from "../state/config-machine-state.js";
 import { buildTestConfigSnapshot } from "./test-helpers.config-snapshots.js";
 import { testConfigRoot, testIsNixMode, testState } from "./test-helpers.runtime-state.js";
 
 type GatewayConfigModule = typeof import("../config/config.js");
+type GatewayConfigRuntime = Pick<
+  typeof import("../config/io.js"),
+  "getRuntimeConfigSnapshot" | "setRuntimeConfigSnapshot"
+>;
+type GatewayConfigOverrides = Pick<
+  GatewayConfigModule,
+  | "CONFIG_PATH"
+  | "STATE_DIR"
+  | "isNixMode"
+  | "applyConfigOverrides"
+  | "getRuntimeConfig"
+  | "parseConfigJson5"
+  | "validateConfigObject"
+  | "readConfigFileSnapshot"
+  | "readConfigFileSnapshotWithPluginMetadata"
+  | "readConfigFileSnapshotForWrite"
+  | "writeConfigFile"
+>;
 
-/** Wraps the real config module with gateway-test runtime overrides. */
-export function createGatewayConfigModuleMock(actual: GatewayConfigModule): GatewayConfigModule {
-  const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
+const resolveConfigPath = () => path.join(testConfigRoot.value, "openclaw.json");
 
-  const composeTestConfig = (baseConfig: Record<string, unknown>) => {
-    const fileAgents =
-      baseConfig.agents &&
-      typeof baseConfig.agents === "object" &&
-      !Array.isArray(baseConfig.agents)
-        ? (baseConfig.agents as Record<string, unknown>)
-        : {};
-    const fileDefaults =
-      fileAgents.defaults &&
-      typeof fileAgents.defaults === "object" &&
-      !Array.isArray(fileAgents.defaults)
-        ? (fileAgents.defaults as Record<string, unknown>)
-        : {};
-    const defaults = {
-      model: { primary: "anthropic/claude-opus-4-6" },
-      workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
-      ...fileDefaults,
-      ...testState.agentConfig,
-    };
-    const testAgents = testState.agentsConfig;
-    const retainedFileAgents = { ...fileAgents };
-    if (testAgents && Object.hasOwn(testAgents, "list")) {
-      delete retainedFileAgents.entries;
-    }
-    if (testAgents && Object.hasOwn(testAgents, "entries")) {
-      delete retainedFileAgents.list;
-    }
-    const agents = testAgents
-      ? { ...retainedFileAgents, ...testAgents, defaults }
-      : { ...retainedFileAgents, defaults };
-
-    const fileBindings = Array.isArray(baseConfig.bindings)
-      ? (baseConfig.bindings as AgentBinding[])
-      : undefined;
-
-    const fileChannels =
-      baseConfig.channels &&
-      typeof baseConfig.channels === "object" &&
-      !Array.isArray(baseConfig.channels)
-        ? ({ ...(baseConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    const overrideChannels =
-      testState.channelsConfig && typeof testState.channelsConfig === "object"
-        ? { ...testState.channelsConfig }
-        : {};
-    const mergedChannels = { ...fileChannels, ...overrideChannels };
-    if (testState.allowFrom !== undefined) {
-      const existing =
-        mergedChannels.whatsapp &&
-        typeof mergedChannels.whatsapp === "object" &&
-        !Array.isArray(mergedChannels.whatsapp)
-          ? (mergedChannels.whatsapp as Record<string, unknown>)
-          : {};
-      mergedChannels.whatsapp = {
-        ...existing,
-        allowFrom: testState.allowFrom,
-      };
-    }
-    const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
-
-    const fileSession =
-      baseConfig.session &&
-      typeof baseConfig.session === "object" &&
-      !Array.isArray(baseConfig.session)
-        ? (baseConfig.session as Record<string, unknown>)
-        : {};
-    const session: Record<string, unknown> = {
-      ...fileSession,
-      mainKey: fileSession.mainKey ?? "main",
-    };
-    if (typeof testState.sessionStorePath === "string") {
-      session.store = testState.sessionStorePath;
-    }
-    if (testState.sessionConfig) {
-      Object.assign(session, testState.sessionConfig);
-    }
-
-    const fileGateway =
-      baseConfig.gateway &&
-      typeof baseConfig.gateway === "object" &&
-      !Array.isArray(baseConfig.gateway)
-        ? ({ ...(baseConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    if (testState.gatewayBind) {
-      fileGateway.bind = testState.gatewayBind;
-    }
-    if (testState.gatewayAuth) {
-      fileGateway.auth = testState.gatewayAuth;
-    }
-    if (testState.gatewayControlUi) {
-      const fileControlUi =
-        fileGateway.controlUi &&
-        typeof fileGateway.controlUi === "object" &&
-        !Array.isArray(fileGateway.controlUi)
-          ? (fileGateway.controlUi as Record<string, unknown>)
-          : {};
-      fileGateway.controlUi = {
-        ...fileControlUi,
-        ...testState.gatewayControlUi,
-      };
-    }
-    const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
-
-    const hooks = testState.hooksConfig ?? baseConfig.hooks;
-
-    const fileCron =
-      baseConfig.cron && typeof baseConfig.cron === "object" && !Array.isArray(baseConfig.cron)
-        ? ({ ...(baseConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
-        : {};
-    if (typeof testState.cronEnabled === "boolean") {
-      fileCron.enabled = testState.cronEnabled;
-    }
-    if (typeof testState.cronTriggersEnabled === "boolean") {
-      fileCron.triggers = { enabled: testState.cronTriggersEnabled };
-    }
-    if (typeof testState.cronStorePath === "string") {
-      writeConfigMachineState("cron.store", testState.cronStorePath);
-    }
-    const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
-
-    const composed = {
-      ...baseConfig,
-      agents,
-      bindings: testState.bindingsConfig ?? fileBindings,
-      channels,
-      session,
-      gateway,
-      hooks,
-      cron,
-    } as OpenClawConfig;
-    return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
+const composeTestConfig = (baseConfig: Record<string, unknown>) => {
+  const fileAgents =
+    baseConfig.agents && typeof baseConfig.agents === "object" && !Array.isArray(baseConfig.agents)
+      ? (baseConfig.agents as Record<string, unknown>)
+      : {};
+  const fileDefaults =
+    fileAgents.defaults &&
+    typeof fileAgents.defaults === "object" &&
+    !Array.isArray(fileAgents.defaults)
+      ? (fileAgents.defaults as Record<string, unknown>)
+      : {};
+  const defaults = {
+    model: { primary: "anthropic/claude-opus-4-6" },
+    workspace: path.join(os.tmpdir(), "openclaw-gateway-test"),
+    ...fileDefaults,
+    ...testState.agentConfig,
   };
+  const testAgents = testState.agentsConfig;
+  const retainedFileAgents = { ...fileAgents };
+  if (testAgents && Object.hasOwn(testAgents, "list")) {
+    delete retainedFileAgents.entries;
+  }
+  if (testAgents && Object.hasOwn(testAgents, "entries")) {
+    delete retainedFileAgents.list;
+  }
+  const agents = testAgents
+    ? { ...retainedFileAgents, ...testAgents, defaults }
+    : { ...retainedFileAgents, defaults };
 
+  const fileBindings = Array.isArray(baseConfig.bindings)
+    ? (baseConfig.bindings as AgentBinding[])
+    : undefined;
+
+  const fileChannels =
+    baseConfig.channels &&
+    typeof baseConfig.channels === "object" &&
+    !Array.isArray(baseConfig.channels)
+      ? ({ ...(baseConfig.channels as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  const overrideChannels =
+    testState.channelsConfig && typeof testState.channelsConfig === "object"
+      ? { ...testState.channelsConfig }
+      : {};
+  const mergedChannels = { ...fileChannels, ...overrideChannels };
+  if (testState.allowFrom !== undefined) {
+    const existing =
+      mergedChannels.whatsapp &&
+      typeof mergedChannels.whatsapp === "object" &&
+      !Array.isArray(mergedChannels.whatsapp)
+        ? (mergedChannels.whatsapp as Record<string, unknown>)
+        : {};
+    mergedChannels.whatsapp = {
+      ...existing,
+      allowFrom: testState.allowFrom,
+    };
+  }
+  const channels = Object.keys(mergedChannels).length > 0 ? mergedChannels : undefined;
+
+  const fileSession =
+    baseConfig.session &&
+    typeof baseConfig.session === "object" &&
+    !Array.isArray(baseConfig.session)
+      ? (baseConfig.session as Record<string, unknown>)
+      : {};
+  const session: Record<string, unknown> = {
+    ...fileSession,
+    mainKey: fileSession.mainKey ?? "main",
+  };
+  if (typeof testState.sessionStorePath === "string") {
+    session.store = testState.sessionStorePath;
+  }
+  if (testState.sessionConfig) {
+    Object.assign(session, testState.sessionConfig);
+  }
+
+  const fileGateway =
+    baseConfig.gateway &&
+    typeof baseConfig.gateway === "object" &&
+    !Array.isArray(baseConfig.gateway)
+      ? ({ ...(baseConfig.gateway as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  if (testState.gatewayBind) {
+    fileGateway.bind = testState.gatewayBind;
+  }
+  if (testState.gatewayAuth) {
+    fileGateway.auth = testState.gatewayAuth;
+  }
+  if (testState.gatewayControlUi) {
+    const fileControlUi =
+      fileGateway.controlUi &&
+      typeof fileGateway.controlUi === "object" &&
+      !Array.isArray(fileGateway.controlUi)
+        ? (fileGateway.controlUi as Record<string, unknown>)
+        : {};
+    fileGateway.controlUi = {
+      ...fileControlUi,
+      ...testState.gatewayControlUi,
+    };
+  }
+  const gateway = Object.keys(fileGateway).length > 0 ? fileGateway : undefined;
+
+  const hooks = testState.hooksConfig ?? baseConfig.hooks;
+
+  const fileCron =
+    baseConfig.cron && typeof baseConfig.cron === "object" && !Array.isArray(baseConfig.cron)
+      ? ({ ...(baseConfig.cron as Record<string, unknown>) } as Record<string, unknown>)
+      : {};
+  if (typeof testState.cronEnabled === "boolean") {
+    fileCron.enabled = testState.cronEnabled;
+  }
+  if (typeof testState.cronTriggersEnabled === "boolean") {
+    fileCron.triggers = { enabled: testState.cronTriggersEnabled };
+  }
+  if (typeof testState.cronStorePath === "string") {
+    writeConfigMachineState("cron.store", testState.cronStorePath);
+  }
+  const cron = Object.keys(fileCron).length > 0 ? fileCron : undefined;
+
+  const composed = {
+    ...baseConfig,
+    agents,
+    bindings: testState.bindingsConfig ?? fileBindings,
+    channels,
+    session,
+    gateway,
+    hooks,
+    cron,
+  } as OpenClawConfig;
+  return migratePersistedImplicitMainRoster(composed).config as OpenClawConfig;
+};
+
+export function loadGatewayTestConfig(): OpenClawConfig {
+  const configPath = resolveConfigPath();
+  let fileConfig: Record<string, unknown> = {};
+  try {
+    if (fsSync.existsSync(configPath)) {
+      const raw = fsSync.readFileSync(configPath, "utf-8");
+      fileConfig = JSON.parse(raw) as Record<string, unknown>;
+    }
+  } catch {
+    fileConfig = {};
+  }
+  return applyPluginAutoEnable({
+    config: composeTestConfig(fileConfig),
+    env: process.env,
+  }).config;
+}
+
+/** Creates gateway-test overrides without importing the facade that re-exports mocked IO. */
+export function createGatewayConfigOverrides(actual: GatewayConfigRuntime): GatewayConfigOverrides {
   const readConfigFileSnapshot = async (): Promise<ConfigFileSnapshot> => {
     if (testState.legacyIssues.length > 0) {
       const raw = JSON.stringify(testState.legacyParsed ?? {});
@@ -217,10 +252,8 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
 
   const writeConfigFile = vi.fn(async (cfg: Record<string, unknown>) => {
     const configPath = resolveConfigPath();
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    const raw = JSON.stringify(cfg, null, 2).trimEnd().concat("\n");
-    await fs.writeFile(configPath, raw, "utf-8");
-    actual.resetConfigRuntimeState();
+    await writeJsonAtomic(configPath, cfg, { durable: false, trailingNewline: true });
+    actual.setRuntimeConfigSnapshot(loadGatewayTestConfig());
     return {
       persistedHash: "test-config-hash",
       persistedConfig: composeTestConfig(cfg),
@@ -237,7 +270,7 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
   const readConfigFileSnapshotWithPluginMetadata =
     async (): Promise<ReadConfigFileSnapshotWithPluginMetadataResult> => {
       const snapshot = await readConfigFileSnapshot();
-      const validation = actual.validateConfigObjectWithPlugins(snapshot.config, {
+      const validation = validateConfigObjectWithPlugins(snapshot.config, {
         env: process.env,
         pluginValidation: "skip",
       });
@@ -251,35 +284,17 @@ export function createGatewayConfigModuleMock(actual: GatewayConfigModule): Gate
       };
     };
 
-  const loadTestConfig = () => {
-    const configPath = resolveConfigPath();
-    let fileConfig: Record<string, unknown> = {};
-    try {
-      if (fsSync.existsSync(configPath)) {
-        const raw = fsSync.readFileSync(configPath, "utf-8");
-        fileConfig = JSON.parse(raw) as Record<string, unknown>;
-      }
-    } catch {
-      fileConfig = {};
-    }
-    return applyPluginAutoEnable({
-      config: composeTestConfig(fileConfig),
-      env: process.env,
-    }).config;
-  };
-
   const loadRuntimeAwareTestConfig = () => {
     const runtimeSnapshot = actual.getRuntimeConfigSnapshot();
     if (runtimeSnapshot) {
       return runtimeSnapshot;
     }
-    const config = loadTestConfig();
+    const config = loadGatewayTestConfig();
     actual.setRuntimeConfigSnapshot(config);
     return config;
   };
 
   return {
-    ...actual,
     get CONFIG_PATH() {
       return resolveConfigPath();
     },

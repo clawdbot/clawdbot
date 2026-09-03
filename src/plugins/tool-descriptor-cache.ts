@@ -15,6 +15,7 @@ const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
+  hideFromChannelProgress?: AnyAgentTool["hideFromChannelProgress"];
   requiredClientCaps?: string[];
   resultContentSource?: AnyAgentTool["resultContentSource"];
   optional: boolean;
@@ -114,6 +115,7 @@ function buildDescriptorContextCacheKey(params: {
     agentAccountId: ctx.agentAccountId ?? null,
     nativeChannelId: ctx.nativeChannelId ?? null,
     deliveryContext: ctx.deliveryContext ?? null,
+    deliveryAvailable: ctx.delivery !== undefined,
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,
     sandboxed: ctx.sandboxed ?? null,
@@ -158,6 +160,7 @@ export function capturePluginToolDescriptor(params: {
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(params.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(params.tool.requiredClientCaps
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
       : {}),

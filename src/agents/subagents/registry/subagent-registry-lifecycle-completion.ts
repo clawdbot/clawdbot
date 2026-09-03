@@ -36,6 +36,8 @@ import {
 type BrowserCleanupModule = typeof import("../../../browser-lifecycle-cleanup.js");
 type BrowserCleanup = BrowserCleanupModule["cleanupBrowserSessionsForLifecycleEnd"];
 
+const MISSING_REQUIRED_FINAL_REPLY_ERROR = "subagent run ended before producing a final reply";
+
 const browserCleanupLoader = createLazyImportLoader<BrowserCleanupModule>(
   () => import("../../../browser-lifecycle-cleanup.js"),
 );
@@ -413,6 +415,20 @@ export async function completeSubagentRunAttempt(
         mutated = true;
       }
     }
+    const terminalReply = mergeAgentRunTerminalReplySnapshot(
+      entry.completion?.terminalReply,
+      completeParams.terminalReply,
+    );
+    // Lifecycle events and agent.wait both settle here. A required success
+    // needs producer evidence before any transcript fallback can freeze it.
+    if (
+      entry.expectsCompletionMessage === true &&
+      completionOutcome.status === "ok" &&
+      !terminalReply
+    ) {
+      completionOutcome = { status: "error", error: MISSING_REQUIRED_FINAL_REPLY_ERROR };
+      completionReason = SUBAGENT_ENDED_REASON_ERROR;
+    }
     const outcome =
       recoveryRequested && entry.execution.outcome
         ? entry.execution.outcome
@@ -466,16 +482,9 @@ export async function completeSubagentRunAttempt(
       }
     }
 
-    if (completeParams.terminalReply) {
+    if (terminalReply) {
       const completion = ensureCompletionState(entry);
-      const terminalReply = mergeAgentRunTerminalReplySnapshot(
-        completion.terminalReply,
-        completeParams.terminalReply,
-      );
-      if (
-        terminalReply &&
-        JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply)
-      ) {
+      if (JSON.stringify(terminalReply) !== JSON.stringify(completion.terminalReply)) {
         completion.terminalReply = terminalReply;
         completion.resultText =
           terminalReply.disposition === "visible"
@@ -486,6 +495,25 @@ export async function completeSubagentRunAttempt(
         completion.capturedAt = endedAt;
         mutated = true;
       }
+    }
+
+    const closesAsIntentionalNonDelivery =
+      entry.expectsCompletionMessage === true &&
+      executionOutcome.status === "ok" &&
+      terminalReply?.disposition === "empty" &&
+      terminalReply.code !== "message-tool-not-called" &&
+      entry.requesterTurnYielded !== true &&
+      entry.requesterSettleWake === undefined &&
+      entry.delivery?.disposition !== "intentional_non_delivery";
+    if (closesAsIntentionalNonDelivery) {
+      // Producer-owned empty success is a terminal fact, not a failed send.
+      // Close it before task finalization so no requester delivery can start.
+      entry.delivery = {
+        status: "not_required",
+        disposition: "intentional_non_delivery",
+      };
+      entry.suppressCompletionDelivery = true;
+      mutated = true;
     }
 
     // A newer generation may share the session key. Its transcript/reply is

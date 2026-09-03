@@ -1,7 +1,7 @@
 // Lazy GPT-Live media runtime: werift peer plus WASM Opus framing and PCM conversion.
 import { randomInt } from "node:crypto";
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
+import { createStreamingPcmResampler, resamplePcm } from "openclaw/plugin-sdk/realtime-voice";
 import {
   OpenAIQuicksilverPendingAudio,
   OPENAI_QUICKSILVER_RELAY_FRAME_BYTES,
@@ -12,6 +12,9 @@ const RELAY_SAMPLE_RATE = 24_000;
 const QUICKSILVER_CHANNELS = 2;
 const OPUS_FRAME_SAMPLES = 960;
 const OPUS_FRAME_DURATION_MS = 20;
+// The centered 31-tap filter withholds 15 input samples. Prime the 2x path with
+// the matching 30-sample silence so every Opus tick still receives one full frame.
+const OUTBOUND_RESAMPLE_PREROLL_SAMPLES = 30;
 const INBOUND_REORDER_DEPTH = 4;
 // More than two seconds behind cannot be useful 20 ms reordering; fail instead of corrupting Opus state.
 const INBOUND_MAX_LATE_PACKETS = 100;
@@ -59,9 +62,11 @@ function pcmBufferToInt16(pcm: Buffer): Int16Array {
 }
 
 function convertRelayPcmToQuicksilverPcm(pcm24kMono: Buffer): Int16Array {
-  const mono48k = pcmBufferToInt16(
-    resamplePcm(pcm24kMono, RELAY_SAMPLE_RATE, QUICKSILVER_SAMPLE_RATE),
-  );
+  return duplicateMonoToStereo(resamplePcm(pcm24kMono, RELAY_SAMPLE_RATE, QUICKSILVER_SAMPLE_RATE));
+}
+
+function duplicateMonoToStereo(pcm48kMono: Buffer): Int16Array {
+  const mono48k = pcmBufferToInt16(pcm48kMono);
   const stereo48k = new Int16Array(mono48k.length * QUICKSILVER_CHANNELS);
   for (let index = 0; index < mono48k.length; index += 1) {
     const sample = mono48k[index] ?? 0;
@@ -167,6 +172,15 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   private inboundRtpState: InboundRtpState = { pendingPackets: new Map() };
   private mediaTimer: ReturnType<typeof setInterval> | undefined;
   private pendingAudio = new OpenAIQuicksilverPendingAudio();
+  private pendingResampledAudio = Buffer.alloc(OUTBOUND_RESAMPLE_PREROLL_SAMPLES * 2);
+  private readonly inboundResampler = createStreamingPcmResampler(
+    QUICKSILVER_SAMPLE_RATE,
+    RELAY_SAMPLE_RATE,
+  );
+  private readonly outboundResampler = createStreamingPcmResampler(
+    RELAY_SAMPLE_RATE,
+    QUICKSILVER_SAMPLE_RATE,
+  );
   private sequenceNumber = randomInt(0x1_0000);
   private subscribedTracks = new Set<string>();
   private timestamp = randomInt(0x1_0000_0000);
@@ -248,6 +262,9 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
       this.mediaTimer = undefined;
     }
     this.pendingAudio.clear();
+    this.pendingResampledAudio = Buffer.alloc(0);
+    this.inboundResampler.flush();
+    this.outboundResampler.flush();
     this.resetInboundRtpState();
     this.state.encoder.free();
     this.state.decoder.free();
@@ -396,7 +413,14 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
   }
 
   private emitInboundPcm(decoded: Int16Array): void {
-    const relayPcm = convertQuicksilverPcmToRelayPcm(decoded);
+    const frameCount = Math.floor(decoded.length / QUICKSILVER_CHANNELS);
+    const mono48k = Buffer.alloc(frameCount * 2);
+    for (let frame = 0; frame < frameCount; frame += 1) {
+      const left = decoded[frame * 2] ?? 0;
+      const right = decoded[frame * 2 + 1] ?? 0;
+      mono48k.writeInt16LE(Math.round((left + right) / 2), frame * 2);
+    }
+    const relayPcm = this.inboundResampler.process(mono48k);
     if (relayPcm.length > 0) {
       this.state.callbacks.onAudio(relayPcm);
     }
@@ -418,7 +442,13 @@ export class OpenAIQuicksilverAudioPeer implements OpenAIQuicksilverAudioPeerCon
     }
     const frame = this.takeNextRelayFrame();
     try {
-      const opusPacket = this.state.encoder.encode(convertRelayPcmToQuicksilverPcm(frame), {
+      const resampled = this.outboundResampler.process(frame);
+      this.pendingResampledAudio = Buffer.concat([this.pendingResampledAudio, resampled]);
+      const monoFrameBytes = OPUS_FRAME_SAMPLES * 2;
+      const monoFrame = Buffer.alloc(monoFrameBytes);
+      this.pendingResampledAudio.copy(monoFrame, 0, 0, monoFrameBytes);
+      this.pendingResampledAudio = Buffer.from(this.pendingResampledAudio.subarray(monoFrameBytes));
+      const opusPacket = this.state.encoder.encode(duplicateMonoToStereo(monoFrame), {
         frameSize: OPUS_FRAME_SAMPLES,
       });
       const rtp = new this.state.werift.RtpPacket(

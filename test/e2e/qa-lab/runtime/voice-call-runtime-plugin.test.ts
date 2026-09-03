@@ -70,7 +70,7 @@ describe("Voice Call runtime fixture", () => {
     async (state) => {
       const owner = {};
       setRuntimeCoordinator({
-        current: owner,
+        current: { generation: owner },
         slot: { state, owner, promise: Promise.resolve() },
       });
 
@@ -82,7 +82,7 @@ describe("Voice Call runtime fixture", () => {
     const getCall = vi.fn();
     const streamSessionIssuer = vi.fn();
     setRuntimeCoordinator({
-      current: {},
+      current: { generation: {} },
       slot: {
         state: "running",
         owner: {},
@@ -110,7 +110,7 @@ describe("Voice Call runtime fixture", () => {
       token: "stream-token",
     }));
     setRuntimeCoordinator({
-      current: owner,
+      current: { generation: owner },
       slot: {
         state: "running",
         owner,

@@ -22,6 +22,7 @@ const DEFAULT_COMMAND_HELP_NAMES = [
   "browser",
   "secrets",
   "nodes",
+  "config",
   "doctor",
   "gateway",
   "models",
@@ -41,8 +42,6 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["extensions/browser/src/cli/browser-cli.ts", "export const browserHelp = 'browser';\n"],
     ["extensions/canvas/cli-metadata.ts", "export const canvasMetadata = 'canvas';\n"],
     ["extensions/canvas/index.ts", "export const canvasEntry = 'canvas';\n"],
-    ["extensions/canvas/src/a2ui-jsonl.ts", "export const a2uiJsonl = 'canvas';\n"],
-    ["extensions/canvas/src/cli-helpers.ts", "export const canvasHelpers = 'canvas';\n"],
     ["extensions/canvas/src/cli.ts", "export const canvasCliHelp = 'canvas';\n"],
     ["src/cli/banner.ts", "export const banner = 'openclaw';\n"],
     [
@@ -53,6 +52,7 @@ function writeStartupMetadataSourceSignatureFixture(rootDir: string): void {
     ["src/cli/gateway-cli/register.ts", "export const gatewayRegister = 'gateway';\n"],
     ["src/cli/gateway-cli/run-command.ts", "export const gatewayRun = 'gateway';\n"],
     ["src/cli/help-format.ts", "export const helpFormat = 'help';\n"],
+    ["src/cli/config-cli.ts", "export const configHelp = 'config';\n"],
     ["src/cli/models-cli.ts", "export const modelsHelp = 'models';\n"],
     ["src/cli/nodes-cli/register.ts", "export const nodesHelp = 'nodes';\n"],
     ["src/cli/program/register.maintenance.ts", "export const maintenanceHelp = 'maintenance';\n"],
@@ -417,6 +417,7 @@ describe("write-cli-startup-metadata", () => {
           renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
           renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
           renderSourceSubcommandHelpTextRecord: () => ({
+            config: "Usage: openclaw config\n",
             doctor: "Usage: openclaw doctor\n",
             gateway: "Usage: openclaw gateway\n",
             models: "Usage: openclaw models\n",
@@ -700,6 +701,7 @@ describe("write-cli-startup-metadata", () => {
           `  renderSourceSecretsHelpText: renderCommand(${JSON.stringify(commandPath)}, 'render failed'),`,
           "  renderSourceNodesHelpText: () => 'Usage: openclaw nodes\\n',",
           "  renderSourceSubcommandHelpTextRecord: () => ({",
+          "    config: 'Usage: openclaw config\\n',",
           "    doctor: 'Usage: openclaw doctor\\n', gateway: 'Usage: openclaw gateway\\n',",
           "    models: 'Usage: openclaw models\\n', plugins: 'Usage: openclaw plugins\\n',",
           "    sessions: 'Usage: openclaw sessions\\n', tasks: 'Usage: openclaw tasks\\n',",
@@ -784,6 +786,7 @@ describe("write-cli-startup-metadata", () => {
       renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
       renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
       renderSourceSubcommandHelpTextRecord: () => ({
+        config: "Usage: openclaw config\n",
         doctor: "Usage: openclaw doctor\n",
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
@@ -801,6 +804,7 @@ describe("write-cli-startup-metadata", () => {
       rootHelpText: string;
       secretsHelpText: string;
       subcommandHelpText: {
+        config: string;
         doctor: string;
         gateway: string;
         models: string;
@@ -819,6 +823,7 @@ describe("write-cli-startup-metadata", () => {
     expect(written.nodesHelpText).toContain("openclaw nodes");
     expect(written.rootHelpText).toContain("Usage:");
     expect(written.rootHelpText).toContain("openclaw");
+    expect(written.subcommandHelpText.config).toContain("openclaw config");
     expect(written.subcommandHelpText.doctor).toContain("openclaw doctor");
     expect(written.subcommandHelpText.gateway).toContain("openclaw gateway");
     expect(written.subcommandHelpText.models).toContain("openclaw models");
@@ -851,6 +856,7 @@ describe("write-cli-startup-metadata", () => {
         renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
         renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
         renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
           doctor: "Usage: openclaw doctor\n",
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
@@ -900,6 +906,7 @@ describe("write-cli-startup-metadata", () => {
       renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
       renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
       renderSourceSubcommandHelpTextRecord: () => ({
+        config: "Usage: openclaw config\n",
         doctor: "Usage: openclaw doctor\n",
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
@@ -967,6 +974,7 @@ describe("write-cli-startup-metadata", () => {
           unblockers.set("subcommands", resolve);
         });
         return {
+          config: "Usage: openclaw config\n",
           doctor: "Usage: openclaw doctor\n",
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
@@ -1036,6 +1044,7 @@ describe("write-cli-startup-metadata", () => {
       },
       renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
       renderSourceSubcommandHelpTextRecord: () => ({
+        config: "Usage: openclaw config\n",
         doctor: "Usage: openclaw doctor\n",
         gateway: "Usage: openclaw gateway\n",
         models: "Usage: openclaw models\n",
@@ -1095,6 +1104,7 @@ describe("write-cli-startup-metadata", () => {
           renderSourceSecretsHelpText: () => "Usage: openclaw secrets\n",
           renderSourceNodesHelpText: () => "Usage: openclaw nodes\n",
           renderSourceSubcommandHelpTextRecord: () => ({
+            config: "Usage: openclaw config\n",
             doctor: "Usage: openclaw doctor\n",
             gateway: "Usage: openclaw gateway\n",
             models: "Usage: openclaw models\n",
@@ -1143,6 +1153,7 @@ describe("write-cli-startup-metadata", () => {
           return `Usage: openclaw nodes ${nodesRenderCount}\n`;
         },
         renderSourceSubcommandHelpTextRecord: () => ({
+          config: "Usage: openclaw config\n",
           doctor: "Usage: openclaw doctor\n",
           gateway: "Usage: openclaw gateway\n",
           models: "Usage: openclaw models\n",
@@ -1198,6 +1209,7 @@ describe("write-cli-startup-metadata", () => {
       };
       const banner = `OpenClaw ${buildInfo.version} (${buildInfo.commit.slice(0, 7)})`;
       return {
+        config: `${banner}\nUsage: openclaw config\n`,
         doctor: `${banner}\nUsage: openclaw doctor\n`,
         gateway: `${banner}\nUsage: openclaw gateway\n`,
         models: `${banner}\nUsage: openclaw models\n`,

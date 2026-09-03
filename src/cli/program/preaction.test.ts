@@ -158,6 +158,7 @@ describe("registerPreActionHooks", () => {
       .command("agent")
       .argument("[note]")
       .requiredOption("-m, --message <text>")
+      .option("--agent <id>")
       .option("--local")
       .option("--json")
       .action(() => {});
@@ -223,6 +224,8 @@ describe("registerPreActionHooks", () => {
       .action(() => {});
     programLocal.command("completion").action(() => {});
     programLocal.command("secrets").action(() => {});
+    const modelList = programLocal.command("models").command("aliases").command("list");
+    modelList.option("--plain").action(() => {});
     const skills = programLocal.command("skills");
     skills.option("--json").action(() => {});
     for (const skillCommand of ["list", "check"]) {
@@ -505,7 +508,7 @@ describe("registerPreActionHooks", () => {
   it("bypasses operator config and plugin startup for agent exec", async () => {
     await runPreAction({
       parseArgv: ["agent", "exec", "fix it"],
-      processArgv: ["node", "openclaw", "agent", "exec", "fix it"],
+      processArgv: ["node", "openclaw", "agent", "--agent", "main", "exec", "fix it"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();
@@ -890,11 +893,32 @@ describe("registerPreActionHooks", () => {
     }
 
     expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
     expect(observedMachineOutputStdoutIsTTY).toBe(false);
     expect(ensureConfigReadyMock).toHaveBeenCalledWith({
       runtime: runtimeMock,
       measure: expect.any(Function),
       commandPath: ["machine"],
+      suppressDoctorStdout: true,
+    });
+  });
+
+  it("keeps plain model output clean throughout Commander startup", async () => {
+    loggingState.forceConsoleToStderr = true;
+    loggingState.earlyConsoleRoutingRestore = false;
+
+    await runPreAction({
+      parseArgv: ["models", "aliases", "list"],
+      processArgv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+    });
+
+    expect(loggingState.forceConsoleToStderr).toBe(true);
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      measure: expect.any(Function),
+      commandPath: ["models", "aliases", "list"],
       suppressDoctorStdout: true,
     });
   });
