@@ -1,4 +1,4 @@
-# Task-only baseline proof. Remove this workflow and apps/macos/Proofs/ScreenScrollIntent before landing.
+# Task-only candidate proof. Remove this workflow and apps/macos/Proofs/ScreenScrollIntent before landing.
 name: Screen scroll intent proof
 
 on:
@@ -48,9 +48,9 @@ jobs:
         run: |
           set -euo pipefail
           git fetch --no-tags --depth=1 origin "$BASE_SHA"
-          git diff --exit-code "$BASE_SHA" -- \
-            apps/macos/Sources/OpenClaw/ComputerScreenActionExecutor.swift \
-            apps/macos/Package.swift apps/macos/Package.resolved
+          git diff --exit-code "$BASE_SHA" -- apps/macos/Package.swift apps/macos/Package.resolved
+          git show "$BASE_SHA:apps/macos/Sources/OpenClaw/ComputerScreenActionExecutor.swift" \
+            > "$PROOF_EVIDENCE/baseline-screen-executor.swift"
           git rev-parse HEAD > "$PROOF_EVIDENCE/proof-sha.txt"
           printf '%s\n' "$BASE_SHA" > "$PROOF_EVIDENCE/baseline-sha.txt"
           cp -R apps/macos/Proofs/ScreenScrollIntent "$PROOF_PACKAGE"
@@ -116,14 +116,14 @@ jobs:
             --skip-build --no-parallel --filter 'legacy' \
             2>&1 | tee "$PROOF_EVIDENCE/service-red.log"
 
-      - name: Capture actual caller source-contract red
-        id: caller_red
-        continue-on-error: true
+      - name: Verify repaired caller source contract
+        id: caller_green
         run: |
           set -euo pipefail
           swift test --package-path "$PROOF_PACKAGE" --build-system native \
             --skip-build --no-parallel --filter ComputerScreenScrollIntentTests \
-            2>&1 | tee "$PROOF_EVIDENCE/caller-red.log"
+            2>&1 | tee "$PROOF_EVIDENCE/caller-green.log"
+          grep -F 'Test run with 1 test in 1 suite passed' "$PROOF_EVIDENCE/caller-green.log"
 
       - name: Run foreground and background contract diagnostics
         run: |
@@ -135,22 +135,44 @@ jobs:
           grep -F 'SCREEN_SCROLL_FOREGROUND_CHECKED:' "$PROOF_EVIDENCE/contracts-green.log"
           grep -F 'SCREEN_SCROLL_BACKGROUND_CHECKED:' "$PROOF_EVIDENCE/contracts-green.log"
 
-      - name: Verify both reds failed for the intended reasons
+      - name: Verify repaired caller and unchanged background boundary
         env:
           SERVICE_OUTCOME: ${{ steps.service_red.outcome }}
-          CALLER_OUTCOME: ${{ steps.caller_red.outcome }}
+          CALLER_OUTCOME: ${{ steps.caller_green.outcome }}
         run: |
           set -euo pipefail
-          [[ "$SERVICE_OUTCOME" == failure && "$CALLER_OUTCOME" == failure ]]
+          [[ "$SERVICE_OUTCOME" == failure && "$CALLER_OUTCOME" == success ]]
           grep -F 'SCREEN_SCROLL_SERVICE_RED: snapshotStale; emittedTicks=0; pointerMoves=0' "$PROOF_EVIDENCE/service-red.log"
-          grep -F 'SCREEN_SCROLL_FOREGROUND_REQUIRED:' "$PROOF_EVIDENCE/caller-red.log"
           cat <<'EOF' >> "$GITHUB_STEP_SUMMARY"
-          Baseline real service refused the old request with snapshotStale before synthetic input.
-          The actual caller source guard failed on the missing explicit foreground argument.
+          The actual repaired caller passed the same source guard that failed on baseline.
+          The real service still refused the old request with snapshotStale before synthetic input.
           Foreground service diagnostics dispatched three bounded downward ticks without moving the pointer.
           Four explicit background requests with missing snapshot or target were refused despite synthOnly policy.
           This is service-contract and caller-source proof, not executor or visible wheel-delivery proof.
           EOF
+
+      - name: Setup Node environment for native app assets
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+          cache-mode: restore
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
+      - name: Build actual app tests
+        run: |
+          set -euo pipefail
+          swift build --package-path apps/macos --build-system native \
+            --enable-code-coverage --build-tests 2>&1 | tee "$PROOF_EVIDENCE/app-build.log"
+
+      - name: Verify native action authorization and sibling contracts
+        run: |
+          set -euo pipefail
+          node scripts/test-macos-native.mts default --package-path apps/macos \
+            --build-system native --enable-code-coverage --skip-build --no-parallel \
+            --filter 'ComputerActionServiceTests|ComputerRefLifecycleContractTests|ComputerControlSettingsTests|ComputerScreenScrollIntentTests|MacNodeRuntimeTests' \
+            2>&1 | tee "$PROOF_EVIDENCE/app-tests.log"
 
       - name: Preserve task-scoped proof logs
         if: always()
