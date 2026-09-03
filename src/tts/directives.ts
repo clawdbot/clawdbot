@@ -3,7 +3,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { OpenClawConfig } from "../config/types.js";
 import type { AssistantDeliveryTtsFacts } from "../llm/types.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
-import { extractTtsDirectiveFacts } from "./directive-facts.js";
+import { bodyHasTtsDirectiveKeyValue, extractTtsDirectiveFacts } from "./directive-facts.js";
 import { compareSpeechProviderOrder } from "./provider-registry-core.js";
 import { listSpeechProviders } from "./provider-registry.js";
 import type {
@@ -129,6 +129,32 @@ function classifyTtsTag(body: string): "hidden-open" | "hidden-close" | "tts" | 
   return "other";
 }
 
+/**
+ * A single colon tag `[[tts:<prose>]]` without any `key=value` token carries the
+ * model's wrapped spoken reply, not directives. Returns that prose so streaming
+ * and caption cleaners keep it visible; returns null for bare delimiters
+ * (`[[tts]]`, closers) and real directive bodies.
+ */
+function resolveFreeTextTtsBody(bracketBody: string): string | null {
+  // Match the final parser's colon-tag grammar: any whitespace (including a
+  // line break) around `tts:` and after the colon is accepted, then the body is
+  // trimmed like the parser's spoken value. `[[tts:\nhello]]` therefore yields
+  // `hello` and a multi-line interior stays intact.
+  const colonMatch = /^[\s]*tts[\s]*:([\s\S]*)$/i.exec(bracketBody);
+  if (!colonMatch) {
+    return null;
+  }
+  const captured = colonMatch[1];
+  if (captured === undefined) {
+    return null;
+  }
+  const prose = captured.trim();
+  if (!prose || bodyHasTtsDirectiveKeyValue(prose)) {
+    return null;
+  }
+  return prose;
+}
+
 /** Create an incremental cleaner for hiding [[tts:*]] directive text while streaming. */
 export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCleaner {
   let pending = "";
@@ -170,6 +196,11 @@ export function createTtsDirectiveTextStreamCleaner(): TtsDirectiveTextStreamCle
           insideHiddenTextBlock = false;
         } else if (tag === "other" && !insideHiddenTextBlock) {
           output += rawTag;
+        } else if (tag === "tts" && !insideHiddenTextBlock) {
+          const freeText = resolveFreeTextTtsBody(input.slice(tagStart + 2, tagEnd));
+          if (freeText) {
+            output += freeText;
+          }
         }
 
         index = tagEnd + 2;

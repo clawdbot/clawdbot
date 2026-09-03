@@ -3969,6 +3969,37 @@ describe("tryDispatchAcpReplyCore", () => {
     expect(dispatcherCall(dispatcher.sendFinalReply).text).toBeUndefined();
   });
 
+  it("keeps a free-text [[tts:<prose>]] reply visible in the Telegram voice caption", async () => {
+    setReadyAcpResolution();
+    ttsCapabilityMocks.captionedFinalText = true;
+    queueTtsReplies({
+      text: "Yes—I understand you clearly now.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+      spokenText: "Yes—I understand you clearly now.",
+      ttsSupplement: { spokenText: "Yes—I understand you clearly now." },
+    } as MockTtsReply);
+    mockVisibleTextTurn("[[tts:Yes—I understand you clearly now.]]");
+    const { dispatcher } = createDispatcher();
+
+    await runDispatch({
+      bodyForAgent: "reply",
+      cfg: createAcpTestConfig({
+        acp: { enabled: true, stream: { deliveryMode: "live" } },
+        tts: { auto: "always" },
+      }),
+      dispatcher,
+      ctxOverrides: { Provider: "telegram", Surface: "telegram" },
+    });
+
+    expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+    expect(dispatcherCall(dispatcher.sendFinalReply)).toMatchObject({
+      text: "Yes—I understand you clearly now.",
+      mediaUrl: "/tmp/openclaw-media/acp-tts.ogg",
+      audioAsVoice: true,
+    });
+  });
+
   it("keeps cross-block ACP TTS-only text out of the Telegram caption", async () => {
     setReadyAcpResolution();
     ttsCapabilityMocks.captionedFinalText = true;
