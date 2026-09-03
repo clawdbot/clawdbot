@@ -205,6 +205,11 @@
         "type": "object",
         "additionalProperties": { "type": ["string", "object"] }
       },
+      "workflowFileMaxBytes": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 9007199254740991
+      },
       "workflowPath": {
         "type": "string"
       },

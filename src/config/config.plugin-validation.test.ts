@@ -129,6 +129,7 @@ describe("config plugin validation", () => {
   let chatPluginDir = "";
   let googleOverridePluginDir = "";
   let voiceCallSchemaPluginDir = "";
+  let comfySchemaPluginDir = "";
   let bundlePluginDir = "";
   let manifestlessClaudeBundleDir = "";
   let blockedPluginDir = "";
@@ -285,6 +286,24 @@ describe("config plugin validation", () => {
       dir: voiceCallSchemaPluginDir,
       id: "voice-call-schema-fixture",
       schema: voiceCallManifest.configSchema,
+    });
+    comfySchemaPluginDir = path.join(suiteHome, "comfy-schema-plugin");
+    const comfyManifestPath = path.join(
+      process.cwd(),
+      "extensions",
+      "comfy",
+      "openclaw.plugin.json",
+    );
+    const comfyManifest = JSON.parse(await fs.readFile(comfyManifestPath, "utf-8")) as {
+      configSchema?: Record<string, unknown>;
+    };
+    if (!comfyManifest.configSchema) {
+      throw new Error("comfy manifest missing configSchema");
+    }
+    await writePluginFixture({
+      dir: comfySchemaPluginDir,
+      id: "comfy",
+      schema: comfyManifest.configSchema,
     });
   });
 
@@ -2319,6 +2338,29 @@ describe("config plugin validation", () => {
         },
       },
     });
+    expect(res.ok).toBe(true);
+  });
+
+  it("accepts Comfy workflow settings under the canonical plugin config root", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "openclaw" }] },
+      plugins: {
+        enabled: true,
+        load: { paths: [comfySchemaPluginDir] },
+        entries: {
+          comfy: {
+            config: {
+              workflowFileMaxBytes: 100 * 1024 * 1024,
+              image: {
+                workflowPath: "./workflow.json",
+                promptNodeId: "6",
+              },
+            },
+          },
+        },
+      },
+    });
+
     expect(res.ok).toBe(true);
   });
 
