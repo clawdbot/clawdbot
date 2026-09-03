@@ -175,11 +175,12 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
 
   protected syncRetainedBoardSession(board: ResolvedBoardView): void {
     const sessionKey = this.resolveBoardSessionKey(board.snapshot.sessionKey);
-    if (!this.dashboardExpanded) {
+    const routeRequestsDashboard = this.routeFace === "dashboard" || this.dashboardExpanded;
+    if (!routeRequestsDashboard) {
       this.dashboardExpandedRouteKey = "";
     } else if (board.hasBoard && sessionKey && this.dashboardExpandedRouteKey !== sessionKey) {
       this.dashboardExpandedRouteKey = sessionKey;
-      this.showDashboard(true);
+      this.showDashboard(this.dashboardExpanded);
     }
     if (sessionKey && board.provider.hasLoadedSnapshot) {
       const previous = this.observedBoardPresence.get(sessionKey);

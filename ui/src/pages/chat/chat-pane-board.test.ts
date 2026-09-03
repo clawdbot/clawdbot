@@ -243,6 +243,31 @@ describe("chat pane board shell", () => {
     expect(pane.state.sidebarLayout.expanded).toBe(false);
   });
 
+  it("opens a dashboard route in split view only once", () => {
+    const pane = createTestPane();
+    pane.boardProvider = mockBoardProvider("agent:main:dashboard-route");
+    pane.state.sessionKey = "agent:main:dashboard-route";
+    pane.sessionKey = "agent:main:dashboard-route";
+    pane.routeFace = "dashboard";
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+    expect(
+      pane.state.sidebarLayout.columns.flatMap(
+        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
+      ),
+    ).toContain("dashboard");
+    expect(pane.state.sidebarLayout.expanded).toBe(false);
+
+    pane.commitSidebarLayout(openSlot(pane.state.sidebarLayout, "terminal"));
+    pane.syncRetainedBoardSession(pane.resolveBoardView());
+    expect(
+      pane.state.sidebarLayout.columns.flatMap(
+        (column) => column.panels.find((panel) => panel.id === column.activePanelId)?.slot,
+      ),
+    ).toContain("terminal");
+  });
+
   it("does not hydrate the swarm after becoming hidden during module loading", async () => {
     vi.useFakeTimers();
     const list = vi.fn().mockResolvedValue({ sessions: [] });
