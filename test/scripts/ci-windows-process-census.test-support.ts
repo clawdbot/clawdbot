@@ -66,6 +66,7 @@ export function registerWindowsCensusTests() {
     "ready",
     "startup",
     "query",
+    "stderr-reply",
     "late",
     "mismatched",
     "birth",
@@ -78,15 +79,31 @@ export function registerWindowsCensusTests() {
       const sampler = String.raw`
 import { createInterface } from "node:readline";
 const fault = process.argv[1];
-if (fault === "startup") { console.error("injected sampler startup failure"); process.exit(23); }
-if (fault !== "retire") console.log(JSON.stringify({ ready: true }));
+let pendingReply;
+const reply = ({ id, pids }) => console.log(JSON.stringify({ id: fault === "mismatched" ? id + 1 : id,
+  observations: pids.map(pid => ({ pid, alive: true, creationTime: fault === "birth" ? null : pid === 101 ? "5001" : "6002" })) }));
 createInterface({ input: process.stdin }).on("line", line => {
-  const { id, pids } = JSON.parse(line);
-  if (fault === "query") { console.error("injected native query failure"); process.exit(24); }
+  if (line === "stderr-observed") {
+    if (fault === "startup" || fault === "query") {
+      const message = fault === "startup" ? "injected sampler startup failure" : "injected native query failure";
+      process.stderr.write(message + "\n", () => process.exit(fault === "startup" ? 23 : 24));
+    } else {
+      // Stay alive after the valid reply: an exit must not mask accidental acceptance.
+      reply(pendingReply);
+    }
+    return;
+  }
+  const request = JSON.parse(line);
+  if (fault === "query" || fault === "stderr-reply") {
+    pendingReply = request;
+    process.stderr.write("injected traceback prefix\n");
+    return;
+  }
   if (fault === "truncated") { process.stdout.write('{"id":'); process.stdin.destroy(); return; }
-  console.log(JSON.stringify({ id: fault === "mismatched" ? id + 1 : id,
-    observations: pids.map(pid => ({ pid, alive: true, creationTime: fault === "birth" ? null : pid === 101 ? "5001" : "6002" })) }));
+  reply(request);
 });
+if (fault === "startup") process.stderr.write("injected traceback prefix\n");
+else if (fault !== "retire") console.log(JSON.stringify({ ready: true }));
 `;
       const { child, completion } = spawnOwnedVitestProcess({
         command: process.execPath,
@@ -105,12 +122,45 @@ const root = fs.mkdtempSync(path.join(tmpdir(), "census-"));
 fs.writeFileSync(path.join(root, "lease"), "owned");
 const endpoint = path.join(root, "census.json");
 const children = [], closes = [];
+let stderrObserved = false, mixedReply;
 const spawn = cp.spawn;
 cp.spawn = (command, args, options) => {
   assert.equal(command, "python");
   const child = spawn(process.execPath, ["--input-type=module", "-e", sampler, fault], options);
   children.push(child);
-  child.once("close", () => closes.push({ pid: child.pid, endpoint: fs.existsSync(endpoint) }));
+  child.once("close", (code, signal) => closes.push({ pid: child.pid, code, signal, endpoint: fs.existsSync(endpoint) }));
+  if (["startup", "query", "stderr-reply"].includes(fault)) {
+    const on = child.stderr.on;
+    child.stderr.on = function(event, listener) {
+      if (event !== "data") return on.call(this, event, listener);
+      return on.call(this, event, function(chunk) {
+        const result = listener.call(this, chunk);
+        // Acknowledge only after the real owner has processed stderr. Its pre-fix
+        // SIGKILL prevents the sampler from emitting the terminal diagnostic/reply.
+        if (!stderrObserved) {
+          stderrObserved = true;
+          child.stdin.write("stderr-observed\n");
+        }
+        return result;
+      });
+    };
+  }
+  if (fault === "stderr-reply") {
+    let buffered = "";
+    child.stdout.on("data", chunk => {
+      buffered += String(chunk);
+      for (;;) {
+        const newline = buffered.indexOf("\n");
+        if (newline < 0) break;
+        const frame = JSON.parse(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        if (frame.observations) {
+          assert(stderrObserved, "mixed reply preceded owner-observed stderr");
+          mixedReply = frame;
+        }
+      }
+    });
+  }
   if (fault === "late") child.stdout.prependListener("data", chunk => {
     if (String(chunk).includes('"id"')) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_100);
   });
@@ -132,9 +182,9 @@ let accepted = false, rejected;
 try {
   if (fault === "retire") await owner.close();
   await owner.ready;
-  // One admitted request must reject after lease replacement; a sibling's ingress
-  // rejection must not hide a stale success from the request already in flight.
-  const pids = fault === "lease" ? [101] : [101, 202];
+  // A sibling's ingress rejection must not hide stale success from an already
+  // admitted lease or stderr-fault request.
+  const pids = ["lease", "query", "stderr-reply"].includes(fault) ? [101] : [101, 202];
   const results = await Promise.all(pids.map(pid => requestWindowsProcessCensus(root, "owned", [pid])));
   assert.deepEqual(results.map(result => [...result.values()]), pids.map(pid => [
     { pid, alive: true, creationTime: pid === 101 ? "5001" : "6002" },
@@ -153,10 +203,20 @@ if (fault === "ready") assert.deepEqual(failures, []);
 else assert(rejected, "fault was accepted");
 if (!["ready", "lease", "retire"].includes(fault)) assert.equal(failures.length, 1);
 const diagnostics = owner.diagnostics();
-if (fault === "startup") assert(diagnostics.includes("injected sampler startup failure"));
-if (fault === "query") assert(diagnostics.includes("injected native query failure"));
+if (fault === "startup") assert(diagnostics.includes("injected sampler startup failure"), diagnostics);
+if (fault === "query") assert(diagnostics.includes("injected native query failure"), diagnostics);
+if (fault === "startup" || fault === "query") {
+  assert(stderrObserved, "owner never observed the diagnostic prefix");
+  assert.equal(closes[0].code, fault === "startup" ? 23 : 24, diagnostics);
+  assert.equal(closes[0].signal, null, diagnostics);
+}
+if (fault === "stderr-reply") {
+  assert(stderrObserved, "owner never observed stderr before the valid reply");
+  assert.deepEqual(mixedReply?.observations, [{ pid: 101, alive: true, creationTime: "5001" }],
+    "sampler must deliver a valid reply after stderr so rejection is not vacuous");
+}
 if (fault === "late") assert(/Late|ETIMEDOUT/.test(diagnostics));
-console.log(JSON.stringify({ fault, accepted, rejected, diagnostics, closes }));
+console.log(JSON.stringify({ fault, accepted, rejected, diagnostics, closes, stderrObserved, mixedReply }));
 fs.rmSync(root, { recursive: true });
 `,
           new URL("./fixtures/ci-windows-process-census.mjs", import.meta.url).href,

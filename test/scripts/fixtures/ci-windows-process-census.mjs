@@ -125,16 +125,17 @@ export function createWindowsProcessCensus({ root, token, onFailure }) {
   child.stdin.on("error", fail);
   child.stderr.setEncoding("utf8");
   child.stderr.on("data", (chunk) => {
-    // Keep the traceback tail, including the native error, without unbounded accumulation.
+    // Drain the bounded traceback through child close; killing on its first chunk
+    // can discard the native error and replace its exit status with SIGKILL.
     stderrTruncated ||= stderr.length + chunk.length > MAX_STDERR_CHARS;
     stderr = (stderr + chunk).slice(-MAX_STDERR_CHARS);
-    fail(new Error("Census helper wrote stderr"));
   });
   child.stderr.on("error", fail);
   readFrames(
     child.stdout,
     (message) => {
       if (closing || failure) return;
+      if (stderr) throw new Error("Census helper wrote stderr");
       if (!initialized) {
         if (message?.ready !== true || Object.keys(message).length !== 1) {
           throw new Error("Invalid census helper readiness");
