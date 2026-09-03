@@ -2319,6 +2319,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
       packageAcceptance,
       "upgrade-survivor-probe-gateway",
       "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
       "openclaw-test-state",
     ],
@@ -2327,6 +2328,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     "scripts/e2e/lib/upgrade-survivor/run.sh",
     [
       "upgrade-survivor-assertions",
+      "upgrade-survivor-mobile-pairing",
       "upgrade-survivor-recovery-cleanup",
       "upgrade-survivor-watchos-direct-node",
     ],
@@ -2334,6 +2336,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   [
     "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs",
     ["upgrade-survivor-watchos-direct-node"],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/mobile-pairing-client.mts",
+    ["upgrade-survivor-mobile-pairing"],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",

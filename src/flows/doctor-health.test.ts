@@ -298,6 +298,8 @@ describe("runDoctorHealthFlow", () => {
     "ready",
     "clean-repair",
     "clean-inspect",
+    "clean-force-repair",
+    "clean-force-inspect",
     "update-no-restart",
     "update-no-restart-stopped",
     "update-parent-stopped",
@@ -316,6 +318,8 @@ describe("runDoctorHealthFlow", () => {
     async (outcome) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const clean = outcome.startsWith("clean-") || outcome.startsWith("update-");
+        const inspectionOnly = outcome === "clean-inspect" || outcome === "clean-force-inspect";
+        const force = outcome.startsWith("clean-force-");
         const cfg: OpenClawConfig = {
           agents: {
             ownership: "explicit",
@@ -435,7 +439,7 @@ describe("runDoctorHealthFlow", () => {
         });
         mocks.runContributions.mockImplementation(async (ctx) => {
           events.push("repair");
-          expect(ctx.gatewayMaintenanceActive).toBe(outcome !== "clean-inspect");
+          expect(ctx.gatewayMaintenanceActive).toBe(!inspectionOnly);
           if (clean) {
             return;
           }
@@ -539,7 +543,8 @@ describe("runDoctorHealthFlow", () => {
           }
           mocks.restartedHealthy = outcome !== "restart-unhealthy";
           const run = runDoctorHealthFlow(runtime, {
-            ...(outcome === "clean-inspect" ? {} : { repair: true }),
+            ...(inspectionOnly ? {} : { repair: true }),
+            force,
             nonInteractive: true,
           });
           if (outcome === "update-no-restart") {
@@ -588,17 +593,23 @@ describe("runDoctorHealthFlow", () => {
             outcome === "ready" ||
             outcome === "restart-unhealthy" ||
             outcome === "clean-repair" ||
+            outcome === "clean-force-repair" ||
             outcome === "approvals-migrated" ||
             outcome === "update-legacy";
           expect(events).toEqual(
-            outcome === "clean-inspect"
+            inspectionOnly
               ? ["repair"]
               : shouldRestart
                 ? ["stop", "repair", "restart"]
                 : ["stop", "repair"],
           );
-          expect(stop).toHaveBeenCalledTimes(outcome === "clean-inspect" ? 0 : 1);
+          expect(stop).toHaveBeenCalledTimes(inspectionOnly ? 0 : 1);
           expect(restart).toHaveBeenCalledTimes(shouldRestart ? 1 : 0);
+          if (shouldRestart) {
+            expect(restart).toHaveBeenCalledWith(
+              expect.objectContaining({ preserveDefinition: true }),
+            );
+          }
           if (clean) {
             expect(fs.readFileSync(state.configPath)).toEqual(configBefore);
             expect(fs.readFileSync(initial.path)).toEqual(agentBefore);

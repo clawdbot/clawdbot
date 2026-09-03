@@ -17,6 +17,7 @@ import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.
 const command = process.argv[2];
 const SCENARIOS = new Set([
   "base",
+  "mobile-pairing-reconnect",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
@@ -372,9 +373,9 @@ function seedState() {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
-  // The watch row proves only direct-node identity/auth survival. Unrelated
-  // migration specimens can prevent the shipped baseline Gateway from starting.
-  if (scenario === "watchos-direct-node") {
+  // Companion reconnect rows own their real pairing state. Generic migration
+  // specimens can block a frozen candidate before its auth path is exercised.
+  if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
     return;
   }
   writeJson(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
@@ -487,7 +488,8 @@ function assertConfigSurvived() {
     assert(config.update?.channel === expectedChannel, "update.channel was not preserved");
   }
   if (acceptsIntent(coverage, "gateway")) {
-    assert(config.gateway?.auth?.mode === "token", "gateway auth mode was not preserved");
+    const expectedAuthMode = scenario === "mobile-pairing-reconnect" ? "password" : "token";
+    assert(config.gateway?.auth?.mode === expectedAuthMode, "gateway auth mode was not preserved");
   }
 
   if (acceptsIntent(coverage, "models")) {
@@ -645,7 +647,7 @@ function assertStateSurvived() {
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
-  if (scenario === "watchos-direct-node") {
+  if (scenario === "watchos-direct-node" || scenario === "mobile-pairing-reconnect") {
     return;
   }
   assert(
@@ -1644,12 +1646,90 @@ function assertUpdateRunSelfUpgrade([file]) {
   );
 }
 
+function assertMobilePairingEvidence(files) {
+  const expectedPhases = ["baseline", "candidate-first", "candidate-restart", "final"];
+  const expectedNodeSurfaceAdditions = ["watch.notify", "watch.status"];
+  assert(
+    files.length === expectedPhases.length,
+    "mobile pairing evidence requires all four reconnect phases",
+  );
+  const evidence = files.map((file, index) => {
+    const value = readJson(file);
+    assert(value?.phase === expectedPhases[index], "mobile pairing evidence phase changed");
+    assert(value?.ok === true, "mobile pairing reconnect did not pass");
+    assert(value?.health === true, "mobile pairing health check did not pass");
+    assert(
+      value?.connectedDevicePresent === true,
+      "mobile pairing connected device assertion did not pass",
+    );
+    assert(value?.pendingDevicePairingCount === 0, "mobile device pairing left a pending request");
+    assert(value?.pairedDevicePresent === true, "paired mobile device missing");
+    assert(value?.pairedNodePresent === true, "paired mobile node missing");
+    const cleanPairingState =
+      value?.pendingPairingCount === 0 &&
+      value?.pendingNodePairingCount === 0 &&
+      value?.nodeSurfaceReapprovalRequired === false &&
+      Array.isArray(value?.nodeSurfaceCommandAdditions) &&
+      value.nodeSurfaceCommandAdditions.length === 0;
+    const scopedNodeSurfaceReapproval =
+      index > 0 &&
+      value?.pendingPairingCount === 1 &&
+      value?.pendingNodePairingCount === 1 &&
+      value?.nodeSurfaceReapprovalRequired === true &&
+      JSON.stringify(value?.nodeSurfaceCommandAdditions) ===
+        JSON.stringify(expectedNodeSurfaceAdditions);
+    assert(
+      typeof value?.nodeSurfaceReapprovalExpected === "boolean",
+      "mobile node pairing reapproval expectation missing",
+    );
+    assert(
+      value.nodeSurfaceReapprovalExpected ? scopedNodeSurfaceReapproval : cleanPairingState,
+      "mobile node pairing pending state exceeded the known command-surface reapproval",
+    );
+    assert(value?.missingPasswordReason === true, "mobile pairing password_missing proof missing");
+    assert(
+      value?.missingPasswordClose1008 === true,
+      "mobile pairing password_missing close code proof missing",
+    );
+    for (const role of ["node", "operator"]) {
+      const credential = value?.credentials?.[role];
+      assert(
+        /^[a-f0-9]{64}$/u.test(credential?.usedTokenHash),
+        `mobile pairing ${role} used token hash missing`,
+      );
+      assert(
+        /^[a-f0-9]{64}$/u.test(credential?.storedTokenHash),
+        `mobile pairing ${role} stored token hash missing`,
+      );
+      assert(
+        typeof credential?.deviceTokenReturned === "boolean",
+        `mobile pairing ${role} token return flag missing`,
+      );
+      assert(
+        typeof credential?.tokenRotated === "boolean",
+        `mobile pairing ${role} rotation flag missing`,
+      );
+    }
+    return value;
+  });
+
+  for (let index = 1; index < evidence.length; index += 1) {
+    for (const role of ["node", "operator"]) {
+      assert(
+        evidence[index - 1]?.credentials?.[role]?.storedTokenHash ===
+          evidence[index]?.credentials?.[role]?.usedTokenHash,
+        `mobile pairing ${role} reconnect did not use the newest stored token`,
+      );
+    }
+  }
+}
+
 if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
 } else if (command === "assert-exec-approvals") {
-  if (getScenario() !== "watchos-direct-node") {
+  if (!["watchos-direct-node", "mobile-pairing-reconnect"].includes(getScenario())) {
     assertExecApprovalPolicySurvived(
       requireEnv("OPENCLAW_STATE_DIR"),
       process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
@@ -1686,6 +1766,8 @@ if (command === "list-scenarios") {
   assertRepairJson(process.argv.slice(3));
 } else if (command === "assert-update-run-self-upgrade") {
   assertUpdateRunSelfUpgrade(process.argv.slice(3));
+} else if (command === "assert-mobile-pairing-evidence") {
+  assertMobilePairingEvidence(process.argv.slice(3));
 } else {
   throw new Error(`unknown upgrade-survivor assertion command: ${command ?? "<missing>"}`);
 }
