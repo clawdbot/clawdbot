@@ -178,7 +178,7 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
       }
       // Metadata survives usage, threading, and transcript decoration; object identity does not.
       if (pendingContinuationSettlement && getReplyPayloadMetadata(reply)?.continuationStatus) {
-        if (finalReply.queuedFinal) {
+        if (finalReply.dispatcherOutcome) {
           registerReplyDispatcherSettledTask(dispatcher, async () => {
             const outcome = await finalReply.dispatcherOutcome;
             // A post-send error can leave visibility unknown. Only an acknowledged
