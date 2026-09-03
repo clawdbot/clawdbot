@@ -19,7 +19,7 @@ import { sensitive } from "./zod-schema.sensitive.js";
 const { SECTION_DOCS_URLS } = testApi;
 // Root sections without beginner-worthy pages stay explicit. Adding a root config key
 // requires choosing a docsUrl or listing it here.
-const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
+const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments", "taskLanes"] as const;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.discord",
   "channels.imessage",

@@ -649,7 +649,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     // panel on this flag, so an unconfigured install never polls lane data.
     respond(
       true,
-      { ...status, taskLanesConfigured: context.taskLanes?.hasProviders() === true },
+      { ...status, taskLanesConfigured: context.taskLanes?.hasProviders() ?? false },
       undefined,
     );
   },
