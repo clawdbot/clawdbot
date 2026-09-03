@@ -182,7 +182,11 @@ suite.define(() => {
             hasText: "Omitted from history",
           });
           await omittedCard.waitFor({ state: "visible" });
-          expect(await omittedCard.locator("a, button, img, audio, video").count()).toBe(0);
+          const omittedCardText = await omittedCard.textContent();
+          const omittedInteractiveDescendantCount = await omittedCard
+            .locator("a, button, img, audio, video")
+            .count();
+          expect(omittedInteractiveDescendantCount).toBe(0);
           await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
 
           await navigateToControlUiSession(page, retainedSessionKey);
@@ -206,10 +210,8 @@ suite.define(() => {
                   retainedIncludesUrl: JSON.stringify(retainedHistory).includes(retainedImageUrl),
                 },
                 ui: {
-                  omittedCardText: await omittedCard.textContent(),
-                  omittedInteractiveDescendantCount: await omittedCard
-                    .locator("a, button, img, audio, video")
-                    .count(),
+                  omittedCardText,
+                  omittedInteractiveDescendantCount,
                   retainedImageSrc: await retainedPane
                     .locator(`img.chat-message-image[src="${retainedImageUrl}"]`)
                     .getAttribute("src"),
