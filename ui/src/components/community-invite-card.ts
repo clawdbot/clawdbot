@@ -186,7 +186,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       line-height: 1.45;
     }
 
-    .invite__cta {
+    a.invite__cta {
       box-sizing: border-box;
       display: flex;
       align-items: center;
@@ -198,6 +198,7 @@ class OpenClawCommunityInviteCard extends OpenClawLitElement {
       border-radius: var(--radius-md, 10px);
       background: var(--text-strong);
       color: var(--bg);
+      cursor: pointer;
       font-size: var(--control-ui-text-sm, 12px);
       font-weight: 600;
       text-decoration: none;
