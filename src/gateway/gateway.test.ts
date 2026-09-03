@@ -43,13 +43,11 @@ const GATEWAY_E2E_TIMEOUT_MS = 90_000;
 
 async function startLoopbackTokenGateway(token: string) {
   const port = await getGatewayE2ePortBlock();
-  // Sidecars stay non-deferred: startup's own model-runtime publication loads the workspace
-  // plugin registry, and deferring it lets that load land after this resolves. Callers that
-  // measure per-request plugin loads would then sample a moving startup baseline.
   const server = await startGatewayServer(port, {
     bind: "loopback",
     auth: { mode: "token", token },
     controlUiEnabled: false,
+    sidecarStartup: "defer",
   });
   return { port, server };
 }
@@ -718,6 +716,10 @@ module.exports = {
       const { port, server } = await startLoopbackTokenGateway(token);
 
       try {
+        // The baseline counts startup's own workspace-plugin load, which the deferred
+        // sidecars publish. Without this the read races that load and the baseline moves.
+        await server.startupSettled;
+
         const beforeCount = await readCounterWithRetry(registerCountPath);
         expect(beforeCount).toBeGreaterThan(0);
 
