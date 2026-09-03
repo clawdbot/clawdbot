@@ -151,6 +151,24 @@ describe("prepareWorkerGitHubEnvironment", () => {
     expect(warn.mock.lastCall?.[0]).toContain(remoteHead.slice(0, 7));
   });
 
+  it("keeps the session's own tracked-file deletion while materializing new pushed files", async () => {
+    // A file tracked since the initial commit that the previous turn deleted locally.
+    const keepDeleted = "keep-deleted.txt";
+    await fs.writeFile(path.join(cwd, keepDeleted), "to be deleted\n");
+    initialHead = await commit(cwd, "Track a file that will be deleted");
+    await git(cwd, "push", "--quiet", "--force", "origin", "HEAD:refs/heads/main");
+    const remoteHead = await publishEarlierTurn();
+    await fs.rm(path.join(cwd, keepDeleted));
+
+    await prepare();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    await expect(fs.access(path.join(cwd, keepDeleted))).rejects.toThrow();
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe(` D ${keepDeleted}\0`);
+    expect(await fs.readFile(path.join(cwd, filename), "utf8")).toBe(pushedContent);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("never starts the credentialed fetch for a fenced turn", async () => {
     const remoteHead = await publishEarlierTurn();
     const controller = new AbortController();

@@ -84,10 +84,15 @@ async function bindWorkerGitHubCheckout(
     if (signal?.aborted) {
       return;
     }
+    // Paths already missing before the move are the session's own deletions and stay
+    // deleted; only files the incoming commits introduce are materialized.
+    const listDeleted = async () =>
+      (await requireGit(["ls-files", "--deleted", "-z"])).split("\0").filter(Boolean);
+    const deletedBefore = new Set(await listDeleted());
     await requireGit(["reset", "--mixed", "FETCH_HEAD"]);
-    const deleted = (await requireGit(["ls-files", "--deleted", "-z"])).split("\0").filter(Boolean);
-    if (deleted.length > 0) {
-      await requireGit(["--literal-pathspecs", "checkout", "--", ...deleted]);
+    const missing = (await listDeleted()).filter((file) => !deletedBefore.has(file));
+    if (missing.length > 0) {
+      await requireGit(["--literal-pathspecs", "checkout", "--", ...missing]);
     }
   } catch (error) {
     // Checkout metadata helps direct publication; a failure must not discard the coding turn.
