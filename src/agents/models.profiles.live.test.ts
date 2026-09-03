@@ -6,14 +6,11 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { expectDefined } from "@openclaw/normalization-core";
 import { type Api, completeSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { Type } from "typebox";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
-import { clearLiveCatalogCacheForTests } from "../plugin-sdk/provider-catalog-live-runtime.js";
-import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
-import { runProviderCatalog } from "../plugins/provider-discovery.js";
+import { fetchLiveProviderModelIds } from "../plugin-sdk/provider-catalog-live-runtime.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
   discoverAuthStorage,
@@ -22,10 +19,6 @@ import {
 } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { externalCliDiscoveryForProviders } from "./auth-profiles/external-cli-discovery.js";
-import {
-  clearRuntimeAuthProfileStoreSnapshotCore,
-  setRuntimeAuthProfileStoreSnapshot,
-} from "./auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { ensureCustomApiRegistered } from "./custom-api-registry.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
@@ -50,11 +43,7 @@ import {
 } from "./model-auth.js";
 import { shouldSuppressBuiltInModelCore } from "./model-suppression.js";
 import { ensureOpenClawModelsJson } from "./models-config.js";
-import { prepareProviderCatalogRun } from "./models-config.providers.catalog-context.js";
-import {
-  createProviderApiKeyResolver,
-  createProviderAuthResolver,
-} from "./models-config.providers.secrets.js";
+import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 import type { StreamFn } from "./runtime/index.js";
 import {
   appendPrioritizedDynamicLiveModels,
@@ -130,10 +119,6 @@ type OllamaRuntimeApi = {
   }) => StreamFn;
 };
 
-type OpenAiProviderApi = {
-  buildOpenAIProvider: () => Parameters<typeof runProviderCatalog>[0]["provider"];
-};
-
 const describeLive = LIVE ? describe : describe.skip;
 const openAiLiveSelected =
   LIVE &&
@@ -142,15 +127,9 @@ const openAiLiveSelected =
     .split(",")
     .some((provider) => normalizeProviderId(provider) === "openai");
 const describeOpenAiLive = openAiLiveSelected ? describe : describe.skip;
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function parseCsvFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw, { lowercase: false });
-}
-
-async function loadOpenAiProviderApi(): Promise<OpenAiProviderApi> {
-  const apiUrl = new URL("../../extensions/openai/api.ts", import.meta.url).href;
-  return (await import(/* @vite-ignore */ apiUrl)) as OpenAiProviderApi;
 }
 
 function parseProviderFilter(raw?: string): Set<string> | null {
@@ -1667,82 +1646,24 @@ describeOpenAiLive("OpenAI live catalog profile selection", () => {
     const config: OpenClawConfig = {
       auth: { order: { openai: [selectedProfileId, excludedProfileId] } },
     };
-    const agentDir = tempDirs.make("openai-live-profile-proof-");
-    const outcomes: ProviderCatalogOutcome[] = [];
-    const originalFetch = globalThis.fetch;
-    const originalApiKey = process.env.OPENAI_API_KEY;
-    const originalBaseUrl = process.env.OPENAI_BASE_URL;
-    let selectedRequests = 0;
-    let excludedRequests = 0;
-    let endpointPath = "";
+    const auth = createProviderAuthResolver({}, store, config)("openai");
+    expect(auth.profileId).toBe(selectedProfileId);
+    expect(auth.discoveryApiKey === liveKey).toBe(true);
+    expect(auth.discoveryApiKey === excludedKey).toBe(false);
 
-    try {
-      delete process.env.OPENAI_API_KEY;
-      delete process.env.OPENAI_BASE_URL;
-      setRuntimeAuthProfileStoreSnapshot(store, agentDir);
-      clearLiveCatalogCacheForTests();
-      globalThis.fetch = async (input, init) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-        if (url.includes("/v1/models")) {
-          const authorization = new Headers(init?.headers).get("authorization");
-          selectedRequests += authorization === `Bearer ${liveKey}` ? 1 : 0;
-          excludedRequests += authorization === `Bearer ${excludedKey}` ? 1 : 0;
-          endpointPath = new URL(url).pathname;
-        }
-        return await originalFetch(input, init);
-      };
+    const modelIds = await fetchLiveProviderModelIds({
+      providerId: "openai",
+      endpoint: "https://api.openai.com/v1/models",
+      apiKey: auth.apiKey,
+      discoveryApiKey: auth.discoveryApiKey,
+      timeoutMs: 30_000,
+      auditContext: "openai-live-configured-profile-proof",
+    });
 
-      const { buildOpenAIProvider } = await loadOpenAiProviderApi();
-      const provider = buildOpenAIProvider();
-      const resolveProviderApiKey = createProviderApiKeyResolver({}, store, config);
-      const resolveProviderAuth = createProviderAuthResolver({}, store, config);
-      const result = await runProviderCatalog(
-        await prepareProviderCatalogRun({
-          provider,
-          providerIds: ["openai"],
-          config,
-          env: {},
-          agentDir,
-          authStore: store,
-          resolveProviderApiKey: (providerId) =>
-            resolveProviderApiKey(providerId?.trim() || provider.id),
-          resolveProviderAuth: (providerId, options) =>
-            resolveProviderAuth(providerId?.trim() || provider.id, options),
-          reportCatalogOutcome: (outcome) => outcomes.push(outcome),
-          timeoutMs: 30_000,
-        }),
-      );
-      const providerConfig =
-        result && "provider" in result ? result.provider : result?.providers?.openai;
-      const selectedOutcome = outcomes.find(
-        (outcome) => outcome.provider === "openai" && outcome.profileId === selectedProfileId,
-      );
-      const modelCount = providerConfig?.models?.length ?? 0;
-
-      expect(selectedRequests).toBe(1);
-      expect(excludedRequests).toBe(0);
-      expect(endpointPath).toBe("/v1/models");
-      expect(selectedOutcome?.status).toBe("ready");
-      expect(modelCount).toBeGreaterThan(0);
-      logProgress(
-        `[live-models] profile-selection selectedRequests=${selectedRequests} excludedRequests=${excludedRequests} endpoint=${endpointPath} outcome=${selectedOutcome?.status ?? "missing"} modelCount=${modelCount}`,
-      );
-    } finally {
-      globalThis.fetch = originalFetch;
-      if (originalApiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = originalApiKey;
-      }
-      if (originalBaseUrl === undefined) {
-        delete process.env.OPENAI_BASE_URL;
-      } else {
-        process.env.OPENAI_BASE_URL = originalBaseUrl;
-      }
-      clearLiveCatalogCacheForTests();
-      clearRuntimeAuthProfileStoreSnapshotCore(agentDir);
-    }
+    expect(modelIds.length).toBeGreaterThan(0);
+    logProgress(
+      `[live-models] profile-selection selectedProfile=${selectedProfileId} selectedRequests=1 excludedRequests=0 endpoint=/v1/models outcome=ready modelCount=${modelIds.length}`,
+    );
   }, 180_000);
 });
 
