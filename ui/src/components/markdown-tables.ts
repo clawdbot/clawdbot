@@ -163,18 +163,24 @@ async function showTableDialog(
     dialog.label = t("common.expandedTable");
     dialog.setReturnFocusTarget(trigger);
     const dismissLink = (event: Event) => {
-      if (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ") {
+      const anchor = anchorFromNavigationEvent(event);
+      if (
+        !anchor ||
+        (event instanceof KeyboardEvent && event.key !== "Enter" && event.key !== " ")
+      ) {
         return;
       }
-      if (anchorFromNavigationEvent(event)) {
-        // Listener microtasks can run before ancestor handlers. Wait for the
-        // transcript's keyboard activation decision before dismissing the overlay.
-        setTimeout(() => {
-          if (event.type === "click" || event.defaultPrevented) {
-            close();
-          }
-        }, 0);
-      }
+      // Listener microtasks can precede ancestor routing. Defer removal until
+      // routing and the browser's default href activation have finished.
+      setTimeout(() => {
+        if (
+          event.type === "click" ||
+          event.defaultPrevented ||
+          (event instanceof MouseEvent && event.button === 1 && anchor.hasAttribute("href"))
+        ) {
+          close();
+        }
+      }, 0);
     };
     dialog.addEventListener("modal-cancel", close);
     render(

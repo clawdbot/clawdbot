@@ -210,33 +210,38 @@ describe("Markdown table interactions", () => {
     expect(document.activeElement).toBe(second);
   });
 
-  it("dismisses routed middle-clicks while preserving right-click menus", async () => {
-    const routing = startNativeLinkRouting({ shouldOpenInControlUiBrowser: () => true });
-    const { owner } = interactiveOwner(
-      "| Reference |\n| --- |\n| [Open reference](https://example.com/table) |",
-    );
-    try {
-      owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
-      const { modal } = await waitForRenderedModalDialog(owner);
-      const link = modal.querySelector("a")!;
-      vi.useFakeTimers();
-      for (const type of ["contextmenu", "auxclick"]) {
-        const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
-        link.dispatchEvent(event);
+  it.each([true, false])(
+    "dismisses middle-clicks while preserving right-click menus (browser panel: %s)",
+    async (openInBrowserPanel) => {
+      const routing = startNativeLinkRouting({
+        shouldOpenInControlUiBrowser: () => openInBrowserPanel,
+      });
+      const { owner } = interactiveOwner(
+        "| Reference |\n| --- |\n| [Open reference](https://example.com/table) |",
+      );
+      try {
+        owner.querySelector<HTMLButtonElement>(".markdown-table__expand")!.click();
+        const { modal } = await waitForRenderedModalDialog(owner);
+        const link = modal.querySelector("a")!;
+        vi.useFakeTimers();
+        for (const type of ["contextmenu", "auxclick"]) {
+          const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 2 });
+          link.dispatchEvent(event);
+          await vi.advanceTimersByTimeAsync(0);
+          expect(event.defaultPrevented).toBe(false);
+          expect(modal.isConnected).toBe(true);
+        }
+        const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
+        link.dispatchEvent(middle);
+        expect(middle.defaultPrevented).toBe(openInBrowserPanel);
         await vi.advanceTimersByTimeAsync(0);
-        expect(event.defaultPrevented).toBe(false);
-        expect(modal.isConnected).toBe(true);
+        expect(modal.isConnected).toBe(false);
+      } finally {
+        routing.dispose();
+        releaseMarkdownTables(owner);
       }
-      const middle = new MouseEvent("auxclick", { bubbles: true, cancelable: true, button: 1 });
-      link.dispatchEvent(middle);
-      expect(middle.defaultPrevented).toBe(true);
-      await vi.advanceTimersByTimeAsync(0);
-      expect(modal.isConnected).toBe(false);
-    } finally {
-      routing.dispose();
-      releaseMarkdownTables(owner);
-    }
-  });
+    },
+  );
 
   it("retires a connected pane's pending table without blocking another pane", async () => {
     const pane = document.createElement("section");

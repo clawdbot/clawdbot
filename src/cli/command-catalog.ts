@@ -503,6 +503,8 @@ export const cliCommandCatalog: readonly CliCommandCatalogEntry[] = [
     commandPath: ["node"],
     policy: { networkProxy: "bypass" },
   },
+  // Remote pairing verification owns a read-only identity lookup, including before its action.
+  { commandPath: ["node", "identity"], exact: true, policy: PASSIVE_STARTUP_POLICY },
   {
     commandPath: ["node", "worker"],
     exact: true,

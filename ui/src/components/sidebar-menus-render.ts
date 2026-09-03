@@ -29,6 +29,7 @@ import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
@@ -472,6 +473,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -527,6 +531,9 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });

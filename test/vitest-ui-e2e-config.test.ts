@@ -101,7 +101,10 @@ const standaloneFile = "ui/src/e2e/board-fixture.e2e.test.ts";
 const bundledFile = "ui/src/e2e/mount-fallback.e2e.test.ts";
 const serialBundledFile = "ui/src/e2e/chat-stream-runtime-budgets.e2e.test.ts";
 const privateFile = "ui/src/e2e/approval-bootstrap.e2e.test.ts";
-const qaLabFile = "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts";
+const qaLabFiles = [
+  "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+  "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
+];
 
 type OwnershipProbe = {
   files: Array<{ file: string; project: string; phase: number; workers: number }>;
@@ -365,7 +368,7 @@ describe("Control UI E2E resource ownership", () => {
       await import("./vitest/vitest.ui-e2e.config.ts");
     const result = probeOwnership();
     const inventory = fs
-      .globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot })
+      .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
       .toSorted();
     expect(result.files.map((entry) => entry.file).toSorted()).toEqual(inventory);
     expect(result.setupError).toBeUndefined();
@@ -397,7 +400,7 @@ describe("Control UI E2E resource ownership", () => {
       "usage-sessions-owner-attribution",
     ]
       .map((name) => `ui/src/e2e/${name}.e2e.test.ts`)
-      .concat(qaLabFile);
+      .concat(qaLabFiles);
     expect(
       result.files
         .filter((entry) => realGateway.includes(entry.file))
@@ -516,7 +519,7 @@ describe("Control UI E2E Vitest sharding", () => {
 
   it("assigns every discovered file once with committed timings, ignoring stale keys", async () => {
     const committed = fs.readFileSync(timingPath, "utf8");
-    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot });
+    const discovered = fs.globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot });
     const { uiE2eSerialTestFiles } = await import("./vitest/vitest.ui-e2e.config.ts");
     const serial = new Set(uiE2eSerialTestFiles);
     const files = [
@@ -557,7 +560,7 @@ describe("Control UI E2E Vitest sharding", () => {
   ])("preserves the no-file partition with %s", async (_name, contents) => {
     const files = specifications(
       fs
-        .globSync(["ui/src/**/*.e2e.test.ts", qaLabFile], { cwd: repoRoot })
+        .globSync(["ui/src/**/*.e2e.test.ts", ...qaLabFiles], { cwd: repoRoot })
         .map((file) => path.join(repoRoot, file)),
     );
     useTimings(null);

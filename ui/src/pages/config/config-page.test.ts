@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
 import type {
@@ -33,14 +34,6 @@ import type { ConfigViewState } from "./view.ts";
 
 const switchActiveRealtimeTalkCameras =
   vi.fn<typeof realtimeTalk.switchActiveRealtimeTalkCameras>();
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 let localStorageMock: Storage;
 
@@ -497,30 +490,111 @@ describe("ConfigPage media discovery", () => {
       await first;
     }
   });
+});
 
-  it("upgrades passive discovery when the user requests permission", async () => {
-    for (const method of ["refreshMicrophones", "refreshCameras"] as const) {
-      const passiveDiscovery = deferred<MediaDeviceInfo[]>();
-      const enumerateDevices = vi
-        .fn()
-        .mockImplementationOnce(() => passiveDiscovery.promise)
-        .mockResolvedValueOnce([]);
-      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices } });
+// The same matrix runs on the unchanged owner before applying the repair.
+// Observe the real discovery callee at the MediaDevices boundary, not queue flags.
+describe("media permission lifetime: Settings", () => {
+  const scenarios = [
+    "queued gesture remains active",
+    "queued gesture leaves Appearance",
+    "queued gesture disconnects",
+    "permission-bearing enumeration leaves Appearance",
+    "reentry without a fresh gesture",
+    "reentry with a fresh gesture",
+    "failed passive enumeration keeps one upgrade",
+    "second enumeration leaves Appearance",
+    "permission-bearing enumeration fails once",
+  ] as const;
+
+  for (const kind of ["microphone", "camera"] as const) {
+    it.each(scenarios)(`${kind}: %s`, async (scenario) => {
+      const initial = deferred<MediaDeviceInfo[]>();
+      const second = deferred<MediaDeviceInfo[]>();
+      const enumerateDevices = vi.fn().mockReturnValueOnce(initial.promise);
+      if (scenario === "second enumeration leaves Appearance") {
+        enumerateDevices.mockReturnValueOnce(second.promise);
+      }
+      enumerateDevices.mockResolvedValue([]);
+      const stop = vi.fn();
+      const getUserMedia = vi.fn().mockResolvedValue({ getTracks: () => [{ stop }] });
+      vi.stubGlobal("navigator", { mediaDevices: { enumerateDevices, getUserMedia } });
       const page = new ConfigPage();
-      const state = page as unknown as Record<
-        typeof method,
-        (requestPermission: boolean) => Promise<void>
-      >;
-
-      const passive = state[method](false);
-      await state[method](true);
+      page.pageId = "appearance";
+      const state = page as unknown as {
+        refreshMicrophones: (requestPermission: boolean) => Promise<void>;
+        refreshCameras: (requestPermission: boolean) => Promise<void>;
+        microphoneLoading: boolean;
+        cameraLoading: boolean;
+        microphoneError: string | null;
+        cameraError: string | null;
+      };
+      const refresh = (requestPermission: boolean) =>
+        kind === "microphone"
+          ? state.refreshMicrophones(requestPermission)
+          : state.refreshCameras(requestPermission);
+      const leaveAppearance = () => {
+        page.pageId = "advanced";
+        page.willUpdate(new Map([["pageId", "appearance"]]));
+      };
+      const startsWithPermission = scenario.startsWith("permission-bearing");
+      const first = refresh(startsWithPermission);
+      if (!startsWithPermission) {
+        await refresh(true);
+      }
       expect(enumerateDevices).toHaveBeenCalledOnce();
+      expect(getUserMedia).not.toHaveBeenCalled();
 
-      passiveDiscovery.resolve([]);
-      await passive;
-      expect(enumerateDevices).toHaveBeenCalledTimes(2);
-    }
-  });
+      if (scenario === "queued gesture disconnects") {
+        page.disconnectedCallback();
+      } else if (
+        scenario === "queued gesture leaves Appearance" ||
+        scenario === "permission-bearing enumeration leaves Appearance" ||
+        scenario.startsWith("reentry")
+      ) {
+        leaveAppearance();
+      }
+      if (scenario.startsWith("reentry")) {
+        page.pageId = "appearance";
+        page.willUpdate(new Map([["pageId", "advanced"]]));
+        await refresh(scenario === "reentry with a fresh gesture");
+      }
+      if (
+        scenario === "failed passive enumeration keeps one upgrade" ||
+        scenario === "second enumeration leaves Appearance" ||
+        scenario === "permission-bearing enumeration fails once"
+      ) {
+        initial.reject(new DOMException("Synthetic inactive enumeration", "InvalidStateError"));
+      } else {
+        initial.resolve([]);
+      }
+      if (scenario === "second enumeration leaves Appearance") {
+        await vi.waitFor(() => expect(enumerateDevices).toHaveBeenCalledTimes(2));
+        leaveAppearance();
+        second.resolve([]);
+      }
+      await first;
+      await vi.waitFor(() =>
+        expect(kind === "microphone" ? state.microphoneLoading : state.cameraLoading).toBe(false),
+      );
+      const permits = [
+        "queued gesture remains active",
+        "reentry with a fresh gesture",
+        "failed passive enumeration keeps one upgrade",
+      ].includes(scenario);
+      expect(getUserMedia).toHaveBeenCalledTimes(permits ? 1 : 0);
+      expect(stop).toHaveBeenCalledTimes(permits ? 1 : 0);
+      if (permits) {
+        expect(getUserMedia).toHaveBeenCalledWith(
+          kind === "microphone" ? { audio: true } : { video: true },
+        );
+      }
+      if (scenario === "permission-bearing enumeration fails once") {
+        expect(enumerateDevices).toHaveBeenCalledOnce();
+        expect(kind === "microphone" ? state.microphoneError : state.cameraError).toBeTruthy();
+      }
+    });
+  }
 });
 
 describe("ConfigPage camera selection", () => {

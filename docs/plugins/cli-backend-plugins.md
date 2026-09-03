@@ -334,9 +334,25 @@ may include final text, usage, an error, and a successor session id. Session ids
 reported by either event shape participate in resumed-session and fork
 persistence.
 
+Lifecycle events are intentionally separate from this return union so existing
+plugins can continue to match it exhaustively. Use `parseJsonlLifecycleEvent`
+for backend-owned lifecycle records instead.
+
 Tool events describe work the backend already performed. OpenClaw renders and
 summarizes them, but does not treat them as host tool execution, trusted
 diagnostics, loopback correlation, or message-delivery evidence.
+
+### `parseJsonlLifecycleEvent`: provider-native lifecycle records
+
+Set `parseJsonlLifecycleEvent` when a backend emits JSONL records for lifecycle
+state that is independent of assistant text, tools, sessions, and terminal
+results. The hook receives the same line and context as `parseJsonlEvent` and is
+tried first. Returning a lifecycle event consumes that line; returning `null`
+lets the source-compatible `parseJsonlEvent` hook or built-in parser handle it.
+
+The current lifecycle contract supports native compaction start and end records.
+An end record includes `completed` so channels can distinguish successful and
+incomplete compaction without inferring an outcome from later messages.
 
 ### `ownsNativeCompaction`: opting out of OpenClaw compaction
 

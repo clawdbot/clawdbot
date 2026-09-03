@@ -2,9 +2,10 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { TestHomeSelection } from "../../test/test-home-policy.mts";
-import { resolveVitestCliEntry, resolveVitestNodeArgs } from "../run-vitest.mts";
 import { installVitestProcessGroupCleanup } from "../vitest-process-group.mts";
+import { resolveVitestCliEntry } from "./vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./vitest-home-selection.mts";
+import { resolveVitestNodeArgs } from "./vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./vitest-process.mts";
 import type { VitestReportOutcome } from "./vitest-report-owner.mts";
 

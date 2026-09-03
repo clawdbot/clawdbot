@@ -64,7 +64,7 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
         if mode == "qa-tag":
             checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
                     "tag", "-a", "v2026.9.1", "-m", "release", cwd=source)
-    if mode == "historical":
+    if mode in ("historical", "base"):
         (source / "payload.txt").write_text("current checkout\n")
         checked(git, "add", "payload.txt", cwd=source)
         checked(git, "-c", "user.name=Checkout Fixture", "-c", "user.email=fixture@example.invalid",
@@ -82,6 +82,8 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
     authorization = f"Basic {encoded}"
     requests = []
     kova_methods = []
+    post_checkout_requests = []
+    checkout_complete = root / "checkout-complete"
     redirect = False
 
     class Handler(BaseHTTPRequestHandler):
@@ -100,6 +102,8 @@ with tempfile.TemporaryDirectory(prefix="checkout-auth-") as directory:
             authenticated = len(headers) == 1 and headers[0].lower().startswith("basic ") and headers[0][6:] == encoded
             requests.append({"path": parsed.path, "authenticated": authenticated,
                              "authorizationPresent": bool(headers)})
+            if checkout_complete.exists():
+                post_checkout_requests.append(parsed.path)
             if parsed.path.startswith("/other.git"):
                 self.send_error(404)
                 return
@@ -276,7 +280,7 @@ elif phase == "redirect":
                     raise
                 return subprocess.CompletedProcess(child.args, child.returncode, stdout, stderr)
 
-        if mode == "historical":
+        if mode in ("historical", "base"):
             env["GIT_CONFIG_GLOBAL"] = str(home / ".gitconfig")
             policy.write_text('''import ci_git_owner as owner
 import json, os, sys
@@ -289,22 +293,33 @@ try:
     owner.checkout()
 finally:
     owner.checkout_environment.clear()
-historical = json.loads(os.environ["CHECKOUT_GIT_COMMITS_JSON"])[0]
-owner.run_git(os.getcwd(), "cat-file", "-e", historical + "^{commit}")
-reader = str(Path.cwd().parent / "historical-reader")
-owner.run_git(os.getcwd(), "worktree", "add", "--detach", reader, historical)
-assert Path(reader, "payload.txt").read_text() == "checkout must hydrate this promised blob\\n"
-owner.run_git(os.getcwd(), "worktree", "remove", reader)
+Path.cwd().parent.joinpath("checkout-complete").touch()
+if phase == "base":
+    base = os.environ["CHECKOUT_BASE_SHA"]
+    assert owner.git_output(os.getcwd(), "rev-parse", "refs/remotes/origin/ci-ratchet-base").strip() == base
+    diff = owner.git_output(os.getcwd(), "diff", "--unified=0", base + "..HEAD", "--", "payload.txt")
+    assert "-checkout must hydrate this promised blob\\n+current checkout\\n" in diff
+else:
+    historical = json.loads(os.environ["CHECKOUT_GIT_COMMITS_JSON"])[0]
+    owner.run_git(os.getcwd(), "cat-file", "-e", historical + "^{commit}")
+    reader = str(Path.cwd().parent / "historical-reader")
+    owner.run_git(os.getcwd(), "worktree", "add", "--detach", reader, historical)
+    assert Path(reader, "payload.txt").read_text() == "checkout must hydrate this promised blob\\n"
+    owner.run_git(os.getcwd(), "worktree", "remove", reader)
 ''')
             env.update(CHECKOUT_SHA=revision, WORKFLOW_SHA=revision,
-                       CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]))
-            result = owned("historical")
+                       CHECKOUT_GIT_COMMITS_JSON=json.dumps([historical_revision]) if mode == "historical" else "[]",
+                       CHECKOUT_BASE_SHA=historical_revision if mode == "base" else "")
+            result = owned(mode)
             assert result.returncode == 0, result.stderr
             assert requests and all(item["authenticated"] for item in requests)
+            assert not post_checkout_requests, "prepared objects triggered HTTP after checkout"
             config = (workspace / ".git/config").read_text()
             assert token not in config and encoded not in config and "extraheader" not in config.lower()
             assert checked(git, "rev-parse", "HEAD", cwd=workspace) == revision
-            print(json.dumps({"historicalReaderPrepared": True, "credentialPersisted": False}))
+            print(json.dumps({"mode": mode, "preparedObjectsReadable": True,
+                              "credentialPersisted": False,
+                              "postCheckoutRequests": len(post_checkout_requests)}))
             raise SystemExit(0)
 
         fetched = owned("fetch-only" if mode == "fetch-only" else "fetch")

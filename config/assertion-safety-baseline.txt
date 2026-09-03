@@ -2663,7 +2663,6 @@ src/config/sessions/session-accessor.sqlite-visible-cursor.ts	1
 src/config/sessions/session-accessor.transcript-range.ts	3
 src/config/sessions/session-accessor.transcript-turn.ts	1
 src/config/sessions/session-entry-json.ts	1
-src/config/sessions/session-history-eviction.ts	2
 src/config/sessions/session-reset-boundary-event.ts	5
 src/config/sessions/session-sharing-store.ts	2
 src/config/sessions/session-snapshot-merge.ts	26
@@ -2722,7 +2721,6 @@ src/cron/run-diagnostics-normalize.ts	2
 src/cron/run-diagnostics.ts	3
 src/cron/runtime-authority.ts	3
 src/cron/schedule-identity.ts	2
-src/cron/schedule.ts	1
 src/cron/service/active-run-cancellation.ts	1
 src/cron/service/failure-alerts.ts	1
 src/cron/service/jobs.ts	6
@@ -3405,7 +3403,7 @@ src/plugins/clawhub.ts	10
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3
 src/plugins/computer-use-contract.ts	3
-src/plugins/config-normalization-shared.ts	20
+src/plugins/config-normalization-shared.ts	19
 src/plugins/config-schema.ts	6
 src/plugins/contracts/inventory/bundled-capability-metadata.ts	3
 src/plugins/contracts/registry.ts	1

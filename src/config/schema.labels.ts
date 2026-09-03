@@ -814,6 +814,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "transcripts.autoStart": "Transcripts Auto-start Sources",
   "transcripts.autoStart[].providerId": "Transcript Source Provider ID",
   "transcripts.autoStart[].sessionId": "Transcript Session ID",
+  "transcripts.autoStart[].whenOccupied": "Transcript Capture When Occupied",
   "transcripts.autoStart[].title": "Transcript Title",
   "transcripts.autoStart[].accountId": "Transcript Account ID",
   "transcripts.autoStart[].guildId": "Discord Guild ID",

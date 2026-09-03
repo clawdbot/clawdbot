@@ -37,7 +37,7 @@ function createTarball(
   return tarball;
 }
 
-function registryFixture(root: string, names: string[]) {
+function registryFixture(root: string, names: string[], version = VERSION) {
   const artifactDir = join(root, "artifact");
   mkdirSync(artifactDir);
   const packages = names
@@ -49,10 +49,10 @@ function registryFixture(root: string, names: string[]) {
         artifactDir,
         name,
         tarball,
-        VERSION,
-        name === "openclaw" ? { dependencies: { "@openclaw/ai": VERSION } } : {},
+        version,
+        name === "openclaw" ? { dependencies: { "@openclaw/ai": version } } : {},
       );
-      return { name, version: VERSION, tarball, sha256: sha256(file) };
+      return { name, version, tarball, sha256: sha256(file) };
     });
   const manifestPath = join(artifactDir, "prepublish-plugin-registry.json");
   writeFileSync(
@@ -61,7 +61,7 @@ function registryFixture(root: string, names: string[]) {
       schema: "openclaw.prepublish-plugin-registry/v1",
       schemaVersion: 1,
       sourceSha: SOURCE_SHA,
-      candidateVersion: VERSION,
+      candidateVersion: version,
       packages,
     }),
   );
@@ -71,7 +71,7 @@ function registryFixture(root: string, names: string[]) {
     env: {
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: SOURCE_SHA,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: VERSION,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifestPath),
     },
   };
@@ -79,7 +79,7 @@ function registryFixture(root: string, names: string[]) {
 
 async function withPublishedRegistry(root: string, run: (url: string) => void | Promise<void>) {
   const portFile = join(root, "upstream-port");
-  const args = ["openclaw", "@openclaw/ai"].flatMap((name, index) => [
+  const args = ["openclaw", "@openclaw/ai", "@openclaw/discord"].flatMap((name, index) => [
     name,
     BASELINE_VERSION,
     createTarball(
@@ -193,18 +193,20 @@ console.log(JSON.stringify({ url, first: first.status, second: second.status, bo
     }
   });
 
-  it("installs a published baseline before the exact candidate and reaps its registry on failure", async () => {
-    const root = tempDirs.make("openclaw-prepublish-command-");
-    const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"]);
-    const registryUrl = join(root, "registry-url");
-    await withPublishedRegistry(root, async (upstream) => {
-      const result = spawnSync(
-        "bash",
-        [
-          resolve(SCRIPT),
+  it.each([VERSION, "2026.8.1", "2026.8.1-2"])(
+    "installs a published baseline before candidate %s and reaps its registry on failure",
+    async (version) => {
+      const root = tempDirs.make("openclaw-prepublish-command-");
+      const fixture = registryFixture(root, ["openclaw", "@openclaw/ai"], version);
+      const registryUrl = join(root, "registry-url");
+      await withPublishedRegistry(root, async (upstream) => {
+        const result = spawnSync(
           "bash",
-          "-c",
-          `
+          [
+            resolve(SCRIPT),
+            "bash",
+            "-c",
+            `
 set -euo pipefail
 test "$BUN_CONFIG_REGISTRY" = "$NPM_CONFIG_REGISTRY"
 npm install --prefix "$INSTALL_DIR" openclaw@latest --ignore-scripts --no-fund --no-audit --package-lock=false --userconfig=/dev/null --cache "$INSTALL_DIR/cache"
@@ -213,29 +215,30 @@ npm install --prefix "$INSTALL_DIR" "$ROOT_TARBALL" --ignore-scripts --no-fund -
 node -e 'const fs=require("node:fs"); const root=require(process.env.INSTALL_DIR+"/node_modules/openclaw/package.json"); const ai=require(process.env.INSTALL_DIR+"/node_modules/@openclaw/ai/package.json"); if(root.dependencies["@openclaw/ai"] !== ai.version) process.exit(1); fs.writeFileSync(process.env.REGISTRY_URL_FILE, process.env.NPM_CONFIG_REGISTRY);'
 exit 17
 `,
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          timeout: 30_000,
-          env: {
-            ...process.env,
-            ...fixture.env,
-            OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
-            BASELINE_VERSION,
-            INSTALL_DIR: join(root, "install"),
-            ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
-            REGISTRY_URL_FILE: registryUrl,
+          ],
+          {
+            cwd: root,
+            encoding: "utf8",
+            timeout: 30_000,
+            env: {
+              ...process.env,
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              BASELINE_VERSION,
+              INSTALL_DIR: join(root, "install"),
+              ROOT_TARBALL: join(fixture.artifactDir, "openclaw.tgz"),
+              REGISTRY_URL_FILE: registryUrl,
+            },
           },
-        },
-      );
+        );
 
-      expect(result.status, result.stdout + result.stderr).toBe(17);
-      await expect(
-        fetch(readFileSync(registryUrl, "utf8"), { signal: AbortSignal.timeout(1_000) }),
-      ).rejects.toThrow();
-    });
-  });
+        expect(result.status, result.stdout + result.stderr).toBe(17);
+        await expect(
+          fetch(readFileSync(registryUrl, "utf8"), { signal: AbortSignal.timeout(1_000) }),
+        ).rejects.toThrow();
+      });
+    },
+  );
 
   it("carries verified registry bytes and their expected identity into the Docker context", () => {
     const root = tempDirs.make("openclaw-prepublish-build-context-");
@@ -483,16 +486,10 @@ NODE
 
   it.each(["2026.8.1", "2026.8.1-2"])(
     "resolves stable candidate %s from an unversioned npm spec",
-    (version) => {
+    async (version) => {
       const root = tempDirs.make("openclaw-stable-prepublish-registry-shell-");
       const registryRoot = join(root, "registry");
-      const discordTarball = createTarball(
-        root,
-        root,
-        "@openclaw/discord",
-        `openclaw-discord-${version}.tgz`,
-        version,
-      );
+      const fixture = registryFixture(root, ["@openclaw/discord"], version);
       const fixtureVersion = "2026.5.2";
       const braveTarball = createTarball(
         root,
@@ -501,11 +498,12 @@ NODE
         `openclaw-brave-${fixtureVersion}.tgz`,
         fixtureVersion,
       );
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          `
+      await withPublishedRegistry(root, (upstream) => {
+        const result = spawnSync(
+          "bash",
+          [
+            "-c",
+            `
 set -euo pipefail
 source "$HELPER"
 registry_pid=""
@@ -516,29 +514,32 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
-openclaw_prepublish_plugin_registry_start \
-  "" "" "$VERSION" "" "$REGISTRY_ROOT" registry_pid \
-  "@openclaw/discord" "$VERSION" "$DISCORD_TARBALL" \
+openclaw_prepublish_plugin_registry_start_mounted \
+  "$REGISTRY_ROOT" registry_pid '[]' \
   "@openclaw/brave-plugin" "$FIXTURE_VERSION" "$BRAVE_TARBALL"
 test "$(npm view @openclaw/discord version)" = "$VERSION"
+test "$(npm view @openclaw/discord@$BASELINE_VERSION version)" = "$BASELINE_VERSION"
 test "$(npm view @openclaw/brave-plugin version)" = "$FIXTURE_VERSION"
 `,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            ...process.env,
-            BRAVE_TARBALL: braveTarball,
-            DISCORD_TARBALL: discordTarball,
-            FIXTURE_VERSION: fixtureVersion,
-            HELPER: SCRIPT,
-            REGISTRY_ROOT: registryRoot,
-            VERSION: version,
+          ],
+          {
+            encoding: "utf8",
+            env: {
+              ...process.env,
+              ...fixture.env,
+              OPENCLAW_NPM_REGISTRY_UPSTREAM: upstream,
+              BASELINE_VERSION,
+              BRAVE_TARBALL: braveTarball,
+              FIXTURE_VERSION: fixtureVersion,
+              HELPER: SCRIPT,
+              REGISTRY_ROOT: registryRoot,
+              VERSION: version,
+            },
           },
-        },
-      );
+        );
 
-      expect(result.status, result.stderr).toBe(0);
+        expect(result.status, result.stderr).toBe(0);
+      });
     },
   );
 

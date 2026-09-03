@@ -478,9 +478,12 @@ describe("updateSessionStoreAfterAgentRun", () => {
       await vi.waitFor(
         () => {
           const persisted = loadPersistedSessionStore(storePath);
-          expect(Object.keys(persisted)).toHaveLength(42);
+          expect(Object.keys(persisted)).toHaveLength(46);
+          expect(
+            Object.values(persisted).filter((entry) => entry.archivedAt === undefined),
+          ).toHaveLength(42);
           expect(persisted[sessionKey]?.sessionId).toBe(sessionId);
-          expect(persisted["agent:main:stale:44"]).toBeUndefined();
+          expect(persisted["agent:main:stale:44"]?.archivedAt).toEqual(expect.any(Number));
         },
         { timeout: 5_000 },
       );

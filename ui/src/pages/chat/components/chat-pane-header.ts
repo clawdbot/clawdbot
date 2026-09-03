@@ -66,6 +66,7 @@ type ChatPaneHeaderProps = {
   canReveal: boolean;
   copiedAction: ChatPaneHeaderAction | null;
   renameDisabledReason?: string;
+  actionsDisabled?: boolean;
   panelActions: TemplateResult | typeof nothing;
   discussionAction: TemplateResult | typeof nothing;
   diffAction: TemplateResult | typeof nothing;
@@ -522,7 +523,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
             `
           : nothing}
         ${renderGatewayPicker(props)}
-        <div class="chat-pane__actions">
+        <fieldset class="chat-pane__actions" ?disabled=${props.actionsDisabled}>
           ${compactSessionActions ? nothing : props.panelActions}
           ${compactSessionActions ? nothing : props.discussionAction}
           ${props.catalog || compactSessionActions
@@ -590,7 +591,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
               </openclaw-tooltip>`
             : nothing}
           ${props.sessionMenuAction}
-        </div>
+        </fieldset>
       </div>
     </div>
   `;

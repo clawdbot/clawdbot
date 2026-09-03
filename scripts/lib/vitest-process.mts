@@ -2,6 +2,7 @@ import { spawn, type SpawnOptions } from "node:child_process";
 import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { waitForever } from "../../src/cli/wait.ts";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import {
   resolveTestBrowserCache,
@@ -19,6 +20,8 @@ import {
   createVitestProcessCompletion,
   shouldUseDetachedVitestProcessGroup,
 } from "../vitest-process-group.mts";
+import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
+import { signalExitCode } from "./managed-child-process.mts";
 import {
   createVitestResourceOwner,
   findVitestResourceOwner,
@@ -121,4 +124,24 @@ export function spawnOwnedVitestProcess(spec: {
     }
   })();
   return { child, completion };
+}
+
+export async function exitVitestBySignal(signal: NodeJS.Signals): Promise<void> {
+  process.kill(process.pid, signal);
+  // Dependency signal handlers may finish cleanup and re-raise asynchronously.
+  // A numeric return must not win that race.
+  await waitForever();
+}
+
+/** Only public invocations report; internal children propagate their settled outcome. */
+export function runVitestCli(
+  tool: string,
+  run: (exitBySignal: typeof exitVitestBySignal) => Promise<void>,
+): Promise<void> {
+  return runWithFailedTrailer(tool, () =>
+    run(async (signal) => {
+      writeFailedTrailer(tool, signalExitCode(signal));
+      await exitVitestBySignal(signal);
+    }),
+  );
 }

@@ -20,3 +20,9 @@ export async function waitForPlaybackTranscodeJobsForTest(mode: "next" | "all"):
   await (mode === "next" ? Promise.race(jobs) : Promise.all(jobs));
   return jobs.length;
 }
+
+// Stop issuing requests and release every fixture gate before calling; this joins
+// the existing jobs for cleanup and does not assert that conversion succeeded.
+export async function settlePlaybackTranscodeJobsForTest(): Promise<void> {
+  await Promise.allSettled(getTestApi().getPlaybackTranscodeJobs());
+}
