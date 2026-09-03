@@ -314,6 +314,13 @@ suite.define(() => {
           await composer.waitFor();
           await page.getByText(prompt, { exact: true }).waitFor();
           await expect.poll(() => approvalCard.count()).toBe(0);
+          const reloadedWorkSummary = page
+            .locator(".chat-work-group > .chat-activity-group__summary")
+            .first();
+          await reloadedWorkSummary.waitFor();
+          if ((await reloadedWorkSummary.getAttribute("aria-expanded")) !== "true") {
+            await reloadedWorkSummary.click();
+          }
           const reloadedToolSummaries = page.locator(".chat-tool-msg-summary");
           await reloadedToolSummaries.first().waitFor();
           for (const summary of await reloadedToolSummaries.all()) {
