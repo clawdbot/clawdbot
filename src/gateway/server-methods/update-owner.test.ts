@@ -95,6 +95,19 @@ describe("update.run current owner authority", () => {
     },
   );
 
+  it("carries the admitted chat requester into the managed handoff", async () => {
+    detectRespawnSupervisorMock.mockReturnValue("launchd");
+    const result = await runOwnerTool(
+      createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" }),
+    );
+    expect(result.details).toMatchObject({ ok: true });
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requester: { channel: "slack", accountId: "primary", senderId: "owner" },
+      }),
+    );
+  });
+
   it.each([false, true])("rechecks after awaited acknowledgement (managed=%s)", async (managed) => {
     detectRespawnSupervisorMock.mockReturnValue(managed ? "launchd" : null);
     sendGatewayLifecycleNoticeMock.mockImplementationOnce(async () => {
