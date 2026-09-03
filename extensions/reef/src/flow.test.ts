@@ -69,8 +69,15 @@ describe("createConfiguredGuard", () => {
   });
 
   it.each([
-    { label: "without optional concrete model headers", responseModel: undefined },
-    { label: "with a provider-attested dated model", responseModel: oauthGuardResponseModel },
+    { label: "with an exact provider-attested model", responseModel: oauthGuardModel },
+    {
+      label: "with a compact provider-attested date suffix",
+      responseModel: `${oauthGuardModel}-20260801`,
+    },
+    {
+      label: "with a dashed provider-attested date suffix",
+      responseModel: oauthGuardResponseModel,
+    },
   ])(
     "uses the host-owned OpenAI OAuth profile with strict structured output $label",
     async ({ responseModel }) => {
@@ -179,6 +186,7 @@ describe("createConfiguredGuard", () => {
       "wrong logical model",
       { model: "gpt-5.6-sol", responseModel: oauthGuardResponseModel, stopReason: "stop" },
     ],
+    ["missing response model", { responseModel: undefined, stopReason: "stop" }],
     ["mismatched response model", { responseModel: "gpt-5.6-sol", stopReason: "stop" }],
     [
       "non-date response suffix",
@@ -234,9 +242,13 @@ describe("createConfiguredGuard", () => {
     ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
   });
 
-  it.each([undefined, "gpt-5.6-luna-20260802"])(
-    "keeps dated OAuth guard model pins exact for response model %s",
-    async (responseModel) => {
+  it.each([
+    { responseModel: "gpt-5.6-luna-20260801", decision: "allow", category: "safe" },
+    { responseModel: undefined, decision: "deny", category: "guard_failure" },
+    { responseModel: "gpt-5.6-luna-20260802", decision: "deny", category: "guard_failure" },
+  ])(
+    "keeps dated OAuth guard model pins exact for response model $responseModel",
+    async ({ responseModel, decision, category }) => {
       const runtime = createPluginRuntimeMock();
       runtime.llm.complete = vi.fn().mockResolvedValue({
         text: JSON.stringify({
@@ -276,7 +288,7 @@ describe("createConfiguredGuard", () => {
           text: "hello",
           policyVersion: "v1",
         }),
-      ).resolves.toMatchObject({ decision: "deny", category: "guard_failure" });
+      ).resolves.toMatchObject({ decision, category });
     },
   );
 });

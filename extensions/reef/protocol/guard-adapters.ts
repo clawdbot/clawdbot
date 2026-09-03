@@ -56,12 +56,10 @@ const OPENAI_DATED_MODEL_ID = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 const OPENAI_DATED_MODEL_SUFFIX = /^-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 function matchesOpenAiPinnedModel(responseModel: string | undefined, pinnedModel: string): boolean {
-  // Reef already admits only three explicitly documented undated OpenAI ids.
-  // ChatGPT OAuth currently returns the logical model in the Responses payload
-  // but may omit concrete model headers entirely. Preserve that owner-approved
-  // residual risk only for those undated pins; dated pins require attestation.
+  // The locally requested logical model is not provider attestation. Reef must
+  // fail closed when the managed OAuth route omits concrete model evidence.
   if (responseModel === undefined) {
-    return !OPENAI_DATED_MODEL_ID.test(pinnedModel);
+    return false;
   }
   if (responseModel === pinnedModel) {
     return true;
