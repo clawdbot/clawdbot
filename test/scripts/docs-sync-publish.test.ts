@@ -47,6 +47,18 @@ function findNestedGroup(pages: unknown, groupName: string) {
   });
 }
 
+function findNestedGroupByPage(pages: unknown, page: string) {
+  if (!Array.isArray(pages)) {
+    return undefined;
+  }
+  return pages.find((entry) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return "pages" in entry && collectPages(entry.pages).includes(page);
+  });
+}
+
 describe("docs-sync-publish", () => {
   it("executes the copied MDX checker runtime closure", () => {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
@@ -244,6 +256,24 @@ describe("docs-sync-publish", () => {
       releaseRoutes.map((page) => `zh-CN/${page}`),
     );
     expect(new Set(collectPages(simplifiedChineseReleaseTab))).toHaveLength(releaseRoutes.length);
+
+    const simplifiedChineseGatewayTab = simplifiedChinese!.tabs.find(
+      (tab) => tab.tab === "网关与运维",
+    );
+    const simplifiedChineseGateway = simplifiedChineseGatewayTab?.groups?.find(
+      (group) => group.group === "网关",
+    );
+    const ambiguousChineseGroups = [
+      ["zh-CN/gateway/configuration", "Configuration"],
+      ["zh-CN/gateway/authentication", "Authentication and secrets"],
+      ["zh-CN/gateway/health", "Health and diagnostics"],
+      ["zh-CN/gateway/gateway-lock", "Scaling and operations"],
+    ] as const;
+    for (const [page, expectedGroup] of ambiguousChineseGroups) {
+      expect(findNestedGroupByPage(simplifiedChineseGateway?.pages, page)).toEqual(
+        expect.objectContaining({ group: expectedGroup }),
+      );
+    }
 
     expect(collectPages(german)).toHaveLength(collectPages(englishWithoutClawHub).length);
     expect(german!.tabs[0]?.tab).toBe("Loslegen");

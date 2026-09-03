@@ -460,6 +460,15 @@ function findBestNavMatchIndex(candidates, overlayEntry, excludedIndexes = new S
   return bestIndex;
 }
 
+function hasAmbiguousNavMatch(candidates, overlayEntry) {
+  const overlayPages = collectNavPages(overlayEntry);
+  const matches = candidates.filter((candidate) => {
+    const candidatePages = collectNavPages(candidate);
+    return [...overlayPages].some((page) => candidatePages.has(page));
+  });
+  return matches.length > 1;
+}
+
 export function applyLocaleNavLabelOverlay(fullNav, labelOverlay) {
   const tabs = Array.isArray(fullNav.tabs)
     ? fullNav.tabs.map((tab) => ({
@@ -498,13 +507,16 @@ function isNavGroup(entry) {
   );
 }
 
-function applyNavGroupLabelOverlay(candidateGroups, overlayGroups) {
+function applyNavGroupLabelOverlay(candidateGroups, overlayGroups, requireUniqueMatch = false) {
   if (!Array.isArray(candidateGroups) || !Array.isArray(overlayGroups)) {
     return;
   }
 
   const matchedGroupIndexes = new Set();
   for (const overlayGroup of overlayGroups) {
+    if (requireUniqueMatch && hasAmbiguousNavMatch(candidateGroups, overlayGroup)) {
+      continue;
+    }
     const groupIndex = findBestNavMatchIndex(candidateGroups, overlayGroup, matchedGroupIndexes);
     if (groupIndex < 0) {
       continue;
@@ -522,7 +534,7 @@ function applyNavGroupLabelOverlay(candidateGroups, overlayGroups) {
     const overlayNestedGroups = Array.isArray(overlayGroup.pages)
       ? overlayGroup.pages.filter(isNavGroup)
       : [];
-    applyNavGroupLabelOverlay(candidateNestedGroups, overlayNestedGroups);
+    applyNavGroupLabelOverlay(candidateNestedGroups, overlayNestedGroups, true);
   }
 }
 
