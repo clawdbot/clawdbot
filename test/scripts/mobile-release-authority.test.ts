@@ -712,6 +712,7 @@ describe("mobile release authority", () => {
     expect(result.stderr).toContain("lacks write, maintain, or admin permission");
     expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
     expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(2);
+    expect(trace.at(-1)?.args[1]).toContain("/collaborators/");
     expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
     expect(trace.every(({ token }) => token === "")).toBe(true);
   });
@@ -731,6 +732,7 @@ describe("mobile release authority", () => {
     expect(result.stderr).toContain("lacks write, maintain, or admin permission");
     expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
     expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(2);
+    expect(trace.at(-1)?.args[1]).toContain("/collaborators/");
     expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
     expect(trace.every(({ token }) => token === "")).toBe(true);
   });
@@ -751,6 +753,11 @@ describe("mobile release authority", () => {
     expect(result.stderr).toContain("lacks write, maintain, or admin permission");
     expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
     expect(trace.filter(({ args }) => args[1]?.includes("/collaborators/"))).toHaveLength(3);
+    expect(trace.some(({ args }) => args[1]?.includes("/git/ref/openclaw/mobile-releases/"))).toBe(
+      true,
+    );
+    expect(trace.some(({ args }) => args[1]?.includes("/git/ref/heads/release/"))).toBe(true);
+    expect(trace.at(-1)?.args[1]).toContain("/collaborators/");
     expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
     expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
   });
@@ -871,7 +878,9 @@ describe("mobile release authority", () => {
     const action = parse(source) as {
       runs: {
         steps: Array<{
+          "continue-on-error"?: unknown;
           env?: Record<string, string>;
+          if?: unknown;
           name: string;
           run?: string;
           uses?: string;
@@ -891,6 +900,10 @@ describe("mobile release authority", () => {
 
     expect(tokenIndex).toBe(validateIndex + 1);
     expect(recordIndex).toBe(tokenIndex + 1);
+    for (const stepIndex of [validateIndex, tokenIndex, recordIndex]) {
+      expect(action.runs.steps[stepIndex]?.if).toBe("inputs.operation == 'record'");
+      expect(action.runs.steps[stepIndex]?.["continue-on-error"]).toBeUndefined();
+    }
     expect(action.runs.steps[tokenIndex]?.with).toMatchObject({
       "app-id": "2729701",
       "permission-contents": "write",
