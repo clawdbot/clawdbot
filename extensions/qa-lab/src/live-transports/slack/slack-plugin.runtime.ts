@@ -1,14 +1,11 @@
 // QA Lab resolves Slack operations from the owning plugin's isolated dependency scope.
-import type { SlackQaRuntime } from "@openclaw/slack/test-api.js";
 import { loadQaRunnerBundledPluginTestApi } from "openclaw/plugin-sdk/qa-runner-runtime";
 
-type SlackQaTestApi = {
-  slackQaRuntime: SlackQaRuntime;
-};
+type SlackQaRuntime = typeof import("@openclaw/slack/test-api.js");
 
 let cachedSlackQaRuntime: SlackQaRuntime | undefined;
 
 export function loadSlackQaRuntime(): SlackQaRuntime {
-  cachedSlackQaRuntime ??= loadQaRunnerBundledPluginTestApi<SlackQaTestApi>("slack").slackQaRuntime;
+  cachedSlackQaRuntime ??= loadQaRunnerBundledPluginTestApi<SlackQaRuntime>("slack");
   return cachedSlackQaRuntime;
 }

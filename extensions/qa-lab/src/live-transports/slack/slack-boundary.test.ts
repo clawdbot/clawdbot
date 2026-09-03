@@ -32,7 +32,7 @@ describe("Slack QA transport boundary", () => {
       expect(source, file).not.toContain("@openclaw/slack/api.js");
       if (source.includes("@openclaw/slack/test-api.js")) {
         expect(source, file).toMatch(
-          /import type \{[^}]+\} from "@openclaw\/slack\/test-api\.js";/su,
+          /type \w+ = typeof import\("@openclaw\/slack\/test-api\.js"\);/u,
         );
       }
     }

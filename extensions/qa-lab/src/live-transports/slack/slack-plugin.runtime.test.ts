@@ -21,7 +21,7 @@ describe("Slack plugin runtime facade", () => {
       resolveSlackWebClientOptions: vi.fn(),
       sendSlackMessage: vi.fn(),
     };
-    loadQaRunnerBundledPluginTestApi.mockReturnValue({ slackQaRuntime });
+    loadQaRunnerBundledPluginTestApi.mockReturnValue(slackQaRuntime);
 
     const { loadSlackQaRuntime } = await import("./slack-plugin.runtime.js");
 

@@ -1,6 +1,6 @@
 // Slack test API tests enforce the narrow private-QA runtime surface.
 import { describe, expect, it } from "vitest";
-import { slackQaRuntime } from "./test-api.js";
+import * as slackQaRuntime from "./test-api.js";
 
 describe("Slack test API", () => {
   it("exports exactly the Slack operations owned by private QA", () => {
