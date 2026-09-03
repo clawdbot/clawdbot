@@ -141,6 +141,7 @@ export type GatewaySystemAgentSession = {
       question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
+    noteAssistantMessage: (text: string) => void;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -149,6 +150,7 @@ export type GatewaySystemAgentSession = {
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
       beforePersistentApply?: () => void,
+      terminalStatus?: "expired" | "cancelled",
     ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
@@ -162,7 +164,15 @@ export type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
-  pendingApproval?: { id: string; proposalHash: string };
+  pendingApproval?: {
+    id: string;
+    proposalHash: string;
+    completion: Promise<
+      NonNullable<
+        Awaited<ReturnType<GatewaySystemAgentSession["engine"]["resolveOperatorApproval"]>>
+      >
+    >;
+  };
 };
 
 /** Kernel-owned services and state that can be constructed without binding sockets. */
