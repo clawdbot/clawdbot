@@ -530,6 +530,34 @@ describe("checkUpdateStatus", () => {
     },
   );
 
+  it("detects lockless OpenClaw npm installs when package.json lacks a packageManager field", async () => {
+    await withTestDir({ prefix: "openclaw-update-check-lockless-npm-no-pm-" }, async (base) => {
+      const root = path.join(base, "prefix", "node_modules", "openclaw");
+      await fs.mkdir(root, { recursive: true });
+      await fs.writeFile(
+        path.join(root, "package.json"),
+        JSON.stringify({ name: "openclaw", version: "2026.8.1" }),
+        "utf8",
+      );
+
+      const status = await checkUpdateStatus({
+        root,
+        includeRegistry: false,
+        fetchGit: false,
+        timeoutMs: 1000,
+      });
+
+      expect(status.installKind).toBe("package");
+      expect(status.packageManager).toBe("npm");
+      expect(status.deps).toMatchObject({
+        manager: "npm",
+        lockfilePath: path.join(root, "package-lock.json"),
+        status: "unknown",
+        reason: "lockfile missing",
+      });
+    });
+  });
+
   it("reports a missing dependency marker and accepts an older valid marker", async () => {
     await withTestDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
       await fs.writeFile(

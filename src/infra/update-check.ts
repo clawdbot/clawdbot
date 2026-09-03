@@ -205,7 +205,10 @@ async function isLocklessOpenClawNpmInstall(params: {
   root: string;
   manager: PackageManager;
 }): Promise<boolean> {
-  if (params.manager !== "pnpm" || (await exists(path.join(params.root, "pnpm-lock.yaml")))) {
+  if (
+    (params.manager !== "pnpm" && params.manager !== "unknown") ||
+    (await exists(path.join(params.root, "pnpm-lock.yaml")))
+  ) {
     return false;
   }
   try {
