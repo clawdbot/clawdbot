@@ -387,6 +387,7 @@ export function renderGroupedMessage(
               canvasPluginSurfaceUrl: opts.canvasPluginSurfaceUrl,
               boardProvider: opts.boardProvider,
               embedSandboxMode: opts.embedSandboxMode ?? "scripts",
+              allowExternalEmbedUrls: opts.allowExternalEmbedUrls,
               sessionKey: opts.sessionKey,
             })}
             ${block.rawText

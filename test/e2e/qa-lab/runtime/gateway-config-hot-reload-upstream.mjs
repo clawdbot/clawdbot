@@ -20,3 +20,6 @@ globalThis.fetch = async (input, init) => {
   delete fixtureInit.dispatcher;
   return originalFetch(`${fixture}${fixturePath}`, fixtureInit);
 };
+// Use the existing hermetic fetch contract so guarded favicon requests reach
+// this fixture instead of selecting Undici's DNS-pinned external transport.
+globalThis.fetch.mock = {};

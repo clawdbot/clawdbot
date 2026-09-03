@@ -168,7 +168,9 @@ describe("startNodePairingSshVerify", () => {
       { name: "identity", policy: { identity: "/keys/replacement" } },
       { name: "timeout", policy: { timeoutMs: 500 } },
       { name: "CIDR scope", policy: { cidrs: ["192.168.0.0/16"] } },
-    ].flatMap((change) => ["in-flight", "failure cooldown"].map((phase) => ({ ...change, phase }))),
+    ].flatMap((change) =>
+      ["in-flight", "failure cooldown"].map((phase) => Object.assign({}, change, { phase })),
+    ),
   )("starts a fresh probe after $name changes during $phase", async ({ policy, phase }) => {
     const identity = makeIdentity();
     const oldProbe = createDeferred<NodeIdentityProbeResult>();

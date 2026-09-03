@@ -174,7 +174,10 @@ export async function startHotReloadUpstreams(mockBaseUrl: string) {
           {
             role: "user",
             content: [
-              { type: "input_text", text: 'Reply exactly `{"titles":{"0":"Read project notes"}}`' },
+              {
+                type: "input_text",
+                text: 'Reply exactly `{"titles":{"0":"Reviewed project notes"}}`',
+              },
             ],
           },
         ];

@@ -72,9 +72,9 @@ export async function prepareGatewayPairingFixture(temporaryRoot: string) {
   const reserved = server.address();
   assert(reserved && typeof reserved !== "string");
   const port = reserved.port;
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
   const hostKey = path.join(root, "host-key");
   const clientKeys = [path.join(root, "client-a"), path.join(root, "client-b")] as const;
   await Promise.all(
@@ -177,7 +177,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
   const releases: string[] = [];
   let stopped = false;
   const close = async () => {
-    if (stopped) return;
+    if (stopped) {
+      return;
+    }
     stopped = true;
     await Promise.all(releases.map((release) => fs.writeFile(release, "release")));
     if (daemon.pid && daemon.exitCode === null && daemon.signalCode === null) {
@@ -189,8 +191,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
   };
   try {
     await waitForHotReloadFact("isolated sshd listening", async () => {
-      if (daemon.exitCode !== null || daemon.signalCode !== null || daemonError)
+      if (daemon.exitCode !== null || daemon.signalCode !== null || daemonError) {
         throw new Error(`Isolated sshd failed: ${daemonError}`);
+      }
       return (await portOpen(address, port)) ? true : undefined;
     });
   } catch (error) {
@@ -211,7 +214,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
         release,
       }),
     );
-    if (!delayed) await fs.writeFile(release, "release");
+    if (!delayed) {
+      await fs.writeFile(release, "release");
+    }
     return {
       waitStarted: () =>
         waitForHotReloadFact(
@@ -248,7 +253,12 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
     throw error;
   }
   return {
-    runtimeEnvPatch: { PATH: `${bin}${path.delimiter}${process.env.PATH ?? "/usr/bin:/bin"}` },
+    runtimeEnvPatch: {
+      // The fixture owns this PATH: normal CLI bootstrap puts /usr/bin first and
+      // would bypass the real-SSH adapter's isolated trust files and high port.
+      OPENCLAW_PATH_BOOTSTRAPPED: "1",
+      PATH: `${bin}${path.delimiter}${process.env.PATH ?? "/usr/bin:/bin"}`,
+    },
     close,
     async run(params: {
       gateway: QaGatewayChild;
@@ -267,10 +277,9 @@ for (const signal of ["SIGTERM", "SIGINT"]) process.on(signal, () => child.kill(
         });
       const patchPairing = (pairing: GatewayNodePairingConfig) =>
         params.patchConfig({ gateway: { nodes: { pairing } } }, [
-          ...(pairing.autoApproveCidrs ? ["gateway.nodes.pairing.autoApproveCidrs"] : []),
-          ...(typeof pairing.sshVerify === "object" && pairing.sshVerify.cidrs
-            ? ["gateway.nodes.pairing.sshVerify.cidrs"]
-            : []),
+          "gateway.nodes.pairing.autoApproveCidrs",
+          // Replacing the SSH policy with false removes its nested CIDRs too.
+          "gateway.nodes.pairing.sshVerify.cidrs",
         ]);
       const list = () => params.operator.request<PairingList>("device.pair.list", {});
       const expectPending = async (device: DeviceIdentity) => {
