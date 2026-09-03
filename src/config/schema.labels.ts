@@ -487,6 +487,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.startupContext.maxFileBytes": "Startup Context Max File Bytes",
   "agents.defaults.startupContext.maxFileChars": "Startup Context Max File Chars",
   "agents.defaults.startupContext.maxTotalChars": "Startup Context Max Total Chars",
+  "agents.entries.*.memory.dreaming": "Agent Memory Dreaming",
+  "agents.entries.*.memory.dreaming.enabled": "Enable Dreaming for Agent",
   "memory.search": "Memory Search",
   "memory.search.enabled": "Enable Memory Search",
   "memory.search.rememberAcrossConversations": "Remember Across Conversations",

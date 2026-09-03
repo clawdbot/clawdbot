@@ -1,5 +1,9 @@
 // Memory Core plugin module implements dreaming command behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  resolveMemoryDreamingPluginConfig,
+  resolveMemoryDreamingPluginId,
+} from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryDreamingConfig } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { OpenClawPluginApi, PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -9,16 +13,20 @@ import {
 import { resolveShortTermPromotionDreamingConfig } from "./dreaming.js";
 
 function resolveDreamingPluginConfig(cfg: OpenClawConfig): Record<string, unknown> {
-  const entry = asNullableRecord(cfg.plugins?.entries?.["memory-core"]);
-  return asNullableRecord(entry?.config) ?? {};
+  return resolveMemoryDreamingPluginConfig(cfg) ?? {};
 }
 
 function updateDreamingEnabledInConfig(cfg: OpenClawConfig, enabled: boolean): OpenClawConfig {
   const entries = { ...cfg.plugins?.entries };
-  const existingEntry = asNullableRecord(entries["memory-core"]) ?? {};
+  // The selected memory plugin owns Dreaming configuration, so the toggle must
+  // write the entry the Dreaming resolver actually reads.
+  // Config normalization lowercases plugin ids; match it so the toggle can
+  // never create a duplicate mixed-case entry alongside the real one.
+  const pluginId = resolveMemoryDreamingPluginId(cfg).toLowerCase();
+  const existingEntry = asNullableRecord(entries[pluginId]) ?? {};
   const existingConfig = asNullableRecord(existingEntry.config) ?? {};
   const existingSleep = asNullableRecord(existingConfig.dreaming) ?? {};
-  entries["memory-core"] = {
+  entries[pluginId] = {
     ...existingEntry,
     config: {
       ...existingConfig,

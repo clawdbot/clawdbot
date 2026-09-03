@@ -15,6 +15,7 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  isMemoryDreamingEnabledForWorkspaceAgent,
   resolveMemoryDreamingConfig,
   resolveMemoryDeepDreamingConfig,
 } from "openclaw/plugin-sdk/memory-core-host-status";
@@ -435,6 +436,7 @@ export function createMemorySearchTool(options: MemoryToolOptions) {
           );
           const status = executed.status;
           if (
+            isMemoryDreamingEnabledForWorkspaceAgent(cfg, agentId, status.workspaceDir) &&
             resolveMemoryDreamingConfig({
               pluginConfig: resolveMemoryDreamingPluginConfig(cfg),
               cfg,

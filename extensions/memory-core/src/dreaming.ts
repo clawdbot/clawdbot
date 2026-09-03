@@ -579,7 +579,9 @@ async function runShortTermDreamingPromotionIfTriggered(params: {
       );
     }
   }
-  if (workspaces.length === 0 && fallbackWorkspaceDir) {
+  // A configured-but-empty result is authoritative: every candidate was excluded or a
+  // shared workspace was ambiguous. Only the legacy no-config path may use the hook fallback.
+  if (!params.cfg && workspaces.length === 0 && fallbackWorkspaceDir) {
     addWorkspace(fallbackWorkspaceDir, triggerAgentId);
   }
   if (workspaces.length === 0) {

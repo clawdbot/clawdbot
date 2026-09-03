@@ -694,7 +694,13 @@ before applying it. Source session transcripts remain in the session store.
 
 ## Dreaming
 
-Dreaming is configured under `plugins.entries.memory-core.config.dreaming`, not under `memory.search`.
+Dreaming is configured under `plugins.entries.<memory-plugin>.config.dreaming` on the active memory plugin (selected by `plugins.slots.memory`, by default `memory-core`), not under `memory.search`.
+
+The selected plugin is the configuration owner; `memory-core` is the execution owner. Non-core
+memory plugins must explicitly list `memory-core` in their manifest's
+`contracts.memoryDreamingEngines` before OpenClaw will load that sidecar. The bundled
+`memory-lancedb` plugin declares this contract. If the contract is absent, or `memory-core` is
+disabled or denied, OpenClaw does not infer Dreaming support.
 
 Dreaming runs as one scheduled sweep and uses internal light/deep/REM phases as an implementation detail.
 
@@ -733,6 +739,31 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
   },
 }
 ```
+
+### Exclude one agent
+
+Set the per-agent field to `false` when an agent may use normal memory search but must not
+participate in automatic Dreaming:
+
+```json5
+{
+  agents: {
+    entries: {
+      companion: {
+        memory: {
+          dreaming: { enabled: false },
+        },
+      },
+    },
+  },
+}
+```
+
+The field defaults to participation when omitted. It does not override a disabled global
+Dreaming master switch. Exclusion applies to automatic recall tracking, transcript ingestion,
+scheduled and heartbeat sweeps, promotion, cleanup, and agent-scoped status. If an included and
+an excluded agent share the same canonical workspace, the whole workspace is skipped and status
+reports `shared-workspace-ambiguity`; give those agents separate workspaces to resolve it.
 
 <Note>
 - Dreaming writes machine state to `memory/.dreams/`.

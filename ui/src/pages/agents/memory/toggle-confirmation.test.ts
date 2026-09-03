@@ -26,21 +26,26 @@ describe("renderDreamingToggleConfirmation", () => {
     expect(renderToggle({ open: false }).textContent?.trim()).toBe("");
   });
 
-  it("states the global scope and never promises a gateway restart", () => {
+  it("states the per-agent scope and never promises a gateway restart", () => {
     for (const enabling of [true, false]) {
       const text = renderToggle({ enabling }).textContent ?? "";
-      expect(text).toContain("All Agents");
-      expect(text).toContain("global setting");
+      expect(text).toContain("This Agent");
+      expect(text).toContain("selected agent");
+      expect(text.toLowerCase()).toContain("other agents are unchanged");
       expect(text.toLowerCase()).not.toContain("restart");
       expect(text.toLowerCase()).not.toContain("interrupt");
     }
   });
 
   it("uses direction-specific copy for enabling and disabling", () => {
-    expect(renderToggle({ enabling: true }).textContent).toContain("Turn On Dreaming");
+    expect(renderToggle({ enabling: true }).textContent).toContain(
+      "Include This Agent in Dreaming",
+    );
+    expect(renderToggle({ enabling: true }).textContent).toContain("Include Agent");
     const disabling = renderToggle({ enabling: false });
-    expect(disabling.textContent).toContain("Turn Off Dreaming");
-    // Disabling is the destructive direction: it stops the sweep for every agent.
+    expect(disabling.textContent).toContain("Exclude This Agent from Dreaming");
+    expect(disabling.textContent).toContain("Exclude Agent");
+    // Disabling is the destructive direction: it stops automatic Dreaming for this agent.
     expect(disabling.querySelector("button.btn.danger")).not.toBeNull();
     expect(renderToggle({ enabling: true }).querySelector("button.btn.danger")).toBeNull();
   });

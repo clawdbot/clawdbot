@@ -177,6 +177,67 @@ describe("memory-core /dreaming command", () => {
     expect(result.text).toContain("Dreaming enabled.");
   });
 
+  it("reads dreaming status from the selected LanceDB memory plugin", async () => {
+    const harness = createHarness({
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: {
+          "memory-lancedb": {
+            config: {
+              dreaming: {
+                enabled: false,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await runDreamingCommand(harness, "status");
+
+    expect(result.text).toContain("- enabled: off");
+    expect(harness.runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("persists the dreaming toggle on the selected LanceDB memory plugin entry", async () => {
+    const harness = createHarness({
+      plugins: {
+        slots: { memory: "memory-lancedb" },
+        entries: {
+          "memory-lancedb": {
+            config: {
+              dreaming: {
+                frequency: "0 */6 * * *",
+              },
+            },
+          },
+          "memory-core": {
+            config: {
+              dreaming: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const result = await runDreamingCommand(harness, "off", {
+      senderIsOwner: true,
+    });
+
+    expect(harness.runtime.config.mutateConfigFile).toHaveBeenCalledTimes(1);
+    const config = harness.getRuntimeConfig();
+    const lancedbEntry = asNullableRecord(config.plugins?.entries?.["memory-lancedb"]);
+    const lancedbDreaming = asNullableRecord(asNullableRecord(lancedbEntry?.config)?.dreaming);
+    expect(lancedbDreaming?.enabled).toBe(false);
+    expect(lancedbDreaming?.frequency).toBe("0 */6 * * *");
+    // The unselected store entry keeps its own configuration untouched.
+    const coreEntry = asNullableRecord(config.plugins?.entries?.["memory-core"]);
+    expect(asNullableRecord(asNullableRecord(coreEntry?.config)?.dreaming)?.enabled).toBe(true);
+    expect(result.text).toContain("Dreaming disabled.");
+  });
+
   it("returns status without mutating config", async () => {
     const harness = createHarness({
       plugins: {

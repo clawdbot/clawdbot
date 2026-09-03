@@ -322,6 +322,7 @@ function mergeManifestContracts(
     "workerProviders",
     "usageProviders",
     "migrationProviders",
+    "memoryDreamingEngines",
     "gatewayMethodDispatch",
     "tools",
   ] as const) {

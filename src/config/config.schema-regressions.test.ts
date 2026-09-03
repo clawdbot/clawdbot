@@ -161,6 +161,31 @@ describe("config schema regressions", () => {
     ).toBe(true);
   });
 
+  it("accepts a strict per-agent memory Dreaming exclusion", () => {
+    expect(
+      validateConfigObject({
+        agents: {
+          entries: {
+            companion: {
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+      }).ok,
+    ).toBe(true);
+  });
+
+  it.each([{ dreaming: { enabled: "false" } }, { dreaming: { enabled: false, mode: "legacy" } }])(
+    "rejects invalid per-agent memory Dreaming config %j",
+    (memory) => {
+      expect(
+        validateConfigObject({
+          agents: { entries: { companion: { memory } } },
+        }).ok,
+      ).toBe(false);
+    },
+  );
+
   it.each([
     { pattern: "**/*.md" },
     { path: "../shared", pattern: 42 },

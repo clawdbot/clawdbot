@@ -9,9 +9,13 @@ export {
 export type { Tone } from "../../packages/memory-host-sdk/src/status.js";
 export {
   formatMemoryDreamingDay,
+  isMemoryDreamingEnabledForAgent,
+  isMemoryDreamingEnabledForWorkspaceAgent,
   isSameMemoryDreamingDay,
+  resolveMemoryConfiguredWorkspaces,
   resolveMemoryDeepDreamingConfig,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaceStatuses,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -36,4 +40,5 @@ export {
 export type {
   MemoryDreamingPhaseName,
   MemoryDreamingStorageConfig,
+  MemoryDreamingWorkspaceStatus,
 } from "../memory-host-sdk/dreaming.js";

@@ -6,7 +6,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   formatMemoryDreamingDay,
+  isMemoryDreamingEnabledForWorkspaceAgent,
   isSameMemoryDreamingDay,
+  resolveMemoryConfiguredWorkspaces,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingPluginId,
   resolveMemoryDreamingConfig,
@@ -236,6 +238,90 @@ describe("memory dreaming host helpers", () => {
     ]);
   });
 
+  it("excludes an agent whose memory dreaming is explicitly disabled", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          alpha: { workspace: "/workspace/alpha" },
+          beta: {
+            workspace: "/workspace/beta",
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/alpha",
+        agentIds: ["alpha"],
+      },
+    ]);
+  });
+
+  it("fails closed when enabled and excluded agents share a workspace", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          alpha: { workspace: "/workspace/shared" },
+          beta: {
+            workspace: "/workspace/shared",
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([]);
+    expect(isMemoryDreamingEnabledForWorkspaceAgent(cfg, "alpha", "/workspace/shared")).toBe(false);
+    expect(resolveMemoryConfiguredWorkspaces(cfg)).toEqual([
+      {
+        workspaceDir: "/workspace/shared",
+        agentIds: ["alpha", "beta"],
+      },
+    ]);
+  });
+
+  it("does not re-add an unknown runtime primary under an explicit roster", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          companion: {
+            workspace: "/workspace/companion",
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryAgentId: "unknown-runtime-agent",
+        primaryWorkspaceDir: "/workspace/runtime",
+      }),
+    ).toEqual([]);
+  });
+
+  it("does not re-enable an explicitly excluded main runtime primary", () => {
+    const cfg = {
+      agents: {
+        entries: {
+          main: {
+            workspace: "/workspace/main",
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(
+      resolveMemoryDreamingWorkspaces(cfg, {
+        primaryAgentId: "main",
+        primaryWorkspaceDir: "/workspace/main",
+      }),
+    ).toEqual([]);
+  });
+
   it("uses canonical roster identities when agent aliases share a workspace", () => {
     const cfg = {
       agents: {
@@ -272,6 +358,21 @@ describe("memory dreaming host helpers", () => {
         agentIds: ["beta"],
       },
     ]);
+  });
+
+  it.each([
+    ["entries", { agents: { entries: {} } }],
+    ["list", { agents: { list: [] } }],
+  ])("does not synthesize a default workspace for an explicitly empty %s roster", (_, cfg) => {
+    const primaryWorkspace = {
+      primaryAgentId: "main",
+      primaryWorkspaceDir: "/workspace/main",
+    };
+
+    expect(resolveMemoryDreamingWorkspaces(cfg)).toEqual([]);
+    expect(resolveMemoryConfiguredWorkspaces(cfg)).toEqual([]);
+    expect(resolveMemoryDreamingWorkspaces(cfg, primaryWorkspace)).toEqual([]);
+    expect(isMemoryDreamingEnabledForWorkspaceAgent(cfg, "main", "/workspace/main")).toBe(false);
   });
 
   it("dedupes configured workspace symlink aliases across agents", async () => {
@@ -368,6 +469,24 @@ describe("memory dreaming host helpers", () => {
         },
       } as OpenClawConfig),
     ).toBe("memos-local-openclaw-plugin");
+  });
+
+  it("normalizes a mixed-case memory slot before reading its Dreaming config", () => {
+    const cfg = {
+      plugins: {
+        slots: { memory: "Memory-LanceDB" },
+        entries: {
+          "memory-lancedb": {
+            config: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveMemoryDreamingPluginId(cfg)).toBe("memory-lancedb");
+    expect(resolveMemoryDreamingPluginConfig(cfg)).toEqual({
+      dreaming: { enabled: false },
+    });
   });
 
   it("reads dreaming config from the configured memory-slot owner", () => {

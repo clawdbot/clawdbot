@@ -20,6 +20,7 @@
   },
   "kind": "memory",
   "contracts": {
+    "memoryDreamingEngines": ["memory-core"],
     "tools": ["memory_forget", "memory_recall", "memory_store"]
   },
   "toolMetadata": {
@@ -70,7 +71,7 @@
     },
     "dreaming": {
       "label": "Dreaming",
-      "help": "Optional dreaming config consumed when this plugin owns the memory slot"
+      "help": "Optional Dreaming config executed by the memory-core sidecar when this plugin owns the memory slot"
     },
     "captureMaxChars": {
       "label": "Capture Max Chars",

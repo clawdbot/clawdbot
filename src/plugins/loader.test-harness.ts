@@ -166,6 +166,7 @@ export function setupBundledDreamingMemoryPlugins(params?: {
   selectedId?: string;
   selectedKind?: unknown;
   coreBody?: string;
+  supportsDreaming?: boolean;
 }) {
   const selectedId = params?.selectedId ?? "memory-lancedb";
   const bundledDir = makePluginLoaderTempDir();
@@ -192,7 +193,13 @@ export function setupBundledDreamingMemoryPlugins(params?: {
   updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
   updatePluginManifest(
     { dir: selectedMemoryDir },
-    { kind: params?.selectedKind ?? "memory", configSchema: openSchema },
+    {
+      kind: params?.selectedKind ?? "memory",
+      configSchema: openSchema,
+      ...(params?.supportsDreaming === false
+        ? {}
+        : { contracts: { memoryDreamingEngines: ["memory-core"] } }),
+    },
   );
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, selectedId };

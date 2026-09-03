@@ -13,6 +13,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import {
   listAgentIds,
+  resolveAgentConfig,
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../agents/agent-scope.js";
@@ -26,10 +27,24 @@ const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
 const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
+const MEMORY_DREAMING_ENGINE_CONTRACT = "memoryDreamingEngines";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
 export const MANAGED_MEMORY_DREAMING_CRON_TAG = "[managed-by=memory-core.short-term-promotion]";
 export const MEMORY_DREAMING_SYSTEM_EVENT_TEXT =
   "__openclaw_memory_core_short_term_promotion_dream__";
+
+export function supportsMemoryDreamingEngine(
+  contracts: Readonly<Record<string, readonly string[]>> | undefined,
+  engineId = DEFAULT_MEMORY_DREAMING_PLUGIN_ID,
+): boolean {
+  const normalizedEngineId = normalizeLowercaseStringOrEmpty(engineId);
+  return Boolean(
+    normalizedEngineId &&
+    contracts?.[MEMORY_DREAMING_ENGINE_CONTRACT]?.some(
+      (candidate) => normalizeLowercaseStringOrEmpty(candidate) === normalizedEngineId,
+    ),
+  );
+}
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME = "Memory Light Dreaming";
 export const LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.light]";
 export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_light_sleep__";
@@ -302,8 +317,8 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeOptionalString(slots?.memory);
-  if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
+  const configuredSlot = normalizeOptionalLowercaseString(slots?.memory);
+  if (configuredSlot && configuredSlot !== "none") {
     return configuredSlot;
   }
   return DEFAULT_MEMORY_DREAMING_PLUGIN_ID;
@@ -576,15 +591,24 @@ export function isSameMemoryDreamingDay(
   );
 }
 
-export function resolveMemoryDreamingWorkspaces(
+/** Returns whether an agent participates in Dreaming; omission preserves the enabled default. */
+export function isMemoryDreamingEnabledForAgent(cfg: OpenClawConfig, agentId: string): boolean {
+  const agent = resolveAgentConfig(cfg, agentId);
+  return Boolean(agent) && agent?.memory?.dreaming?.enabled !== false;
+}
+
+export type MemoryDreamingWorkspaceStatus = {
+  workspaceDir: string;
+  enabledAgentIds: string[];
+  excludedAgentIds: string[];
+  state: "enabled" | "agent-config-disabled" | "shared-workspace-ambiguity";
+};
+
+/** Resolves every configured memory workspace without applying Dreaming participation policy. */
+export function resolveMemoryConfiguredWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const agentIds = listAgentIds(cfg);
-  if (agentIds.length === 0) {
-    agentIds.push(resolveDefaultAgentId(cfg));
-  }
-
   const byWorkspace = new Map<string, MemoryDreamingWorkspace>();
   const addWorkspace = (workspaceDirRaw: string | undefined, agentIdRaw: string): void => {
     const workspaceDir = workspaceDirRaw?.trim();
@@ -593,17 +617,14 @@ export function resolveMemoryDreamingWorkspaces(
     }
     const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
     const key = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
-    const existing = byWorkspace.get(key);
-    if (existing) {
-      if (!existing.agentIds.includes(agentId)) {
-        existing.agentIds.push(agentId);
-      }
-      return;
+    const workspace = byWorkspace.get(key) ?? { workspaceDir, agentIds: [] };
+    if (!workspace.agentIds.includes(agentId)) {
+      workspace.agentIds.push(agentId);
     }
-    byWorkspace.set(key, { workspaceDir, agentIds: [agentId] });
+    byWorkspace.set(key, workspace);
   };
 
-  for (const agentId of agentIds) {
+  for (const agentId of listAgentIds(cfg)) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
   const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
@@ -611,4 +632,85 @@ export function resolveMemoryDreamingWorkspaces(
     addWorkspace(primaryWorkspaceDir, options.primaryAgentId ?? resolveDefaultAgentId(cfg));
   }
   return [...byWorkspace.values()];
+}
+
+/** Resolves Dreaming eligibility per canonical workspace, including fail-closed diagnostics. */
+export function resolveMemoryDreamingWorkspaceStatuses(
+  cfg: OpenClawConfig,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspaceStatus[] {
+  const hasConfiguredAgent = listAgentIds(cfg).length > 0;
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  const primaryAgentId = primaryWorkspaceDir
+    ? normalizeOptionalLowercaseString(options.primaryAgentId ?? resolveDefaultAgentId(cfg))
+    : undefined;
+  const primaryWorkspace = primaryWorkspaceDir
+    ? resolveWorkspaceStateIdentity(primaryWorkspaceDir).workspacePath
+    : undefined;
+
+  return resolveMemoryConfiguredWorkspaces(cfg, options).map((workspace) => {
+    const enabledAgentIds: string[] = [];
+    const excludedAgentIds: string[] = [];
+    const workspaceIdentity = resolveWorkspaceStateIdentity(workspace.workspaceDir).workspacePath;
+    for (const agentId of workspace.agentIds) {
+      const isUnconfiguredRuntimePrimary =
+        hasConfiguredAgent &&
+        agentId === "main" &&
+        agentId === primaryAgentId &&
+        workspaceIdentity === primaryWorkspace &&
+        resolveAgentConfig(cfg, agentId) === undefined;
+      const target =
+        isMemoryDreamingEnabledForAgent(cfg, agentId) || isUnconfiguredRuntimePrimary
+          ? enabledAgentIds
+          : excludedAgentIds;
+      target.push(agentId);
+    }
+    const state =
+      enabledAgentIds.length > 0 && excludedAgentIds.length > 0
+        ? "shared-workspace-ambiguity"
+        : enabledAgentIds.length > 0
+          ? "enabled"
+          : "agent-config-disabled";
+    return {
+      workspaceDir: workspace.workspaceDir,
+      enabledAgentIds,
+      excludedAgentIds,
+      state,
+    };
+  });
+}
+
+export function resolveMemoryDreamingWorkspaces(
+  cfg: OpenClawConfig,
+  options: MemoryDreamingWorkspaceOptions = {},
+): MemoryDreamingWorkspace[] {
+  return resolveMemoryDreamingWorkspaceStatuses(cfg, options)
+    .filter(({ state }) => state === "enabled")
+    .map(({ workspaceDir, enabledAgentIds }) => ({
+      workspaceDir,
+      agentIds: enabledAgentIds,
+    }));
+}
+
+/** Returns whether one agent may write Dreaming state for the resolved workspace. */
+export function isMemoryDreamingEnabledForWorkspaceAgent(
+  cfg: OpenClawConfig,
+  agentId: string,
+  workspaceDir: string | undefined,
+): boolean {
+  const normalizedAgentId = normalizeOptionalLowercaseString(agentId);
+  const normalizedWorkspaceDir = workspaceDir?.trim();
+  if (!normalizedAgentId || !normalizedWorkspaceDir) {
+    return false;
+  }
+  const targetWorkspace = resolveWorkspaceStateIdentity(normalizedWorkspaceDir).workspacePath;
+  return resolveMemoryDreamingWorkspaceStatuses(cfg, {
+    primaryWorkspaceDir: normalizedWorkspaceDir,
+    primaryAgentId: agentId,
+  }).some(
+    (status) =>
+      status.state === "enabled" &&
+      status.enabledAgentIds.includes(normalizedAgentId) &&
+      resolveWorkspaceStateIdentity(status.workspaceDir).workspacePath === targetWorkspace,
+  );
 }

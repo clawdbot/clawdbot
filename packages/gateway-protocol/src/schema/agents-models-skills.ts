@@ -154,14 +154,35 @@ export const AgentsListResultSchema = closedObject({
   agents: Type.Array(AgentSummarySchema),
 });
 
-/** Creates a configured agent; the server supplies an omitted workspace. */
-export const AgentsCreateParamsSchema = closedObject({
+const AgentsCreateCommonFields = {
   name: NonEmptyString,
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(NonEmptyString),
   emoji: Type.Optional(Type.String()),
   avatar: Type.Optional(Type.String()),
+};
+
+/** Closed Safe Start fields that may be published atomically with a new agent. */
+export const AgentCreateInitialConfigSchema = closedObject({
+  memory: closedObject({
+    dreaming: closedObject({
+      enabled: Type.Boolean(),
+    }),
+  }),
 });
+
+/** Creates a configured agent; initial config is always bound to a config revision. */
+export const AgentsCreateParamsSchema = Type.Object(
+  {
+    ...AgentsCreateCommonFields,
+    baseHash: Type.Optional(NonEmptyString),
+    initialConfig: Type.Optional(AgentCreateInitialConfigSchema),
+  },
+  {
+    additionalProperties: false,
+    dependentRequired: { initialConfig: ["baseHash"] },
+  },
+);
 
 /** Result returned after creating an agent. */
 export const AgentsCreateResultSchema = closedObject({

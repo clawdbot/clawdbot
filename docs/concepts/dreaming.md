@@ -10,10 +10,38 @@ read_when:
 
 Dreaming is the background memory consolidation system in `memory-core`. It moves strong short-term signals into durable memory while keeping the process explainable and reviewable.
 
+The plugin selected by `plugins.slots.memory` owns the Dreaming configuration. The
+`memory-core` plugin owns the Dreaming scheduler and lifecycle. A non-core memory plugin can use
+that engine only when its manifest explicitly declares `memory-core` in the
+`memoryDreamingEngines` contract. The bundled `memory-lancedb` plugin declares this contract, so
+OpenClaw loads `memory-core` as a Dreaming sidecar while LanceDB remains the selected memory
+plugin. Plugins without that contract do not implicitly activate Dreaming.
+
 <Note>
 Dreaming is enabled by default. Set
-`plugins.entries.memory-core.config.dreaming.enabled: false` to disable it.
+`plugins.entries.<memory-plugin>.config.dreaming.enabled: false` on the active memory
+plugin (by default `memory-core`) to disable it.
+To exclude only one agent while leaving memory search available, set
+`agents.entries.<id>.memory.dreaming.enabled: false`.
 </Note>
+
+## Per-agent participation
+
+The global `plugins.entries.<memory-plugin>.config.dreaming.enabled` switch on the active
+memory plugin (selected by `plugins.slots.memory`, by default `memory-core`) owns the cadence and
+phase policy. `agents.entries.<id>.memory.dreaming.enabled` controls whether one configured agent
+participates in automatic Dreaming. Omission and `true` preserve participation; `false` excludes
+the agent from recall tracking, transcript ingestion, scheduled and heartbeat processing,
+promotion, startup cleanup, and agent-scoped reporting. Changes are read from live config and do
+not require a Gateway restart.
+
+An explicitly empty agent roster resolves no Dreaming workspaces. OpenClaw does not synthesize an
+implicit default owner for `agents.entries: {}` or `agents.list: []`.
+
+Dreaming operates at the workspace boundary. When included and excluded agents resolve to the
+same canonical workspace, OpenClaw cannot prove which agent owns shared files, so it skips that
+workspace fail-closed and reports `shared-workspace-ambiguity`. Configure distinct workspaces to
+restore processing for the included agent.
 
 ## What dreaming writes
 
@@ -213,6 +241,11 @@ This selects the execution owner; it does not change any agent's workspace or li
   </Tab>
 </Tabs>
 
+When `plugins.slots.memory` is `memory-lancedb`, put the `dreaming` block under
+`plugins.entries.memory-lancedb.config`. OpenClaw then loads the declared `memory-core` Dreaming
+sidecar. Keep engine trust settings such as `subagent.allowModelOverride` under
+`plugins.entries.memory-core`.
+
 ## Slash command
 
 ```text
@@ -260,7 +293,8 @@ This selects the execution owner; it does not change any agent's workspace or li
 
 ## Key defaults
 
-All settings live under `plugins.entries.memory-core.config.dreaming`.
+Dreaming settings live under `plugins.entries.<memory-plugin>.config.dreaming` on the selected
+memory plugin. The examples use the default `memory-core` selection.
 
 <ParamField path="enabled" type="boolean" default="true">
   Enable or disable the dreaming sweep.

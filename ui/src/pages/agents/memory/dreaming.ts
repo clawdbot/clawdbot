@@ -10,6 +10,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../../api/gateway.
 import type { ConfigSnapshot } from "../../../api/types.ts";
 import { t } from "../../../i18n/index.ts";
 import { copyToClipboard } from "../../../lib/clipboard.ts";
+import { resolveAgentConfigEntryTarget } from "../../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
 import {
@@ -315,6 +316,19 @@ export function resolveConfiguredDreaming(configValue: Record<string, unknown> |
     enabled: slotSelection.kind !== "off" && dreaming?.enabled !== false,
     overridden,
     engineOff: slotSelection.kind === "off",
+  };
+}
+
+export function resolveAgentDreamingParticipation(
+  configValue: Record<string, unknown> | null,
+  agentId: string,
+): { enabled: boolean; overridden: boolean } {
+  const entry = resolveAgentConfigEntryTarget(configValue, agentId)?.entry;
+  const memory = asRecord(entry?.memory);
+  const dreaming = asRecord(memory?.dreaming);
+  return {
+    enabled: dreaming?.enabled !== false,
+    overridden: typeof dreaming?.enabled === "boolean",
   };
 }
 
@@ -624,21 +638,6 @@ export async function resolveDreamingConfigPathSupport(
   }
 }
 
-async function ensureDreamingPathSupported(
-  state: DreamingState,
-  config: DreamingConfigCapability,
-  pluginId: string,
-): Promise<boolean> {
-  // "unknown" stays optimistic: the gateway rejects the write if it is wrong.
-  if ((await resolveDreamingConfigPathSupport(config, pluginId)) !== "unsupported") {
-    return true;
-  }
-  const message = t("dreaming.actions.unsupportedPlugin", { pluginId });
-  state.dreamingStatusError = message;
-  state.lastError = message;
-  return false;
-}
-
 export async function updateDreamingEnabled(
   state: DreamingState,
   config: DreamingConfigCapability,
@@ -652,12 +651,16 @@ export async function updateDreamingEnabled(
     state.dreamingStatusError = t("dreaming.actions.configHashMissing");
     return false;
   }
-  const { pluginId } = resolveConfiguredDreaming(
-    asRecord(config.state.configSnapshot?.config) ?? null,
-  );
-  if (!(await ensureDreamingPathSupported(state, config, pluginId))) {
+  const agentId = resolveSelectedAgentId(state);
+  if (!agentId) {
+    state.dreamingStatusError = t("dreaming.actions.updateFailed");
     return false;
   }
+  // Probe the core path so lifecycle changes can cancel the write while the lookup is pending.
+  // A missing/older lookup stays optimistic; the Gateway's strict config schema is authoritative.
+  await config
+    .lookupSchemaPath(`agents.entries.${agentId}.memory.dreaming.enabled`)
+    .catch(() => null);
   if (!canDispatch()) {
     return false;
   }
@@ -665,13 +668,11 @@ export async function updateDreamingEnabled(
     state,
     config,
     {
-      plugins: {
+      agents: {
         entries: {
-          [pluginId]: {
-            config: {
-              dreaming: {
-                enabled,
-              },
+          [agentId]: {
+            memory: {
+              dreaming: { enabled },
             },
           },
         },
@@ -682,6 +683,7 @@ export async function updateDreamingEnabled(
   if (ok && state.dreamingStatus) {
     state.dreamingStatus = {
       ...state.dreamingStatus,
+      agentIncluded: enabled,
       enabled,
     };
   }

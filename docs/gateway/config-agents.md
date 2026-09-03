@@ -1064,6 +1064,9 @@ for provider examples and precedence.
           },
         },
         skills: ["docs-search"], // replaces agents.defaults.skills when set
+        memory: {
+          dreaming: { enabled: false }, // exclude this agent from automatic Dreaming
+        },
         identity: {
           name: "Samantha",
           theme: "helpful sloth",
@@ -1102,6 +1105,7 @@ for provider examples and precedence.
 - `params`: per-agent stream params merged over the selected model entry in `agents.defaults.models`. Use this for agent-specific overrides like `cacheRetention`, `temperature`, or `maxTokens` without duplicating the whole model catalog.
 - `tts`: optional per-agent text-to-speech overrides. The block deep-merges over `tts`, so keep shared provider credentials and fallback policy in `tts` and set only persona-specific values such as provider, voice, model, style, or auto mode here.
 - `skills`: optional per-agent skill allowlist. If omitted, the agent inherits `agents.defaults.skills` when set; an explicit list replaces defaults instead of merging, and `[]` means no skills.
+- `memory.dreaming.enabled`: set `false` to exclude this agent from automatic Dreaming ingestion, promotion, cleanup, and reporting. Omission preserves the default participation behavior. The global Dreaming master switch still applies to every agent. If included and excluded agents resolve to the same canonical workspace, Dreaming skips that workspace fail-closed.
 - `thinkingDefault`: optional per-agent default thinking level (`off | minimal | low | medium | high | xhigh | adaptive | max`). Overrides `agents.defaults.thinkingDefault` for this agent when no per-message or session override is set. The selected provider/model profile controls which values are valid; for Google Gemini, `adaptive` keeps provider-owned dynamic thinking (`thinkingLevel` omitted on Gemini 3/3.1, `thinkingBudget: -1` on Gemini 2.5).
 - `reasoningDefault`: optional per-agent default reasoning visibility (`on | off | stream`). Overrides `agents.defaults.reasoningDefault` for this agent when no per-message or session reasoning override is set.
 - `fastModeDefault`: optional per-agent default for fast mode (`"auto" | true | false`). Overrides `agents.defaults.fastModeDefault` for this agent when no per-message or session fast-mode override is set.

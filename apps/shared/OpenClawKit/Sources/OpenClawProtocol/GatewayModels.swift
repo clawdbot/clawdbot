@@ -15417,19 +15417,35 @@ public struct AgentsCreateParams: Codable, Sendable {
     public let model: String?
     public let emoji: String?
     public let avatar: String?
+    public let basehash: String?
+    public let initialconfig: [String: AnyCodable]?
 
     public init(
         name: String,
         workspace: String? = nil,
         model: String? = nil,
         emoji: String? = nil,
-        avatar: String? = nil)
+        avatar: String? = nil,
+        basehash: String? = nil,
+        initialconfig: [String: AnyCodable]? = nil)
     {
         self.name = name
         self.workspace = workspace
         self.model = model
         self.emoji = emoji
         self.avatar = avatar
+        self.basehash = basehash
+        self.initialconfig = initialconfig
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case name
+        case workspace
+        case model
+        case emoji
+        case avatar
+        case basehash = "baseHash"
+        case initialconfig = "initialConfig"
     }
 }
 

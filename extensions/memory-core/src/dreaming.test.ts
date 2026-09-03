@@ -1690,7 +1690,12 @@ describe("gateway startup reconciliation", () => {
           limit: 5,
           phases: { light: { enabled: false }, rem: { enabled: false } },
         },
-        { agents: { defaults: { workspace: workspaceDir } } },
+        {
+          agents: {
+            defaults: { workspace: workspaceDir },
+            entries: { researcher: { workspace: workspaceDir } },
+          },
+        },
       ),
     });
 
@@ -1719,6 +1724,53 @@ describe("gateway startup reconciliation", () => {
       )[0];
       expect(sweepArgs.agentId).toBe("researcher");
       expect(sweepArgs.workspaceDir).toBe(workspaceDir);
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("does not sweep an explicitly excluded trigger workspace through the fallback", async () => {
+    clearInternalHooks();
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-excluded-");
+    runDreamingSweepPhasesMock.mockClear();
+    const config = createDreamingConfig(
+      {
+        enabled: true,
+        limit: 5,
+        phases: { light: { enabled: false }, rem: { enabled: false } },
+      },
+      {
+        agents: {
+          entries: {
+            companion: {
+              workspace: workspaceDir,
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+      },
+    );
+    const { api, harness, onMock } = createDreamingTestContext({ config });
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, { config, getCron: () => harness.cron });
+
+      const result = await getBeforeAgentReplyHandler(onMock)(
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        {
+          trigger: "cron",
+          agentId: "companion",
+          workspaceDir,
+          sessionKey: "agent:companion:cron:memory-dreaming",
+        },
+      );
+
+      expect(result).toEqual({
+        handled: true,
+        reason: "memory-core: short-term dreaming missing workspace",
+      });
+      expect(runDreamingSweepPhasesMock).not.toHaveBeenCalled();
     } finally {
       clearInternalHooks();
     }

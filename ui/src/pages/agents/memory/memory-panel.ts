@@ -31,6 +31,7 @@ import {
   repairDreamingArtifacts,
   resetGroundedShortTerm,
   resetDreamDiary,
+  resolveAgentDreamingParticipation,
   resolveConfiguredDreaming,
   updateDreamingEnabled,
   type DreamingState,
@@ -429,15 +430,42 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
   override render() {
     const dreaming = this.dreaming;
     const configState = this.context.runtimeConfig.state;
-    const configuredDreaming = resolveConfiguredDreaming(currentConfigObject(configState));
-    // The status RPC can complete after config switches the engine Off. Keep the
-    // cached payload for a future refresh, but never present it as current runtime state.
-    const dreamingStatus = configuredDreaming.engineOff ? null : dreaming.dreamingStatus;
-    const dreamingOn = dreamingStatus?.enabled ?? configuredDreaming.enabled;
+    const configObject = currentConfigObject(configState);
+    const configuredDreaming = resolveConfiguredDreaming(configObject);
+    const selectedAgentId = dreaming.selectedAgentId ?? "";
+    const agentParticipation = resolveAgentDreamingParticipation(configObject, selectedAgentId);
+    // The status RPC can complete after config disables Dreaming globally, excludes
+    // the selected agent, or switches the engine Off. Keep the cached payload for a
+    // future refresh, but never present it as current runtime state: a cached
+    // enabled value must not override the current global master setting, the
+    // current agent participation gate, or the engine slot.
+    const agentExcludedByConfig = !configuredDreaming.engineOff && !agentParticipation.enabled;
+    const dreamingStatus =
+      configuredDreaming.enabled && agentParticipation.enabled ? dreaming.dreamingStatus : null;
+    // Doctor reports shared-workspace ambiguity to both co-owners, including the
+    // agent that is explicitly excluded. That agent gates the cached payload
+    // below, so the specific diagnosis would be lost before exclusionNotice
+    // reads it; recover it from the cached reason while stale counts and phases
+    // stay suppressed. The ambiguity notice carries the recovery action
+    // (separate the workspaces) that the generic exclusion notice hides.
+    const cachedExclusionReason = agentExcludedByConfig
+      ? dreaming.dreamingStatus?.exclusionReason === "shared-workspace-ambiguity"
+        ? "shared-workspace-ambiguity"
+        : undefined
+      : undefined;
+    const exclusionReason = dreamingStatus?.exclusionReason ?? cachedExclusionReason;
+    const agentIncluded = !configuredDreaming.engineOff && agentParticipation.enabled;
+    const effectiveDreamingOn =
+      dreamingStatus?.enabled ?? (configuredDreaming.enabled && agentIncluded);
+    const exclusionNotice =
+      exclusionReason === "shared-workspace-ambiguity"
+        ? t("dreaming.header.sharedWorkspaceAmbiguity")
+        : exclusionReason === "agent-config-disabled" || agentExcludedByConfig
+          ? t("dreaming.header.agentExcluded")
+          : null;
     const loading = dreaming.dreamingStatusLoading || dreaming.dreamingModeSaving;
     const canUpdateConfig = canCallDreamingMethod(dreaming, "config.patch", "operator.admin");
     const refreshLoading = dreaming.dreamingStatusLoading || dreaming.dreamDiaryLoading;
-    const selectedAgentId = dreaming.selectedAgentId ?? "";
 
     return html`
       <section class="content-header content-header--page agent-memory-panel__header">
@@ -453,19 +481,19 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
             <span class="muted">
               ${configuredDreaming.engineOff
                 ? t("dreaming.header.engineOff")
-                : renderSettingsDefaultDescription(
+                : html`${renderSettingsDefaultDescription(
                     t("common.enabled"),
-                    configuredDreaming.overridden,
-                  )}
+                    agentParticipation.overridden,
+                  )}${exclusionNotice ? html` · ${exclusionNotice}` : ""}`}
             </span>
             <button
-              class="dreams__phase-toggle ${dreamingOn ? "dreams__phase-toggle--on" : ""}"
+              class="dreams__phase-toggle ${agentIncluded ? "dreams__phase-toggle--on" : ""}"
               ?disabled=${!canUpdateConfig || loading || configuredDreaming.engineOff}
-              @click=${() => this.setEnabled(!dreamingOn, dreamingOn)}
+              @click=${() => this.setEnabled(!agentIncluded, agentIncluded)}
             >
               <span class="dreams__phase-toggle-dot"></span>
               <span class="dreams__phase-toggle-label">
-                ${dreamingOn ? t("dreaming.header.on") : t("dreaming.header.off")}
+                ${agentIncluded ? t("dreaming.header.on") : t("dreaming.header.off")}
               </span>
             </button>
           </div>
@@ -503,7 +531,7 @@ class AgentMemoryPanel extends OpenClawLightDomElement {
           ),
         },
         viewState: this.viewState,
-        active: dreamingOn,
+        active: effectiveDreamingOn,
         selectedAgentId,
         shortTermCount: dreamingStatus?.shortTermCount ?? 0,
         promotedCount: dreamingStatus?.promotedToday ?? 0,

@@ -3,6 +3,7 @@ import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  AgentsCreateParamsSchema,
   AgentsDeleteResultSchema,
   AgentsListResultSchema,
   AgentsUpdateParamsSchema,
@@ -224,6 +225,41 @@ describe("AgentsUpdateParamsSchema", () => {
   it("distinguishes omitted, cleared, and invalid model values", () => {
     expectAccepted(AgentsUpdateParamsSchema, { agentId: "work" }, { agentId: "work", model: null });
     expectRejected(AgentsUpdateParamsSchema, { agentId: "work", model: "" });
+  });
+});
+
+describe("AgentsCreateParamsSchema", () => {
+  it("accepts legacy creates and CAS-bound Safe Start config", () => {
+    expectAccepted(
+      AgentsCreateParamsSchema,
+      { name: "companion" },
+      { name: "companion", baseHash: "opaque-config-revision" },
+      {
+        name: "companion",
+        baseHash: "opaque-config-revision",
+        initialConfig: { memory: { dreaming: { enabled: false } } },
+      },
+    );
+  });
+
+  it("requires CAS and keeps the Safe Start subset closed", () => {
+    expectRejected(
+      AgentsCreateParamsSchema,
+      {
+        name: "companion",
+        initialConfig: { memory: { dreaming: { enabled: false } } },
+      },
+      {
+        name: "companion",
+        baseHash: "opaque-config-revision",
+        initialConfig: { memory: { dreaming: { enabled: "false" } } },
+      },
+      {
+        name: "companion",
+        baseHash: "opaque-config-revision",
+        initialConfig: { tools: { deny: ["exec"] } },
+      },
+    );
   });
 });
 

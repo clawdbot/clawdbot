@@ -47,6 +47,7 @@ const MANIFEST_CONTRACT_FAMILIES = [
   "workerProviders",
   "usageProviders",
   "migrationProviders",
+  "memoryDreamingEngines",
   "gatewayMethodDispatch",
   "tools",
 ] as const satisfies readonly (keyof PluginManifestContracts)[];

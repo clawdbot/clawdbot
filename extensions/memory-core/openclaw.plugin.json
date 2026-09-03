@@ -16,6 +16,7 @@
   },
   "kind": "memory",
   "contracts": {
+    "memoryDreamingEngines": ["memory-core"],
     "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {

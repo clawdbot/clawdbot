@@ -2295,6 +2295,82 @@ describe("memory cli", () => {
     });
   });
 
+  it("resolves rem-harness dreaming config from the selected LanceDB memory plugin", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const nowMs = Date.now();
+      const isoDay = new Date(nowMs).toISOString().slice(0, 10);
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, "memory", `${isoDay}.md`),
+        "Always check weather before suggesting outdoor plans.\n",
+        "utf-8",
+      );
+
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 7,
+                    },
+                    deep: {
+                      enabled: true,
+                      minScore: 0.4,
+                      recencyHalfLifeDays: 9,
+                    },
+                  },
+                },
+              },
+            },
+            // Foreign key on the unselected store plugin must be ignored.
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                  phases: {
+                    rem: {
+                      enabled: true,
+                      limit: 2,
+                    },
+                    deep: {
+                      enabled: true,
+                      minScore: 0.9,
+                      recencyHalfLifeDays: 30,
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      });
+
+      const close = vi.fn(async () => {});
+      mockManager({
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["rem-harness", "--json"]);
+
+      const payload = firstWrittenJsonArg<{
+        remConfig?: { limit?: number };
+        deepConfig?: { minScore?: number; recencyHalfLifeDays?: number };
+      }>(writeJson);
+      expect(payload?.remConfig?.limit).toBe(7);
+      expect(payload?.deepConfig?.minScore).toBe(0.4);
+      expect(payload?.deepConfig?.recencyHalfLifeDays).toBe(9);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
   it("previews rem harness output as json", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       const nowMs = Date.now();
@@ -3345,6 +3421,185 @@ describe("memory cli", () => {
       }
       expect(payload.results).toHaveLength(1);
       expect(payload.results[0]?.path).toBe("memory/2026-04-03.md");
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("records short-term recall entries from memory search for the selected LanceDB memory plugin", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      // The unselected memory-core entry disables Dreaming, so reading the
+      // wrong (unselected) config owner suppresses recall recording.
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                },
+              },
+            },
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      });
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      const entries = await readShortTermRecallEntries({ workspaceDir });
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.path).toBe("memory/2026-04-03.md");
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not record short-term recall entries when the selected LanceDB memory plugin disables Dreaming", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      const search = vi.fn(async () => [
+        {
+          path: "memory/2026-04-03.md",
+          startLine: 1,
+          endLine: 2,
+          score: 0.91,
+          snippet: "Move backups to S3 Glacier.",
+          source: "memory",
+        },
+      ]);
+      getRuntimeConfig.mockReturnValue({
+        plugins: {
+          slots: { memory: "memory-lancedb" },
+          entries: {
+            "memory-lancedb": {
+              config: {
+                dreaming: {
+                  enabled: false,
+                },
+              },
+            },
+          },
+        },
+      });
+      mockManager({
+        search,
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      const writeJson = spyRuntimeJson(defaultRuntime);
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      const payload = firstWrittenJsonArg<{ results: Array<{ path: string }> }>(writeJson);
+      if (!payload) {
+        throw new Error("Expected memory search JSON payload");
+      }
+      expect(payload.results).toHaveLength(1);
+      expect(payload.results[0]?.path).toBe("memory/2026-04-03.md");
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not record CLI recall entries for an agent excluded from Dreaming", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          entries: {
+            main: {
+              workspace: workspaceDir,
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      });
+      mockManager({
+        search: vi.fn(async () => [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.91,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ]),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
+      expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
+      expect(close).toHaveBeenCalled();
+    });
+  });
+
+  it("does not record CLI recall entries for an ambiguous shared Dreaming workspace", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      const close = vi.fn(async () => {});
+      getRuntimeConfig.mockReturnValue({
+        agents: {
+          entries: {
+            main: { workspace: workspaceDir },
+            excluded: {
+              workspace: workspaceDir,
+              memory: { dreaming: { enabled: false } },
+            },
+          },
+        },
+        plugins: {
+          entries: {
+            "memory-core": { config: { dreaming: { enabled: true } } },
+          },
+        },
+      });
+      mockManager({
+        search: vi.fn(async () => [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 2,
+            score: 0.91,
+            snippet: "Move backups to S3 Glacier.",
+            source: "memory",
+          },
+        ]),
+        status: () => makeMemoryStatus({ workspaceDir }),
+        close,
+      });
+
+      await runMemoryCli(["search", "glacier", "--json"]);
+
       expect(await readShortTermRecallEntries({ workspaceDir })).toHaveLength(0);
       expect(close).toHaveBeenCalled();
     });

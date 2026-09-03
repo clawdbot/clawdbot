@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     location: "legacy-main" | "state-db";
   },
   loadConfigReturn: {} as Record<string, unknown>,
+  configSnapshotExists: true,
   listAgentEntries: vi.fn((_cfg?: unknown) => [] as Array<Record<string, unknown>>),
   findAgentEntryIndex: vi.fn((_list?: unknown, _agentId?: string) => -1),
   applyAgentConfig: vi.fn((_cfg: unknown, _opts: unknown) => ({})),
@@ -117,7 +118,11 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: async (params: { nextConfig: unknown }) =>
       await mocks.writeConfigFile(params.nextConfig),
     readConfigFileSnapshotForWrite: async () => ({
-      snapshot: { sourceConfig: mocks.loadConfigReturn },
+      snapshot: {
+        exists: mocks.configSnapshotExists,
+        ...(mocks.configSnapshotExists ? { hash: "test-hash" } : {}),
+        sourceConfig: mocks.loadConfigReturn,
+      },
     }),
     mutateConfigFileWithRetry: async (params: {
       writeOptions?: unknown;
@@ -489,6 +494,7 @@ function makeCall(method: keyof typeof agentsHandlers, params: Record<string, un
     respond,
     context: {
       getRuntimeConfig: () => mocks.loadConfigReturn,
+      configRevisionProjector: { projectRawHash: (hash: string) => `public:${hash}` },
       cron: { removeAgentJobsTransactional: mocks.cronRemoveAgentJobsTransactional },
     } as never,
     req: { type: "req" as const, id: "1", method },
@@ -734,6 +740,7 @@ beforeEach(() => {
 describe("agents.create", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.configSnapshotExists = true;
     mocks.loadConfigReturn = {
       agents: { list: [{ id: "main", default: true }] },
     };
@@ -787,6 +794,57 @@ describe("agents.create", () => {
     expect(callOrder.indexOf("ensureAgentWorkspace")).toBeLessThan(
       callOrder.indexOf("writeConfigFile"),
     );
+  });
+
+  it("creates a CAS-bound agent with Safe Start config in one publication", async () => {
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Companion",
+      baseHash: "public:test-hash",
+      initialConfig: { memory: { dreaming: { enabled: false } } },
+    });
+
+    await promise;
+
+    expectRespondOk(respond, { ok: true, agentId: "companion" });
+    expect(mocks.writeConfigFile).toHaveBeenCalledOnce();
+    expect(mockCallArg(mocks.writeConfigFile)).toMatchObject({
+      agents: {
+        entries: {
+          companion: {
+            memory: { dreaming: { enabled: false } },
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects a stale create base hash before workspace setup", async () => {
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Companion",
+      baseHash: "public:stale-hash",
+      initialConfig: { memory: { dreaming: { enabled: false } } },
+    });
+
+    await promise;
+
+    expectRespondErrorContaining(respond, "config changed since last load");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
+  it("rejects a CAS create when no public base hash is available", async () => {
+    mocks.configSnapshotExists = false;
+    const { respond, promise } = makeCall("agents.create", {
+      name: "Companion",
+      baseHash: "public:unverifiable",
+      initialConfig: { memory: { dreaming: { enabled: false } } },
+    });
+
+    await promise;
+
+    expectRespondErrorContaining(respond, "config base hash unavailable");
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.writeConfigFile).not.toHaveBeenCalled();
   });
 
   it("routes main through the canonical shared-auth creation gate", async () => {

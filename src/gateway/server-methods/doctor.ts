@@ -21,6 +21,7 @@ import {
   resolveMemoryLightDreamingConfig,
   resolveMemoryDreamingPluginConfig,
   resolveMemoryDreamingConfig,
+  resolveMemoryDreamingWorkspaceStatuses,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryRemDreamingConfig,
 } from "../../memory-host-sdk/dreaming.js";
@@ -91,7 +92,10 @@ type DoctorMemoryDreamingEntryPayload = {
 };
 
 type DoctorMemoryDreamingPayload = {
+  configuredEnabled?: boolean;
+  agentIncluded?: boolean;
   enabled: boolean;
+  exclusionReason?: "agent-config-disabled" | "shared-workspace-ambiguity";
   timezone?: string;
   verboseLogging: boolean;
   storageMode: "inline" | "separate" | "both";
@@ -751,16 +755,34 @@ export const createDoctorHandlers = (
       const workspaceDir = normalizeOptionalString(
         (status as Record<string, unknown>).workspaceDir,
       );
+      const workspaceStatuses = resolveMemoryDreamingWorkspaceStatuses(cfg, {
+        primaryWorkspaceDir: workspaceDir,
+        primaryAgentId: agentId,
+      });
+      const selectedWorkspaceStatus = workspaceStatuses.find(
+        (entry) =>
+          entry.enabledAgentIds.includes(agentId) || entry.excludedAgentIds.includes(agentId),
+      );
+      const agentIncluded = requestedAgentId
+        ? selectedWorkspaceStatus?.state === "enabled"
+        : workspaceStatuses.some((entry) => entry.state === "enabled");
+      const exclusionReason = requestedAgentId
+        ? selectedWorkspaceStatus?.state === "shared-workspace-ambiguity"
+          ? "shared-workspace-ambiguity"
+          : agentIncluded
+            ? undefined
+            : "agent-config-disabled"
+        : undefined;
+      const effectiveDreamingEnabled = dreamingConfig.enabled && agentIncluded;
       const configuredWorkspaces = requestedAgentId
-        ? workspaceDir
+        ? agentIncluded && workspaceDir
           ? [workspaceDir]
           : []
         : resolveMemoryDreamingWorkspaces(cfg, {
             primaryWorkspaceDir: workspaceDir,
             primaryAgentId: agentId,
           }).map((entry) => entry.workspaceDir);
-      const allWorkspaces =
-        configuredWorkspaces.length > 0 ? configuredWorkspaces : workspaceDir ? [workspaceDir] : [];
+      const allWorkspaces = configuredWorkspaces;
       const storeStats =
         allWorkspaces.length > 0
           ? mergeDreamingStoreStats(
@@ -800,18 +822,25 @@ export const createDoctorHandlers = (
         })(),
         dreaming: {
           ...dreamingConfig,
+          configuredEnabled: dreamingConfig.enabled,
+          agentIncluded,
+          enabled: effectiveDreamingEnabled,
+          ...(exclusionReason ? { exclusionReason } : {}),
           ...storeStats,
           phases: {
             light: {
               ...dreamingConfig.phases.light,
+              enabled: effectiveDreamingEnabled && dreamingConfig.phases.light.enabled,
               ...cronStatuses.light,
             },
             deep: {
               ...dreamingConfig.phases.deep,
+              enabled: effectiveDreamingEnabled && dreamingConfig.phases.deep.enabled,
               ...cronStatuses.deep,
             },
             rem: {
               ...dreamingConfig.phases.rem,
+              enabled: effectiveDreamingEnabled && dreamingConfig.phases.rem.enabled,
               ...cronStatuses.rem,
             },
           },

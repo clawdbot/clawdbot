@@ -4396,20 +4396,23 @@ export const en: TranslationMap & {
     header: {
       refresh: "Refresh",
       refreshing: "Refreshing…",
-      on: "Dreaming On",
-      off: "Dreaming Off",
+      on: "Agent Included",
+      off: "Agent Excluded",
       engineOff: "Memory engine is Off. Choose an engine in Settings to enable dreaming.",
+      agentExcluded: "Dreaming is excluded for this agent.",
+      sharedWorkspaceAmbiguity:
+        "Dreaming is paused because this workspace is shared with an excluded agent.",
     },
     toggleConfirmation: {
-      subtitle: "Dreaming is a global setting; it is not scoped to this agent.",
-      enableTitle: "Turn On Dreaming for All Agents",
+      subtitle: "This setting controls Dreaming participation for the selected agent.",
+      enableTitle: "Include This Agent in Dreaming",
       enableDetail:
-        "The nightly dreaming sweep will run across every configured agent workspace, promoting short-term recalls into long-term memory. This applies right away.",
-      enableConfirm: "Turn On Dreaming",
-      disableTitle: "Turn Off Dreaming for All Agents",
+        "Scheduled Dreaming may process this agent's workspace after the config reloads. Other agents are unchanged.",
+      enableConfirm: "Include Agent",
+      disableTitle: "Exclude This Agent from Dreaming",
       disableDetail:
-        "The nightly dreaming sweep will stop for every configured agent, not just this one. Memories already written stay; nothing new gets promoted. This applies right away.",
-      disableConfirm: "Turn Off Dreaming",
+        "Scheduled Dreaming, recall tracking, and automatic promotion stop for this agent. Existing memories stay; other agents are unchanged.",
+      disableConfirm: "Exclude Agent",
       saving: "Saving…",
       failed: "Could not apply change. Check your connection and try again.",
     },

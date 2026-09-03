@@ -129,6 +129,10 @@ export type AgentConfig = {
   /** Per-agent overrides for the shared top-level memory configuration. */
   memory?: {
     search?: MemorySearchConfig;
+    /** Set to false to exclude this agent from memory Dreaming. */
+    dreaming?: {
+      enabled?: boolean;
+    };
   };
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
