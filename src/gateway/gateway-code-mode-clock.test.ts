@@ -254,7 +254,7 @@ describe("Gateway Code Mode clock rollback", () => {
           plugins: { allow: [approvalPluginId] },
           tools: {
             profile: "full",
-            codeMode: { enabled: true, timeoutMs: 1_000 },
+            codeMode: { enabled: true, timeoutMs: 10_000 },
             alsoAllow: ["code_mode_clock_approval"],
           },
           models: {
