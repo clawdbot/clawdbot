@@ -5899,7 +5899,7 @@ describe("Codex app-server thread lifecycle timing", () => {
     expect(message).toContain("thread-resume-request:9ms@9ms");
   });
 
-  it("warns on slow start even when trace logging is disabled", async () => {
+  it("warns on slow start even when profiling and trace logging are disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     let nowMs = 0;
@@ -5919,7 +5919,7 @@ describe("Codex app-server thread lifecycle timing", () => {
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
       timing: {
-        enabled: true,
+        enabled: false,
         now: () => nowMs,
         log,
         totalThresholdMs: 10,

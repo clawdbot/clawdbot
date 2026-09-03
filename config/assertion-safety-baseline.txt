@@ -2176,7 +2176,7 @@ src/auto-reply/reply/reply-operation-run-state.ts	1
 src/auto-reply/reply/reply-payload-sending-hook.ts	1
 src/auto-reply/reply/reply-run-registry.registry.ts	1
 src/auto-reply/reply/reply-threading.ts	2
-src/auto-reply/reply/reply-timing-tracker.ts	3
+src/auto-reply/reply/reply-timing-tracker.ts	2
 src/auto-reply/reply/reply-turn-admission.ts	1
 src/auto-reply/reply/restart-recovery-claim.ts	3
 src/auto-reply/reply/session-delivery.ts	1
@@ -2654,7 +2654,7 @@ src/config/sessions/session-accessor.sqlite-parent-fork.ts	1
 src/config/sessions/session-accessor.sqlite-read.ts	12
 src/config/sessions/session-accessor.sqlite-recovery.ts	1
 src/config/sessions/session-accessor.sqlite-reset-window.ts	2
-src/config/sessions/session-accessor.sqlite-title-probes.ts	2
+src/config/sessions/session-accessor.sqlite-title-probes.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-message-append.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-mirror.ts	1
 src/config/sessions/session-accessor.sqlite-transcript-store.ts	2
