@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { GitHubIdentityError } from "../agents/github-tool-identity.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -174,32 +175,103 @@ describe("loadControlUiGitHubPreview", () => {
     expect(fetchMock).toHaveBeenCalledTimes(6);
   });
 
-  it("withholds an in-flight preview when the selected identity changes", async () => {
+  it.each([
+    { stage: "repository", stopAfter: 1, redirect: false },
+    { stage: "item", stopAfter: 2, redirect: false },
+    { stage: "final visibility check", stopAfter: 3, redirect: false },
+    { stage: "repository redirect", stopAfter: 1, redirect: true },
+    { stage: "item redirect", stopAfter: 2, redirect: true },
+    { stage: "commits redirect", stopAfter: 4, redirect: true },
+  ])(
+    "blocks later GitHub dispatches after identity changes during $stage",
+    async ({ stopAfter, redirect, stage }) => {
+      let changed = false;
+      const assertSelected = () => {
+        if (changed) {
+          throw new GitHubIdentityError("changed");
+        }
+      };
+      const identity = {
+        token: "inflight-preview-identity",
+        cacheScope: `inflight-preview-identity-${stage}`,
+        assertSelected,
+        revalidate: async () => assertSelected(),
+      };
+      const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+        const url = requestUrl(input);
+        if (fetchMock.mock.calls.length === stopAfter) {
+          changed = true;
+          if (redirect) {
+            return new Response(null, {
+              status: 301,
+              headers: { Location: url.replace("/openclaw/openclaw", "/openclaw/renamed") },
+            });
+          }
+        }
+        return githubJson(
+          url.includes("/commits")
+            ? []
+            : url.includes("/pulls/")
+              ? previewPayload({ user: { login: "octocat" } })
+              : { private: false },
+        );
+      });
+      await expect(
+        loadControlUiGitHubPreview(
+          { kind: "pull", number: 88123, owner: "openclaw", repo: "openclaw" },
+          identity,
+          fetchMock,
+        ),
+      ).rejects.toMatchObject({ reason: "changed" });
+      expect(fetchMock).toHaveBeenCalledTimes(stopAfter);
+    },
+  );
+
+  it("keeps concurrent readers and later cache hits independent of a disconnected caller", async () => {
+    const started = createDeferred();
+    const repository = createDeferred<Response>();
+    let connected = true;
     const identity = {
-      token: "inflight-preview-identity",
-      cacheScope: "inflight-preview-identity",
-      assertSelected: vi.fn(),
-      revalidate: vi.fn().mockResolvedValue(undefined),
+      token: "shared-preview-identity",
+      cacheScope: "shared-preview-identity",
+      assertSelected() {
+        if (!connected) {
+          throw new GitHubIdentityError("changed");
+        }
+      },
+      async revalidate() {
+        this.assertSelected();
+      },
     };
-    let finishItem!: (response: Response) => void;
-    const itemResponse = new Promise<Response>((resolve) => {
-      finishItem = resolve;
-    });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockImplementation(async (input) =>
-        requestUrl(input).includes("/issues/") ? itemResponse : githubJson({ private: false }),
+    const follower = {
+      ...identity,
+      assertSelected() {},
+    };
+    const fetchMock = vi.fn<typeof fetch>().mockImplementation(async (input) => {
+      if (fetchMock.mock.calls.length === 1) {
+        started.resolve();
+        return repository.promise;
+      }
+      return githubJson(
+        requestUrl(input).includes("/issues/")
+          ? previewPayload({ user: { login: "octocat" } })
+          : { private: false },
       );
-    const request = loadControlUiGitHubPreview(
-      { kind: "issue", number: 88123, owner: "openclaw", repo: "openclaw" },
-      identity,
-      fetchMock,
-    );
-    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
-    identity.revalidate.mockRejectedValue(new GitHubIdentityError("changed"));
-    const rejected = expect(request).rejects.toMatchObject({ reason: "changed" });
-    finishItem(githubJson(previewPayload({ user: { login: "octocat" } })));
+    });
+    const target = { kind: "issue" as const, number: 88125, owner: "openclaw", repo: "openclaw" };
+    const first = loadControlUiGitHubPreview(target, identity, fetchMock);
+    const rejected = expect(first).rejects.toMatchObject({ reason: "changed" });
+    await started.promise;
+    const second = loadControlUiGitHubPreview(target, follower, fetchMock);
+    connected = false;
+    repository.resolve(githubJson({ private: false }));
     await rejected;
+    await expect(second).resolves.toMatchObject({ login: "octocat" });
+    const calls = fetchMock.mock.calls.length;
+    await expect(loadControlUiGitHubPreview(target, follower, fetchMock)).resolves.toMatchObject({
+      login: "octocat",
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(calls);
   });
 
   it.each([401, 403, 429])(

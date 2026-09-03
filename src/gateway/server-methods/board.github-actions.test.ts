@@ -513,7 +513,10 @@ describe("board authenticated GitHub Actions", () => {
     }));
     const raw = { total_count: 30, workflow_runs: runs };
     expect(Buffer.byteLength(JSON.stringify(raw))).toBeGreaterThan(256 * 1024);
-    await expect(readGitHubJsonResponse(json(raw))).rejects.toThrow("Content too large");
+    await expect(readGitHubJsonResponse(json(raw))).rejects.toMatchObject({
+      statusCode: 502,
+      message: expect.stringContaining("size limit"),
+    });
     actions = () => json(raw);
     const { read } = await reader();
     expect((await read({ repository: "owner/repo", perPage: 30 })).mock.calls[0]).toEqual([

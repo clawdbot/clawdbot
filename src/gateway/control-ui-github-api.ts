@@ -48,6 +48,10 @@ export class ControlUiGitHubError extends Error {
   }
 }
 
+// Keep no-response transport failures distinct from HTTP/protocol failures:
+// identity synchronization may reuse an exact verified cache only for the former.
+class ControlUiGitHubTransportError extends Error {}
+
 export function formatControlUiGitHubPreviewError(error: unknown): {
   message: string;
   retryable: boolean;
@@ -55,6 +59,9 @@ export function formatControlUiGitHubPreviewError(error: unknown): {
 } {
   if (isTrustedSecretSurfaceUnavailableError(error)) {
     return { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false };
+  }
+  if (error instanceof ControlUiGitHubTransportError) {
+    return { message: `${error.message}. Retry or check GitHub availability.`, retryable: true };
   }
   if (error instanceof ControlUiGitHubError) {
     const status = `HTTP ${error.upstreamStatus}`;
@@ -201,6 +208,7 @@ export async function fetchGitHubApi(
   fetchImpl: typeof fetch,
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
+  identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
 ): Promise<Response> {
   const initialUrl = safeGitHubApiUrl(rawUrl);
   if (!initialUrl) {
@@ -210,6 +218,10 @@ export async function fetchGitHubApi(
 
   const signal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
   for (let redirects = 0; ; redirects += 1) {
+    // Recheck every dispatch, including redirects and auxiliary metadata reads.
+    // Selection must still be current after the asynchronous credential read.
+    await identity?.revalidate();
+    identity?.assertSelected();
     let response: Response;
     try {
       response = await fetchImpl(url.href, {
@@ -219,8 +231,7 @@ export async function fetchGitHubApi(
       });
     } catch (error) {
       const timedOut = signal.aborted || (error instanceof Error && error.name === "TimeoutError");
-      throw new ControlUiGitHubError(
-        502,
+      throw new ControlUiGitHubTransportError(
         timedOut ? "GitHub request timed out" : "Could not reach GitHub",
       );
     }
@@ -249,8 +260,7 @@ export async function discardResponse(response: Response): Promise<void> {
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
   try {
     return await readResponseWithLimit(response, maxBytes, {
-      onOverflow: () =>
-        new ControlUiGitHubError(502, "GitHub response exceeded the preview size limit"),
+      onOverflow: () => new ControlUiGitHubError(502, "GitHub response exceeded the size limit"),
     });
   } finally {
     await discardResponse(response);
