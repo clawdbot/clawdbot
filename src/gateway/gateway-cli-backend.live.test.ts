@@ -527,7 +527,7 @@ describeLive("gateway live (cli backend)", () => {
             : cfg.models,
         tools: {
           ...cfg.tools,
-          allow: ["sessions_spawn", "bash"],
+          alsoAllow: ["sessions_spawn", "bash"],
           ...(useMinimalToolsProfile ? { profile: "minimal" as const } : {}),
         },
         agents: {

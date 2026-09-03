@@ -1288,12 +1288,11 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
         gatewayHealth: "live",
       }));
     const callGateway = createGatewayMock();
-    let activityChecks = 0;
     testing.setDepsForTest({
       callGateway,
       getRequesterSessionActivity: () => ({
         sessionId: "paperclip-session",
-        isActive: activityChecks++ === 0,
+        isActive: true,
       }),
       queueEmbeddedAgentMessageWithOutcome,
       getRuntimeConfig: () =>
