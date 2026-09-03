@@ -214,11 +214,35 @@ describe("registerQrCli", () => {
       expiresAtMs: 123,
     });
     expect(runtime.log).toHaveBeenCalledWith(expected);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
     expect(renderTerminal).not.toHaveBeenCalled();
     expect(resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
     expect(issueDevicePairSetupBootstrapToken).toHaveBeenCalledWith(
       expect.objectContaining({ profile: FULL_ACCESS_PAIRING_SETUP_BOOTSTRAP_PROFILE }),
     );
+  });
+
+  it("prints the JSON document when --setup-code-only is combined with --json", async () => {
+    loadConfig.mockReturnValue({
+      gateway: {
+        bind: "custom",
+        customBindHost: "127.0.0.1",
+        auth: { mode: "token", token: "tok" },
+      },
+    });
+
+    await runQr(["--setup-code-only", "--json"]);
+
+    const expected = encodePairingSetupCode({
+      url: "ws://127.0.0.1:18789",
+      bootstrapToken: "bootstrap-123",
+      expiresAtMs: 123,
+    });
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ setupCode: expected, gatewayUrl: "ws://127.0.0.1:18789" }),
+    );
+    expect(runtime.log).not.toHaveBeenCalledWith(expected);
+    expect(renderTerminal).not.toHaveBeenCalled();
   });
 
   it("uses the bounded bootstrap profile with --limited", async () => {

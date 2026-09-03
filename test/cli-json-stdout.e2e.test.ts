@@ -428,6 +428,36 @@ describe("cli json stdout contract", () => {
     );
   });
 
+  it("keeps qr --setup-code-only --json as one JSON document on stdout", async () => {
+    await withTempHome(
+      async (tempHome) => {
+        const configPath = path.join(tempHome, "openclaw.json");
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            gateway: {
+              bind: "custom",
+              customBindHost: "127.0.0.1",
+              auth: { mode: "token", token: "e2e-token" },
+            },
+          }),
+        );
+
+        const result = runBuiltCli(tempHome, ["qr", "--setup-code-only", "--json"], {
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+        });
+
+        expect(result.status, result.stderr).toBe(0);
+        const payload = JSON.parse(result.stdout);
+        expect(typeof payload.setupCode).toBe("string");
+        expect(payload.gatewayUrl).toBe("ws://127.0.0.1:18789");
+        expect(result.stdout).toBe(`${JSON.stringify(payload, null, 2)}\n`);
+      },
+      { prefix: "openclaw-qr-setup-code-json-e2e-" },
+    );
+  });
+
   it("renders sandbox explain validation failures as one canonical JSON document", async () => {
     await withTempHome(
       async (tempHome) => {
