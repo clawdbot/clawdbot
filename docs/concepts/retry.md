@@ -57,6 +57,10 @@ delivery uses a producer claim, reservation checks the exact owner and its lease
 before charging an attempt. An expired or replaced claim does not spend the
 remaining budget; recovery can acquire a fresh claim before retrying.
 
+Producer leases last 60 seconds and renew every 20 seconds while the owner is
+active. This tolerates brief Gateway stalls; recovery of a vanished producer
+waits until its last lease expires.
+
 Lease expiry does not erase evidence that a send already started. Those entries
 still require reconciliation before replay, and an unreplaced owner can record a
 late result without authorizing another send.

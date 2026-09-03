@@ -202,13 +202,13 @@ export function renderApplicationShell(host: ShellViewHost) {
   const lazyElementState = host.lazyCustomElements.visibleState;
   const activeRoute = host.routeState.routeId ?? "chat";
   const sessionRoute = isSessionRouteId(activeRoute);
-  // Chat has an offline outbox, New Session keeps a local draft, and Appearance
-  // persists local preference intent for replay. Their server actions are
-  // independently gated; other pages cannot submit useful disconnected work.
+  // Session routes have an offline outbox, New Session keeps a local draft, and
+  // Appearance persists local preference intent for replay. Their server actions
+  // are independently gated; other pages cannot submit useful disconnected work.
   const pageActionsBlocked =
     gatewaySnapshot.phase === "reload-required" ||
     (!gatewayConnected &&
-      activeRoute !== "chat" &&
+      !sessionRoute &&
       activeRoute !== "new-session" &&
       activeRoute !== "appearance");
   // Plugin tabs share one route; the search picks the active item.

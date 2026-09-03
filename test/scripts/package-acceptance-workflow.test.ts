@@ -523,6 +523,7 @@ function runFullReleaseTargetIdentityValidation(params: {
   releaseProfile?: string;
   runReleaseSoak?: string;
   rerunGroup?: string;
+  crossOsSuiteFilter?: string;
 }) {
   const step = workflowStep(
     workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "resolve_target"),
@@ -615,6 +616,7 @@ printf '%s\\n' "$value"
       RELEASE_PROFILE: params.releaseProfile ?? "beta",
       RUN_RELEASE_SOAK: params.runReleaseSoak ?? "false",
       RERUN_GROUP: params.rerunGroup ?? "all",
+      CROSS_OS_SUITE_FILTER: params.crossOsSuiteFilter ?? "",
       SKIP_PACKAGE_TELEGRAM_E2E: "false",
       TARGET_CONTEXT_REF: params.targetContextRef ?? "",
       TARGET_REF: params.targetRef,
@@ -4660,6 +4662,16 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(workflow).toContain('"docker-e2e-prepublish-plugin-registry-" +');
   });
 
+  it.each(["package", "product"])(
+    "schedules updater first-hop compatibility in the %s acceptance profile",
+    (suiteProfile) => {
+      const { outputs, result } = runPackageAcceptanceProfile({ suiteProfile });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect((outputs.docker_lanes ?? "").split(/\s+/u)).toContain("update-first-hop-compat");
+    },
+  );
+
   it("selects one normalized Telegram scenario without enabling broad acceptance lanes", () => {
     const { outputs, result } = runPackageAcceptanceProfile({
       suiteProfile: "telegram",
@@ -6900,13 +6912,15 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it.each([
     { label: "canonical beta", scope: "npm-beta" },
+    { label: "Linux-only beta", crossOsSuiteFilter: "ubuntu", scope: "npm-beta" },
     { label: "beta soak", runReleaseSoak: "true", scope: "full" },
     { label: "focused beta CI", rerunGroup: "ci", scope: "full" },
     { label: "stable profile", releaseProfile: "stable", scope: "full" },
     { label: "stable version", version: "2026.8.1", scope: "full" },
     { label: "main beta profile", targetRef: "main", scope: "full" },
     {
-      label: "canonical stable",
+      label: "canonical stable with Windows omitted",
+      crossOsSuiteFilter: "ubuntu,macos",
       releaseProfile: "stable",
       version: "2026.8.1",
       runReleaseSoak: "true",
@@ -6957,6 +6971,25 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(result.output).toContain(
         `skip_package_telegram_e2e=${overrides.runReleaseSoak === "true" || overrides.rerunGroup === "ci" || overrides.releaseProfile === "stable" ? "false" : "true"}\n`,
       );
+    },
+  );
+
+  it.each([
+    ["beta", "2026.8.1-beta.3", "false"],
+    ["stable", "2026.8.1", "true"],
+  ])(
+    "rejects %s qualification when the cross-OS selection omits Linux coverage",
+    (releaseProfile, version, runReleaseSoak) => {
+      const result = runFullReleaseTargetIdentityValidation({
+        targetRef: "release/2026.8.1",
+        releaseProfile,
+        version,
+        runReleaseSoak,
+        crossOsSuiteFilter: "windows,macos,ubuntu/packaged-fresh",
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("Linux");
+      expect(result.output).not.toContain("coverage_policy=");
     },
   );
 
@@ -7549,6 +7582,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "skill-install",
       "update-corrupt-plugin",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "published-upgrade-survivor",
       "root-managed-vps-upgrade",
       "update-restart-auth",
@@ -7616,7 +7650,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(filterValidator).toContain(
       "Repo live_suite_filter selectors require rerun_group=live-e2e",
     );
-    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(filterValidator).toContain("cross_os_suite_filter requires rerun_group=all or cross-os");
     expect(workflow).toContain("live_suite_filter explicitly requested disabled QA live lane(s)");
     expect(workflow).toContain("OPENCLAW_RELEASE_QA_*_LIVE_CI_ENABLED");
     expect(workflow).not.toContain(
@@ -9798,12 +9832,13 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
 
   it("loads the strict release validator from the isolated trusted tooling bundle", () => {
     const root = tempDirs.make("release-validation-tooling-");
-    mkdirSync(join(root, "lib"));
+    mkdirSync(join(root, "lib", "cross-os-release-checks"), { recursive: true });
     for (const source of [
       "scripts/release-ci-summary.mjs",
       "scripts/full-release-validation-policy.mjs",
       "scripts/full-release-candidate-contract.mjs",
       "scripts/lib/canonical-json.mjs",
+      "scripts/lib/cross-os-release-checks/suite-filter.mjs",
       "scripts/lib/plain-gh.mjs",
       "scripts/lib/release-context.mjs",
       "scripts/lib/release-version.mjs",

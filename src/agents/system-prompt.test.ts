@@ -1325,20 +1325,28 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.schema, config.apply");
   });
 
-  it("delegates system changes when openclaw tool is present", () => {
-    const prompt = buildAgentSystemPrompt({
-      workspaceDir: "/tmp/openclaw",
-      toolNames: ["openclaw", "sessions_spawn"],
-    });
+  it.each(["full", "minimal"] as const)(
+    "delegates system changes without overriding tool-owned approval policy in %s prompts",
+    (promptMode) => {
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/tmp/openclaw",
+        promptMode,
+        toolNames: ["openclaw", "sessions_spawn"],
+      });
 
-    expect(prompt).toContain(
-      "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`.",
-    );
-    expect(prompt).toContain(
-      "Never restart the Gateway through shell commands or write your own config.",
-    );
-    expect(prompt).toContain("`visible:true` for work the user follows or asked for; else hidden.");
-  });
+      expect(prompt).toContain("- openclaw: Gateway restart/system setup/config\n");
+      expect(prompt).not.toContain("changes need human approval");
+      expect(prompt).toContain(
+        "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`.",
+      );
+      expect(prompt).toContain(
+        "Never restart the Gateway through shell commands or write your own config.",
+      );
+      expect(prompt).toContain(
+        "`visible:true` for work the user follows or asked for; else hidden.",
+      );
+    },
+  );
 
   it("omits openclaw delegation guidance without the tool", () => {
     const prompt = buildAgentSystemPrompt({
@@ -1346,6 +1354,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["gateway"],
     });
 
+    expect(prompt).not.toContain("- openclaw:");
     expect(prompt).not.toContain("ask `openclaw`");
     expect(prompt).not.toContain("Gateway restart, config");
   });

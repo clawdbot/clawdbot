@@ -495,13 +495,16 @@ export function createChangedExtensionFallbackShards(
     // Each envelope retains its own child process. Share only the checkout;
     // runtime preparation stays separate from other configs' readers.
     (bin, shard) =>
-      bin.length === 1 &&
-      !bin[0].pretestBuildMode &&
       !shard.pretestBuildMode &&
-      bin[0].configs[0] !== shard.configs[0] &&
-      bin[0].runner === shard.runner &&
-      bin[0].requiresDist === shard.requiresDist &&
-      bin[0].predictedSeconds + shard.predictedSeconds <= CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
+      bin.every(
+        (entry) =>
+          !entry.pretestBuildMode &&
+          entry.configs[0] !== shard.configs[0] &&
+          entry.runner === shard.runner &&
+          entry.requiresDist === shard.requiresDist,
+      ) &&
+      bin.reduce((seconds, entry) => seconds + entry.predictedSeconds, shard.predictedSeconds) <=
+        CHANGED_EXTENSION_FALLBACK_JOB_SECONDS,
   );
   if (bins.length > MAX_CHANGED_EXTENSION_FALLBACK_JOBS) {
     throw new Error(

@@ -660,6 +660,10 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["mentions.list", "mentions", "operator.read", "2026.8", { startup: true }],
   // Dismissal only changes the caller's temporary Inbox, not session or shared state.
   ["mentions.dismiss", "mentions", "operator.read", "2026.8", { startup: true }],
+  // Meeting notes share the trusted operator domain, like workspace/session reads.
+  // Strong user/tenant isolation requires separate Gateways; see operator-scopes.md.
+  ["transcripts.list", "transcripts", "operator.read", "2026.8"],
+  ["transcripts.get", "transcripts", "operator.read", "2026.8"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
 
 export type CoreGatewayHandlerFamily = Exclude<(typeof CORE_GATEWAY_METHOD_SPECS)[number][1], null>;

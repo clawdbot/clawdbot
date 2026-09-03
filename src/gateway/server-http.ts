@@ -152,10 +152,8 @@ export function createGatewayHttpServer(opts: {
   controlUiEnabled: boolean;
   controlUiBasePath: string;
   controlUiRoot?: ControlUiRootState;
-  openAiChatCompletionsEnabled: boolean;
-  openAiChatCompletionsConfig?: import("../config/types.gateway.js").GatewayHttpChatCompletionsConfig;
-  openResponsesEnabled: boolean;
-  openResponsesConfig?: import("../config/types.gateway.js").GatewayHttpResponsesConfig;
+  openAiChatCompletionsEnabled?: boolean;
+  openResponsesEnabled?: boolean;
   strictTransportSecurityHeader?: string;
   handleHooksRequest: HooksRequestHandler;
   handleMcpOAuthCallbackRequest?: McpOAuthCallbackHandler;
@@ -190,10 +188,6 @@ export function createGatewayHttpServer(opts: {
     controlUiEnabled,
     controlUiBasePath,
     controlUiRoot,
-    openAiChatCompletionsEnabled,
-    openAiChatCompletionsConfig,
-    openResponsesEnabled,
-    openResponsesConfig,
     strictTransportSecurityHeader,
     handleHooksRequest,
     handlePluginRequest,
@@ -207,7 +201,6 @@ export function createGatewayHttpServer(opts: {
   } = opts;
   const getResolvedAuth = opts.getResolvedAuth ?? (() => resolvedAuth);
   const loadGatewayConfig = opts.getRuntimeConfig ?? getRuntimeConfig;
-  const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
   const controlUiRouteBasePath =
     controlUiBasePath && controlUiBasePath !== "/" ? controlUiBasePath.replace(/\/$/, "") : "";
   const handleServerRequest = (
@@ -299,6 +292,15 @@ export function createGatewayHttpServer(opts: {
       }
 
       const configSnapshot = loadGatewayConfig();
+      // Pin endpoint admission and input limits to the same request snapshot.
+      // Only explicit server overrides survive config reloads.
+      const openAiChatCompletionsConfig = configSnapshot.gateway?.http?.endpoints?.chatCompletions;
+      const openResponsesConfig = configSnapshot.gateway?.http?.endpoints?.responses;
+      const openAiChatCompletionsEnabled =
+        opts.openAiChatCompletionsEnabled ?? openAiChatCompletionsConfig?.enabled ?? false;
+      const openResponsesEnabled =
+        opts.openResponsesEnabled ?? openResponsesConfig?.enabled ?? false;
+      const openAiCompatEnabled = openAiChatCompletionsEnabled || openResponsesEnabled;
       const trustedProxies = configSnapshot.gateway?.trustedProxies ?? [];
       const allowRealIpFallback = configSnapshot.gateway?.allowRealIpFallback === true;
       const ingressAttribution = prepareGatewayIngressAttribution({

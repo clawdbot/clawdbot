@@ -420,6 +420,7 @@ export class SessionProgressHovercardProvider extends ReactiveElement {
             lastMessagePreview: sidebarRow.lastMessagePreview,
             createdActor: sidebarRow.createdActor,
             participants: sidebarRow.participants,
+            expandedParticipants: sidebarRow.expandedParticipants,
             participantCount: sidebarRow.participantCount,
             workContext: sidebarRow.workContext,
             createdAt: sidebarRow.createdAt,

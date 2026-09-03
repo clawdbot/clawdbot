@@ -136,6 +136,8 @@ describe("listGatewayMethods", () => {
     "users.mentionable",
     "mentions.list",
     "mentions.dismiss",
+    "transcripts.list",
+    "transcripts.get",
   ];
 
   it("advertises plugin surface refresh for capability rotation", () => {

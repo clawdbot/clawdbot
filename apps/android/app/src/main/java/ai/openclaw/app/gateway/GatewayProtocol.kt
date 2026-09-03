@@ -898,6 +898,8 @@ enum class GatewayMethod(
   UsersMentionable("users.mentionable"),
   MentionsList("mentions.list"),
   MentionsDismiss("mentions.dismiss"),
+  TranscriptsList("transcripts.list"),
+  TranscriptsGet("transcripts.get"),
 }
 
 enum class GatewayEvent(
