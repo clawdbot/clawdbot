@@ -107,7 +107,6 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
       }
       if (report.supportIssue) {
         outputRuntime.log(`- support-issue-report=${report.supportIssue.bodyPath ?? "inline"}`);
-        outputRuntime.log(`- support-issue-url=${report.supportIssue.url}`);
       }
       for (const target of report.targets) {
         outputRuntime.log(
@@ -186,23 +185,43 @@ async function maybeCreateSessionSqliteGithubIssue(
     }
     return;
   }
-  const { createSessionSqliteGithubIssue } =
-    await import("./doctor-session-sqlite-github-issue.js");
-  const created = createSessionSqliteGithubIssue(report.supportIssue);
-  if (created.ok) {
+  const { prepareGithubIssue, submitGithubIssue } = await import("../infra/github-issue.js");
+  const created = await submitGithubIssue(
+    prepareGithubIssue({
+      body: report.supportIssue.body,
+      title: report.supportIssue.title,
+    }),
+  );
+  if (created.status === "created") {
     report.supportIssue.github = { status: "created", url: created.url };
     if (shouldLog) {
       runtime.log(`session-sqlite recover: created GitHub issue ${created.url}`);
     }
     return;
   }
-  report.supportIssue.github = {
-    fallbackUrl: created.fallbackUrl,
-    message: created.message,
-    status: "failed",
-  };
+  if (created.status === "outcome-unknown") {
+    const message = "GitHub issue creation outcome is unknown; no duplicate was opened.";
+    report.supportIssue.github = { message, status: "failed" };
+    if (shouldLog) {
+      runtime.log(`session-sqlite recover: ${message}`);
+    }
+    return;
+  }
+  const message =
+    created.reason === "cli-unavailable"
+      ? "GitHub CLI is unavailable."
+      : created.reason === "authentication-unavailable"
+        ? "GitHub authentication is unavailable."
+        : "GitHub issue creation is unavailable.";
+  const { openUrl } = await import("../infra/browser-open.js");
+  const opened = await openUrl(created.url);
+  report.supportIssue.github = { message, status: "failed" };
   if (shouldLog) {
-    runtime.log(`session-sqlite recover: GitHub issue creation unavailable: ${created.message}`);
-    runtime.log(`session-sqlite recover: prefilled issue URL ${created.fallbackUrl}`);
+    runtime.log(`session-sqlite recover: ${message}`);
+    runtime.log(
+      opened
+        ? "session-sqlite recover: opened the sanitized fallback in your browser"
+        : "session-sqlite recover: browser handoff unavailable; rerun this recovery in JSON mode to retrieve the sanitized fallback",
+    );
   }
 }

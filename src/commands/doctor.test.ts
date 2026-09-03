@@ -3,10 +3,12 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createSessionSqliteGithubIssue: vi.fn(),
+  openUrl: vi.fn(),
+  promptYesNo: vi.fn(),
   runPostUpgradeProbes: vi.fn(),
   runDoctorStateSqliteCompact: vi.fn(),
   runDoctorSessionSqlite: vi.fn(),
+  submitGithubIssue: vi.fn(),
   withDoctorSqliteMaintenanceLock: vi.fn(),
   resolveInstalledPluginIndexStorePath: vi.fn(() => "/tmp/openclaw-installed-plugins.json"),
 }));
@@ -30,8 +32,21 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", () => ({
   withDoctorSqliteMaintenanceLock: mocks.withDoctorSqliteMaintenanceLock,
 }));
 
-vi.mock("./doctor-session-sqlite-github-issue.js", () => ({
-  createSessionSqliteGithubIssue: mocks.createSessionSqliteGithubIssue,
+vi.mock("../infra/github-issue.js", () => ({
+  prepareGithubIssue: (input: { body: string; title: string }) => ({
+    ...input,
+    fallbackUrl: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+    marker: `openclaw-report:${"a".repeat(64)}`,
+  }),
+  submitGithubIssue: mocks.submitGithubIssue,
+}));
+
+vi.mock("../infra/browser-open.js", () => ({
+  openUrl: mocks.openUrl,
+}));
+
+vi.mock("../cli/prompt.js", () => ({
+  promptYesNo: mocks.promptYesNo,
 }));
 
 vi.mock("../plugins/installed-plugin-index-store-path.js", () => ({
@@ -312,8 +327,8 @@ describe("doctorCommand", () => {
       },
     };
     mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
-    mocks.createSessionSqliteGithubIssue.mockReturnValueOnce({
-      ok: true,
+    mocks.submitGithubIssue.mockResolvedValueOnce({
+      status: "created",
       url: "https://github.com/openclaw/openclaw/issues/123",
     });
     const runtime = {
@@ -334,11 +349,142 @@ describe("doctorCommand", () => {
       }),
     ).rejects.toThrow("exit:0");
 
-    expect(mocks.createSessionSqliteGithubIssue).toHaveBeenCalledWith(supportIssue);
+    expect(mocks.submitGithubIssue).toHaveBeenCalledWith({
+      body: supportIssue.body,
+      fallbackUrl: supportIssue.url,
+      marker: `openclaw-report:${"a".repeat(64)}`,
+      title: supportIssue.title,
+    });
     expect(runtime.log).toHaveBeenCalledWith(
       "session-sqlite recover: created GitHub issue https://github.com/openclaw/openclaw/issues/123",
     );
     expect(runtime.exit).toHaveBeenCalledWith(0);
+  });
+
+  it("opens a sanitized fallback without logging its body or query URL", async () => {
+    const fallbackUrl =
+      "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
+    const supportIssue = {
+      body: "private-report-text",
+      title: "Session SQLite migration recovery report (run-1)",
+      url: fallbackUrl,
+    };
+    const report = {
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    mocks.submitGithubIssue.mockResolvedValueOnce({
+      reason: "authentication-unavailable",
+      status: "browser-fallback",
+      url: fallbackUrl,
+    });
+    mocks.openUrl.mockResolvedValueOnce(true);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("opened the sanitized fallback in your browser");
+    expect(output).not.toContain("private-report-text");
+    expect(output).not.toContain("issues/new?");
+    expect((supportIssue as { github?: unknown }).github).toEqual({
+      message: "GitHub authentication is unavailable.",
+      status: "failed",
+    });
+  });
+
+  it("keeps a failed browser handoff private and available in JSON output", async () => {
+    const fallbackUrl =
+      "https://github.com/openclaw/openclaw/issues/new?title=run-1&body=private-report-text";
+    const supportIssue = {
+      body: "private-report-text",
+      title: "Session SQLite migration recovery report (run-1)",
+      url: fallbackUrl,
+    };
+    const report = {
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    mocks.submitGithubIssue.mockResolvedValueOnce({
+      reason: "transport-unavailable",
+      status: "browser-fallback",
+      url: fallbackUrl,
+    });
+    mocks.openUrl.mockResolvedValueOnce(false);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+        yes: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.openUrl).toHaveBeenCalledWith(fallbackUrl);
+    const output = runtime.log.mock.calls.flat().join("\n");
+    expect(output).toContain(
+      "browser handoff unavailable; rerun this recovery in JSON mode to retrieve the sanitized fallback",
+    );
+    expect(output).not.toContain("private-report-text");
+    expect(output).not.toContain("issues/new?");
+    expect((supportIssue as { github?: unknown }).github).toEqual({
+      message: "GitHub issue creation is unavailable.",
+      status: "failed",
+    });
   });
 
   it("keeps session sqlite recovery GitHub status inside JSON output", async () => {
@@ -383,9 +529,61 @@ describe("doctorCommand", () => {
       }),
     ).rejects.toThrow("exit:0");
 
-    expect(mocks.createSessionSqliteGithubIssue).not.toHaveBeenCalled();
+    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
     expect((report.supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
     expect(runtime.log).not.toHaveBeenCalled();
     expect(runtime.writeJson).toHaveBeenCalledWith(report, 2);
+  });
+
+  it("does not start issue transport when the operator declines", async () => {
+    const supportIssue = {
+      body: "sanitized body",
+      title: "Session SQLite migration recovery report (run-1)",
+      url: "https://github.com/openclaw/openclaw/issues/new?title=run-1",
+    };
+    const report = {
+      mode: "recover",
+      supportIssue,
+      targets: [],
+      totals: {
+        archivedTranscriptFiles: 0,
+        archivedUnreferencedJsonlFiles: 0,
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+        issues: 0,
+        legacyEntries: 0,
+        sqliteEntries: 0,
+        targets: 0,
+        unreferencedJsonlFiles: 0,
+        validatedEntries: 0,
+        validatedTranscriptEvents: 0,
+      },
+    };
+    mocks.runDoctorSessionSqlite.mockResolvedValueOnce(report);
+    mocks.promptYesNo.mockResolvedValueOnce(false);
+    const runtime = {
+      log: vi.fn(),
+      error: vi.fn(),
+      writeStdout: vi.fn(),
+      writeJson: vi.fn(),
+      exit: vi.fn((code: number) => {
+        throw new Error(`exit:${code}`);
+      }),
+    };
+
+    await expect(
+      doctorCommand(runtime, {
+        sessionSqlite: "recover",
+        sessionSqliteGithubIssue: true,
+      }),
+    ).rejects.toThrow("exit:0");
+
+    expect(mocks.promptYesNo).toHaveBeenCalledWith(
+      "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
+      false,
+    );
+    expect(mocks.submitGithubIssue).not.toHaveBeenCalled();
+    expect(mocks.openUrl).not.toHaveBeenCalled();
+    expect((supportIssue as { github?: unknown }).github).toEqual({ status: "skipped" });
   });
 });

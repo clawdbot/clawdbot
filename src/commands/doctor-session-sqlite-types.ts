@@ -67,7 +67,6 @@ export type SessionSqliteMigrationFailureIssue = {
   body: string;
   bodyPath?: string;
   github?: {
-    fallbackUrl?: string;
     message?: string;
     status: "created" | "failed" | "skipped";
     url?: string;
