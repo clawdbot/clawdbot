@@ -59,6 +59,34 @@ describe("canonical declaration stage", () => {
     },
   );
 
+  it("also strips undeclared __exportAll left in live dist outside staging", async () => {
+    const { staging, dist, invocation } = fixture();
+    fs.writeFileSync(
+      path.join(dist, "leftover-chunk.d.ts"),
+      "export declare const keep: number;\nexport { keep as k, __exportAll as ud };\n",
+    );
+    await publishStagedDeclarations(
+      {
+        env: process.env,
+        maxOldSpaceMb: 8192,
+        heapShortfall: null,
+        invocations: [
+          invocation({
+            "plugin-sdk/core.d.ts": "export declare const ok: true;\n",
+          }),
+        ],
+      },
+      [],
+      staging,
+      dist,
+      ["plugin-sdk/core.d.ts"],
+      ["plugin-sdk/obsolete.d.ts"],
+    );
+    const leftover = fs.readFileSync(path.join(dist, "leftover-chunk.d.ts"), "utf8");
+    expect(leftover).toContain("keep as k");
+    expect(leftover).not.toContain("__exportAll");
+  });
+
   it("rejects absolute reference paths even when a staged relative namesake exists", async () => {
     const { staging, dist, invocation } = fixture();
     await expect(

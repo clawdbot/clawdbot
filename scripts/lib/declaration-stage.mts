@@ -158,4 +158,48 @@ export async function publishStagedDeclarations(
   }
   sealInputs?.();
   publishArtifactFiles(staging, dist, ordered, previous);
+  // Main tsdown also emits hashed root/extension .d.ts into dist/ without
+  // passing through the staging sanitizer above. Sweep the live tree so
+  // undeclared bundler helpers cannot reach the published package.
+  sanitizePublishedDeclarationTree(dist);
+}
+
+function sanitizePublishedDeclarationTree(root: string) {
+  const queue = [root];
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const dir = queue.pop()!;
+    if (seen.has(dir)) {
+      continue;
+    }
+    seen.add(dir);
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      const fullPath = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        queue.push(fullPath);
+        continue;
+      }
+      if (
+        !entry.isFile() ||
+        !(
+          entry.name.endsWith(".d.ts") ||
+          entry.name.endsWith(".d.mts") ||
+          entry.name.endsWith(".d.cts")
+        )
+      ) {
+        continue;
+      }
+      const current = fs.readFileSync(fullPath, "utf8");
+      const sanitized = sanitizeBundlerHelperDtsExports(current).sourceText;
+      if (sanitized !== current) {
+        fs.writeFileSync(fullPath, sanitized);
+      }
+    }
+  }
 }

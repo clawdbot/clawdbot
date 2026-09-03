@@ -143,6 +143,10 @@ export default defineChannelPluginEntry({
 `,
     );
     writeFileSync(join(consumerRoot, "package.json"), '{"private":true,"type":"module"}\n');
+    // Keep skipLibCheck on for this in-tree consumer: workspace @openclaw/ai
+    // declaration caches can omit .d.mts while still shipping .mjs, which makes
+    // skipLibCheck:false fail with TS7016 before the helper scan below. Packed
+    // release-check still uses skipLibCheck:false against a complete tarball.
     writeFileSync(
       join(consumerRoot, "tsconfig.json"),
       `{
