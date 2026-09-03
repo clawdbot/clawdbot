@@ -69,6 +69,8 @@ suite.define(() => {
         await picker.waitFor();
         await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
         await pauseVirtualClock(page);
+        const initialSystemInfoRequestCount = (await gateway.getRequests("system.info")).length;
+        expect(initialSystemInfoRequestCount).toBeGreaterThan(0);
 
         const initialRequest = (await gateway.getRequests("models.list"))[0];
         expect(initialRequest?.params).toEqual({
@@ -123,6 +125,11 @@ suite.define(() => {
         ];
         await gateway.setMethodResponse("models.list", { models: recoveredModels });
         await page.clock.runFor(10_000);
+        await expect
+          .poll(async () => (await gateway.getRequests("system.info")).length)
+          .toBe(initialSystemInfoRequestCount + 1);
+        await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+        const finalSystemInfoRequestCount = (await gateway.getRequests("system.info")).length;
         const finalRequestCount = (await gateway.getRequests("models.list")).length;
         const finalWarningVisible = await section
           .getByText("Explicit model catalog unavailable", { exact: true })
@@ -148,6 +155,7 @@ suite.define(() => {
 
         expect(initialWarningVisible).toBe(true);
         expect(initialOptions).toEqual(["Auto (provider default)", "Disabled"]);
+        expect(finalSystemInfoRequestCount).toBe(initialSystemInfoRequestCount + 1);
         expect(finalRequestCount).toBe(2);
         expect(finalWarningVisible).toBe(false);
         expect(finalOptions).toEqual([
