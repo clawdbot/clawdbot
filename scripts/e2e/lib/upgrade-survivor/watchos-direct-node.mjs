@@ -75,7 +75,7 @@ function loadIdentity(stateFile) {
   return state;
 }
 
-function decodeBootstrapToken(setupFile) {
+function decodeBootstrapSetup(setupFile) {
   const result = readJson(setupFile);
   assert(typeof result.setupCode === "string", "setupCode missing");
   const encoded = result.setupCode.toLowerCase().startsWith("oc-pair://")
@@ -83,7 +83,55 @@ function decodeBootstrapToken(setupFile) {
     : result.setupCode;
   const payload = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
   assert(typeof payload.bootstrapToken === "string", "bootstrapToken missing");
-  return payload.bootstrapToken;
+  assert(payload.token === undefined, "setup payload included a gateway token");
+  assert(payload.password === undefined, "setup payload included a gateway password");
+  if (payload.expiresAtMs !== undefined) {
+    assert(
+      Number.isSafeInteger(payload.expiresAtMs) && payload.expiresAtMs > Date.now(),
+      "setup payload expired",
+    );
+  }
+  const candidates = [payload.url, ...(Array.isArray(payload.urls) ? payload.urls : [])];
+  let secureUrl;
+  for (const candidate of candidates) {
+    if (typeof candidate !== "string") {
+      continue;
+    }
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === "wss:" || parsed.protocol === "https:") {
+        secureUrl = parsed;
+        break;
+      }
+    } catch {
+      // Match the app parser: an invalid candidate does not hide a later secure fallback.
+    }
+  }
+  assert(secureUrl, "setup payload omitted a trusted TLS endpoint");
+  assert(!secureUrl.username && !secureUrl.password, "setup endpoint included userinfo");
+  assert(!secureUrl.search && !secureUrl.hash, "setup endpoint included query or fragment");
+  return {
+    credential: payload.bootstrapToken,
+    endpoint: {
+      host: secureUrl.hostname,
+      port: Number(secureUrl.port || "443"),
+      tls: true,
+    },
+  };
+}
+
+function watchApiBaseUrlFromEndpoint(endpoint) {
+  assert(endpoint && typeof endpoint === "object", "persisted endpoint missing");
+  assert.equal(endpoint.tls, true, "persisted endpoint is not TLS");
+  assert(typeof endpoint.host === "string" && endpoint.host.length > 0, "endpoint host missing");
+  assert(
+    Number.isSafeInteger(endpoint.port) && endpoint.port >= 1 && endpoint.port <= 65535,
+    "endpoint port invalid",
+  );
+  const url = new URL("https://localhost");
+  url.hostname = endpoint.host;
+  url.port = String(endpoint.port);
+  return `${url.origin}/api/nodes/watch`;
 }
 
 async function readResponseJson(response, label) {
@@ -98,15 +146,19 @@ async function readResponseJson(response, label) {
 async function connect(values) {
   const mode = requiredOption(values, "mode");
   assert(mode === "bootstrap" || mode === "device", `unsupported connect mode: ${mode}`);
-  const baseUrl = requiredOption(values, "base-url").replace(/\/+$/u, "");
   const stateFile = requiredOption(values, "state");
   const outputFile = requiredOption(values, "out");
   const label = requiredOption(values, "label");
   const state = loadIdentity(stateFile);
-  const credential =
-    mode === "bootstrap"
-      ? decodeBootstrapToken(requiredOption(values, "credential"))
-      : state.deviceToken;
+  const setup =
+    mode === "bootstrap" ? decodeBootstrapSetup(requiredOption(values, "credential")) : undefined;
+  if (setup) {
+    state.endpoint = setup.endpoint;
+    writeJson(stateFile, state);
+  }
+  const endpointSource = setup ? "setupCode" : "persistedState";
+  const baseUrl = watchApiBaseUrlFromEndpoint(state.endpoint);
+  const credential = setup ? setup.credential : state.deviceToken;
   assert(typeof credential === "string" && credential.length > 0, `${mode} credential missing`);
 
   const challengeResponse = await fetch(`${baseUrl}/challenge`, {
@@ -175,6 +227,16 @@ async function connect(values) {
   assert.equal(response.protocol, WATCH_PROTOCOL, "connect negotiated another protocol");
   state.deviceToken = response.deviceToken;
   writeJson(stateFile, state);
+  const pollResponse = await fetch(`${baseUrl}/poll`, {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      authorization: `Bearer ${response.sessionToken}`,
+    },
+  });
+  const poll = await readResponseJson(pollResponse, "poll");
+  assert.equal(pollResponse.status, 200, `poll failed: ${JSON.stringify(poll)}`);
+  assert.equal(poll.ok, true, "poll response was not ok");
   const artifact = {
     label,
     ok: true,
@@ -182,6 +244,10 @@ async function connect(values) {
     authField: mode === "bootstrap" ? "bootstrapToken" : "deviceToken",
     challengeStatus: challengeResponse.status,
     connectStatus: connectResponse.status,
+    pollStatus: pollResponse.status,
+    pollAuthenticated: true,
+    transport: "https",
+    endpointSource,
     challengeTimestampSource: Number.isSafeInteger(challenge.ts) ? "gateway" : "local-clock",
     protocol: response.protocol,
     protocolRange: [WATCH_PROTOCOL, WATCH_PROTOCOL],
@@ -242,7 +308,6 @@ async function main() {
   const { values } = parseArgs({
     args: process.argv.slice(3),
     options: {
-      "base-url": { type: "string" },
       credential: { type: "string" },
       devices: { type: "string" },
       label: { type: "string" },

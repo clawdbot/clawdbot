@@ -139,6 +139,15 @@ WATCH_CANDIDATE_CONNECT_JSON="$ARTIFACT_ROOT/watchos-candidate-connect.json"
 WATCH_CANDIDATE_STATE_JSON="$ARTIFACT_ROOT/watchos-candidate-state.json"
 WATCH_RESTART_CONNECT_JSON="$ARTIFACT_ROOT/watchos-restart-connect.json"
 WATCH_RESTART_STATE_JSON="$ARTIFACT_ROOT/watchos-restart-state.json"
+WATCH_TLS_ROOT="$WATCH_RUNTIME_ROOT/tls"
+WATCH_TLS_CA_KEY="$WATCH_TLS_ROOT/ca-key.pem"
+WATCH_TLS_CA_CERT="$WATCH_TLS_ROOT/ca-cert.pem"
+WATCH_TLS_SERVER_KEY="$WATCH_TLS_ROOT/server-key.pem"
+WATCH_TLS_SERVER_CSR="$WATCH_TLS_ROOT/server.csr"
+WATCH_TLS_SERVER_CERT="$WATCH_TLS_ROOT/server-cert.pem"
+WATCH_TLS_SERVER_EXT="$WATCH_TLS_ROOT/server.ext"
+WATCH_GATEWAY_WS_URL="wss://localhost:18789"
+WATCH_GATEWAY_HTTP_URL="https://localhost:18789"
 export OPENCLAW_UPGRADE_SURVIVOR_CONFIG_COVERAGE_JSON="$CONFIG_COVERAGE_JSON"
 rm -f "$SUMMARY_JSON" "$CONFIG_COVERAGE_JSON"
 : >"$PHASE_LOG"
@@ -343,7 +352,7 @@ watchos_gateway_call() {
   local params="$2"
   local output="$3"
   openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway call "$method" \
-    --port 18789 \
+    --url "$WATCH_GATEWAY_WS_URL" \
     --token "$GATEWAY_AUTH_TOKEN_REF" \
     --params "$params" \
     --timeout 20000 \
@@ -369,14 +378,19 @@ watchos_connect() {
   local credential="$2"
   local output="$3"
   local label="$4"
-  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
-    node scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs connect \
-    --mode "$mode" \
-    --base-url http://127.0.0.1:18789/api/nodes/watch \
-    --credential "$credential" \
-    --state "$WATCH_STATE_JSON" \
-    --out "$output" \
+  local args=(
+    scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs
+    connect
+    --mode "$mode"
+    --state "$WATCH_STATE_JSON"
+    --out "$output"
     --label "$label"
+  )
+  if [ "$mode" = "bootstrap" ]; then
+    args+=(--credential "$credential")
+  fi
+  openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+    node "${args[@]}"
 }
 
 watchos_pair_baseline() {
@@ -384,7 +398,7 @@ watchos_pair_baseline() {
   chmod 700 "$WATCH_RUNTIME_ROOT"
   start_gateway
   watchos_gateway_call device.pair.setupCode \
-    '{"includeQr":false,"bootstrapProfile":"node","publicUrl":"ws://127.0.0.1:18789"}' \
+    '{"includeQr":false,"bootstrapProfile":"node","publicUrl":"wss://localhost:18789"}' \
     "$WATCH_SETUP_JSON"
   watchos_connect bootstrap "$WATCH_SETUP_JSON" "$WATCH_BASELINE_CONNECT_JSON" baseline
   watchos_assert_gateway_state baseline "$WATCH_BASELINE_STATE_JSON"
@@ -970,6 +984,55 @@ apply_baseline_config_recipe() {
     --baseline-version "$baseline_version"
 }
 
+configure_watchos_tls_fixture() {
+  [ "$SCENARIO" = "watchos-direct-node" ] || return 0
+  command -v openssl >/dev/null || {
+    echo "watchOS direct-node survivor requires openssl" >&2
+    return 1
+  }
+  mkdir -p "$WATCH_TLS_ROOT"
+  chmod 700 "$WATCH_TLS_ROOT"
+  openssl req -x509 -newkey rsa:2048 -nodes -sha256 -days 1 \
+    -subj "/CN=OpenClaw watchOS survivor CA" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -keyout "$WATCH_TLS_CA_KEY" \
+    -out "$WATCH_TLS_CA_CERT" >/dev/null 2>&1
+  openssl req -newkey rsa:2048 -nodes -sha256 \
+    -subj "/CN=localhost" \
+    -keyout "$WATCH_TLS_SERVER_KEY" \
+    -out "$WATCH_TLS_SERVER_CSR" >/dev/null 2>&1
+  printf '%s\n' \
+    "basicConstraints=critical,CA:FALSE" \
+    "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+    "keyUsage=critical,digitalSignature,keyEncipherment" \
+    "extendedKeyUsage=serverAuth" >"$WATCH_TLS_SERVER_EXT"
+  openssl x509 -req \
+    -in "$WATCH_TLS_SERVER_CSR" \
+    -CA "$WATCH_TLS_CA_CERT" \
+    -CAkey "$WATCH_TLS_CA_KEY" \
+    -CAcreateserial \
+    -days 1 \
+    -sha256 \
+    -extfile "$WATCH_TLS_SERVER_EXT" \
+    -out "$WATCH_TLS_SERVER_CERT" >/dev/null 2>&1
+  chmod 600 "$WATCH_TLS_CA_KEY" "$WATCH_TLS_CA_CERT" "$WATCH_TLS_SERVER_KEY" \
+    "$WATCH_TLS_SERVER_CSR" "$WATCH_TLS_SERVER_CERT" "$WATCH_TLS_SERVER_EXT"
+  local tls_config
+  tls_config="$(
+    node -e '
+      process.stdout.write(JSON.stringify({
+        enabled: true,
+        autoGenerate: false,
+        certPath: process.argv[1],
+        keyPath: process.argv[2],
+      }));
+    ' "$WATCH_TLS_SERVER_CERT" "$WATCH_TLS_SERVER_KEY"
+  )"
+  openclaw config set gateway.tls "$tls_config" --strict-json >/dev/null
+  export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"
+}
+
 validate_baseline_config() {
   if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw config validate >"$BASELINE_CONFIG_VALIDATE_LOG" 2>&1; then
     echo "generated baseline config failed baseline validation" >&2
@@ -1300,8 +1363,12 @@ probe_gateway_endpoint() {
   local out_file="$3"
   local start_epoch
   local end_epoch
+  local gateway_http_url="http://127.0.0.1:18789"
+  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+    gateway_http_url="$WATCH_GATEWAY_HTTP_URL"
+  fi
   local args=(
-    --base-url "http://127.0.0.1:18789"
+    --base-url "$gateway_http_url"
     --path "$path"
     --expect "$expect_kind"
   )
@@ -1328,7 +1395,11 @@ start_gateway() {
   start_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
-  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" || return "$?"
+  local readiness_mode="strict"
+  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+    readiness_mode="legacy-ready-log-ok"
+  fi
+  openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
   ready_epoch="$(node -e "process.stdout.write(String(Date.now()))")"
   start_seconds=$(((ready_epoch - start_epoch + 999) / 1000))
   if [ "$start_seconds" -gt "$budget" ]; then
@@ -1352,12 +1423,16 @@ check_gateway_probes() {
 
 check_gateway_status() {
   local port=18789
+  local gateway_ws_url="ws://127.0.0.1:$port"
+  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+    gateway_ws_url="$WATCH_GATEWAY_WS_URL"
+  fi
   local budget
   budget="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_STATUS_BUDGET_SECONDS 30)"
   local status_start
   local status_end
   status_start="$(node -e "process.stdout.write(String(Date.now()))")"
-  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "ws://127.0.0.1:$port" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
+  if ! openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" openclaw gateway status --url "$gateway_ws_url" --token "$GATEWAY_AUTH_TOKEN_REF" --require-rpc --timeout 30000 --json >"$STATUS_JSON" 2>"$STATUS_ERR"; then
     echo "gateway status failed" >&2
     openclaw_e2e_print_log "$STATUS_ERR" >&2
     openclaw_e2e_print_log "$GATEWAY_LOG" >&2
@@ -1414,6 +1489,9 @@ phase reset-run-state reset_run_state
 phase install-baseline install_baseline
 phase initialize-state initialize_state
 phase apply-baseline-config-recipe apply_baseline_config_recipe
+if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  phase configure-watchos-tls configure_watchos_tls_fixture
+fi
 phase validate-baseline-config validate_baseline_config
 phase resolve-candidate resolve_candidate_version
 phase configure-clawhub-fixture configure_clawhub_fixture

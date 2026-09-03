@@ -1,7 +1,7 @@
-import { execFile } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { createServer } from "node:http";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer } from "node:https";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
@@ -10,6 +10,99 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const adapter = resolve("scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs");
+
+function createTlsFixture(root: string) {
+  const tlsRoot = join(root, "tls");
+  const caKey = join(tlsRoot, "ca-key.pem");
+  const caCert = join(tlsRoot, "ca-cert.pem");
+  const serverKey = join(tlsRoot, "server-key.pem");
+  const serverCsr = join(tlsRoot, "server.csr");
+  const serverCert = join(tlsRoot, "server-cert.pem");
+  const serverExt = join(tlsRoot, "server.ext");
+  mkdirSync(tlsRoot);
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-days",
+      "1",
+      "-subj",
+      "/CN=OpenClaw watchOS survivor test CA",
+      "-addext",
+      "basicConstraints=critical,CA:TRUE",
+      "-addext",
+      "keyUsage=critical,keyCertSign,cRLSign",
+      "-keyout",
+      caKey,
+      "-out",
+      caCert,
+    ],
+    { stdio: "ignore" },
+  );
+  execFileSync(
+    "openssl",
+    [
+      "req",
+      "-newkey",
+      "rsa:2048",
+      "-nodes",
+      "-sha256",
+      "-subj",
+      "/CN=localhost",
+      "-keyout",
+      serverKey,
+      "-out",
+      serverCsr,
+    ],
+    { stdio: "ignore" },
+  );
+  writeFileSync(
+    serverExt,
+    [
+      "basicConstraints=critical,CA:FALSE",
+      "subjectAltName=DNS:localhost,IP:127.0.0.1",
+      "keyUsage=critical,digitalSignature,keyEncipherment",
+      "extendedKeyUsage=serverAuth",
+      "",
+    ].join("\n"),
+  );
+  execFileSync(
+    "openssl",
+    [
+      "x509",
+      "-req",
+      "-in",
+      serverCsr,
+      "-CA",
+      caCert,
+      "-CAkey",
+      caKey,
+      "-CAcreateserial",
+      "-days",
+      "1",
+      "-sha256",
+      "-extfile",
+      serverExt,
+      "-out",
+      serverCert,
+    ],
+    { stdio: "ignore" },
+  );
+  return {
+    caCert,
+    cert: readFileSync(serverCert),
+    key: readFileSync(serverKey),
+  };
+}
+
+function adapterEnv(caCert: string) {
+  return { ...process.env, NODE_EXTRA_CA_CERTS: caCert };
+}
 
 function signaturePayload(body: Record<string, any>, token: string): string {
   return [
@@ -36,11 +129,13 @@ describe.skipIf(process.platform === "win32")(
       const setup = join(root, "setup.json");
       const bootstrapArtifact = join(root, "bootstrap.json");
       const reconnectArtifact = join(root, "reconnect.json");
+      const tls = createTlsFixture(root);
       const bootstrapToken = "bootstrap-secret";
       const deviceToken = "retained-device-secret";
       const requests: Array<Record<string, any>> = [];
+      const pollTokens: string[] = [];
       let challengeCount = 0;
-      const server = createServer((request, response) => {
+      const server = createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
         if (request.url?.endsWith("/challenge")) {
           challengeCount += 1;
           response.setHeader("content-type", "application/json");
@@ -71,6 +166,12 @@ describe.skipIf(process.platform === "win32")(
           });
           return;
         }
+        if (request.url?.endsWith("/poll")) {
+          pollTokens.push(request.headers.authorization ?? "");
+          response.setHeader("content-type", "application/json");
+          response.end(JSON.stringify({ ok: true, event: null }));
+          return;
+        }
         response.statusCode = 404;
         response.end();
       });
@@ -81,47 +182,54 @@ describe.skipIf(process.platform === "win32")(
       if (!address || typeof address === "string") {
         throw new Error("failed to bind watch fixture");
       }
-      const baseUrl = `http://127.0.0.1:${address.port}/api/nodes/watch`;
       writeFileSync(
         setup,
         JSON.stringify({
-          setupCode: `oc-pair://${Buffer.from(JSON.stringify({ bootstrapToken })).toString("base64url")}`,
+          setupCode: `oc-pair://${Buffer.from(
+            JSON.stringify({
+              url: `wss://localhost:${address.port}`,
+              bootstrapToken,
+              expiresAtMs: Date.now() + 60_000,
+            }),
+          ).toString("base64url")}`,
         }),
       );
 
       try {
-        await execFileAsync(process.execPath, [
-          adapter,
-          "connect",
-          "--mode",
-          "bootstrap",
-          "--base-url",
-          baseUrl,
-          "--credential",
-          setup,
-          "--state",
-          state,
-          "--out",
-          bootstrapArtifact,
-          "--label",
-          "baseline",
-        ]);
-        await execFileAsync(process.execPath, [
-          adapter,
-          "connect",
-          "--mode",
-          "device",
-          "--base-url",
-          baseUrl,
-          "--credential",
-          state,
-          "--state",
-          state,
-          "--out",
-          reconnectArtifact,
-          "--label",
-          "candidate",
-        ]);
+        await execFileAsync(
+          process.execPath,
+          [
+            adapter,
+            "connect",
+            "--mode",
+            "bootstrap",
+            "--credential",
+            setup,
+            "--state",
+            state,
+            "--out",
+            bootstrapArtifact,
+            "--label",
+            "baseline",
+          ],
+          { env: adapterEnv(tls.caCert) },
+        );
+        await execFileAsync(
+          process.execPath,
+          [
+            adapter,
+            "connect",
+            "--mode",
+            "device",
+            "--state",
+            state,
+            "--out",
+            reconnectArtifact,
+            "--label",
+            "candidate",
+          ],
+          { env: adapterEnv(tls.caCert) },
+        );
       } finally {
         await new Promise<void>((resolveClose) => {
           server.close(() => resolveClose());
@@ -129,6 +237,7 @@ describe.skipIf(process.platform === "win32")(
       }
 
       expect(requests).toHaveLength(2);
+      expect(pollTokens).toEqual(["Bearer session-1", "Bearer session-2"]);
       const [bootstrap, reconnect] = requests;
       if (!bootstrap || !reconnect) {
         throw new Error("watch fixture omitted bootstrap or reconnect request");
@@ -181,20 +290,30 @@ describe.skipIf(process.platform === "win32")(
         deviceId: bootstrap.device.id,
         instanceId: "watchos-upgrade-survivor",
         deviceToken,
+        endpoint: {
+          host: "localhost",
+          port: address.port,
+          tls: true,
+        },
       });
-      for (const artifactPath of [bootstrapArtifact, reconnectArtifact]) {
+      for (const [index, artifactPath] of [bootstrapArtifact, reconnectArtifact].entries()) {
         const raw = readFileSync(artifactPath, "utf8");
         expect(raw).not.toContain(bootstrapToken);
         expect(raw).not.toContain(deviceToken);
+        expect(raw).not.toContain(`session-${index + 1}`);
         expect(JSON.parse(raw)).toMatchObject({
           ok: true,
           challengeStatus: 200,
           connectStatus: 200,
+          pollStatus: 200,
+          pollAuthenticated: true,
+          transport: "https",
           protocol: 4,
           protocolRange: [4, 4],
           clientId: "openclaw-watchos",
           clientMode: "node",
           instanceId: "watchos-upgrade-survivor",
+          endpointSource: index === 0 ? "setupCode" : "persistedState",
         });
       }
     });
@@ -269,20 +388,12 @@ describe.skipIf(process.platform === "win32")(
       const retainedToken = "retained-device-secret";
       const rotatedToken = "rotated-device-secret";
       const authenticatedTokens: string[] = [];
+      const pollTokens: string[] = [];
+      const tls = createTlsFixture(root);
       const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
       const publicDer = publicKey.export({ format: "der", type: "spki" });
       const rawPublicKey = Buffer.from(publicDer).subarray(-32);
-      writeFileSync(
-        state,
-        JSON.stringify({
-          deviceId: crypto.createHash("sha256").update(rawPublicKey).digest("hex"),
-          publicKey: rawPublicKey.toString("base64url"),
-          privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }).toString(),
-          instanceId: "watchos-upgrade-survivor",
-          deviceToken: retainedToken,
-        }),
-      );
-      const server = createServer((request, response) => {
+      const server = createServer({ cert: tls.cert, key: tls.key }, (request, response) => {
         response.setHeader("content-type", "application/json");
         if (request.url?.endsWith("/challenge")) {
           response.end(JSON.stringify({ ok: true, nonce: "rotation-nonce", ts: Date.now() }));
@@ -309,6 +420,11 @@ describe.skipIf(process.platform === "win32")(
           });
           return;
         }
+        if (request.url?.endsWith("/poll")) {
+          pollTokens.push(request.headers.authorization ?? "");
+          response.end(JSON.stringify({ ok: true, event: null }));
+          return;
+        }
         response.statusCode = 404;
         response.end();
       });
@@ -319,40 +435,51 @@ describe.skipIf(process.platform === "win32")(
       if (!address || typeof address === "string") {
         throw new Error("failed to bind watch fixture");
       }
+      writeFileSync(
+        state,
+        JSON.stringify({
+          deviceId: crypto.createHash("sha256").update(rawPublicKey).digest("hex"),
+          publicKey: rawPublicKey.toString("base64url"),
+          privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+          instanceId: "watchos-upgrade-survivor",
+          deviceToken: retainedToken,
+          endpoint: { host: "localhost", port: address.port, tls: true },
+        }),
+      );
 
       try {
-        await execFileAsync(process.execPath, [
-          adapter,
-          "connect",
-          "--mode",
-          "device",
-          "--base-url",
-          `http://127.0.0.1:${address.port}/api/nodes/watch`,
-          "--credential",
-          state,
-          "--state",
-          state,
-          "--out",
-          firstArtifact,
-          "--label",
-          "candidate",
-        ]);
-        await execFileAsync(process.execPath, [
-          adapter,
-          "connect",
-          "--mode",
-          "device",
-          "--base-url",
-          `http://127.0.0.1:${address.port}/api/nodes/watch`,
-          "--credential",
-          state,
-          "--state",
-          state,
-          "--out",
-          secondArtifact,
-          "--label",
-          "restart",
-        ]);
+        await execFileAsync(
+          process.execPath,
+          [
+            adapter,
+            "connect",
+            "--mode",
+            "device",
+            "--state",
+            state,
+            "--out",
+            firstArtifact,
+            "--label",
+            "candidate",
+          ],
+          { env: adapterEnv(tls.caCert) },
+        );
+        await execFileAsync(
+          process.execPath,
+          [
+            adapter,
+            "connect",
+            "--mode",
+            "device",
+            "--state",
+            state,
+            "--out",
+            secondArtifact,
+            "--label",
+            "restart",
+          ],
+          { env: adapterEnv(tls.caCert) },
+        );
       } finally {
         await new Promise<void>((resolveClose) => {
           server.close(() => resolveClose());
@@ -360,13 +487,21 @@ describe.skipIf(process.platform === "win32")(
       }
 
       expect(authenticatedTokens).toEqual([retainedToken, rotatedToken]);
+      expect(pollTokens).toEqual(["Bearer rotation-session-1", "Bearer rotation-session-2"]);
       expect(JSON.parse(readFileSync(state, "utf8"))).toMatchObject({
         deviceToken: rotatedToken,
       });
-      for (const artifactPath of [firstArtifact, secondArtifact]) {
+      for (const [index, artifactPath] of [firstArtifact, secondArtifact].entries()) {
         const raw = readFileSync(artifactPath, "utf8");
         expect(raw).not.toContain(retainedToken);
         expect(raw).not.toContain(rotatedToken);
+        expect(raw).not.toContain(`rotation-session-${index + 1}`);
+        expect(JSON.parse(raw)).toMatchObject({
+          pollStatus: 200,
+          pollAuthenticated: true,
+          transport: "https",
+          endpointSource: "persistedState",
+        });
       }
     });
   },

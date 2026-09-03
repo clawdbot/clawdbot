@@ -5614,6 +5614,12 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
     expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
+    expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
+    expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
+    expect(publishedUpgradeSurvivor).not.toContain(
+      "--base-url http://127.0.0.1:18789/api/nodes/watch",
+    );
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );
