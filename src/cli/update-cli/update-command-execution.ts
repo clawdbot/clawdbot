@@ -1,6 +1,9 @@
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import type { UpdateGenerationConfinedFilesystem } from "../../infra/update-generation-confined-filesystem.js";
+import type { UpdateGenerationLedgerHook } from "../../infra/update-generation-ledger-hook.js";
+import type { UpdateGenerationRuntime } from "../../infra/update-generation-runtime.js";
 import {
   verifyPackageUpdateRecovery,
   type ResolvedGlobalInstallTarget,
@@ -32,7 +35,10 @@ import {
   captureOwnedManagedUpdateContext,
   type OwnedManagedUpdateContext,
 } from "./update-command-managed-context.js";
-import { runPackageInstallUpdate } from "./update-command-package.js";
+import {
+  runPackageInstallUpdate,
+  type PackageInstallUpdateParams,
+} from "./update-command-package.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 import {
   maybeRestartServiceAfterFailedMutableUpdate,
@@ -54,6 +60,51 @@ type MutableUpdateExecutionResult = {
   recoveryEnv: NodeJS.ProcessEnv | undefined;
 };
 
+/**
+ * Generation-aware package mutation owner supplied by the protected broker stack.
+ * The current package updater remains the compatibility owner until that stack is installed.
+ */
+export abstract class UpdateGenerationPackageUpdateExecutor {
+  readonly #opaqueGenerationPackageUpdateExecutor = true;
+
+  protected constructor(
+    readonly filesystem: UpdateGenerationConfinedFilesystem | null,
+    readonly ledger: UpdateGenerationLedgerHook | null,
+  ) {
+    void this.#opaqueGenerationPackageUpdateExecutor;
+  }
+
+  abstract execute(params: {
+    update: PackageInstallUpdateParams;
+    filesystem: UpdateGenerationConfinedFilesystem;
+    ledger: UpdateGenerationLedgerHook;
+    runtime: UpdateGenerationRuntime;
+  }): Promise<UpdateRunResult>;
+}
+
+async function resolvePackageUpdateExecutor(
+  executor: UpdateGenerationPackageUpdateExecutor | undefined,
+): Promise<(params: PackageInstallUpdateParams) => Promise<UpdateRunResult>> {
+  if (!executor) {
+    return runPackageInstallUpdate;
+  }
+  const { UPDATE_GENERATION_RUNTIME: runtime } =
+    await import("../../infra/update-generation-runtime.js");
+  if (
+    !(executor instanceof UpdateGenerationPackageUpdateExecutor) ||
+    !(executor.filesystem instanceof runtime.ConfinedFilesystem) ||
+    !executor.ledger
+  ) {
+    throw new UpdatePreMutationError(
+      "generation-activation-preflight",
+      "Generation-addressed package updates require a confined filesystem provider and authoritative ledger.",
+    );
+  }
+  const filesystem = executor.filesystem;
+  const ledger = executor.ledger;
+  return async (update) => await executor.execute({ update, filesystem, ledger, runtime });
+}
+
 export async function executeMutableUpdate(params: {
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -72,6 +123,7 @@ export async function executeMutableUpdate(params: {
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageInstallTarget?: ResolvedGlobalInstallTarget;
+  generationPackageUpdateExecutor?: UpdateGenerationPackageUpdateExecutor;
   packageTargetSchemaVersions?: OpenClawSchemaVersions;
   packageUpdateNodeRunner?: string;
   managedServiceNodeRunner?: string;
@@ -216,6 +268,10 @@ export async function executeMutableUpdate(params: {
   let result: UpdateRunResult;
   let failure: MutableUpdateExecutionResult["failure"];
   try {
+    const packageUpdateExecutor =
+      params.updateInstallKind === "package"
+        ? await resolvePackageUpdateExecutor(params.generationPackageUpdateExecutor)
+        : runPackageInstallUpdate;
     if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
       await stopManagedServiceBeforeMutableUpdate(
         gitMutationRoots ?? undefined,
@@ -238,7 +294,7 @@ export async function executeMutableUpdate(params: {
     preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     result =
       params.updateInstallKind === "package"
-        ? await runPackageInstallUpdate({
+        ? await packageUpdateExecutor({
             root: params.root,
             installKind: params.installKind,
             tag: params.tag,

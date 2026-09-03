@@ -293,6 +293,7 @@ describe("confined update-generation filesystem contract", () => {
       "update-generation-evidence.ts",
       "update-generation-ledger-hook.ts",
       "update-generation-recovery.ts",
+      "update-generation-runtime.ts",
     ]);
     const providerSource = await fs.readFile(
       path.join(import.meta.dirname, "update-generation-confined-filesystem.ts"),
