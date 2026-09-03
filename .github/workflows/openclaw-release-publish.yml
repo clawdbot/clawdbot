@@ -329,7 +329,13 @@ jobs:
         run: |
           set -euo pipefail
           release_version="${RELEASE_TAG#v}"
-          android_pin_version="$(jq -er '.version | strings | select(length > 0)' apps/android/version.json)"
+          # The pin comes from the release checkout and is echoed into GITHUB_OUTPUT;
+          # only an exact YYYY.M.PATCH string may pass so it cannot inject output records.
+          android_pin_version="$(jq -r '.version // empty' apps/android/version.json)"
+          if [[ ! "${android_pin_version}" =~ ^[0-9]{4}\.([1-9]|1[0-2])\.[0-9]{1,3}$ ]]; then
+            echo "apps/android/version.json must pin an exact YYYY.M.PATCH Android version, got: ${android_pin_version@Q}" >&2
+            exit 1
+          fi
           android_pin_matches=false
           android_release_note=""
           if [[ "${android_pin_version}" == "${release_version%%-*}" ]]; then

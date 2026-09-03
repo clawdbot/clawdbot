@@ -3544,6 +3544,36 @@ wait_for_run openclaw-npm-release.yml 404 "$EXPECTED_SHA" "$STARTED_JOB" "$APPRO
     expect(readFileSync(calls, "utf8").split("\n").filter(Boolean)).toHaveLength(approvals);
   });
 
+  it.each(["2026.9.1\nsha=" + "b".repeat(40), "", "v2026.9.1", "2026.13.1", "2026.9"])(
+    "rejects an Android pin that is not an exact version before writing outputs (%j)",
+    (pin) => {
+      const target = workflowJob(RELEASE_PUBLISH_WORKFLOW, "resolve_release_target");
+      const ref = workflowStep(target, "Resolve checked-out release ref");
+      const root = tempDirs.make("release-android-pin-reject-");
+      mkdirSync(join(root, "apps/android"), { recursive: true });
+      writeFileSync(join(root, "apps/android/version.json"), JSON.stringify({ version: pin }));
+      writeFileSync(join(root, "git"), `#!/bin/sh\nprintf '%s\\n' '${"a".repeat(40)}'\n`, {
+        mode: 0o755,
+      });
+      const result = spawnSync("bash", ["-c", ref.run ?? ""], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          PATH: `${root}:${process.env.PATH}`,
+          RELEASE_TAG: "v2026.9.1",
+          PUBLISH_OPENCLAW_NPM: "true",
+          PUBLISH_DOCKER_ONLY: "false",
+          GITHUB_OUTPUT: join(root, "output"),
+          GITHUB_STEP_SUMMARY: join(root, "summary"),
+        },
+      });
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("exact YYYY.M.PATCH Android version");
+      // A rejected pin must not reach GITHUB_OUTPUT at all, so it can never add output records.
+      expect(existsSync(join(root, "output"))).toBe(false);
+    },
+  );
+
   it.each([
     { tag: "v2026.9.1", pin: "2026.7.4", native: false },
     { tag: "v2026.9.1", pin: "2026.9.1", native: true },
