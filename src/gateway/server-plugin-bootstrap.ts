@@ -80,10 +80,7 @@ function logGatewayPluginDiagnostics(params: {
     if (diag.level === "error") {
       params.log.error(message);
     } else {
-      // `PluginDiagnostic.level` is only "warn" | "error", so this branch is
-      // every warn diagnostic the registry records. Routing it through `info`
-      // collapsed the whole severity level into routine startup chatter and
-      // made a degraded plugin surface invisible to a level-filtered read.
+      // `PluginDiagnostic.level` is only "warn" | "error": this branch is every warn diagnostic.
       params.log.warn(message);
     }
   }
