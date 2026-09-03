@@ -45,15 +45,18 @@ export function resolveSubagentAnnounceTimeoutMs(cfg: OpenClawConfig): number {
   return clampTimerTimeoutMs(configured) ?? DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS;
 }
 
+export function resolveSubagentAnnounceWholeCallTimeoutMs(cfg: OpenClawConfig): number | undefined {
+  return clampTimerTimeoutMs(cfg.agents?.defaults?.subagents?.announceTimeoutMs);
+}
+
 function resolveAnnouncePhaseTimeoutMs(
   cfg: OpenClawConfig,
   phaseKey: "announceAdmissionTimeoutMs" | "announceRunTimeoutMs",
   fallbackMs: number,
 ): number {
   const subagents = cfg.agents?.defaults?.subagents;
-  // An operator who pinned the single legacy budget keeps it for both phases
-  // until they set the phase-specific key, so existing configs do not change
-  // behavior when the split lands.
+  // The legacy timeout continues to provide a phase fallback, while the split
+  // deadline owner also retains it as the outer whole-call cap.
   return (
     clampTimerTimeoutMs(subagents?.[phaseKey]) ??
     clampTimerTimeoutMs(subagents?.announceTimeoutMs) ??

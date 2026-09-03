@@ -18,7 +18,7 @@ import { addSafeTimeoutDelayGraceMs, setSafeTimeout } from "../../../utils/timer
 const ANNOUNCE_DISPATCH_RELEASE_GRACE_MS = 30_000;
 
 /** The announce turn never started: its requester session lane stayed busy. */
-export class AnnounceNotAdmittedError extends Error {
+class AnnounceNotAdmittedError extends Error {
   constructor(runId: string, admissionTimeoutMs: number) {
     super(
       `announce not admitted (lane busy) run=${runId} admissionTimeoutMs=${admissionTimeoutMs}`,
@@ -28,10 +28,18 @@ export class AnnounceNotAdmittedError extends Error {
 }
 
 /** The announce turn started and then outran its own budget. */
-export class AnnounceRunBudgetExceededError extends Error {
+class AnnounceRunBudgetExceededError extends Error {
   constructor(runId: string, runTimeoutMs: number) {
     super(`announce run exceeded budget run=${runId} runTimeoutMs=${runTimeoutMs}`);
     this.name = "AnnounceRunBudgetExceededError";
+  }
+}
+
+/** An explicitly configured legacy whole-call timeout elapsed. */
+class AnnounceWholeCallTimeoutError extends Error {
+  constructor(runId: string, timeoutMs: number) {
+    super(`announce whole-call timeout run=${runId} timeoutMs=${timeoutMs}`);
+    this.name = "AnnounceWholeCallTimeoutError";
   }
 }
 
@@ -48,6 +56,7 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
   runId: string;
   admissionTimeoutMs: number;
   runTimeoutMs: number;
+  wholeCallTimeoutMs?: number;
   signal?: AbortSignal;
   run: (
     dispatchTimeoutMs: number,
@@ -58,6 +67,7 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
   let admitted = false;
   let admissionTimer: NodeJS.Timeout | undefined;
   let runTimer: NodeJS.Timeout | undefined;
+  let wholeCallTimer: NodeJS.Timeout | undefined;
   const controller = new AbortController();
   const dispatchSignal = params.signal
     ? AbortSignal.any([params.signal, controller.signal])
@@ -69,7 +79,17 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
     if (runTimer) {
       clearTimeout(runTimer);
     }
+    if (wholeCallTimer) {
+      clearTimeout(wholeCallTimer);
+    }
   };
+  if (params.wholeCallTimeoutMs !== undefined) {
+    const wholeCallTimeoutMs = params.wholeCallTimeoutMs;
+    wholeCallTimer = setSafeTimeout(() => {
+      controller.abort(new AnnounceWholeCallTimeoutError(params.runId, wholeCallTimeoutMs));
+    }, wholeCallTimeoutMs);
+    wholeCallTimer.unref?.();
+  }
   admissionTimer = setSafeTimeout(() => {
     // A start event landing in the same tick as the timer still counts.
     if (admitted) {
@@ -93,8 +113,16 @@ export async function runWithAnnounceSplitDeadlines<T>(params: {
     runTimer.unref?.();
   };
   try {
+    const splitTimeoutMs = addSafeTimeoutDelayGraceMs(
+      params.admissionTimeoutMs,
+      params.runTimeoutMs,
+    );
+    const effectiveTimeoutMs =
+      params.wholeCallTimeoutMs === undefined
+        ? splitTimeoutMs
+        : Math.min(splitTimeoutMs, params.wholeCallTimeoutMs);
     const dispatchTimeoutMs = addSafeTimeoutDelayGraceMs(
-      addSafeTimeoutDelayGraceMs(params.admissionTimeoutMs, params.runTimeoutMs),
+      effectiveTimeoutMs,
       ANNOUNCE_DISPATCH_RELEASE_GRACE_MS,
     );
     // The deadline aborts the dispatch rather than merely abandoning its

@@ -51,6 +51,7 @@ import {
   resolveSubagentAnnounceAdmissionTimeoutMs,
   resolveSubagentAnnounceRunTimeoutMs,
   resolveSubagentAnnounceTimeoutMs,
+  resolveSubagentAnnounceWholeCallTimeoutMs,
   runAnnounceDeliveryWithRetry,
   SourceOwnerChangedError,
   sourceOwnerChangedResult,
@@ -131,6 +132,7 @@ export async function sendSubagentAnnounceDirectly(params: {
   const announceTimeoutMs = resolveSubagentAnnounceTimeoutMs(cfg);
   const announceAdmissionTimeoutMs = resolveSubagentAnnounceAdmissionTimeoutMs(cfg);
   const announceRunTimeoutMs = resolveSubagentAnnounceRunTimeoutMs(cfg);
+  const announceWholeCallTimeoutMs = resolveSubagentAnnounceWholeCallTimeoutMs(cfg);
   const canonicalRequesterSessionKey = resolveRequesterStoreKey(
     cfg,
     params.targetRequesterSessionKey,
@@ -410,6 +412,7 @@ export async function sendSubagentAnnounceDirectly(params: {
             runId: params.directIdempotencyKey,
             admissionTimeoutMs: announceAdmissionTimeoutMs,
             runTimeoutMs: announceRunTimeoutMs,
+            wholeCallTimeoutMs: announceWholeCallTimeoutMs,
             signal: params.signal,
             run: async (dispatchTimeoutMs, signal, onWorkLaneAdmitted) =>
               await runAnnounceAgentCall({

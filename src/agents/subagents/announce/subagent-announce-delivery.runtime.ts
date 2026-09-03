@@ -266,28 +266,6 @@ export async function dispatchSubagentAnnounceAgent(
   );
 }
 
-export async function abortSubagentAnnounceAgent(params: {
-  runId: string;
-  sessionKey: string;
-  resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
-}): Promise<boolean> {
-  const response = await subagentAnnounceDeliveryDeps.dispatchGatewayMethodInProcess<{
-    aborted?: boolean;
-    runIds?: unknown[];
-  }>(
-    "chat.abort",
-    { runId: params.runId, sessionKey: params.sessionKey },
-    {
-      operatorRoleActor: { kind: "system" },
-      resolveGatewayContext: params.resolveGatewayContext,
-    },
-  );
-  return (
-    response.aborted === true &&
-    (response.runIds === undefined || response.runIds.includes(params.runId))
-  );
-}
-
 export async function sendSubagentAnnounceMessage(
   params: Parameters<typeof sendMessage>[0],
 ): ReturnType<typeof sendMessage> {

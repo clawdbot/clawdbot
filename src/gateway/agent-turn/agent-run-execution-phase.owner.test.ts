@@ -149,9 +149,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const admission = new Promise<void>((resolve) => {
       releaseAdmission = resolve;
     });
-    execution.params.prepared.activeGatewayWorkAdmission.run = async (run: () => Promise<void>) => {
+    execution.params.prepared.activeGatewayWorkAdmission.run = async <T>(
+      run: () => Promise<T>,
+    ): Promise<T> => {
       await admission;
-      await run();
+      return await run();
     };
     const executionStarted = vi.fn();
     const workLaneAdmitted = vi.fn(() => {

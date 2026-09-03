@@ -8,12 +8,9 @@ import {
   resolveSubagentAnnounceAdmissionTimeoutMs,
   resolveSubagentAnnounceRunTimeoutMs,
   resolveSubagentAnnounceTimeoutMs,
+  resolveSubagentAnnounceWholeCallTimeoutMs,
 } from "./subagent-announce-delivery-retry.js";
-import {
-  AnnounceNotAdmittedError,
-  AnnounceRunBudgetExceededError,
-  runWithAnnounceSplitDeadlines,
-} from "./subagent-announce-split-deadline.js";
+import { runWithAnnounceSplitDeadlines } from "./subagent-announce-split-deadline.js";
 
 const ANNOUNCE_RUN_ID = "announce:v1:agent:tank:subagent:child-session:child-run";
 
@@ -23,7 +20,12 @@ function configWithSubagents(subagents: Record<string, number>): OpenClawConfig 
 
 function rejectsWhenAborted(_timeoutMs: number, signal: AbortSignal): Promise<never> {
   return new Promise<never>((_resolve, reject) => {
-    const onAbort = () => reject(signal.reason);
+    const onAbort = () =>
+      reject(
+        signal.reason instanceof Error
+          ? signal.reason
+          : new Error(String(signal.reason ?? "announce aborted")),
+      );
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) {
       onAbort();
@@ -61,6 +63,35 @@ describe("announce phase timeout resolution", () => {
 
     expect(resolveSubagentAnnounceAdmissionTimeoutMs(cfg)).toBe(45_000);
     expect(resolveSubagentAnnounceRunTimeoutMs(cfg)).toBe(45_000);
+    expect(resolveSubagentAnnounceWholeCallTimeoutMs(cfg)).toBe(45_000);
+  });
+
+  it("does not impose the legacy whole-call cap when it is unset", () => {
+    expect(resolveSubagentAnnounceWholeCallTimeoutMs({} as OpenClawConfig)).toBeUndefined();
+  });
+
+  it("preserves a pinned legacy announceTimeoutMs as the whole-call cap", async () => {
+    vi.useFakeTimers();
+    try {
+      const abortable = createAbortableRun();
+      const result = runWithAnnounceSplitDeadlines({
+        runId: ANNOUNCE_RUN_ID,
+        admissionTimeoutMs: 45,
+        runTimeoutMs: 45,
+        wholeCallTimeoutMs: 45,
+        run: abortable.run,
+      }).catch((error: unknown) => error);
+
+      await vi.advanceTimersByTimeAsync(30);
+      abortable.admit();
+      await vi.advanceTimersByTimeAsync(14);
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(result).resolves.toMatchObject({ name: "AnnounceWholeCallTimeoutError" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("lets each phase-specific key override the legacy budget independently", () => {
@@ -104,6 +135,23 @@ describe("runWithAnnounceSplitDeadlines", () => {
     expect(dispatchTimeoutMs).toBeGreaterThan(930_000);
   });
 
+  it("bounds the dispatch release backstop from the legacy whole-call cap", async () => {
+    let dispatchTimeoutMs: number | undefined;
+
+    await runWithAnnounceSplitDeadlines({
+      runId: ANNOUNCE_RUN_ID,
+      admissionTimeoutMs: 45_000,
+      runTimeoutMs: 45_000,
+      wholeCallTimeoutMs: 45_000,
+      run: async (timeoutMs) => {
+        dispatchTimeoutMs = timeoutMs;
+        return "delivered";
+      },
+    });
+
+    expect(dispatchTimeoutMs).toBe(75_000);
+  });
+
   it("starts the full run budget only after admission", async () => {
     vi.useFakeTimers();
     try {
@@ -121,7 +169,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       expect(vi.getTimerCount()).toBeGreaterThan(0);
 
       await vi.advanceTimersByTimeAsync(1);
-      await expect(result).resolves.toBeInstanceOf(AnnounceRunBudgetExceededError);
+      await expect(result).resolves.toMatchObject({ name: "AnnounceRunBudgetExceededError" });
     } finally {
       vi.useRealTimers();
     }
@@ -135,7 +183,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       run: rejectsWhenAborted,
     });
 
-    await expect(call).rejects.toBeInstanceOf(AnnounceNotAdmittedError);
+    await expect(call).rejects.toMatchObject({ name: "AnnounceNotAdmittedError" });
     await expect(call).rejects.toThrow(/announce not admitted \(lane busy\)/);
   });
 
@@ -149,7 +197,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
     });
     abortable.admit();
 
-    await expect(call).rejects.toBeInstanceOf(AnnounceRunBudgetExceededError);
+    await expect(call).rejects.toMatchObject({ name: "AnnounceRunBudgetExceededError" });
     await expect(call).rejects.toThrow(/announce run exceeded budget/);
   });
 
@@ -177,7 +225,7 @@ describe("runWithAnnounceSplitDeadlines", () => {
       run: rejectsWhenAborted,
     });
 
-    await expect(call).rejects.toBeInstanceOf(AnnounceNotAdmittedError);
+    await expect(call).rejects.toMatchObject({ name: "AnnounceNotAdmittedError" });
   });
 
   it("reports the two announce failures as distinct outcomes", async () => {
@@ -205,8 +253,20 @@ describe("runWithAnnounceSplitDeadlines", () => {
   });
 
   it.each([
-    ["not admitted", () => new AnnounceNotAdmittedError(ANNOUNCE_RUN_ID, 20)],
-    ["run budget exceeded", () => new AnnounceRunBudgetExceededError(ANNOUNCE_RUN_ID, 80)],
+    [
+      "not admitted",
+      () =>
+        Object.assign(new Error("announce not admitted (lane busy)"), {
+          name: "AnnounceNotAdmittedError",
+        }),
+    ],
+    [
+      "run budget exceeded",
+      () =>
+        Object.assign(new Error("announce run exceeded budget"), {
+          name: "AnnounceRunBudgetExceededError",
+        }),
+    ],
   ])("does not retry a %s phase deadline", async (_name, createError) => {
     let attempts = 0;
 
