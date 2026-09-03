@@ -191,59 +191,61 @@ describe("gateway multi-instance e2e", () => {
       const proofRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-invoke-proof-"));
       const shiftPath = path.join(proofRoot, "shift");
       const preloadPath = path.join(proofRoot, "clock-shift.mjs");
-      await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
-      const instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
-        NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-        OPENCLAW_CLOCK_SHIFT_PATH: shiftPath,
-        OPENCLAW_CLOCK_SHIFT_MS: "10000",
-      });
-      instances.push(instance);
-      const nodeIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(instance.homeDir, "proof-node-device.sqlite"),
-      });
-      let nodeClient: GatewayClient | undefined;
-      const node = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        clientDisplayName: "real-node-proof",
-        clientVersion: "1.0.0",
-        platform: "ios",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        role: "node",
-        scopes: [],
-        caps: ["system"],
-        commands: ["camera.capture"],
-        deviceIdentity: nodeIdentity,
-        onEvent: (event) => {
-          if (event.event !== "node.invoke.request") {
-            return;
-          }
-          const payload = event.payload as { id: string; nodeId: string };
-          void writeFile(shiftPath, "shift\n");
-          setTimeout(() => {
-            void nodeClient?.request("node.invoke.result", {
-              id: payload.id,
-              nodeId: payload.nodeId,
-              ok: true,
-              payloadJSON: JSON.stringify({ captured: true }),
-            });
-          }, 350).unref();
-        },
-      });
-      nodeClient = node;
-      const operator = await connectGatewayClient({
-        url: instance.url,
-        token: instance.gatewayToken,
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
-        role: "operator",
-        scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
-        deviceIdentity: loadOrCreateDeviceIdentity({
-          path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
-        }),
-      });
+      let node: GatewayClient | undefined;
+      let operator: GatewayClient | undefined;
       try {
+        await writeFile(preloadPath, CLOCK_SHIFT_PRELOAD, "utf8");
+        const instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
+          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          OPENCLAW_CLOCK_SHIFT_PATH: shiftPath,
+          OPENCLAW_CLOCK_SHIFT_MS: "10000",
+        });
+        instances.push(instance);
+        const nodeIdentity = loadOrCreateDeviceIdentity({
+          path: path.join(instance.homeDir, "proof-node-device.sqlite"),
+        });
+        let nodeClient: GatewayClient | undefined;
+        node = await connectGatewayClient({
+          url: instance.url,
+          token: instance.gatewayToken,
+          clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          clientDisplayName: "real-node-proof",
+          clientVersion: "1.0.0",
+          platform: "ios",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+          role: "node",
+          scopes: [],
+          caps: ["system"],
+          commands: ["camera.capture"],
+          deviceIdentity: nodeIdentity,
+          onEvent: (event) => {
+            if (event.event !== "node.invoke.request") {
+              return;
+            }
+            const payload = event.payload as { id: string; nodeId: string };
+            void writeFile(shiftPath, "shift\n");
+            setTimeout(() => {
+              void nodeClient?.request("node.invoke.result", {
+                id: payload.id,
+                nodeId: payload.nodeId,
+                ok: true,
+                payloadJSON: JSON.stringify({ captured: true }),
+              });
+            }, 350).unref();
+          },
+        });
+        nodeClient = node;
+        operator = await connectGatewayClient({
+          url: instance.url,
+          token: instance.gatewayToken,
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+          role: "operator",
+          scopes: ["operator.admin", "operator.read", "operator.write", "operator.pairing"],
+          deviceIdentity: loadOrCreateDeviceIdentity({
+            path: path.join(instance.homeDir, "proof-operator-device.sqlite"),
+          }),
+        });
         await waitForNodeStatus(instance, nodeIdentity.deviceId);
         const startedAt = performance.now();
         const result = await operator.request<{ captured?: boolean }>(
@@ -266,8 +268,8 @@ describe("gateway multi-instance e2e", () => {
           `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=10000 result=SUCCESS elapsedMs=${elapsedMs}`,
         );
       } finally {
-        operator.stop();
-        node.stop();
+        operator?.stop();
+        node?.stop();
         await rm(proofRoot, { recursive: true, force: true });
       }
     },
