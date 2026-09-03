@@ -4,6 +4,7 @@ import { property } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../../app/context.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
+import { isSessionRunActive } from "../../../lib/session-run-state.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
 import {
   sessionProgressCardsForGateway,
@@ -87,6 +88,7 @@ class OpenClawSessionProgressWidget extends OpenClawLightDomElement {
       row?.status,
       row?.startedAt,
       row?.endedAt,
+      isSessionRunActive({ status: row?.status }),
     );
   }
 

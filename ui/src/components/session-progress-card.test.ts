@@ -394,7 +394,48 @@ describe("renderSessionProgressCard", () => {
 
     expect(container.querySelector("time")?.textContent).toBe("Updated 3m ago");
     expect(container.querySelector("[data-outcome=failed]")).toBeNull();
-    expect(container.querySelector(".session-run-spinner")).not.toBeNull();
+  });
+
+  it("renders a stale in-progress step as paused while a later run is active", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, updatedAt: RUN_STARTED_MS - 1 },
+        "board",
+        undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".session-run-spinner")).toBeNull();
+    const pausedStep = container.querySelector(".session-progress-card__step--paused");
+    expect(pausedStep?.getAttribute("aria-label")).toBe("Wire the checklist, paused");
+    expect(pausedStep?.querySelector("polyline")).not.toBeNull();
+    expect(
+      container.querySelector(".session-progress-card__step-marker[data-status=paused]"),
+    ).not.toBeNull();
+  });
+
+  it("keeps a card that was updated during the active run live", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        progressCard,
+        "board",
+        undefined,
+        "running",
+        RUN_STARTED_MS,
+        undefined,
+      ),
+      container,
+    );
+
+    expect(
+      container.querySelector(".session-progress-card__step--in_progress .session-run-spinner"),
+    ).not.toBeNull();
   });
 
   it("falls back safely for timestamps outside the Date range", () => {
