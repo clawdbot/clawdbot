@@ -228,7 +228,6 @@ export async function startOrResumeThread(
     ) =>
       lifecycleErrors.assertCodexBindingMayBeReplacedInEnvironment(
         current,
-        environmentSelectionFingerprint,
         operation,
         expectedOwnership,
       );

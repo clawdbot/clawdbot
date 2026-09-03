@@ -56,16 +56,11 @@ export function assertCodexProjectInstructionEnvironmentAvailable(
 
 export function assertCodexBindingMayBeReplacedInEnvironment(
   binding: CodexAppServerThreadBinding | undefined,
-  environmentSelectionFingerprint: string | undefined,
   operation: string,
   expected?: EmbeddedRunAttemptParamsV2["expectedSessionRuntimeOwnership"],
 ): void {
-  if (binding) {
-    assertCodexProjectInstructionEnvironmentAvailable(
-      binding,
-      environmentSelectionFingerprint,
-      operation,
-    );
+  if (binding?.projectInstructionsUnavailableToGateway === true) {
+    throw new CodexProjectInstructionsUnavailableError(binding.threadId, operation);
   }
   assertCodexBindingMayBeReplaced(binding, operation, expected);
 }

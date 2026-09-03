@@ -496,8 +496,9 @@ hierarchy inside the selected execution environment, while app-server reports
 only its source paths, so the Gateway cannot freeze the authoritative bytes.
 OpenClaw records that the environment owns the project instructions and permits
 warm reuse only while the same environment-backed thread remains live. It
-rejects a physical cold resume or cross-environment replacement before provider
-I/O; continue the live sandbox thread or start a new session.
+rejects every physical cold resume or replacement before provider I/O, including
+replacement under the same environment fingerprint; continue the live sandbox
+thread or start a new session.
 
 Ordinary conversation tool-policy restrictions preserve the native project-
 document budget because project instructions are context, not tool authority.

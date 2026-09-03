@@ -1014,8 +1014,9 @@ For an experimental sandbox exec-server thread, Codex reads the hierarchy inside
 the selected execution environment and app-server exposes only source paths, not
 the authoritative bytes. OpenClaw therefore records environment-owned project
 instructions, allows warm reuse only while that same environment-backed thread
-is live, and rejects physical cold resume or cross-environment replacement
-before provider I/O. Continue the live sandbox thread or start a new session.
+is live, and rejects every physical cold resume or replacement before provider
+I/O, including replacement under the same environment fingerprint. Continue the
+live sandbox thread or start a new session.
 When execution uses another folder or ordinary policy restrictions remove native
 filesystem discovery from the outset, OpenClaw carries only the configured
 workspace's bounded root `AGENTS.md` snapshot; the execution folder's native

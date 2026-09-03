@@ -1651,6 +1651,63 @@ describe("Codex app-server thread lifecycle bindings", () => {
     });
   });
 
+  it("rejects same-environment physical rotation when project instructions are environment-owned", async () => {
+    const sessionFile = path.join(tempDir, "environment-owned-rotation-session.jsonl");
+    const workspaceDir = path.join(tempDir, "environment-owned-rotation-workspace");
+    let starts = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        starts += 1;
+        return threadStartResult(`thread-environment-owned-${starts}`, {
+          cwd: "/workspace",
+          instructionSources: ["/workspace/AGENTS.md"],
+        });
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const client = {
+      getInstanceId: () => "client-environment-owned",
+      request,
+      addNotificationHandler: () => () => undefined,
+      addRequestHandler: () => () => undefined,
+      addCloseHandler: () => () => undefined,
+    } as never;
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const environmentSelection = [{ environmentId: "sandbox-a", cwd: "/workspace" }];
+    const common = {
+      client,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: "/workspace",
+      appServer: createThreadLifecycleAppServerOptions(),
+      userMcpServersEnabled: false,
+      environmentSelection,
+      projectInstructionsUnavailableToGateway: true,
+    };
+
+    const started = await startOrResumeThread({ ...common, dynamicTools: [] });
+    const originalBinding = await readCodexAppServerBinding(sessionFile);
+    expect(started).toMatchObject({
+      threadId: "thread-environment-owned-1",
+      projectInstructionsUnavailableToGateway: true,
+    });
+    expect(originalBinding).toMatchObject({
+      threadId: "thread-environment-owned-1",
+      projectInstructionsUnavailableToGateway: true,
+      environmentSelectionFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
+    });
+
+    await expect(
+      startOrResumeThread({
+        ...common,
+        dynamicTools: [createNamedDynamicTool("replacement-tool")],
+      }),
+    ).rejects.toThrow("original project instructions belong to an unavailable environment");
+
+    expect(starts).toBe(1);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(originalBinding);
+  });
+
   it("rebinds a resumed thread to its replacement physical client before warm reuse", async () => {
     const sessionFile = path.join(tempDir, "replacement-client-session.jsonl");
     const workspaceDir = path.join(tempDir, "replacement-client-workspace");
