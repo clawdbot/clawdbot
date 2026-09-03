@@ -177,15 +177,14 @@ export async function buildPreparedModelsProviderData(
   const deadlineMs = Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
   let currentConfig = cfg;
   for (;;) {
-    const timeoutMs = deadlineMs - Date.now();
-    if (timeoutMs <= 0) {
+    if (Date.now() >= deadlineMs) {
       return buildPreparedDataForConfig(currentConfig, agentId, options, {
         catalogFallback: true,
-        timeoutMs: 1,
+        deadlineMs,
       });
     }
     try {
-      return await buildPreparedDataForConfig(currentConfig, agentId, options, { timeoutMs });
+      return await buildPreparedDataForConfig(currentConfig, agentId, options, { deadlineMs });
     } catch (error) {
       if (!isPreparedModelCatalogOwnerReplacement(error)) {
         throw error;
@@ -199,7 +198,7 @@ export async function buildPreparedModelsProviderData(
     if (!owner) {
       return buildPreparedDataForConfig(currentConfig, agentId, options, {
         catalogFallback: true,
-        timeoutMs: 1,
+        deadlineMs,
       });
     }
     currentConfig = owner.config;
@@ -245,7 +244,7 @@ async function buildPreparedDataForConfig(
   cfg: OpenClawConfig,
   agentId: string | undefined,
   options: ModelsBrowseOptions,
-  control: { catalogFallback?: boolean; timeoutMs: number },
+  control: { catalogFallback?: boolean; deadlineMs: number },
 ): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
@@ -262,24 +261,26 @@ async function buildPreparedDataForConfig(
   );
 
   let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
-  const snapshot = control.catalogFallback
-    ? { entries: [], routeVariants: [] }
-    : await loadPreparedModelCatalogSnapshotForBrowse({
-        cfg,
-        agentId,
-        view: options.view ?? "default",
-        loadCatalog: async ({ readOnly }) => {
-          loadedOwner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
-            config: cfg,
-            readOnly,
-            refreshFullCatalog: "stale",
-            ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
-            ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-          });
-          return loadedOwner.modelCatalog;
-        },
-        timeoutMs: control.timeoutMs,
-      });
+  const timeoutMs = control.deadlineMs - Date.now();
+  const snapshot =
+    control.catalogFallback || timeoutMs <= 0
+      ? { entries: [], routeVariants: [] }
+      : await loadPreparedModelCatalogSnapshotForBrowse({
+          cfg,
+          agentId,
+          view: options.view ?? "default",
+          loadCatalog: async ({ readOnly }) => {
+            loadedOwner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
+              config: cfg,
+              readOnly,
+              refreshFullCatalog: "stale",
+              ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+              ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+            });
+            return loadedOwner.modelCatalog;
+          },
+          timeoutMs,
+        });
   // A timed-out read can complete later. Only pair auth with the catalog actually returned.
   const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
   const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
