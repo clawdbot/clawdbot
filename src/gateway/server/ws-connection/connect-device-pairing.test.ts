@@ -7,12 +7,16 @@ import {
   GATEWAY_CLIENT_NAMES,
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { HelloOk } from "../../../../packages/gateway-protocol/src/schema/frames.js";
-import type { UsersSelfResult } from "../../../../packages/gateway-protocol/src/schema/users.js";
+import type {
+  UsersListResult,
+  UsersSelfResult,
+} from "../../../../packages/gateway-protocol/src/schema/users.js";
 import { replaceConfigFile } from "../../../config/config.js";
 import {
   getRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../../../infra/device-auth-store.js";
@@ -32,9 +36,9 @@ import {
   readUserGitHubConnection,
   updateUserGitHubConnection,
 } from "../../../state/user-github-connections.js";
+import { repairMergedGatewayOwnerProfile } from "../../../state/user-profiles-owner-migration.js";
 import {
   ensureProfileForEmail,
-  getUserProfileListItem,
   hasMultipleSessionSharingIdentities,
   setUserProfileRole,
 } from "../../../state/user-profiles.js";
@@ -48,13 +52,20 @@ import {
   openTrackedWs,
   pairDeviceIdentity,
 } from "../../device-authz.test-helpers.js";
-import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
+import {
+  resolveGatewayOperatorRoleActor,
+  resolveOperatorRolePolicyForProfile,
+} from "../../operator-role-policy.js";
+import { resolveSessionCatalogVisibility } from "../../server-methods/session-catalog-visibility.js";
+import { sessionReadHandlers } from "../../server-methods/sessions-read.js";
 import { usersHandlers } from "../../server-methods/users.js";
 import {
   ConnectErrorDetailCodes,
   CONTROL_UI_CLIENT,
   openTailscaleWs,
 } from "../../server.auth.test-helpers.js";
+import { sharingIdentity } from "../../session-sharing-policy.js";
+import type { SessionsListResult } from "../../session-utils.types.js";
 import {
   connectReq,
   installGatewayTestHooks,
@@ -109,6 +120,8 @@ describe("gateway connect pairing exemptions", () => {
     });
     let reconnect: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
     const selfHandler = vi.spyOn(usersHandlers, "users.self");
+    const listHandler = vi.spyOn(sessionReadHandlers, "sessions.list");
+    const personalSpies: { mockRestore: () => void }[] = [];
     const connectOptions = {
       token: auth.token,
       scopes: ["operator.admin"],
@@ -119,6 +132,17 @@ describe("gateway connect pairing exemptions", () => {
       expect((await connectReq(started.ws, connectOptions)).ok).toBe(true);
       const person = ensureProfileForEmail("person@example.test");
       setUserProfileRole(person.id, "guest");
+      const personSessionKey = "agent:main:merged-owner-person";
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: personSessionKey },
+        {
+          sessionId: "merged-owner-person-session",
+          updatedAt: 1,
+          createdVia: "operator",
+          createdActor: { type: "human", source: "profile", id: person.id },
+          visibility: "draft",
+        },
+      );
       const personalConnection = updateUserGitHubConnection(
         person.id,
         () => ({
@@ -145,18 +169,6 @@ describe("gateway connect pairing exemptions", () => {
       db.prepare(
         "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
       ).run(person.id);
-      const rejected = await rpcReq(started.ws, "users.linkEmail", {
-        email: "new@example.test",
-        targetProfileId: "gateway-owner",
-      });
-      expect.soft(rejected).toMatchObject({
-        ok: false,
-        error: {
-          code: "INVALID_REQUEST",
-          message:
-            "the shared owner profile cannot be merged; sign in with a personal identity instead",
-        },
-      });
       started.ws.close();
       const logPath = path.join(path.dirname(stateDb.path), "owner-repair.log");
       setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
@@ -172,6 +184,84 @@ describe("gateway connect pairing exemptions", () => {
         error: { code: "FORBIDDEN", message: "users.self requires an authenticated user" },
       });
       expect(selfHandler.mock.lastCall?.[0].client).not.toHaveProperty("authenticatedUserProfile");
+      const personal = selfHandler.mock.lastCall?.[0].context.githubOAuthService?.personal;
+      if (!personal) {
+        throw new Error("expected the Gateway's personal GitHub service");
+      }
+      const personalStatus = vi.spyOn(personal, "status");
+      const personalAuthorize = vi.spyOn(personal, "startAuthorization");
+      personalSpies.push(personalStatus, personalAuthorize);
+      for (const method of ["users.github.status", "users.github.authorize.start"]) {
+        expect(await rpcReq(reconnect, method, {})).toMatchObject({
+          ok: false,
+          error: {
+            code: "FORBIDDEN",
+            message: "My GitHub requires a current authenticated human Gateway connection.",
+          },
+        });
+      }
+      expect(personalStatus).not.toHaveBeenCalled();
+      expect(personalAuthorize).not.toHaveBeenCalled();
+      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+      const sessions = await rpcReq<SessionsListResult>(reconnect, "sessions.list", {});
+      expect(sessions.ok).toBe(true);
+      expect(
+        sessions.payload?.sessions.find((session) => session.key === personSessionKey),
+      ).toMatchObject({
+        createdActor: { type: "human", id: person.id },
+        visibility: "draft",
+        sharingRole: "admin",
+      });
+      const listRequest = listHandler.mock.lastCall?.[0];
+      if (!listRequest?.client) {
+        throw new Error("expected the sessions.list RPC client");
+      }
+      const actor = resolveGatewayOperatorRoleActor(listRequest.client);
+      expect(actor).toEqual({ kind: "system" });
+      expect(sharingIdentity(listRequest.client, actor)).toBeUndefined();
+      expect(listRequest.client).not.toHaveProperty("authenticatedUserProfile");
+      const visibility = resolveSessionCatalogVisibility(
+        listRequest.client,
+        listRequest.context.getRuntimeConfig(),
+      );
+      expect(visibility.kind).toBe("unrestricted");
+      expect(JSON.parse(visibility.cacheKey)).toEqual({
+        admin: true,
+        multipleIdentities: false,
+        profileId: null,
+        profileAliases: [],
+        others: null,
+      });
+      expect(
+        await rpcReq(reconnect, "users.setRole", { profileId: "gateway-owner", role: null }),
+      ).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message: "the shared owner profile is not governed by operator roles",
+        },
+      });
+      expect(
+        await rpcReq(reconnect, "users.linkEmail", {
+          email: "new@example.test",
+          targetProfileId: "gateway-owner",
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "the shared owner profile cannot be merged; sign in with a personal identity instead",
+        },
+      });
+      const beforeRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
+      expect(beforeRepair.ok).toBe(true);
+      expect(
+        beforeRepair.payload?.profiles.find((profile) => profile.id === person.id),
+      ).toMatchObject({
+        emails: ["person@example.test"],
+        role: "guest",
+      });
       const presence = hello.snapshot.presence.find(
         (entry) => entry.instanceId === "before-owner-repair",
       );
@@ -187,8 +277,6 @@ describe("gateway connect pairing exemptions", () => {
           .get(),
       ).toMatchObject({ merged_into: person.id, updated_at: 1 });
 
-      const { repairMergedGatewayOwnerProfile } =
-        await import("../../../state/user-profiles-owner-migration.js");
       expect(repairMergedGatewayOwnerProfile({ shouldRepair: true }).repaired).toBe(true);
       reconnect.close();
       reconnect = await openTrackedWs(started.port, { origin });
@@ -207,19 +295,34 @@ describe("gateway connect pairing exemptions", () => {
         repairedHello.snapshot.presence.find((entry) => entry.instanceId === "after-owner-repair")
           ?.user,
       ).toMatchObject({ id: "gateway-owner" });
-      expect.soft(profileId).toBe("gateway-owner");
-      expect.soft(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
-      expect.soft(hasMultipleSessionSharingIdentities()).toBe(false);
-      expect.soft(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
+      expect(self.ok).toBe(true);
+      expect(profileId).toBe("gateway-owner");
+      expect(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
+      expect(hasMultipleSessionSharingIdentities()).toBe(false);
+      expect(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
         ok: true,
         payload: { personal: { state: "disconnected", account: null } },
       });
-      expect
-        .soft(getUserProfileListItem(person.id))
-        .toMatchObject({ emails: ["person@example.test"], role: "guest" });
+      expect(personalStatus).toHaveBeenCalledExactlyOnceWith({
+        owner: "gateway-owner",
+        assertCurrent: expect.any(Function),
+      });
+      expect(personalAuthorize).not.toHaveBeenCalled();
+      const afterRepair = await rpcReq<UsersListResult>(reconnect, "users.list", {});
+      expect(afterRepair.ok).toBe(true);
+      expect(
+        afterRepair.payload?.profiles.find((profile) => profile.id === person.id),
+      ).toMatchObject({
+        emails: ["person@example.test"],
+        role: "guest",
+      });
       expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
     } finally {
+      for (const spy of personalSpies) {
+        spy.mockRestore();
+      }
       selfHandler.mockRestore();
+      listHandler.mockRestore();
       setLoggerOverride({ level: "silent", consoleLevel: "silent" });
       reconnect?.close();
       started.ws.close();
