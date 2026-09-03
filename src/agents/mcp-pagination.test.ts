@@ -142,7 +142,9 @@ describe("collectMcpPaginatedItems", () => {
       loadPage: async () => ({ items: ["resource"] }),
       mapItem: (item) => {
         mappedItems += 1;
-        vi.advanceTimersByTime(50);
+        // Cross the deadline on the monotonic clock only; the deadline timer must not fire,
+        // so the synchronous check is what rejects the page.
+        vi.spyOn(performance, "now").mockReturnValue(performance.now() + 50);
         return item;
       },
     });
