@@ -259,11 +259,13 @@ describe("chat pane header", () => {
   it("places the session menu last in the header action row", () => {
     const { container } = mountHeader({
       mergedChrome: true,
+      fullscreenAction: html`<button data-action="fullscreen"></button>`,
       onClosePane: vi.fn(),
       sessionMenuAction: html`<button data-action="session-menu"></button>`,
     });
     const actions = container.querySelector(".chat-pane__actions");
 
+    expect(container.querySelector('[data-action="fullscreen"]')?.parentElement).toBe(actions);
     expect(actions?.lastElementChild?.getAttribute("data-action")).toBe("session-menu");
     expect(actions?.querySelector(".chat-pane__palette-open")).not.toBeNull();
     expect(actions?.querySelector(".chat-pane__close-pane")).not.toBeNull();

@@ -78,7 +78,6 @@ export function renderBoardViewSwitch(props: {
   face: BoardFace;
   dock: BoardTab["chatDock"];
   canChangeDock: boolean;
-  fullscreenControl?: TemplateResult;
   onSelectMode: (mode: BoardViewMode) => void;
   onDockSideChange: (dock: BoardVisibleChatDock) => void;
 }) {
@@ -169,7 +168,6 @@ export function renderBoardViewSwitch(props: {
             </wa-dropdown>
           `
         : nothing}
-      ${mode === "chat" ? nothing : props.fullscreenControl}
     </div>
   `;
 }

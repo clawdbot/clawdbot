@@ -41,8 +41,7 @@
   display: inline-flex;
 }
 
-.chat-pane__dock-caret-trigger,
-.board-fullscreen-button {
+.chat-pane__dock-caret-trigger {
   width: 24px;
   min-width: 24px;
   height: 24px;
@@ -60,15 +59,6 @@
   stroke-width: 1.6px;
   stroke-linecap: round;
   stroke-linejoin: round;
-}
-
-.board-fullscreen-button__icon {
-  display: inline-flex;
-}
-
-.board-fullscreen-button svg {
-  width: 14px;
-  height: 14px;
 }
 
 .chat-pane-primary-column:fullscreen {
