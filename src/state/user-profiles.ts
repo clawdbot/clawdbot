@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { sql } from "kysely";
-import type { UserProfileGitHubIdentity } from "../../packages/gateway-protocol/src/schema/users.js";
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type UserProfileGitHubIdentity,
+} from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -32,7 +35,6 @@ import {
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
-  GATEWAY_OWNER_PROFILE_ID,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
   UserProfileOwnerError,

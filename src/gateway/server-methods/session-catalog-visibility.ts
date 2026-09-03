@@ -1,6 +1,7 @@
-import type {
-  SessionCatalogHost,
-  SessionCatalogSession,
+import {
+  GATEWAY_OWNER_PROFILE_ID,
+  type SessionCatalogHost,
+  type SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,7 +11,6 @@ import type {
 } from "../../plugins/session-catalog.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readUserProfileAliases } from "../../state/user-profile-list.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../state/user-profiles-schema.js";
 import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";

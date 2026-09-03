@@ -201,6 +201,31 @@ describe("renderIdentitySection", () => {
     expect(toggle?.hasAttribute("disabled")).toBe(true);
   });
 
+  it("explains personal GitHub sign-in for the shared owner without email or retry rows", () => {
+    const container = document.createElement("div");
+    render(
+      renderIdentitySection(
+        createProps({ profile: { ...PROFILE, id: "gateway-owner", emails: [] } }),
+      ),
+      container,
+    );
+
+    const descriptions = [...container.querySelectorAll(".settings-row__desc")].map((node) =>
+      node.textContent?.trim(),
+    );
+    expect(descriptions).toContain(
+      "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
+    );
+    expect(descriptions).toContain(
+      "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
+    );
+    expect(container.textContent).not.toContain("Linked emails");
+    expect(container.textContent).not.toContain("Refresh to retry");
+    const toggle = container.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+    expect(toggle?.checked).toBe(false);
+    expect(toggle?.hasAttribute("disabled")).toBe(true);
+  });
+
   it("reports mutation errors without inventing another settings surface", () => {
     const container = document.createElement("div");
     render(renderIdentitySection(createProps({ error: "Save failed" })), container);

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
+  GATEWAY_OWNER_PROFILE_ID,
   GIT_COAUTHOR_PREFERENCE_KEY,
   isGitCoauthorCreditEnabled,
 } from "../../packages/gateway-protocol/src/schema/users.js";
@@ -12,11 +13,7 @@ import {
 } from "./openclaw-state-db.js";
 import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.js";
 import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
-import {
-  ensureUserProfilesSchema,
-  GATEWAY_OWNER_PROFILE_ID,
-  UserProfileOwnerError,
-} from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema, UserProfileOwnerError } from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";

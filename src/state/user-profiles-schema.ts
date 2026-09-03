@@ -6,8 +6,6 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 
-export const GATEWAY_OWNER_PROFILE_ID = "gateway-owner";
-
 // Canonical additive schema for durable user profiles. Kept feature-local so
 // ordinary shared-state opens do not create identity tables until they are used.
 const USER_PROFILES_SCHEMA_SQL = `

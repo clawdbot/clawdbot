@@ -3437,11 +3437,15 @@ export const en: TranslationMap & {
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
+      ownerGithubDescription:
+        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
       gitCoauthorDescription:
         "Adds this account's public GitHub noreply address to commits created from shared sessions. Turning it off affects future commits only.",
       gitCoauthorUnavailable:
         "Available after your GitHub-backed sign-in is verified. Refresh to retry.",
+      ownerGitCoauthorDescription:
+        "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",
