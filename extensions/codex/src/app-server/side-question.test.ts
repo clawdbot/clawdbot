@@ -2841,10 +2841,7 @@ describe("runCodexAppServerSideQuestion", () => {
     });
   });
 
-  it("withholds the blocking question tools from a side thread", async () => {
-    // A side thread returns text to whoever asked and owns no conversation, so a
-    // question tool offered here would register a question and then wait out its
-    // whole timeout on a prompt nobody was ever shown.
+  it("exposes blocking question tools to a side thread conversation", async () => {
     const boundNames: string[][] = [];
     const bindToolSurface = vi.fn((tools: Array<{ name: string }>) => {
       boundNames.push(tools.map((tool) => tool.name));
@@ -2879,7 +2876,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }),
     );
 
-    expect(boundNames[0]).toEqual(["message"]);
+    expect(boundNames[0]).toEqual(["message", "ask_user", "secrets"]);
   });
 
   it("binds /btw tools and retained bound callbacks fail after capability closure", async () => {

@@ -162,18 +162,6 @@ import {
 
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 
-/**
- * Tools a side thread must not expose.
- *
- * `web_search` and `computer` were already withheld: a fork accepts no dynamic
- * tools, and it does not own the context lifecycle that expires screenshot
- * coordinates. `ask_user` and `secrets` join them for a different reason — a side
- * thread returns text to whoever asked and owns no conversation, so a blocking
- * question asked here has nowhere to appear and would wait out its whole timeout
- * on a question nobody was ever shown.
- */
-const SIDE_THREAD_WITHHELD_TOOL_NAMES = new Set(["web_search", "computer", "ask_user", "secrets"]);
-
 class CodexSideQuestionTimeoutError extends Error {
   override name = "TimeoutError";
 }
@@ -1302,7 +1290,7 @@ async function createCodexSideToolBridge(input: {
   // Side threads inherit a large parent context but do not own the main
   // context-compaction lifecycle needed to expire screenshot coordinates.
   const exposedTools = input.params.hostCapabilities.bindToolSurface(
-    tools.filter((tool) => !SIDE_THREAD_WITHHELD_TOOL_NAMES.has(tool.name)),
+    tools.filter((tool) => tool.name !== "web_search" && tool.name !== "computer"),
     { cwd: input.cwd },
   );
   const hookChannelFields = buildAgentHookContextChannelFields({
