@@ -25,6 +25,16 @@ describe("clampOpenAIPromptCacheKey", () => {
     expect(Array.from(clamped ?? "")).toHaveLength(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH);
   });
 
+  // A grapheme cap would keep this cluster whole; the provider counts code points.
+  it("cuts inside a multi-code-point grapheme cluster", () => {
+    const family = "\u{1f468}\u200d\u{1f469}\u200d\u{1f467}";
+    const clamped = clampOpenAIPromptCacheKey(family.repeat(20));
+    expect(Array.from(clamped ?? "")).toHaveLength(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH);
+    expect(clamped).toBe(
+      Array.from(family.repeat(20)).slice(0, OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH).join(""),
+    );
+  });
+
   it("keeps an astral key whose UTF-16 length exceeds the cap", () => {
     const key = "🦞".repeat(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH / 2);
     expect(key.length).toBe(OPENAI_PROMPT_CACHE_KEY_MAX_LENGTH);
