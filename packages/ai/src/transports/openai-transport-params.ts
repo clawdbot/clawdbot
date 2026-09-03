@@ -306,11 +306,27 @@ export function resolveOpenAIStrictToolFlagWithDiagnostics(
   return strict;
 }
 
+function isOpenAIChatGPTResponsesApi(api: string): boolean {
+  if (api === "openai-chatgpt-responses" || api === "openclaw-openai-chatgpt-responses-transport") {
+    return true;
+  }
+  if (!api.startsWith("openclaw-provider-stream:")) {
+    return false;
+  }
+  const sourceApi = api.split(":")[3];
+  if (!sourceApi) {
+    return false;
+  }
+  try {
+    return decodeURIComponent(sourceApi) === "openai-chatgpt-responses";
+  } catch {
+    return false;
+  }
+}
+
 export function isOpenAICodexResponsesModel(model: Model): boolean {
   return (
-    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) &&
-    (model.api === "openai-chatgpt-responses" ||
-      model.api === "openclaw-openai-chatgpt-responses-transport")
+    OPENAI_CODEX_RESPONSES_PROVIDERS.has(model.provider) && isOpenAIChatGPTResponsesApi(model.api)
   );
 }
 
@@ -333,6 +349,7 @@ function isNativeOpenAICodexResponsesBaseUrl(baseUrl?: string): boolean {
       "/backend-api/v1",
       "/backend-api/codex",
       "/backend-api/codex/v1",
+      "/backend-api/codex/responses",
     ].includes(pathname);
   } catch {
     return false;
