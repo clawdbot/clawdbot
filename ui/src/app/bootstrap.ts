@@ -475,7 +475,7 @@ export function bootstrapApplication(): ApplicationRuntime {
       void navigateWithMode(routeId, options, "replace");
     },
     revalidate: (routeId) => router.revalidate(context, routeId),
-    preload: (routeId, options) => router.preloadLocation(routeLocation(routeId, options), context),
+    preload: (routeId) => router.preloadLocation(locationForRoute(routeId, basePath), context),
   };
   return {
     context,

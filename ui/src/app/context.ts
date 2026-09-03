@@ -122,7 +122,8 @@ export type ApplicationContext<TRouteId extends string = string> = {
   ) => Promise<void>;
   readonly replace: (routeId: TRouteId, options?: ApplicationNavigationOptions) => void;
   readonly revalidate: (routeId?: TRouteId) => Promise<void>;
-  readonly preload: (routeId: TRouteId, options?: ApplicationNavigationOptions) => Promise<void>;
+  /** Warms a named route; dynamic locations load as part of navigation. */
+  readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
 export const applicationContext =
