@@ -4,6 +4,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { CommandEntry } from "../../../../packages/gateway-protocol/src/index.js";
+import type { CommandArgValues } from "../../../../src/auto-reply/commands-args.types.js";
 import { buildBuiltinChatCommands } from "../../../../src/auto-reply/commands-registry.shared.js";
 import { t } from "../../i18n/index.ts";
 
@@ -47,6 +48,7 @@ type CommandLike = {
     required?: boolean;
     choices?: LocalArgChoice[];
   }>;
+  formatArgs?: (values: CommandArgValues) => string | undefined;
   category?: string;
   tier?: string;
   source?: "native" | "plugin" | "skill";
@@ -201,8 +203,9 @@ function formatArgs(command: CommandLike): string | undefined {
     .join(" ");
 }
 
-function choiceToValue(choice: LocalArgChoice): string {
-  return typeof choice === "string" ? choice : choice.value;
+function choiceToValue(command: CommandLike, argName: string, choice: LocalArgChoice): string {
+  const value = typeof choice === "string" ? choice : choice.value;
+  return command.formatArgs?.({ [argName]: value }) ?? value;
 }
 
 function getArgOptions(command: CommandLike): string[] | undefined {
@@ -210,7 +213,9 @@ function getArgOptions(command: CommandLike): string[] | undefined {
   if (!firstArg) {
     return undefined;
   }
-  const options = firstArg.choices?.map(choiceToValue).filter(Boolean);
+  const options = firstArg.choices
+    ?.map((choice) => choiceToValue(command, firstArg.name, choice))
+    .filter(Boolean);
   return options?.length ? options : undefined;
 }
 
@@ -368,6 +373,7 @@ function buildLocalSlashCommands(): SlashCommandDef[] {
         required: arg.required,
         choices: Array.isArray(arg.choices) ? arg.choices : undefined,
       })),
+      formatArgs: command.formatArgs,
       category: command.category,
       tier: command.tier,
     }))
