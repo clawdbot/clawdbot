@@ -1076,10 +1076,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
   });
 
   it("keeps expensive platform survivors out of release soak and in far-reaching runs", () => {
-    const scenariosFor = (upgradeSurvivorScenarios: string) =>
+    const scenariosFor = (
+      upgradeSurvivorScenarios: string,
+      upgradeSurvivorBaselines = "2026.7.1-2",
+    ) =>
       planFor({
         selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.7.1-2",
+        upgradeSurvivorBaselines,
         upgradeSurvivorScenarios,
       }).lanes.map((lane) => lane.name);
 
@@ -1089,16 +1092,12 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(scenariosFor("far-reaching")).toContain(
       "published-upgrade-survivor-2026.7.1-2-sqlite-volume",
     );
-    expect(scenariosFor("reported-issues")).not.toContain(
+    expect(scenariosFor("reported-issues", "2026.8.1")).not.toContain(
       "published-upgrade-survivor-2026.8.1-watchos-direct-node",
     );
-    expect(
-      planFor({
-        selectedLaneNames: ["published-upgrade-survivor"],
-        upgradeSurvivorBaselines: "2026.8.1",
-        upgradeSurvivorScenarios: "far-reaching",
-      }).lanes.map((lane) => lane.name),
-    ).toContain("published-upgrade-survivor-2026.8.1-watchos-direct-node");
+    expect(scenariosFor("far-reaching", "2026.8.1")).toContain(
+      "published-upgrade-survivor-2026.8.1-watchos-direct-node",
+    );
   });
 
   it("runs the watchOS direct-node survivor only from its shipped gateway floor", () => {
