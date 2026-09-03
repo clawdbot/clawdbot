@@ -1,4 +1,5 @@
 // Browser tests cover process-local session tab cleanup behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const clientMocks = vi.hoisted(() => ({
@@ -186,6 +187,197 @@ describe("session tab registry", () => {
       profile: undefined,
     });
   });
+
+  it.each(["lifecycle", "sweep"] as const)(
+    "preserves %s activity semantics while the raw client loads",
+    async (kind) => {
+      const tab = { sessionKey: "agent:main:main", targetId: "active-tab" };
+      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const cleanup =
+        kind === "lifecycle"
+          ? closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey] })
+          : sweepTrackedBrowserTabs({ now: 10_000, idleMs: 1 });
+      await Promise.resolve();
+      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+      touchSessionBrowserTab({ ...tab, now: 11_000 });
+      await expect(cleanup).resolves.toBe(kind === "lifecycle" ? 1 : 0);
+      expect(clientMocks.browserCloseTabByRawTargetId).toHaveBeenCalledTimes(
+        kind === "lifecycle" ? 1 : 0,
+      );
+    },
+  );
+
+  it("does not adopt a new registration while an earlier selected tab closes", async () => {
+    const sessionKey = "agent:main:main";
+    const next = { sessionKey, targetId: "next-tab" };
+    trackSessionBrowserTab({ sessionKey, targetId: "first-tab", now: 1_000 });
+    trackSessionBrowserTab({ ...next, now: 1_000 });
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const closeTab = vi.fn(async ({ targetId }: { targetId: string }) => {
+      if (targetId === "first-tab") {
+        entered.resolve();
+        await release.promise;
+      }
+    });
+    const cleanup = closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab });
+    try {
+      await entered.promise;
+      untrackSessionBrowserTab(next);
+      trackSessionBrowserTab({ ...next, now: 1_000 });
+    } finally {
+      release.resolve();
+    }
+    await expect(cleanup).resolves.toBe(1);
+    expect(closeTab).toHaveBeenCalledOnce();
+    await expect(
+      closeTrackedBrowserTabsForSessions({ sessionKeys: [sessionKey], closeTab }),
+    ).resolves.toBe(1);
+    expect(closeTab).toHaveBeenLastCalledWith(expect.objectContaining({ targetId: "next-tab" }));
+  });
+
+  it.each(["before-dispatch", "during-close"] as const)(
+    "preserves a registration replaced %s without dispatching against it",
+    async (replacementPhase) => {
+      const tab = { sessionKey: "agent:main:main", targetId: "replaced-tab" };
+      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      let replaced = false;
+      const closeTab = vi.fn(async () => {
+        expect.soft(replaced).toBe(false);
+        entered.resolve();
+        await release.promise;
+      });
+      const cleanup = closeTrackedBrowserTabsForSessions({
+        sessionKeys: [tab.sessionKey],
+        closeTab,
+      });
+      try {
+        if (replacementPhase === "during-close") {
+          await entered.promise;
+        }
+        replaced = true;
+        untrackSessionBrowserTab(tab);
+        trackSessionBrowserTab({ ...tab, now: 1_000 });
+      } finally {
+        release.resolve();
+      }
+      await cleanup;
+      const freshClose = vi.fn(async () => {});
+      await expect(
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab: freshClose }),
+      ).resolves.toBe(1);
+      expect(freshClose).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([false, true])(
+    "retires only acquired cross-session registrations (replace=%s)",
+    async (replace) => {
+      const first = { sessionKey: "agent:main:first", targetId: "shared-target" };
+      const second = { sessionKey: "agent:main:second", targetId: "shared-target" };
+      trackSessionBrowserTab({ ...first, now: 1_000 });
+      trackSessionBrowserTab({ ...second, now: 1_000 });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const closeTab = vi.fn(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const cleanup = closeTrackedBrowserTabsForSessions({
+        sessionKeys: [first.sessionKey],
+        closeTab,
+      });
+      try {
+        await entered.promise;
+        if (replace) {
+          untrackSessionBrowserTab(second);
+          trackSessionBrowserTab({ ...second, now: 1_000 });
+        }
+      } finally {
+        release.resolve();
+      }
+      await expect(cleanup).resolves.toBe(1);
+      const freshClose = vi.fn(async () => {});
+      await expect(
+        closeTrackedBrowserTabsForSessions({
+          sessionKeys: [second.sessionKey],
+          closeTab: freshClose,
+        }),
+      ).resolves.toBe(replace ? 1 : 0);
+      expect(freshClose).toHaveBeenCalledTimes(replace ? 1 : 0);
+    },
+  );
+
+  it.each([false, true])(
+    "binds a queued lifecycle request to its registration (replace=%s)",
+    async (replace) => {
+      const tab = { sessionKey: "agent:main:main", targetId: "queued-target" };
+      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const entered = createDeferred<void>();
+      const release = createDeferred<void>();
+      const firstClose = vi.fn(async () => {
+        entered.resolve();
+        await release.promise;
+      });
+      const first = closeTrackedBrowserTabsForSessions({
+        sessionKeys: [tab.sessionKey],
+        closeTab: firstClose,
+      });
+      const nextClose = vi.fn(async () => {});
+      let second: Promise<number>;
+      try {
+        await entered.promise;
+        if (replace) {
+          untrackSessionBrowserTab(tab);
+          trackSessionBrowserTab({ ...tab, now: 1_000 });
+        }
+        second = closeTrackedBrowserTabsForSessions({
+          sessionKeys: [tab.sessionKey],
+          closeTab: nextClose,
+        });
+        expect(nextClose).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+      }
+      await expect(first).resolves.toBe(1);
+      await expect(second).resolves.toBe(replace ? 1 : 0);
+      expect(nextClose).toHaveBeenCalledTimes(replace ? 1 : 0);
+    },
+  );
+
+  it.each(["published", "during-prepare"] as const)(
+    "joins a failed owner %s without retrying the registration",
+    async (ownerTiming) => {
+      const tab = { sessionKey: "agent:main:main", targetId: "failed-owner" };
+      trackSessionBrowserTab({ ...tab, now: 1_000 });
+      const release = createDeferred<void>();
+      const closeTab = vi.fn(async () => {
+        await release.promise;
+        throw new Error("close failed");
+      });
+      const onWarn = vi.fn();
+      const beginOwner = () =>
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], closeTab, onWarn });
+      const beginDefault = () =>
+        closeTrackedBrowserTabsForSessions({ sessionKeys: [tab.sessionKey], onWarn });
+      const first = ownerTiming === "published" ? beginOwner() : beginDefault();
+      const second = ownerTiming === "published" ? beginDefault() : beginOwner();
+      try {
+        if (ownerTiming === "during-prepare") {
+          await vi.dynamicImportSettled();
+        }
+        expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+      }
+      await expect(Promise.all([first, second])).resolves.toEqual([0, 0]);
+      expect(closeTab).toHaveBeenCalledOnce();
+      expect(clientMocks.browserCloseTabByRawTargetId).not.toHaveBeenCalled();
+      expect(onWarn).toHaveBeenCalledOnce();
+    },
+  );
 
   it("touches and untracks a volatile tab through same-process aliases", async () => {
     trackSessionBrowserTab({
