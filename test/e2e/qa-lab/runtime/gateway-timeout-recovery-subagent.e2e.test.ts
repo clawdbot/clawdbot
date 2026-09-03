@@ -9,11 +9,6 @@ import {
   createQaGatewayChild,
   startQaBusServer,
 } from "../../../../extensions/qa-lab/api.js";
-import type { StreamEvent } from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-contracts.js";
-import {
-  buildAssistantEvents,
-  buildToolCallEventsWithArgs,
-} from "../../../../extensions/qa-lab/src/providers/mock-openai/mock-openai-tooling.js";
 import { readSubagentRun } from "../../../../src/agents/subagents/registry/subagent-registry.store.sqlite.js";
 import {
   closeOpenClawStateDatabaseByPath,
@@ -26,26 +21,141 @@ const CONVERSATION = { id: "timeout-recovery", kind: "direct" as const };
 const PROMPT =
   "Subagent terminal reply QA check: visible. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.";
 const CHILD_MARKER = "QA-TIMEOUT-RECOVERY-CHILD-OK";
+type SseEvent = {
+  type: string;
+  response?: Record<string, unknown>;
+  [key: string]: unknown;
+};
 
-function writeSse(response: ServerResponse, events: StreamEvent[]) {
+let responseSequence = 0;
+
+function buildAssistantEvents(text: string): SseEvent[] {
+  const sequence = ++responseSequence;
+  const responseId = `resp_qa_timeout_recovery_${sequence}`;
+  const itemId = `msg_qa_timeout_recovery_${sequence}`;
+  const part = { type: "output_text", text, annotations: [] };
+  const item = {
+    type: "message",
+    id: itemId,
+    role: "assistant",
+    status: "completed",
+    content: [part],
+  };
+  const position = { item_id: itemId, output_index: 0, content_index: 0 };
+  return [
+    {
+      type: "response.created",
+      response: {
+        id: responseId,
+        object: "response",
+        status: "in_progress",
+        output: [],
+        created_at: Math.floor(Date.now() / 1_000),
+      },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, content: [], status: "in_progress" },
+    },
+    {
+      type: "response.content_part.added",
+      ...position,
+      part: { ...part, text: "" },
+    },
+    { type: "response.output_text.delta", ...position, delta: text },
+    { type: "response.output_text.done", ...position, text },
+    { type: "response.content_part.done", ...position, part },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: responseId,
+        object: "response",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 24, total_tokens: 88 },
+      },
+    },
+  ];
+}
+
+function buildToolCallEventsWithArgs(name: string, args: Record<string, unknown>): SseEvent[] {
+  const sequence = ++responseSequence;
+  const responseId = `resp_qa_timeout_recovery_tool_${sequence}`;
+  const itemId = `fc_qa_timeout_recovery_${sequence}`;
+  const callId = `call_qa_timeout_recovery_${sequence}`;
+  const argumentsText = JSON.stringify(args);
+  const item = {
+    type: "function_call",
+    id: itemId,
+    call_id: callId,
+    name,
+    arguments: argumentsText,
+  };
+  return [
+    {
+      type: "response.created",
+      response: {
+        id: responseId,
+        object: "response",
+        status: "in_progress",
+        output: [],
+        created_at: Math.floor(Date.now() / 1_000),
+      },
+    },
+    {
+      type: "response.output_item.added",
+      output_index: 0,
+      item: { ...item, arguments: "" },
+    },
+    {
+      type: "response.function_call_arguments.delta",
+      item_id: itemId,
+      output_index: 0,
+      delta: argumentsText,
+    },
+    {
+      type: "response.function_call_arguments.done",
+      item_id: itemId,
+      output_index: 0,
+      name,
+      arguments: argumentsText,
+    },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: responseId,
+        object: "response",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 64, output_tokens: 16, total_tokens: 80 },
+      },
+    },
+  ];
+}
+
+function writeSse(response: ServerResponse, events: SseEvent[]) {
   response.writeHead(200, { "content-type": "text/event-stream", connection: "keep-alive" });
   response.end(
     `${events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")}data: [DONE]\n\n`,
   );
 }
 
-function withUsage(events: StreamEvent[], inputTokens: number): StreamEvent[] {
-  return events.map((event) =>
-    event.type === "response.completed"
-      ? {
-          ...event,
-          response: {
-            ...event.response,
-            usage: { input_tokens: inputTokens, output_tokens: 8, total_tokens: inputTokens + 8 },
-          },
-        }
-      : event,
-  );
+function withUsage(events: SseEvent[], inputTokens: number): SseEvent[] {
+  return events.map((event) => {
+    if (event.type !== "response.completed" || !event.response) {
+      return event;
+    }
+    return {
+      ...event,
+      response: {
+        ...event.response,
+        usage: { input_tokens: inputTokens, output_tokens: 8, total_tokens: inputTokens + 8 },
+      },
+    };
+  });
 }
 
 async function startProofProvider() {
@@ -191,15 +301,7 @@ describe("Gateway timeout recovery subagent delivery", () => {
     cleanups.push(async () => expect((await owner.stop()).errors).toEqual([]));
     const gateway = await owner.start({
       repoRoot: REPO_ROOT,
-      command: {
-        executablePath: process.execPath,
-        argsPrefix: [
-          "/home/obviyus/Developer/openclaw/node_modules/tsx/dist/cli.mjs",
-          path.join(REPO_ROOT, "src/entry.ts"),
-        ],
-        cwd: REPO_ROOT,
-        usePackagedPlugins: false,
-      },
+      useRepoCli: true,
       providerBaseUrl: `${provider.baseUrl}/v1`,
       providerMode: "mock-openai",
       primaryModel: MODEL,
@@ -208,11 +310,6 @@ describe("Gateway timeout recovery subagent delivery", () => {
       transportBaseUrl: bus.baseUrl,
       controlUiEnabled: false,
       mutateConfig: withTimeoutConfig,
-      runtimeEnvPatch: {
-        NODE_OPTIONS: "--conditions=import",
-        OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS: "1",
-        OPENCLAW_BUNDLED_PLUGINS_DIR: "/home/obviyus/Developer/openclaw/dist/extensions",
-      },
     });
     await transport.waitReady({ gateway });
     const sinceIndex = state
@@ -249,7 +346,9 @@ describe("Gateway timeout recovery subagent delivery", () => {
     const task = listing.tasks?.find((entry) => entry.title === "qa-timeout-recovery-child");
     expect(task?.runId).toBeTypeOf("string");
     const database = openOpenClawStateDatabase({ env: gateway.runtimeEnv });
-    cleanups.push(async () => closeOpenClawStateDatabaseByPath(database.path));
+    cleanups.push(async () => {
+      closeOpenClawStateDatabaseByPath(database.path);
+    });
     const ledger = readSubagentRun(database, String(task?.runId));
     expect(ledger?.execution.outcome?.status).toBe("ok");
     console.log(
