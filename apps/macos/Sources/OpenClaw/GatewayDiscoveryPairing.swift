@@ -14,9 +14,11 @@ enum GatewayDiscoveryPairingError: LocalizedError, Equatable {
         case .secureSetupRequired:
             "Use a TLS setup code that includes a certificate fingerprint and bootstrap token."
         case .deviceCredentialNotIssued:
-            "The Gateway authenticated, but did not issue both reusable device credentials. Create a fresh full-access setup code."
+            "The Gateway authenticated, but did not issue both reusable device credentials. " +
+                "Create a fresh full-access setup code."
         case .configSaveFailed:
-            "The Gateway authenticated, but OpenClaw could not save the new route. Your existing connection was preserved."
+            "The Gateway authenticated, but OpenClaw could not save the new route. " +
+                "Your existing connection was preserved."
         }
     }
 }

@@ -477,7 +477,7 @@ struct OnboardingViewSmokeTests {
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
 
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             let state = AppState(preview: true)
             state.connectionMode = .remote
             let previousGatewayPreference = captureOnboardingGatewayPreference()
@@ -588,7 +588,7 @@ struct OnboardingViewSmokeTests {
             routeIdentity: "remote:id:gateway-a",
             defaults: defaults)
 
-        await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
+        try await TestIsolation.withEnvValues(["OPENCLAW_CONFIG_PATH": override]) {
             let state = AppState(preview: true)
             state.connectionMode = .remote
             let previousGatewayPreference = captureOnboardingGatewayPreference()
