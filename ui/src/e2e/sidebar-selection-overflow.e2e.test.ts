@@ -63,7 +63,9 @@ suite.define(() => {
           maskImage: scrollerStyle.maskImage,
           maskPosition: scrollerStyle.maskPosition,
           maskSize: scrollerStyle.maskSize,
+          paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
           rowRight: rowRect.right,
+          sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
           overflows: scroller.scrollHeight > scroller.clientHeight,
           scrollbarGutter: scrollerStyle.scrollbarGutter,
           scrollbarWidth: scroller.offsetWidth - scroller.clientWidth,
@@ -82,7 +84,11 @@ suite.define(() => {
       expect(rtlMaskPosition.split(", ").at(-1)?.split(" ")[0]).toBe("0%");
       expect(geometry.scrollbarGutter).toBe("stable");
       expect(geometry.scrollbarWidth).toBeGreaterThan(0);
-      expect(geometry.contentEdge - geometry.rowRight, JSON.stringify(geometry)).toBeCloseTo(4, 1);
+      expect(geometry.paddingInlineEnd).toBe(geometry.sidebarPadX);
+      expect(geometry.contentEdge - geometry.rowRight, JSON.stringify(geometry)).toBeCloseTo(
+        geometry.sidebarPadX,
+        1,
+      );
 
       if (captureProof) {
         await page.screenshot({

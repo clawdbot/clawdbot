@@ -1137,6 +1137,8 @@ openclaw-settings-save-indicator:empty {
 }
 
 .sidebar-shell__body {
+  /* Nav items add 8px padding plus a 1px border before their 20px lead.
+     Keep session labels on that same text column. */
   --sidebar-inset: 9px;
   --sidebar-lead: 20px;
   --sidebar-row-gap: 8px;
@@ -1152,10 +1154,10 @@ openclaw-settings-save-indicator:empty {
   overflow-x: hidden;
   overflow-y: auto;
   scrollbar-gutter: stable;
-  /* Cancel shell padding so the thumb hugs the edge; the browser gutter owns
-     classic width, while this 4px inset stays constant in both modes. */
-  margin-right: calc(-1 * var(--sidebar-pad-x));
-  padding-right: 4px;
+  /* Cancel shell padding so the thumb hugs the inline edge. The stable gutter
+     owns classic width; shared padding preserves symmetry with overlay scrollbars. */
+  margin-inline-end: calc(-1 * var(--sidebar-pad-x));
+  padding-inline-end: var(--sidebar-pad-x);
 }
 
 /* Chrome, not content: the strip bleeds past both shell gutters. Negating the
@@ -1180,7 +1182,6 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  padding: 0 8px;
   margin-top: var(--sidebar-group-gap);
   border-radius: var(--radius-md);
   transition:
@@ -1209,7 +1210,6 @@ openclaw-settings-save-indicator:empty {
   align-items: center;
   gap: 2px;
   min-height: 24px;
-  margin-inline: -8px 0;
   padding: 0 10px 0 var(--sidebar-text-offset);
 }
 
@@ -1286,9 +1286,6 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  /* Cancel the section inset so every sidebar family shares the scroll
-     container's 4px content edge; scrollbar clearance belongs to its gutter. */
-  margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
 }
@@ -2288,7 +2285,7 @@ openclaw-settings-save-indicator:empty {
   flex-direction: column;
   gap: 4px;
   padding-top: 12px;
-  margin-block: 12px 10px;
+  margin: 12px 0 10px;
   border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
   border-radius: 0;
 }

@@ -97,6 +97,7 @@ suite.define(() => {
           throw new Error("Missing sidebar scroll container");
         }
         const scrollerBounds = scroller.getBoundingClientRect();
+        const scrollerStyle = getComputedStyle(scroller);
         const scrollbarWidth = scroller.offsetWidth - scroller.clientWidth;
         const contentEdge = scrollerBounds.right - scrollbarWidth;
         const bounds = (selector: string) => {
@@ -128,7 +129,9 @@ suite.define(() => {
           regularSessionLabel: bounds(
             '.sidebar-sessions .sidebar-recent-session[data-session-key="agent:main:alignment-1"] .sidebar-recent-session__name',
           ),
-          scrollbarGutter: getComputedStyle(scroller).scrollbarGutter,
+          paddingInlineEnd: Number.parseFloat(scrollerStyle.paddingInlineEnd),
+          sidebarPadX: Number.parseFloat(scrollerStyle.getPropertyValue("--sidebar-pad-x")),
+          scrollbarGutter: scrollerStyle.scrollbarGutter,
           scrollbarWidth,
           overflows: scroller.scrollHeight > scroller.clientHeight,
           sessionHeader: bounds(".sidebar-sessions .sidebar-recent-sessions__head"),
@@ -153,15 +156,17 @@ suite.define(() => {
             layout.toolbar,
           ].map(({ left }) => left),
         ),
-      ).toEqual(new Set([10]));
+      ).toEqual(new Set([layout.nav.left]));
       expect(layout.onlineHeader.right).toBe(layout.sessionHeader.right);
       expect(layout.onlineRow.right).toBe(layout.sessionRow.right);
       expect(layout.nav.right).toBe(layout.sessionRow.right);
       expect(layout.catalogCodex.right).toBe(layout.sessionHeader.right);
       expect(layout.catalogClaude.right).toBe(layout.sessionHeader.right);
+      expect(layout.toolbar.right).toBe(layout.sessionHeader.right);
       expect(layout.pinnedSessionLabel.left).toBe(layout.navLabel.left);
       expect(layout.regularSessionLabel.left).toBe(layout.navLabel.left);
-      expect(layout.contentEdge - layout.sessionRow.right).toBe(4);
+      expect(layout.paddingInlineEnd).toBe(layout.sidebarPadX);
+      expect(layout.contentEdge - layout.sessionRow.right).toBeCloseTo(layout.sidebarPadX, 1);
     } finally {
       await suite.closeBrowserContext(context);
     }
