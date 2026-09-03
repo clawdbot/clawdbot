@@ -293,11 +293,10 @@ export async function defaultPersistDigest(params: {
     },
     { preserveActivity: true },
   );
-  const accepted = result === null ? null : applied;
-  if (accepted) {
+  if (applied) {
     sessionObserverDigestVersion += 1;
   }
-  return accepted;
+  return result === null ? null : applied;
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {
