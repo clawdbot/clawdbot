@@ -26,6 +26,7 @@ import {
   getQueueState,
   type LaneState,
   normalizeLane,
+  removeLaneQueueEntry,
   type QueueEntry,
   type QueuePriority,
 } from "./command-queue.state.js";
@@ -546,6 +547,9 @@ export function enqueueCommandInLane<T>(
   task: (marker: CommandLaneTaskMarker) => Promise<T>,
   opts?: CommandQueueEnqueueOptions,
 ): Promise<T> {
+  if (opts?.abortSignal?.aborted) {
+    return Promise.reject(opts.abortSignal.reason);
+  }
   const queueState = getQueueState();
   if (isGatewaySubordinateWorkAdmissionClosed()) {
     return Promise.reject(new GatewayDrainingError());
@@ -574,6 +578,17 @@ export function enqueueCommandInLane<T>(
       onWait: opts?.onWait,
     };
     enqueueLaneEntry(state, entry);
+    const signal = opts?.abortSignal;
+    if (signal) {
+      const onAbort = () => {
+        if (removeLaneQueueEntry(state.queue, entry)) {
+          entry.reject(signal.reason);
+          retireIdleScopedCommandLane(state);
+        }
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      entry.releaseQueuedAbort = () => signal.removeEventListener("abort", onAbort);
+    }
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainReadyCommandLane(cleaned);
     if (entry.queued) {

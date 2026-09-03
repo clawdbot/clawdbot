@@ -312,11 +312,10 @@ describe("queued embedded run context liveness", () => {
 
         abort.abort(new Error("queued run canceled"));
         expect(isAgentRunWaitingForCapacity(params.runId)).toBe(false);
-        expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(1);
+        expect(getCommandLaneSnapshot(blockedLane).queuedCount).toBe(0);
         expect(sweepStaleRunContexts()).toBe(1);
         expect(getAgentRunContext(params.runId)).toBeUndefined();
 
-        setCommandLaneConcurrency(blockedLane, 1);
         await expect(run).rejects.toThrow("queued run canceled");
       } finally {
         setCommandLaneConcurrency(blockedLane, 1);
