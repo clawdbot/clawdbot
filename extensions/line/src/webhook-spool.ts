@@ -234,7 +234,7 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           missingParts = set.missing;
           options.runtime.error?.(
             danger(
-              `line: image set ${imageSet.setId} delivered ${set.events.length} of ${set.events.length + set.missing} parts`,
+              `line: image set ${imageSet.setId} delivered ${set.events.length} parts, ${set.missing} still missing from the send`,
             ),
           );
         }
