@@ -304,7 +304,7 @@ module.exports = {
   return pluginFile;
 }
 
-export async function expectNativeHarnessModelsPublished(params: {
+async function expectNativeHarnessModelsPublished(params: {
   config: OpenClawConfig;
   metadataSnapshot: PluginMetadataSnapshot;
   snapshot: PreparedModelRuntimeSnapshot;
