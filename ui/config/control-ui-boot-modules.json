@@ -1525,13 +1525,11 @@
   "src/cli/quote-cli-arg.ts",
   "ui/src/components/agent-select-registration.ts",
   "ui/src/components/capacity-meter.ts",
-  "ui/src/components/community-invite-card.ts",
   "ui/src/components/login-gate.ts",
   "ui/src/components/web-awesome-popover.ts",
   "ui/src/components/worker-capacity.ts",
   "ui/src/i18n/locales/en-new-session-setup.ts",
   "ui/src/lib/platform-label.ts",
-  "ui/src/lib/product-links.ts",
   "ui/src/lib/worktrees/create-worktree.ts",
   "ui/src/pages/new-session/attachment-draft.ts",
   "ui/src/pages/new-session/background-session-notice.ts",
@@ -1582,7 +1580,6 @@
   "ui/src/pages/new-session/terminal-start.ts",
   "ui/src/pages/new-session/where-chip.ts",
   "ui/src/styles/capacity-meter.css",
-  "ui/src/styles/community-invite-card.css",
   "ui/src/styles/new-session.css"
  ],
  "chat": [
