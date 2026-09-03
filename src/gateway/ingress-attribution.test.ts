@@ -70,6 +70,37 @@ describe("gateway ingress attribution", () => {
   );
 
   it.each([
+    ["an IPv4-mapped CIDR", "::ffff:10.0.0.0/104"],
+    ["its equivalent plain IPv4 CIDR", "10.0.0.0/8"],
+  ])(
+    "attributes the forwarded client through a proxy trusted by %s",
+    async (_name, trustedProxy) => {
+      const attribution = prepareGatewayIngressAttribution({
+        req: request({ remoteAddress: "10.1.2.3", forwardedFor: "203.0.113.9" }),
+        trustedProxies: [trustedProxy],
+      });
+
+      expect(attribution).toMatchObject({
+        kind: "trusted-proxy",
+        clientIp: "203.0.113.9",
+        rateLimit: { subject: { key: "203.0.113.9" } },
+      });
+    },
+  );
+
+  it("rejects a proxy that falls outside an IPv4-mapped trusted range", async () => {
+    const attribution = prepareGatewayIngressAttribution({
+      req: request({ remoteAddress: "11.1.2.3", forwardedFor: "203.0.113.9" }),
+      trustedProxies: ["::ffff:10.0.0.0/104"],
+    });
+
+    expect(attribution).toMatchObject({
+      kind: "unattributable-proxy",
+      reason: "proxy_attribution_required",
+    });
+  });
+
+  it.each([
     ["missing", undefined],
     ["loopback", "127.0.0.1"],
   ])(
