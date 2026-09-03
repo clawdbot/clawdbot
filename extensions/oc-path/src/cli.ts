@@ -9,6 +9,7 @@
 import { constants as fsConstants, promises as fs } from "node:fs";
 import { resolve as resolvePath } from "node:path";
 import type { Command } from "commander";
+import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from "diff";
 import {
   MAX_JSONC_INPUT_BYTES,
   OcEmitSentinelError,
@@ -268,61 +269,45 @@ function formatMatchHuman(match: OcMatch): string {
   return `root @ L${match.line}`;
 }
 
-function splitDiffLines(s: string): readonly string[] {
-  return s === "" ? [] : s.split("\n");
-}
-
 function formatUnifiedDiff(oldBytes: string, newBytes: string, fsPath: string): string {
   if (oldBytes === newBytes) {
     return "";
   }
-  const oldLines = splitDiffLines(oldBytes);
-  const newLines = splitDiffLines(newBytes);
-  let prefix = 0;
-  while (
-    prefix < oldLines.length &&
-    prefix < newLines.length &&
-    oldLines[prefix] === newLines[prefix]
-  ) {
-    prefix++;
+  const oldLines = oldBytes.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  const newLines = newBytes.match(/[^\n]*\n|[^\n]+$/g) ?? [];
+  let start = 0;
+  while (start < oldLines.length && oldLines[start] === newLines[start]) {
+    start++;
   }
+  let oldEnd = oldLines.length;
+  let newEnd = newLines.length;
+  while (oldEnd > start && newEnd > start && oldLines[oldEnd - 1] === newLines[newEnd - 1]) {
+    oldEnd--;
+    newEnd--;
+  }
+  const contextStart = Math.max(0, start - 3);
+  const trailing = Math.min(3, oldLines.length - oldEnd);
 
-  let oldSuffix = oldLines.length - 1;
-  let newSuffix = newLines.length - 1;
-  while (
-    oldSuffix >= prefix &&
-    newSuffix >= prefix &&
-    oldLines[oldSuffix] === newLines[newSuffix]
-  ) {
-    oldSuffix--;
-    newSuffix--;
-  }
-
-  const context = 3;
-  const hunkStart = Math.max(0, prefix - context);
-  const hunkOldEnd = Math.min(oldLines.length - 1, oldSuffix + context);
-  const hunkNewEnd = Math.min(newLines.length - 1, newSuffix + context);
-  const oldCount = Math.max(0, hunkOldEnd - hunkStart + 1);
-  const newCount = Math.max(0, hunkNewEnd - hunkStart + 1);
-  const lines = [
-    `--- ${fsPath}`,
-    `+++ ${fsPath}`,
-    `@@ -${hunkStart + 1},${oldCount} +${hunkStart + 1},${newCount} @@`,
-  ];
-
-  for (let i = hunkStart; i < prefix; i++) {
-    lines.push(` ${oldLines[i] ?? ""}`);
-  }
-  for (let i = prefix; i <= oldSuffix; i++) {
-    lines.push(`-${oldLines[i] ?? ""}`);
-  }
-  for (let i = prefix; i <= newSuffix; i++) {
-    lines.push(`+${newLines[i] ?? ""}`);
-  }
-  for (let i = Math.max(oldSuffix + 1, prefix); i <= hunkOldEnd; i++) {
-    lines.push(` ${oldLines[i] ?? ""}`);
-  }
-  return `${lines.join("\n")}\n`;
+  // Empty-side patches preserve newline markers without a quadratic search
+  // when a Markdown edit normalizes every CRLF line in a large file.
+  const formatLines = (prefix: string, lines: string[]) =>
+    (structuredPatch("", "", "", lines.join("")).hunks[0]?.lines ?? []).map((line) =>
+      line.startsWith("+") ? `${prefix}${line.slice(1)}` : line,
+    );
+  const patch = structuredPatch(fsPath, fsPath, "", "");
+  patch.hunks.push({
+    oldStart: contextStart + 1,
+    oldLines: oldEnd - contextStart + trailing,
+    newStart: contextStart + 1,
+    newLines: newEnd - contextStart + trailing,
+    lines: [
+      ...formatLines(" ", oldLines.slice(contextStart, start)),
+      ...formatLines("-", oldLines.slice(start, oldEnd)),
+      ...formatLines("+", newLines.slice(start, newEnd)),
+      ...formatLines(" ", oldLines.slice(oldEnd, oldEnd + trailing)),
+    ],
+  });
+  return formatPatch(patch, FILE_HEADERS_ONLY);
 }
 
 // ---------- Commands -----------------------------------------------------

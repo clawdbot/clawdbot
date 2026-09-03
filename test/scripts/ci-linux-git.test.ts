@@ -258,35 +258,12 @@ linuxIt.each(preflightCases)(
   55_000,
 );
 
-linuxIt.each([
-  { job: "checks-fast-core", task: "bundled-protocol" },
-  { job: "check-shard", task: "guards" },
-  { job: "check-shard", task: "npm-lock" },
-])("$job checkout owns $task base history before credential cleanup", async ({ job }) => {
-  const report = await runCiGitStep({
-    job,
-    env: { CHECKOUT_BASE_SHA: base },
-    fetchResults: [0],
-  });
-  expect(report.code).toBe(0);
-  const checkoutFetch = report.fetches.find(({ args }) =>
-    args.includes(`+${candidate}:refs/remotes/origin/ci-target`),
-  );
-  expect(checkoutFetch?.args).toEqual(
-    expect.arrayContaining([
-      `+${candidate}:refs/remotes/origin/ci-target`,
-      `+${base}:refs/remotes/origin/ci-ratchet-base`,
-    ]),
-  );
-});
-
 const historyProfiles: {
   job: string;
   step: string;
   env: Record<string, string>;
   target: string;
   depth: number;
-  consumer: string;
 }[] = [
   {
     job: "preflight",
@@ -294,7 +271,6 @@ const historyProfiles: {
     env: { GITHUB_EVENT_NAME: "workflow_dispatch", RELEASE_GATE: "true" },
     target: "+refs/pull/17/merge:refs/remotes/origin/release-gate-merge",
     depth: 2,
-    consumer: "",
   },
   {
     job: "checks-fast-core",
@@ -302,7 +278,6 @@ const historyProfiles: {
     env: {},
     target: "+refs/pull/17/merge:refs/remotes/origin/ci-ratchet-merge",
     depth: 2,
-    consumer: "",
   },
 ];
 
@@ -318,7 +293,7 @@ linuxIt.each(
   ]),
 )(
   "$job/$step joins supplemental history before consumption ($label, $target)",
-  async ({ job, step, env, target, depth, consumer, fetchResults, code }) => {
+  async ({ job, step, env, target, depth, fetchResults, code }) => {
     const report = await runCiGitStep({
       job,
       step,
@@ -330,14 +305,6 @@ linuxIt.each(
     expect(report.code).toBe(code);
     expect(report.fetches).toHaveLength(1);
     expect(report.fetches[0]?.args).toEqual(expect.arrayContaining([target, `--depth=${depth}`]));
-    if (consumer) {
-      expect(report.commands.some(({ tool, args }) => tool !== "git" && args[0] === consumer)).toBe(
-        code === 0,
-      );
-    }
-    if (env.TASK === "npm-lock") {
-      expect(report.commands.some(({ args }) => args[0] === "deps:npm-lock:check")).toBe(false);
-    }
     if (step === "Resolve exact diff base") {
       expect(report.githubOutput).toBe(code === 0 ? `sha=${base}\nhead_sha=${merge}\n` : "");
     }

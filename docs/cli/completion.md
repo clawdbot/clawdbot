@@ -48,6 +48,7 @@ Installed source lines preserve literal cache paths, including spaces, quotes, d
 
 - Without `--install` or `--write-state`, the command prints the script to stdout.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
+- Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands.
 - `openclaw update` refreshes the completion cache automatically after a successful update; `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related

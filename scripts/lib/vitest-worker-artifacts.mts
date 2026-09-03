@@ -10,6 +10,8 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  "extensions/qa-lab/gateway-child-artifacts-runtime.test-support":
+    "extensions/qa-lab/src/gateway-child-artifacts-runtime.test-support.ts",
   "agents/command/cli-compaction-runtime.test-support":
     "src/agents/command/cli-compaction-runtime.test-support.ts",
   "cron/owner-hardening-runtime.test-support": "src/cron/owner-hardening-runtime.test-support.ts",
@@ -18,6 +20,8 @@ export const vitestWorkerDeclarationEntries = {
   "node-host/config-runtime.test-support": "src/node-host/config-runtime.test-support.ts",
   "skills/library/persistence-runtime.test-support":
     "src/skills/library/persistence-runtime.test-support.ts",
+  "state/openclaw-state-lease-runtime.test-support":
+    "src/state/openclaw-state-lease-runtime.test-support.ts",
   "tui/tui-pty-runtime-test-support": "src/tui/tui-pty-runtime-test-support.ts",
 };
 

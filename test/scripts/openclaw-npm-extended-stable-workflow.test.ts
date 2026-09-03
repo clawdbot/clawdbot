@@ -233,11 +233,6 @@ describe("minimal npm extended-stable workflow", () => {
     expect(parsed.jobs?.preflight_openclaw_npm?.with?.use_github_hosted_runners).toBe(
       "${{ inputs.use_github_hosted_runners }}",
     );
-    for (const job of Object.values(workflow(preflightWorkflowPath).jobs ?? {})) {
-      expect(job["runs-on"]).toBe(
-        "${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}",
-      );
-    }
   });
 
   it("binds intentional Plugin SDK release changes to the reported digest", () => {

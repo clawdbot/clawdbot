@@ -21,6 +21,7 @@ import type {
   PendingSessionPlacementRecoveryState,
   SubmissionOutcomeReason,
 } from "./session-placement-recovery-state.ts";
+import { readNewSessionTerminalStartAccess } from "./terminal-start.ts";
 
 // Silent gates are the only submit blocks allowed to omit a visible reason:
 // the busy Start button and an empty draft already explain themselves. Every
@@ -149,7 +150,6 @@ type SubmitGateHost = {
   submissionSnapshot(): DraftSubmissionSnapshot;
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
-  terminalStartAccess(): SessionMethodAccess;
   placementTargetForSubmission(): SessionPlacementTarget | null;
   cloudDisabledReason(): string | undefined;
   cloudRuntimeUnsupportedReason(): string | undefined;
@@ -157,11 +157,11 @@ type SubmitGateHost = {
 
 export function resolveNewSessionSubmitBlock(
   host: SubmitGateHost,
-  kind: "session" | "terminal",
 ): NewSessionSubmitBlock | undefined {
   const gateway = host.gatewayState;
   const place = host.placeState;
   const snapshot = host.submissionSnapshot();
+  const kind = catalog.isTarget(snapshot.data) ? "terminal" : "session";
   const pendingPlacementActive = Boolean(host.pendingPlacement.sessionKey);
   if (host.submitting) {
     return { gate: "submitting" };
@@ -169,7 +169,6 @@ export function resolveNewSessionSubmitBlock(
   if (
     host.mentions.length > 0 &&
     (kind === "terminal" ||
-      catalog.isTarget(snapshot.data) ||
       host.visibility === "incognito" ||
       host.message.trimStart().startsWith("/"))
   ) {
@@ -177,20 +176,20 @@ export function resolveNewSessionSubmitBlock(
   }
   if (
     gateway.preferenceLoading ||
-    place.modelControl.isRestoringPreference() ||
+    (kind === "session" && place.modelControl.isRestoringPreference()) ||
     !place.placementPreferenceReady
   ) {
     return { gate: "preference-restore", reason: t("newSession.restoringPreferences") };
   }
-  if (host.requiresModelSetup()) {
+  if (kind === "session" && host.requiresModelSetup()) {
     return { gate: "model-setup", reason: t("modelSetup.required.title") };
   }
   if (catalog.isRoutePending(snapshot.data, snapshot.context?.sessions)) {
     return { gate: "route-pending", reason: t("newSession.catalogUnavailable") };
   }
-  const modelUnavailableMessage = chatModelUnavailableMessage(
-    place.modelControl.modelUnavailableReason(place.selectedAgent()),
-  );
+  const modelUnavailableMessage =
+    kind === "session" &&
+    chatModelUnavailableMessage(place.modelControl.modelUnavailableReason(place.selectedAgent()));
   if (modelUnavailableMessage) {
     return { gate: "model-unavailable", reason: modelUnavailableMessage };
   }
@@ -215,9 +214,34 @@ export function resolveNewSessionSubmitBlock(
     // cause; checked here so the gates below can rely on a live client.
     return { gate: "disconnected", reason: t("sessionsView.actionRequiresConnection") };
   }
-  const access = kind === "terminal" ? host.terminalStartAccess() : host.submissionAccess();
+  const access =
+    kind === "terminal"
+      ? readNewSessionTerminalStartAccess(connection.snapshot, place.worktree)
+      : host.submissionAccess();
   if (!access.allowed) {
     return { gate: "access", reason: access.reason };
+  }
+  if (kind === "terminal") {
+    if (
+      snapshot.context?.config.current.cliAgentsEnabled !== true ||
+      !snapshot.context.config.current.terminalEnabled
+    ) {
+      return { gate: "terminal-capabilities", reason: t("newSession.terminalDisabled") };
+    }
+    if (
+      !snapshot.data?.terminalHosts?.some((candidate) => candidate.hostId === place.terminalHostId)
+    ) {
+      return { gate: "device", reason: t("newSession.terminalHostUnavailable") };
+    }
+    if (host.hasDraftAttachments) {
+      return {
+        gate: "terminal-capabilities",
+        reason: t("newSession.terminalAttachmentsUnsupported"),
+      };
+    }
+    if (place.remotePlacement || host.pendingPlacement.sessionKey) {
+      return { gate: "device", reason: t("newSession.terminalPlacementUnsupported") };
+    }
   }
   if (kind === "terminal" && host.hasCapabilityOverrides) {
     return {
@@ -249,7 +273,7 @@ export function resolveNewSessionSubmitBlock(
   if (!catalog.allowsSelectedAgent(snapshot.data, place.selectedAgent())) {
     return { gate: "agent-not-allowed", reason: t("newSession.catalogUnavailable") };
   }
-  if (!place.devicePlacementReady()) {
+  if (kind === "session" && !place.devicePlacementReady()) {
     return {
       gate: "device",
       reason: place.devicePlacementDisabledReason() ?? t("newSession.nodeUnavailable"),
@@ -292,7 +316,10 @@ export function resolveNewSessionSubmitBlock(
   if (place.worktree && !isWorktreeNameValid(place.worktreeName)) {
     return { gate: "worktree-name", reason: t("newSession.worktreeNameInvalid") };
   }
-  if (kind === "terminal" && !(place.folder.trim() || place.workspacePath())) {
+  if (
+    kind === "terminal" &&
+    !(place.folder.trim() || (!place.terminalOnNode && place.workspacePath()))
+  ) {
     return { gate: "terminal-folder", reason: t("newSession.terminalNeedsFolder") };
   }
   return emptyDraftBlock(host, kind, pendingPlacementActive);

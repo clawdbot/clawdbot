@@ -183,7 +183,7 @@ export class NewSessionModelControl {
             status: "ready",
             owner,
             targets: result.catalogs
-              .filter((catalog) => catalog.capabilities.createSession !== undefined)
+              .filter((catalog) => catalog.capabilities.startTerminal === true)
               .map(({ id, label }) => ({ id, label })),
           };
           this.notify();

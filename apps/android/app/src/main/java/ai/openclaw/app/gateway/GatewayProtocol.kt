@@ -924,6 +924,7 @@ enum class GatewayEvent(
   TalkMode("talk.mode"),
   TalkEvent("talk.event"),
   Shutdown("shutdown"),
+  GatewaySuspension("gateway.suspension"),
   Health("health"),
   Heartbeat("heartbeat"),
   Cron("cron"),

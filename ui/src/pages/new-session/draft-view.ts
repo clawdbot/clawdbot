@@ -61,7 +61,7 @@ export function renderNewSessionDraftView(options: {
         titlePreparation.setComposing(false);
       }}
     >
-      ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission)}
+      ${renderTargetBar()} ${renderNewSessionDraftErrors(place, submission, isCatalogTarget)}
       ${renderNewSessionDraftComposer({
         agent: place.selectedAgent(),
         agentId: place.agentId,
@@ -98,14 +98,9 @@ export function renderNewSessionDraftView(options: {
         textareaController: submission.composerTextarea,
         voiceControl,
         messageLocked: Boolean(submission.pendingPlacement.sessionKey),
-        terminalAction: submission.showStartInTerminal()
-          ? {
-              canStart:
-                !submission.submitting && !dictationLocked && submission.canSubmit("terminal"),
-              disabledReason: submission.submitBlock("terminal")?.reason,
-              onStart: () => void submission.startInTerminal(),
-            }
-          : undefined,
+        nativeTerminal: isCatalogTarget,
+        onUnsupportedAttachment: () =>
+          submission.setError(t("newSession.terminalAttachmentsUnsupported")),
         onInput: onMessage,
         onOpenImage,
         onVisibilityChange: (visibility) => {
@@ -115,7 +110,7 @@ export function renderNewSessionDraftView(options: {
         },
         onSubmit: () => void submission.submit(),
         onBackgroundSubmit:
-          submission.visibility === "draft"
+          submission.visibility === "draft" || isCatalogTarget
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
@@ -129,7 +124,9 @@ export function renderNewSessionDraftView(options: {
               : nothing}
           </div>`
         : nothing}
-      ${renderNewSessionIncognitoNotice(submission.visibility === "incognito")}
+      ${!isCatalogTarget
+        ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
+        : nothing}
     </div>
   `;
 }

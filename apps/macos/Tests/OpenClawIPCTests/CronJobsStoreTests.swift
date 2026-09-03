@@ -65,7 +65,8 @@ private final class CronGatewayFixture: @unchecked Sendable {
         recoveryEligible: Bool = false,
         initialRunsFailure: (any Error & Sendable)? = nil,
         holdJobList: Bool = false,
-        onRequestRecorded: (@Sendable () -> Void)? = nil)
+        onRequestRecorded: (@Sendable () -> Void)? = nil,
+        onEndpointLookup: (@Sendable (Int) async -> Void)? = nil)
     {
         let requests = CronGatewayRequestLog()
         self.requests = requests
@@ -107,6 +108,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
             self.gateway = GatewayConnection(
                 endpointProvider: {
                     await requests.lookupEndpoint()
+                    await onEndpointLookup?(requests.endpointLookupCount())
                     return GatewayConnection.EndpointSnapshot(
                         config: (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil),
                         routeAuthority: nil)
@@ -118,6 +120,7 @@ private final class CronGatewayFixture: @unchecked Sendable {
             self.gateway = GatewayConnection(
                 configProvider: {
                     await requests.lookupEndpoint()
+                    await onEndpointLookup?(requests.endpointLookupCount())
                     return (url: URL(string: "ws://127.0.0.1:1")!, token: nil, password: nil)
                 },
                 sessionBox: WebSocketSessionBox(session: self.session))
@@ -214,7 +217,7 @@ struct CronJobsStoreTests {
             await store.refreshJobs()
         }
         func cleanup() async {
-            store.stop()
+            store.stop(.settings)
             refresh.cancel()
             signal.finish()
             await refresh.value
@@ -229,7 +232,7 @@ struct CronJobsStoreTests {
             let pending = try #require(recorded, "refresh ended before cron.list arrived")
             // A buffered request can outlive its refresh; stop must still precede completion.
             try #require(store.isLoadingJobs)
-            store.stop()
+            store.stop(.settings)
             store.lastError = "current pane error"
             if succeeds {
                 try await fixture.respondWithJobs(to: pending)
@@ -252,7 +255,7 @@ struct CronJobsStoreTests {
     @Test func `selecting another job sends its history request while the previous request is pending`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let firstRequest = try #require(await fixture.waitForRequest(jobId: "job-a"))
         store.runEntries = [self.entry(jobId: "job-a", summary: "old A")]
@@ -285,7 +288,7 @@ struct CronJobsStoreTests {
     @Test func `late failure from a superseded job preserves the selected jobs own failure`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let firstRequest = try #require(await fixture.waitForRequest(jobId: "job-a"))
         store.runEntries = [self.entry(jobId: "job-a", summary: "old A")]
@@ -312,7 +315,7 @@ struct CronJobsStoreTests {
     func `manual refresh replaces the selected jobs pending request without accepting stale success`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let originalRequest = try #require(await fixture.waitForRequest(jobId: "job-a"))
 
@@ -337,7 +340,7 @@ struct CronJobsStoreTests {
     @Test func `manual refresh after failure clears the old error and publishes the successful retry`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let failedRequest = try #require(await fixture.waitForRequest(jobId: "job-a"))
         try await fixture.fail(failedRequest, message: "temporary history failure")
@@ -359,8 +362,8 @@ struct CronJobsStoreTests {
     @Test func `finished events refresh only the job still selected after their debounce`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
-        store.start()
+        defer { store.stop(.settings) }
+        store.start(.settings)
         try #require(await self.waitUntil { store.jobs.count == 2 })
         store.selectJob("job-a")
         let firstRequest = try #require(await fixture.waitForRequest(jobId: "job-a"))
@@ -397,9 +400,9 @@ struct CronJobsStoreTests {
     {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         if source == "event" {
-            store.start()
+            store.start(.settings)
             try #require(await self.waitUntil { store.jobs.count == 2 })
         }
         store.selectJob("job-a")
@@ -417,7 +420,7 @@ struct CronJobsStoreTests {
         let previousHistory = store.runEntries.map(\.summary)
         let previousError = store.lastError
 
-        store.stop()
+        store.stop(.settings)
 
         #expect(!store.isLoadingRuns)
         if outcome == "success" {
@@ -437,7 +440,7 @@ struct CronJobsStoreTests {
     @Test func `removing the selected job cancels its pending history before refreshing jobs`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let pending = try #require(await fixture.waitForRequest(jobId: "job-a"))
         store.runEntries = [self.entry(jobId: "job-a", summary: "removed history")]
@@ -460,7 +463,7 @@ struct CronJobsStoreTests {
     func `job list refresh invalidates pending history when another client removed its selected job`() async throws {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
-        defer { store.stop() }
+        defer { store.stop(.settings) }
         store.selectJob("job-a")
         let pending = try #require(await fixture.waitForRequest(jobId: "job-a"))
         store.runEntries = [self.entry(jobId: "job-a", summary: "old history")]
@@ -482,7 +485,7 @@ struct CronJobsStoreTests {
     @Test func `superseded history never activates the local Gateway or its launch agent`() async throws {
         try await self.withLocalGatewayRecovery { fixture in
             let store = CronJobsStore(gateway: fixture.gateway)
-            defer { store.stop() }
+            defer { store.stop(.settings) }
             store.selectJob("job-a")
             _ = try #require(await fixture.waitForRequest(jobId: "job-a"))
 
@@ -505,7 +508,7 @@ struct CronJobsStoreTests {
     @Test func `uncancelled history transport failures activate the Gateway and retry`() async throws {
         try await self.withLocalGatewayRecovery(initialRunsFailure: URLError(.networkConnectionLost)) { fixture in
             let store = CronJobsStore(gateway: fixture.gateway)
-            defer { store.stop() }
+            defer { store.stop(.settings) }
 
             store.selectJob("job-a")
 
@@ -526,7 +529,7 @@ struct CronJobsStoreTests {
         let fixture = CronGatewayFixture()
         let store = CronJobsStore(gateway: fixture.gateway)
 
-        store.start()
+        store.start(.settings)
         try #require(await self.waitUntil { store.jobs.count == 2 })
 
         #expect(store.schedulerEnabled == true)
@@ -536,10 +539,124 @@ struct CronJobsStoreTests {
         #expect(await fixture.requests.requestCount(method: "cron.status") == 1)
         #expect(await fixture.requests.requestCount(method: "cron.list") == 1)
 
-        store.stop()
+        store.stop(.settings)
 
         #expect(!store.isLoadingRuns)
         #expect(fixture.session.snapshotCancelCount() == 0)
+    }
+
+    @Test(arguments: ["menu", "settings"])
+    func `shared refresh survives either consumer closing and stops after both close`(
+        firstClosed: String) async throws
+    {
+        let fixture = CronGatewayFixture()
+        let store = CronJobsStore(gateway: fixture.gateway)
+        func cleanup() async {
+            store.stop(.settings)
+            store.stop(.statusMenu)
+            await fixture.gateway.shutdown()
+        }
+        do {
+            store.start(.settings)
+            store.start(.statusMenu)
+            try #require(await self.waitUntil { store.jobs.count == 2 })
+            store.selectJob("job-a")
+            let initial = try #require(await fixture.waitForRequest(jobId: "job-a"))
+            try await fixture.respond(to: initial, jobId: "job-a", summary: "existing history")
+            try #require(await self.waitUntil { !store.isLoadingRuns && !store.isLoadingJobs })
+
+            store.stop(firstClosed == "menu" ? .statusMenu : .settings)
+            let statusCount = await fixture.requests.requestCount(method: "cron.status")
+            try await fixture.sendFinishedEvent(jobId: "job-a")
+            _ = try #require(
+                await fixture.waitForRequest(method: "cron.status", occurrence: statusCount),
+                "Closing one consumer must retain refresh for the other visible consumer")
+
+            if firstClosed == "menu" {
+                let refreshed = try #require(await fixture.waitForRequest(jobId: "job-a", occurrence: 1))
+                try await fixture.respond(to: refreshed, jobId: "job-a", summary: "visible settings")
+                try #require(await self.waitUntil { !store.isLoadingRuns })
+                #expect(store.runEntries.first?.summary == "visible settings")
+            } else {
+                #expect(await fixture.waitForRequest(
+                    jobId: "job-a", occurrence: 1, timeout: .milliseconds(300)) == nil)
+                #expect(store.selectedJobId == "job-a")
+                #expect(store.runEntries.first?.summary == "existing history")
+            }
+
+            store.stop(firstClosed == "menu" ? .settings : .statusMenu)
+            let finalStatusCount = await fixture.requests.requestCount(method: "cron.status")
+            try await fixture.sendFinishedEvent(jobId: "job-a")
+            #expect(await fixture.waitForRequest(
+                method: "cron.status", occurrence: finalStatusCount, timeout: .milliseconds(350)) == nil)
+            #expect(!store.isLoadingRuns)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
+    }
+
+    @Test(arguments: ["consumer", "event", "reopened consumer"])
+    func `replacement refresh waits for the cancelled event refresh to drain`(replacement: String) async throws {
+        let (lookups, entered) = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let (releases, release) = AsyncStream<Void>.makeStream()
+        // An unstructured wait keeps endpoint completion pending after its caller is cancelled.
+        let heldLookup = Task { for await _ in releases {} }
+        let fixture = CronGatewayFixture(onEndpointLookup: { count in
+            guard count == 3 else { return }
+            entered.yield(())
+            await heldLookup.value
+        })
+        let store = CronJobsStore(gateway: fixture.gateway)
+        func cleanup() async {
+            release.finish()
+            entered.finish()
+            store.stop(.settings)
+            store.stop(.statusMenu)
+            await heldLookup.value
+            await fixture.gateway.shutdown()
+        }
+        do {
+            store.start(.settings)
+            try #require(await self.waitUntil { store.jobs.count == 2 && !store.isLoadingJobs })
+            await fixture.requests.removeJob("job-a")
+            try await fixture.sendFinishedEvent(jobId: "job-b")
+            let reachedGate = try await AsyncTimeout.withTimeout(
+                seconds: 2,
+                onTimeout: { URLError(.timedOut) })
+            {
+                for await _ in lookups {
+                    return true
+                }
+                return false
+            }
+            try #require(reachedGate)
+
+            if replacement == "event" {
+                try await fixture.sendFinishedEvent(jobId: "job-b")
+            } else {
+                store.start(.statusMenu)
+                if replacement == "reopened consumer" {
+                    // Cancel the intermediate join before its task can run on this actor.
+                    store.stop(.statusMenu)
+                    store.start(.statusMenu)
+                }
+            }
+            #expect(await fixture.waitForRequest(
+                method: "cron.list", occurrence: 1, timeout: .milliseconds(350)) == nil)
+            release.finish()
+            _ = try #require(
+                await fixture.waitForRequest(method: "cron.list", occurrence: 1),
+                "The replacement must refresh after the cancelled request drains")
+            try #require(await self.waitUntil { !store.isLoadingJobs })
+            #expect(store.jobs.map(\.id) == ["job-b"])
+            #expect(store.lastError == nil)
+        } catch {
+            await cleanup()
+            throw error
+        }
+        await cleanup()
     }
 
     private func entry(jobId: String, summary: String) -> CronRunLogEntry {

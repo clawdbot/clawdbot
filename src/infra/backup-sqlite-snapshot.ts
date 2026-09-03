@@ -13,7 +13,7 @@ import {
   sanitizeOpenClawGlobalStateSnapshot,
   sanitizeOpenClawStateLeaseRows,
 } from "../state/openclaw-state-snapshot-sanitizer.js";
-import { isTransientSqliteBackupPath, isVolatileBackupPath } from "./backup-volatile-filter.js";
+import { isTransientSqliteBackupPath } from "./backup-volatile-filter.js";
 import { hasErrnoCode } from "./errno.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
@@ -121,7 +121,6 @@ async function discoverBackupSqliteSources(params: {
   const discoveredSourcePaths = new Set<string>();
   const visitedDirectories = new Set<string>();
   const gatewayLockDir = resolveGatewayLockDir(params.inventory.stateDir);
-  const volatilePlan = { stateDirs: [params.inventory.stateDir] };
 
   async function visit(directoryPath: string): Promise<void> {
     const resolvedDirectoryPath = path.resolve(directoryPath);
@@ -142,10 +141,7 @@ async function discoverBackupSqliteSources(params: {
 
     for (const entry of entries) {
       const entryPath = path.join(resolvedDirectoryPath, entry.name);
-      if (
-        isPathWithin(entryPath, gatewayLockDir) ||
-        isVolatileBackupPath(entryPath, volatilePlan)
-      ) {
+      if (isPathWithin(entryPath, gatewayLockDir) || params.inventory.isVolatile(entryPath)) {
         continue;
       }
       if (entry.isDirectory()) {

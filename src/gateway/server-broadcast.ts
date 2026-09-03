@@ -64,6 +64,7 @@ const EVENT_SCOPE_GUARDS: Record<string, string[]> = {
   // The frame cadence itself exposes person activity; match system-presence access.
   presence: [READ_SCOPE],
   shutdown: [],
+  "gateway.suspension": [],
   tick: [],
   "talk.event": [READ_SCOPE],
   "talk.mode": [TALK_SCOPE],

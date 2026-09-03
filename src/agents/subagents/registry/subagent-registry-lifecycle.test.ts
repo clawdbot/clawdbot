@@ -34,6 +34,7 @@ import {
   SUBAGENT_ENDED_REASON_KILLED,
 } from "./subagent-lifecycle-events.js";
 import { shouldSuppressSubagentRecoverySessionEffects } from "./subagent-recovery-state.js";
+import { loadPendingFinalDeliveryPayload } from "./subagent-registry-lifecycle-delivery.js";
 import {
   SubagentLifecycleController,
   type SubagentLifecycleOptions,
@@ -217,7 +218,8 @@ vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: vi.fn(async () => "retryable" as const),
 }));
 
-vi.mock("./subagent-registry-cleanup.js", () => ({
+vi.mock("./subagent-registry-cleanup.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./subagent-registry-cleanup.js")>()),
   resolveCleanupCompletionReason: () => SUBAGENT_ENDED_REASON_COMPLETE,
   resolveDeferredCleanupDecision: () => ({ kind: "give-up", reason: "expiry" }),
 }));
@@ -267,6 +269,33 @@ function createRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
         },
   };
 }
+
+describe("pending final delivery payload", () => {
+  it("uses the authoritative completion reply after a retry payload was captured", () => {
+    const staleTerminalReply = { disposition: "visible", text: "child result" } as const;
+    const completionTerminalReply = {
+      disposition: "visible",
+      text: "child result",
+      modelRouteChange: "Model route changed: requested/model → actual/model.",
+    } as const;
+    const entry = createRunEntry({
+      delivery: {
+        status: "pending",
+        payload: {
+          requesterSessionKey: "agent:main:main",
+          requesterDisplayKey: "main",
+          childSessionKey: "agent:main:subagent:child",
+          childRunId: "run-1",
+          task: "finish the task",
+          terminalReply: staleTerminalReply,
+        },
+      },
+      completion: { required: true, terminalReply: completionTerminalReply },
+    });
+
+    expect(loadPendingFinalDeliveryPayload(entry).terminalReply).toEqual(completionTerminalReply);
+  });
+});
 
 function makeProvisionalKilledRunEntry(overrides: RunEntryOverrides = {}): SubagentRunRecord {
   return createRunEntry({
@@ -3981,6 +4010,84 @@ describe("subagent registry lifecycle hardening", () => {
     expect(Number.isNaN(entry.cleanupCompletedAt)).toBe(false);
   });
 
+  it.each([
+    { name: "original window", required: true, redriven: false, replaced: false },
+    { name: "explicit retry window", required: true, redriven: true, replaced: false },
+    { name: "retired owner", required: true, redriven: false, replaced: true },
+    { name: "optional completion window", required: false, redriven: false, replaced: false },
+  ])(
+    "bounds a pending completion handoff by its $name",
+    async ({ required, redriven, replaced }) => {
+      vi.useFakeTimers();
+      vi.setSystemTime(2_000_000);
+      const deadlineAt = Date.now() + (redriven ? 3_000 : 1_000);
+      const entry = createRunEntry({
+        endedAt: Date.now() - (required ? 30 : 5) * 60_000 + 1_000,
+        endedReason: SUBAGENT_ENDED_REASON_COMPLETE,
+        expectsCompletionMessage: required ? true : undefined,
+        completion: { required, resultText: "final answer" },
+        delivery: {
+          status: "pending",
+          ...(redriven ? { windowStartedAt: Date.now(), deadlineAt } : {}),
+        },
+        outcome: { status: "ok" },
+        retainAttachmentsOnKeep: true,
+      });
+      const pendingHandoff = createDeferredCore<AnnounceFlowOutcome>();
+      let deliverySignal: AbortSignal | undefined;
+      const runSubagentAnnounceFlow = vi.fn<LifecycleControllerParams["runSubagentAnnounceFlow"]>(
+        (params) => {
+          deliverySignal = params.signal;
+          params.signal?.addEventListener(
+            "abort",
+            () => pendingHandoff.reject(params.signal?.reason),
+            {
+              once: true,
+            },
+          );
+          return pendingHandoff.promise;
+        },
+      );
+      const runs = new Map([[entry.runId, entry]]);
+      const controller = createLifecycleController({ entry, runs, runSubagentAnnounceFlow });
+      try {
+        expect(controller.startSubagentAnnounceCleanupFlow(entry.runId, entry)).toBe(true);
+        await waitForLifecycleState(() => expect(runSubagentAnnounceFlow).toHaveBeenCalledOnce());
+        const successor = replaced ? createRunEntry({ runId: entry.runId }) : undefined;
+        if (successor) {
+          runs.set(entry.runId, successor);
+        }
+
+        await vi.advanceTimersByTimeAsync(deadlineAt - Date.now() - 1);
+        expect(entry.delivery?.status).toBe("pending");
+        expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+
+        expect(deliverySignal?.aborted).toBe(true);
+        await waitForLifecycleState(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+        if (successor) {
+          expect(runs.get(entry.runId)).toBe(successor);
+          expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        } else if (!required) {
+          expect(entry.delivery?.status).toBe("failed");
+          expect(entry.cleanupCompletedAt).toBeTypeOf("number");
+          expect(completionDeliveryMocks.blockSubagentCompletionDelivery).not.toHaveBeenCalled();
+        } else {
+          expect(entry.delivery?.status).toBe("suspended");
+          expect(entry.delivery?.suspendedReason).toBe("expiry");
+          expect(entry.completion?.resultText).toBe("final answer");
+          expect(entry.cleanupHandled).toBe(false);
+          expect(entry.cleanupCompletedAt).toBeUndefined();
+        }
+      } finally {
+        pendingHandoff.resolve("retryable");
+        await vi.advanceTimersByTimeAsync(0);
+        controller.clearScheduledResumeTimers();
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("suspends successful keep-mode final delivery after its deadline", async () => {
     const persistOrThrow = vi.fn();
     const entry = createRunEntry({
@@ -4934,6 +5041,50 @@ describe("requester settle wake trigger", () => {
     expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
       expect.objectContaining({ deliveryStatus: "delivered" }),
     );
+  });
+
+  it("records suppressed completion delivery without retrying or waking the requester", async () => {
+    const entry = createRunEntry({ endedAt: 4_000, expectsCompletionMessage: true });
+    const maybeWakeRequesterAfterAllChildrenSettled = vi.fn(async () => false);
+    const runSubagentAnnounceFlow: LifecycleControllerParams["runSubagentAnnounceFlow"] = vi.fn(
+      async (announceParams) => {
+        announceParams.onDeliveryResult?.({
+          delivered: false,
+          path: "direct",
+          reason: "delivery_suppressed",
+          error: "cancelled_by_message_sending_hook",
+          terminal: true,
+          disposition: "intentional_non_delivery",
+        });
+        return "intentional_non_delivery" as const;
+      },
+    );
+    const controller = createLifecycleController({
+      entry,
+      maybeWakeRequesterAfterAllChildrenSettled,
+      runSubagentAnnounceFlow,
+    });
+
+    await completeRun(controller, entry, {
+      triggerCleanup: true,
+      terminalReply: { disposition: "visible", text: "Generated completion" },
+    });
+    await waitForLifecycleState(() => expect(entry.cleanupCompletedAt).toBeDefined());
+
+    expect(entry.delivery).toMatchObject({
+      status: "failed",
+      disposition: "intentional_non_delivery",
+      lastError: "cancelled_by_message_sending_hook; delivery_suppressed",
+    });
+    expect(entry.delivery?.deliveredAt).toBeUndefined();
+    expect(entry.delivery?.nextAttemptAt).toBeUndefined();
+    expect(taskExecutorMocks.setDetachedTaskDeliveryStatusByRunId).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deliveryStatus: "failed",
+        error: "cancelled_by_message_sending_hook; delivery_suppressed",
+      }),
+    );
+    expect(maybeWakeRequesterAfterAllChildrenSettled).not.toHaveBeenCalled();
   });
 
   it("marks yielded intentional non-delivery blocked after requester-settle exhaustion", async () => {

@@ -1,11 +1,6 @@
-// Regex patterns for ANSI escape sequences (constructed from strings to
 import { expectDefined } from "@openclaw/normalization-core";
-// satisfy the no-control-regex lint rule).
-const SGR_PATTERN = "\\x1b\\[[0-9;]*m";
-const OSC8_PATTERN = "\\x1b\\]8;;.*?(?:\\x07|\\x1b\\\\)";
-const ANSI_RE = new RegExp(`${SGR_PATTERN}|${OSC8_PATTERN}`, "g");
-const SGR_START_RE = new RegExp(`^${SGR_PATTERN}`);
-const OSC8_START_RE = new RegExp(`^${OSC8_PATTERN}`);
+import { iterateAnsiSegments } from "../../packages/terminal-core/src/ansi-sequences.js";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 
 /** Allow one level of balanced parentheses inside a URL so markdown link
  *  targets like `https://en.wikipedia.org/wiki/URL_(disambiguation)` are
@@ -76,11 +71,6 @@ export function extractUrls(markdown: string): string[] {
   }
 
   return [...urls];
-}
-
-/** Strip ANSI SGR and OSC 8 sequences to get visible text. */
-function stripAnsi(input: string): string {
-  return input.replace(ANSI_RE, "");
 }
 
 interface UrlRange {
@@ -211,62 +201,54 @@ function findUrlRanges(
 
 /**
  * Apply OSC 8 hyperlink sequences to a line based on visible-text URL ranges.
- * Walks through the raw string character by character, inserting OSC 8
- * open/close sequences at URL range boundaries while preserving ANSI codes.
+ * Preserve renderer-owned hyperlinks while linking remaining visible URL ranges.
  */
 function applyOsc8Ranges(line: string, ranges: UrlRange[]): string {
   if (ranges.length === 0) {
     return line;
   }
 
-  // Build a lookup: visible position → URL
-  const urlAt = new Map<number, string>();
-  for (const r of ranges) {
-    for (let p = r.start; p < r.end; p++) {
-      urlAt.set(p, r.url);
-    }
-  }
-
   let result = "";
   let visiblePos = 0;
   let activeUrl: string | null = null;
-  let i = 0;
+  let rendererLink = false;
+  let rangeIndex = 0;
+  let range = ranges[rangeIndex];
 
-  while (i < line.length) {
-    // Fast path: only check for escape sequences when we see ESC
-    if (line.charCodeAt(i) === 0x1b) {
-      // ANSI SGR sequence
-      const sgr = line.slice(i).match(SGR_START_RE);
-      if (sgr) {
-        result += sgr[0];
-        i += sgr[0].length;
-        continue;
+  for (const segment of iterateAnsiSegments(line)) {
+    if (segment.kind === "ansi") {
+      let code = segment.value;
+      if (code.startsWith("\x1b]8;")) {
+        if (activeUrl !== null) {
+          result += "\x1b]8;;\x07";
+        }
+        code = code.replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
+        const body = code.slice(4, code.endsWith("\x1b\\") ? -2 : -1);
+        rendererLink = body.slice(body.indexOf(";") + 1).length > 0;
+        // The parsed Markdown href owns this span, even when its label is another URL.
+        activeUrl = null;
       }
-
-      // Existing OSC 8 sequence (pass through)
-      const osc = line.slice(i).match(OSC8_START_RE);
-      if (osc) {
-        result += osc[0].replace(/[\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, "");
-        i += osc[0].length;
-        continue;
-      }
+      result += code;
+      continue;
     }
 
-    // Visible character — toggle OSC 8 at range boundaries
-    const targetUrl = urlAt.get(visiblePos) ?? null;
-    if (targetUrl !== activeUrl) {
-      if (activeUrl !== null) {
-        result += "\x1b]8;;\x07";
+    for (const char of segment.value) {
+      while (range && visiblePos >= range.end) {
+        range = ranges[++rangeIndex];
       }
-      if (targetUrl !== null) {
-        result += `\x1b]8;;${targetUrl}\x07`;
+      const targetUrl = !rendererLink && range && visiblePos >= range.start ? range.url : null;
+      if (targetUrl !== activeUrl) {
+        if (activeUrl !== null) {
+          result += "\x1b]8;;\x07";
+        }
+        if (targetUrl !== null) {
+          result += `\x1b]8;;${targetUrl}\x07`;
+        }
+        activeUrl = targetUrl;
       }
-      activeUrl = targetUrl;
+      result += char;
+      visiblePos += char.length;
     }
-
-    result += line[i];
-    visiblePos++;
-    i++;
   }
 
   if (activeUrl !== null) {

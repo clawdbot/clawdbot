@@ -998,12 +998,6 @@ vi.mock("../replies.js", async (importOriginal) => ({
   }),
   deliverReplies: deliverRepliesMock,
   readSlackReplyBlocks: () => mockedSlackReplyBlocks,
-  resolveDeliveredSlackReplyThreadTs: (params: {
-    replyToMode: "off" | "first" | "all" | "batched";
-    payloadReplyToId?: string;
-    replyThreadTs?: string;
-  }) =>
-    (params.replyToMode === "off" ? undefined : params.payloadReplyToId) ?? params.replyThreadTs,
   resolveSlackThreadTs: () => mockedReplyThreadTs,
 }));
 
