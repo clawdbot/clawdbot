@@ -88,13 +88,15 @@ function registerNode(registry: NodeRegistry, pairedNode: PairedDevice) {
 
 describe("node read projections", () => {
   it.each(["node.list", "node.describe"] as const)(
-    "%s reports host stats only for the live connection",
+    "%s prefers live host stats and projects last-known stats while offline",
     async (method) => {
       const pairedNode = createPairedNode("stats-node");
       const { nodeRegistry } = createNodeRegistryRuntime(() => new NodeRegistry());
       const registered = registerNode(nodeRegistry, pairedNode);
       const stats = { cpuCount: 4, memoryTotalBytes: 8192, memoryFreeBytes: 4096 };
       const hostStats = { ...stats, updatedAtMs: 100_000 };
+      const lastHostStats = { ...stats, memoryFreeBytes: 1024, updatedAtMs: 50_000 };
+      pairedNode.nodeSurface!.lastHostStats = lastHostStats;
       nodeRegistry.updateHostStats({
         nodeId: pairedNode.deviceId,
         connId: registered.connId,
@@ -133,8 +135,10 @@ describe("node read projections", () => {
         expect(connected.hostStats).not.toBe(nodeRegistry.get(pairedNode.deviceId)?.hostStats);
         nodeRegistry.unregister(registered.connId);
         const offline = await readNode();
-        expect(offline).toMatchObject({ connected: false });
-        expect(offline).not.toHaveProperty("hostStats");
+        expect(offline).toMatchObject({ connected: false, hostStats: lastHostStats });
+        expect(offline.hostStats).not.toBe(lastHostStats);
+        registerNode(nodeRegistry, pairedNode);
+        expect(await readNode()).not.toHaveProperty("hostStats");
       } finally {
         nodeRegistry.unregister(registered.connId);
       }

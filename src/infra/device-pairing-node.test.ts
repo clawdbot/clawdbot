@@ -2,6 +2,7 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 import {
   closeOpenClawStateDatabaseByPath,
   openOpenClawStateDatabase,
@@ -30,6 +31,13 @@ import {
 } from "./device-pairing.js";
 
 const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-" });
+const hostStats: NodeHostStats = {
+  cpuCount: 4,
+  loadAverage: [1.5, 1, 0.5],
+  memoryTotalBytes: 8192,
+  memoryFreeBytes: 4096,
+  updatedAtMs: 1_250,
+};
 
 async function withNodePairingDir<T>(run: (baseDir: string) => Promise<T>): Promise<T> {
   return await run(await tempDirs.make("case"));
@@ -784,6 +792,9 @@ describe("node surface approvals", () => {
   test("records and clears generation-bound node disconnect history", async () => {
     await withNodePairingDir(async (baseDir) => {
       await setupPairedNode(baseDir);
+      const database = openOpenClawStateDatabase({
+        env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+      });
       const generation = resolveNodePairingGeneration(await getPairedDevice("node-1", baseDir));
       if (!generation) {
         throw new Error("expected node pairing generation");
@@ -798,28 +809,82 @@ describe("node surface approvals", () => {
           connectedAtMs: 1_000,
           disconnectedAtMs: 1_500,
           expectedPairingGeneration: generation,
+          hostStats,
           baseDir,
         }),
       ).resolves.toEqual({ recorded: true });
       expect(await findPairedNode("node-1", baseDir)).toMatchObject({
         lastConnectedAtMs: 1_000,
         lastDisconnectedAtMs: 1_500,
+        lastHostStats: hostStats,
       });
+      expect(closeOpenClawStateDatabaseByPath(database.path)).toBe(true);
+      expect((await getPairedDevice("node-1", baseDir))?.nodeSurface?.lastHostStats).toEqual(
+        hostStats,
+      );
 
       await expect(
         recordPairedNodeConnection("node-1", 2_000, baseDir, generation),
       ).resolves.toEqual({ recorded: true, firstConnection: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
       await expect(
         recordPairedNodeDisconnection({
           nodeId: "node-1",
           connectedAtMs: 1_000,
           disconnectedAtMs: 2_500,
           expectedPairingGeneration: generation,
+          hostStats: { ...hostStats, updatedAtMs: 2_400 },
           baseDir,
         }),
       ).resolves.toEqual({ recorded: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
+      await recordPairedNodeDisconnection({
+        nodeId: "node-1",
+        connectedAtMs: 2_000,
+        disconnectedAtMs: 3_000,
+        expectedPairingGeneration: generation,
+        baseDir,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(hostStats);
+      await recordPairedNodeConnection("node-1", 4_000, baseDir, generation);
+      const nextStats = {
+        cpuCount: 8,
+        memoryTotalBytes: 16384,
+        memoryFreeBytes: 0,
+        updatedAtMs: 4_500,
+      };
+      await recordPairedNodeDisconnection({
+        nodeId: "node-1",
+        connectedAtMs: 4_000,
+        disconnectedAtMs: 5_000,
+        expectedPairingGeneration: generation,
+        hostStats: nextStats,
+        baseDir,
+      });
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toEqual(nextStats);
+    });
+  });
+
+  test.each([
+    ["null", null],
+    ["missing timestamp", { ...hostStats, updatedAtMs: undefined }],
+    ["invalid timestamp", { ...hostStats, updatedAtMs: -1 }],
+    ["invalid load", { ...hostStats, loadAverage: ["bad", 0, 0] }],
+    ["inconsistent memory", { ...hostStats, memoryFreeBytes: 16384 }],
+    ["unpaired disk capacity", { ...hostStats, diskTotalBytes: 1024 }],
+  ])("drops stored host stats with %s on read", async (_label, malformed) => {
+    await withNodePairingDir(async (baseDir) => {
+      await setupPairedNode(baseDir);
+      await withPairedDeviceRecords(baseDir, (devices) => {
+        Object.assign(devices["node-1"]!.nodeSurface!, { lastHostStats: malformed });
+        return { value: undefined, persist: true };
+      });
+      expect((await getPairedDevice("node-1", baseDir))?.nodeSurface).not.toHaveProperty(
+        "lastHostStats",
+      );
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toBeUndefined();
     });
   });
 
@@ -849,10 +914,12 @@ describe("node surface approvals", () => {
           connectedAtMs: 1_000,
           disconnectedAtMs: 1_500,
           expectedPairingGeneration: previousGeneration,
+          hostStats,
           baseDir,
         }),
       ).resolves.toEqual({ recorded: false });
       expect((await findPairedNode("node-1", baseDir))?.lastDisconnectedAtMs).toBeUndefined();
+      expect((await findPairedNode("node-1", baseDir))?.lastHostStats).toBeUndefined();
     });
   });
 

@@ -778,6 +778,12 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it("records disconnect history for the current node connection", async () => {
+    const hostStats = {
+      cpuCount: 4,
+      memoryTotalBytes: 8192,
+      memoryFreeBytes: 4096,
+      updatedAtMs: 1_250,
+    };
     const unregister = vi.fn(() => "node-1");
     const get = vi.fn();
     const { socket, passed } = await connectTestWs({
@@ -798,6 +804,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       connId: handler.connId,
       connectedAtMs: 1_000,
       pairingGeneration: "generation-1",
+      hostStats,
     });
     expect(
       handler.setClient({
@@ -823,6 +830,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       connectedAtMs: 1_000,
       disconnectedAtMs: expect.any(Number),
       expectedPairingGeneration: { nodeId: "node-1", key: "generation-1" },
+      hostStats,
     });
   });
 

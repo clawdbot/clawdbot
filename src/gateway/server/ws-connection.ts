@@ -522,6 +522,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
               nodeId: nodeSession.nodeId,
               connectedAtMs: nodeSession.connectedAtMs,
               disconnectedAtMs: Date.now(),
+              hostStats: nodeSession.hostStats,
               expectedPairingGeneration: {
                 nodeId: nodeSession.nodeId,
                 key: nodeSession.pairingGeneration,

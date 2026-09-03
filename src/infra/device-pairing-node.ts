@@ -3,6 +3,7 @@
 // surface projected from those canonical paired-device records.
 import { randomUUID } from "node:crypto";
 import { normalizeArrayBackedTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { NodeHostStats } from "../shared/node-host-stats.js";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { updatePairedDeviceNodeSurfaceInTransaction } from "./device-pairing-store.js";
 import {
@@ -81,6 +82,7 @@ export type PairedDeviceNode = NodeDeclaredSurface & {
   approvedAtMs: number;
   lastConnectedAtMs?: number;
   lastDisconnectedAtMs?: number;
+  lastHostStats?: NodeHostStats;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -191,6 +193,7 @@ function toPairedNode(
     approvedAtMs: surface.approvedAtMs,
     lastConnectedAtMs: surface.lastConnectedAtMs,
     lastDisconnectedAtMs: surface.lastDisconnectedAtMs,
+    lastHostStats: surface.lastHostStats,
     lastSeenAtMs: device.lastSeenAtMs,
     lastSeenReason: device.lastSeenReason,
   };
@@ -582,6 +585,7 @@ export async function approveNodePairing(
       createdAtMs: device.nodeSurface?.createdAtMs ?? now,
       approvedAtMs: now,
       lastConnectedAtMs: device.nodeSurface?.lastConnectedAtMs,
+      lastHostStats: device.nodeSurface?.lastHostStats,
     };
     delete device.pendingNodeSurface;
     const nextPairingState = resolveNodePairingState(device);
@@ -699,6 +703,7 @@ export async function recordPairedNodeDisconnection(params: {
   nodeId: string;
   connectedAtMs: number;
   disconnectedAtMs: number;
+  hostStats?: NodeHostStats;
   expectedPairingGeneration: NodePairingGeneration;
   baseDir?: string;
 }): Promise<RecordPairedNodeDisconnectionResult> {
@@ -726,6 +731,8 @@ export async function recordPairedNodeDisconnection(params: {
               device.nodeSurface.lastDisconnectedAtMs ?? params.disconnectedAtMs,
               params.disconnectedAtMs,
             ),
+            // A connection can end before reporting stats; retain the previous sample.
+            ...(params.hostStats ? { lastHostStats: params.hostStats } : {}),
           },
         };
       },
