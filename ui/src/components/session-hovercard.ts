@@ -246,7 +246,7 @@ function renderParticipantMenu(
       </div>`;
     })}
     ${unresolvedCount > 0
-      ? html`<div class="session-hovercard__participant-unresolved" role="listitem">
+      ? html`<div class="session-hovercard__more" role="listitem">
           ${t("sessionHovercard.moreParticipantsLabel", { count: String(unresolvedCount) })}
         </div>`
       : nothing}
@@ -349,8 +349,8 @@ function renderSessionAttribution({
             >
               <button
                 type="button"
-                class="session-hovercard__attribution-others btn--ghost"
-                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); font: inherit;"
+                class="session-hovercard__attribution-others"
+                style="padding: 1px 3px; border: 0; border-radius: var(--radius-sm); background: transparent; font: inherit;"
                 aria-label=${t("sessionHovercard.moreParticipantsLabel", {
                   count: String(otherCount),
                 })}
