@@ -1,9 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import JSZip from "jszip";
-import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
-import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { resolveStorePath, upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { expect, it } from "vitest";
 import { transformMessages } from "../../../packages/ai/src/transcript-transform.ts";
 import type { AssistantMessage, Model } from "../../../packages/ai/src/types.ts";
@@ -94,116 +94,114 @@ function readModelReplayError(messages: AssistantMessage[]): string | null {
 }
 
 suite.define(() => {
-  it(
-    "renders sanitized omitted and retained image history",
-    { timeout: 180_000 },
-    async () => {
-      const gatewayOwner = createQaLiveLaneGateway();
-      const gateway = await gatewayOwner.start({
-        repoRoot: process.cwd(),
-        command: {
-          ...resolveQaGatewayChildCommand(process.cwd()),
-          usePackagedPlugins: false,
-        },
-        providerMode: "mock-openai",
-        primaryModel: "mock-openai/gpt-5.6-luna",
-        alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        transport: { requiredPluginIds: [], createGatewayConfig: () => ({}) },
-        transportBaseUrl: "http://127.0.0.1",
-        controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
-        controlUiEnabled: false,
+  it("renders sanitized omitted and retained image history", { timeout: 180_000 }, async () => {
+    const gatewayOwner = createQaLiveLaneGateway();
+    const gateway = await gatewayOwner.start({
+      repoRoot: process.cwd(),
+      command: {
+        ...resolveQaGatewayChildCommand(process.cwd()),
+        usePackagedPlugins: false,
+      },
+      providerMode: "mock-openai",
+      primaryModel: "mock-openai/gpt-5.6-luna",
+      alternateModel: "mock-openai/gpt-5.6-luna-alt",
+      transport: { requiredPluginIds: [], createGatewayConfig: () => ({}) },
+      transportBaseUrl: "http://127.0.0.1",
+      controlUiAllowedOrigins: [new URL(suite.server.baseUrl).origin],
+      controlUiEnabled: false,
+    });
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(gateway.gateway.tempRoot, "state"),
+    };
+    const seed = async (sessionKey: string, sessionId: string, content: unknown[]) => {
+      const storePath = resolveStorePath(undefined, { agentId: "qa", env });
+      await upsertSessionEntry({
+        agentId: "qa",
+        env,
+        sessionKey,
+        storePath,
+        entry: { sessionId, updatedAt: Date.now() },
       });
-      const env = {
-        ...process.env,
-        OPENCLAW_STATE_DIR: path.join(gateway.gateway.tempRoot, "state"),
-      };
-      const seed = async (sessionKey: string, sessionId: string, content: unknown[]) => {
-        const storePath = resolveStorePath(undefined, { agentId: "qa", env });
-        await upsertSessionEntry({
-          agentId: "qa",
-          env,
-          sessionKey,
-          storePath,
-          entry: { sessionId, updatedAt: Date.now() },
-        });
-        await appendSessionTranscriptMessageByIdentity({
-          agentId: "qa",
-          env,
-          sessionId,
-          sessionKey,
-          storePath,
-          message: { role: "user", timestamp: Date.now(), content },
-        });
-      };
-      const omittedSessionKey = "agent:qa:omitted-image-history";
-      const retainedSessionKey = "agent:qa:retained-image-history";
-      const retainedImageUrl = "https://example.invalid/retained-history-image.png";
-      await seed(omittedSessionKey, "omitted-image-history", [
+      await appendSessionTranscriptMessageByIdentity({
+        agentId: "qa",
+        env,
+        sessionId,
+        sessionKey,
+        storePath,
+        message: { role: "user", timestamp: Date.now(), content },
+      });
+    };
+    const omittedSessionKey = "agent:qa:omitted-image-history";
+    const retainedSessionKey = "agent:qa:retained-image-history";
+    const retainedImageUrl = "https://example.invalid/retained-history-image.png";
+    await seed(omittedSessionKey, "omitted-image-history", [
+      {
+        type: "image",
+        mimeType: "image/png",
+        data: Buffer.from("omitted inline image").toString("base64"),
+      },
+    ]);
+    await seed(retainedSessionKey, "retained-image-history", [
+      { type: "image", mimeType: "image/png", source: { type: "url", url: retainedImageUrl } },
+    ]);
+    try {
+      const omittedHistory = await gateway.gateway.call("chat.history", {
+        sessionKey: omittedSessionKey,
+        limit: 10,
+      });
+      const retainedHistory = await gateway.gateway.call("chat.history", {
+        sessionKey: retainedSessionKey,
+        limit: 10,
+      });
+      expect(JSON.stringify(omittedHistory)).toContain('"omitted":true');
+      expect(JSON.stringify(omittedHistory)).not.toContain("omitted inline image");
+      expect(JSON.stringify(retainedHistory)).toContain(retainedImageUrl);
+
+      await suite.withPage(
         {
-          type: "image",
-          mimeType: "image/png",
-          data: Buffer.from("omitted inline image").toString("base64"),
+          locale: "en-US",
+          recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
+          serviceWorkers: "block",
+          viewport: { width: 1280, height: 900 },
         },
-      ]);
-      await seed(retainedSessionKey, "retained-image-history", [
-        { type: "image", mimeType: "image/png", source: { type: "url", url: retainedImageUrl } },
-      ]);
-      try {
-        const omittedHistory = await gateway.gateway.call("chat.history", {
-          sessionKey: omittedSessionKey,
-          limit: 10,
-        });
-        const retainedHistory = await gateway.gateway.call("chat.history", {
-          sessionKey: retainedSessionKey,
-          limit: 10,
-        });
-        expect(JSON.stringify(omittedHistory)).toContain('"omitted":true');
-        expect(JSON.stringify(omittedHistory)).not.toContain("omitted inline image");
-        expect(JSON.stringify(retainedHistory)).toContain(retainedImageUrl);
+        async ({ page }) => {
+          await page.addInitScript(
+            ({ gatewayUrl, token }) => {
+              (
+                window as Window & {
+                  __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
+                }
+              )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
+            },
+            { gatewayUrl: gateway.gateway.wsUrl, token: gateway.gateway.token },
+          );
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, omittedSessionKey));
+          const visiblePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+          const omittedCard = visiblePane.locator(".chat-assistant-attachment-card", {
+            hasText: "Omitted from history",
+          });
+          await omittedCard.waitFor({ state: "visible" });
+          expect(await omittedCard.locator("a, button, img, audio, video").count()).toBe(0);
+          await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
 
-        await suite.withPage(
-          {
-            locale: "en-US",
-            recordVideo: { dir: suite.artifactDir, size: { width: 1280, height: 900 } },
-            serviceWorkers: "block",
-            viewport: { width: 1280, height: 900 },
-          },
-          async ({ page }) => {
-            await page.addInitScript(
-              ({ gatewayUrl, token }) => {
-                (
-                  window as Window & {
-                    __OPENCLAW_NATIVE_CONTROL_AUTH__?: { gatewayUrl: string; token: string };
-                  }
-                )["__OPENCLAW_NATIVE_CONTROL_AUTH__"] = { gatewayUrl, token };
-              },
-              { gatewayUrl: gateway.gateway.wsUrl, token: gateway.gateway.token },
-            );
-            await page.goto(controlUiSessionUrl(suite.server.baseUrl, omittedSessionKey));
-            const omittedCard = page.locator(".chat-assistant-attachment-card", {
-              hasText: "Omitted from history",
-            });
-            await omittedCard.waitFor({ state: "visible" });
-            expect(await omittedCard.locator("a, button, img, audio, video").count()).toBe(0);
-            await page.screenshot({ path: path.join(suite.artifactDir, "01-omitted-image.png") });
-
-            await navigateToControlUiSession(page, retainedSessionKey);
-            await page
-              .locator(`img.chat-message-image[src="${retainedImageUrl}"]`)
-              .waitFor({ state: "visible" });
-            expect(
-              await page
-                .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
-                .count(),
-            ).toBe(0);
-            await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
-          },
-        );
-      } finally {
-        await gatewayOwner.stop({ preserveToDir: path.join(suite.artifactDir, "gateway") });
-      }
-    },
-  );
+          await navigateToControlUiSession(page, retainedSessionKey);
+          const retainedPane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+          await retainedPane
+            .locator(`img.chat-message-image[src="${retainedImageUrl}"]`)
+            .waitFor({ state: "visible" });
+          expect(
+            await retainedPane
+              .locator(".chat-assistant-attachment-card", { hasText: "Omitted from history" })
+              .count(),
+          ).toBe(0);
+          await page.screenshot({ path: path.join(suite.artifactDir, "02-retained-image.png") });
+        },
+      );
+    } finally {
+      await gatewayOwner.stop({ preserveToDir: path.join(suite.artifactDir, "gateway") });
+    }
+  });
 
   it(
     "delivers PowerPoint and keeps persisted attachment failures replay-safe",
