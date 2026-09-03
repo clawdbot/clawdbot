@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { describe, expect, it } from "vitest";
+import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
 import { execSchtasks } from "./schtasks-exec.js";
@@ -396,21 +398,24 @@ async function cleanupNativeTask(params: {
       ),
     );
   }
+  try {
+    // Service guards observe config in this test process. Native child exit does
+    // not close that parent-held database; release only this fixture before unlink.
+    const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: params.stateDir });
+    const cachedStateHandleClosed = closeOpenClawStateDatabaseByPath(databasePath);
+    console.log(`[windows-schtasks-cleanup] ${JSON.stringify({ cachedStateHandleClosed })}`);
+  } catch (error) {
+    cleanupErrors.push(error);
+  }
   if (cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, "Native Scheduled Task process or task cleanup failed");
+    throw new AggregateError(cleanupErrors, "Native Scheduled Task resource cleanup failed");
   }
   if (params.preserveEvidence) {
     return;
   }
+  // Stop at the first filesystem failure so remaining fixture evidence survives.
   for (const cleanupPath of [params.stateDir, params.rootDir]) {
-    try {
-      await fs.rm(cleanupPath, { recursive: true, force: true });
-    } catch (error) {
-      cleanupErrors.push(error);
-    }
-  }
-  if (cleanupErrors.length > 0) {
-    throw new AggregateError(cleanupErrors, "Native Scheduled Task path cleanup failed");
+    await fs.rm(cleanupPath, { recursive: true, force: true });
   }
 }
 
@@ -567,6 +572,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     let testError: unknown;
     let lifecyclePids: number[] = [];
     let installedPrincipal: ScheduledTaskPrincipal | null = null;
+    let pendingProof: { path: string; content: string } | undefined;
     const programArguments = buildGatewayTaskSupervisorProgramArguments({
       activePidPath,
       eventsPath,
@@ -576,7 +582,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     try {
       await fs.mkdir(stateDir);
       await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
-      await withEnvAsync(env, async () => {
+      pendingProof = await withEnvAsync(env, async () => {
         const startupFallbackProof = await proof.proveNativeStartupFallbackLaunch({ env, rootDir });
         const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
@@ -857,10 +863,9 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
               "CI_WINDOWS_SCHTASKS_HEAD must identify the exact 40-character checkout SHA",
             );
           }
-          await fs.mkdir(path.dirname(proofPath), { recursive: true });
-          await fs.writeFile(
-            proofPath,
-            `${JSON.stringify(
+          return {
+            path: proofPath,
+            content: `${JSON.stringify(
               {
                 result: "pass",
                 head: proofHead,
@@ -898,9 +903,9 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
               null,
               2,
             )}\n`,
-            "utf8",
-          );
+          };
         }
+        return undefined;
       });
     } catch (error) {
       testFailed = true;
@@ -933,6 +938,11 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     }
     if (testFailed) {
       throw testError;
+    }
+    // A passing lifecycle alone is not a completed proof: cleanup must also succeed.
+    if (pendingProof) {
+      await fs.mkdir(path.dirname(pendingProof.path), { recursive: true });
+      await fs.writeFile(pendingProof.path, pendingProof.content, "utf8");
     }
   }, 240_000);
 });

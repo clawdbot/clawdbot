@@ -76,11 +76,11 @@ export async function writeGatewayTaskSupervisorProbe(params: {
   eventsPath: string;
   probe: GatewayTaskSupervisorProbe;
 }): Promise<void> {
-  const taskSupervisorModuleUrl = pathToFileURL(
-    path.resolve("src/cli/gateway-cli/task-supervisor.ts"),
-  ).href;
-  const hostedProbeModuleUrl = pathToFileURL(
-    path.resolve("src/daemon/schtasks.hosted-stop.native-test-fixture.ts"),
+  const taskSupervisorModuleUrl = new URL("../cli/gateway-cli/task-supervisor.ts", import.meta.url)
+    .href;
+  const hostedProbeModuleUrl = new URL(
+    "./schtasks.hosted-stop.native-test-support.ts",
+    import.meta.url,
   ).href;
   await fs.writeFile(
     params.probe.probePath,
