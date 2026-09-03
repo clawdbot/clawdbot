@@ -581,6 +581,7 @@ describe("buildOpenAIProvider", () => {
     const fetchGuard: LiveModelCatalogFetchGuard = vi.fn(async () => ({
       response: Response.json({
         data: [
+          { id: "gpt-6-astra", object: "model" },
           { id: "gpt-5.6", object: "model" },
           { id: "gpt-5.5", object: "model" },
           { id: "chat-latest", object: "model" },
@@ -606,6 +607,7 @@ describe("buildOpenAIProvider", () => {
     expect(provider.models.map((model) => model.id)).toContain("gpt-5.5");
     expect(provider.models.map((model) => model.id)).toEqual(
       expect.arrayContaining([
+        "gpt-6-astra",
         "chat-latest",
         "gpt-5.4",
         "gpt-5.4-pro",
