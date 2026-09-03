@@ -497,12 +497,8 @@ public enum ChatSessionSidebarModel {
         _ session: OpenClawChatSessionEntry,
         mainSessionKey: String) -> Bool
     {
-        let status = session.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         return self.normalized(session.sessionId) != nil &&
-            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
-            session.hasActiveRun != true &&
-            session.hasActiveSubagentRun != true &&
-            status != "running"
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey)
     }
 
     public static func isSessionInActiveAgentScope(
