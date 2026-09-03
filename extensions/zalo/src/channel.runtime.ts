@@ -1,5 +1,7 @@
 // Zalo plugin module implements channel behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import {
   PAIRING_APPROVED_MESSAGE,
   type ChannelPlugin,
@@ -9,13 +11,24 @@ import { probeZalo } from "./probe.js";
 import { resolveZaloProxyFetch } from "./proxy.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
-import type { ResolvedZaloAccount } from "./types.js";
+import type { ResolvedZaloAccount, ZaloConfig } from "./types.js";
 
 export async function notifyZaloPairingApproval(params: { cfg: OpenClawConfig; id: string }) {
   const { resolveZaloAccount } = await import("./accounts.js");
   const account = resolveZaloAccount({ cfg: params.cfg });
   if (!account.token) {
-    throw new Error("Zalo token not configured");
+    const config = params.cfg.channels?.zalo as ZaloConfig | undefined;
+    const accountConfig = resolveAccountEntry(
+      config?.accounts as Record<string, ZaloConfig> | undefined,
+      account.accountId,
+    );
+    const accountPath = accountConfig
+      ? `channels.zalo.accounts.${account.accountId}`
+      : "channels.zalo";
+    const envHint = account.accountId === DEFAULT_ACCOUNT_ID ? ", or ZALO_BOT_TOKEN" : "";
+    throw new Error(
+      `Zalo token not configured for account ${account.accountId} (set ${accountPath}.botToken, ${accountPath}.tokenFile${envHint})`,
+    );
   }
   await sendMessageZalo(params.id, PAIRING_APPROVED_MESSAGE, {
     token: account.token,
