@@ -41,6 +41,7 @@ const resolveDeprecatedProviderInstallCatalogEntry = vi.hoisted(() =>
 );
 
 vi.mock("../plugins/provider-install-catalog.js", () => ({
+  loadProviderSetupAuthChoices: vi.fn(async () => {}),
   resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntry: vi.fn(() => undefined),
 }));
