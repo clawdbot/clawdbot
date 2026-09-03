@@ -68,7 +68,9 @@ async function capture(page: Page, name: string, observed: unknown) {
   if (!captureEnabled) {
     return;
   }
-  await page.screenshot({ path: path.join(suite.artifactDir, `${name}.png`), fullPage: true });
+  await page
+    .locator(".cron-page")
+    .screenshot({ path: path.join(suite.artifactDir, `${name}.png`) });
   await fs.writeFile(
     path.join(suite.artifactDir, `${name}.json`),
     `${JSON.stringify(observed, null, 2)}\n`,
@@ -481,6 +483,118 @@ suite.define(() => {
           servedAssets: await Promise.all(servedAssets),
         });
       });
+    });
+  });
+
+  it("clone payload policy: preserves public options through the real Gateway and CLI readback", async () => {
+    await withGatewayCommands("real-clone-policy-commands.json", async (cliJson) => {
+      for (const variant of [
+        { name: "finite-cap", toolsAllow: ["read"], allowUnsafeExternalContent: false },
+        { name: "empty-cap", toolsAllow: [], allowUnsafeExternalContent: true },
+      ]) {
+        const sourceName = `Synthetic clone ${variant.name} source`;
+        const payload = {
+          kind: "agentTurn" as const,
+          message: "node -e \"console.log('synthetic clone fixture')\"",
+          toolsAllow: variant.toolsAllow,
+          fallbacks: [],
+          lightContext: false,
+          allowUnsafeExternalContent: variant.allowUnsafeExternalContent,
+          timeoutSeconds: 0,
+        };
+        const created = await cliJson([
+          "gateway",
+          "call",
+          "cron.add",
+          "--params",
+          JSON.stringify({
+            name: sourceName,
+            agentId: "main",
+            enabled: false,
+            schedule: { kind: "every", everyMs: 60_000 },
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            payload,
+            delivery: { mode: "none" },
+          }),
+          "--json",
+        ]);
+        const sourceId = cronJobId(created);
+        const original = await cliJson(["automations", "get", sourceId, "--json"]);
+        expect(original).toMatchObject({ id: sourceId, enabled: false });
+        expect(original.payload).toEqual(payload);
+
+        await withCronJobPage(cliJson, sourceId, async (evidence) => {
+          const { page, servedDocumentSha256, servedAssets } = evidence;
+          await expect
+            .poll(() => page.locator(".cron-detail-title").textContent())
+            .toBe(original.name);
+          await capture(page, `real-clone-policy-${variant.name}-loaded`, {
+            original,
+            servedDocumentSha256,
+          });
+          const menu = page.locator(".cron-detail-actions wa-dropdown");
+          await menu.locator('button[slot="trigger"]').click();
+          await menu.locator('wa-dropdown-item[value="clone"]').click();
+          await page.locator('.cron-page[data-panel-mode="create"]').waitFor();
+          await expect
+            .poll(() => page.locator("#cron-name").inputValue())
+            .toBe(`${sourceName} copy`);
+          const cloneName = `Synthetic clone ${variant.name} copy`;
+          await page.locator("#cron-name").fill(cloneName);
+          const cloned = await submitCronForm(evidence, cliJson, "cron.add");
+          const cloneId = cronJobId(cloned.stored);
+          await page.locator(`[data-test-id="cron-row-${cloneId}"]`).click();
+          await expect.poll(() => page.locator(".cron-detail-title").textContent()).toBe(cloneName);
+          const originalAfter = await cliJson(["automations", "get", sourceId, "--json"]);
+          await capture(page, `real-clone-policy-${variant.name}-readback`, {
+            original,
+            originalAfter,
+            ...cloned,
+            servedDocumentSha256,
+            servedAssets: await Promise.all(servedAssets),
+          });
+
+          expect.soft(originalAfter, `${variant.name}: source unchanged`).toEqual(original);
+          expect.soft(cloneId, `${variant.name}: new job identity`).not.toBe(sourceId);
+          expect.soft(cloned.stored, `${variant.name}: new disabled task`).toMatchObject({
+            name: cloneName,
+            agentId: "main",
+            enabled: false,
+            sessionTarget: "isolated",
+            wakeMode: "now",
+            delivery: { mode: "none" },
+          });
+          expect
+            .soft(cloned.stored.schedule, `${variant.name}: exact schedule`)
+            .toEqual(original.schedule);
+          const params = requireRecord(cloned.request.params);
+          const submittedPayload = requireRecord(params.payload);
+          const storedPayload = requireRecord(cloned.stored.payload);
+          for (const [field, value] of Object.entries(payload)) {
+            expect
+              .soft(submittedPayload[field], `${variant.name}: submitted ${field}`)
+              .toEqual(value);
+            expect.soft(storedPayload[field], `${variant.name}: stored ${field}`).toEqual(value);
+          }
+          for (const field of ["toolsAllowIsDefault", "externalContentSource"]) {
+            expect
+              .soft(submittedPayload, `${variant.name}: omitted ${field}`)
+              .not.toHaveProperty(field);
+          }
+          for (const field of [
+            "createdActor",
+            "toolsAllowProvenance",
+            "toolsAllowExecTarget",
+            "toolsAllowExecTargetRequirement",
+            "runtimeAuthority",
+            "runtimeAuthorityRecoveryRequired",
+            "skillLibrarySelections",
+          ]) {
+            expect.soft(params, `${variant.name}: omitted ${field}`).not.toHaveProperty(field);
+          }
+        });
+      }
     });
   });
 });

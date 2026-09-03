@@ -86,6 +86,29 @@ describe("heartbeat monitor desired-state planning", () => {
     ]);
   });
 
+  it("removes duplicate monitors before updating the retained row", () => {
+    const cfg = {
+      agents: { defaults: { heartbeat: { every: "15m" } } },
+    } as OpenClawConfig;
+    const options = { schedulerSeed: "test-seed" };
+    const input = resolveHeartbeatMonitorPlan(cfg, [], options).specs[0]?.input;
+    if (!input) {
+      throw new Error("expected configured heartbeat monitor spec");
+    }
+    const older = { ...monitorJob(input, "older"), updatedAtMs: 1 };
+    const newer = {
+      ...monitorJob({ ...input, enabled: false }, "newer"),
+      updatedAtMs: 2,
+    };
+
+    const plan = resolveHeartbeatMonitorPlan(cfg, [older, newer], options);
+
+    expect(plan.changes).toEqual([
+      { kind: "remove", agentId: "main", job: older },
+      expect.objectContaining({ kind: "update", agentId: "main" }),
+    ]);
+  });
+
   it.each([
     { field: "name", value: "stale-name", changes: ["update"] },
     { field: "agentId", value: "stale-agent", changes: ["update"] },

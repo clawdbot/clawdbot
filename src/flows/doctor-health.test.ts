@@ -75,6 +75,7 @@ describe("runDoctorHealthFlow", () => {
     mocks.config.mockReturnValue({});
     mocks.packageRoot.mockReturnValue(undefined);
     mocks.service.mockReset();
+    mocks.probePortUsage.mockReset().mockResolvedValue("free");
     mocks.restartedHealthy = true;
     mocks.emulateNativeInstall = true;
     mocks.servicePlatform = undefined;
@@ -104,6 +105,8 @@ describe("runDoctorHealthFlow", () => {
       "unresolved-respawning",
       "absent",
       "absent-unknown",
+      "absent-busy-port",
+      "absent-unknown-port",
       "windows-ready",
       "windows-disabled",
       "windows-queued",
@@ -126,6 +129,9 @@ describe("runDoctorHealthFlow", () => {
         )) {
           vi.stubEnv(key, value);
         }
+      }
+      if (kind === "absent-busy-port" || kind === "absent-unknown-port") {
+        mocks.probePortUsage.mockResolvedValue(kind === "absent-busy-port" ? "busy" : "unknown");
       }
       const windows = kind.startsWith("windows");
       mocks.emulateNativeInstall = kind !== "runtime-only";
@@ -269,6 +275,9 @@ describe("runDoctorHealthFlow", () => {
           expect(fs.existsSync(databasePath)).toBe(false);
           expect(fs.existsSync(coordinatorPath)).toBe(false);
           expect(mocks.outro).not.toHaveBeenCalledWith("Doctor complete.");
+        }
+        if (kind === "absent" || kind === "absent-busy-port" || kind === "absent-unknown-port") {
+          expect(mocks.probePortUsage).toHaveBeenCalledOnce();
         }
         if (windows) {
           expect(mocks.taskDefinitelyStopped).toHaveBeenCalled();

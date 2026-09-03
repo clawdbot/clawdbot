@@ -6,6 +6,7 @@ import {
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isIncognitoSessionKey } from "../incognito-session.js";
 import type { CodexAppServerClient } from "./client.js";
+import { CODEX_SESSION_OVERRIDABLE_LAYER_TYPES } from "./config-layer-policy.js";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
 import {
   isMessageOnlyCodexSourceReply,
@@ -144,16 +145,6 @@ const CODEX_RING_ZERO_RESTRICTED_FEATURE_ALIASES = new Map<string, string>([
   ["memory_tool", "memories"],
   ["telepathy", "chronicle"],
   ["codex_hooks", "hooks"],
-]);
-
-const CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES = new Set([
-  "packagedDefaults",
-  "mdm",
-  "system",
-  "enterpriseManaged",
-  "user",
-  "project",
-  "sessionFlags",
 ]);
 
 export type CodexThreadConfigurationContext = CodexThreadPromptContext &
@@ -555,7 +546,7 @@ export async function readCodexInheritedMcpServerNames(
         `Codex restricted tool surface cannot override config layer ${layer.name.type}; ${migrationGuidance}.`,
       );
     }
-    if (!CODEX_RING_ZERO_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
+    if (!CODEX_SESSION_OVERRIDABLE_LAYER_TYPES.has(layer.name.type)) {
       throw new Error(
         `Codex restricted tool surface does not recognize config layer ${layer.name.type}`,
       );

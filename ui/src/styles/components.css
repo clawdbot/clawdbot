@@ -1038,6 +1038,10 @@ openclaw-session-progress-hovercard-provider {
   background: var(--ok);
 }
 
+.person-activity-card__status--offline > span {
+  background: var(--muted);
+}
+
 .person-activity-card__facts {
   display: grid;
   gap: 12px;

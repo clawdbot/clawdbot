@@ -1001,7 +1001,9 @@ class GatewaySession(
           tls = target.tls,
           customHeadersProvider = customHeadersProvider,
         )
-      socket = client.newWebSocket(request, listener)
+      // OkHttp can invoke onOpen before newWebSocket returns. Publish under the
+      // send lock so the handshake cannot observe a not-yet-installed socket.
+      writeLock.withLock { socket = client.newWebSocket(request, listener) }
       return connectDeferred.await()
     }
 
@@ -1190,8 +1192,8 @@ class GatewaySession(
       writeLock.withLock {
         currentCoroutineContext().ensureActive()
         withEnqueue {
-          if (socket?.send(jsonString) != true) {
-            // OkHttp returning false means this frame never entered its outgoing queue.
+          if (state.get() == ConnectionState.CLOSED || socket?.send(jsonString) != true) {
+            // Closing during the lock wait, like an OkHttp false return, means no frame was queued.
             throw GatewayRequestNotEnqueued("gateway send failed")
           }
         }

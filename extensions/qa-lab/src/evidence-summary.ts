@@ -69,6 +69,13 @@ const qaEvidenceTimingSchema = z.strictObject({
   failedSamples: z.number().int().nonnegative().optional(),
 });
 
+const qaEvidenceRttMeasurementSchema = z.strictObject({
+  finalMatchedReplyRttMs: z.number().finite().positive(),
+  requestStartedAt: nonEmptyStringSchema,
+  responseObservedAt: nonEmptyStringSchema,
+  source: nonEmptyStringSchema,
+});
+
 const qaEvidenceTestSchema = z.strictObject({
   kind: nonEmptyStringSchema,
   id: nonEmptyStringSchema,
@@ -145,6 +152,7 @@ const qaEvidenceResultSchema = z.strictObject({
   status: qaEvidenceStatusSchema,
   failure: qaEvidenceFailureSchema.optional(),
   timing: qaEvidenceTimingSchema.optional(),
+  rttMeasurement: qaEvidenceRttMeasurementSchema.optional(),
 });
 
 const qaEvidencePostureSchema = z.enum(["direct-gateway", "native-approval", "user-path"]);
@@ -173,6 +181,7 @@ const qaEvidenceSummarySchema = z.strictObject({
 type QaEvidenceProfile = z.infer<typeof qaEvidenceProfileIdSchema>;
 export type QaEvidenceStatus = z.infer<typeof qaEvidenceStatusSchema>;
 export type QaEvidenceTiming = z.infer<typeof qaEvidenceTimingSchema>;
+export type QaEvidenceRttMeasurement = z.infer<typeof qaEvidenceRttMeasurementSchema>;
 export type QaEvidencePackageSource = z.infer<typeof qaEvidencePackageSourceSchema>;
 export type QaEvidenceScorecardJson = z.infer<typeof qaEvidenceScorecardSchema>;
 export type QaEvidenceSummaryEntry = z.infer<typeof qaEvidenceSummaryEntrySchema>;
@@ -204,6 +213,9 @@ type QaEvidenceScenarioResultInput = {
   rttMs?: number;
   rttMeasurement?: {
     finalMatchedReplyRttMs?: number;
+    requestStartedAt?: string;
+    responseObservedAt?: string;
+    source?: string;
   };
 };
 
@@ -387,18 +399,25 @@ function failureForResult(result: {
   };
 }
 
-function timingForRttResult(check: QaEvidenceRttInput) {
+function evidenceForRttResult(check: QaEvidenceRttInput) {
   const timing: QaEvidenceTiming = { ...check.timing };
-  const rttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
-  if (
+  const parsedMeasurement = qaEvidenceRttMeasurementSchema.safeParse(check.rttMeasurement);
+  const rttMeasurement = parsedMeasurement.success ? parsedMeasurement.data : undefined;
+  const fallbackRttMs = check.rttMeasurement?.finalMatchedReplyRttMs ?? check.rttMs;
+  if (rttMeasurement) {
+    timing.rttMs = rttMeasurement.finalMatchedReplyRttMs;
+  } else if (
     timing.rttMs === undefined &&
-    typeof rttMs === "number" &&
-    Number.isFinite(rttMs) &&
-    rttMs > 0
+    typeof fallbackRttMs === "number" &&
+    Number.isFinite(fallbackRttMs) &&
+    fallbackRttMs > 0
   ) {
-    timing.rttMs = rttMs;
+    timing.rttMs = fallbackRttMs;
   }
-  return Object.keys(timing).length > 0 ? timing : undefined;
+  return {
+    timing: Object.keys(timing).length > 0 ? timing : undefined,
+    rttMeasurement,
+  };
 }
 
 function timingForTestResult(result: QaEvidenceTestResultInput) {
@@ -412,11 +431,13 @@ function timingForTestResult(result: QaEvidenceTestResultInput) {
 function resultForEvidence(
   result: { details?: string; failureMessage?: string; status: QaEvidenceStatusInput },
   timing?: QaEvidenceTiming,
+  rttMeasurement?: QaEvidenceRttMeasurement,
 ) {
   return {
     status: normalizeQaEvidenceStatus(result.status),
     failure: failureForResult(result),
     timing,
+    rttMeasurement,
   };
 }
 
@@ -519,7 +540,7 @@ export function buildQaSuiteEvidenceSummary(
       docsRefs: scenario?.docsRefs,
       codeRefs: scenario?.codeRefs,
     });
-    const timing = timingForRttResult(result);
+    const { timing, rttMeasurement } = evidenceForRttResult(result);
     return {
       test: {
         kind: "qa-scenario",
@@ -545,7 +566,7 @@ export function buildQaSuiteEvidenceSummary(
         packageSource,
         artifacts: buildQaEvidenceArtifacts(params.artifactPaths, "qa-suite"),
       },
-      result: resultForEvidence(result, timing),
+      result: resultForEvidence(result, timing, rttMeasurement),
     };
   });
   return buildQaEvidenceSummary({

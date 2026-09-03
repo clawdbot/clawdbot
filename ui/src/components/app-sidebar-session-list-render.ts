@@ -1,9 +1,12 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import type { SessionCatalog } from "../../../packages/gateway-protocol/src/index.ts";
+import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { CatalogOpenTarget } from "../app/settings.ts";
+import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
+import { isPresenceViewerIdle, projectPresenceViewers } from "../lib/presence-users.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import type { SidebarSessionSection } from "../lib/sessions/grouping.ts";
@@ -52,14 +55,37 @@ type SessionCatalogRenderSnapshot = {
   terminalAvailable: boolean;
 };
 
+type PersonHeaders = {
+  presence: ReadonlyMap<string, "active" | "idle">;
+  selfProfileId?: string;
+};
+
 function renderSessionSection(params: {
   host: SidebarSessionListHost;
   section: RenderableSessionSection;
+  personHeaders: PersonHeaders | undefined;
 }) {
-  const { host, section } = params;
+  const { host, section, personHeaders } = params;
   const totalRowCount = section.totalRowCount;
   const group = section.category;
   const personOwner = section.personOwner;
+  const personIdentity = personOwner?.identity;
+  const presence =
+    personIdentity?.type === "profile" ? personHeaders?.presence.get(personIdentity.id) : undefined;
+  const personCard =
+    personOwner &&
+    personIdentity?.type === "profile" &&
+    personIdentity.id !== personHeaders?.selfProfileId;
+  const personCardKey = personCard
+    ? presenceUserKey({ id: personOwner.id, identity: personIdentity })
+    : undefined;
+  const presenceLabel = presence
+    ? t(presence === "idle" ? "presence.idle" : "presence.rosterTitle")
+    : undefined;
+  // The person button's explicit aria-label hides descendant text, so the live
+  // state is exposed as its accessible description via this indicator id.
+  const presenceId =
+    presence && personIdentity ? `sidebar-person-presence-${personIdentity.id}` : undefined;
   // Pinned rows render in the nav zone; renderHeader records whether this list
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
@@ -118,6 +144,57 @@ function renderSessionSection(params: {
   ]
     .filter(Boolean)
     .join(" ");
+  const chevron = html`<span class="sidebar-session-group-toggle__lead" aria-hidden="true">
+    <span class="sidebar-session-group-toggle__icon"
+      >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+    >
+  </span>`;
+  const ownerAvatar = personOwner
+    ? html`<span class="sidebar-session-group-toggle__person"
+        ><openclaw-viewer-avatar
+          .identity=${personOwner.identity}
+          .user=${{
+            id: personOwner.id,
+            name: personOwner.label,
+            avatarUrl: personOwner.avatarUrl,
+            watchedSessions: [],
+          }}
+          .markAsViewer=${false}
+          variant="session"
+          aria-hidden="true"
+        ></openclaw-viewer-avatar>
+        ${presence
+          ? html`<span
+              id=${presenceId ?? nothing}
+              class="sidebar-session-group-presence ${presence === "idle"
+                ? "sidebar-session-group-presence--idle"
+                : ""}"
+              role="img"
+              aria-label=${presenceLabel}
+            ></span>`
+          : nothing}
+      </span>`
+    : nothing;
+  const labelText = html`<span class="sidebar-recent-sessions__label-text hover-marquee"
+    >${label}</span
+  >`;
+  const headerStatus = html`${collapsed && totalRowCount > 0
+    ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
+    : nothing}${collapsedRunningDot
+    ? html`<span
+        class="session-run-spinner sidebar-session-group-running"
+        role="img"
+        aria-label=${t("sessionsView.activeRun")}
+        title=${t("sessionsView.activeRun")}
+      ></span>`
+    : nothing}${collapsedAttentionDot
+    ? html`<span
+        class="sidebar-session-group-attention"
+        role="img"
+        aria-label=${t("sessionsView.attentionRequired")}
+        title=${t("sessionsView.attentionRequired")}
+      ></span>`
+    : nothing}`;
   return html`
     <div
       class=${sectionClass}
@@ -147,54 +224,39 @@ function renderSessionSection(params: {
                 }
               : undefined,
             content: html`
-              <button
-                type="button"
-                class="sidebar-session-group-toggle"
-                aria-expanded=${String(!collapsed)}
-                aria-label=${label}
-                title=${section.project?.path ?? nothing}
-                @click=${() => host.toggleSection(section.id)}
-              >
-                <span class="sidebar-session-group-toggle__lead" aria-hidden="true">
-                  <span class="sidebar-session-group-toggle__icon"
-                    >${collapsed ? icons.chevronRight : icons.chevronDown}</span
+              ${personCard
+                ? html`<button
+                      type="button"
+                      class="sidebar-session-group-toggle sidebar-session-group-toggle--lead"
+                      aria-expanded=${String(!collapsed)}
+                      aria-label=${label}
+                      @click=${() => host.toggleSection(section.id)}
+                    >
+                      ${chevron}
+                    </button>
+                    <button
+                      type="button"
+                      class="sidebar-session-group-person"
+                      data-person-card
+                      data-person-card-key=${personCardKey}
+                      aria-haspopup="dialog"
+                      aria-expanded="false"
+                      aria-label=${t("presence.card.details", { name: label })}
+                      aria-describedby=${presenceId ?? nothing}
+                    >
+                      ${ownerAvatar}${labelText}
+                    </button>
+                    ${headerStatus}`
+                : html`<button
+                    type="button"
+                    class="sidebar-session-group-toggle"
+                    aria-expanded=${String(!collapsed)}
+                    aria-label=${label}
+                    title=${section.project?.path ?? nothing}
+                    @click=${() => host.toggleSection(section.id)}
                   >
-                </span>
-                ${personOwner
-                  ? html`<openclaw-viewer-avatar
-                      .identity=${personOwner.identity}
-                      .user=${{
-                        id: personOwner.id,
-                        name: personOwner.label,
-                        avatarUrl: personOwner.avatarUrl,
-                        watchedSessions: [],
-                      }}
-                      .markAsViewer=${false}
-                      variant="session"
-                      aria-hidden="true"
-                    ></openclaw-viewer-avatar>`
-                  : nothing}
-                <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
-                ${collapsed && totalRowCount > 0
-                  ? html`<span class="sidebar-session-group-count">${totalRowCount}</span>`
-                  : nothing}
-                ${collapsedRunningDot
-                  ? html`<span
-                      class="session-run-spinner sidebar-session-group-running"
-                      role="img"
-                      aria-label=${t("sessionsView.activeRun")}
-                      title=${t("sessionsView.activeRun")}
-                    ></span>`
-                  : nothing}
-                ${collapsedAttentionDot
-                  ? html`<span
-                      class="sidebar-session-group-attention"
-                      role="img"
-                      aria-label=${t("sessionsView.attentionRequired")}
-                      title=${t("sessionsView.attentionRequired")}
-                    ></span>`
-                  : nothing}
-              </button>
+                    ${chevron}${ownerAvatar}${labelText}${headerStatus}
+                  </button>`}
               ${group
                 ? html`
                     ${renderNewSessionLink({
@@ -408,6 +470,28 @@ function renderSessionListBody(params: {
   catalogRenderer: SessionCatalogGroupsRenderer | null;
 }) {
   const { host } = params;
+  let personHeaders: PersonHeaders | undefined;
+  if (host.sessionsGrouping === "person") {
+    const selfUser = resolveCurrentSelfUser({
+      snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
+      presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
+      presenceInstanceId: host.sessionData.presenceInstanceId,
+    });
+    const presence = new Map<string, "active" | "idle">();
+    for (const user of projectPresenceViewers(
+      host.sessionData.presencePayload,
+      selfUser,
+      host.sessionData.presenceInstanceId,
+    )) {
+      if (user.identity?.type === "profile") {
+        presence.set(user.identity.id, isPresenceViewerIdle(user) ? "idle" : "active");
+      }
+    }
+    personHeaders = {
+      presence,
+      selfProfileId: selfUser?.identity?.type === "profile" ? selfUser.identity.id : undefined,
+    };
+  }
   const catalogsBySectionId = new Map(
     params.catalogs.catalogs.map((catalog) => [`catalog:${catalog.id}`, catalog]),
   );
@@ -431,7 +515,7 @@ function renderSessionListBody(params: {
           if (section.totalRowCount === 0) {
             return nothing;
           }
-          return renderSessionSection({ host, section });
+          return renderSessionSection({ host, section, personHeaders });
         }
         // Empty Other remains useful only as a collaborator or drag destination.
         if (
@@ -444,7 +528,7 @@ function renderSessionListBody(params: {
         ) {
           return nothing;
         }
-        return renderSessionSection({ host, section });
+        return renderSessionSection({ host, section, personHeaders });
       },
     )}
   `;

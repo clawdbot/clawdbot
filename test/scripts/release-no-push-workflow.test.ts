@@ -670,7 +670,7 @@ describe("release validation no-push transport", () => {
     },
     {
       phase: "candidate",
-      candidateArtifactJson: "{}",
+      candidateArtifactJson: '{"packagePublished":false}',
       installSmokeScheduled: "false",
       crossOsScheduled: "true",
       packageAcceptanceScheduled: "true",

@@ -58,8 +58,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceDir],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs,
       }),
     );
@@ -186,8 +184,6 @@ describe("backup commands", () => {
       oauthDir,
       workspaceDirs: [workspaceDir],
       includeWorkspace: true,
-      configInsideState: true,
-      oauthInsideState: true,
       nowMs: 123,
     });
     expectWorkspaceCoveredByState(plan);
@@ -212,8 +208,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         workspaceDirs: [workspaceLink],
         includeWorkspace: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       });
       expectWorkspaceCoveredByState(plan);
@@ -257,8 +251,6 @@ describe("backup commands", () => {
           oauthDir: path.join(stateDir, "credentials"),
           workspaceDirs: [externalWorkspace],
           includeWorkspace: true,
-          configInsideState: false,
-          oauthInsideState: true,
           nowMs,
         }),
       );
@@ -569,8 +561,6 @@ describe("backup commands", () => {
         configPath: path.join(stateDir, "openclaw.json"),
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );
@@ -661,8 +651,6 @@ describe("backup commands", () => {
         oauthDir: path.join(stateDir, "credentials"),
         includeWorkspace: false,
         onlyConfig: true,
-        configInsideState: true,
-        oauthInsideState: true,
         nowMs: 123,
       }),
     );

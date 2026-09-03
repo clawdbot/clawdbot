@@ -51,7 +51,8 @@ pack_fixture_plugin "$npm_pack_dir" /tmp/demo-corrupt-plugin.tgz demo-corrupt-pl
     exit 1
   fi
   node "$entry" config set plugins.allow '["demo-corrupt-plugin"]' >/dev/null
-  # Disable the unrelated model runtime explicitly without hiding Doctor's bundled health APIs.
+  node "$entry" config set agents.defaults.model anthropic/claude-sonnet-4-6 >/dev/null
+  # Keep Doctor's route repair from re-enabling the unrelated Codex runtime.
   node "$entry" config set plugins.entries.codex.enabled false >/dev/null
   node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-policy-preserved "$OPENCLAW_CONFIG_PATH" demo-corrupt-plugin
   node "$entry" plugins inspect demo-corrupt-plugin --runtime --json >/tmp/openclaw-corrupt-plugin-before.json
