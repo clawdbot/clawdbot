@@ -23,7 +23,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-const [root, command, leaderText] = process.argv.slice(2);
+const [root, surface, command, leaderText] = process.argv.slice(2);
 const record = (kind, details = {}) => fs.appendFileSync(
   path.join(root, "events.jsonl"), JSON.stringify({ at: Date.now(), kind, ...details }) + "\n");
 const pgid = () => Number(execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(process.pid)],
@@ -31,6 +31,15 @@ const pgid = () => Number(execFileSync("/bin/ps", ["-o", "pgid=", "-p", String(p
 if (command === "models") {
   for await (const ignored of process.stdin) { /* discard synthetic auth */ }
   record("auth-cli-completed");
+  if (surface !== "bootstrap") process.exit(0);
+}
+if (command === "update" && leaderText === "repair") {
+  if (process.argv.includes("--help")) {
+    process.stdout.write("Options: --accept-capabilities --yes --no-restart --json");
+  } else {
+    record("plugin-repair-completed");
+    process.stdout.write(JSON.stringify({ status: "ok" }));
+  }
   process.exit(0);
 }
 if (command === "descendant") {
@@ -39,14 +48,14 @@ if (command === "descendant") {
   const identity = { leaderPid: Number(leaderText), descendantPid: process.pid, pgid: pgid() };
   record("descendant-ready", identity);
   process.send(identity);
-} else if (command === "gateway") {
+} else if (command === "gateway" || (command === "models" && surface === "bootstrap")) {
   setTimeout(() => process.exit(19), 10_000);
   const identity = { leaderPid: process.pid, pgid: pgid() };
   fs.writeFileSync(path.join(root, "identity.json"), JSON.stringify(identity));
-  record("gateway-start", identity);
+  record(surface + "-start", identity);
   const descendant = spawn(process.execPath,
-    [fileURLToPath(import.meta.url), root, "descendant", String(process.pid)],
-    { detached: false, stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    [fileURLToPath(import.meta.url), root, surface, "descendant", String(process.pid)],
+    { detached: false, stdio: ["ignore", "inherit", "inherit", "ipc"] });
   const [ready] = await once(descendant, "message");
   if (ready.descendantPid !== descendant.pid || ready.pgid !== process.pid) process.exit(18);
   fs.writeFileSync(path.join(root, "identity.json"), JSON.stringify(ready));
@@ -89,7 +98,7 @@ function serializeError(error: unknown): unknown {
     : String(error);
 }
 
-async function reproduce(denyGroupSignals: boolean) {
+async function reproduce(denyGroupSignals: boolean, surface: "gateway" | "bootstrap") {
   await fs.mkdir(artifactRoot, { recursive: true });
   const root = await fs.mkdtemp(path.join(artifactRoot, denyGroupSignals ? "fault-" : "control-"));
   const eventsPath = path.join(root, "events.jsonl");
@@ -244,6 +253,8 @@ async function reproduce(denyGroupSignals: boolean) {
   vi.stubEnv("OPENCLAW_QA_CONVEX_SITE_URL", baseUrl);
   vi.stubEnv("OPENCLAW_QA_CONVEX_SECRET_CI", "synthetic-only");
   vi.stubEnv("OPENCLAW_QA_ALLOW_INSECURE_HTTP", "1");
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
   const killSpy = vi.spyOn(process, "kill").mockImplementation((pid, signal) => {
     const identity = readIdentity(root);
     if (identity && pid === -identity.pgid) {
@@ -289,7 +300,7 @@ async function reproduce(denyGroupSignals: boolean) {
           adapterFactories: [factory],
           sutOpenClawCommand: {
             executablePath: process.execPath,
-            argsPrefix: [fixturePath, root],
+            argsPrefix: [fixturePath, root, surface],
             tempParentDir,
             usePackagedPlugins: true,
           },
@@ -389,15 +400,31 @@ describe.skipIf(process.platform === "win32")(
   "gateway startup lease lifetime (real process group)",
   () => {
     it.each([
-      { label: "positive control: successful tree shutdown", denyGroupSignals: false },
-      { label: "fault: process-group shutdown denied", denyGroupSignals: true },
-    ])(
-      "$label releases only after descendant exit",
+      { surface: "gateway", denyGroupSignals: false },
+      { surface: "gateway", denyGroupSignals: true },
+      { surface: "bootstrap", denyGroupSignals: false },
+      { surface: "bootstrap", denyGroupSignals: true },
+    ] as const)(
+      "$surface startup releases only after descendant exit (denied=$denyGroupSignals)",
       { timeout: 45_000 },
-      async ({ denyGroupSignals }) => {
-        const result = await reproduce(denyGroupSignals);
+      async ({ denyGroupSignals, surface }) => {
+        const result = await reproduce(denyGroupSignals, surface);
         expect(result.scenarioCalls).toBe(0);
-        expect(result.events.filter((event) => event.kind === "gateway-start")).toHaveLength(1);
+        const repaired = result.events.findIndex(
+          (event) => event.kind === "plugin-repair-completed",
+        );
+        if (surface === "gateway") {
+          expect(repaired).toBeGreaterThan(-1);
+          expect(
+            result.events.findIndex((event) => event.kind === "gateway-start"),
+          ).toBeGreaterThan(repaired);
+        } else {
+          expect(repaired).toBe(-1);
+        }
+        expect(result.events.filter((event) => event.kind === "gateway-start")).toHaveLength(
+          surface === "gateway" ? 1 : 0,
+        );
+        expect(result.events.filter((event) => event.kind === `${surface}-start`)).toHaveLength(1);
         expect(result.events.find((event) => event.kind === "leader-exit")).toMatchObject({
           exitCode: 17,
         });
@@ -414,14 +441,13 @@ describe.skipIf(process.platform === "win32")(
           (event) => event.kind === "transport-after-gateway-stop",
         );
         const rejected = result.events.findIndex((event) => event.kind === "suite-rejected");
+        expect(rejected).toBeGreaterThan(-1);
         if (denyGroupSignals) {
           expect(afterCleanup).toBe(-1);
           expect(result.releases).toEqual([]);
           expect(
-            result.events.some(
-              (event) => event.kind === "lease-heartbeat" && event.at > result.events[rejected]!.at,
-            ),
-          ).toBe(true);
+            result.events.findLastIndex((event) => event.kind === "lease-heartbeat"),
+          ).toBeGreaterThan(rejected);
         } else {
           expect(result.releases.length).toBeGreaterThan(0);
           expect(result.releases.every((release) => !release.groupAlive)).toBe(true);
@@ -438,7 +464,9 @@ describe.skipIf(process.platform === "win32")(
           expect(result.suiteError).toBeInstanceOf(Error);
         }
         expect(JSON.stringify(serializeError(result.suiteError))).toContain(
-          "gateway exited before listening (exitCode=17",
+          surface === "gateway"
+            ? "gateway exited before listening (exitCode=17"
+            : "OpenClaw CLI exited 17",
         );
         expect(
           result.releases.every((release) => !release.descendantAlive),

@@ -444,6 +444,29 @@ defineDiscordVoiceTests(
       expectUserMessageIncludes("wake answer");
     });
 
+    it.each([
+      {
+        name: "unfinished fuzzy name",
+        chunks: ["Mostly", " because the task is still running."],
+      },
+      {
+        name: "name inside a long transcript",
+        chunks: ["ordinary discussion ".repeat(30), `OpenClaw, ${"x".repeat(230)}`],
+      },
+    ])("does not acknowledge $name that the final wake gate rejects", async ({ chunks }) => {
+      const { entry, bridgeParams } = await createWakeNameFixture();
+      beginSpeakerTurn(entry);
+      bridgeParams?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+      for (const chunk of chunks) {
+        bridgeParams?.onTranscript?.("user", chunk, false);
+      }
+      await emitFinalRealtimeUserTranscript(bridgeParams, chunks.join(""));
+
+      expect(sentUserMessages()).toEqual([]);
+      expect(controlRealtimeVoiceAgentRunMock).not.toHaveBeenCalled();
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    });
+
     it("does not carry partial wake-name state across provider continuity resets", async () => {
       const { entry, bridgeParams } = await createWakeNameFixture();
       const wakeAckCount = () =>

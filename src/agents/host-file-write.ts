@@ -42,9 +42,17 @@ async function readHostFilePrefix(handle: FileHandle, length: number) {
   return prefix;
 }
 
-async function overwriteHostFileInPlace(handle: FileHandle, payload: Buffer, currentSize: number) {
+async function overwriteHostFileInPlace(
+  handle: FileHandle,
+  payload: Buffer,
+  currentSize: number,
+  abortSignal?: AbortSignal,
+) {
   const prefixLength = Math.min(payload.length, currentSize);
   const originalPrefix = await readHostFilePrefix(handle, prefixLength);
+  // Prefix preparation may outlive the tool generation. Once mutation starts,
+  // preserve the existing whole-write rollback boundary.
+  abortSignal?.throwIfAborted();
   let prefixStarted = false;
   try {
     if (payload.length > currentSize) {
@@ -83,17 +91,23 @@ async function openHostFileForUpdate(resolved: string) {
   }
 }
 
-export async function writeHostFile(absolutePath: string, content: string) {
+export async function writeHostFile(
+  absolutePath: string,
+  content: string,
+  abortSignal?: AbortSignal,
+) {
   const resolved = resolveHostPath(absolutePath);
+  abortSignal?.throwIfAborted();
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const handle = await openHostFileForUpdate(resolved);
   if (!handle) {
+    abortSignal?.throwIfAborted();
     await fs.writeFile(resolved, content, "utf-8");
     return;
   }
   try {
     const stat = await handle.stat();
-    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size);
+    await overwriteHostFileInPlace(handle, Buffer.from(content, "utf-8"), stat.size, abortSignal);
   } finally {
     await handle.close().catch(() => undefined);
   }

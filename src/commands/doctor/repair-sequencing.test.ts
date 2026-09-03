@@ -513,7 +513,7 @@ describe("doctor repair sequencing", () => {
     });
     mocks.repairMissingConfiguredPluginInstalls.mockImplementation(async () => {
       events.push("missing-installs");
-      return { changes: [], warnings: [] };
+      return { changes: [], warnings: [], records: {} };
     });
 
     const result = await runDoctorRepairSequence({
@@ -558,6 +558,19 @@ describe("doctor repair sequencing", () => {
     const peerLinkCall = mocks.maybeRepairPluginOpenClawHostLinks.mock.calls[0]?.[0];
     expect(peerLinkCall?.prompter).toEqual({ shouldRepair: true });
     expect(peerLinkCall?.env).toBe(process.env);
+    expect(mocks.loadInstalledPluginIndex).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: {
+          plugins: {
+            entries: {
+              "google-meet": { enabled: true },
+            },
+          },
+        },
+        env: process.env,
+        installRecords: {},
+      }),
+    );
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
     expect(result.pluginMetadataSnapshot).toMatchObject({
       manifestRegistry: refreshedSnapshot.manifestRegistry,
@@ -1054,6 +1067,7 @@ describe("doctor repair sequencing", () => {
       changes: ['Removed stale managed install record for bundled plugin "google-meet".'],
       warnings: [],
       pluginInventoryChanged: true,
+      records: {},
     });
     const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
       typeof import("./shared/stale-agent-model-ref-repair.js")
@@ -1117,6 +1131,7 @@ describe("doctor repair sequencing", () => {
       },
       env: process.env,
       workspaceDir,
+      index: { plugins: [] },
     });
     expect(mocks.applyPluginAutoEnable).toHaveBeenCalledWith({
       config: {

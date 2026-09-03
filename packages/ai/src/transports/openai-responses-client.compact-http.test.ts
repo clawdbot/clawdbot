@@ -70,14 +70,14 @@ describe("prepared Responses compaction HTTP lifetime", () => {
   it.each([
     "request-timeout",
     "host-timeout",
-    "body-timeout-retry",
-    "status-retry",
+    "body-timeout",
+    "status-error",
     "caller-abort",
     "success",
     "oversized-body",
   ] as const)("preserves SDK %s behavior with a bounded response body", async (mode) => {
     const deadlineCase =
-      mode === "request-timeout" || mode === "host-timeout" || mode === "body-timeout-retry";
+      mode === "request-timeout" || mode === "host-timeout" || mode === "body-timeout";
     const timeoutMs = deadlineCase ? 100 : 1_000;
     const abortController = new AbortController();
     const requestPaths: string[] = [];
@@ -94,20 +94,18 @@ describe("prepared Responses compaction HTTP lifetime", () => {
     const server = createServer((request, response) => {
       requestPaths.push(request.url ?? "");
       request.resume();
-      if (mode === "status-retry" && requestPaths.length === 1) {
+      if (mode === "status-error") {
+        // retry-after-ms hint present on purpose: the SDK must still surface
+        // the failure on the first attempt instead of retrying internally.
         response.writeHead(503, { "content-type": "application/json", "retry-after-ms": "1" });
-        response.end(JSON.stringify({ error: { message: "retry this synthetic request" } }));
+        response.end(JSON.stringify({ error: { message: "synthetic 503 failure" } }));
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
       response.flushHeaders();
       if (mode === "oversized-body") {
         response.end(Buffer.alloc(16 * 1024 * 1024 + 1, "x"));
-      } else if (
-        mode === "success" ||
-        mode === "status-retry" ||
-        (mode === "body-timeout-retry" && requestPaths.length > 1)
-      ) {
+      } else if (mode === "success") {
         response.end(JSON.stringify(compacted));
       } else {
         // Headers arrive promptly; only SDK body parsing can enforce this deadline.
@@ -146,7 +144,6 @@ describe("prepared Responses compaction HTTP lifetime", () => {
         {
           apiKey: "synthetic-loopback-only",
           ...(mode !== "host-timeout" ? { timeoutMs } : {}),
-          maxRetries: mode === "body-timeout-retry" || mode === "status-retry" ? 1 : 0,
           signal: abortController.signal,
         },
       ).then(
@@ -158,8 +155,11 @@ describe("prepared Responses compaction HTTP lifetime", () => {
         abortController.abort();
       }
       const result = await outcome;
-      if (mode === "request-timeout" || mode === "host-timeout") {
+      if (deadlineCase) {
         expect(result.error).toBeInstanceOf(OpenAI.APIConnectionTimeoutError);
+      } else if (mode === "status-error") {
+        expect(result.error).toBeInstanceOf(OpenAI.APIError);
+        expect(String(result.error)).toContain("synthetic 503 failure");
       } else if (mode === "caller-abort") {
         expect(result.error).toBeInstanceOf(OpenAI.APIUserAbortError);
       } else if (mode === "oversized-body") {
@@ -170,14 +170,9 @@ describe("prepared Responses compaction HTTP lifetime", () => {
         expect(result.value?.output).toEqual(compacted.output);
       }
       expect(watchdogFired).toBe(false);
-      expect(requestPaths).toEqual(
-        Array.from(
-          {
-            length: mode === "body-timeout-retry" || mode === "status-retry" ? 2 : 1,
-          },
-          () => "/v1/responses/compact",
-        ),
-      );
+      // Exactly one request per mode: the embedded runner owns transient
+      // retries, so the SDK never re-issues a failed compaction call.
+      expect(requestPaths).toEqual(["/v1/responses/compact"]);
     } finally {
       clearTimeout(watchdog);
       abortController.abort();

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   prepareSessionManager: vi.fn(),
   prepareTrajectory: vi.fn(),
   prepareTransport: vi.fn(),
+  restoreProjections: vi.fn(),
 }));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
@@ -19,6 +20,9 @@ vi.mock("../../anthropic-payload-log.js", () => ({
 vi.mock("../../cache-trace.js", () => ({ createCacheTrace: mocks.createCacheTrace }));
 vi.mock("../session-prompt-state.js", () => ({
   getEmbeddedSessionPromptState: mocks.getSessionPromptState,
+}));
+vi.mock("../tool-result-truncation.js", () => ({
+  restoreCacheTtlToolResultProjections: mocks.restoreProjections,
 }));
 vi.mock("./attempt-setup.js", () => ({
   installEmbeddedAttemptContextGuards: mocks.installContextGuards,
@@ -44,7 +48,7 @@ type PrepareInput = Parameters<typeof prepareEmbeddedAttemptSessionRuntime>[0];
 
 function createFixture() {
   const order: string[] = [];
-  const sessionManager = { kind: "manager" };
+  const sessionManager = { kind: "manager", getBranch: () => [] };
   const activeSession = {
     messages: [{ role: "user" }, { role: "assistant" }],
     sessionId: "active-session",
@@ -164,12 +168,16 @@ function createFixture() {
     effectiveWorkspace: "/workspace",
     initialSystemPrompt: "initial prompt",
     isRawModelRun: false,
+    nestedToolActivities: [],
     sessionManager: {
       replayAllowedToolNames: new Set(["read"]),
       resolveActiveContextEnginePluginId: vi.fn(),
       sessionAgentId: "main",
       transcriptLifecycle: {},
-      withOwnedTranscriptWrite: vi.fn(),
+      withOwnedTranscriptWrite: vi.fn(async (operation: () => unknown) => {
+        order.push("owned-boundary");
+        return await operation();
+      }),
     },
     agentSession: {
       agentCoreThinkingLevel: "medium",
@@ -227,6 +235,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
       "own-manager",
       "agent-session",
       "own-session",
+      "owned-boundary",
       "boundary",
       "prompt-state",
       "settle-tracker",
@@ -262,6 +271,7 @@ describe("prepareEmbeddedAttemptSessionRuntime", () => {
     });
     expect(mocks.prepareSessionBoundary).toHaveBeenCalledWith(
       expect.objectContaining({
+        abortSignal: fixture.input.agentSession.runAbortSignal,
         getUserTranscriptContexts: fixture.getUserTranscriptContexts,
         preparedUserTurnMessage: { role: "user", content: "hello" },
       }),

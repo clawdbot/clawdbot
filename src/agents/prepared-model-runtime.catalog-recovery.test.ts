@@ -4,7 +4,11 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   getPreparedModelRuntimeSnapshot,
   loadPublishedGatewayReplyDispatchRuntime,
@@ -14,10 +18,18 @@ import {
 } from "./prepared-model-runtime.js";
 
 const mocks = getPreparedModelRuntimeMocks();
+let state: OpenClawTestState;
 
 describe("prepared model runtime catalog recovery", () => {
-  beforeEach(() => {
-    resetPreparedModelRuntimeHarness();
+  beforeEach(async () => {
+    state = await createOpenClawTestState({ label: "prepared-model-runtime-catalog-recovery" });
+    resetPreparedModelRuntimeHarness(state);
+    mocks.configuredAgentDirs.set("default", "/tmp/unused-agent");
+    mocks.configuredAgentDirs.set("secondary", "/tmp/configured-secondary");
+  });
+
+  afterEach(async () => {
+    await state.cleanup();
   });
 
   it("drains queued auth mutations before rebuilding reply dispatch", async () => {

@@ -1,6 +1,7 @@
 // Image runtime tests cover model-backed image routing, auth/profile handling,
 // provider payload transforms, and MiniMax/Copilot special paths.
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -68,27 +69,6 @@ type ResolveModelWithRegistryTestParams = {
   provider: string;
   modelId: string;
 };
-
-function requireMockCallAt<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  index: number,
-  label: string,
-): Calls[number] {
-  // Tests inspect exact dependency calls because image runtime behavior is
-  // mostly provider/auth orchestration.
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index}`);
-  }
-  return call as Calls[number];
-}
-
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  label: string,
-): Calls[number] {
-  return requireMockCallAt(mock, 0, label);
-}
 
 vi.mock("../llm/stream.js", async () => {
   const actual = await vi.importActual<typeof import("../llm/stream.js")>("../llm/stream.js");
@@ -322,7 +302,7 @@ describe("describeImageWithModelCore", () => {
       model: "gpt-5.4",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    const firstCall = expectDefined(completeMock.mock.calls[0], "image completion call 0");
     const [completionModel, context, options] = firstCall;
     expect(completionModel).toEqual({
       provider: "openai",
@@ -388,7 +368,7 @@ describe("describeImageWithModelCore", () => {
       model: "gpt-5.4",
     });
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
-    const firstCall = requireFirstMockCall(completeMock, "image completion");
+    const firstCall = expectDefined(completeMock.mock.calls[0], "image completion call 0");
     expect(firstCall[2].timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
   });
 
@@ -428,7 +408,10 @@ describe("describeImageWithModelCore", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const firstCall = requireFirstMockCall(completeMock, "OpenRouter image completion");
+    const firstCall = expectDefined(
+      completeMock.mock.calls[0],
+      "OpenRouter image completion call 0",
+    );
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
@@ -481,7 +464,10 @@ describe("describeImageWithModelCore", () => {
       text: "dashscope ok",
       model: "qwen3.6-plus",
     });
-    const firstCall = requireFirstMockCall(completeMock, "DashScope image completion");
+    const firstCall = expectDefined(
+      completeMock.mock.calls[0],
+      "DashScope image completion call 0",
+    );
     const [, context] = firstCall;
     expect(context.systemPrompt).toBeUndefined();
     const userMessage = context.messages[0];
@@ -601,7 +587,7 @@ describe("describeImageWithModelCore", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const retryCall = requireMockCallAt(completeMock, 1, "retry image completion");
+      const retryCall = expectDefined(completeMock.mock.calls[1], "retry image completion call 1");
       const [retryModel, , retryOptions] = retryCall;
       if (!retryOptions?.onPayload) {
         throw new Error("expected retry payload mapper");
@@ -658,7 +644,10 @@ describe("describeImageWithModelCore", () => {
     ).rejects.toThrow("caller cancelled image description");
 
     expect(completeMock).toHaveBeenCalledOnce();
-    const options = requireFirstMockCall(completeMock, "cancelled image completion")[2];
+    const options = expectDefined(
+      completeMock.mock.calls[0],
+      "cancelled image completion call 0",
+    )[2];
     expect(options?.signal?.aborted).toBe(true);
   });
 
@@ -692,7 +681,7 @@ describe("describeImageWithModelCore", () => {
     );
     await vi.advanceTimersByTimeAsync(25);
     await assertion;
-    const firstCall = requireFirstMockCall(completeMock, "timed image completion");
+    const firstCall = expectDefined(completeMock.mock.calls[0], "timed image completion call 0");
     const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");
@@ -782,7 +771,10 @@ describe("describeImageWithModelCore", () => {
     await vi.advanceTimersByTimeAsync(slowSetupMs);
     await Promise.resolve();
     expect(completeMock).toHaveBeenCalledTimes(1);
-    const firstCall = requireFirstMockCall(completeMock, "slow setup image completion");
+    const firstCall = expectDefined(
+      completeMock.mock.calls[0],
+      "slow setup image completion call 0",
+    );
     const options = firstCall[2];
     if (!options?.signal) {
       throw new Error("Expected image completion abort signal");

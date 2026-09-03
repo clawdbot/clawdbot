@@ -6,12 +6,16 @@ import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { loadSettings, patchSettings } from "../app/settings.ts";
 import { t } from "../i18n/index.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
-import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
+import type {
+  SessionDeleteBatchResult,
+  SessionDeleteOutcome,
+} from "../lib/sessions/session-capability.ts";
 import { showToast } from "../lib/toast.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import {
@@ -119,7 +123,11 @@ function createHarness(
   const groupsDelete = vi.fn(async () => "completed" as const);
   const scope = {
     epoch: 1,
-    context: { agents: { state: { agentsList: null } }, theme: { refresh: refreshTheme } },
+    context: {
+      agents: { state: { agentsList: null } },
+      theme: { refresh: refreshTheme },
+      placementStartup: { pause: vi.fn() },
+    },
     gateway: { snapshot },
     sessions: {
       patch,
@@ -534,6 +542,29 @@ describe("session organizer destructive confirmations", () => {
     patchSettings({ sessionDeleteConfirm: true });
     document.body.replaceChildren();
     restoreDialogPolyfill();
+  });
+
+  it("keeps a preservation notice when optimistic navigation unmounts the initiating header", async () => {
+    const harness = createHarness(destructiveHarness);
+    const response = createDeferred<SessionDeleteOutcome>();
+    harness.deleteOne.mockImplementationOnce(() => response.promise);
+    const pending = deleteSession(harness.host, sessionRow(0), harness.scope);
+    answerConfirmDialog(await waitForConfirmDialogActions(), "confirm");
+    await vi.waitFor(() => expect(harness.deleteOne).toHaveBeenCalledOnce());
+    harness.retireScope();
+    response.resolve({
+      deleted: true,
+      worktreePreserved: {
+        id: "wt-busy",
+        branch: "feature",
+        path: "/tmp/worktree",
+        reason: "busy",
+      },
+    });
+    await pending;
+    expect(showToast).toHaveBeenCalledWith({
+      message: "Managed Worktrees:\nfeature — live run or cleanup active",
+    });
   });
 
   it("renders the localized batch-delete copy in-app and deletes once accepted", async () => {

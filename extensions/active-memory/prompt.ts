@@ -11,9 +11,21 @@ import {
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
   TIMEOUT_BOILERPLATE_PATTERNS,
+  type ActiveRecallResult,
   type ActiveMemoryPromptStyle,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
+
+type ActiveMemoryRecallOutcome =
+  | Extract<ActiveRecallResult["status"], "unavailable">
+  | "skipped-no-recall-intent";
+
+const ACTIVE_MEMORY_RECALL_OUTCOME_TEXT = {
+  "skipped-no-recall-intent":
+    "Active Memory intentionally skipped deep recall because this turn did not ask for past context.",
+  unavailable:
+    "Active Memory could not retrieve memory for this turn. Do not assume that no relevant memory exists.",
+} satisfies Record<ActiveMemoryRecallOutcome, string>;
 
 function buildPromptStyleLines(style: ActiveMemoryPromptStyle): string[] {
   switch (style) {
@@ -301,10 +313,7 @@ function truncateSummary(summary: string, maxSummaryChars: number): string {
   return `${bounded}${ellipsis}`;
 }
 
-function buildMetadata(summary: string | null): string | undefined {
-  if (!summary) {
-    return undefined;
-  }
+function buildMetadata(summary: string): string {
   return [
     `<${ACTIVE_MEMORY_PLUGIN_TAG}>`,
     escapeXml(summary),
@@ -312,17 +321,19 @@ function buildMetadata(summary: string | null): string | undefined {
   ].join("\n");
 }
 
-function buildPromptPrefix(summary: string | null): string | undefined {
+function buildPromptPrefix(summary: string): string {
   const metadata = buildMetadata(summary);
-  if (!metadata) {
-    return undefined;
-  }
   return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
+}
+
+function buildRecallOutcomePrefix(outcome: ActiveMemoryRecallOutcome): string {
+  return buildPromptPrefix(ACTIVE_MEMORY_RECALL_OUTCOME_TEXT[outcome]);
 }
 
 export {
   buildMetadata,
   buildPromptPrefix,
+  buildRecallOutcomePrefix,
   buildRecallPrompt,
   normalizeActiveSummary,
   readExplicitMemoryEvidence,

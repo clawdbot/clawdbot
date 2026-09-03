@@ -59,7 +59,7 @@ describe("package manager build policy", () => {
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
-    expect(workspace.minimumReleaseAge).toBe(2880);
+    expect(workspace.minimumReleaseAge).toBe(7 * 24 * 60);
     expect(workspace.minimumReleaseAgeStrict).toBe(true);
     expect(workspace.verifyDepsBeforeRun).toBe(false);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();

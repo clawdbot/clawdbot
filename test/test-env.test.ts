@@ -12,6 +12,8 @@ import {
   writePersistedAuthProfileStateRaw,
   writePersistedAuthProfileStoreRaw,
 } from "../src/agents/auth-profiles/sqlite.js";
+import { isCurrentProcessLaunchdServiceLabel } from "../src/daemon/launchd-current-service.js";
+import { detectGatewayRespawnSupervisor } from "../src/infra/supervisor-markers.js";
 import { closeOpenClawAgentDatabaseByPath } from "../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../src/state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../src/state/openclaw-state-db.paths.js";
@@ -42,6 +44,13 @@ function restoreProcessEnv(): void {
       setTestEnvValue(key, value);
     }
   }
+}
+
+// Compare every key without printing ambient credentials in assertion failures.
+function changedEnvKeys(expected: NodeJS.ProcessEnv): string[] {
+  return [...new Set([...Object.keys(expected), ...Object.keys(process.env)])].filter(
+    (key) => expected[key] !== process.env[key],
+  );
 }
 
 function writeFile(targetPath: string, content: string): void {
@@ -117,10 +126,13 @@ describe("installTestEnv", () => {
           OPENCLAW_HOME: realHome,
           OPENCLAW_STATE_DIR: path.join(realHome, ".openclaw"),
           OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_AGENT_DIR: path.join(realHome, "caller-agent"),
+          PI_CODING_AGENT_DIR: path.join(realHome, "caller-legacy-agent"),
           OPENCLAW_LIVE_TEST: "1",
           OPENCLAW_LIVE_USE_REAL_HOME: undefined,
           OPENCLAW_LIVE_TEST_QUIET: "1",
           OPENCLAW_TEST_FAST: "",
+          COREPACK_HOME: undefined,
           ACQUISITION_PROFILE_ADDED: undefined,
           ACQUISITION_PROFILE_EMPTY: "",
         },
@@ -150,10 +162,7 @@ describe("installTestEnv", () => {
             fault.mockRestore();
           }
           expect(failedHome).not.toBe("");
-          const changedKeys = [
-            ...new Set([...Object.keys(callerEnv), ...Object.keys(process.env)]),
-          ].filter((key) => callerEnv[key] !== process.env[key]);
-          expect.soft(changedKeys).toEqual([]);
+          expect.soft(changedEnvKeys(callerEnv)).toEqual([]);
           expect.soft(fs.existsSync(failedHome)).toBe(false);
           expect(fs.readdirSync(sandbox)).toEqual([]);
           expect(fs.readFileSync(configPath, "utf8")).toBe("{}\n");
@@ -161,6 +170,8 @@ describe("installTestEnv", () => {
           const next = installTestEnv();
           cleanupFns.push(next.cleanup);
           expect(next.tempHome).not.toBe(failedHome);
+          expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+          expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
           expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
           expect(process.env.ACQUISITION_PROFILE_EMPTY).toBe("from-profile");
           expect(
@@ -168,6 +179,8 @@ describe("installTestEnv", () => {
           ).toBe("{}\n");
           next.cleanup();
           expect(process.env.HOME).toBe(realHome);
+          expect(process.env.OPENCLAW_AGENT_DIR).toBe(callerEnv.OPENCLAW_AGENT_DIR);
+          expect(process.env.PI_CODING_AGENT_DIR).toBe(callerEnv.PI_CODING_AGENT_DIR);
           expect(process.env.OPENCLAW_TEST_FAST).toBe("from-profile");
           expect(process.env.ACQUISITION_PROFILE_ADDED).toBe("from-profile");
           expect(fs.readdirSync(sandbox)).toEqual([]);
@@ -420,12 +433,21 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_LIVE_TEST", "1");
     setTestEnvValue("OPENCLAW_LIVE_USE_REAL_HOME", "1");
     setTestEnvValue("OPENCLAW_LIVE_TEST_QUIET", "1");
+    const agentDir = path.join(realHome, "caller-agent");
+    const legacyAgentDir = path.join(realHome, "caller-legacy-agent");
+    setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
+    setTestEnvValue("PI_CODING_AGENT_DIR", legacyAgentDir);
 
     const testEnv = installTestEnv();
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
+    expect(process.env.OPENCLAW_AGENT_DIR).toBe(agentDir);
+    expect(process.env.PI_CODING_AGENT_DIR).toBe(legacyAgentDir);
+    testEnv.cleanup();
+    expect(process.env.OPENCLAW_AGENT_DIR).toBe(agentDir);
+    expect(process.env.PI_CODING_AGENT_DIR).toBe(legacyAgentDir);
   });
 
   it("keeps hermetic mode isolated when live flags request the real HOME", () => {
@@ -445,6 +467,8 @@ describe("installTestEnv", () => {
     setTestEnvValue("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
     setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     setTestEnvValue("OPENCLAW_HOME", realHome);
+    setTestEnvValue("OPENCLAW_AGENT_DIR", path.join(realHome, "caller-agent"));
+    setTestEnvValue("PI_CODING_AGENT_DIR", path.join(realHome, "caller-legacy-agent"));
 
     const testEnv = installTestEnv({ mode: "hermetic" });
     cleanupFns.push(testEnv.cleanup);
@@ -461,26 +485,84 @@ describe("installTestEnv", () => {
     expect(process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR).toBe("1");
     expect(process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS).toBeUndefined();
     expect(process.env.OPENCLAW_HOME).toBeUndefined();
+    expect(process.env.OPENCLAW_AGENT_DIR).toBeUndefined();
+    expect(process.env.PI_CODING_AGENT_DIR).toBeUndefined();
     expect(fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "openclaw.json"))).toBe(false);
     expect(
       fs.existsSync(path.join(testEnv.tempHome, ".openclaw", "credentials", "token.txt")),
     ).toBe(false);
   });
 
-  it("clears and restores OPENCLAW_HOME for normal isolated test runs", () => {
+  it.each(["OPENCLAW_HOME", "OPENCLAW_AGENT_DIR", "PI_CODING_AGENT_DIR"])(
+    "clears and restores %s for normal isolated test runs",
+    (key) => {
+      const realHome = createTempHome();
+      const callerPath = path.join(realHome, "caller-override");
+      setTestEnvValue("HOME", realHome);
+      setTestEnvValue("USERPROFILE", realHome);
+      setTestEnvValue(key, callerPath);
+
+      const testEnv = installTestEnv();
+      cleanupFns.push(testEnv.cleanup);
+
+      expect(testEnv.tempHome).not.toBe(realHome);
+      expect(process.env[key]).toBeUndefined();
+      setTestEnvValue(key, path.join(testEnv.tempHome, "explicit-override"));
+
+      testEnv.cleanup();
+      expect(process.env[key]).toBe(callerPath);
+    },
+  );
+
+  it.each([
+    {
+      name: "explicit",
+      corepack: "tool-cache",
+      xdg: "xdg",
+      local: "local",
+      expected: "tool-cache",
+    },
+    { name: "explicit empty", corepack: "", xdg: "xdg", local: "local", expected: "" },
+    { name: "explicit whitespace", corepack: " tool-cache ", expected: " tool-cache " },
+    { name: "XDG before LOCALAPPDATA", xdg: "xdg", local: "local", expected: "xdg/node/corepack" },
+    { name: "empty XDG", xdg: "", local: "local", expected: "node/corepack" },
+    { name: "LOCALAPPDATA", local: "local", expected: "local/node/corepack" },
+    { name: "empty LOCALAPPDATA", local: "", expected: "node/corepack" },
+    { name: "OS home" },
+  ])("preserves the $name Corepack cache across HOME isolation and cleanup", (testCase) => {
     const realHome = createTempHome();
-    const configuredOpenClawHome = path.join(realHome, "custom-openclaw-home");
-    setTestEnvValue("HOME", realHome);
-    setTestEnvValue("USERPROFILE", realHome);
-    setTestEnvValue("OPENCLAW_HOME", configuredOpenClawHome);
+    withEnv(
+      {
+        HOME: realHome,
+        USERPROFILE: realHome,
+        COREPACK_HOME: testCase.corepack,
+        XDG_CACHE_HOME: testCase.xdg,
+        LOCALAPPDATA: testCase.local,
+      },
+      () => {
+        const callerEnv = { ...process.env };
+        const expected =
+          testCase.expected === undefined
+            ? path.join(
+                os.homedir(),
+                process.platform === "win32" ? "AppData/Local" : ".cache",
+                "node/corepack",
+              )
+            : testCase.corepack === undefined
+              ? path.normalize(testCase.expected)
+              : testCase.expected;
+        const testEnv = installTestEnv({ mode: "hermetic" });
+        cleanupFns.push(testEnv.cleanup);
 
-    const testEnv = installTestEnv();
-
-    expect(testEnv.tempHome).not.toBe(realHome);
-    expect(process.env.OPENCLAW_HOME).toBeUndefined();
-
-    testEnv.cleanup();
-    expect(process.env.OPENCLAW_HOME).toBe(configuredOpenClawHome);
+        expect(process.env.HOME).toBe(testEnv.tempHome);
+        expect(process.env.XDG_CACHE_HOME).toBe(path.join(testEnv.tempHome, ".cache"));
+        expect(process.env.COREPACK_HOME).toBe(expected);
+        setTestEnvValue("COREPACK_HOME", path.join(testEnv.tempHome, "changed-tool-cache"));
+        testEnv.cleanup();
+        expect(changedEnvKeys(callerEnv)).toEqual([]);
+        expect(fs.existsSync(testEnv.tempHome)).toBe(false);
+      },
+    );
   });
 
   it.each([
@@ -499,6 +581,57 @@ describe("installTestEnv", () => {
     testEnv.cleanup();
     expect(process.env[key]).toBe("test-channel-value");
   });
+
+  it.each(["live-aware", "hermetic"] as const)(
+    "isolates and restores inherited supervisor identity in %s mode",
+    (mode) => {
+      const supervisorEnv = {
+        LAUNCH_JOB_LABEL: "ai.openclaw.gateway",
+        LAUNCH_JOB_NAME: "ai.openclaw.gateway",
+        XPC_SERVICE_NAME: "ai.openclaw.gateway",
+        OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        OPENCLAW_SERVICE_KIND: "gateway",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
+        INVOCATION_ID: "test-invocation",
+        SYSTEMD_EXEC_PID: "1234",
+        JOURNAL_STREAM: "8:1234",
+        OPENCLAW_WINDOWS_TASK_NAME: "OpenClaw Gateway",
+        OPENCLAW_SUPERVISOR_MODE: "external",
+        OPENCLAW_WRAPPER: "/fixture/operator-wrapper",
+        OPENCLAW_GATEWAY_SERVICE_PID: "4321",
+        OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "FIXTURE_AUTH_REF",
+        OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+      };
+      for (const [key, value] of Object.entries(supervisorEnv)) {
+        setTestEnvValue(key, value);
+      }
+      setTestEnvValue("TEST_UNRELATED_SERVICE_HINT", "preserved");
+
+      const testEnv = installTestEnv({ mode });
+      cleanupFns.push(testEnv.cleanup);
+
+      expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(false);
+      for (const platform of ["darwin", "linux", "win32"] as const) {
+        expect(detectGatewayRespawnSupervisor(process.env, platform)).toBeNull();
+      }
+      expect(Object.keys(supervisorEnv).filter((key) => process.env[key] !== undefined)).toEqual(
+        [],
+      );
+      expect(process.env.TEST_UNRELATED_SERVICE_HINT).toBe("preserved");
+      withEnv({ XPC_SERVICE_NAME: "ai.openclaw.gateway" }, () => {
+        expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(true);
+      });
+      withEnv({ XPC_SERVICE_NAME: "0" }, () => {
+        expect(isCurrentProcessLaunchdServiceLabel("ai.openclaw.gateway")).toBe(false);
+      });
+
+      testEnv.cleanup();
+      for (const [key, value] of Object.entries(supervisorEnv)) {
+        expect(process.env[key]).toBe(value);
+      }
+    },
+  );
 
   it("does not load ~/.profile for normal isolated test runs", () => {
     const realHome = createTempHome();

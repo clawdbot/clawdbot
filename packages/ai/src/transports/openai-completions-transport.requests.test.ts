@@ -34,7 +34,7 @@ describe("openai completions transport requests", () => {
       createStream: createOpenAICompletionsTransportStreamFn,
     },
   ])(
-    "honors turn timeout and zero retries over real $api HTTP",
+    "honors turn timeout and pinned SDK retries over real $api HTTP",
     async (transport) => {
       const capturedTimeouts: Array<string | undefined> = [];
       const server = createServer((request, response) => {
@@ -80,7 +80,7 @@ describe("openai completions transport requests", () => {
             messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
             tools: [],
           },
-          { apiKey: "test-key", timeoutMs: 1_234, maxRetries: 0 },
+          { apiKey: "test-key", timeoutMs: 1_234 },
         );
 
         const eventTypes: string[] = [];

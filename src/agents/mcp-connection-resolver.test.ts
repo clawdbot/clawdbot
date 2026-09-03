@@ -362,7 +362,9 @@ describe("mcp connection resolver helpers", () => {
         setState(nextState) {
           gatewayState = nextState;
         },
-        async startChannel() {},
+        async startChannel() {
+          return new Map();
+        },
         async stopChannel() {},
         pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {

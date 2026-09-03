@@ -8,7 +8,9 @@ import {
   createGlobalCommandRunner,
   ensureGitCheckout,
   parseTimeoutMsOrExit,
+  resolveGlobalManager,
   resolveUpdateRoot,
+  runUpdateStep,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
@@ -93,6 +95,32 @@ describe("update CLI shared helpers", () => {
     }
   });
 
+  it("keeps failed command diagnostics in both progress and the final result", async () => {
+    runCommandWithTimeout.mockResolvedValueOnce({
+      ...successfulCommandResult,
+      code: 1,
+      stdout: `${"x".repeat(10_000)}\nBuild type error`,
+      stderr: "Command failed",
+    });
+    const onStepComplete = vi.fn();
+    const result = await runUpdateStep({
+      name: "build",
+      argv: ["pnpm", "build"],
+      timeoutMs: 1200,
+      progress: { onStepComplete },
+    });
+
+    expect(result.stdoutTail).toContain("Build type error");
+    expect(result.stdoutTail?.length).toBeLessThanOrEqual(8001); // includes the truncation marker
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stdoutTail: result.stdoutTail,
+        stderrTail: "Command failed",
+        exitCode: 1,
+      }),
+    );
+  });
+
   it("parses complete positive integer timeout values as milliseconds", () => {
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
@@ -135,6 +163,25 @@ describe("update CLI shared helpers", () => {
       });
     },
   );
+
+  it("refuses a package root without a proven manager owner", async () => {
+    runCommandWithTimeout.mockResolvedValue({
+      ...successfulCommandResult,
+      code: 1,
+      stderr: "not owned",
+    });
+
+    await expect(
+      resolveGlobalManager({
+        root: "/shared/store/openclaw",
+        installKind: "package",
+        timeoutMs: 1_000,
+      }),
+    ).rejects.toThrow(
+      "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.",
+    );
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
+  });
 
   it("publishes a successful fresh clone only after the clone completes", async () => {
     await withTestDir({ prefix: "openclaw-update-clone-success-" }, async (base) => {

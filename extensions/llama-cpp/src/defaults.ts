@@ -5,6 +5,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
@@ -63,6 +64,25 @@ export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): st
 
 export function resolveLegacyLlamaCppModelCacheDir(): string {
   return path.join(os.homedir(), ".node-llama-cpp", "models");
+}
+
+export function resolveLlamaCppEmbeddingModel(
+  local: { modelPath?: string; modelCacheDir?: string } = {},
+) {
+  const source = normalizeOptionalString(local.modelPath) ?? DEFAULT_LLAMA_CPP_EMBEDDING_MODEL;
+  const cacheDir = normalizeOptionalString(local.modelCacheDir) ?? resolveLlamaCppModelCacheDir();
+  const resolvedPath = /^(?:hf:|https?:\/\/)/iu.test(source)
+    ? undefined
+    : path.resolve(cacheDir, source);
+  return {
+    source,
+    cacheDir,
+    isDefault:
+      source === DEFAULT_LLAMA_CPP_EMBEDDING_MODEL ||
+      resolvedPath === path.resolve(cacheDir, DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE) ||
+      resolvedPath ===
+        path.resolve(resolveLegacyLlamaCppModelCacheDir(), DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE),
+  };
 }
 
 export function resolveHomePath(value: string): string {

@@ -51,11 +51,11 @@ describe("resolveNpmChannelTag", () => {
 
   let versionByTag: Record<string, string | null>;
   let runCommand: NpmMetadataCommandRunner;
-  let runCommandMock: ReturnType<typeof vi.fn>;
+  let runCommandMock: ReturnType<typeof vi.fn<NpmMetadataCommandRunner>>;
 
   beforeEach(() => {
     versionByTag = {};
-    runCommandMock = vi.fn(async (argv: string[]) => {
+    runCommandMock = vi.fn<NpmMetadataCommandRunner>(async (argv) => {
       const spec = argv[2] ?? "";
       const tag = spec.slice(spec.lastIndexOf("@") + 1);
       const version = versionByTag[tag] ?? null;
@@ -71,7 +71,7 @@ describe("resolveNpmChannelTag", () => {
         code: version == null ? 1 : 0,
       };
     });
-    runCommand = runCommandMock as unknown as NpmMetadataCommandRunner;
+    runCommand = runCommandMock;
   });
 
   it("delegates package target metadata to npm view with global config scope", async () => {
@@ -396,6 +396,35 @@ describe("resolveNpmChannelTag", () => {
       tag: "latest",
       version: "1.0.3",
     });
+  });
+
+  it("resolves beta and stable within one registry response delay", async () => {
+    vi.useFakeTimers();
+    try {
+      runCommandMock.mockImplementation(async (argv: string[]) => {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        return {
+          stdout: JSON.stringify({
+            version: argv[2] === "openclaw@beta" ? "2026.9.1-beta.1" : "2026.8.30",
+          }),
+          stderr: "",
+          code: 0,
+        };
+      });
+      const completed = vi.fn();
+      const pending = resolveNpmChannelTag({ channel: "beta", timeoutMs: 1000, runCommand });
+      void pending.then(completed);
+
+      await vi.advanceTimersByTimeAsync(200);
+
+      expect(completed).toHaveBeenCalledWith({ tag: "beta", version: "2026.9.1-beta.1" });
+      await pending;
+    } finally {
+      await vi.runAllTimersAsync();
+      vi.useRealTimers();
+    }
   });
 
   it("fetches registry tag versions and reports missing tags", async () => {

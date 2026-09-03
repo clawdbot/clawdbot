@@ -218,7 +218,7 @@ async function waitForCollector(params: {
   timeoutMs: number;
   signal?: AbortSignal;
 }) {
-  const deadline = Date.now() + params.timeoutMs;
+  const deadline = performance.now() + params.timeoutMs;
   for (;;) {
     if (params.signal?.aborted) {
       throw createAbortError("agents_wait aborted.");
@@ -231,7 +231,7 @@ async function waitForCollector(params: {
       params.currentAgentId,
       params.config,
     );
-    if (state.completed.length > 0 || state.pending.length === 0 || Date.now() >= deadline) {
+    if (state.completed.length > 0 || state.pending.length === 0 || performance.now() >= deadline) {
       return state;
     }
     await new Promise<void>((resolve, reject) => {
@@ -245,7 +245,7 @@ async function waitForCollector(params: {
         resolve();
       };
       const onAbort = () => finish(createAbortError("agents_wait aborted."));
-      const timer = setTimeout(finish, Math.min(25, Math.max(0, deadline - Date.now())));
+      const timer = setTimeout(finish, Math.min(25, Math.max(0, deadline - performance.now())));
       params.signal?.addEventListener("abort", onAbort, { once: true });
       // Abort can race listener registration; never turn that cancellation into a successful poll.
       if (params.signal?.aborted) {

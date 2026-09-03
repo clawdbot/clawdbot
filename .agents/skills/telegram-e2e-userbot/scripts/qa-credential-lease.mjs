@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 
+import { execFile as execFileCallback } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 
 const ENDPOINT_PREFIX = "/qa-credentials/v1";
 const CHUNKED_PAYLOAD_MARKER = "__openclawQaCredentialPayloadChunksV1";
+const CONVEX_BROKER_DEPLOYMENT = "reminiscent-ibex-847";
+const CONVEX_BROKER_SITE_URL = `https://${CONVEX_BROKER_DEPLOYMENT}.convex.site`;
 const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
 const DEFAULT_PAYLOAD_MAX_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PAYLOAD_MAX_CHUNKS = 4096;
@@ -12,6 +17,7 @@ const DEFAULT_RESPONSE_MAX_BYTES = 1024 * 1024;
 const RETRYABLE_ACQUIRE_CODES = new Set(["POOL_EXHAUSTED", "NO_CREDENTIAL_AVAILABLE"]);
 const CONVEX_WRITE_CONTENTION =
   /Documents read from or written to the "credential_sets" table changed while this mutation was being run/u;
+const execFile = promisify(execFileCallback);
 
 export class QaCredentialBrokerError extends Error {
   constructor(code, message, retryAfterMs) {
@@ -30,15 +36,7 @@ function retryableAcquireError(error) {
   );
 }
 
-function brokerConfig(env = process.env) {
-  const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
-  const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
-  if (!siteUrl || !secret) {
-    throw new Error(
-      "Missing OPENCLAW_QA_CONVEX_SITE_URL / OPENCLAW_QA_CONVEX_SECRET_CI. " +
-        "Both are in Bitwarden SM as OPENCLAW_RTT_TEST_CONVEX_SITE_URL / _SECRET_CI.",
-    );
-  }
+function parseBrokerConfig({ siteUrl, secret, allowInsecureHttp }) {
   let parsed;
   try {
     parsed = new URL(siteUrl);
@@ -50,9 +48,7 @@ function brokerConfig(env = process.env) {
     parsed.hostname === "::1" ||
     parsed.hostname === "[::1]" ||
     /^127(?:\.\d{1,3}){3}$/u.test(parsed.hostname);
-  const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(
-    env.OPENCLAW_QA_ALLOW_INSECURE_HTTP?.trim() ?? "",
-  );
+  const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(allowInsecureHttp?.trim() ?? "");
   if (
     parsed.protocol !== "https:" &&
     !(parsed.protocol === "http:" && loopback && allowLoopbackHttp)
@@ -63,6 +59,50 @@ function brokerConfig(env = process.env) {
     );
   }
   return { siteUrl: parsed.toString().replace(/\/+$/u, ""), secret };
+}
+
+async function defaultRunConvexCli(args, { cwd }) {
+  const { stdout } = await execFile("convex", args, {
+    cwd,
+    env: process.env,
+    encoding: "utf8",
+    maxBuffer: 1024 * 1024,
+  });
+  return stdout.trim();
+}
+
+async function resolveBrokerConfig({ env, cwd, runConvexCliImpl, convexProjectDir }) {
+  const siteUrl = env.OPENCLAW_QA_CONVEX_SITE_URL?.trim();
+  const secret = env.OPENCLAW_QA_CONVEX_SECRET_CI?.trim();
+  if (siteUrl || secret) {
+    if (!siteUrl || !secret) {
+      throw new Error(
+        "Set both OPENCLAW_QA_CONVEX_SITE_URL and OPENCLAW_QA_CONVEX_SECRET_CI, or leave both unset to use Convex CLI authentication.",
+      );
+    }
+    return parseBrokerConfig({
+      siteUrl,
+      secret,
+      allowInsecureHttp: env.OPENCLAW_QA_ALLOW_INSECURE_HTTP,
+    });
+  }
+
+  const projectDir = convexProjectDir ?? path.join(cwd, "qa", "convex-credential-broker");
+  try {
+    const cliSecret = (
+      await runConvexCliImpl(
+        ["env", "--deployment", CONVEX_BROKER_DEPLOYMENT, "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
+        { cwd: projectDir },
+      )
+    ).trim();
+    if (!cliSecret) throw new Error("Convex production broker credential is missing.");
+    return parseBrokerConfig({ siteUrl: CONVEX_BROKER_SITE_URL, secret: cliSecret });
+  } catch (error) {
+    throw new Error(
+      "Could not load the QA broker through the Convex CLI. Ask the user to install and authenticate the convex command, then request access to the OpenClaw broker project.",
+      { cause: error },
+    );
+  }
 }
 
 async function readBrokerResponse(response, maxBytes) {
@@ -97,9 +137,9 @@ async function readBrokerResponse(response, maxBytes) {
 async function callBroker(
   suffix,
   body,
-  { env, fetchImpl, httpTimeoutMs, maxResponseBytes = DEFAULT_RESPONSE_MAX_BYTES },
+  { broker, fetchImpl, httpTimeoutMs, maxResponseBytes = DEFAULT_RESPONSE_MAX_BYTES },
 ) {
-  const { siteUrl, secret } = brokerConfig(env);
+  const { siteUrl, secret } = broker;
   const response = await fetchImpl(`${siteUrl}${ENDPOINT_PREFIX}/${suffix}`, {
     method: "POST",
     headers: { "content-type": "application/json", authorization: `Bearer ${secret}` },
@@ -180,12 +220,21 @@ export async function acquireQaLease({
   payloadMaxBytes = DEFAULT_PAYLOAD_MAX_BYTES,
   payloadMaxChunks = DEFAULT_PAYLOAD_MAX_CHUNKS,
   env = process.env,
+  cwd = process.cwd(),
+  runConvexCliImpl = defaultRunConvexCli,
+  convexProjectDir,
   fetchImpl = fetch,
   sleepImpl = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   randomImpl = Math.random,
 } = {}) {
   if (!kind) throw new Error("acquireQaLease requires a credential kind.");
-  const requestOptions = { env, fetchImpl, httpTimeoutMs };
+  const broker = await resolveBrokerConfig({
+    env,
+    cwd,
+    runConvexCliImpl,
+    convexProjectDir,
+  });
+  const requestOptions = { broker, fetchImpl, httpTimeoutMs };
   const startedAt = Date.now();
   let acquired;
   for (;;) {

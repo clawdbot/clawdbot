@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { restoreRuntimeTerminalState } from "../runtime.js";
 import { isAbortError } from "./abort-signal.js";
 import { collectNestedErrorCandidates, extractErrorCodeOrErrno } from "./error-graph-internal.js";
-import { extractErrorCode, formatUncaughtError, readErrorName } from "./errors.js";
+import { extractErrorCode, formatUncaughtError, readErrorCause, readErrorName } from "./errors.js";
 import { runFatalErrorHooks } from "./fatal-error-hooks.js";
 import { isTransientNetworkError } from "./retryable-network-errors.js";
 
@@ -134,13 +134,6 @@ function isBenignUncaughtNetworkMessage(message: string): boolean {
   return message === WS_PRE_HANDSHAKE_CLOSE_MESSAGE;
 }
 
-function getErrorCause(err: unknown): unknown {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  return (err as { cause?: unknown }).cause;
-}
-
 function extractNumericErrorCode(err: unknown, key: "errno" | "errcode"): number | undefined {
   if (!err || typeof err !== "object") {
     return undefined;
@@ -161,7 +154,7 @@ function extractErrorCodeWithCause(err: unknown): string | undefined {
   if (direct) {
     return direct;
   }
-  return extractErrorCode(getErrorCause(err));
+  return extractErrorCode(readErrorCause(err));
 }
 
 function isFatalError(err: unknown): boolean {

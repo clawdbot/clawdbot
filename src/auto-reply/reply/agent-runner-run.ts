@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -12,6 +13,7 @@ import {
   BLOCK_REPLY_SEND_TIMEOUT_MS,
   cleanupReplyAgentRun,
   handleReplyAgentRunError,
+  hasSuccessfulTerminalSourceReplyDelivery,
   refreshSessionEntryFromStore,
   resolveAdmittedRunSessionFile,
   type RunReplyAgentParams,
@@ -208,6 +210,38 @@ export async function runReplyAgent(
     return undefined;
   }
 
+  const pendingQuestionText = (
+    transcriptCommandBody ??
+    followupRun.transcriptPrompt ??
+    commandBody
+  ).trim();
+  const isExternalUserInput =
+    followupRun.run.inputProvenance === undefined ||
+    followupRun.run.inputProvenance.kind === "external_user";
+  if (
+    !isHeartbeat &&
+    isExternalUserInput &&
+    pendingQuestionText &&
+    !followupRun.images?.length &&
+    !followupRun.media?.length &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text: pendingQuestionText,
+      persist: followupRun.userTurnTranscriptRecorder
+        ? async () => {
+            await followupRun.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
+    }
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return undefined;
+  }
+
   const baseShouldEmitToolResult = createShouldEmitToolResult({
     sessionKey,
     storePath,
@@ -373,6 +407,7 @@ export async function runReplyAgent(
   const cfg = followupRun.run.config;
   const replyMediaContext = createReplyMediaContext({
     cfg,
+    agentId: followupRun.run.agentId,
     sessionKey,
     workspaceDir: followupRun.run.workspaceDir,
     messageProvider: followupRun.run.messageProvider,
@@ -422,6 +457,20 @@ export async function runReplyAgent(
           buffer: createAudioAsVoiceBuffer({ isAudioPayload }),
         })
       : null;
+  const resolveVisibleReplyDelivery = async () => {
+    // Settle accepted or in-flight blocks before deciding whether a terminal failure may stay silent.
+    try {
+      await blockReplyPipeline?.flush({ force: true });
+    } catch (flushError) {
+      logVerbose(
+        `failed to flush streamed reply blocks before surfacing run failure: ${String(flushError)}`,
+      );
+    }
+    return (
+      didDeliverVisiblePartialReply ||
+      hasSuccessfulTerminalSourceReplyDelivery({ blockReplyPipeline })
+    );
+  };
   const replySessionKey = sessionKey ?? followupRun.run.sessionKey;
   const replyRouteThreadId = resolveRoutedDeliveryThreadId({
     ctx: sessionCtx,
@@ -558,6 +607,7 @@ export async function runReplyAgent(
       checkpointBeforeAgentReply,
       commandBody,
       defaultModel,
+      resolveVisibleReplyDelivery,
       followupRun,
       getActiveIsNewSession: () => activeIsNewSession,
       getActiveSessionEntry: () => activeSessionEntry,
@@ -611,9 +661,8 @@ export async function runReplyAgent(
       replyOperation,
     );
     return await handleReplyAgentRunError(error, {
-      blockReplyPipeline,
       cfg,
-      didDeliverVisiblePartialReply: () => didDeliverVisiblePartialReply,
+      resolveVisibleReplyDelivery,
       isHeartbeat,
       isRestartRecoveryArmed,
       replyOperation,

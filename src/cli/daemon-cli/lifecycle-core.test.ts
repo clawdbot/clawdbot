@@ -1006,6 +1006,17 @@ describe("runServiceRestart token drift", () => {
     expect(payload.error).toContain("launchctl kickstart failed: permission denied");
   });
 
+  it("runs the start health check before reporting success", async () => {
+    service.isLoaded.mockResolvedValue(false);
+    const postStartCheck = vi.fn(async () => {});
+
+    await runServiceStart({ ...createServiceRunArgs(), postStartCheck });
+
+    expect(postStartCheck).toHaveBeenCalledOnce();
+    const payload = readJsonLog<{ ok?: boolean; result?: string }>();
+    expect(payload).toMatchObject({ ok: true, result: "started" });
+  });
+
   it("fails start with install hints when no service is installed", async () => {
     service.isLoaded.mockResolvedValue(false);
     service.readCommand.mockResolvedValue(null);

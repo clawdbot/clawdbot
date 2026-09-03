@@ -55,7 +55,12 @@ export function commandError(command: string, result: GitResult): Error {
 export async function requireGit(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<string> {
   return await requireGitCommand(cwd, args, { ...options, env: gitEnvironment(options.env) });
 }
@@ -151,17 +156,5 @@ export async function worktreePathExists(target: string): Promise<boolean> {
       return false;
     }
     throw error;
-  }
-}
-
-export async function removeEmptyParents(start: string, stop: string): Promise<void> {
-  let current = start;
-  while (current.startsWith(`${stop}${path.sep}`)) {
-    try {
-      await fs.rmdir(current);
-    } catch {
-      return;
-    }
-    current = path.dirname(current);
   }
 }

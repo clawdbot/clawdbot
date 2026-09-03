@@ -24,7 +24,7 @@ describe("session sharing board ticket authority", () => {
           sessionId: "session-work-global",
           updatedAt: 1,
           visibility: "read-only",
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
         },
       );
       const cfg = {

@@ -6,6 +6,7 @@ import {
   runCodeModeScriptHeadless,
 } from "./code-mode.js";
 import {
+  expectOriginalCodeModeMarker,
   createCodeModeHarness,
   createHeadlessCodeModeHarness,
   pluginToolWithExecute,
@@ -37,6 +38,9 @@ describe("Code Mode promise rejection settlement", () => {
       );
       expect(final.status).toBe(action === "throw" ? "failed" : "completed");
       expect(final.output).toEqual([]);
+      if (action === "return") {
+        expectOriginalCodeModeMarker(final.value, "x".repeat(10000));
+      }
     },
   );
 

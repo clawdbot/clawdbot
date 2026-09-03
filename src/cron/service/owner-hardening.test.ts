@@ -3,9 +3,12 @@ import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "../../infra/runtime-worker-url.js";
 import {
   tryBeginGatewayRootWorkAdmission,
   tryBeginGatewaySuspendAdmission,
@@ -16,6 +19,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
 import { advanceCronActiveJobGeneration, isCronJobActive } from "../active-jobs.js";
+import { cronOwnerHardeningEntrypoints } from "../owner-hardening-runtime.test-support.js";
 import { CronService } from "../service.js";
 import { createCronStoreHarness } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
@@ -34,12 +38,18 @@ import { listForeignReceipts } from "./foreign-receipt-monitor.js";
 import type { CronServiceState } from "./state.js";
 import { findCronTaskRunRecoveryInDatabase } from "./task-runs.js";
 
+const serviceUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.service);
+const stateDatabaseUrl = resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase);
+
 const children = new Set<ChildProcess>();
 let scriptRoot = "";
 let runnerScript = "";
 
-// Register this before the temp and store hooks because children can retain
-// both filesystem and SQLite ownership until their exit event is observed.
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
+
+// Vitest runs afterEach hooks in reverse registration order, so register last
+// to observe child exits before the temp and store hooks release their state.
 afterEach(async () => {
   const activeChildren = [...children].filter(
     (child) => child.exitCode === null && child.signalCode === null,
@@ -51,20 +61,15 @@ afterEach(async () => {
   children.clear();
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const { makeStorePath } = createCronStoreHarness({ prefix: "cron-owner-hardening-" });
-
 beforeEach(async () => {
   scriptRoot = tempDirs.make("cron-owner-hardening-script-", os.tmpdir());
-  runnerScript = path.join(scriptRoot, "runner.mts");
-  const serviceUrl = pathToFileURL(path.resolve("src/cron/service.ts")).href;
-  const stateDatabaseUrl = pathToFileURL(path.resolve("src/state/openclaw-state-db.ts")).href;
+  runnerScript = path.join(scriptRoot, "runner.mjs");
   await fsPromises.writeFile(
     runnerScript,
     `
       import fs from "node:fs";
-      import { CronService } from ${JSON.stringify(serviceUrl)};
-      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl)};
+      import { CronService } from ${JSON.stringify(serviceUrl.href)};
+      import { openOpenClawStateDatabase } from ${JSON.stringify(stateDatabaseUrl.href)};
       const [storePath, jobId, mode, releasePath, outputPath] = process.argv.slice(2);
       const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
       const logger = { debug() {}, info() {}, warn() {}, error() {} };
@@ -167,8 +172,7 @@ function spawnRunner(params: {
   const child = spawn(
     process.execPath,
     [
-      "--import",
-      "tsx",
+      ...resolveRuntimeWorkerArgv(serviceUrl).slice(0, -1),
       runnerScript,
       params.storePath,
       params.jobId,
@@ -698,6 +702,8 @@ describe("cron durable run ownership", () => {
     const first = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
     const second = spawnRunner({ storePath, jobId: job.id, mode: "due", releasePath, outputPath });
     await Promise.all([waitForExit(first), waitForExit(second)]);
+    expect(first.exitCode).toBe(0);
+    expect(second.exitCode).toBe(0);
 
     const invocations = fs.existsSync(outputPath)
       ? fs.readFileSync(outputPath, "utf8").trim().split("\n").filter(Boolean)

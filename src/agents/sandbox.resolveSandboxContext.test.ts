@@ -85,43 +85,36 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxContext", () => {
-  it("does not sandbox the agent main session in non-main mode", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "session" },
-        },
-        list: [{ id: "main" }],
+  describe.each([
+    { name: "context", resolve: resolveSandboxContext },
+    { name: "workspace", resolve: ensureSandboxWorkspaceForSession },
+  ])("sandbox $name", ({ resolve }) => {
+    it.each(["per-sender", "global"] as const)(
+      "bypasses the selected main session in %s scope",
+      async (scope) => {
+        const cfg: OpenClawConfig = {
+          session: { scope },
+          agents: {
+            ownership: "explicit",
+            defaults: {
+              sandbox: { mode: "non-main", scope: "session" },
+            },
+            entries: { main: {}, other: {} },
+          },
+        };
+
+        const result = await resolve({
+          config: cfg,
+          agentId: "main",
+          sessionKey: scope === "global" ? "global" : "agent:main:main",
+          workspaceDir: "/tmp/openclaw-test",
+        });
+
+        expect(result).toBeNull();
       },
-    };
-
-    const result = await resolveSandboxContext({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/openclaw-test",
-    });
-
-    expect(result).toBeNull();
-  }, 15_000);
-
-  it("does not create a sandbox workspace for the agent main session in non-main mode", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main", scope: "session" },
-        },
-        list: [{ id: "main" }],
-      },
-    };
-
-    const result = await ensureSandboxWorkspaceForSession({
-      config: cfg,
-      sessionKey: "agent:main:main",
-      workspaceDir: "/tmp/openclaw-test",
-    });
-
-    expect(result).toBeNull();
-  }, 15_000);
+      15_000,
+    );
+  });
 
   it("does not touch sandbox backends for cron or sub-agent sessions when sandbox mode is off", async () => {
     // Mode=off should short-circuit before resolving any backend implementation.
@@ -184,7 +177,7 @@ describe("resolveSandboxContext", () => {
       sessionId: "guest-session",
       updatedAt: 1,
       sandbox: "required" as const,
-      createdActor: { type: "human" as const, id: "guest-principal" },
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFactory = vi.fn(async () => ({
@@ -480,7 +473,7 @@ describe("resolveSandboxContext", () => {
       sessionId: "guest-session",
       updatedAt: 1,
       sandbox: "required" as const,
-      createdActor: { type: "human" as const, id: "guest-principal" },
+      createdActor: { type: "human" as const, source: "unknown" as const, id: "guest-principal" },
     };
     await replaceSessionEntry({ sessionKey, storePath }, entry);
     const backendFailure = new Error("Required sandbox backend unavailable");

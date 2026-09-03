@@ -86,11 +86,6 @@ const DirFetchToolSchema = Type.Object({
     description:
       "Max gzipped tarball bytes to fetch. Default 8 MB, hard ceiling 16 MB (single round-trip).",
   }),
-  includeDotfiles: Type.Optional(
-    Type.Boolean({
-      description: "Reserved for v2; currently always includes dotfiles (v1 quirk in BSD tar).",
-    }),
-  ),
   gatewayUrl: Type.Optional(Type.String()),
   gatewayToken: Type.Optional(Type.String()),
   timeoutMs: optionalPositiveIntegerSchema(),
@@ -100,7 +95,7 @@ export const DIR_FETCH_TOOL_DESCRIPTOR: FileTransferToolDescriptor = {
   label: "Directory Fetch",
   name: "dir_fetch",
   description:
-    "Retrieve a directory tree from a paired node as a gzipped tarball, unpack it on the gateway, and return a manifest of saved paths. Use to pull source trees, asset folders, or log directories in a single round-trip. The unpacked files live on the GATEWAY (not your local machine); pass localPath into other tools or use file_fetch on individual entries to ship them elsewhere. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
+    "Retrieve a whole directory tree, including dotfiles, from a paired node as a gzipped tarball. Unpack it on the gateway and return a manifest of saved paths. A denied descendant rejects the whole transfer. The unpacked files live on the gateway; use their localPath for follow-up operations. Rejects trees larger than 16 MB compressed. Requires operator opt-in: gateway.nodes.allowCommands must include 'dir.fetch', and file-transfer policy must authorize the path through allowReadPaths or a remembered exact approval.",
   parameters: DirFetchToolSchema,
 };
 

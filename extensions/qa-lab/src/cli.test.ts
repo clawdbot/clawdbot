@@ -708,14 +708,17 @@ describe("qa cli registration", () => {
     expect(registration.register).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps Telegram credential flags on the shared host CLI", () => {
+  it("documents the Convex-only Telegram userbot credential path", () => {
     const qa = program.commands.find((command) => command.name() === "qa");
     const telegram = qa?.commands.find((command) => command.name() === "telegram");
     const optionNames = telegram?.options.map((option) => option.long) ?? [];
+    const sourceOption = telegram?.options.find((option) => option.long === "--credential-source");
 
     expect(optionNames).toContain("--credential-source");
     expect(optionNames).toContain("--credential-role");
     expect(optionNames).toContain("--list-scenarios");
+    expect(telegram?.description()).toContain("Telegram Test Server");
+    expect(sourceOption?.description).toContain("must be convex");
   });
 
   it("registers standalone provider server commands from the provider registry", async () => {

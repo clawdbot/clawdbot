@@ -1,10 +1,9 @@
 import { createHash } from "node:crypto";
-import type {
-  SessionCatalogProvider,
-  SessionCatalogTranscriptItem,
-} from "openclaw/plugin-sdk/session-catalog";
+import type { SessionCatalogProvider } from "openclaw/plugin-sdk/session-catalog";
+import { isControlUiCatalogShareId } from "openclaw/plugin-sdk/session-catalog-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BeamStore } from "./store.js";
-import { BEAM_HOST_ID, type BeamStoredSession } from "./types.js";
+import { BEAM_HOST_ID, BEAM_SESSION_SHARE_ROUTE, type BeamStoredSession } from "./types.js";
 
 const DEFAULT_LIMIT = 50;
 const MAX_LIMIT = 100;
@@ -25,15 +24,6 @@ function searchableText(session: BeamStoredSession): string {
   return `${session.title}\n${session.source}`.toLowerCase();
 }
 
-function transcriptItems(session: BeamStoredSession): SessionCatalogTranscriptItem[] {
-  return session.items.map((item, index) => ({
-    id: `${session.beamId}:${index}`,
-    type: item.type,
-    text: item.text,
-    timestamp: session.updatedAt,
-  }));
-}
-
 type TranscriptCursor = { revision: string; end: number };
 
 function transcriptRevision(session: BeamStoredSession): string {
@@ -48,16 +38,14 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   try {
     const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf8")) as unknown;
     if (
-      parsed &&
-      typeof parsed === "object" &&
-      !Array.isArray(parsed) &&
-      typeof (parsed as TranscriptCursor).revision === "string" &&
-      /^[A-Za-z0-9_-]{43}$/.test((parsed as TranscriptCursor).revision) &&
-      typeof (parsed as TranscriptCursor).end === "number" &&
-      Number.isSafeInteger((parsed as TranscriptCursor).end) &&
-      (parsed as TranscriptCursor).end >= 0
+      isRecord(parsed) &&
+      typeof parsed.revision === "string" &&
+      /^[A-Za-z0-9_-]{43}$/.test(parsed.revision) &&
+      typeof parsed.end === "number" &&
+      Number.isSafeInteger(parsed.end) &&
+      parsed.end >= 0
     ) {
-      return parsed as TranscriptCursor;
+      return { revision: parsed.revision, end: parsed.end };
     }
   } catch {
     // Reject malformed cursors below.
@@ -65,33 +53,29 @@ function decodeTranscriptCursor(value: string): TranscriptCursor {
   throw new Error("invalid Beam transcript cursor");
 }
 
-function transcriptPage(
-  items: SessionCatalogTranscriptItem[],
-  limit: number,
-  revision: string,
-  cursor?: TranscriptCursor,
-): { items: SessionCatalogTranscriptItem[]; nextCursor?: string } {
-  if (cursor && cursor.revision !== revision) {
-    throw new Error("stale Beam transcript cursor");
-  }
-  const end = Math.min(items.length, Math.max(0, cursor?.end ?? items.length));
-  const start = Math.max(0, end - limit);
-  return {
-    items: items.slice(start, end),
-    ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
-  };
-}
-
 export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvider {
   return {
     id: "beam",
     label: "Beam",
+    audience: "gateway-operators",
+    shareRoute: BEAM_SESSION_SHARE_ROUTE,
     supportsProcessHomeIsolation: true,
     async list(params) {
       const search = params.search?.trim().toLowerCase();
+      const shareId =
+        search && isControlUiCatalogShareId(BEAM_SESSION_SHARE_ROUTE, search) ? search : undefined;
       const sessions = (await store.list())
-        .filter((session) => !search || searchableText(session).includes(search))
-        .toSorted((left, right) => right.receivedAt - left.receivedAt);
+        .filter(
+          (session) =>
+            !search ||
+            (shareId
+              ? session.beamId.startsWith(shareId)
+              : searchableText(session).includes(search)),
+        )
+        .toSorted(
+          (left, right) =>
+            right.receivedAt - left.receivedAt || left.beamId.localeCompare(right.beamId),
+        );
       const offset = cursorOffset(params.cursors?.[BEAM_HOST_ID]);
       const limit = boundedLimit(params.limitPerHost);
       const page = sessions.slice(offset, offset + limit);
@@ -110,7 +94,7 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
             recencyAt: session.receivedAt,
             source: session.source,
             archived: false,
-            canContinue: false,
+            canContinue: true,
             canArchive: false,
           })),
           ...(offset + page.length < sessions.length
@@ -127,17 +111,49 @@ export function createBeamSessionCatalog(store: BeamStore): SessionCatalogProvid
       if (!session) {
         throw new Error(`unknown Beam session: ${params.threadId}`);
       }
-      const page = transcriptPage(
-        transcriptItems(session),
-        boundedLimit(params.limit),
-        transcriptRevision(session),
-        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor),
-      );
+      const cursor =
+        params.cursor === undefined ? undefined : decodeTranscriptCursor(params.cursor);
+      const revision = transcriptRevision(session);
+      if (cursor && cursor.revision !== revision) {
+        throw new Error("stale Beam transcript cursor");
+      }
+      const end = Math.min(session.items.length, cursor?.end ?? session.items.length);
+      const start = Math.max(0, end - boundedLimit(params.limit));
       return {
         hostId: BEAM_HOST_ID,
         label: session.title,
         threadId: session.beamId,
-        ...page,
+        // Project only the selected page; keep chronological source indices in IDs
+        // while exposing newest-first items on the catalog wire.
+        items: session.items
+          .slice(start, end)
+          .map((item, index) => ({
+            id: `${session.beamId}:${start + index}`,
+            type: item.type,
+            text: item.text,
+            timestamp: session.updatedAt,
+            sender:
+              item.type === "userMessage" && session.uploaderProfileId
+                ? { identity: { type: "profile" as const, id: session.uploaderProfileId } }
+                : undefined,
+          }))
+          .toReversed(),
+        ...(start > 0 ? { nextCursor: encodeTranscriptCursor({ revision, end: start }) } : {}),
+      };
+    },
+    async copyToGatewaySession(params) {
+      if (params.hostId !== BEAM_HOST_ID) {
+        throw new Error(`unknown Beam host: ${params.hostId}`);
+      }
+      const session = await store.get(params.threadId);
+      if (!session) {
+        throw new Error(`unknown Beam session: ${params.threadId}`);
+      }
+      return {
+        displayName: session.title,
+        ...(session.sourceModel
+          ? { preferredModel: `${session.sourceModel.provider}/${session.sourceModel.model}` }
+          : {}),
       };
     },
   };

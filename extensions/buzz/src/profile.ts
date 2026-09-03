@@ -1,4 +1,4 @@
-import { finalizeEvent, type Event, type Relay } from "nostr-tools";
+import { compareEvents, finalizeEvent, type Event, type Relay } from "nostr-tools";
 import { queryBuzzRelaySnapshot } from "./relay-subscription.js";
 
 const PROFILE_KIND = 0;
@@ -68,7 +68,7 @@ async function queryCurrentProfiles(params: {
     closeMessage: (reason) => `Buzz profile query closed: ${reason}`,
     onEvent: (event) => {
       const current = latestByKind.get(event.kind);
-      if (!current || event.created_at > current.created_at) {
+      if (!current || compareEvents(event, current) < 0) {
         latestByKind.set(event.kind, event);
       }
     },
@@ -114,6 +114,7 @@ export async function syncBuzzProfile(params: {
     ...params,
     onTimeout: params.onFatalError,
   });
+  params.signal?.throwIfAborted();
   const currentMetadata = currentProfiles.get(PROFILE_KIND);
   const currentAgentProfile = currentProfiles.get(AGENT_PROFILE_KIND);
   const metadataContent = parseProfileContent(currentMetadata);
@@ -171,12 +172,15 @@ export async function syncBuzzProfile(params: {
     );
   }
 
-  if (events.length === 0) {
+  const lastEvent = events.at(-1);
+  if (!lastEvent) {
     return { status: "unchanged" };
   }
   for (const event of events) {
+    // A previous publish acknowledgement can arrive after this account stopped.
+    params.signal?.throwIfAborted();
     await params.relay.publish(event);
   }
-  const lastEvent = events.at(-1);
-  return lastEvent ? { status: "published", eventId: lastEvent.id } : { status: "unchanged" };
+  params.signal?.throwIfAborted();
+  return { status: "published", eventId: lastEvent.id };
 }

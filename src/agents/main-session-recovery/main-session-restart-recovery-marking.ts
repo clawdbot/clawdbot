@@ -16,7 +16,7 @@ import {
 import {
   listActiveEmbeddedRunSessionIds,
   listActiveEmbeddedRunSessionKeys,
-} from "../embedded-agent-runner/run-state.js";
+} from "../embedded-agent-runner/active-run-projections.js";
 import {
   isMainRestartRecoveryAggregateTerminalOnly,
   isMainRestartRecoveryCandidate,

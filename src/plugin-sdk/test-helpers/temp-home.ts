@@ -37,7 +37,12 @@ async function allocateTempHomeBase(prefix: string): Promise<string> {
   let state = SHARED_HOME_ROOTS.get(prefix);
   if (!state) {
     state = {
-      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)),
+      rootPromise: fs.mkdtemp(path.join(os.tmpdir(), prefix)).catch((error: unknown) => {
+        // Only the creator evicts a failed acquisition; current waiters keep its
+        // rejection and cannot evict a later caller's replacement root.
+        SHARED_HOME_ROOTS.delete(prefix);
+        throw error;
+      }),
       nextCaseId: 0,
     };
     SHARED_HOME_ROOTS.set(prefix, state);

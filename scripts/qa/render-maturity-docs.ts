@@ -258,10 +258,12 @@ function docsLink(docPath: string, docsRouteIndex: DocsRouteIndex): string | und
   const publicRoute = docsRouteIndex.routes.has(withoutExtension)
     ? withoutExtension
     : docsRouteIndex.redirects.get(withoutExtension);
-  if (!publicRoute || !docsRouteIndex.routes.has(publicRoute)) {
+  // Redirect fragments override source fragments; route validation only checks the page.
+  const [publicPage = "", publicAnchor = anchor] = (publicRoute ?? "").split("#", 2);
+  if (!publicPage || !docsRouteIndex.routes.has(publicPage)) {
     return undefined;
   }
-  const publicHref = anchor ? `${publicRoute}#${anchor}` : publicRoute;
+  const publicHref = publicAnchor ? `${publicPage}#${publicAnchor}` : publicPage;
   return `[${markdownEscape(title)}](/${markdownEscape(publicHref)})`;
 }
 

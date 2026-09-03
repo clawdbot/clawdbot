@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -20,12 +20,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "agent-selection-persistence",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("agent-selection-persistence");
+  }
+});
 
 const agentsList = {
   agents: [
@@ -78,7 +78,6 @@ async function screenshot(page: Page, name: string) {
   if (!captureUiProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
   await page.waitForTimeout(600);
   await page.screenshot({
     animations: "disabled",
@@ -101,7 +100,7 @@ async function hasOpenClawStartup(gateway: MockGatewayControls): Promise<boolean
     return (
       params?.agentId === "openclaw" &&
       params.sessionKey === "agent:openclaw:main" &&
-      params.limit === 100
+      params.limit === 800
     );
   });
 }
@@ -139,9 +138,6 @@ async function openPage(
 
 suite.define(() => {
   it("restores the selected agent when a fresh shell reopens the canonical global session", async () => {
-    if (captureUiProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -178,13 +174,11 @@ suite.define(() => {
       const reopened = await openPage(context);
       const reopenedPage = reopened.page;
       await reopened.gateway.waitForRequest("chat.startup");
-      await reopenedPage.waitForTimeout(1_500);
-      await screenshot(reopenedPage, "03-reopened-agent.png");
-
       await waitForControlUiRoute(reopenedPage, {
         pathname: "/chat/openclaw",
         routeId: "chat",
       });
+      await screenshot(reopenedPage, "03-reopened-agent.png");
       await expect.poll(() => hasOpenClawStartup(reopened.gateway)).toBe(true);
       await expect.poll(() => selectedAgentName(reopenedPage)).toBe("OpenClaw");
       await expect

@@ -55,7 +55,7 @@ function legacyPairedDevice(deviceId: string, extra: Partial<PairedDevice> = {})
 
 async function writeLegacyFiles(
   baseDir: string,
-  files: { paired?: Record<string, PairedDevice>; pending?: unknown; bootstrap?: unknown },
+  files: { paired?: Record<string, unknown>; pending?: unknown; bootstrap?: unknown },
 ): Promise<string> {
   const devicesDir = path.join(baseDir, "devices");
   await fs.mkdir(devicesDir, { recursive: true });
@@ -144,6 +144,51 @@ describe("migrateLegacyDevicePairingStore", () => {
     const result = await migrateLegacyDevicePairingStore({ baseDir });
     expect(result).toEqual({ imported: 0, skippedExisting: 1 });
     expect((await getPairedDevice("device-a", baseDir))?.publicKey).toBe("pk-current");
+  });
+
+  test("imports usable paired rows while omitting invalid optional fields", async () => {
+    const baseDir = await suiteRootTracker.make("contaminated-paired");
+    const devicesDir = await writeLegacyFiles(baseDir, {
+      paired: {
+        "device-a": legacyPairedDevice("device-a"),
+        "request-a": {
+          requestId: "request-a",
+          deviceId: "device-a",
+          publicKey: "pk-device-a",
+          ts: 1_700_000_000_000,
+        },
+        "invalid-timestamp": legacyPairedDevice("invalid-timestamp", {
+          createdAtMs: 1e100,
+        }),
+        "invalid-last-seen": legacyPairedDevice("invalid-last-seen", {
+          lastSeenAtMs: 1e100,
+        }),
+        "invalid-text": {
+          ...legacyPairedDevice("invalid-text"),
+          displayName: { value: "Device" },
+        },
+      },
+    });
+    const warnings: string[] = [];
+
+    const result = await migrateLegacyDevicePairingStore({
+      baseDir,
+      log: { info: () => {}, warn: (message) => warnings.push(message) },
+    });
+
+    expect(result).toEqual({ imported: 3, skippedExisting: 0 });
+    expect((await getPairedDevice("device-a", baseDir))?.publicKey).toBe("pk-device-a");
+    const normalizedLastSeen = await getPairedDevice("invalid-last-seen", baseDir);
+    expect(normalizedLastSeen?.publicKey).toBe("pk-invalid-last-seen");
+    expect(normalizedLastSeen?.lastSeenAtMs).toBeUndefined();
+    const normalizedText = await getPairedDevice("invalid-text", baseDir);
+    expect(normalizedText?.publicKey).toBe("pk-invalid-text");
+    expect(normalizedText?.displayName).toBeUndefined();
+    expect(warnings).toEqual([
+      "device pairing store migration skipped 2 invalid paired record(s)",
+      "device pairing store migration omitted 2 invalid optional field(s)",
+    ]);
+    expect(await listDeviceFiles(devicesDir)).toEqual(["paired.json.migrated"]);
   });
 
   test("returns null when no legacy files exist", async () => {

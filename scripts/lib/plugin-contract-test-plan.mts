@@ -1,5 +1,6 @@
 // Builds balanced Vitest shard plans for plugin contract tests.
 import { listTrackedTestFiles } from "./list-test-files.mts";
+import { assignWeightedTestFiles } from "./weighted-test-shards.mts";
 
 function listContractTestFiles(rootDir = "src/plugins/contracts") {
   return listTrackedTestFiles(rootDir);
@@ -33,34 +34,16 @@ function resolveContractFileWeight(file: string) {
 /** Create balanced plugin contract test shards for CI check planning. */
 export function createPluginContractTestShards() {
   const suffixes = ["a", "b"];
-  const groups: Record<string, string[]> = Object.fromEntries(
-    suffixes.map((suffix) => [`checks-fast-contracts-plugins-${suffix}`, []]),
-  );
-  const groupKeys = suffixes.map((suffix) => `checks-fast-contracts-plugins-${suffix}`);
-  const weights: Record<string, number> = Object.fromEntries(groupKeys.map((key) => [key, 0]));
+  const groups = suffixes.map((suffix) => ({
+    checkName: `checks-fast-contracts-plugins-${suffix}`,
+    includePatterns: new Array<string>(),
+    weight: 0,
+  }));
 
-  const pushBalanced = (file: string) => {
-    const target = groupKeys.toSorted(
-      (a, b) => (weights[a] ?? 0) - (weights[b] ?? 0) || a.localeCompare(b),
-    )[0];
-    if (!target || !groups[target] || weights[target] === undefined) {
-      throw new Error("plugin contract shard groups must not be empty");
-    }
-    groups[target].push(file);
-    weights[target] += resolveContractFileWeight(file);
-  };
+  assignWeightedTestFiles(groups, listContractTestFiles(), resolveContractFileWeight);
 
-  const byDescendingWeight = (left: string, right: string) => {
-    const delta = resolveContractFileWeight(right) - resolveContractFileWeight(left);
-    return delta === 0 ? left.localeCompare(right) : delta;
-  };
-
-  for (const file of listContractTestFiles().toSorted(byDescendingWeight)) {
-    pushBalanced(file);
-  }
-
-  return Object.entries(groups)
-    .map(([checkName, includePatterns]) => ({
+  return groups
+    .map(({ checkName, includePatterns }) => ({
       checkName,
       includePatterns,
       runtime: "node",

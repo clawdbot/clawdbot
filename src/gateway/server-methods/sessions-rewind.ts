@@ -21,6 +21,7 @@ import {
 import { MEDIA_MAX_BYTES, readMediaBuffer } from "../../media/store.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { ModelSelectionLockedError } from "../../sessions/model-overrides.js";
+import { withSessionInitializationSource } from "../../sessions/session-initialization.js";
 import {
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
@@ -241,6 +242,23 @@ async function mutateSessionAtMessage(
     );
     return;
   }
+  const rejectInitializing = (pending: boolean | undefined) => {
+    if (!pending) {
+      return false;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.UNAVAILABLE,
+        `Session ${sessionKey} is initializing; retry ${action} later.`,
+      ),
+    );
+    return true;
+  };
+  if (rejectInitializing(initial.entry.initializationPending)) {
+    return;
+  }
   if (action === "fork") {
     const creationError = authorizeGatewaySessionCreation({
       cfg,
@@ -283,7 +301,7 @@ async function mutateSessionAtMessage(
   let blockedByActiveRun = false;
   await runExclusiveSessionLifecycleMutation({
     scope: initial.storePath,
-    identities: [initialSessionId, initialLifecycleRevision],
+    identities: lifecycleIdentities,
     prepare: async () => {
       const current = loadAccessorSessionEntryForGatewayTarget({
         key: sessionKey,
@@ -354,6 +372,9 @@ async function mutateSessionAtMessage(
         );
         return;
       }
+      if (rejectInitializing(current.entry.initializationPending)) {
+        return;
+      }
       const upstreamLink = readSessionUpstreamLink(current.canonicalKey, current.target.agentId);
       const archived = current.entry.archivedAt !== undefined;
       if ((archived || upstreamLink) && action !== "fork") {
@@ -399,24 +420,42 @@ async function mutateSessionAtMessage(
       const sandbox = action === "fork" ? resolveCreatorSandbox(cfg, creation) : undefined;
       const upstreamFork =
         upstreamLink && upstreamForkHarness
-          ? await upstreamForkHarness.fork({
-              targetKey,
-              sandbox,
-              source: {
-                agentId: current.target.agentId,
-                sessionId: current.entry.sessionId,
-                sessionKey: current.canonicalKey,
-                storePath: current.storePath,
-                entryId,
+          ? await withSessionInitializationSource(
+              () => {
+                commitGuard();
+                const source = loadAccessorSessionEntryForGatewayTarget({
+                  key: sessionKey,
+                  cfg,
+                  agentId: requestedAgent.agentId,
+                });
+                if (
+                  source.entry?.sessionId !== initialSessionId ||
+                  source.entry.lifecycleRevision !== initialLifecycleRevision ||
+                  source.entry.initializationPending === true
+                ) {
+                  throw new Error(`Session ${sessionKey} changed during fork initialization`);
+                }
               },
-              upstream: {
-                catalogId: upstreamLink.catalogId,
-                hostId: upstreamLink.hostId,
-                kind: upstreamLink.upstreamKind,
-                threadId: upstreamLink.threadId,
-                ref: upstreamLink.upstreamRef,
-              },
-            })
+              () =>
+                upstreamForkHarness.fork({
+                  targetKey,
+                  sandbox,
+                  source: {
+                    agentId: current.target.agentId,
+                    sessionId: initialSessionId,
+                    sessionKey: current.canonicalKey,
+                    storePath: current.storePath,
+                    entryId,
+                  },
+                  upstream: {
+                    catalogId: upstreamLink.catalogId,
+                    hostId: upstreamLink.hostId,
+                    kind: upstreamLink.upstreamKind,
+                    threadId: upstreamLink.threadId,
+                    ref: upstreamLink.upstreamRef,
+                  },
+                }),
+            )
           : undefined;
       if (upstreamFork?.status === "failed") {
         respond(

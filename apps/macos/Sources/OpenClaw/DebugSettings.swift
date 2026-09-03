@@ -62,7 +62,8 @@ struct DebugSettings: View {
         }
         .alert(item: self.$pendingKill) { listener in
             Alert(
-                title: Text("Kill \(listener.command) (\(listener.pid))?"),
+                title: Text(String(
+                    format: String(localized: "Kill %@ (%d)?"), listener.command, listener.pid)),
                 message: Text("This process looks expected for the current mode. Kill anyway?"),
                 primaryButton: .destructive(Text("Kill")) {
                     Task { await self.killConfirmed(listener.pid) }
@@ -83,9 +84,12 @@ struct DebugSettings: View {
                         }
                     }
 
-                Text(
-                    "When enabled, OpenClaw won't install or manage \(gatewayLaunchdLabel). " +
-                        "It will only attach to an existing Gateway.")
+                Text(String(
+                    format: String(localized: """
+                    When enabled, OpenClaw won't install or manage %@. \
+                    It will only attach to an existing Gateway.
+                    """),
+                    gatewayLaunchdLabel))
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
@@ -162,7 +166,7 @@ struct DebugSettings: View {
                 }
                 GridRow {
                     self.gridLabel("PID")
-                    Text("\(ProcessInfo.processInfo.processIdentifier)")
+                    Text(verbatim: "\(ProcessInfo.processInfo.processIdentifier)")
                 }
                 GridRow {
                     self.gridLabel("Settings")
@@ -352,13 +356,15 @@ struct DebugSettings: View {
                 }
 
                 if self.portReports.isEmpty, !self.portCheckInFlight {
-                    Text("Check which process owns \(GatewayEnvironment.gatewayPort()) and suggest fixes.")
+                    Text(String(
+                        format: String(localized: "Check which process owns %lld and suggest fixes."),
+                        GatewayEnvironment.gatewayPort()))
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(self.portReports) { report in
                         VStack(alignment: .leading, spacing: 4) {
-                            Text("Port \(report.port)")
+                            Text(String(format: String(localized: "Port %lld"), report.port))
                                 .font(.footnote.weight(.semibold))
                             Text(report.summary)
                                 .font(.caption)
@@ -367,7 +373,7 @@ struct DebugSettings: View {
                             ForEach(report.listeners) { listener in
                                 VStack(alignment: .leading, spacing: 2) {
                                     HStack(spacing: 8) {
-                                        Text("\(listener.command) (\(listener.pid))")
+                                        Text(verbatim: "\(listener.command) (\(listener.pid))")
                                             .font(.caption.monospaced())
                                             .foregroundStyle(listener.expected ? .secondary : Color.red)
                                             .lineLimit(1)

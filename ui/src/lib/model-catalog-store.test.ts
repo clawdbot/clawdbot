@@ -3,7 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   peekChatMetadata,
-  rememberChatMetadata,
+  loadChatMetadata,
+  beginChatMetadataPublication,
   subscribeChatMetadata,
 } from "./chat/chat-metadata-store.ts";
 import { invalidateModelCatalogCache, loadModelCatalog } from "./model-catalog-store.ts";
@@ -58,15 +59,24 @@ describe("loadModels", () => {
       ...(method === "chat.metadata" ? { commands: [] } : {}),
     }));
     const client = { request } as unknown as GatewayBrowserClient;
-    rememberChatMetadata(client, "main", { commands: [], models: prepared });
-    const listener = vi.fn();
-    const unsubscribe = subscribeChatMetadata(client, "main", listener);
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({
+      commands: [],
+      models: prepared,
+    });
+    const listener = vi.fn((update: { type: string }) => {
+      if (update.type === "invalidated") {
+        void loadChatMetadata(client, { agentId: "main" });
+      }
+    });
+    const unsubscribe = subscribeChatMetadata(client, { agentId: "main" }, listener);
 
     await loadModels(client, { agentId: "main" });
 
-    await vi.waitFor(() => expect(peekChatMetadata(client, "main")?.models).toEqual(discovered));
+    await vi.waitFor(() =>
+      expect(peekChatMetadata(client, { agentId: "main" })?.models).toEqual(discovered),
+    );
     expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
-    expect(listener).toHaveBeenCalledOnce();
+    expect(listener.mock.calls.filter(([update]) => update.type === "result")).toHaveLength(1);
     unsubscribe();
   });
 
@@ -74,7 +84,7 @@ describe("loadModels", () => {
     const models = [{ id: "prepared", name: "Prepared", provider: "openai" }];
     const request = vi.fn(async () => ({ models }));
     const client = { request } as unknown as GatewayBrowserClient;
-    rememberChatMetadata(client, "main", { commands: [], models });
+    beginChatMetadataPublication(client, { agentId: "main" }).publish({ commands: [], models });
 
     await loadModels(client, { agentId: "main", preparedOnly: true });
 

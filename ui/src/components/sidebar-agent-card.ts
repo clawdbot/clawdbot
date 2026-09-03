@@ -15,10 +15,9 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) authToken: string | null = null;
   @property({ attribute: false }) avatarAuthReady = false;
   @property({ attribute: false }) avatarText = "";
-  @property({ attribute: false }) subtitle = "";
   @property({ attribute: false }) environment: ControlUiEnvironment | null = null;
   @property({ attribute: false }) menuOpen = false;
-  /** Unread sessions exist on non-active agents; surfaces next to the name. */
+  /** Unread sessions exist on non-active agents; surfaces on the avatar. */
   @property({ attribute: false }) menuUnread = false;
   /** More than one agent is configured; labels the menu as a switcher. */
   @property({ attribute: false }) switcherAvailable = false;
@@ -27,16 +26,7 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
   onMenuPointerEnter?: (trigger: HTMLElement, event: PointerEvent) => void;
   @property({ attribute: false }) onMenuPointerLeave?: () => void;
 
-  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(() => {
-    if (this.isConnected) {
-      this.requestUpdate();
-    }
-  });
-
-  override disconnectedCallback() {
-    this.avatarLoader.reset();
-    super.disconnectedCallback();
-  }
+  private readonly avatarLoader = new AuthenticatedAvatarRouteLoader(this);
 
   override render() {
     return this.avatarLoader.withActiveRoutes(() => this.renderContent());
@@ -93,34 +83,27 @@ class SidebarAgentCard extends OpenClawLightDomContentsElement {
               : html`<span class="sidebar-agent-card__avatar-text" aria-hidden="true"
                   >${this.avatarText}</span
                 >`}
+            ${this.menuUnread && !this.menuOpen
+              ? html`<span
+                  class="session-unread-dot sidebar-agent-card__menu-unread"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing}
           </span>
           <span class="sidebar-agent-card__text">
             <span class="sidebar-agent-card__name">
-              ${this.agentName}
+              <span class="sidebar-agent-card__name-text">${this.agentName}</span>
               <span class="sidebar-agent-card__chevron" aria-hidden="true"
-                >${icons.chevronDown}</span
+                >${icons.chevronsUpDown}</span
               >
             </span>
-            ${this.subtitle || this.environment
+            ${this.environment
               ? html`<span class="sidebar-agent-card__subtitle-row">
-                  ${this.subtitle
-                    ? html`<span class="sidebar-agent-card__subtitle">${this.subtitle}</span>`
-                    : nothing}
-                  ${this.environment
-                    ? html`<span class="control-ui-environment-pill"
-                        >${this.environment.label}</span
-                      >`
-                    : nothing}
+                  <span class="control-ui-environment-pill">${this.environment.label}</span>
                 </span>`
               : nothing}
           </span>
-          ${this.menuUnread && !this.menuOpen
-            ? html`<span
-                class="session-unread-dot sidebar-agent-card__menu-unread"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
         </button>
       </div>
     `;

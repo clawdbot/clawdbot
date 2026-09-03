@@ -164,7 +164,7 @@ describe.skipIf(process.platform !== "darwin")("native Codex turn sandbox", () =
         "supports_websockets=false",
       ].join("\n");
       await fs.writeFile(path.join(codexHome, "config.toml"), config);
-      const child = createStdioTransport(
+      const child = await createStdioTransport(
         { transport: "stdio", command, commandSource: "config", args, cwd, headers: {} },
         { ...env, PATH: "/usr/bin:/bin", SHELL: "/bin/sh" },
       );

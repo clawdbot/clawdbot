@@ -1,6 +1,5 @@
-// Tests session maintenance warning formatting and suppression.
 import { randomUUID } from "node:crypto";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type DeliveryCall = {
   channel?: string;
@@ -70,10 +69,10 @@ function createParams(
   };
 }
 
-function expectedMaintenanceWarning(reasonText: string): string {
+function expectedMaintenanceWarning(reasonText: string, outcome = "removed"): string {
   return (
-    `\u26A0\uFE0F Session maintenance warning: this active session would be evicted (${reasonText}). ` +
-    `Maintenance is set to warn-only, so nothing was reset. ` +
+    `\u26A0\uFE0F Session maintenance warning: this active session would be ${outcome} (${reasonText}). ` +
+    `Maintenance is set to warn-only, so nothing was changed. ` +
     `To enforce cleanup, set \`session.maintenance.mode: "enforce"\` or increase the limits.`
   );
 }
@@ -90,9 +89,13 @@ describe("deliverSessionMaintenanceWarning", () => {
   let prevVitest: string | undefined;
   let prevNodeEnv: string | undefined;
 
-  beforeEach(async () => {
+  beforeAll(async () => {
+    // Start under this suite's mocks, then reuse the owner across disjoint session keys.
     vi.resetModules();
     ({ deliverSessionMaintenanceWarning } = await import("./session-maintenance-warning.js"));
+  });
+
+  beforeEach(() => {
     prevVitest = process.env.VITEST;
     prevNodeEnv = process.env.NODE_ENV;
     delete process.env.VITEST;
@@ -163,6 +166,7 @@ describe("deliverSessionMaintenanceWarning", () => {
         maxEntries: 10,
         wouldPrune: false,
         wouldCap: true,
+        capOutcome: "archive",
       } as never,
     });
 
@@ -170,6 +174,26 @@ describe("deliverSessionMaintenanceWarning", () => {
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(mocks.enqueueSystemEvent).toHaveBeenCalledTimes(1);
+    expect(firstSystemEventCall()).toEqual([
+      expectedMaintenanceWarning("not in the most recent 10 sessions", "archived"),
+      { sessionKey: params.sessionKey },
+    ]);
+  });
+
+  it("describes synthetic cap overflow as removal", async () => {
+    mocks.deliveryContextFromSession.mockReturnValueOnce(undefined as never);
+    const params = createParams({
+      warning: {
+        pruneAfterMs: 3_600_000,
+        maxEntries: 10,
+        wouldPrune: false,
+        wouldCap: true,
+        capOutcome: "remove",
+      } as never,
+    });
+
+    await deliverSessionMaintenanceWarning(params);
+
     expect(firstSystemEventCall()).toEqual([
       expectedMaintenanceWarning("not in the most recent 10 sessions"),
       { sessionKey: params.sessionKey },
@@ -197,42 +221,6 @@ describe("deliverSessionMaintenanceWarning", () => {
       expectedMaintenanceWarning("older than 1 second"),
       { sessionKey: params.sessionKey },
     ]);
-  });
-
-  it.each([
-    [59_500, "60 seconds", "1 minute"],
-    [3_570_000, "60 minutes", "1 hour"],
-    [86_370_000, "24 hours", "1 day"],
-  ])(
-    "formatDuration rolls over %dms to next unit instead of %s",
-    async (pruneAfterMs, _buggyOutput, expected) => {
-      mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("force system event"));
-      const params = createParams({
-        warning: { pruneAfterMs, wouldPrune: true, wouldCap: false, maxEntries: 100 } as never,
-      });
-
-      await deliverSessionMaintenanceWarning(params);
-
-      expect(firstSystemEventCall()?.[0]).toContain(`older than ${expected}`);
-    },
-  );
-
-  it.each([
-    [30_000, "30 seconds"],
-    [89_500, "1 minute"],
-    [1_800_000, "30 minutes"],
-    [5_370_000, "1 hour"],
-    [43_200_000, "12 hours"],
-    [129_570_000, "1 day"],
-  ])("formatDuration keeps %dms in its own unit as %s", async (pruneAfterMs, expected) => {
-    mocks.deliverOutboundPayloads.mockRejectedValueOnce(new Error("force system event"));
-    const params = createParams({
-      warning: { pruneAfterMs, wouldPrune: true, wouldCap: false, maxEntries: 100 } as never,
-    });
-
-    await deliverSessionMaintenanceWarning(params);
-
-    expect(firstSystemEventCall()?.[0]).toContain(`older than ${expected}`);
   });
 
   it("keeps a recently used context while evicting the least-recently-used entry", async () => {

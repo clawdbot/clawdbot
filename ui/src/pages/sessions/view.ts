@@ -16,6 +16,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import { renderCapacityMeter } from "../../components/capacity-meter.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
@@ -59,6 +60,7 @@ import {
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { formatSessionArchiveReason } from "../../lib/sessions/session-archive-reason.ts";
 import { parseSessionKeyParts } from "../../lib/sessions/session-key.ts";
 import { SESSIONS_PAGE_DEFAULT_LIMIT } from "../../lib/sessions/session-requests.ts";
 
@@ -137,6 +139,7 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       icon?: string | null;
+      color?: string | null;
       category?: string | null;
       archived?: boolean;
       pinned?: boolean;
@@ -335,13 +338,7 @@ function renderTokensCell(row: GatewaySessionRow) {
         <span class="session-tokens__value"
           >${totalLabel} / ${formatCompactTokenCount(context)}</span
         >
-        <span
-          class="session-context-meter session-context-meter--${tone}"
-          role="img"
-          aria-label=${title}
-        >
-          <span class="session-context-meter__fill" style=${`width: ${percent}%`}></span>
-        </span>
+        ${renderCapacityMeter({ mode: "continuous", percent, tone, label: title })}
       </div>
     </openclaw-tooltip>
   `;
@@ -734,6 +731,12 @@ function sessionDetailItems(params: {
   add(t("sessionsView.room"), row.room);
   add(t("sessionsView.space"), row.space);
   add(t("sessionsView.sessionId"), row.sessionId);
+  if (row.archiveReason) {
+    details.push({
+      label: t("sessionsView.archiveReason"),
+      value: formatSessionArchiveReason(row.archiveReason),
+    });
+  }
   for (const [label, value] of [
     [t("sessionsView.activeRun"), row.hasActiveRun],
     [t("sessionsView.archived"), row.archived],

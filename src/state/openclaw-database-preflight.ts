@@ -16,6 +16,7 @@ import {
 import {
   describeRunningOpenClawBuild,
   readSqliteUserVersion,
+  SqliteSchemaVersionError,
 } from "../infra/sqlite-user-version.js";
 import { discoverAgentDatabaseMigrationTargets } from "../infra/state-migrations.media-persistence-targets.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -93,7 +94,7 @@ function formatDoctorIncompatibleDatabase(database: IncompatibleOpenClawDatabase
 }
 
 /** Fatal refusal when persisted schemas were written by a newer build. */
-export class OpenClawDatabaseSchemaPreflightError extends Error {
+export class OpenClawDatabaseSchemaPreflightError extends SqliteSchemaVersionError {
   constructor(
     readonly incompatibleDatabases: readonly IncompatibleOpenClawDatabase[],
     options: { operation?: OpenClawDatabaseSchemaPreflightOperation } = {},
@@ -326,7 +327,12 @@ export function preflightOpenClawDatabaseSchemas(options: {
   env: NodeJS.ProcessEnv;
   supportedVersions: OpenClawSchemaVersions;
   verifyCurrentSchemaShape?: boolean;
-  configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
+  configuredAgentDatabaseTargets?:
+    | readonly { agentId: string; path: string }[]
+    | ((
+        registeredDatabases: readonly { agentId: string; path: string }[],
+      ) => readonly { agentId: string; path: string }[]);
+  configuredAgentDatabaseCandidatePaths?: readonly string[];
 }): OpenClawDatabaseSchemaPreflight {
   const result: OpenClawDatabaseSchemaPreflight = { incompatible: [], indeterminate: [] };
   const statePath = path.resolve(resolveOpenClawStateSqlitePath(options.env));
@@ -390,9 +396,15 @@ export function preflightOpenClawDatabaseSchemas(options: {
   }
   let agentTargets = registeredDatabases;
   if (options.configuredAgentDatabaseTargets !== undefined) {
+    // Doctor must resolve configured paths from these read-only facts: the
+    // runtime registry reader rejects the very legacy schema Doctor repairs.
+    const configuredTargets =
+      typeof options.configuredAgentDatabaseTargets === "function"
+        ? options.configuredAgentDatabaseTargets(registeredDatabases)
+        : options.configuredAgentDatabaseTargets;
     const discovery = discoverAgentDatabaseMigrationTargets({
       env: options.env,
-      configuredAgentDatabaseTargets: options.configuredAgentDatabaseTargets,
+      configuredAgentDatabaseTargets: configuredTargets,
       registeredAgentDatabases: registeredDatabases,
     });
     agentTargets = discovery.targets;
@@ -400,20 +412,34 @@ export function preflightOpenClawDatabaseSchemas(options: {
       result.indeterminate.push({ kind: "agent", ...failure });
     }
   }
-  for (const row of agentTargets) {
+  // An occupied custom-store candidate can have a newer, unreadable owner.
+  // Check its version without promoting it into an owned migration target.
+  const inspectionTargets: Array<{ agentId?: string; path: string }> = [
+    ...agentTargets,
+    ...(options.configuredAgentDatabaseCandidatePaths ?? []).map((candidatePath) => ({
+      path: candidatePath,
+    })),
+  ];
+  const inspectedAgentPaths = new Set<string>();
+  for (const row of inspectionTargets) {
     const agentPath = row.path;
     if (!existsSync(agentPath)) {
       continue;
     }
     let agentDatabase: DatabaseSync | undefined;
     try {
+      const realAgentPath = realpathSync(agentPath);
+      if (row.agentId === undefined && inspectedAgentPaths.has(realAgentPath)) {
+        continue;
+      }
+      inspectedAgentPaths.add(realAgentPath);
       agentDatabase = openNodeSqliteDatabase(agentPath, {
         readOnly: true,
       });
       agentDatabase.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
       const agentVersion = readSqliteUserVersion(agentDatabase);
       if (agentVersion <= options.supportedVersions.agent) {
-        if (options.verifyCurrentSchemaShape === true) {
+        if (options.verifyCurrentSchemaShape === true && row.agentId !== undefined) {
           // Existing agent databases require Doctor-owned migration before
           // startup; a successor cannot safely repair them after close.
           assertOpenClawAgentDatabaseForMaintenance(agentDatabase, {
@@ -427,7 +453,7 @@ export function preflightOpenClawDatabaseSchemas(options: {
       result.incompatible.push({
         kind: "agent",
         path: agentPath,
-        agentId: row.agentId,
+        ...(row.agentId !== undefined ? { agentId: row.agentId } : {}),
         foundVersion: agentVersion,
         supportedVersion: options.supportedVersions.agent,
         ...(writerAppVersion ? { writerAppVersion } : {}),

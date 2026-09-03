@@ -1,8 +1,8 @@
 // Control UI E2E coverage for operator-facing Skills, Nodes, and exec approvals administration.
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
   type MockGatewayControls,
@@ -17,7 +17,12 @@ const suite = createControlUiE2eSuite({
 });
 
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "operator-admin");
+let proofDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    proofDir = createControlUiE2eArtifactDir("operator-admin");
+  }
+});
 const viewport = { height: 960, width: 1440 };
 
 const agentRoster = [
@@ -116,9 +121,6 @@ async function waitForRequest(
 }
 
 async function createContext(): Promise<BrowserContext> {
-  if (captureUiProof) {
-    await mkdir(proofDir, { recursive: true });
-  }
   return suite.browser.newContext({
     locale: "en-US",
     serviceWorkers: "block",
@@ -251,11 +253,13 @@ suite.define(() => {
         gateway.waitForRequest("exec.approvals.get"),
       ]);
       await expect.poll(() => page.getByText("Build Node", { exact: true }).isVisible()).toBe(true);
-      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(0);
+      // The connected node row carries a status pill and capability chips; an
+      // unknown capability keeps its raw name as a generic chip.
+      await expect.poll(() => page.getByText("connected", { exact: true }).count()).toBe(1);
+      const chips = page.locator(".device-capability");
+      await expect.poll(() => chips.filter({ hasText: "Browser" }).count()).toBe(1);
+      await expect.poll(() => chips.filter({ hasText: "filesystem" }).count()).toBe(1);
       await page.getByText("Details", { exact: true }).click();
-      await expect
-        .poll(() => page.getByText(/Capabilities: browser, filesystem/).isVisible())
-        .toBe(true);
       await expect
         .poll(() =>
           page

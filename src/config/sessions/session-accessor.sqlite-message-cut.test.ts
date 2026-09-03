@@ -21,6 +21,7 @@ import {
   recordSessionParticipant,
   readSessionTranscriptMessageEventPage,
   readSessionTranscriptMessageEvents,
+  replaceTranscriptEvents,
   rewindSessionToMessage,
   switchSessionBranch,
   updateSessionEntry,
@@ -89,10 +90,15 @@ async function createSession(options: { activeLeafTarget?: string } = {}) {
     cliSessionBindings: { "claude-cli": { sessionId: "claude-conversation" } },
     cliSessionIds: { "claude-cli": "claude-conversation" },
     compactionCount: 2,
+    transcriptByteCompactionLatch: {
+      activeBytes: 20_000,
+      sessionId,
+      maxBytes: 10_000,
+    },
     contextTokens: 100_000,
     contextTokensSource: "runtime",
     createdVia: "operator",
-    createdActor: { type: "human", id: "profile-1" },
+    createdActor: { type: "human", source: "profile", id: "profile-1" },
     createdAt: 1_000,
     delivery: normalizeSessionDeliveryState({
       context: { channel: "telegram", to: "chat-123" },
@@ -413,6 +419,80 @@ describe("SQLite session message cuts", () => {
     });
   });
 
+  it("summarizes a large shared branch graph without repeated path walks", async () => {
+    const stateDir = tempDirs.make("openclaw-large-branches-");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const sessionId = "large-branches-source";
+    const scope = { agentId, env, sessionId, sessionKey };
+    await upsertSessionEntryCore(scope, { sessionId, updatedAt: Date.now() });
+    const events: Parameters<typeof replaceTranscriptEvents>[1] = [
+      {
+        type: "session",
+        id: sessionId,
+        version: 3,
+        timestamp: "2026-08-30T00:00:00.000Z",
+      },
+      {
+        type: "message",
+        id: "orphan-user",
+        parentId: "missing-ancestor",
+        timestamp: "2026-08-30T00:00:01.000Z",
+        message: { role: "user", content: "orphan prompt" },
+      },
+      {
+        type: "message",
+        id: "orphan-assistant",
+        parentId: "orphan-user",
+        timestamp: "2026-08-30T00:00:02.000Z",
+        message: { role: "assistant", content: "orphan answer" },
+      },
+    ];
+    for (let index = 1; index <= 12_554; index += 1) {
+      events.push({
+        type: "message",
+        id: `main-${index}`,
+        parentId: index === 1 ? null : `main-${index - 1}`,
+        timestamp: new Date(Date.UTC(2026, 7, 30, 0, 0, index)).toISOString(),
+        message: { role: index % 2 === 0 ? "assistant" : "user", content: `main ${index}` },
+      });
+    }
+    for (let index = 1; index <= 1_360; index += 1) {
+      events.push({
+        type: "message",
+        id: `side-${index}`,
+        parentId: "main-5376",
+        appendMode: "side",
+        timestamp: new Date(Date.UTC(2026, 7, 30, 1, 0, index)).toISOString(),
+        message: { role: "assistant", content: `side ${index}` },
+      });
+    }
+    events.push({
+      type: "leaf",
+      id: "active-leaf",
+      parentId: "main-12554",
+      targetId: "main-12554",
+      timestamp: "2026-08-30T02:00:02.000Z",
+    });
+    await replaceTranscriptEvents(scope, events);
+
+    const startedAt = performance.now();
+    const result = await listSessionBranches({ agentId, env, sessionKey });
+    const elapsedMs = performance.now() - startedAt;
+    expect(result.status).toBe("ok");
+    if (result.status !== "ok") {
+      throw new Error("expected branch list result");
+    }
+    expect(elapsedMs).toBeLessThan(1_000);
+    expect(result.branches).toHaveLength(1_362);
+    expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual({
+      leafEntryId: "orphan-assistant",
+      headline: "orphan answer",
+      messageCount: 2,
+      updatedAt: "2026-08-30T00:00:02.000Z",
+      active: false,
+    });
+  }, 15_000);
+
   it("switches to another tip and rebuilds the active-path projection", async () => {
     const { env } = await createSession();
 
@@ -496,10 +576,11 @@ describe("SQLite session message cuts", () => {
       cliSessionBindings: undefined,
       cliSessionIds: undefined,
       compactionCount: undefined,
+      transcriptByteCompactionLatch: undefined,
       contextTokens: undefined,
       contextTokensSource: undefined,
       createdVia: "operator",
-      createdActor: { type: "human", id: "profile-1" },
+      createdActor: { type: "human", source: "profile", id: "profile-1" },
       createdAt: 1_000,
       forkSource: { sessionKey: "agent:main:root", sessionId: "root-session" },
       previousSessionId: "message-cut-source",

@@ -3,6 +3,7 @@ import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import type { ApprovalScope } from "../../../src/infra/approval-scope.ts";
+import type { GatewaySessionRow } from "../api/types.ts";
 import type {
   ExecApprovalDecision,
   ExecApprovalRequest,
@@ -23,6 +24,7 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
 
 type ExecApprovalCardProps = {
   approval: ExecApprovalRequest;
+  sourceSession?: GatewaySessionRow;
   busy: boolean;
   canGrant: boolean;
   error: string | null;
@@ -384,7 +386,7 @@ export function renderExecApprovalCard(props: ExecApprovalCardProps) {
     ${props.variant === "inline" && active.sourceSessionKey
       ? html`<div class="exec-approval-warning" role="note">
           ${t("execApproval.requestedBySession", {
-            session: resolveSessionDisplayName(active.sourceSessionKey),
+            session: resolveSessionDisplayName(active.sourceSessionKey, props.sourceSession),
           })}
         </div>`
       : nothing}

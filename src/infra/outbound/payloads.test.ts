@@ -1,5 +1,7 @@
 // Covers outbound payload normalization across text, media, presentation,
 // interactive blocks, mirror text, and suppressed relay status payloads.
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
@@ -31,6 +33,18 @@ function resolveMirrorProjection(payloads: readonly ReplyPayload[]) {
 }
 
 describe("normalizeReplyPayloadsForDelivery", () => {
+  it.each(["photo.png", "café 100% image.png"])(
+    "deduplicates a file URL directive with its explicit local path: %s",
+    (fileName) => {
+      const filePath = path.resolve("media", fileName);
+      const [payload] = normalizeReplyPayloadsForDelivery([
+        { text: `Caption\nMEDIA:${pathToFileURL(filePath).href}`, mediaUrl: filePath },
+      ]);
+
+      expect(payload).toMatchObject({ text: "Caption", mediaUrl: filePath, mediaUrls: [filePath] });
+    },
+  );
+
   it("parses directives, merges media, and preserves reply metadata", () => {
     expect(
       normalizeReplyPayloadsForDelivery([

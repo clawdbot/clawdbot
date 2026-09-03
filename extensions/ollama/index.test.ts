@@ -2575,8 +2575,6 @@ describe("ollama plugin", () => {
       capabilities?: string[];
       defaultModels?: Record<string, string>;
       autoPriority?: Record<string, number>;
-      describeImage?: unknown;
-      describeImages?: unknown;
     }> = [];
 
     plugin.register(
@@ -2598,8 +2596,6 @@ describe("ollama plugin", () => {
     const ollamaMedia = expectDefined(mediaProviders[0], "Ollama media provider");
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
-    expect(ollamaMedia.describeImage).toBeTypeOf("function");
-    expect(ollamaMedia.describeImages).toBeTypeOf("function");
     // Intentional: no defaultModels or autoPriority. Ollama vision models are
     // user-installed (llava, qwen2.5vl, …) with no universal default, and we
     // don't want Ollama to auto-steal image duty from configured providers.

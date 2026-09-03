@@ -21,6 +21,20 @@ vi.mock("../node-registry-private.js", () => ({
   })),
 }));
 
+vi.mock("../worker-environments/placement-capabilities.js", () => ({
+  resolveWorkerPlacementCapabilities: vi.fn((runtimeId: string) =>
+    runtimeId === "codex"
+      ? {
+          executionMode: "remote-exec",
+          devicePlacement: {
+            requiredNodeCommands: ["codex.exec-server.stdio.v1"],
+            consumesWorkerSlot: false,
+          },
+        }
+      : {},
+  ),
+}));
+
 beforeEach(() => {
   vi.mocked(listDevicePairing).mockResolvedValue({ paired: [] } as never);
   vi.mocked(listNodePairing).mockResolvedValue({ paired: [] } as never);
@@ -29,34 +43,51 @@ beforeEach(() => {
 describe("node environment command authority", () => {
   it.each([
     {
-      name: "projects sorted approved commands while preserving denied declarations",
+      name: "invocable command",
       declared: ["system.which", "codex.exec-server.stdio.v1", "system.run", "system.run"],
+      effective: ["system.which", "codex.exec-server.stdio.v1", "system.run"],
       allow: ["codex.exec-server.stdio.v1"],
       deny: ["system.run"],
       expected: ["codex.exec-server.stdio.v1", "system.which"],
+      state: "invocable",
     },
     {
-      name: "withholds declared commands without explicit Gateway approval",
+      name: "declared command pending pairing approval",
       declared: ["codex.exec-server.stdio.v1"],
-      allow: [],
+      effective: [],
+      allow: ["codex.exec-server.stdio.v1"],
       deny: [],
       expected: [],
+      state: "pending-approval",
     },
     {
-      name: "honors Gateway denial even when the command was explicitly allowed",
+      name: "declared command blocked by current Gateway policy",
       declared: ["codex.exec-server.stdio.v1"],
+      effective: ["codex.exec-server.stdio.v1"],
       allow: ["codex.exec-server.stdio.v1"],
       deny: ["codex.exec-server.stdio.v1"],
       expected: [],
+      state: "unauthorized",
     },
     {
-      name: "does not project approved commands the node did not declare",
-      declared: ["system.which"],
+      name: "required command blocked while an unrelated declaration awaits approval",
+      declared: ["codex.exec-server.stdio.v1", "fixture.unrelated"],
+      effective: ["codex.exec-server.stdio.v1"],
+      allow: [],
+      deny: [],
+      expected: [],
+      state: "unauthorized",
+    },
+    {
+      name: "command not declared by the node",
+      declared: [],
+      effective: [],
       allow: ["codex.exec-server.stdio.v1"],
       deny: [],
-      expected: ["system.which"],
+      expected: [],
+      state: "undeclared",
     },
-  ])("$name", async ({ declared, allow, deny, expected }) => {
+  ])("projects $name", async ({ declared, effective, allow, deny, expected, state }) => {
     const context = {
       logGateway: { warn: vi.fn() },
       getRuntimeConfig: () => ({ gateway: { nodes: { commands: { allow, deny } } } }),
@@ -69,7 +100,8 @@ describe("node environment command authority", () => {
             platform: "linux",
             deviceFamily: "Linux",
             caps: ["session.host"],
-            commands: declared,
+            declaredCommands: declared,
+            commands: effective,
             connectedAtMs: 123,
           },
         ],
@@ -78,8 +110,9 @@ describe("node environment command authority", () => {
 
     const listRespond = vi.fn();
     await environmentsHandlers["environments.list"]?.({
-      params: {},
+      params: { runtimeId: "codex" },
       respond: listRespond,
+      client: { connect: { scopes: ["operator.write"] } },
       context,
     } as never);
     const listPayload = listRespond.mock.calls.at(0)?.[1] as
@@ -88,6 +121,7 @@ describe("node environment command authority", () => {
             id: string;
             capabilities?: string[];
             invocableCommands?: string[];
+            requiredNodeCommand?: { command: string; state: string };
           }>;
         }
       | undefined;
@@ -96,7 +130,11 @@ describe("node environment command authority", () => {
     );
 
     expect(listed?.invocableCommands ?? []).toEqual(expected);
-    for (const command of declared) {
+    expect(listed?.requiredNodeCommand).toEqual({
+      command: "codex.exec-server.stdio.v1",
+      state,
+    });
+    for (const command of effective) {
       expect(listed?.capabilities).toContain(command);
     }
 
@@ -110,5 +148,34 @@ describe("node environment command authority", () => {
       | { invocableCommands?: string[] }
       | undefined;
     expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
+  });
+
+  it("requires write scope only for runtime-specific command state", async () => {
+    const context = {
+      logGateway: { warn: vi.fn() },
+      getRuntimeConfig: () => ({}),
+      nodeRegistry: { listConnectedForPairingStates: () => [] },
+    };
+    const readOnlyRespond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: { runtimeId: "codex" },
+      respond: readOnlyRespond,
+      client: { connect: { scopes: ["operator.read"] } },
+      context,
+    } as never);
+    expect(readOnlyRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+    );
+
+    const inventoryRespond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: {},
+      respond: inventoryRespond,
+      client: { connect: { scopes: ["operator.read"] } },
+      context,
+    } as never);
+    expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
   });
 });

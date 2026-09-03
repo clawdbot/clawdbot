@@ -1,11 +1,24 @@
 /** Tracks active and retired plugin registries so stale runtime calls can be rejected. */
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { PluginLoaderCacheState } from "./loader-cache-state.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
-const retiredRegistries = new WeakSet<PluginRegistry>();
-const activatedRegistries = new WeakSet<PluginRegistry>();
-const registryEpochs = new WeakMap<PluginRegistry, object>();
-const recordEpochs = new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>();
-const revokedRecordEpoch = Object.freeze({});
+const MAX_PLUGIN_REGISTRY_CACHE_ENTRIES = 128;
+
+export const pluginLoaderCacheState = new PluginLoaderCacheState<PluginRegistry>(
+  MAX_PLUGIN_REGISTRY_CACHE_ENTRIES,
+);
+
+// Registry identities cross built/source module copies. Their activation and
+// revocation state must share that lifetime, or valid owners fail and revocations split.
+const { retiredRegistries, activatedRegistries, registryEpochs, recordEpochs, revokedRecordEpoch } =
+  resolveGlobalSingleton(Symbol.for("openclaw.pluginRegistryLifecycle"), () => ({
+    retiredRegistries: new WeakSet<PluginRegistry>(),
+    activatedRegistries: new WeakSet<PluginRegistry>(),
+    registryEpochs: new WeakMap<PluginRegistry, object>(),
+    recordEpochs: new WeakMap<PluginRegistry, WeakMap<PluginRecord, object>>(),
+    revokedRecordEpoch: Object.freeze({}),
+  }));
 
 export type PluginRegistryLifecycleEpoch = object;
 type PluginRecordLifecycleEpoch = object;
@@ -15,6 +28,9 @@ export function markPluginRegistryRetired(registry: PluginRegistry | null | unde
   if (registry) {
     retiredRegistries.add(registry);
     registryEpochs.delete(registry);
+    // Retired registrations cannot be reused and retain their Gateway/cache generation.
+    // Release every cache key now, including keys that will never be looked up again.
+    pluginLoaderCacheState.deleteValue(registry);
   }
 }
 

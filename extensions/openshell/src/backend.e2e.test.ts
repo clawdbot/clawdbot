@@ -1,7 +1,6 @@
 // Openshell tests cover backend plugin behavior.
 import fs from "node:fs/promises";
 import net from "node:net";
-import os from "node:os";
 import path from "node:path";
 import {
   createSandboxTestContext,
@@ -339,7 +338,9 @@ describe("openshell sandbox backend e2e", () => {
         throw new Error("OpenShell E2E requires an active local registered gateway");
       }
 
-      const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-openshell-e2e-"));
+      // macOS sockaddr_un cannot hold the test runner's nested temporary path, and the
+      // mirror socket under this root would exceed it.
+      const rootDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "oc-osh-e2e-"));
       const env = openshellEnv(rootDir);
       const previousHome = process.env.HOME;
       const previousXdgConfigHome = process.env.XDG_CONFIG_HOME;

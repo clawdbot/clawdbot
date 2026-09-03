@@ -7,6 +7,7 @@ import {
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type { WorkerWorkspaceCommand, WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
 import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 import {
   measureLocalWorkspaceReconciliation,
   pruneWorkspaceHashMemo,
@@ -32,7 +33,11 @@ export type NodeWorkerWorkspaceBinding = {
 
 type NodeWorkerWorkspaceActions = Pick<
   WorkerWorkspaceTunnelHandle,
-  "runWorkspaceCommand" | "syncWorkspace" | "quiesceWorkspace" | "reconcileWorkspace"
+  | "runWorkspaceCommand"
+  | "syncWorkspace"
+  | "quiesceWorkspace"
+  | "reconcileWorkspace"
+  | "stageAttachments"
 > & { validateRestoredWorkspace: () => Promise<void> };
 
 export function createNodeWorkerWorkspaceActions(params: {
@@ -65,6 +70,8 @@ export function createNodeWorkerWorkspaceActions(params: {
     if (!restoredWorkspace) {
       return;
     }
+    // Restore transport custody only. The uploaded base is hash-bound to placement;
+    // three-way reconciliation owns legitimate changes on either workspace.
     const prepared = await params.workspaceTransfer.prepareSync({
       environmentId: params.environmentId,
       ownerEpoch: params.ownerEpoch,
@@ -77,22 +84,6 @@ export function createNodeWorkerWorkspaceActions(params: {
       signal: params.ownerSignal,
     });
     params.workspaceTransfer.revoke(params.environmentId, prepared.token);
-    if (prepared.snapshot.manifestRef !== restoredWorkspace.manifestRef) {
-      throw new Error("Gateway workspace changed before node tunnel recovery");
-    }
-    const quiescence = await quiesceWorkspace(restoredWorkspace.remoteWorkspaceDir);
-    try {
-      const remoteManifestRef = await workspace.captureManifest(
-        restoredWorkspace.remoteWorkspaceDir,
-        prepared.snapshot.manifest.baseCommit,
-        restoredWorkspace.manifestRef,
-      );
-      if (remoteManifestRef !== restoredWorkspace.manifestRef) {
-        throw new Error("Node workspace changed before tunnel recovery");
-      }
-    } finally {
-      await quiescence.resume();
-    }
   };
   // Same placement-lifetime memo contract as the SSH tunnel owner: stat-identity
   // keys self-invalidate on change, and without this owner every turn re-hashes
@@ -163,16 +154,11 @@ export function createNodeWorkerWorkspaceActions(params: {
         if (accepted.manifestRef === expectedRemoteRef) {
           return;
         }
-        const baseSnapshot = params.workspaceTransfer.getSnapshot(
-          params.environmentId,
-          request.baseManifestRef,
-        );
         const token = params.workspaceTransfer.publishSnapshot(params.environmentId, {
           manifest: accepted.manifest,
           manifestRef: accepted.manifestRef,
           rawManifest: serializeWorkerWorkspaceManifest(accepted.manifest),
           root: await fsp.realpath(request.localPath),
-          ...(baseSnapshot?.packPath ? { packPath: baseSnapshot.packPath } : {}),
         });
         try {
           const published = await exec({
@@ -258,6 +244,39 @@ export function createNodeWorkerWorkspaceActions(params: {
   return {
     validateRestoredWorkspace,
     runWorkspaceCommand: exec,
+    stageAttachments: async (request) => {
+      const prepared = await params.workspaceTransfer.prepareAttachments({
+        ...request,
+        environmentId: params.environmentId,
+      });
+      try {
+        const result = await exec({
+          argv: ["openclaw-internal-workspace-transfer"],
+          transfer: {
+            direction: "download",
+            token: prepared.token,
+            manifestRef: prepared.snapshot.manifestRef,
+            attachments: true,
+          },
+          transportRetry: "never",
+          assertCurrent: () => {
+            if (!request.isAuthorized()) {
+              throw new Error("Worker attachment transfer authority closed");
+            }
+          },
+          signal: request.signal,
+        });
+        if (
+          result.termination !== "exit" ||
+          result.code !== 0 ||
+          result.stdout.trim() !== prepared.snapshot.manifestRef
+        ) {
+          throw new Error("Worker attachment transfer failed");
+        }
+      } finally {
+        params.workspaceTransfer.revoke(params.environmentId, prepared.token);
+      }
+    },
     syncWorkspace: async (request) => {
       workspaceReady = true;
       try {
@@ -272,11 +291,13 @@ export function createNodeWorkerWorkspaceActions(params: {
           signal: params.ownerSignal,
         });
         try {
-          const originStartedAt = performance.now();
-          const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
-          recordNodeSyncPath(params.environmentId, params.sessionId, origin, originStartedAt);
-          if (origin.kind === "synced") {
-            return await workspace.finalizeSync(request, origin.result);
+          if (!request.projectKey) {
+            const originStartedAt = performance.now();
+            const origin = await workspace.trySyncWorkspace(request, prepared.snapshot.manifestRef);
+            recordNodeSyncPath(params.environmentId, params.sessionId, origin, originStartedAt);
+            if (origin.kind === "synced") {
+              return await workspace.finalizeSync(request, origin.result);
+            }
           }
           const transferred = await exec({
             argv: ["openclaw-internal-workspace-transfer"],
@@ -284,6 +305,14 @@ export function createNodeWorkerWorkspaceActions(params: {
               direction: "download",
               token: prepared.token,
               manifestRef: prepared.snapshot.manifestRef,
+              ...(request.projectKey && prepared.snapshot.manifest.baseCommit
+                ? {
+                    seedKey: workerProjectSeedKey({
+                      key: request.projectKey,
+                      baseCommit: prepared.snapshot.manifest.baseCommit,
+                    }),
+                  }
+                : {}),
             },
             timeoutMs: 10 * 60_000,
             transportRetry: "never",

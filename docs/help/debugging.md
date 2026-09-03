@@ -4,7 +4,9 @@ read_when:
   - You need to inspect raw model output for reasoning leakage
   - You want to run the Gateway in watch mode while iterating
   - You need a repeatable debugging workflow
+  - You are diagnosing Node or tsx startup errors
 title: "Debugging"
+doc-schema-version: 1
 ---
 
 Debugging helpers for streaming output, gateway iteration, and startup profiling.
@@ -80,6 +82,17 @@ OPENCLAW_TRACE_SYNC_IO=1 pnpm openclaw gateway --force
 ```
 
 `pnpm gateway:watch` leaves this flag disabled by default for the watched Gateway child; set `OPENCLAW_TRACE_SYNC_IO=1` when you want sync I/O trace output in watch mode too.
+
+## Node and tsx startup errors
+
+If a source-run command fails with `TypeError: __name is not a function`, capture
+`node --version`, `pnpm list tsx --depth 0`, the exact command, and the full stack.
+Confirm that Node is a [supported version](/install/node).
+
+From a trusted source checkout, run `pnpm build` before comparing the failure with
+the built runtime through `pnpm openclaw <command>`. The repository's typecheck
+does not emit build output. Keep the failing command and version evidence in a
+bug report rather than applying a workaround from an old investigation.
 
 ## Gateway watch mode
 
@@ -158,9 +171,11 @@ Add gateway CLI flags after `gateway:watch` and they pass through on each restar
 
 When you run `pnpm openclaw`, `pnpm dev`, or a Gateway development runner from
 a checkout, the runner selects that checkout's plugins ahead of tracked global
-copies with the same id. Built plugin output remains preferred when available;
-source-only plugins still load from the checkout. Rebuild to pick up source
-changes when using built output.
+copies with the same id. Built plugin output remains preferred when available,
+including for separately published checkout plugins and Doctor's provider/tool
+checks. Source-only plugins still load from the checkout. Rebuild to pick up
+source changes when using built output. Intentional source-entry selections and
+mounted source overlays keep using source instead of their compiled peers.
 
 This selection is separate from the `--dev` profile. It does not grant trusted
 plugin capabilities to arbitrary local links, `npm-pack:` installs, or plugins

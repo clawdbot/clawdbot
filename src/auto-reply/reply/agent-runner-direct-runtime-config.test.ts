@@ -317,8 +317,9 @@ describe("runReplyAgent runtime config", () => {
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
     expect(createReplyMediaContextMock).toHaveBeenCalledWith({
       cfg: freshCfg,
+      agentId: "main",
       sessionKey: undefined,
-      workspaceDir: "/tmp",
+      workspaceDir: followupRun.run.workspaceDir,
       messageProvider: "telegram",
       accountId: undefined,
       groupId: undefined,
@@ -409,7 +410,7 @@ describe("runReplyAgent runtime config", () => {
         replyParams.sessionStore = { [sessionKey]: sessionEntry };
         replyParams.sessionCtx.SessionCreation = {
           via: "operator",
-          actor: { type: "human", id: "profile-creator" },
+          actor: { type: "human", source: "profile", id: "profile-creator" },
         };
         if (identity) {
           prepareSessionParticipantInput(replyParams.sessionCtx, identity, 1);

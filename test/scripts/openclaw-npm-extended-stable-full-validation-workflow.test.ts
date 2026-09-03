@@ -6,7 +6,7 @@ import { parse } from "yaml";
 const fullValidationPath = ".github/workflows/full-release-validation.yml";
 const releaseChecksPath = ".github/workflows/openclaw-release-checks.yml";
 
-type Step = { name?: string; run?: string };
+type Step = { env?: Record<string, string>; name?: string; run?: string };
 type Job = { steps?: Step[] };
 type Workflow = { jobs?: Record<string, Job> };
 
@@ -15,12 +15,20 @@ function workflow(path: string): Workflow {
 }
 
 function stepRun(path: string, jobName: string, stepName: string): string {
-  const job = workflow(path).jobs?.[jobName];
-  const step = job?.steps?.find((candidate) => candidate.name === stepName);
-  if (!step?.run) {
-    throw new Error(`Missing workflow step: ${jobName} / ${stepName}`);
+  const step = workflowStep(path, jobName, stepName);
+  if (!step.run) {
+    throw new Error(`Missing workflow step run: ${jobName} / ${stepName}`);
   }
   return step.run;
+}
+
+function workflowStep(path: string, jobName: string, stepName: string): Step {
+  const job = workflow(path).jobs?.[jobName];
+  const step = job?.steps?.find((candidate) => candidate.name === stepName);
+  if (!step) {
+    throw new Error(`Missing workflow step: ${jobName} / ${stepName}`);
+  }
+  return step;
 }
 
 function runReleaseChecksTrustedRefGuard(workflowRef: string): ReturnType<typeof spawnSync> {
@@ -40,6 +48,21 @@ function runReleaseChecksTrustedRefGuard(workflowRef: string): ReturnType<typeof
 }
 
 describe("extended-stable Full Release Validation workflow", () => {
+  it("passes frozen target context to both plugin prerelease phases", () => {
+    const phases = [
+      {
+        job: "plugin_prerelease_independent",
+        step: "Dispatch plugin prerelease independent phase",
+      },
+      { job: "plugin_prerelease_candidate", step: "Dispatch plugin prerelease candidate phase" },
+    ];
+    for (const phase of phases) {
+      const dispatch = workflowStep(fullValidationPath, phase.job, phase.step);
+      expect(dispatch.env?.TARGET_CONTEXT_REF).toBe("${{ inputs.target_context_ref }}");
+      expect(dispatch.run).toContain('args+=(-f target_context_ref="$TARGET_CONTEXT_REF")');
+    }
+  });
+
   it("lets the exact extended-stable branch reach every child at the target SHA", () => {
     const fullValidation = readFileSync(fullValidationPath, "utf8");
     const childDispatches = [

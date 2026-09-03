@@ -6,6 +6,7 @@ import {
   removeParticipantMSTeams,
   renameGroupMSTeams,
 } from "./graph-group-management.js";
+import { createGraphPageGuard } from "./graph-pagination.test-support.js";
 
 const mockState = vi.hoisted(() => ({
   resolveGraphToken: vi.fn(),
@@ -13,7 +14,13 @@ const mockState = vi.hoisted(() => ({
   mutateGraphJson: vi.fn(),
   deleteGraphRequest: vi.fn(),
   findPreferredDmByUserId: vi.fn(),
+  fetchWithSsrFGuard: vi.fn(),
 }));
+
+vi.mock("../runtime-api.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../runtime-api.js")>();
+  return { ...actual, fetchWithSsrFGuard: mockState.fetchWithSsrFGuard };
+});
 
 vi.mock("./graph.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./graph.js")>();
@@ -48,12 +55,13 @@ function postGraphBodyAt(index: number): Record<string, unknown> {
   return body as Record<string, unknown>;
 }
 
-describe("addParticipantMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockState.resolveGraphToken.mockResolvedValue(TOKEN);
+  mockState.fetchWithSsrFGuard.mockImplementation(createGraphPageGuard(mockState.fetchGraphJson));
+});
 
+describe("addParticipantMSTeams", () => {
   it("maps the default chat member role to Graph owner", async () => {
     mockState.mutateGraphJson.mockResolvedValue({});
 
@@ -210,11 +218,6 @@ describe("addParticipantMSTeams", () => {
 });
 
 describe("removeParticipantMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("lists members, finds match, deletes by membershipId", async () => {
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
@@ -289,17 +292,17 @@ describe("removeParticipantMSTeams", () => {
           "https://graph.microsoft.com/v1.0/chats/19%3Aabc%40thread.tacv2/members?$skip=2",
       })
       .mockResolvedValueOnce({
-        value: [{ id: "membership-9", userId: "user-aad-id-9" }],
+        value: [{ id: "membership-9", email: " User-AAD-ID-9 " }],
       });
     mockState.deleteGraphRequest.mockResolvedValue(undefined);
 
     const result = await removeParticipantMSTeams({
       cfg: {} as OpenClawConfig,
       to: CHAT_ID,
-      userId: "user-aad-id-9",
+      userId: " USER-AAD-ID-9 ",
     });
 
-    expect(result).toEqual({ removed: { userId: "user-aad-id-9", chatId: CHAT_ID } });
+    expect(result).toEqual({ removed: { userId: " USER-AAD-ID-9 ", chatId: CHAT_ID } });
     expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(1, {
       token: TOKEN,
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
@@ -313,14 +316,51 @@ describe("removeParticipantMSTeams", () => {
       path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-9`,
     });
   });
+
+  it("accepts a match on the final allowed page even when another page is advertised", async () => {
+    let page = 0;
+    mockState.fetchGraphJson.mockImplementation(async () => {
+      page += 1;
+      return {
+        value: page === 100 ? [{ id: "membership-final", userId: "user-final" }] : [],
+        "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/chat/members?$skip=next",
+      };
+    });
+    mockState.deleteGraphRequest.mockResolvedValue(undefined);
+
+    await expect(
+      removeParticipantMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        userId: "user-final",
+      }),
+    ).resolves.toEqual({ removed: { userId: "user-final", chatId: CHAT_ID } });
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(100);
+    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members/membership-final`,
+    });
+  });
+
+  it("preserves the exact pagination-limit failure after 100 unmatched pages", async () => {
+    mockState.fetchGraphJson.mockResolvedValue({
+      value: [],
+      "@odata.nextLink": "https://graph.microsoft.com/v1.0/chats/chat/members?$skip=next",
+    });
+
+    await expect(
+      removeParticipantMSTeams({
+        cfg: {} as OpenClawConfig,
+        to: CHAT_ID,
+        userId: "missing",
+      }),
+    ).rejects.toThrow("MS Teams conversation member pagination limit exceeded");
+    expect(mockState.fetchGraphJson).toHaveBeenCalledTimes(100);
+    expect(mockState.deleteGraphRequest).not.toHaveBeenCalled();
+  });
 });
 
 describe("renameGroupMSTeams", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.resolveGraphToken.mockResolvedValue(TOKEN);
-  });
-
   it("renames a chat with topic", async () => {
     mockState.mutateGraphJson.mockResolvedValue(undefined);
 

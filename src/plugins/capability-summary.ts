@@ -1,12 +1,16 @@
 // Inventory needs capability facts without artifact inspection or lifecycle writes.
 import { createHash } from "node:crypto";
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
 import { PLUGIN_DECLARED_SURFACE_GROUPS } from "../../packages/gateway-protocol/src/schema/plugin-declared-surface-groups.js";
 import type {
   PluginDeclaredSurface,
   PluginHookGrant,
   PluginInspectSource,
   PluginOperatorGrants,
+  PluginInstallTrust,
+  PluginsInspectResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   PluginAcceptedDeclaredSurface,
   PluginEntryConfig,
@@ -16,6 +20,7 @@ import {
   resolveConversationAccessAllowed,
   resolvePromptInjectionAllowed,
 } from "./hook-policy-decisions.js";
+import type { InstalledPluginInstallRecordInfo } from "./installed-plugin-index-types.js";
 import type { InstalledPluginPackageOwnership } from "./installed-plugin-package-ownership.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { PluginManifestContracts } from "./manifest-types.js";
@@ -68,6 +73,21 @@ type PluginCapabilityManifest = {
   skills?: readonly string[];
   configContracts?: PluginManifestRecord["configContracts"];
 };
+
+export function diffDeclaredSurfaceWidening(
+  previous: PluginAcceptedDeclaredSurface,
+  next: PluginAcceptedDeclaredSurface,
+): { widened: Partial<PluginAcceptedDeclaredSurface>; hasWidening: boolean } {
+  const widened: Partial<PluginAcceptedDeclaredSurface> = {};
+  for (const group of PLUGIN_DECLARED_SURFACE_GROUPS) {
+    const previousValues = new Set(previous[group]);
+    const added = next[group].filter((value) => !previousValues.has(value)).toSorted();
+    if (added.length > 0) {
+      widened[group] = added;
+    }
+  }
+  return { widened, hasWidening: Object.keys(widened).length > 0 };
+}
 
 export function mergePluginDeclaredSurfaces(
   surfaces: Iterable<PluginDeclaredSurface>,
@@ -243,5 +263,81 @@ export function buildPluginCapabilitySummary(params: {
           }
         : {}),
     },
+  };
+}
+
+export type PluginCapabilityConsentReview = Omit<PluginsInspectResult, "ok" | "plugin"> & {
+  pluginId: string;
+  name: string;
+  version?: string;
+  widened?: Partial<PluginAcceptedDeclaredSurface>;
+  acceptedAt?: string;
+};
+
+export function resolvePluginInstallRecordTrust(
+  record: InstalledPluginInstallRecordInfo | undefined,
+): PluginInstallTrust | undefined {
+  if (!record?.clawhubTrustDisposition) {
+    return undefined;
+  }
+  return {
+    disposition: record.clawhubTrustDisposition,
+    ...(record.clawhubTrustReasons ? { reasons: [...record.clawhubTrustReasons] } : {}),
+    ...(record.clawhubTrustCheckedAt ? { checkedAt: record.clawhubTrustCheckedAt } : {}),
+    ...(record.clawhubTrustAcknowledgedAt
+      ? { acknowledgedAt: record.clawhubTrustAcknowledgedAt }
+      : {}),
+    ...(record.clawhubTrustPending !== undefined ? { pending: record.clawhubTrustPending } : {}),
+    ...(record.clawhubTrustStale !== undefined ? { stale: record.clawhubTrustStale } : {}),
+  };
+}
+
+export function buildPluginCapabilityConsentReview(params: {
+  pluginId: string;
+  manifest: Parameters<typeof buildPluginCapabilitySummary>[0]["manifest"] & {
+    name?: string;
+    version?: string;
+  };
+  record: PluginInstallRecord;
+  config: OpenClawConfig;
+  declared?: PluginAcceptedDeclaredSurface;
+  previousDeclared?: PluginAcceptedDeclaredSurface;
+  widened?: Partial<PluginAcceptedDeclaredSurface>;
+}): PluginCapabilityConsentReview {
+  const { pluginId, manifest, record } = params;
+  const summary = buildPluginCapabilitySummary({
+    manifest,
+    origin: "global",
+    entryConfig: params.config.plugins?.entries?.[pluginId],
+  });
+  const declared = params.declared ?? summary.declared;
+  const spec = record.resolvedSpec ?? record.spec;
+  const packageName = record.clawhubPackage ?? record.resolvedName;
+  const previousDeclared = params.previousDeclared ?? record.acceptedSurface;
+  const widened =
+    params.widened ??
+    (previousDeclared
+      ? diffDeclaredSurfaceWidening(previousDeclared, declared).widened
+      : undefined);
+  const trust = resolvePluginInstallRecordTrust(record);
+  return {
+    pluginId,
+    name: manifest.name ?? pluginId,
+    ...((manifest.version ?? record.version)
+      ? { version: manifest.version ?? record.version }
+      : {}),
+    ...summary,
+    declared,
+    reviewToken: computeDeclaredSurfaceHash(declared),
+    source: {
+      kind: record.source,
+      // Keep operational specs in install records; prompts and RPCs receive display-safe copies.
+      ...(spec ? { spec: redactSensitiveUrlLikeString(spec) } : {}),
+      ...(packageName ? { packageName } : {}),
+      ...resolvePluginInstallRecordIntegrity(record),
+    },
+    ...(trust ? { trust } : {}),
+    ...(widened && Object.keys(widened).length > 0 ? { widened } : {}),
+    ...(record.acceptedSurfaceAt ? { acceptedAt: record.acceptedSurfaceAt } : {}),
   };
 }

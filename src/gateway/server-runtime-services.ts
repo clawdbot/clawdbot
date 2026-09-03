@@ -74,7 +74,9 @@ export function startGatewayCronWithLogging(params: {
       // admission fence; restart and suspension cannot race past this point.
       params.onStartError?.(err);
     }
-  }).catch((err: unknown) => params.logCron.error(`failed to enter start root: ${String(err)}`));
+  }, "runtime:cron-start").catch((err: unknown) =>
+    params.logCron.error(`failed to enter start root: ${String(err)}`),
+  );
 }
 
 export async function clearGatewayMaintenanceHandles(
@@ -142,7 +144,7 @@ export function scheduleGatewayPostReadyMaintenance(params: {
       if (!params.isClosing()) {
         params.recordPostReadyMemory();
       }
-    }).catch((err: unknown) =>
+    }, "runtime:maintenance").catch((err: unknown) =>
       params.log.warn(`gateway post-ready maintenance deferred task failed: ${String(err)}`),
     );
   }, params.delayMs);
@@ -222,6 +224,7 @@ function startPendingOutboundDeliveryRecovery(params: {
           deliver: deliverWithCurrentConversationAuthority,
           log: logRecovery,
           cfg,
+          shouldContinue: () => !stopped,
         });
         return;
       }
@@ -234,8 +237,11 @@ function startPendingOutboundDeliveryRecovery(params: {
         log: logRecovery,
         deliver: deliverWithCurrentConversationAuthority,
         selectEntry: () => ({ match: true, bypassBackoff: false }),
+        shouldContinue: () => !stopped,
       });
-    }).catch((err: unknown) => params.log.error(`Delivery recovery failed: ${String(err)}`));
+    }, "runtime:delivery-recovery").catch((err: unknown) =>
+      params.log.error(`Delivery recovery failed: ${String(err)}`),
+    );
     const settled: Promise<void> = recovery.finally(() => {
       if (inFlight === settled) {
         inFlight = null;
@@ -323,7 +329,7 @@ function startPendingSessionDeliveryRuntime(params: {
         // recovery failure must not leave persisted rows without timers.
         await schedulePendingSessionDeliveries();
       }
-    }).catch((err: unknown) =>
+    }, "runtime:session-delivery-recovery").catch((err: unknown) =>
       params.log.error(`Session delivery recovery failed: ${String(err)}`),
     );
   }, 1_250);

@@ -31,6 +31,7 @@ export {
   slackQaProgressCommentaryOmittedScenario,
   slackQaProgressCommentaryTrueScenario,
   slackQaProgressCommentaryVerboseDedupeScenario,
+  slackQaProgressCommentaryVerboseFullScenario,
   slackQaReactionGlyphNativeScenario,
   slackQaTableInvalidBlocksFallbackScenario,
   slackQaTablePresentationNativeScenario,

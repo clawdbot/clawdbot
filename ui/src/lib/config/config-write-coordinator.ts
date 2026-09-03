@@ -728,7 +728,7 @@ export function createConfigWriteCoordinator({
         : Promise.resolve(false),
     runExternalMutation: async <T>(
       task: (client: GatewayBrowserClient) => Promise<T>,
-      options: RuntimeConfigExternalMutationOptions = {},
+      options: RuntimeConfigExternalMutationOptions<T> = {},
     ): Promise<RuntimeConfigExternalMutationResult<T>> => {
       const mutationClient = state.client;
       const mutationConnectionEpoch = currentConfigConnectionEpoch(state);

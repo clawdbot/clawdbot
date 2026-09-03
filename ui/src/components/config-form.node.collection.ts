@@ -28,6 +28,7 @@ import {
   configValuesEqual,
   defaultValue,
   isSupportedConfigValueValid,
+  isObjectPropertyNameValid,
   NO_SAFE_DEFAULT,
   objectAdditionalPropertiesSchema,
   objectPropertyKeys,
@@ -186,6 +187,7 @@ export function renderObject(
             value: objectValue,
             sourceIdentity: objectSourceIdentity,
             reservedKeys,
+            validateKey: (key) => isObjectPropertyNameValid(schema, key),
             searchCriteria: childSearchCriteria,
             onPatch: patchObjectChild,
           },
@@ -505,6 +507,7 @@ function renderMapField(
   params: ConfigNodeRenderParams & {
     value: Record<string, unknown>;
     reservedKeys: Set<string>;
+    validateKey: (key: string) => boolean;
   },
   renderNode: ConfigNodeRenderer,
 ): TemplateResult {
@@ -517,6 +520,7 @@ function renderMapField(
     unsupported,
     disabled,
     reservedKeys,
+    validateKey,
     onPatch,
     searchCriteria,
     revealSensitive,
@@ -533,6 +537,7 @@ function renderMapField(
     identity: draftId,
     sourceIdentity: params.sourceIdentity ?? value,
     existingKeys: [...new Set([...Object.keys(value), ...reservedKeys])],
+    validateKey,
   };
   const entries = Object.entries(value ?? {}).filter(([key]) => !reservedKeys.has(key));
   const visibleEntries =
@@ -604,7 +609,6 @@ function renderMapField(
             <div class="settings-subrows">
               ${visibleEntries.map(([key, entryValue]) => {
                 const valuePath = [...path, key];
-                const fallback = jsonValue(entryValue);
                 const sensitiveState = getSensitiveRenderState({
                   path: valuePath,
                   value: entryValue,
@@ -629,21 +633,25 @@ function renderMapField(
                             target.value = key;
                             return;
                           }
-                          const nextValue = { ...value };
                           // Renaming a key that still holds server-redacted secrets would
                           // submit the sentinel under a new key: the gateway fails closed
                           // (dead-end draft), and a delete+rename fold in one autosave
                           // window silently binds the deleted entry's old credential.
-                          if (nextKey in nextValue || containsRedactedSentinel(nextValue[key])) {
+                          const error = !validateKey(nextKey)
+                            ? t("configForm.invalidString")
+                            : containsRedactedSentinel(value[key])
+                              ? t("configForm.renameRedactedBlocked")
+                              : "";
+                          if (nextKey in value || error) {
                             target.value = key;
-                            if (!(nextKey in nextValue)) {
-                              target.setCustomValidity(t("configForm.renameRedactedBlocked"));
+                            if (error) {
+                              target.setCustomValidity(error);
                               target.reportValidity();
                               target.setCustomValidity("");
                             }
                             return;
                           }
-                          nextValue[nextKey] = nextValue[key];
+                          const nextValue = { ...value, [nextKey]: value[key] };
                           delete nextValue[key];
                           if (onPatch(path, nextValue) === false) {
                             target.value = key;
@@ -682,7 +690,7 @@ function renderMapField(
                           ariaLabel: `${key}: ${t("configForm.jsonValue")}`,
                           sourceValue: entryValue,
                           rowIdentity: params.rowIdentity,
-                          fallback,
+                          fallback: jsonValue(entryValue),
                           rows: 2,
                           sensitiveState,
                           disabled,

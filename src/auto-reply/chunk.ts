@@ -1,7 +1,3 @@
-// Utilities for splitting outbound text into platform-sized chunks without
-// unintentionally breaking on newlines. Using [\s\S] keeps newlines inside
-// the chunk so messages are only split when they truly exceed the limit.
-
 import {
   findFenceSpanAt,
   isSafeFenceBreak,
@@ -400,7 +396,8 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
   let reopenFence: ReturnType<typeof findFenceSpanAt> | undefined;
 
   while (start < text.length) {
-    const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
+    const reopenLine = reopenFence ? resolveFenceReopenLine(reopenFence, normalizedLimit) : "";
+    const reopenPrefix = reopenLine ? `${reopenLine}\n` : "";
     const contentLimit = Math.max(1, normalizedLimit - reopenPrefix.length);
     if (text.length - start <= contentLimit) {
       const finalChunk = `${reopenPrefix}${text.slice(start)}`;
@@ -410,25 +407,28 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       break;
     }
 
+    // A reopen applies to one continuation; the split below records the next one.
+    reopenFence = undefined;
     const windowEnd = Math.min(text.length, start + contentLimit);
     const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
     let breakIdx = softBreak > start ? softBreak : windowEnd;
 
-    const initialFence = isSafeFenceBreak(spans, breakIdx)
-      ? undefined
-      : findFenceSpanAt(spans, breakIdx);
+    const initialFence = findFenceSpanAt(spans, breakIdx);
 
     let fenceToSplit = initialFence;
     if (initialFence) {
       const closeLine = `${initialFence.indent}${initialFence.marker}`;
-      const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
-
-      if (maxIdxIfNeedNewline <= start) {
+      if (!resolveFenceReopenLine(initialFence, normalizedLimit)) {
         breakIdx = windowEnd;
+        fenceToSplit = undefined;
       } else {
+        const maxIdxIfNeedNewline = start + (contentLimit - (closeLine.length + 1));
+        // A synthetic reopen makes any remaining physical opener bytes continuation body.
         const minProgressIdx = Math.min(
           text.length,
-          Math.max(start + 1, initialFence.start + initialFence.openLine.length + 2),
+          reopenPrefix
+            ? start + 1
+            : Math.max(start + 1, initialFence.start + initialFence.openLine.length + 2),
         );
         const maxIdxIfAlreadyNewline = start + (contentLimit - closeLine.length);
 
@@ -448,18 +448,19 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
           lastNewline = text.lastIndexOf("\n", lastNewline - 1);
         }
 
-        if (!pickedNewline) {
-          if (minProgressIdx > maxIdxIfAlreadyNewline) {
-            breakIdx = windowEnd;
-          } else {
+        if (!pickedNewline && minProgressIdx >= maxIdxIfAlreadyNewline) {
+          breakIdx = windowEnd;
+          fenceToSplit = undefined;
+          reopenFence = initialFence;
+        } else {
+          if (!pickedNewline) {
             breakIdx = Math.max(minProgressIdx, maxIdxIfNeedNewline);
           }
+          const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
+          fenceToSplit =
+            fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
         }
       }
-
-      const fenceAtBreak = findFenceSpanAt(spans, breakIdx);
-      fenceToSplit =
-        fenceAtBreak && fenceAtBreak.start === initialFence.start ? fenceAtBreak : undefined;
     }
 
     const safeBreakIdx = avoidTrailingHighSurrogateBreak(text, start, breakIdx);
@@ -484,18 +485,29 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
       rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
       reopenFence = fenceToSplit;
-    } else {
+    } else if (!initialFence) {
       // Only prose separators are disposable; fenced whitespace can be code indentation.
       const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
       nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
       nextStart = skipLeadingNewlines(text, nextStart);
-      reopenFence = undefined;
     }
 
     chunks.push(rawChunk);
     start = nextStart;
   }
   return chunks;
+}
+
+function resolveFenceReopenLine(
+  fence: NonNullable<ReturnType<typeof findFenceSpanAt>>,
+  limit: number,
+): string {
+  const markerLine = `${fence.indent}${fence.marker}`;
+  // Reserve the closing marker, two newlines, and one body character.
+  if (fence.openLine.length + markerLine.length + 3 <= limit) {
+    return fence.openLine;
+  }
+  return markerLine.length * 2 + 3 <= limit ? markerLine : "";
 }
 
 function skipLeadingNewlines(value: string, start = 0): number {
@@ -512,8 +524,11 @@ function pickSafeBreakIndex(
   end: number,
   spans: ReturnType<typeof parseFenceSpans>,
 ): number {
-  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(text, start, end, (index) =>
-    isSafeFenceBreak(spans, index),
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
+    text,
+    start,
+    end,
+    (index) => findFenceSpanAt(spans, index)?.end,
   );
 
   if (lastNewline > start) {
@@ -529,14 +544,17 @@ function scanParenAwareBreakpoints(
   text: string,
   start: number,
   end: number,
-  isAllowed: (index: number) => boolean = () => true,
+  skipTo?: (index: number) => number | undefined,
 ): { lastNewline: number; lastWhitespace: number } {
   let lastNewline = -1;
   let lastWhitespace = -1;
   let depth = 0;
 
   for (let i = start; i < end; i++) {
-    if (!isAllowed(i)) {
+    const skippedEnd = skipTo?.(i);
+    if (skippedEnd !== undefined) {
+      // The fence end remains an eligible breakpoint; resume there after the loop increment.
+      i = skippedEnd - 1;
       continue;
     }
     const char = text.charAt(i);

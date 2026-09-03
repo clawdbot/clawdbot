@@ -56,6 +56,8 @@ export type McpCatalogTool = {
   fallbackDescription: string;
   uiResourceUri?: string;
   uiVisibility?: Array<"app" | "model">;
+  /** Listed by the server but excluded from OpenClaw's callable tool catalog. */
+  excludedFromOpenClawCatalog?: true;
   deniedBySession?: true;
   codexAnnotations?: McpCodexToolAnnotations;
 };
@@ -66,6 +68,8 @@ export type McpToolCatalog = {
   generatedAt: number;
   servers: Record<string, McpServerCatalog>;
   tools: McpCatalogTool[];
+  /** Complete raw catalog used to project policy into native MCP clients. */
+  policyTools?: McpCatalogTool[];
   /** Listed tools hidden only by the session override, retained for read-only inventory. */
   sessionDeniedTools?: McpCatalogTool[];
   diagnostics?: readonly McpToolCatalogDiagnostic[];
@@ -77,6 +81,18 @@ export type RequesterMcpConnect = {
   authorizedServerNames: readonly string[];
   configFingerprint: string;
   createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+};
+
+type PreparedNativeMcpServerPolicy = {
+  serverName: string;
+  safeServerName: string;
+  allowedTools: string[];
+  deniedTools: string[];
+};
+
+/** Concrete raw/safe policy fact prepared once for native MCP adapters. */
+export type PreparedNativeMcpPolicy = {
+  servers: Record<string, PreparedNativeMcpServerPolicy>;
 };
 
 export type McpToolCatalogDiagnostic = {

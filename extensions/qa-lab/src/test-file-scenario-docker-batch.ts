@@ -68,6 +68,13 @@ export function isDockerE2eScenario(
   return dockerE2eLaneName(scenario) !== undefined;
 }
 
+export function dockerLaneName(scenario: QaSeedScenarioWithSource) {
+  if (scenario.execution.kind !== "script") {
+    return undefined;
+  }
+  return scenario.execution.dockerLane ?? dockerE2eLaneName(scenario);
+}
+
 export async function prepareDockerE2eEnvironment(params: {
   env: NodeJS.ProcessEnv;
   outputDir: string;
@@ -76,7 +83,7 @@ export async function prepareDockerE2eEnvironment(params: {
   scenarios: readonly QaSeedScenarioWithSource[];
 }): Promise<Readonly<NodeJS.ProcessEnv> | undefined> {
   const laneNames = [
-    ...new Set(params.scenarios.flatMap((scenario) => dockerE2eLaneName(scenario) ?? [])),
+    ...new Set(params.scenarios.flatMap((scenario) => dockerLaneName(scenario) ?? [])),
   ];
   if (laneNames.length === 0) {
     return undefined;

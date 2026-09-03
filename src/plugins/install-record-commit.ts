@@ -19,6 +19,7 @@ import {
   getPluginInstallRecordMapEntry,
   setPluginInstallRecordMapEntry,
 } from "../config/plugin-install-record-map.js";
+import { copyRuntimeConfigWriteApplication } from "../config/runtime-write-application.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -131,10 +132,10 @@ function mergeAfterWrite(
   if (afterWrite === undefined) {
     return writeOptions;
   }
-  return {
+  return copyRuntimeConfigWriteApplication(writeOptions, {
     ...writeOptions,
     afterWrite,
-  };
+  });
 }
 
 function isMissingInstallPathError(error: unknown): boolean {
@@ -490,15 +491,21 @@ async function commitPluginInstallRecordsWithWriter(params: {
         prepared.previousInstallRecords,
         prepared.nextInstallRecords,
       );
-      const committed = await params.commit(params.nextConfig, {
+      const writeOptions = copyRuntimeConfigWriteApplication(params.writeOptions, {
         ...params.writeOptions,
         ...(installRecordsChanged && params.writeOptions?.afterWrite === undefined
-          ? { afterWrite: { mode: "restart", reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON } }
+          ? {
+              afterWrite: {
+                mode: "restart" as const,
+                reason: PLUGIN_SOURCE_CHANGED_RESTART_REASON,
+              },
+            }
           : {}),
         unsetPaths: mergeUnsetPaths(params.writeOptions?.unsetPaths, [
           Array.from(PLUGIN_INSTALLS_CONFIG_PATH),
         ]),
       });
+      const committed = await params.commit(params.nextConfig, writeOptions);
       return { committed, nextInstallRecords: prepared.nextInstallRecords };
     } catch (error) {
       const tentative = tentativeWrite;

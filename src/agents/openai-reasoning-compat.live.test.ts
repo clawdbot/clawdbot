@@ -12,7 +12,6 @@ import {
   isLiveProfileKeyModeEnabled,
   isLiveTestEnabled,
   logLiveProgress,
-  requiresLiveProfileCredential,
   readLiveTestConfig,
   resolveLiveCredentialPrecedence,
 } from "./live-test-helpers.js";
@@ -131,10 +130,7 @@ describeLive("openai reasoning compat live", () => {
         return;
       }
 
-      if (
-        requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-        !apiKeyInfo.source.startsWith("profile:")
-      ) {
+      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
         logProgress(
           `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
         );
@@ -191,10 +187,7 @@ describeLive("openai reasoning compat live", () => {
         return;
       }
 
-      if (
-        requiresLiveProfileCredential(model.provider, REQUIRE_PROFILE_KEYS) &&
-        !apiKeyInfo.source.startsWith("profile:")
-      ) {
+      if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
         logProgress(
           `[openai-reasoning-compat] skip (non-profile credential source: ${apiKeyInfo.source})`,
         );

@@ -14,7 +14,33 @@ vi.mock("../session-create-service.js", () => {
   return {};
 });
 
+vi.mock("./chat.js", () => {
+  throw new Error("Cancellation must not load chat history or send handlers");
+});
+
 describe("lazy core handler families", () => {
+  it("dispatches cancellation without importing unrelated chat workflows", async () => {
+    const { coreGatewayHandlers } = await import("../server-methods.js");
+    const respond = vi.fn();
+    await expectDefined(
+      coreGatewayHandlers["chat.abort"],
+      "chat.abort lazy handler",
+    )({
+      req: { type: "req", id: "abort-light-family", method: "chat.abort" },
+      params: { sessionKey: 42 },
+      respond,
+      context: {} as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
+    );
+  });
+
   it("loads agent identity without importing the agent run stack", async () => {
     const { coreGatewayHandlers } = await import("../server-methods.js");
     const respond = vi.fn();

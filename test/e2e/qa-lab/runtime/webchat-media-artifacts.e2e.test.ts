@@ -369,13 +369,28 @@ describe("WebChat managed media artifact matrix", () => {
       expect(JSON.stringify(mixedContent)).not.toContain("Media failed");
       expect(JSON.stringify(mixedContent)).not.toContain("MEDIA:./");
       const observed = [...accepted, ...rejected];
-      const displayEvents = events.filter((event) => {
+      const sessionEvents = events.filter((event) => {
         if (event.event !== "chat" && event.event !== "session.message") {
           return false;
         }
         const payload = event.payload as { sessionKey?: unknown } | undefined;
         return payload?.sessionKey === SESSION_KEY;
       });
+      const userEvents = sessionEvents.filter(
+        (event) =>
+          (event.payload as { message?: { role?: string } } | undefined)?.message?.role === "user",
+      );
+      expect(userEvents).toHaveLength(1);
+      expect(JSON.stringify(userEvents)).toContain("MEDIA:./artifact.json");
+      const displayEvents = sessionEvents.filter((event) => !userEvents.includes(event));
+      expect(
+        displayEvents.some(
+          (event) =>
+            event.event === "session.message" &&
+            (event.payload as { message?: { role?: string } } | undefined)?.message?.role ===
+              "assistant",
+        ),
+      ).toBe(true);
       const verdict = {
         expected: FIXTURES.length,
         observed: observed.filter((entry) => entry.present).length,

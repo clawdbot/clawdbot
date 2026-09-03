@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolveUserPath } from "../utils.js";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "./bundled-dir.js";
 import { pluginCacheExistsSync, pluginCacheRealpathSync } from "./plugin-cache-files.js";
+import { resolvePluginRootArtifactPath } from "./root-artifact-path.js";
 
 export const PUBLIC_SURFACE_SOURCE_EXTENSIONS = [
   ".ts",
@@ -82,13 +83,12 @@ export function resolvePluginRootPublicSurfacePath(params: {
 }): string | null {
   const artifactBasename = normalizeBundledPluginArtifactSubpath(params.artifactBasename);
   const pluginRoot = path.resolve(params.pluginRoot);
-  for (const candidate of [
-    path.join(pluginRoot, artifactBasename),
-    path.join(pluginRoot, "dist", artifactBasename),
-  ]) {
-    if (pluginCacheExistsSync(candidate)) {
-      return candidate;
-    }
+  const builtCandidate = resolvePluginRootArtifactPath(pluginRoot, [
+    artifactBasename,
+    path.join("dist", artifactBasename),
+  ]);
+  if (builtCandidate) {
+    return builtCandidate;
   }
   const sourceBaseName = artifactBasename.replace(/\.js$/u, "");
   for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
@@ -124,11 +124,33 @@ function resolvePackageFallbackForBundledDir(params: {
       return builtCandidate;
     }
   }
-  return resolveBundledPluginSourcePublicSurfacePath({
-    sourceRoot: path.join(normalizedRootDir, "extensions"),
-    dirName: params.dirName,
-    artifactBasename: params.artifactBasename,
-  });
+  return (
+    resolveRetainedConfigDoctorPath(params) ??
+    resolveBundledPluginSourcePublicSurfacePath({
+      sourceRoot: path.join(normalizedRootDir, "extensions"),
+      dirName: params.dirName,
+      artifactBasename: params.artifactBasename,
+    })
+  );
+}
+
+function resolveRetainedConfigDoctorPath(params: {
+  rootDir: string;
+  dirName: string;
+  artifactBasename: string;
+}): string | null {
+  if (params.artifactBasename !== "config-doctor-api.js") {
+    return null;
+  }
+  // Externalizing a channel removes its runtime entry, but shipped config still needs
+  // its core-version migration before that plugin can be installed or granted capabilities.
+  for (const dist of ["dist", "dist-runtime"]) {
+    const candidate = path.resolve(params.rootDir, dist, "config-doctor", `${params.dirName}.js`);
+    if (pluginCacheExistsSync(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function sameExistingPath(left: string, right: string): boolean {
@@ -155,19 +177,9 @@ function resolvePublicSurfaceFromBundledDir(params: {
   dirName: string;
   artifactBasename: string;
 }): string | null {
-  const pluginDir = path.resolve(params.bundledPluginsDir, params.dirName);
-  const builtCandidate = path.join(pluginDir, params.artifactBasename);
-  if (pluginCacheExistsSync(builtCandidate)) {
-    return builtCandidate;
-  }
-  const packageLocalBuiltCandidate = path.join(pluginDir, "dist", params.artifactBasename);
-  if (pluginCacheExistsSync(packageLocalBuiltCandidate)) {
-    return packageLocalBuiltCandidate;
-  }
   return (
-    resolveBundledPluginSourcePublicSurfacePath({
-      sourceRoot: params.bundledPluginsDir,
-      dirName: params.dirName,
+    resolvePluginRootPublicSurfacePath({
+      pluginRoot: path.resolve(params.bundledPluginsDir, params.dirName),
       artifactBasename: params.artifactBasename,
     }) ??
     resolvePackageFallbackForBundledDir({
@@ -242,5 +254,5 @@ export function resolveBundledPluginPublicSurfacePath(params: {
       return candidate;
     }
   }
-  return null;
+  return resolveRetainedConfigDoctorPath({ ...params, dirName, artifactBasename });
 }

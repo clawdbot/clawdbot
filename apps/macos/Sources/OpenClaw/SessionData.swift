@@ -38,6 +38,7 @@ struct SessionRow: Identifiable {
     let abortedLastRun: Bool
     let tokens: SessionTokenStats
     let model: String?
+    var color: String?
 
     var ageText: String {
         relativeAge(from: self.updatedAt)
@@ -230,7 +231,8 @@ enum SessionLoader {
                     output: output,
                     total: total,
                     contextTokens: context),
-                model: model)
+                model: model,
+                color: entry.color)
         }.sorted { ($0.updatedAt ?? .distantPast) > ($1.updatedAt ?? .distantPast) }
 
         return SessionStoreSnapshot(storePath: storePath, defaults: defaults, rows: rows)

@@ -9,6 +9,7 @@ import {
   resolveInboundSessionEnvelopeContext,
   toInboundMediaFactsWithMetadata,
   toLocationContext,
+  type BuildChannelInboundEventContextParams,
   type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import type {
@@ -44,6 +45,10 @@ type StickerEventMessage = webhook.StickerMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
+export type LineInboundMentionAccess = NonNullable<
+  NonNullable<BuildChannelInboundEventContextParams["access"]>["mentions"]
+>;
+
 interface BuildLineMessageContextParams {
   event: MessageEvent;
   allMedia: MediaRef[];
@@ -54,8 +59,8 @@ interface BuildLineMessageContextParams {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   inboundHistory?: HistoryEntry[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }
 
@@ -198,9 +203,21 @@ function describeLineSticker(sticker: StickerEventMessage): string {
   return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
 }
 
+export function readLineTextMessageBody(message: webhook.TextMessageContent): string {
+  let text = message.text;
+  // LINE can send an empty "()" alternative; retain meaningful alternatives.
+  // Replace from the end so LINE's UTF-16 offsets survive earlier replacements.
+  for (const { index, length } of (message.emojis ?? []).toSorted((a, b) => b.index - a.index)) {
+    if (index >= 0 && length === 2 && text.slice(index, index + length) === "()") {
+      text = `${text.slice(0, index)}[emoji]${text.slice(index + length)}`;
+    }
+  }
+  return text;
+}
+
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
-    return message.text;
+    return readLineTextMessageBody(message);
   }
   if (message.type === "location") {
     const loc = message;
@@ -256,6 +273,7 @@ async function finalizeLineInboundContext(params: {
   locationContext?: ReturnType<typeof toLocationContext>;
   verboseLog: { kind: "inbound" | "postback"; mediaCount?: number };
   inboundHistory?: Pick<HistoryEntry, "sender" | "body" | "timestamp">[];
+  mentions?: LineInboundMentionAccess;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const senderId = params.source.userId ?? "unknown";
@@ -292,6 +310,13 @@ async function finalizeLineInboundContext(params: {
     : params.source.roomId
       ? `line:room:${params.source.roomId}`
       : `line:${params.source.userId ?? params.source.peerId}`;
+
+  const groupConfig = params.source.isGroup
+    ? resolveLineGroupConfigEntry(params.account.config.groups, {
+        groupId: params.source.groupId,
+        roomId: params.source.roomId,
+      })
+    : undefined;
 
   const { storePath, envelopeOptions, previousTimestamp } = resolveInboundSessionEnvelopeContext({
     cfg: params.cfg,
@@ -343,21 +368,14 @@ async function finalizeLineInboundContext(params: {
       commandBody: params.commandBody ?? params.rawBody,
       inboundHistory: params.inboundHistory,
     },
-    access: { commands: { authorized: params.commandAuthorized } },
+    access: { commands: { authorized: params.commandAuthorized }, mentions: params.mentions },
     media,
     extra: {
       ...params.locationContext,
       GroupSubject: params.source.isGroup
         ? (groupName ?? params.source.groupId ?? params.source.roomId)
         : undefined,
-      GroupSystemPrompt: params.source.isGroup
-        ? normalizeOptionalString(
-            resolveLineGroupConfigEntry(params.account.config.groups, {
-              groupId: params.source.groupId,
-              roomId: params.source.roomId,
-            })?.systemPrompt,
-          )
-        : undefined,
+      GroupSystemPrompt: normalizeOptionalString(groupConfig?.systemPrompt),
     },
   });
 
@@ -387,6 +405,8 @@ async function finalizeLineInboundContext(params: {
   return {
     ctxPayload,
     replyToken: (params.event as { replyToken: string }).replyToken,
+    // A group's configured skill scope belongs to the turn that answers it.
+    skillFilter: groupConfig?.skills,
     turn: {
       storePath,
       record: {
@@ -483,18 +503,17 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
     // The agent still reads the message as sent; only command parsing drops the
     // mention, which LINE requires before a group message reaches the bot.
     commandBody: resolveLineMentionStrippedText(message) || rawBody,
+    mentions: params.mentions,
     timestamp,
     messageSid: messageId,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: mediaFacts,
     locationContext,
@@ -505,6 +524,7 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,
@@ -524,7 +544,6 @@ export async function buildLinePostbackContext(params: {
   resolveChannelIngress?: (
     contextBinding: ChannelIngressContextBinding,
   ) => Promise<ResolvedChannelMessageIngress>;
-  channelIngress?: ResolvedChannelMessageIngress;
   buildContext?: typeof buildChannelInboundEventContext;
 }) {
   const { event, cfg, account, commandAuthorized } = params;
@@ -572,14 +591,12 @@ export async function buildLinePostbackContext(params: {
     messageSid,
     commandAuthorized,
     // Configured conversation bindings can replace the base route; bind only to the final route.
-    channelIngress: params.resolveChannelIngress
-      ? await params.resolveChannelIngress({
-          agentId: route.agentId,
-          sessionKey: route.sessionKey,
-          messageId: messageSid,
-          inboundEventKind: "user_request",
-        })
-      : params.channelIngress,
+    channelIngress: await params.resolveChannelIngress?.({
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      messageId: messageSid,
+      inboundEventKind: "user_request",
+    }),
     buildContext: params.buildContext,
     media: [],
     verboseLog: { kind: "postback" },
@@ -588,6 +605,7 @@ export async function buildLinePostbackContext(params: {
   return {
     ctxPayload: finalized.ctxPayload,
     turn: finalized.turn,
+    skillFilter: finalized.skillFilter,
     event,
     userId,
     groupId,

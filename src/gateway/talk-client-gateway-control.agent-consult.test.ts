@@ -71,8 +71,12 @@ function createRunner(
   return createTalkClientAgentConsultRunner({
     config,
     context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
-    agentId: "researcher",
-    sessionKey: "agent:researcher:talk",
+    sessionTarget: {
+      agentId: "researcher",
+      sessionKey: "agent:researcher:talk",
+      canonicalKey: "agent:researcher:talk",
+      storePath: "/tmp/sessions",
+    },
     authority,
     getVoiceSessionId: () => "voice-session",
     initialItems: [],

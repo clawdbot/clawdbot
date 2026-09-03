@@ -1,3 +1,4 @@
+import { assertSessionWriterDeliveryAuthorized } from "../../auto-reply/reply/session-writer-delivery-authority.js";
 // Delivery queue recovery drains pending outbound sends with backoff, crash
 // replay protection, unknown-send reconciliation, and failed-entry pruning.
 import type {
@@ -30,7 +31,10 @@ import {
   type QueuedPostSendState,
 } from "./deliver-queue-state.js";
 import {
+  areOutboundPayloadsIntentionallySuppressed,
   isOutboundDeliveryError,
+  isOutboundDeliveryAdmissionClosedError,
+  OutboundDeliveryAdmissionClosedError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
 } from "./deliver-types.js";
@@ -66,6 +70,7 @@ import {
   loadUnfinishedDeliveries,
   stageDeliveryFailureSettlement,
   reserveDeliveryAttempt,
+  restoreDeliveryAttemptBeforeDispatch,
   type QueuedDelivery,
 } from "./delivery-queue-storage.js";
 import type { DeliveryFailureSettlement } from "./delivery-queue-types.js";
@@ -255,6 +260,10 @@ function buildRecoveryDeliverParams(
 ) {
   const conversationCompletion =
     entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
+  const pendingFinalWriterAuthority =
+    entry.deliveryCompletion?.kind === "pending-final"
+      ? entry.deliveryCompletion.sessionWriterDeliveryAuthority
+      : undefined;
   return {
     cfg,
     channel: entry.channel,
@@ -292,6 +301,22 @@ function buildRecoveryDeliverParams(
             ...(conversationCompletion.routeFingerprint
               ? { routeFingerprint: conversationCompletion.routeFingerprint }
               : {}),
+          },
+        }
+      : {}),
+    // Recovery owns durable terminal settlement, so it cannot forward the
+    // completion itself. Reconstruct only its writer fence at the two final
+    // transport boundaries used by normal live delivery.
+    ...(pendingFinalWriterAuthority
+      ? {
+          onDirectAdapterHandoff: async () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
+          },
+          assertDirectAdapterHandoff: () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
+          },
+          onPlatformSendDispatch: async () => {
+            assertSessionWriterDeliveryAuthorized(pendingFinalWriterAuthority);
           },
         }
       : {}),
@@ -579,15 +604,31 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
     return "failed";
   }
+  if (operation.state === "prepared" || operation.state === "queued") {
+    return "continue";
+  }
+  if (operation.state === "unknown") {
+    const settled = await settleQueuedFailure({
+      ...opts,
+      error: "delivery owner state is unknown",
+    });
+    return settled === "already-gone" ? "failed" : settled;
+  }
+  try {
+    const suppressReceipt =
+      operation.state !== "delivered" && typeof opts.entry.completionRetention === "object";
+    await ackRecoveredDelivery(
+      opts.entry,
+      opts.stateDir,
+      suppressReceipt ? { suppressCompletionReceipt: true } : undefined,
+    );
+  } catch (error) {
+    const errMsg = `failed to ack owner-${operation.state} delivery: ${formatErrorMessage(error)}`;
+    opts.onFailed?.(opts.entry, errMsg);
+    opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
+    return "failed";
+  }
   if (operation.state === "delivered") {
-    try {
-      await ackRecoveredDelivery(opts.entry, opts.stateDir);
-    } catch (error) {
-      const errMsg = `failed to ack owner-completed delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
     const messageId = operation.platformMessageId;
     if (messageId) {
       const result: OutboundDeliveryResult = { channel: opts.entry.channel, messageId };
@@ -601,34 +642,7 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
         }),
       );
     }
-    opts.onRecovered?.(opts.entry);
-    return "recovered";
-  }
-  if (operation.state === "suppressed" || operation.state === "stale") {
-    try {
-      await (typeof opts.entry.completionRetention === "object"
-        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
-        : ackRecoveredDelivery(opts.entry, opts.stateDir));
-    } catch (error) {
-      const errMsg = `failed to ack owner-suppressed delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
-    opts.onRecovered?.(opts.entry);
-    return "recovered";
-  }
-  if (operation.state === "rejected") {
-    try {
-      await (typeof opts.entry.completionRetention === "object"
-        ? ackRecoveredDelivery(opts.entry, opts.stateDir, { suppressCompletionReceipt: true })
-        : ackRecoveredDelivery(opts.entry, opts.stateDir));
-    } catch (error) {
-      const errMsg = `failed to ack owner-rejected delivery: ${formatErrorMessage(error)}`;
-      opts.onFailed?.(opts.entry, errMsg);
-      opts.log.warn(`Delivery entry ${opts.entry.id} ${errMsg}`);
-      return "failed";
-    }
+  } else if (operation.state === "rejected") {
     emitQueuedAuditTerminals(opts.entry, () =>
       failedOutboundAuditTerminals({
         payloadCount: queuedPayloadCount(opts.entry),
@@ -642,15 +656,18 @@ async function resolveCompletedOwnerBeforeRecovery(opts: {
     emitRecoveredTerminalFailure(opts.entry, error);
     opts.onFailed?.(opts.entry, error);
     return "failed";
+  } else if (operation.state === "suppressed") {
+    // A restart can separate owner suppression from queue ack. Publish only
+    // after custody ends; a stale/missing owner proves no suppression.
+    emitQueuedAuditTerminals(opts.entry, () =>
+      uniformOutboundAuditTerminals(queuedPayloadCount(opts.entry), {
+        outcome: "suppressed",
+        reasonCode: "no_visible_payload",
+      }),
+    );
   }
-  if (operation.state === "unknown") {
-    const settled = await settleQueuedFailure({
-      ...opts,
-      error: "delivery owner state is unknown",
-    });
-    return settled === "already-gone" ? "failed" : settled;
-  }
-  return "continue";
+  opts.onRecovered?.(opts.entry);
+  return "recovered";
 }
 
 function isPermanentDeliveryError(error: string): boolean {
@@ -686,9 +703,10 @@ async function drainQueuedEntry(opts: {
   deliver: DeliverFn;
   log: RecoveryLogger;
   stateDir?: string;
+  shouldContinue?: () => boolean;
   onRecovered?: (entry: QueuedDelivery) => void;
   onFailed?: (entry: QueuedDelivery, errMsg: string) => void;
-}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone"> {
+}): Promise<"recovered" | "failed" | "moved-to-failed" | "already-gone" | "stopped"> {
   const { entry } = opts;
   const maxRetries = resolveMaxRetries(entry);
   const attemptBudgetExhausted = resolveAttemptCount(entry) >= maxRetries;
@@ -866,8 +884,15 @@ async function drainQueuedEntry(opts: {
             opts.stateDir,
           )
         : undefined;
+    const deliveryParams = buildRecoveryDeliverParams(
+      entry,
+      opts.cfg,
+      opts.stateDir,
+      producerClaimId,
+    );
+    let dispatchAdmitted = false;
     const result = await opts.deliver({
-      ...buildRecoveryDeliverParams(entry, opts.cfg, opts.stateDir, producerClaimId),
+      ...deliveryParams,
       onPayloadDeliveryOutcome: collectPayloadOutcome,
       onMessageSentEvent: (event, sourceIndex) => messageSentEvents.push({ sourceIndex, event }),
       onPlatformSendStart: async () => {
@@ -882,13 +907,34 @@ async function drainQueuedEntry(opts: {
           ...(producerClaimId ? { producerClaimId } : {}),
         });
       },
+      onPlatformSendDispatch: async () => {
+        await deliveryParams.onPlatformSendDispatch?.();
+        if (dispatchAdmitted) {
+          return;
+        }
+        if (opts.shouldContinue?.() === false) {
+          throw new OutboundDeliveryAdmissionClosedError();
+        }
+        // One admitted attempt owns its complete adapter fanout. Later parts
+        // must settle even when shutdown starts after the first dispatch.
+        dispatchAdmitted = true;
+      },
     });
     const results = isOutboundDeliveryResultArray(result) ? result : [];
+    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     const adapterReturnedNoIdentity = payloadOutcomes.some(
       (outcome) =>
         outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
     );
-    if (adapterReturnedNoIdentity || (results.length === 0 && platformSendStarted)) {
+    if (
+      adapterReturnedNoIdentity ||
+      (results.length === 0 &&
+        // Reported failures carry dispatch evidence and own retry classification.
+        // Adapter handoff alone cannot override a proven pre-send failure.
+        failedOutcomes.length === 0 &&
+        platformSendStarted &&
+        !areOutboundPayloadsIntentionallySuppressed(payloadOutcomes))
+    ) {
       const error = "recovered platform send returned no delivery identity";
       await recordRecoveredFailure(
         failDeliveryAfterPlatformSend,
@@ -913,7 +959,6 @@ async function drainQueuedEntry(opts: {
     if (results.length > 0) {
       deliveredResults = [...results];
     }
-    const failedOutcomes = payloadOutcomes.filter((outcome) => outcome.status === "failed");
     const failedOutcome = failedOutcomes[0];
     if (failedOutcome) {
       const errMsg = formatErrorMessage(failedOutcome.error);
@@ -995,8 +1040,11 @@ async function drainQueuedEntry(opts: {
           );
           postSendState = "failed";
         } else {
+          // Proven omission clears the handoff marker so a restart can safely retry.
           await recordRecoveredFailure(
-            failDelivery,
+            areOutboundPayloadsIntentionallySuppressed(payloadOutcomes)
+              ? failDeliveryBeforePlatformSend
+              : failDelivery,
             entry,
             ackError,
             opts.stateDir,
@@ -1019,6 +1067,15 @@ async function drainQueuedEntry(opts: {
     opts.onRecovered?.(entry);
     return "recovered";
   } catch (err) {
+    if (isOutboundDeliveryAdmissionClosedError(err)) {
+      restoreDeliveryAttemptBeforeDispatch(
+        entry,
+        reservation.attemptCount,
+        opts.stateDir,
+        producerClaimId,
+      );
+      return "stopped";
+    }
     const errMsg = formatErrorMessage(err);
     opts.onFailed?.(entry, errMsg);
     if (isOutboundDeliveryError(err) && err.results.length > 0) {
@@ -1123,11 +1180,13 @@ type QueuedRecoveryContext =
       summary: DeliveryRecoverySummary;
       deadline: number;
       onDeadlineExceeded: () => void;
+      shouldContinue?: () => boolean;
     }
   | {
       kind: "drain";
       logLabel: string;
       selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+      shouldContinue?: () => boolean;
     };
 
 /** Startup and reconnect share custody, admission, retry, and settlement ordering. */
@@ -1136,6 +1195,9 @@ async function processQueuedRecovery(
   context: QueuedRecoveryContext,
 ): Promise<"continue" | "stop"> {
   const { entry, log } = opts;
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
   const label =
     context.kind === "startup" ? `Delivery ${entry.id}` : `${context.logLabel}: entry ${entry.id}`;
   if (entry.settlement) {
@@ -1217,8 +1279,14 @@ async function processQueuedRecovery(
     }
     return "stop";
   }
-  await drainQueuedEntry({
+  // Pacing is the final await before a new durable attempt is admitted. A
+  // lifecycle fence here leaves the untouched row and retry metadata intact.
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
+  const result = await drainQueuedEntry({
     ...opts,
+    ...(context.shouldContinue ? { shouldContinue: context.shouldContinue } : {}),
     onRecovered: (recovered) => {
       if (context.kind === "startup") {
         context.summary.recovered += 1;
@@ -1242,7 +1310,7 @@ async function processQueuedRecovery(
       }
     },
   });
-  return "continue";
+  return result === "stopped" ? "stop" : "continue";
 }
 
 export async function drainPendingDeliveriesCore(opts: {
@@ -1253,6 +1321,7 @@ export async function drainPendingDeliveriesCore(opts: {
   stateDir?: string;
   deliver: DeliverFn;
   selectEntry: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision;
+  shouldContinue?: () => boolean;
 }): Promise<void> {
   const drained = await recoveryCoordinator.withDrain(opts.drainKey, async () => {
     const now = Date.now();
@@ -1274,6 +1343,7 @@ export async function drainPendingDeliveriesCore(opts: {
             kind: "drain",
             logLabel: opts.logLabel,
             selectEntry: opts.selectEntry,
+            ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
           },
         ),
     });
@@ -1295,6 +1365,7 @@ export async function recoverPendingDeliveries(opts: {
   stateDir?: string;
   /** Maximum wall-clock time for recovery in ms. Remaining entries are deferred to next startup. Default: 60 000. */
   maxRecoveryMs?: number;
+  shouldContinue?: () => boolean;
 }): Promise<DeliveryRecoverySummary> {
   const pending = await loadUnfinishedDeliveries(opts.stateDir);
   if (pending.length === 0) {
@@ -1328,6 +1399,7 @@ export async function recoverPendingDeliveries(opts: {
           summary,
           deadline,
           onDeadlineExceeded,
+          ...(opts.shouldContinue ? { shouldContinue: opts.shouldContinue } : {}),
         },
       ),
   });

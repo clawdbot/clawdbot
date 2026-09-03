@@ -99,7 +99,7 @@ describeLive("Anthropic provider live", () => {
             },
           ],
         },
-        { apiKey, maxTokens: 1, maxRetries: 0 },
+        { apiKey, maxTokens: 1 },
       ).result();
 
       expect(result.stopReason).toBe("error");
@@ -120,7 +120,6 @@ describeLive("Anthropic provider live", () => {
       const result = await streamSimpleAnthropic(model, context, {
         apiKey,
         maxTokens: requestedMaxTokens,
-        maxRetries: 0,
         reasoning: "off",
         onPayload: (payload) => {
           sentMaxTokens = (payload as { max_tokens?: number }).max_tokens;

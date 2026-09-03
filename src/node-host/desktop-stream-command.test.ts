@@ -13,7 +13,7 @@ import {
 const TICKET = "a".repeat(48);
 const cleanups: Array<() => Promise<void>> = [];
 
-async function listenRfbSecurity(securityType: number): Promise<number> {
+async function listenRfbSecurity(securityType: number) {
   const peers = new Set<net.Socket>();
   const server = net.createServer((socket) => {
     peers.add(socket);
@@ -38,7 +38,7 @@ async function listenRfbSecurity(securityType: number): Promise<number> {
         server.close(() => resolve());
       }),
   );
-  return address.port;
+  return { port: address.port, peers };
 }
 
 function handleExpectedPeerTeardownError(error: NodeJS.ErrnoException): void {
@@ -71,24 +71,31 @@ describe("node desktop stream command", () => {
     ).rejects.toThrow("INVALID_REQUEST");
   });
 
-  it("refuses an unauthenticated provider RFB endpoint before Gateway attach", async () => {
-    const port = await listenRfbSecurity(1);
+  it.each([
+    [1, "refusing unauthenticated loopback RFB server"],
+    [19, "loopback RFB server security is unsupported"],
+  ])(
+    "refuses security type %i and closes its connection before Gateway attach",
+    async (securityType, message) => {
+      const rfb = await listenRfbSecurity(securityType);
 
-    await expect(
-      invokeNodeWorkerDesktopStream({
-        paramsJSON: JSON.stringify({
-          ticket: TICKET,
-          attachPath: `/node-desktop/attach?ticket=${TICKET}`,
-          port,
+      await expect(
+        invokeNodeWorkerDesktopStream({
+          paramsJSON: JSON.stringify({
+            ticket: TICKET,
+            attachPath: `/node-desktop/attach?ticket=${TICKET}`,
+            port: rfb.port,
+          }),
+          gatewayUrl: "ws://127.0.0.1:1",
+          signal: new AbortController().signal,
         }),
-        gatewayUrl: "ws://127.0.0.1:1",
-        signal: new AbortController().signal,
-      }),
-    ).rejects.toThrow("refusing unauthenticated loopback RFB server");
-  });
+      ).rejects.toThrow(message);
+      await vi.waitFor(() => expect(rfb.peers.size).toBe(0));
+    },
+  );
 
   it("bounds the provider-owned VNC password file", async () => {
-    const port = await listenRfbSecurity(2);
+    const rfb = await listenRfbSecurity(2);
     const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
     const oversized = path.join(root, "oversized");
     await fs.writeFile(oversized, "x".repeat(4 * 1024 + 1));
@@ -103,18 +110,19 @@ describe("node desktop stream command", () => {
           paramsJSON: JSON.stringify({
             ticket: TICKET,
             attachPath: `/node-desktop/attach?ticket=${TICKET}`,
-            port,
+            port: rfb.port,
             passwordFilePath,
           }),
           gatewayUrl: "ws://127.0.0.1:1",
           signal: new AbortController().signal,
         }),
       ).rejects.toThrow(message);
+      await vi.waitFor(() => expect(rfb.peers.size).toBe(0));
     }
   });
 
   it("honors cancellation before reading a VNC password file", async () => {
-    const port = await listenRfbSecurity(2);
+    const rfb = await listenRfbSecurity(2);
     const root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "desktop-password-"));
     const passwordFilePath = path.join(root, "password");
     await fs.writeFile(passwordFilePath, "secret");
@@ -127,7 +135,7 @@ describe("node desktop stream command", () => {
         paramsJSON: JSON.stringify({
           ticket: TICKET,
           attachPath: `/node-desktop/attach?ticket=${TICKET}`,
-          port,
+          port: rfb.port,
           passwordFilePath,
         }),
         gatewayUrl: "ws://127.0.0.1:1",

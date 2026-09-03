@@ -1,7 +1,18 @@
 import { describe, expect, it } from "vitest";
+import { buzzSetupPlugin } from "../setup-plugin-api.js";
 import { buzzPlugin } from "./channel.js";
 
 describe("Buzz channel guidance", () => {
+  it.each([
+    ["runtime", buzzPlugin],
+    ["setup", buzzSetupPlugin],
+  ] as const)("%s opts into isolated named-account reloads", (_surface, plugin) => {
+    expect(plugin.reload).toEqual({
+      configPrefixes: ["channels.buzz"],
+      accountScopedRestart: true,
+    });
+  });
+
   it.each([
     { mode: "off", automatic: true, flat: true },
     { mode: "all", automatic: true, flat: false },

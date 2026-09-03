@@ -50,37 +50,6 @@ function shouldCreateRef(role: string, name?: string): boolean {
   return INTERACTIVE_ROLES.has(role) || (CONTENT_ROLES.has(role) && Boolean(name));
 }
 
-type DuplicateTracker = {
-  counts: Map<string, number>;
-  keysByRef: Map<string, string>;
-  duplicates: Set<string>;
-};
-
-function createDuplicateTracker(): DuplicateTracker {
-  return {
-    counts: new Map(),
-    keysByRef: new Map(),
-    duplicates: new Set(),
-  };
-}
-
-function registerRef(
-  tracker: DuplicateTracker,
-  ref: string,
-  role: string,
-  name?: string,
-): number | undefined {
-  const key = `${role}:${name ?? ""}`;
-  const count = tracker.counts.get(key) ?? 0;
-  tracker.counts.set(key, count + 1);
-  tracker.keysByRef.set(ref, key);
-  if (count > 0) {
-    tracker.duplicates.add(key);
-    return count;
-  }
-  return undefined;
-}
-
 /** Build ARIA nodes while preserving whether a traversal ceiling omitted input. */
 export function flattenChromeMcpSnapshotToAriaResult(
   root: ChromeMcpSnapshotNode,
@@ -134,7 +103,7 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   truncated?: true;
 } {
   const refs: RoleRefMap = {};
-  const tracker = createDuplicateTracker();
+  const counts = new Map<string, number>();
   const lines: string[] = [];
   const maxDepth = Math.min(
     params.options?.maxDepth ?? ROLE_SNAPSHOT_MAX_DEPTH,
@@ -162,7 +131,9 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
       }
       const ref = normalizeSnapshotString(node.id);
       if (ref && shouldCreateRef(role, name)) {
-        const nth = registerRef(tracker, ref, role, name);
+        const key = `${role}:${name ?? ""}`;
+        const nth = counts.get(key);
+        counts.set(key, (nth ?? 0) + 1);
         refs[ref] = nth === undefined ? { role, name } : { role, name, nth };
         line += ` [ref=${ref}]`;
       }
@@ -181,13 +152,6 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
   };
 
   visit(params.root, 0);
-
-  for (const [ref, data] of Object.entries(refs)) {
-    const key = tracker.keysByRef.get(ref);
-    if (key && !tracker.duplicates.has(key)) {
-      delete data.nth;
-    }
-  }
 
   const result = { snapshot: lines.join("\n"), refs };
   return truncated ? { ...result, truncated: true } : result;

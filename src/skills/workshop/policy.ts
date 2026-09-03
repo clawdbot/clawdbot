@@ -7,8 +7,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH } from "../../infra/plugin-approvals.js";
 import { logDebug } from "../../logger.js";
 import type { PluginHookBeforeToolCallResult } from "../../plugins/hook-before-tool-call-result.js";
+import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
-import { resolvePendingSkillProposal } from "./service.js";
+
+// Proposal reconciliation and skill-install dependencies belong to actual approval-detail lookup.
+const loadPendingSkillProposalResolver = createLazyRuntimeNamedExport(
+  () => import("./policy.runtime.js"),
+  "resolvePendingSkillProposal",
+);
 
 const SKILL_WORKSHOP_LIFECYCLE_ACTIONS = new Set([
   "apply",
@@ -118,6 +124,7 @@ async function resolveLifecycleApprovalDescription(params: {
   }
   const toolParams = asNullableRecord(params.toolParams);
   try {
+    const resolvePendingSkillProposal = await loadPendingSkillProposalResolver();
     const proposal = await resolvePendingSkillProposal({
       proposalId: normalizeOptionalString(toolParams?.proposal_id),
       name: normalizeOptionalString(toolParams?.name),

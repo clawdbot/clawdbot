@@ -362,7 +362,7 @@ struct MacNodeClaudeSessionCatalogTests {
         let fixture = try Fixture()
         let project = try fixture.project()
         let sessionId = "transcript-session"
-        let oldUser = String(repeating: "old user ", count: 20000)
+        let oldUser = String(repeating: "old user 🦞 ", count: 20000)
         let transcript = fixture.file(sessionId, in: project)
         try fixture.writeIndex([
             fixture.indexEntry(
@@ -396,6 +396,18 @@ struct MacNodeClaudeSessionCatalogTests {
         let olderItems = try #require(older["items"] as? [[String: Any]])
         #expect(olderItems.map { $0["text"] as? String } == ["old assistant", oldUser])
         #expect(older["nextCursor"] == nil)
+        #expect(enumerations.value() == 1)
+
+        for item in latestItems + olderItems {
+            let resume = try #require(item["resumeCursor"] as? String)
+            let resumeParams = try #require(try fixture.params([
+                "threadId": sessionId, "limit": 1, "cursor": resume,
+            ]))
+            let resumed = try #require(try fixture.read(resumeParams))
+            let resumedItem = try #require((resumed["items"] as? [[String: Any]])?.first)
+            #expect(resumedItem["uuid"] as? String == item["uuid"] as? String)
+            #expect(resumedItem["text"] as? String == item["text"] as? String)
+        }
         #expect(enumerations.value() == 1)
     }
 
@@ -517,6 +529,12 @@ struct MacNodeClaudeSessionCatalogTests {
         let decoded = try #require(fixture.decode(response))
         let items = try #require(decoded["items"] as? [[String: Any]])
         #expect(items.first?["truncated"] as? Bool == true)
+        let resume = try #require(items.first?["resumeCursor"] as? String)
+        let resumeParams = try #require(try fixture.params([
+            "threadId": sessionId, "limit": 1, "cursor": resume,
+        ]))
+        let resumed = try #require(try fixture.read(resumeParams))
+        #expect((resumed["items"] as? [[String: Any]])?.first?["truncated"] as? Bool == true)
         let itemData = try JSONSerialization.data(withJSONObject: #require(items.first))
         #expect(itemData.count <= 4 * 1024 * 1024)
     }

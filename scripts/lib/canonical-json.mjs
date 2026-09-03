@@ -1,5 +1,5 @@
 const ASCII_JSON_PATTERN = /^[\x20-\x7e]+\n$/u;
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+export const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 function fail(message) {
   throw new Error(message);
@@ -7,6 +7,21 @@ function fail(message) {
 
 function canonicalPath(parent, key) {
   return `${parent}[${JSON.stringify(key)}]`;
+}
+
+// This intentionally sorts JSON-like values without validating JSON.
+export function sortJsonValueKeys(value) {
+  if (Array.isArray(value)) {
+    return value.map(sortJsonValueKeys);
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value)
+        .toSorted(([left], [right]) => left.localeCompare(right))
+        .map(([key, entry]) => [key, sortJsonValueKeys(entry)]),
+    );
+  }
+  return value;
 }
 
 export function canonicalizeJsonValue(value, path = "$", ancestors = new Set()) {

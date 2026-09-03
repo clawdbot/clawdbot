@@ -3190,6 +3190,21 @@ describe("check-database-first-legacy-stores", () => {
       `("aliased-top-level-wrapper-closed-over-module-var.ts", []),
 
       // Object-backed wrapper discovery and alias tracking.
+      "keeps fs-safe store aliases copied into their own descendant": privateStoreCase`
+        const stores = { state: privateFileStore(stateDir) };
+        stores.child = { ...stores };
+        await stores.child.state.writeJson("thread-bindings.json", {});
+      `("descendant-fs-safe-store-spread.ts", filesystemWriteViolations(5)),
+      "keeps wrapper aliases copied into their own descendant": fsCase`
+        const writer = {
+          save(filePath) {
+            return fs.writeFile(filePath, "");
+          },
+        };
+        writer.child = { nested: writer };
+        await writer.child.nested.save("sessions.json");
+      `("descendant-wrapper-object-alias.ts", filesystemWriteViolations(9)),
+
       "flags object method wrappers": atomicCase`
         const writer = {
           persist(params: { filePath: string }) {

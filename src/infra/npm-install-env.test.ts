@@ -149,7 +149,7 @@ describe("npm project install env", () => {
           ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
-        {},
+        { npmConfigCwd: dir },
         FROZEN_NOW,
       );
 
@@ -164,7 +164,7 @@ describe("npm project install env", () => {
           NPM_CONFIG_USERCONFIG: npmrc,
           NPM_CONFIG_MIN_RELEASE_AGE: "7",
         },
-        {},
+        { npmConfigCwd: dir },
         FROZEN_NOW,
       );
       expect(envWithParentAge.npm_config_min_release_age).toBe("");
@@ -189,6 +189,7 @@ describe("npm project install env", () => {
             NPM_CONFIG_USERCONFIG: npmrc,
           },
           FROZEN_NOW,
+          { npmConfigCwd: dir },
         ),
       ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
     });
@@ -197,26 +198,31 @@ describe("npm project install env", () => {
   it("uses before args for expanded npm userconfig paths", async () => {
     await withTempDir("openclaw-home-npmrc-", async (dir) => {
       const baseEnv = createIsolatedNpmConfigEnv(dir);
-      fsSync.writeFileSync(path.join(dir, ".npmrc"), "before=2026-01-01T00:00:00.000Z\n", "utf-8");
+      // Keep user config outside the project scope so path expansion must succeed.
+      fsSync.writeFileSync(
+        path.join(dir, "home", ".npmrc"),
+        "before=2026-01-01T00:00:00.000Z\n",
+        "utf-8",
+      );
 
       expect(
         createNpmFreshnessBypassArgs(
           {
             ...baseEnv,
-            HOME: dir,
             NPM_CONFIG_USERCONFIG: "~/.npmrc",
           },
           FROZEN_NOW,
+          { npmConfigCwd: dir },
         ),
       ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
       expect(
         createNpmFreshnessBypassArgs(
           {
             ...baseEnv,
-            HOME: dir,
             NPM_CONFIG_USERCONFIG: "${HOME}/.npmrc",
           },
           FROZEN_NOW,
+          { npmConfigCwd: dir },
         ),
       ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
     });
@@ -241,6 +247,7 @@ describe("npm project install env", () => {
             NPM_CONFIG_PREFIX: dir,
           },
           FROZEN_NOW,
+          { npmConfigCwd: dir },
         ),
       ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
     });
@@ -285,9 +292,12 @@ describe("npm project install env", () => {
         "utf-8",
       );
 
-      expect(createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, { npmConfigPrefix: dir })).toEqual([
-        `--before=${FROZEN_NOW.toISOString()}`,
-      ]);
+      expect(
+        createNpmFreshnessBypassArgs(baseEnv, FROZEN_NOW, {
+          npmConfigCwd: dir,
+          npmConfigPrefix: dir,
+        }),
+      ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
     });
   });
 
@@ -312,7 +322,7 @@ describe("npm project install env", () => {
             NPM_CONFIG_PREFIX: parentPrefix,
           },
           FROZEN_NOW,
-          { npmConfigPrefix: scopedPrefix },
+          { npmConfigCwd: dir, npmConfigPrefix: scopedPrefix },
         ),
       ).toEqual([`--before=${FROZEN_NOW.toISOString()}`]);
     });
@@ -328,7 +338,7 @@ describe("npm project install env", () => {
           ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
-        {},
+        { npmConfigCwd: dir },
         FROZEN_NOW,
       );
 
@@ -338,11 +348,12 @@ describe("npm project install env", () => {
     });
   });
 
-  it("uses release-age args for npmrc release-age policies", async () => {
+  it("uses release-age args for project policy over user before policy", async () => {
     await withTempDir("openclaw-npmrc-", async (dir) => {
       const baseEnv = createIsolatedNpmConfigEnv(dir);
       const npmrc = path.join(dir, "npmrc");
-      fsSync.writeFileSync(npmrc, "min-release-age=7\n", "utf-8");
+      fsSync.writeFileSync(npmrc, "before=2026-01-01T00:00:00.000Z\n", "utf-8");
+      fsSync.writeFileSync(path.join(dir, ".npmrc"), "min-release-age=7\n", "utf-8");
 
       expect(
         createNpmFreshnessBypassArgs(
@@ -351,6 +362,7 @@ describe("npm project install env", () => {
             NPM_CONFIG_USERCONFIG: npmrc,
           },
           FROZEN_NOW,
+          { npmConfigCwd: dir },
         ),
       ).toEqual(["--min-release-age=0"]);
     });
@@ -366,7 +378,7 @@ describe("npm project install env", () => {
           ...baseEnv,
           NPM_CONFIG_USERCONFIG: npmrc,
         },
-        {},
+        { npmConfigCwd: dir },
         FROZEN_NOW,
       );
 

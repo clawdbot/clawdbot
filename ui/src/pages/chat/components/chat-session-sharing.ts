@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { ref } from "lit/directives/ref.js";
 import type {
   GatewaySessionRow,
   SessionMembersListEvidenceResult,
@@ -6,7 +7,7 @@ import type {
 } from "../../../api/types.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionOwnerChip } from "../../../components/session-owner-chip.ts";
-import "../../../components/web-awesome.ts";
+import { syncDropdownItemRadio } from "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 
 export type ChatSessionSharingState = {
@@ -43,14 +44,36 @@ function sharingIcon(visibility: SessionVisibility): TemplateResult {
   return visibility === "shared" ? icons.users : icons.lock;
 }
 
+function renderMemberSkeletons() {
+  return html`
+    <div
+      class="chat-pane__sharing-members-loading"
+      role="status"
+      aria-busy="true"
+      aria-label=${t("common.loading")}
+    >
+      ${Array.from(
+        { length: 3 },
+        () => html`
+          <div class="chat-pane__sharing-member-skeleton" aria-hidden="true">
+            <span class="skeleton chat-pane__sharing-member-skeleton-icon"></span>
+            <span class="skeleton chat-pane__sharing-member-skeleton-label"></span>
+          </div>
+        `,
+      )}
+    </div>
+  `;
+}
+
 export function selectChatSessionSharingItem(
   props: ChatSessionSharingProps,
   value: string | undefined,
 ): void {
   const members = new Set(props.state?.result?.members.map((member) => member.identityId) ?? []);
   if (value?.startsWith("visibility:")) {
-    if (!props.visibilityDisabledReason) {
-      props.onVisibilityChange(value.slice("visibility:".length) as SessionVisibility);
+    const visibility = value.slice("visibility:".length) as SessionVisibility;
+    if (!props.visibilityDisabledReason && visibility !== (props.session?.visibility ?? "shared")) {
+      props.onVisibilityChange(visibility);
     }
     return;
   }
@@ -112,28 +135,37 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
     <div class="chat-pane__sharing-title chat-pane__sharing-visibility-title">
       ${t("chat.sessionSharing.visibility")}
     </div>
-    ${visibilityOptions.map(
-      (option) => html`
+    ${visibilityOptions.map((option) => {
+      const checked = option === visibility;
+      return html`
         <wa-dropdown-item
           class="session-menu__item chat-pane__sharing-visibility-item"
           value=${`visibility:${option}`}
-          ?disabled=${option === visibility || Boolean(props.visibilityDisabledReason)}
+          role="menuitemradio"
+          aria-checked=${String(checked)}
+          ${ref((element) => syncDropdownItemRadio(element, checked))}
+          ?disabled=${Boolean(props.visibilityDisabledReason)}
           title=${props.visibilityDisabledReason ?? nothing}
         >
+          <span slot="icon" class="session-menu__icon" aria-hidden="true"
+            >${sharingIcon(option)}</span
+          >
           <span class="session-menu__text">${t(VISIBILITY_LABEL_KEYS[option])}</span>
-          ${option === visibility
-            ? html`<span slot="details" aria-hidden="true">${icons.check}</span>`
+          ${checked
+            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                >${icons.check}</span
+              >`
             : nothing}
         </wa-dropdown-item>
-      `,
-    )}
+      `;
+    })}
     ${membersAvailable
       ? html`
           <div class="chat-pane__sharing-title chat-pane__sharing-members-title">
             ${t("chat.sessionSharing.members")}
           </div>
           ${props.state?.loading
-            ? html`<div class="chat-pane__sharing-status">${t("common.loading")}</div>`
+            ? renderMemberSkeletons()
             : identities.length > 0
               ? identities.map((identity) => {
                   const disabledReason = members.has(identity.id)

@@ -1,6 +1,7 @@
 // Covers canonical assistant-run ownership and live transcript identity.
 import { describe, expect, it } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
+import { readTuiSessionUserMessage } from "../tui-session-events.js";
 import { ChatLog } from "./chat-log.js";
 
 describe("ChatLog run state", () => {
@@ -92,11 +93,26 @@ describe("ChatLog run state", () => {
 
   it("deduplicates authoritative user events and adopts the matching pending prompt", () => {
     const chatLog = new ChatLog(40);
-    chatLog.addPendingUser("shared-run", "Persisted prompt.");
+    chatLog.addPendingUser("local-send", "Persisted prompt.");
     chatLog.updateAssistant("Already streaming.", "shared-run");
+    const message = readTuiSessionUserMessage({
+      message: {
+        role: "user",
+        content: "Persisted prompt.",
+        __openclaw: {
+          id: "shared-user",
+          idempotencyKey: "local-send:user",
+          runId: "shared-run",
+        },
+      },
+    });
+    expect(message).not.toBeNull();
+    if (!message) {
+      throw new Error("expected a persisted user message");
+    }
 
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
-    chatLog.addLiveUser("Persisted prompt.", { messageId: "shared-user", runId: "shared-run" });
+    chatLog.addLiveUser(message.text, message);
+    chatLog.addLiveUser(message.text, message);
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));
     expect(rendered).toContain("Persisted prompt.");
@@ -115,6 +131,7 @@ describe("ChatLog run state", () => {
     chatLog.addLiveUser("Another client's persisted prompt.", {
       messageId: "shared-remote-user",
       runId: "shared-run",
+      sendId: "remote-send",
     });
 
     const rendered = normalizeTestText(chatLog.render(120).join("\n"));

@@ -31,10 +31,10 @@ export type BundledPackageCacheIdentity = {
   mtimeMs: number;
 };
 
-type PluginLoaderModuleConfig = {
-  tryNative: boolean;
-  aliasMap: PluginSdkAliasMap;
+type PreparedPluginAliases = {
   cacheKey: string;
+  getAliasMap: () => PluginSdkAliasMap;
+  resolveAlias: (specifier: string) => string | undefined;
 };
 
 type PluginSdkHostFacts = {
@@ -64,13 +64,7 @@ function createPluginSdkHostFacts(): PluginSdkHostFacts {
 export function createPluginCacheSdk() {
   return {
     hosts: new Map<string, PluginSdkHostFacts>(),
-    contexts: new Map<
-      string,
-      {
-        aliasMap?: PluginSdkAliasMap;
-        moduleConfig?: PluginLoaderModuleConfig;
-      }
-    >(),
+    contexts: new Map<string, PreparedPluginAliases>(),
     packageNames: new Map<string, string | null>(),
     packageSearches: new Map<string, { first?: string | null; all?: string[] }>(),
     argvDirectories: new Map<string, string[]>(),
@@ -92,6 +86,7 @@ export function createPluginCacheSdk() {
       WeakMap<PluginSdkAliasMap, WeakMap<PluginSdkAliasMap, PluginSdkAliasMap>>
     >(),
     native: {
+      sdkProviders: new Map<string, () => void>(),
       aliases: new Map<string, Array<{ parentRoot: string; target: string }>>(),
       aliasesByMap: new WeakMap<PluginSdkAliasMap, Array<readonly [string, string]>>(),
       registeredHosts: new Set<string>(),

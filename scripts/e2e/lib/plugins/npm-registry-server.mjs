@@ -29,7 +29,11 @@ function normalizeUpstreamRegistry(raw) {
   return url.origin;
 }
 
-const upstreamRegistry = normalizeUpstreamRegistry(process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM);
+const upstreamRegistry = normalizeUpstreamRegistry(
+  process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM || process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL,
+);
+const upstreamMergeMode = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
+const mergeUpstream = upstreamMergeMode === "1" || upstreamMergeMode === "versions";
 const distTagOverrides = new Map(
   (process.env.OPENCLAW_NPM_REGISTRY_DIST_TAGS ?? "")
     .split(",")
@@ -62,8 +66,11 @@ const packages = new Map();
 
 function readPackageManifest(tarballPath, packageName) {
   try {
+    // GNU tar treats Windows drive letters as remote archive hosts. Keep the
+    // archive argument local, as in the prerelease artifact validator.
     const packageJson = JSON.parse(
-      execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarballPath), "package/package.json"], {
+        cwd: path.dirname(tarballPath),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),
@@ -124,6 +131,99 @@ const metadataFor = (entry, baseUrl) => ({
   ),
 });
 
+function metadataForProxy(metadata, baseUrl) {
+  if (
+    !metadata?.versions ||
+    typeof metadata.versions !== "object" ||
+    Array.isArray(metadata.versions)
+  ) {
+    return metadata;
+  }
+  const prefix = `${upstreamRegistry}/`;
+  return {
+    ...metadata,
+    versions: Object.fromEntries(
+      Object.entries(metadata.versions).map(([version, manifest]) => {
+        const tarball = manifest?.dist?.tarball;
+        if (typeof tarball !== "string" || !tarball.startsWith(prefix)) {
+          return [version, manifest];
+        }
+        // npm 12 requires registry tarballs to share its origin, including port.
+        // Project each response separately; cached upstream metadata stays unchanged.
+        return [
+          version,
+          {
+            ...manifest,
+            dist: { ...manifest.dist, tarball: `${baseUrl}/${tarball.slice(prefix.length)}` },
+          },
+        ];
+      }),
+    ),
+  };
+}
+
+// Baseline roots can request older core dependencies through this candidate
+// registry. Keep published versions available while exact candidate bytes win.
+const upstreamMetadata = new Map();
+async function metadataWithPublishedVersions(entry, baseUrl) {
+  const local = metadataFor(entry, baseUrl);
+  if (!mergeUpstream || !upstreamRegistry) {
+    return local;
+  }
+  if (!upstreamMetadata.has(entry.packageName)) {
+    upstreamMetadata.set(
+      entry.packageName,
+      (async () => {
+        const response = await fetch(`${upstreamRegistry}/${entry.encodedPackageName}`, {
+          redirect: "error",
+          signal: AbortSignal.timeout(UPSTREAM_REQUEST_TIMEOUT_MS),
+        });
+        if (response.status === 404) {
+          await response.body?.cancel();
+          return {};
+        }
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`upstream package metadata returned ${response.status}`);
+        }
+        const bytes = await readBoundedResponseBytes(
+          response,
+          "npm registry upstream",
+          UPSTREAM_RESPONSE_MAX_BYTES,
+        );
+        const published = JSON.parse(bytes.toString("utf8"));
+        if (
+          !published?.versions ||
+          typeof published.versions !== "object" ||
+          Array.isArray(published.versions)
+        ) {
+          throw new Error("upstream package metadata has no versions object");
+        }
+        return published;
+      })().catch((/** @type {unknown} */ error) => {
+        upstreamMetadata.delete(entry.packageName);
+        throw error;
+      }),
+    );
+  }
+  const published = metadataForProxy(await upstreamMetadata.get(entry.packageName), baseUrl);
+  // Baseline installs keep published tags; candidate installs select each local
+  // package's release while retaining published versions for older dependencies.
+  const distTags =
+    upstreamMergeMode === "versions"
+      ? { ...published["dist-tags"], ...local["dist-tags"] }
+      : { ...local["dist-tags"], ...published["dist-tags"] };
+  return {
+    ...published,
+    ...local,
+    "dist-tags": {
+      ...distTags,
+      ...Object.fromEntries(distTagOverrides),
+    },
+    versions: { ...published.versions, ...local.versions },
+  };
+}
+
 function decodePackagePath(pathname) {
   try {
     return decodeURIComponent(pathname.slice(1));
@@ -161,7 +261,7 @@ function resolveUpstreamRequestUrl(rawRequestUrl) {
   return `${upstreamRegistry}${requestUrl.pathname}${requestUrl.search}`;
 }
 
-async function proxyUpstream(rawRequestUrl, response) {
+async function proxyUpstream(rawRequestUrl, response, baseUrl) {
   if (!upstreamRegistry) {
     return false;
   }
@@ -176,12 +276,16 @@ async function proxyUpstream(rawRequestUrl, response) {
       await streamUpstreamTarball(upstreamResponse, response);
       return true;
     }
-    const body = await readBoundedResponseBytes(
+    let body = await readBoundedResponseBytes(
       upstreamResponse,
       "npm registry upstream",
       UPSTREAM_RESPONSE_MAX_BYTES,
       { createTooLargeError: createBoundedResponseTooLargeError },
     );
+    if (upstreamResponse.ok && upstreamResponse.headers.get("content-type")?.includes("json")) {
+      const metadata = JSON.parse(body.toString("utf8"));
+      body = Buffer.from(JSON.stringify(metadataForProxy(metadata, baseUrl)));
+    }
     // Fetch decodes compressed bodies but preserves upstream length metadata.
     // Emit the decoded size so npm clients do not truncate proxied responses.
     const headers = { "content-length": String(body.length) };
@@ -251,8 +355,9 @@ async function handleRequest(request, response) {
 
   const packageEntry = findPackageForPath(url.pathname);
   if (packageEntry) {
+    const metadata = await metadataWithPublishedVersions(packageEntry, baseUrl);
     response.writeHead(200, { "content-type": "application/json" });
-    response.end(`${JSON.stringify(metadataFor(packageEntry, baseUrl))}\n`);
+    response.end(`${JSON.stringify(metadata)}\n`);
     return;
   }
 
@@ -266,7 +371,7 @@ async function handleRequest(request, response) {
     return;
   }
 
-  if (await proxyUpstream(request.url, response)) {
+  if (await proxyUpstream(request.url, response, baseUrl)) {
     return;
   }
 

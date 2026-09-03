@@ -53,6 +53,8 @@ const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-")
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
+  "server-methods/usage.test.ts",
+  "server-methods/usage.sessions-usage.test.ts",
 ];
 
 function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable<T["test"]> {
@@ -162,7 +164,7 @@ describe("projects vitest config", () => {
   });
 
   it.each([
-    ["ordinary", createUnitFastVitestConfig, "src/plugin-sdk/provider-entry.test.ts"],
+    ["ordinary", createUnitFastVitestConfig, "src/plugin-sdk/text-chunking.test.ts"],
     [
       "isolated",
       createUnitFastIsolatedVitestConfig,
@@ -172,7 +174,7 @@ describe("projects vitest config", () => {
   ])("limits %s unit-fast include files to the project's owned tests", (_, createConfig, owned) => {
     const unrelated = "src/gateway/openresponses-http.test.ts";
     const mixedIncludeFile = patternFiles.writePatternFile("mixed-unit-fast-include.json", [
-      "src/plugin-sdk/provider-entry.test.ts",
+      "src/plugin-sdk/text-chunking.test.ts",
       "src/system-agent/assistant.configured.test.ts",
       "src/acp/control-plane/manager.test.ts",
       unrelated,
@@ -409,6 +411,19 @@ describe("projects vitest config", () => {
     expect(setupFiles).not.toContain("test/setup-openclaw-runtime.ts");
     expect(setupFiles).toContain("ui/src/test-helpers/lit-warnings.setup.ts");
     expect(requireWebOptimizer(testConfig).enabled).toBe(true);
+  });
+
+  it("registers the package Chromium owner in root and full runtime runs", async () => {
+    const configPath = "test/vitest/vitest.ui-browser.config.ts";
+    expect(rootVitestProjects).toContain(configPath);
+    expect(
+      fullSuiteVitestShards.find((shard) => shard.name === "core-runtime")?.projects,
+    ).toContain(configPath);
+    const { createUiBrowserVitestConfig } = await import("./vitest/vitest.ui-browser.config.ts");
+    const browser = createUiBrowserVitestConfig();
+    expect(normalizeConfigPath(browser.root)).toBe("ui");
+    expect(requireTestConfig(browser).browser?.enabled).toBe(true);
+    expect(requireTestConfig(browser).runner).toBeUndefined();
   });
 
   it("keeps root-matrix unit-fast files on the cross-file cleanup runner", () => {

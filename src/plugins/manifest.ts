@@ -252,6 +252,7 @@ export function loadPluginManifest(
     activation: setupNormalizers.normalizeManifestActivation(raw.activation),
     setup: setupNormalizers.normalizeManifestSetup(raw.setup),
     doctorContract,
+    doctorHealthChecks: raw.doctorHealthChecks === true ? true : undefined,
     sessionRouteStateOwners:
       raw.sessionRouteStateOwners === undefined
         ? undefined
@@ -277,7 +278,6 @@ export function loadPluginManifest(
       name: normalizeOptionalString(raw.name),
       description: normalizeOptionalString(raw.description),
       catalog: capabilityNormalizers.normalizeManifestCatalog(raw.catalog),
-      icon: normalizeOptionalString(raw.icon),
       version: normalizeOptionalString(raw.version),
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       contracts: capabilityNormalizers.normalizeManifestContracts(raw.contracts),

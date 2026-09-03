@@ -23,7 +23,6 @@ const DIR_FETCH_DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 type DirFetchParams = {
   path?: unknown;
   maxBytes?: unknown;
-  includeDotfiles?: unknown;
   followSymlinks?: unknown;
   preflightOnly?: unknown;
   expectedCanonicalPath?: unknown;
@@ -215,8 +214,7 @@ export async function handleDirFetch(params: DirFetchParams): Promise<DirFetchRe
     };
   }
 
-  // includeDotfiles is reserved; both modes archive everything. Preflight must
-  // still build the capped archive so approval cannot accept an oversized tree.
+  // Preflight must build the capped archive so approval cannot accept an oversized tree.
   const tarBuffer = await createTarArchive(
     canonical,
     canonical,

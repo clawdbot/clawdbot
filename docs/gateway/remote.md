@@ -314,6 +314,9 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 
 The tunnel starts automatically at login, restarts on crash, and keeps the forwarded port live.
 
+Open or reopen OpenClaw.app after setup, then verify the connection using the
+[macOS remote access](/platforms/mac/remote) checks.
+
 <Note>
 If you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
 </Note>
@@ -343,4 +346,3 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
-- [Remote gateway setup](/gateway/remote-gateway-readme)

@@ -245,7 +245,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.fail(connection, error);
       }
     });
-    connected.socket.on("close", () => {
+    connected.socket.on("close", (code) => {
       if (!this.lifecycle.isCurrent(connection) || this.socket !== connected.socket) {
         return;
       }
@@ -262,7 +262,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         this.lifecycle.close(connection, "error");
         return;
       }
-      this.notifyClose(connection, "error");
+      this.notifyClose(connection, code === 1000 ? "completed" : "error");
     });
 
     const terminalEvent = connected.detachBuffer();
@@ -286,7 +286,9 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
           ? terminalEvent.error
           : new Error("GPT-Live WebSocket closed during startup");
       if (reachedReady) {
-        if (this.fail(connection, error, "startup terminal event")) {
+        if (terminalEvent.kind === "close" && terminalEvent.code === 1000) {
+          this.notifyClose(connection, "completed");
+        } else if (this.fail(connection, error, "startup terminal event")) {
           this.notifyClose(connection, "error");
         }
       } else {

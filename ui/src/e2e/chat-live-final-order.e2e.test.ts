@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -11,10 +11,10 @@ const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
   it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
-    const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-    if (artifactDir) {
-      await mkdir(artifactDir, { recursive: true });
-    }
+    const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-live-final-order", artifactRoot)
+      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -35,7 +35,7 @@ suite.define(() => {
           "chat.startup": {
             deltaCursor: "before-multi-reply",
             messages: [],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             sessionInfo: {
               activeRunIds: [],
               hasActiveRun: false,
@@ -178,7 +178,7 @@ suite.define(() => {
           "chat.startup": {
             deltaCursor: "before-final",
             messages: [],
-            sessionId: "control-ui-e2e-session",
+            sessionId: "session:agent:main:main",
             sessionInfo: {
               activeRunIds: [],
               hasActiveRun: false,
@@ -233,9 +233,11 @@ suite.define(() => {
         )
         .toBe(true);
 
-      const artifactDir = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-live-final-order", artifactRoot)
+        : undefined;
       if (artifactDir) {
-        await mkdir(artifactDir, { recursive: true });
         await page.screenshot({
           path: path.join(artifactDir, "live-final-transcript-order.png"),
           fullPage: true,

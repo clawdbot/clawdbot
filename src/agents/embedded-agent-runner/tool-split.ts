@@ -13,11 +13,12 @@ export function splitSdkTools(options: {
   tools: AnyAgentTool[];
   sandboxEnabled: boolean;
   toolHookContext?: HookContext;
+  abortSignal?: AbortSignal;
 }): {
   customTools: ReturnType<typeof toToolDefinitions>;
 } {
   const { tools, toolHookContext } = options;
   return {
-    customTools: toToolDefinitions(tools, toolHookContext),
+    customTools: toToolDefinitions(tools, toolHookContext, options.abortSignal),
   };
 }

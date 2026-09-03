@@ -395,7 +395,9 @@ export async function maybeMigrateLegacyStorage(params: {
   env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const hasAccountScopedLegacyStorageFile = fs.existsSync(params.storagePaths.storagePath);
-  const syncCache = hasAccountScopedLegacyStorageFile ? await import("./file-sync-store.js") : null;
+  const syncCache = hasAccountScopedLegacyStorageFile
+    ? await import("./sync-cache-state.js")
+    : null;
   const hasAccountScopedLegacyStorage =
     hasAccountScopedLegacyStorageFile &&
     (await syncCache?.readLegacyMatrixSyncCacheState(params.storagePaths.rootDir)) !== null;
@@ -480,13 +482,13 @@ async function migrateLegacySyncCacheToSqlite(params: {
   moved: LegacyMoveRecord[];
   pendingArchives: LegacyArchiveRecord[];
 }): Promise<void> {
-  const syncCache = await import("./file-sync-store.js");
+  const syncCache = await import("./sync-cache-state.js");
   const persisted = await syncCache.readLegacyMatrixSyncCacheState(params.sourceRootDir);
   if (!persisted) {
     return;
   }
   const store = getMatrixRuntime().state.openKeyedStore<
-    import("./file-sync-store.js").MatrixSyncCacheRecord
+    import("./sync-cache-state.js").MatrixSyncCacheRecord
   >(syncCache.openMatrixSyncCacheStoreOptions(params.targetRootDir));
   if (
     !(await syncCache.hasMatrixSyncCacheStateInStore({

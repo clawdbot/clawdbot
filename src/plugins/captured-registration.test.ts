@@ -64,6 +64,7 @@ describe("captured plugin registration", () => {
         });
         api.registerWorkerProvider({
           id: "captured-worker",
+          resolveAllocation: async () => ({ leaseId: "captured-lease", sharedHost: false }),
           provision: async () => ({
             leaseId: "captured-lease",
             ssh: {

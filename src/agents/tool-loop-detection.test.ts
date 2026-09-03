@@ -1221,6 +1221,155 @@ describe("tool-loop-detection", () => {
       });
     });
 
+    it.each([
+      {
+        label: "ISO timestamps",
+        output: (index: number) => `failed at 2026-08-30T10:20:${10 + index}Z`,
+      },
+      { label: "clock timestamps", output: (index: number) => `failed at 12:00:${10 + index}` },
+      { label: "attempt counters", output: (index: number) => `failed on attempt ${index}` },
+      { label: "retry counters", output: (index: number) => `failed on retry=${index}` },
+      { label: "elapsed durations", output: (index: number) => `failed after ${index + 1}ms` },
+      { label: "short elapsed durations", output: (index: number) => `failed after ${index + 1}s` },
+      { label: "process ids", output: (index: number) => `failed in pid=${1000 + index}` },
+    ])("blocks terminal exec failures with drifting $label", ({ output }) => {
+      const state = createState();
+      const params = { command: "node retry.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({ status: "completed", exitCode: 1, output: output(index) }),
+          index,
+        );
+      }
+
+      expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "critical",
+        detector: "generic_repeat",
+        count: CRITICAL_THRESHOLD,
+      });
+    });
+
+    it.each([
+      {
+        label: "exit code",
+        beforeExitCode: 1,
+        beforeOutput: () => "command failed",
+        afterExitCode: 2,
+        afterOutput: "command failed",
+      },
+      {
+        label: "diagnostic text",
+        beforeExitCode: 1,
+        beforeOutput: () => "dependency missing",
+        afterExitCode: 1,
+        afterOutput: "syntax error",
+      },
+      {
+        label: "diagnostic number",
+        beforeExitCode: 1,
+        beforeOutput: (index: number) => `errno 111 at 12:00:${10 + index}`,
+        afterExitCode: 1,
+        afterOutput: "errno 113 at 12:00:39",
+      },
+      {
+        label: "calendar date",
+        beforeExitCode: 1,
+        beforeOutput: () => "certificate becomes valid on 2026-08-30",
+        afterExitCode: 1,
+        afterOutput: "certificate becomes valid on 2026-08-31",
+      },
+    ])(
+      "resets a drifting terminal-failure streak after a new $label",
+      ({ beforeExitCode, beforeOutput, afterExitCode, afterOutput }) => {
+        const state = createState();
+        const params = { command: "node retry.js" };
+
+        for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+          recordSuccessfulCall(
+            state,
+            "exec",
+            params,
+            createExecLoopResult({
+              status: "completed",
+              exitCode: beforeExitCode,
+              output: beforeOutput(index),
+            }),
+            index,
+          );
+        }
+        recordSuccessfulCall(
+          state,
+          "exec",
+          params,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: afterExitCode,
+            output: afterOutput,
+          }),
+          CRITICAL_THRESHOLD,
+        );
+
+        expect(detectToolCallLoop(state, "exec", params, enabledLoopDetectionConfig)).toMatchObject(
+          {
+            stuck: true,
+            level: "warning",
+            detector: "generic_repeat",
+          },
+        );
+      },
+    );
+
+    it("keeps an intervening command as a reset after the first command resumes", () => {
+      const state = createState();
+      const first = { command: "node first.js" };
+
+      for (let index = 0; index < CRITICAL_THRESHOLD - 1; index += 1) {
+        recordSuccessfulCall(
+          state,
+          "exec",
+          first,
+          createExecLoopResult({
+            status: "completed",
+            exitCode: 1,
+            output: `failed in pid=${1000 + index}`,
+          }),
+          index,
+        );
+      }
+      recordSuccessfulCall(
+        state,
+        "exec",
+        { command: "node second.js" },
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=2000" }),
+        CRITICAL_THRESHOLD,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+
+      recordSuccessfulCall(
+        state,
+        "exec",
+        first,
+        createExecLoopResult({ status: "completed", exitCode: 1, output: "failed in pid=3000" }),
+        CRITICAL_THRESHOLD + 1,
+      );
+
+      expect(detectToolCallLoop(state, "exec", first, enabledLoopDetectionConfig)).toMatchObject({
+        stuck: true,
+        level: "warning",
+        detector: "generic_repeat",
+      });
+    });
+
     it("anchors changing-argument exec vetoes until the global circuit breaker", () => {
       const state = createState();
       const result = createExecLoopResult({
