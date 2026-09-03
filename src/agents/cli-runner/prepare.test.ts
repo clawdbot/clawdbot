@@ -2364,24 +2364,21 @@ describe("prepareCliRunContext", () => {
     const engineId = `cli-cleanup-engine-${Date.now().toString(36)}`;
     const cleanup = vi.fn(async () => {});
     const prepareExecution = vi.fn(async () => ({ cleanup }));
-    registerTestContextEngine(
-      engineId,
-      (): ContextEngine => ({
-        info: {
-          id: engineId,
-          name: "CLI cleanup engine",
-          hostRequirements: {
-            "agent-run": {
-              requiredCapabilities: ["assemble-before-prompt"],
-              unsupportedMessage: "context engine failed",
-            },
+    registerTestContextEngine(engineId, (): ContextEngine => ({
+      info: {
+        id: engineId,
+        name: "CLI cleanup engine",
+        hostRequirements: {
+          "agent-run": {
+            requiredCapabilities: ["assemble-before-prompt"],
+            unsupportedMessage: "context engine failed",
           },
         },
-        ingest: vi.fn(async () => ({ ingested: true })),
-        assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
-        compact: vi.fn(async () => ({ ok: true, compacted: false })),
-      }),
-    );
+      },
+      ingest: vi.fn(async () => ({ ingested: true })),
+      assemble: vi.fn(async ({ messages }) => ({ messages, estimatedTokens: 0 })),
+      compact: vi.fn(async () => ({ ok: true, compacted: false })),
+    }));
     setRawCliBackendForPrepareTest({
       id: "test-cli",
       pluginId: "test-plugin",

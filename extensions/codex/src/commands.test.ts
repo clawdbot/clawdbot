@@ -1693,20 +1693,18 @@ describe("codex command", () => {
     await expect(
       handleCodexCommand(createSandboxedContext("goal", sessionFile), {
         deps: createDeps({
-          codexControlRequest: vi.fn(
-            async (): Promise<JsonValue> => ({
-              goal: {
-                threadId: "thread-status",
-                objective: "Inspect status",
-                status: "active",
-                tokenBudget: null,
-                tokensUsed: 0,
-                timeUsedSeconds: 0,
-                createdAt: 1,
-                updatedAt: 1,
-              },
-            }),
-          ),
+          codexControlRequest: vi.fn(async (): Promise<JsonValue> => ({
+            goal: {
+              threadId: "thread-status",
+              objective: "Inspect status",
+              status: "active",
+              tokenBudget: null,
+              tokensUsed: 0,
+              timeUsedSeconds: 0,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          })),
         }),
       }),
     ).resolves.toEqual({

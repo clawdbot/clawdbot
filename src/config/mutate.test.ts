@@ -49,13 +49,11 @@ const ioMocks = vi.hoisted(() => {
   };
 });
 const validationMocks = vi.hoisted(() => ({
-  validateConfigObjectWithPlugins: vi.fn(
-    (config: OpenClawConfig): MockValidationResult => ({
-      ok: true,
-      config,
-      warnings: [],
-    }),
-  ),
+  validateConfigObjectWithPlugins: vi.fn((config: OpenClawConfig): MockValidationResult => ({
+    ok: true,
+    config,
+    warnings: [],
+  })),
 }));
 const backupMocks = vi.hoisted(() => ({
   maintainConfigBackups: vi.fn<typeof import("./backup-rotation.js").maintainConfigBackups>(),

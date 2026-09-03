@@ -189,10 +189,16 @@ suite.define(() => {
               .toContain(
                 `Ask an administrator to approve the pending ${COMMAND} request, or pick another device.`,
               );
+            // Element clips corrupt recorded Chromium frames; crop proof after recording.
             await page.screenshot({
               animations: "disabled",
               fullPage: true,
-              path: path.join(suite.artifactDir, "01-undeclared-and-pending.png"),
+              path: path.join(suite.artifactDir, "00-undeclared.png"),
+            });
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(suite.artifactDir, "01-pending-approval.png"),
             });
             await page.keyboard.press("Escape");
 
@@ -230,6 +236,39 @@ suite.define(() => {
               path: path.join(suite.artifactDir, "02-unauthorized-after-hot-reload.png"),
             });
             expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.keyboard.press("Escape");
+
+            const deniedConfig = await operator.request<{ hash: string }>("config.get", {});
+            await operator.request("config.patch", {
+              raw: JSON.stringify({
+                gateway: { nodes: { commands: { allow: [COMMAND], deny: [] } } },
+              }),
+              baseHash: deniedConfig.hash,
+              replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
+            });
+            await vi.waitFor(
+              async () => {
+                expect(await readCommandState(unauthorizedIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "invocable",
+                });
+                expect(await readCommandState(pendingIdentity.deviceId)).toEqual({
+                  command: COMMAND,
+                  state: "pending-approval",
+                });
+              },
+              { interval: 250, timeout: 60_000 },
+            );
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
+            await page.reload();
+            await page.locator("#new-session-where-trigger").click();
+            await row(unauthorizedIdentity.deviceId).waitFor();
+            expect(await row(unauthorizedIdentity.deviceId).isEnabled()).toBe(true);
+            await page.screenshot({
+              animations: "disabled",
+              fullPage: true,
+              path: path.join(suite.artifactDir, "03-invocable-after-reallow.png"),
+            });
           },
         );
       } finally {

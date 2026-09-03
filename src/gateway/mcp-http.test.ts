@@ -75,12 +75,10 @@ type McpToolResultPayload = {
 };
 
 const runBeforeToolCallHookMock = vi.hoisted(() =>
-  vi.fn(
-    async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
-      blocked: false,
-      params: args.params,
-    }),
-  ),
+  vi.fn(async (args: { params: unknown }): Promise<MockBeforeToolCallHookResult> => ({
+    blocked: false,
+    params: args.params,
+  })),
 );
 
 const resolveGatewayScopedToolsMock = vi.hoisted(() =>

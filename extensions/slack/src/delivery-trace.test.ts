@@ -87,19 +87,17 @@ type SlackTraceState = {
 
 const traceRuntimeError = vi.fn();
 
-const traceState = vi.hoisted(
-  (): SlackTraceState => ({
-    recordWireCall: () => {},
-    client: null,
-    turn: null,
-    turnStarted: null,
-    turnOutcome: null,
-    dispatchDone: null,
-    counts: { tool: 0, block: 0, final: 0 },
-    tsCounter: 0,
-    rejectStartStreamCode: undefined,
-  }),
-);
+const traceState = vi.hoisted((): SlackTraceState => ({
+  recordWireCall: () => {},
+  client: null,
+  turn: null,
+  turnStarted: null,
+  turnOutcome: null,
+  dispatchDone: null,
+  counts: { tool: 0, block: 0, final: 0 },
+  tsCounter: 0,
+  rejectStartStreamCode: undefined,
+}));
 
 // Replace only the core agent turn. Everything downstream of the captured
 // deliver/typing/replyOptions wiring (dedupe, thread plan, native stream ladder,

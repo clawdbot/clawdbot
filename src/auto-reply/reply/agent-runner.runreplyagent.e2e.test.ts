@@ -4868,6 +4868,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       streamed: false,
     },
   ])("surfaces a configured backend failure when fallback produces $label", async (testCase) => {
+    const onAgentRunTerminalOutcome = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: AgentRunParams) => {
       if (testCase.streamed) {
         await params.onBlockReply?.(testCase.payload);
@@ -4883,7 +4884,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
 
     try {
       const { run } = createMinimalRun({
-        opts: testCase.opts,
+        opts: { ...testCase.opts, onAgentRunTerminalOutcome },
         blockStreamingEnabled: testCase.streamed,
         runOverrides: {
           provider: "lmstudio",
@@ -4902,6 +4903,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
       expect(payload?.text).toContain("configured model backend lmstudio/gemma-4-e4b-it");
       expect(payload?.text).toContain("Fallback used openai/gpt-5.5");
       expect(payload?.text).toContain("no visible reply");
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith("failed");
     } finally {
       fallbackSpy.mockRestore();
     }

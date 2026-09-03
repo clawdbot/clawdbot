@@ -537,12 +537,10 @@ describe("agentLoop streaming updates", () => {
   });
 
   it("does not execute tool calls from a max-token-truncated assistant turn", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "should not run" }],
-        details: {},
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "should not run" }],
+      details: {},
+    }));
     const contexts: Context[] = [];
     let streamCalls = 0;
     const streamFn: StreamFn = async (_model, context) => {
@@ -686,12 +684,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   }
 
   it("hydrates an authorized deferred tool for execution and the continuation", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "hidden ok" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "hidden ok" }],
+      details: { ok: true },
+    }));
     const hiddenTool: AgentTool = {
       name: "hidden_search",
       label: "hidden_search",
@@ -806,12 +802,10 @@ describe("runAgentLoop deferred tool hydration", () => {
   });
 
   it("rejects deferred tools whose names differ from the requested call", async () => {
-    const execute = vi.fn(
-      async (): Promise<AgentToolResult<unknown>> => ({
-        content: [{ type: "text", text: "wrong tool ran" }],
-        details: { ok: true },
-      }),
-    );
+    const execute = vi.fn(async (): Promise<AgentToolResult<unknown>> => ({
+      content: [{ type: "text", text: "wrong tool ran" }],
+      details: { ok: true },
+    }));
     const mismatchedTool: AgentTool = {
       name: "other_deferred",
       label: "other_deferred",

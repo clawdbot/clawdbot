@@ -28,6 +28,7 @@ import {
   finalizeBuildStepCache,
 } from "../../scripts/lib/build-artifact-cache.mts";
 import { listBundledPluginBuildEntries } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { createManagedCommandInvocation } from "../../scripts/lib/managed-child-process.mts";
 import { TSDOWN_UNIFIED_CONFIG_GROUP } from "../../scripts/lib/tsdown-config-groups.mts";
 import { runNodeMain } from "../../scripts/run-node.mts";
 
@@ -217,7 +218,30 @@ describe("resolveBuildAllStep", () => {
       options: {
         stdio: "inherit",
         env: { FOO: "bar" },
+        shell: false,
       },
+    });
+  });
+
+  it("passes encoded import URLs literally to managed Node on Windows", () => {
+    const importUrl = "file:///C:/Users/RUNNER%7E1/Project/scripts/tsx.mjs";
+    const result = resolveBuildAllStep(
+      { label: "tsdown-unified", args: ["--import", importUrl, "scripts/tsdown-build.mts"] },
+      { platform: "win32", nodeExecPath: "C:\\Program Files\\nodejs\\node.exe", env: {} },
+    );
+
+    expect(
+      createManagedCommandInvocation({
+        bin: result.command,
+        args: result.args,
+        ...result.options,
+        platform: "win32",
+      }),
+    ).toEqual({
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["--import", importUrl, "scripts/tsdown-build.mts"],
+      shell: false,
+      windowsVerbatimArguments: undefined,
     });
   });
 
@@ -256,41 +280,44 @@ describe("resolveBuildAllStep", () => {
       options: {
         stdio: "inherit",
         env: expectedEnv,
+        shell: false,
       },
     });
   });
 
-  it("can route pnpm script steps through direct node entrypoints", () => {
-    const step = getBuildAllStep("plugins:assets:build");
-
-    const result = resolveBuildAllStep(step, {
-      nodeExecPath: "/custom/node",
+  it.each([
+    {
+      label: "plugins:assets:build",
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
+    },
+    {
+      label: "plugins:assets:copy",
+      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "copy"],
+    },
+    { label: "ui:build", args: ["scripts/ui.js", "build"] },
+  ])("runs the $label native fallback through managed Node on Windows", ({ label, args }) => {
+    const result = resolveBuildAllStep(getBuildAllStep(label), {
+      platform: "win32",
+      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
       env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
     });
-
-    expect(result).toEqual({
-      command: "/custom/node",
-      args: ["--import", "tsx", "scripts/bundled-plugin-assets.mts", "--phase", "build"],
-      options: {
-        stdio: "inherit",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      },
-    });
-  });
-
-  it("routes no-pnpm UI builds through the canonical validation wrapper", () => {
     expect(
-      resolveBuildAllStep(getBuildAllStep("ui:build"), {
-        nodeExecPath: "/custom/node",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      createManagedCommandInvocation({
+        bin: result.command,
+        args: result.args,
+        ...result.options,
+        platform: "win32",
       }),
     ).toEqual({
-      command: "/custom/node",
-      args: ["scripts/ui.js", "build"],
-      options: {
-        stdio: "inherit",
-        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
-      },
+      command: "C:\\Program Files\\nodejs\\node.exe",
+      args,
+      shell: false,
+      windowsVerbatimArguments: undefined,
+    });
+    expect(result.options).toEqual({
+      stdio: "inherit",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
+      shell: false,
     });
   });
 

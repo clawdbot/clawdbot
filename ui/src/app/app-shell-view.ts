@@ -149,15 +149,17 @@ function renderLazyDevicePairSetup(host: ShellViewHost, props: DevicePairSetupPr
         </div>
       </header>
       <footer class="device-pair-setup__footer">
-        ${failed
-          ? html`<button
-              class="btn btn--primary"
-              type="button"
-              @click=${() => host.retryDevicePairSetupRenderer()}
-            >
-              ${t("common.retry")}
-            </button>`
-          : nothing}
+        ${
+          failed
+            ? html`<button
+                class="btn btn--primary"
+                type="button"
+                @click=${() => host.retryDevicePairSetupRenderer()}
+              >
+                ${t("common.retry")}
+              </button>`
+            : nothing
+        }
         <button class="btn btn--ghost" type="button" @click=${props.onClose}>
           ${t("common.close")}
         </button>
@@ -405,59 +407,69 @@ export function renderApplicationShell(host: ShellViewHost) {
   // Optional tags stay mounted before definition. Lit replays their properties on upgrade,
   // and the upgraded panels catch the first toggle instead of dropping the event.
   return html`
-    ${lazyElementState?.status === "loading" &&
-    lazyElementState.element === host.commandPaletteElement
-      ? renderCommandPaletteLoading(() => host.lazyCustomElements.close())
-      : renderLazyElementModal(host.lazyCustomElements)}
-    ${isOptionalElementDefined(host.commandPaletteElement)
-      ? html`<openclaw-command-palette
-          .desktopAvailable=${desktopPanelAvailable}
-          .custodianAvailable=${custodianPanelAvailable}
-          .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
-            host.navigate(routeId, options)}
-          .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
-          .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
-        ></openclaw-command-palette>`
-      : nothing}
-    ${isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
-      ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
-      : nothing}
-    ${isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
-      ? html`<openclaw-keyboard-shortcuts-dialog
-          .sendShortcut=${normalizeChatSendShortcut(uiSettings.chatSendShortcut)}
-        ></openclaw-keyboard-shortcuts-dialog>`
-      : nothing}
+    ${
+      lazyElementState?.status === "loading" &&
+      lazyElementState.element === host.commandPaletteElement
+        ? renderCommandPaletteLoading(() => host.lazyCustomElements.close())
+        : renderLazyElementModal(host.lazyCustomElements)
+    }
+    ${
+      isOptionalElementDefined(host.commandPaletteElement)
+        ? html`<openclaw-command-palette
+            .desktopAvailable=${desktopPanelAvailable}
+            .custodianAvailable=${custodianPanelAvailable}
+            .onNavigate=${(routeId: RouteId, options?: ApplicationNavigationOptions) =>
+              host.navigate(routeId, options)}
+            .onSelectSession=${(sessionKey: string) => host.selectChatSession(sessionKey)}
+            .onSlashCommand=${(command: string) => host.handleCommandPaletteSlashCommand(command)}
+          ></openclaw-command-palette>`
+        : nothing
+    }
+    ${
+      isOptionalElementDefined(DEBUG_OVERLAY_ELEMENT)
+        ? html`<openclaw-debug-overlay></openclaw-debug-overlay>`
+        : nothing
+    }
+    ${
+      isOptionalElementDefined(KEYBOARD_SHORTCUTS_ELEMENT)
+        ? html`<openclaw-keyboard-shortcuts-dialog
+            .sendShortcut=${normalizeChatSendShortcut(uiSettings.chatSendShortcut)}
+          ></openclaw-keyboard-shortcuts-dialog>`
+        : nothing
+    }
     <div
-      class="shell ${chatLikeRoute ? "shell--chat" : ""} ${navCollapsed
-        ? "shell--nav-collapsed"
-        : ""} ${mobileNavLayout ? "shell--mobile-nav" : ""} ${mergedChatChrome
-        ? "shell--merged-chat-chrome"
-        : ""} ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${onboarding
-        ? "shell--onboarding"
-        : ""} ${settingsTakeover ? "shell--settings" : ""}"
+      class="shell ${chatLikeRoute ? "shell--chat" : ""} ${
+        navCollapsed ? "shell--nav-collapsed" : ""
+      } ${mobileNavLayout ? "shell--mobile-nav" : ""} ${
+        mergedChatChrome ? "shell--merged-chat-chrome" : ""
+      } ${navDrawerOpen ? "shell--nav-drawer-open" : ""} ${
+        onboarding ? "shell--onboarding" : ""
+      } ${settingsTakeover ? "shell--settings" : ""}"
       style=${`--shell-nav-expanded-width: ${navigationSnapshot.navWidth}px`}
       @theme-change=${(event: CustomEvent<ThemeModeChangeDetail>) => host.handleThemeChange(event)}
     >
       <a class="shell-skip-link" href="#control-ui-main" ?inert=${navDrawerOpen}>
         ${t("common.skipToMainContent")}
       </a>
-      ${nativeWebChrome && !onboarding
-        ? html`
-            <openclaw-macos-titlebar-controls
-              ?inert=${navDrawerOpen}
-              .navCollapsed=${host.nativeNavCollapsed()}
-              .historyOnly=${settingsTakeover}
-              .canGoBack=${host.nativeHistoryState.canGoBack}
-              .canGoForward=${host.nativeHistoryState.canGoForward}
-              .newSessionDisabledReason=${newSessionAccess.allowed
-                ? undefined
-                : newSessionAccess.reason}
-              .onToggleSidebar=${() => host.toggleNavigationSurface()}
-              .onOpenPalette=${() => host.openPalette()}
-              .onOpenNewSession=${() => host.handleNativeNewSession()}
-            ></openclaw-macos-titlebar-controls>
-          `
-        : nothing}
+      ${
+        nativeWebChrome && !onboarding
+          ? html`
+              <openclaw-macos-titlebar-controls
+                ?inert=${navDrawerOpen}
+                .navCollapsed=${host.nativeNavCollapsed()}
+                .historyOnly=${settingsTakeover}
+                .canGoBack=${host.nativeHistoryState.canGoBack}
+                .canGoForward=${host.nativeHistoryState.canGoForward}
+                .newSessionDisabledReason=${
+                  newSessionAccess.allowed ? undefined : newSessionAccess.reason
+                }
+                .onToggleSidebar=${() => host.toggleNavigationSurface()}
+                .onOpenPalette=${() => host.openPalette()}
+                .onOpenNewSession=${() => host.handleNativeNewSession()}
+              ></openclaw-macos-titlebar-controls>
+            `
+          : nothing
+      }
       <openclaw-app-topbar
         ?inert=${navDrawerOpen}
         .resourceBasePath=${context.resourceBasePath}
@@ -466,54 +478,58 @@ export function renderApplicationShell(host: ShellViewHost) {
         .onOpenPalette=${() => host.openPalette()}
         .onToggleDrawer=${(trigger: HTMLElement) => host.toggleNavigationSurface(trigger)}
       ></openclaw-app-topbar>
-      ${navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
-        ? html`
-            <div class="shell-chrome-controls">
-              <openclaw-tooltip
-                .content=${`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
-              >
-                <button
-                  type="button"
-                  class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
-                  aria-label=${t("nav.expand")}
-                  aria-expanded="false"
-                  data-env-avatar=${config.environment
-                    ? config.assistantIdentity.name.charAt(0)
-                    : nothing}
-                  @click=${() => host.toggleNavigationSurface()}
+      ${
+        navCollapsed && !onboarding && !settingsTakeover && !mobileNavLayout
+          ? html`
+              <div class="shell-chrome-controls">
+                <openclaw-tooltip
+                  .content=${`${t("nav.expand")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
                 >
-                  ${icons.panelLeftOpen}
-                </button>
-              </openclaw-tooltip>
-              ${renderNewSessionLink({
-                basePath: context.basePath,
-                agentId: selectedAgentId,
-                className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
-                label: t("chat.runControls.newSession"),
-                disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
-                onOpen: openNewSession,
-              })}
-              <openclaw-tooltip
-                .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
-              >
-                <button
-                  type="button"
-                  class="shell-chrome-controls__button shell-chrome-controls__search"
-                  aria-label=${t("chat.openCommandPalette")}
-                  @click=${() => host.openPalette()}
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__nav-toggle"
+                    aria-label=${t("nav.expand")}
+                    aria-expanded="false"
+                    data-env-avatar=${
+                      config.environment ? config.assistantIdentity.name.charAt(0) : nothing
+                    }
+                    @click=${() => host.toggleNavigationSurface()}
+                  >
+                    ${icons.panelLeftOpen}
+                  </button>
+                </openclaw-tooltip>
+                ${renderNewSessionLink({
+                  basePath: context.basePath,
+                  agentId: selectedAgentId,
+                  className: "shell-chrome-controls__button shell-chrome-controls__new-thread",
+                  label: t("chat.runControls.newSession"),
+                  disabledReason: newSessionAccess.allowed ? undefined : newSessionAccess.reason,
+                  onOpen: openNewSession,
+                })}
+                <openclaw-tooltip
+                  .content=${`${t("chat.openCommandPalette")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.commandPalette)})`}
                 >
-                  ${icons.search}
-                </button>
-              </openclaw-tooltip>
-              ${navCollapsed
-                ? renderCollapsedAssistantToggles({
-                    homeAvailable: homePanelAvailable,
-                    custodianAvailable: custodianPanelAvailable,
-                  })
-                : nothing}
-            </div>
-          `
-        : nothing}
+                  <button
+                    type="button"
+                    class="shell-chrome-controls__button shell-chrome-controls__search"
+                    aria-label=${t("chat.openCommandPalette")}
+                    @click=${() => host.openPalette()}
+                  >
+                    ${icons.search}
+                  </button>
+                </openclaw-tooltip>
+                ${
+                  navCollapsed
+                    ? renderCollapsedAssistantToggles({
+                        homeAvailable: homePanelAvailable,
+                        custodianAvailable: custodianPanelAvailable,
+                      })
+                    : nothing
+                }
+              </div>
+            `
+          : nothing
+      }
       <button
         type="button"
         class="shell-nav-backdrop"
@@ -533,43 +549,47 @@ export function renderApplicationShell(host: ShellViewHost) {
       >
         ${navigationContent}
       </div>
-      ${!navCollapsed && !onboarding && !settingsTakeover
-        ? html`
-            <resizable-divider
-              class="sidebar-resizer"
-              .label=${t("nav.resize")}
-              .splitRatio=${navigationSnapshot.navWidth / shellWidth}
-              .minRatio=${NAV_WIDTH_MIN / shellWidth}
-              .maxRatio=${NAV_WIDTH_MAX / shellWidth}
-              aria-valuetext=${`${navigationSnapshot.navWidth} pixels`}
-              title=${t("nav.resize")}
-              @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
-                host.resizeNavigation(event.detail.splitRatio)}
-            ></resizable-divider>
-          `
-        : nothing}
+      ${
+        !navCollapsed && !onboarding && !settingsTakeover
+          ? html`
+              <resizable-divider
+                class="sidebar-resizer"
+                .label=${t("nav.resize")}
+                .splitRatio=${navigationSnapshot.navWidth / shellWidth}
+                .minRatio=${NAV_WIDTH_MIN / shellWidth}
+                .maxRatio=${NAV_WIDTH_MAX / shellWidth}
+                aria-valuetext=${`${navigationSnapshot.navWidth} pixels`}
+                title=${t("nav.resize")}
+                @resize=${(event: CustomEvent<{ splitRatio: number }>) =>
+                  host.resizeNavigation(event.detail.splitRatio)}
+              ></resizable-divider>
+            `
+          : nothing
+      }
       <main
         id="control-ui-main"
-        class="content ${chatLikeRoute ? "content--chat" : ""} ${activeRoute === "custodian"
-          ? "content--custodian"
-          : ""} ${activeRoute === "workboard" ? "content--workboard" : ""}"
+        class="content ${chatLikeRoute ? "content--chat" : ""} ${
+          activeRoute === "custodian" ? "content--custodian" : ""
+        } ${activeRoute === "workboard" ? "content--workboard" : ""}"
         .tabIndex=${-1}
         ?inert=${pageActionsBlocked || (mobileNavLayout && navDrawerOpen)}
       >
-        ${pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
-          ? html`<div class="connection-action-block" role="status" aria-live="polite">
-              <span class="connection-action-block__icon" aria-hidden="true"
-                >${icons.globeOff}</span
-              >
-              <span class="connection-action-block__text">
-                ${t(
-                  settingsTakeover
-                    ? "connection.settingsChangesUnavailable"
-                    : "connection.actionsUnavailable",
-                )}
-              </span>
-            </div>`
-          : nothing}
+        ${
+          pageActionsBlocked && gatewaySnapshot.phase !== "reload-required"
+            ? html`<div class="connection-action-block" role="status" aria-live="polite">
+                <span class="connection-action-block__icon" aria-hidden="true"
+                  >${icons.globeOff}</span
+                >
+                <span class="connection-action-block__text">
+                  ${t(
+                    settingsTakeover
+                      ? "connection.settingsChangesUnavailable"
+                      : "connection.actionsUnavailable",
+                  )}
+                </span>
+              </div>`
+            : nothing
+        }
         ${renderFloatingUpdateCard({
           navigationSurfaceHidden,
           mobileNavLayout,
@@ -610,31 +630,33 @@ export function renderApplicationShell(host: ShellViewHost) {
         .themeMode=${context.theme.resolvedMode}
         .basePath=${context.basePath}
       ></openclaw-terminal-panel>
-      ${sessionRoute
-        ? nothing
-        : html`
-            <openclaw-browser-panel
-              ?inert=${navDrawerOpen}
-              data-chat-autotype-exempt
-              .client=${gatewayConnected ? gatewaySnapshot.client : null}
-              .available=${browserPanelAvailable}
-              .suppressed=${settingsTakeover}
-              .resourceBasePath=${context.resourceBasePath}
-              .authToken=${resolveControlUiAuthToken({
-                hello: gatewaySnapshot.hello,
-                settings: { token: context.gateway.connection.token },
-                password: context.gateway.connection.password,
-              })}
-            ></openclaw-browser-panel>
-            <openclaw-desktop-panel
-              ?inert=${navDrawerOpen}
-              data-chat-autotype-exempt
-              .client=${gatewayConnected ? gatewaySnapshot.client : null}
-              .available=${desktopPanelAvailable}
-              .suppressed=${settingsTakeover}
-              .basePath=${context.basePath}
-            ></openclaw-desktop-panel>
-          `}
+      ${
+        sessionRoute
+          ? nothing
+          : html`
+              <openclaw-browser-panel
+                ?inert=${navDrawerOpen}
+                data-chat-autotype-exempt
+                .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                .available=${browserPanelAvailable}
+                .suppressed=${settingsTakeover}
+                .resourceBasePath=${context.resourceBasePath}
+                .authToken=${resolveControlUiAuthToken({
+                  hello: gatewaySnapshot.hello,
+                  settings: { token: context.gateway.connection.token },
+                  password: context.gateway.connection.password,
+                })}
+              ></openclaw-browser-panel>
+              <openclaw-desktop-panel
+                ?inert=${navDrawerOpen}
+                data-chat-autotype-exempt
+                .client=${gatewayConnected ? gatewaySnapshot.client : null}
+                .available=${desktopPanelAvailable}
+                .suppressed=${settingsTakeover}
+                .basePath=${context.basePath}
+              ></openclaw-desktop-panel>
+            `
+      }
       <openclaw-assistant-panel
         ?inert=${navDrawerOpen}
         .custodianAvailable=${custodianPanelAvailable}
@@ -645,20 +667,22 @@ export function renderApplicationShell(host: ShellViewHost) {
         .pageRouteId=${activeRoute}
         .minimizeRequestId=${host.custodianMinimizeRequestId}
       ></openclaw-assistant-panel>
-      ${isOptionalElementDefined(host.execApprovalElement)
-        ? html`<openclaw-exec-approval
-            .props=${{
-              queue: overlaySnapshot.approvalQueue,
-              busy: overlaySnapshot.approvalBusy,
-              canGrant: overlaySnapshot.approvalCanGrant,
-              errors: overlaySnapshot.approvalErrors,
-              onDecision: (
-                approvalId: string,
-                decision: Parameters<typeof context.overlays.decideApproval>[0],
-              ) => context.overlays.decideApproval(decision, approvalId),
-            }}
-          ></openclaw-exec-approval>`
-        : nothing}
+      ${
+        isOptionalElementDefined(host.execApprovalElement)
+          ? html`<openclaw-exec-approval
+              .props=${{
+                queue: overlaySnapshot.approvalQueue,
+                busy: overlaySnapshot.approvalBusy,
+                canGrant: overlaySnapshot.approvalCanGrant,
+                errors: overlaySnapshot.approvalErrors,
+                onDecision: (
+                  approvalId: string,
+                  decision: Parameters<typeof context.overlays.decideApproval>[0],
+                ) => context.overlays.decideApproval(decision, approvalId),
+              }}
+            ></openclaw-exec-approval>`
+          : nothing
+      }
       ${renderLazyDevicePairSetup(host, {
         open: overlaySnapshot.devicePairSetupOpen,
         lifecycle: overlaySnapshot.devicePairSetupLifecycle,
@@ -676,12 +700,14 @@ export function renderApplicationShell(host: ShellViewHost) {
           host.navigate("apps");
         },
       })}
-      ${memoryImportActive && isOptionalElementDefined(host.onboardingMemoryImportElement)
-        ? html`<openclaw-onboarding-memory-import
-            .active=${true}
-            .context=${context}
-          ></openclaw-onboarding-memory-import>`
-        : nothing}
+      ${
+        memoryImportActive && isOptionalElementDefined(host.onboardingMemoryImportElement)
+          ? html`<openclaw-onboarding-memory-import
+              .active=${true}
+              .context=${context}
+            ></openclaw-onboarding-memory-import>`
+          : nothing
+      }
       <openclaw-toast-host></openclaw-toast-host>
     </div>
   `;

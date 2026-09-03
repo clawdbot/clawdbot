@@ -281,12 +281,10 @@ export async function runNodeDaemonStatus(opts: NodeDaemonStatusOptions = {}) {
   }
   const [command, runtime] = await Promise.all([
     service.readCommand(process.env).catch(() => null),
-    service.readRuntime(process.env).catch(
-      (err: unknown): GatewayServiceRuntime => ({
-        status: "unknown",
-        detail: formatErrorMessage(err),
-      }),
-    ),
+    service.readRuntime(process.env).catch((err: unknown): GatewayServiceRuntime => ({
+      status: "unknown",
+      detail: formatErrorMessage(err),
+    })),
   ]);
 
   const payload = {

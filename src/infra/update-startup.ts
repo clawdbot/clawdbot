@@ -5,6 +5,7 @@ import {
   asDateTimestampMs,
   timestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
+import { sleepWithAbort } from "@openclaw/retry";
 import type {
   UpdateAvailable,
   UpdateScheduleState,
@@ -16,7 +17,6 @@ import {
   refreshRemoteModelCatalog,
   REMOTE_MODEL_CATALOG_TTL_MS,
 } from "../model-catalog/remote-refresh.js";
-import { runCommandWithTimeout } from "../process/exec.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
 import { VERSION } from "../version.js";
@@ -27,6 +27,7 @@ import {
   isGatewayExternallySupervised,
 } from "./gateway-supervision.js";
 import { gitCommitPrefixesMatch } from "./git-commit.js";
+import { executeGitCommand } from "./git-exec.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import {
   readRestartSentinelSnapshot,
@@ -114,8 +115,82 @@ export type {
 
 let updateAvailableCache: UpdateAvailable | null = null;
 let updateScheduleCache: UpdateScheduleState | null = null;
-let installStatusInitialization: ReturnType<typeof resolveStartupInstallStatus> | null = null;
-let updateCheckLifecycle: AbortController | undefined;
+type UpdateCheckLifecycle = {
+  signal: AbortSignal;
+  refreshes: WeakMap<OpenClawConfig, Promise<void>>;
+  run: <T>(work: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
+  schedule: (work: () => Promise<number>, unref?: boolean) => void;
+  stop: () => Promise<void>;
+};
+let updateCheckLifecycle: UpdateCheckLifecycle | undefined;
+
+function createUpdateCheckLifecycle(
+  previous: UpdateCheckLifecycle | undefined = updateCheckLifecycle,
+): UpdateCheckLifecycle {
+  const predecessor = previous?.stop();
+  const controller = new AbortController();
+  const { signal } = controller;
+  const pending = new Set<Promise<unknown>>();
+  let initialization: ReturnType<typeof resolveStartupInstallStatus> | undefined;
+  let stopping: Promise<void> | undefined;
+
+  const run = <T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    const task = (async () => {
+      await predecessor;
+      signal.throwIfAborted();
+      return await work(signal);
+    })();
+    pending.add(task);
+    void task.then(
+      () => pending.delete(task),
+      () => pending.delete(task),
+    );
+    return task;
+  };
+  const initialize = async () => {
+    signal.throwIfAborted();
+    if (!initialization) {
+      const task = run(() => resolveStartupInstallStatus(false, signal));
+      initialization = task;
+      void task.catch(() => {
+        if (initialization === task) {
+          initialization = undefined;
+        }
+      });
+    }
+    return initialization;
+  };
+  const schedule = (work: () => Promise<number>, unref = false) => {
+    void run(async () => {
+      while (!signal.aborted) {
+        const delayMs = await work();
+        await sleepWithAbort(Math.max(1, delayMs), signal, { ref: !unref });
+      }
+    }).catch(() => undefined);
+  };
+  const lifecycle: UpdateCheckLifecycle = {
+    signal,
+    refreshes: new WeakMap(),
+    run,
+    initialize,
+    schedule,
+    stop: () => {
+      controller.abort();
+      if (updateCheckLifecycle === lifecycle) {
+        gatewayUpdateCampaign.clear();
+      }
+      // Replacement owns the predecessor's drain too. Aborting alone does not
+      // join a Git transport or maintenance process that is still shutting down.
+      return (stopping ??= Promise.allSettled([predecessor, ...pending]).then(() => undefined));
+    },
+  };
+  return lifecycle;
+}
+
+function currentUpdateCheckLifecycle() {
+  return (updateCheckLifecycle ??= createUpdateCheckLifecycle());
+}
 
 export function getUpdateAvailable(): UpdateAvailable | null {
   return updateAvailableCache;
@@ -137,8 +212,7 @@ export async function getUpdateEffectiveChannel(): Promise<UpdateChannel> {
 export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
   updateScheduleCache = null;
-  installStatusInitialization = null;
-  updateCheckLifecycle?.abort();
+  void updateCheckLifecycle?.stop();
   updateCheckLifecycle = undefined;
   gatewayUpdateCampaign.resetForTest();
 }
@@ -417,6 +491,7 @@ async function runAutoUpdateCommand(
         params.root,
         params.timeoutMs,
         params.devTarget,
+        params.signal,
       );
       params.signal?.throwIfAborted();
       if (result) {
@@ -495,7 +570,7 @@ function clearAutoState(nextState: UpdateCheckState): void {
   delete nextState.autoFirstSeenAt;
 }
 
-async function resolveStartupInstallStatus(fetchRemoteGit: boolean) {
+async function resolveStartupInstallStatus(fetchRemoteGit: boolean, signal: AbortSignal) {
   const [root, installReceipt] = await Promise.all([
     resolveOpenClawPackageRoot({
       moduleUrl: import.meta.url,
@@ -510,28 +585,20 @@ async function resolveStartupInstallStatus(fetchRemoteGit: boolean) {
       : undefined;
   const status = await checkUpdateStatus({
     root,
+    signal,
     ...(fetchRemoteGit ? {} : { timeoutMs: 2500 }),
     fetchGit: fetchRemoteGit,
     includeRegistry: false,
     ...(fetchRemoteGit ? { useDetachedDevUpstream: true } : {}),
     ...(gitUpstreamFallback ? { gitUpstreamFallback } : {}),
   });
+  signal.throwIfAborted();
   return { root, status, installReceipt };
 }
 
 /** Caches only the fast local install probe; remote Git refresh remains post-ready. */
 export function initializeGatewayUpdateStatus(): ReturnType<typeof resolveStartupInstallStatus> {
-  if (installStatusInitialization) {
-    return installStatusInitialization;
-  }
-  const initialization = resolveStartupInstallStatus(false);
-  installStatusInitialization = initialization;
-  void initialization.catch(() => {
-    if (installStatusInitialization === initialization) {
-      installStatusInitialization = null;
-    }
-  });
-  return initialization;
+  return currentUpdateCheckLifecycle().initialize();
 }
 
 type GitScheduleStatus = NonNullable<NonNullable<UpdateScheduleState["install"]>["git"]>;
@@ -617,39 +684,59 @@ function withInstallStatus(
 }
 
 /** Refreshes the read-only Dev checkout comparison used by update.status. */
-export async function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
-  const lifecycle = updateCheckLifecycle;
-  const scheduleAtStart = updateScheduleCache;
-  const channel =
-    normalizeUpdateChannel(cfg.update?.channel) ?? (await getUpdateEffectiveChannel());
-  const isCurrent = () =>
-    lifecycle === updateCheckLifecycle &&
-    !lifecycle?.signal.aborted &&
-    (updateScheduleCache === scheduleAtStart || updateScheduleCache?.channel === channel);
-  if (channel !== "dev" || !isCurrent()) {
-    return;
+export function refreshGatewayUpdateStatus(cfg: OpenClawConfig): Promise<void> {
+  const lifecycle = currentUpdateCheckLifecycle();
+  const pending = lifecycle.refreshes.get(cfg);
+  if (pending) {
+    return pending;
   }
-  const { root, status, installReceipt } = await resolveStartupInstallStatus(true);
-  if (!isCurrent()) {
-    return;
-  }
-  const current =
-    updateScheduleCache?.channel === channel
-      ? updateScheduleCache
-      : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
-  setUpdateScheduleCache({ next: withInstallStatus(current, status, true, installReceipt, root) });
+  const refresh = lifecycle
+    .run(async (signal) => {
+      const scheduleAtStart = updateScheduleCache;
+      const configured = normalizeUpdateChannel(cfg.update?.channel);
+      const channel =
+        configured ??
+        resolveEffectiveUpdateChannel({
+          currentVersion: VERSION,
+          ...(await lifecycle.initialize()).status,
+        }).channel;
+      const isCurrent = () =>
+        lifecycle === updateCheckLifecycle &&
+        !signal.aborted &&
+        (updateScheduleCache === scheduleAtStart || updateScheduleCache?.channel === channel);
+      if (channel !== "dev" || !isCurrent()) {
+        return;
+      }
+      const { root, status, installReceipt } = await resolveStartupInstallStatus(true, signal);
+      if (!isCurrent()) {
+        return;
+      }
+      const current =
+        updateScheduleCache?.channel === channel
+          ? updateScheduleCache
+          : { channel, autoEnabled: Boolean(cfg.update?.auto?.enabled) };
+      setUpdateScheduleCache({
+        next: withInstallStatus(current, status, true, installReceipt, root),
+      });
+    })
+    .finally(() => {
+      if (lifecycle.refreshes.get(cfg) === refresh) {
+        lifecycle.refreshes.delete(cfg);
+      }
+    });
+  lifecycle.refreshes.set(cfg, refresh);
+  return refresh;
 }
 
 async function resolveDevGitCommits(params: {
   root: string;
   currentSha: string;
   upstreamSha: string;
+  signal: AbortSignal;
 }): Promise<Array<{ sha: string; subject: string }>> {
-  const result = await runCommandWithTimeout(
+  const result = await executeGitCommand(
+    params.root,
     [
-      "git",
-      "-C",
-      params.root,
       "log",
       "--format=%h%x09%s",
       `--max-count=${DEV_COMMIT_LIMIT}`,
@@ -657,6 +744,8 @@ async function resolveDevGitCommits(params: {
     ],
     {
       timeoutMs: 2500,
+      signal: params.signal,
+      killProcessTree: true,
       maxOutputBytes: { stdout: DEV_COMMIT_LOG_MAX_OUTPUT_BYTES, stderr: 1024 },
     },
   ).catch(() => null);
@@ -684,6 +773,8 @@ async function resolveDevGitCommits(params: {
     .slice(0, DEV_COMMIT_LIMIT);
 }
 
+// The owner joins preflight and handoff readiness, never the detached helper's
+// subsequent wait for Gateway exit.
 async function runCampaignUpdate(params: {
   channel: "stable" | "beta" | "dev";
   mode: UpdateRunResult["mode"];
@@ -788,18 +879,33 @@ async function runCampaignUpdate(params: {
   return "failed";
 }
 
-export async function runGatewayUpdateCheck(params: {
-  cfg: OpenClawConfig;
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
-  isNixMode: boolean;
-  allowInTests?: boolean;
-  onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
-  onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
-  activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-  updateCampaign?: UpdateCampaignController;
-  runAutoUpdate?: AutoUpdateRunner;
-  signal?: AbortSignal;
-}): Promise<void> {
+export async function runGatewayUpdateCheck(
+  params: {
+    cfg: OpenClawConfig;
+    log: { info: (msg: string, meta?: Record<string, unknown>) => void };
+    isNixMode: boolean;
+    allowInTests?: boolean;
+    onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
+    onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
+    activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
+    updateCampaign?: UpdateCampaignController;
+    runAutoUpdate?: AutoUpdateRunner;
+    signal?: AbortSignal;
+  },
+  lifecycle = currentUpdateCheckLifecycle(),
+): Promise<void> {
+  return lifecycle.run((signal) =>
+    runGatewayUpdateCheckOwned(
+      { ...params, signal: params.signal ? AbortSignal.any([signal, params.signal]) : signal },
+      lifecycle,
+    ),
+  );
+}
+
+async function runGatewayUpdateCheckOwned(
+  params: Parameters<typeof runGatewayUpdateCheck>[0] & { signal: AbortSignal },
+  lifecycle: UpdateCheckLifecycle,
+): Promise<void> {
   params.signal?.throwIfAborted();
   if (shouldSkipCheck(Boolean(params.allowInTests))) {
     return;
@@ -831,7 +937,7 @@ export async function runGatewayUpdateCheck(params: {
     return;
   }
   const autoDisabledByExternalSupervisor = isGatewayExternallySupervised();
-  const initializedInstallStatus = await initializeGatewayUpdateStatus();
+  const initializedInstallStatus = await lifecycle.initialize();
   params.signal?.throwIfAborted();
   const potentialChannel = resolveEffectiveUpdateChannel({
     configChannel,
@@ -841,7 +947,7 @@ export async function runGatewayUpdateCheck(params: {
   }).channel;
   let installStatus = initializedInstallStatus;
   if (potentialChannel === "dev" && installStatus.status.installKind === "git") {
-    installStatus = await resolveStartupInstallStatus(true);
+    installStatus = await resolveStartupInstallStatus(true, params.signal);
     params.signal?.throwIfAborted();
   }
   const configuredChannel = resolveEffectiveUpdateChannel({
@@ -1039,6 +1145,7 @@ export async function runGatewayUpdateCheck(params: {
       root: git.root,
       currentSha,
       upstreamSha,
+      signal: params.signal,
     });
     params.signal?.throwIfAborted();
 
@@ -1093,20 +1200,22 @@ export async function runGatewayUpdateCheck(params: {
           target,
           inspect: params.activeWorkInspectors,
           onChange: onCampaignChange,
-          apply: async ({ forced }) =>
-            await runCampaignUpdate({
-              channel: "dev",
-              mode: "git",
-              version: upstreamSha,
-              tag: "dev",
-              forced,
-              root: root ?? status.root ?? undefined,
-              devTarget: devUpdateTargetFromGitTarget(target),
-              log: params.log,
-              runAuto,
-              campaign: updateCampaign,
-              signal: params.signal,
-            }),
+          apply: ({ forced }) =>
+            lifecycle.run(() =>
+              runCampaignUpdate({
+                channel: "dev",
+                mode: "git",
+                version: upstreamSha,
+                tag: "dev",
+                forced,
+                root: root ?? status.root ?? undefined,
+                devTarget: devUpdateTargetFromGitTarget(target),
+                log: params.log,
+                runAuto,
+                campaign: updateCampaign,
+                signal: params.signal,
+              }),
+            ),
         });
       }
     } else {
@@ -1247,19 +1356,21 @@ export async function runGatewayUpdateCheck(params: {
           target,
           inspect: params.activeWorkInspectors,
           onChange: onCampaignChange,
-          apply: async ({ forced }) =>
-            await runCampaignUpdate({
-              channel,
-              mode: status.packageManager,
-              version: resolvedVersion,
-              tag,
-              forced,
-              root: root ?? status.root ?? undefined,
-              log: params.log,
-              runAuto,
-              campaign: updateCampaign,
-              signal: params.signal,
-            }),
+          apply: ({ forced }) =>
+            lifecycle.run(() =>
+              runCampaignUpdate({
+                channel,
+                mode: status.packageManager,
+                version: resolvedVersion,
+                tag,
+                forced,
+                root: root ?? status.root ?? undefined,
+                log: params.log,
+                runAuto,
+                campaign: updateCampaign,
+                signal: params.signal,
+              }),
+            ),
         });
       }
     }
@@ -1284,105 +1395,64 @@ export async function runGatewayUpdateCheck(params: {
   writeState(nextState);
 }
 
-export function scheduleGatewayUpdateCheck(params: {
+export function createGatewayUpdateCheck(params: {
   cfg: OpenClawConfig;
   log: { info: (msg: string, meta?: Record<string, unknown>) => void };
   isNixMode: boolean;
   onUpdateAvailableChange?: (updateAvailable: UpdateAvailable | null) => void;
   onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
   activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-}): () => void {
-  updateCheckLifecycle?.abort();
-  const lifecycle = new AbortController();
+}): {
+  initialize: () => ReturnType<typeof resolveStartupInstallStatus>;
+  start: () => void;
+  stop: () => Promise<void>;
+} {
+  const lifecycle = createUpdateCheckLifecycle();
   updateCheckLifecycle = lifecycle;
-  const stopRemoteCatalogRefresh = scheduleRemoteModelCatalogRefresh(params);
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let running = false;
-
-  const tick = async () => {
-    if (lifecycle.signal.aborted || running) {
-      return;
-    }
-    running = true;
-    try {
-      await runGatewayUpdateCheck({ ...params, signal: lifecycle.signal });
-    } catch {
-      // Intentionally ignored: update checks should never crash the gateway loop.
-    } finally {
-      running = false;
-    }
-    if (lifecycle.signal.aborted) {
-      return;
-    }
-    const intervalMs = resolveCheckIntervalMs(params.cfg, updateScheduleCache?.install?.kind);
-    timer = setTimeout(() => {
-      void tick();
-    }, intervalMs);
-  };
-
-  void tick();
-  return () => {
-    stopRemoteCatalogRefresh();
-    lifecycle.abort();
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-    if (updateCheckLifecycle === lifecycle) {
-      gatewayUpdateCampaign.clear();
-    }
-  };
-}
-
-function scheduleRemoteModelCatalogRefresh(params: {
-  cfg: OpenClawConfig;
-  log: { info: (msg: string, meta?: Record<string, unknown>) => void };
-}): () => void {
-  let stopped = false;
-  let timer: ReturnType<typeof setTimeout> | null = null;
-  let running = false;
-  let activeAbortController: AbortController | null = null;
-  const tick = async () => {
-    if (stopped || running) {
-      return;
-    }
-    running = true;
-    const abortController = new AbortController();
-    activeAbortController = abortController;
-    const result = await refreshRemoteModelCatalog({
-      config: params.cfg,
-      signal: abortController.signal,
-    });
-    if (activeAbortController === abortController) {
-      activeAbortController = null;
-    }
-    running = false;
-    if (stopped) {
-      return;
-    }
-    if (result.status === "error") {
-      params.log.info("remote model catalog refresh failed", { error: result.error });
-    } else if (result.status === "updated") {
-      params.log.info("remote model catalog updated; restart the Gateway to apply it", {
-        providers: result.providers,
-        models: result.models,
-        generatedAt: result.generatedAt,
+  let started = false;
+  return {
+    initialize: lifecycle.initialize,
+    stop: lifecycle.stop,
+    start: () => {
+      if (started || lifecycle.signal.aborted) {
+        return;
+      }
+      started = true;
+      lifecycle.schedule(async () => {
+        try {
+          await runGatewayUpdateCheck(params, lifecycle);
+        } catch {
+          // Discovery failures must not crash or retire the Gateway update loop.
+        }
+        return resolveCheckIntervalMs(params.cfg, updateScheduleCache?.install?.kind);
       });
-    }
-    const nextCheckInMs =
-      result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
-    timer = setTimeout(() => void tick(), nextCheckInMs);
-    timer.unref?.();
-  };
-  void tick();
-  return () => {
-    stopped = true;
-    activeAbortController?.abort();
-    activeAbortController = null;
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
+      lifecycle.schedule(async () => {
+        try {
+          const result = await refreshRemoteModelCatalog({
+            config: params.cfg,
+            signal: lifecycle.signal,
+          });
+          if (lifecycle.signal.aborted) {
+            return REMOTE_MODEL_CATALOG_TTL_MS;
+          }
+          if (result.status === "error") {
+            params.log.info("remote model catalog refresh failed", { error: result.error });
+          } else if (result.status === "updated") {
+            params.log.info("remote model catalog updated; restart the Gateway to apply it", {
+              providers: result.providers,
+              models: result.models,
+              generatedAt: result.generatedAt,
+            });
+          }
+          return result.status === "fresh" ? result.nextCheckInMs : REMOTE_MODEL_CATALOG_TTL_MS;
+        } catch (error) {
+          if (!lifecycle.signal.aborted) {
+            params.log.info("remote model catalog refresh failed", { error: String(error) });
+          }
+          return REMOTE_MODEL_CATALOG_TTL_MS;
+        }
+      }, true);
+    },
   };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
