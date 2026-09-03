@@ -269,7 +269,7 @@ func TestProcessFileAcceptsYamlDocumentEndFrontMatter(t *testing.T) {
 	if !ok || !strings.Contains(description, "...\nretained scalar content") {
 		t.Fatalf("indented YAML block-scalar marker was not preserved: %#v\n%s", metadata["description"], got)
 	}
-	t.Logf("generated localized output: description=%q body=%q", description, body)
+	fmt.Printf("generated localized output: description=%q body=%q\n", description, body)
 	if strings.Contains(body, "\n...\n") {
 		t.Fatalf("indented block-scalar marker leaked into translated body:\n%s", body)
 	}
