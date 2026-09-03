@@ -1972,6 +1972,13 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
             threadTs: THREAD_TS,
             status: "processing",
             title,
+            route: {
+              accountId: "default",
+              agentId: "agent-1",
+              lastRoutePolicy: "session",
+              mainSessionKey: "main",
+              sessionKey: "agent:agent-1:slack:C123",
+            },
             eventScope: undefined,
           },
         ],
