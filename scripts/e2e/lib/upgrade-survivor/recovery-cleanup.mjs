@@ -519,11 +519,14 @@ async function packageEvidence() {
   assert(version, "package evidence requires the installed baseline version");
   // Resolve mutable tags once at installation; evidence must describe those same bytes.
   const exactBaseline = `openclaw@${version}`;
-  const metadata = await command(
-    "baseline-package",
-    ["view", exactBaseline, "version", "dist", "--json"],
-    { binary: "npm" },
+  const entries = resolveNpmJsonEntries(
+    await command("baseline-package", ["view", exactBaseline, "version", "dist", "--json"], {
+      binary: "npm",
+    }),
   );
+  assert.equal(entries.length, 1);
+  const metadata = entries[0];
+  assert(metadata && typeof metadata === "object");
   assert.equal(metadata.version, version);
   assert(typeof metadata.dist.integrity === "string" && metadata.dist.integrity.length > 0);
   // npm pack computes integrity from the fetched tarball even with --dry-run.

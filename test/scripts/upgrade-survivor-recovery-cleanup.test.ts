@@ -33,11 +33,13 @@ describe.skipIf(process.platform === "win32")("recovery survivor package provena
     requested = "openclaw@2026.7.1-2",
     installedVersion = "2026.7.1-2",
     packShape = "array",
+    viewShape = "object",
     fault,
   }: {
     requested?: string;
     installedVersion?: string;
     packShape?: "array" | "name-keyed";
+    viewShape?: "object" | "array";
     fault?: PackageFault;
   } = {}) {
     const root = temporary();
@@ -82,7 +84,7 @@ if (args[1] !== ${JSON.stringify(`openclaw@${installedVersion}`)}) {
   throw new Error("package evidence must use the installed exact baseline");
 }
 if (args[0] === "view") {
-  console.log(JSON.stringify(${JSON.stringify(metadata)}));
+  console.log(JSON.stringify(${JSON.stringify(viewShape === "array" ? [metadata] : metadata)}));
 } else if (args[0] === "pack") {
   console.log(JSON.stringify(${JSON.stringify(packShape === "array" ? [packed] : { openclaw: packed })}));
 } else {
@@ -127,7 +129,12 @@ if (args[0] === "view") {
 
   it.each([
     { requested: "openclaw@2026.7.1-2", installedVersion: "2026.7.1-2", packShape: "array" },
-    { requested: "openclaw@2026.8.2", installedVersion: "2026.8.2", packShape: "name-keyed" },
+    {
+      requested: "openclaw@2026.8.2",
+      installedVersion: "2026.8.2",
+      packShape: "name-keyed",
+      viewShape: "array",
+    },
     { requested: "openclaw@latest", installedVersion: "2026.8.2", packShape: "array" },
   ] as const)(
     "verifies $requested against installed $installedVersion ($packShape)",
