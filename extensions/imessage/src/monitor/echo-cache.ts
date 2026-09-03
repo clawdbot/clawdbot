@@ -13,6 +13,7 @@ type SentMessageLookup = {
 type SentMessageLookupOptions = {
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireMessageIdTextMatch?: boolean;
 };
 
 export type SentMessageCache = {
@@ -105,9 +106,14 @@ class DefaultSentMessageCache implements SentMessageCache {
         messageId: lookup.messageId,
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
+        requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
       })
     ) {
       return true;
+    }
+    if (resolvedOptions.requireMessageIdTextMatch) {
+      // The ID-only memory cache cannot prove that this GUID and body were sent together.
+      return false;
     }
     const textKey = normalizeEchoTextKey(lookup.text);
     const mediaKey = resolveIMessageEchoMediaKey(lookup.media);

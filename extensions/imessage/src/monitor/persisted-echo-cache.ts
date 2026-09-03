@@ -168,6 +168,7 @@ export function hasPersistedIMessageEcho(params: {
   messageId?: string;
   skipIdShortCircuit?: boolean;
   includePendingText?: boolean;
+  requireMessageIdTextMatch?: boolean;
 }): boolean {
   const text = normalizeText(params.text);
   const mediaKey = resolveIMessageEchoMediaKey(params.media);
@@ -179,8 +180,20 @@ export function hasPersistedIMessageEcho(params: {
     if (entry.scope !== params.scope) {
       continue;
     }
-    if (messageId && entry.messageId === messageId) {
+    const messageIdMatches = Boolean(messageId && entry.messageId === messageId);
+    if (messageIdMatches && !params.requireMessageIdTextMatch) {
       return true;
+    }
+    if (params.requireMessageIdTextMatch) {
+      if (
+        messageIdMatches &&
+        text &&
+        entry.text === text &&
+        (!entry.pending || params.includePendingText)
+      ) {
+        return true;
+      }
+      continue;
     }
     const hasConflictingMessageIds = Boolean(
       messageId && entry.messageId && messageId !== entry.messageId,
