@@ -211,8 +211,28 @@ actor VoiceWakeRuntime {
                 }
             }
 
-            audioEngine.prepare()
-            try audioEngine.start()
+            try captureInvalidationObserver.start(
+                engine: audioEngine,
+                onConfigurationChange: { [weak self] in
+                    Task {
+                        await self?.recoverInvalidatedCapture(
+                            generation: generation,
+                            config: config,
+                            reason: "audio configuration changed")
+                    }
+                },
+                onWake: { [weak self] in
+                    Task {
+                        await self?.recoverInvalidatedCapture(
+                            generation: generation,
+                            config: config,
+                            reason: "system woke")
+                    }
+                },
+                startEngine: {
+                    audioEngine.prepare()
+                    try audioEngine.start()
+                })
 
             self.currentConfig = config
             self.lastHeard = Date()
@@ -235,25 +255,6 @@ actor VoiceWakeRuntime {
                     generation: generation)
                 Task { await self.handleRecognition(update, config: config) }
             }
-            captureInvalidationObserver.start(
-                engine: audioEngine,
-                onConfigurationChange: { [weak self] in
-                    Task {
-                        await self?.recoverInvalidatedCapture(
-                            generation: generation,
-                            config: config,
-                            reason: "audio configuration changed")
-                    }
-                },
-                onWake: { [weak self] in
-                    Task {
-                        await self?.recoverInvalidatedCapture(
-                            generation: generation,
-                            config: config,
-                            reason: "system woke")
-                    }
-                })
-
             let preferred = config.micID?.isEmpty == false ? config.micID! : "system-default"
             self.logger.info(
                 "voicewake runtime input preferred=\(preferred, privacy: .public) " +
@@ -422,13 +423,15 @@ actor VoiceWakeRuntime {
     {
         guard generation == self.recognitionGeneration, config == self.currentConfig else { return }
         if self.isCapturing {
+            // Invalidation must resolve through the active overlay: forwarding is visibly shown
+            // as sending, and an empty interrupted command is visibly dismissed rather than sent.
             self.logger.warning("voicewake \(reason); finalizing interrupted capture")
             await self.finalizeCapture(config: config)
             return
         }
         self.logger.warning("voicewake \(reason); scheduling capture restart")
         self.haltRecognitionPipeline()
-        self.scheduleRestartRecognizer(delay: 0.7)
+        self.scheduleRestartRecognizer()
     }
 
     private func maybeLogRecognition(

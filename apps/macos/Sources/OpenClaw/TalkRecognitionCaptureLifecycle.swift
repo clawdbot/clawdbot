@@ -10,6 +10,16 @@ struct PreparedRecognitionCapture {
     let engine: AVAudioEngine
     let activeInputResolution: AudioInputDeviceResolution
 
+    func start() throws {
+        do {
+            self.engine.prepare()
+            try self.engine.start()
+        } catch {
+            self.discard()
+            throw error
+        }
+    }
+
     func discard() {
         self.request.endAudio()
         self.engine.inputNode.removeTap(onBus: 0)
@@ -58,7 +68,7 @@ enum TalkRecognitionCaptureLifecycle {
         return false
     }
 
-    static func prepareStartedCapture(
+    static func prepareCapture(
         selection: AudioInputDeviceResolution,
         logger: Logger,
         onRMS: @escaping @Sendable (Double) -> Void,
@@ -96,8 +106,6 @@ enum TalkRecognitionCaptureLifecycle {
                 onRMS(TalkAudioLevel.rms(buffer: buffer))
             }
             tapInstalled = true
-            audioEngine.prepare()
-            try audioEngine.start()
             return PreparedRecognitionCapture(
                 request: request,
                 engine: audioEngine,

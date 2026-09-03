@@ -404,32 +404,12 @@ actor TalkModeRuntime {
             },
             prepare: { enableVoiceProcessing in
                 let meter = self.rmsMeter
-                return try TalkRecognitionCaptureLifecycle.prepareStartedCapture(
+                let preparedCapture = try TalkRecognitionCaptureLifecycle.prepareCapture(
                     selection: selection,
                     logger: self.logger,
                     onRMS: { meter.set($0) },
                     enableVoiceProcessing: enableVoiceProcessing)
-            },
-            discard: { $0.discard() },
-            publish: { preparedCapture in
-                self.recognitionRequest = preparedCapture.request
-                self.audioEngine = preparedCapture.engine
-                self.activeInputResolution = preparedCapture.activeInputResolution
-                self.recognitionTask = recognizer.recognitionTask(
-                    with: preparedCapture.request,
-                    resultHandler: { [weak self, recognitionAttempt] result, error in
-                        guard let self else { return }
-                        let segments = result?.bestTranscription.segments ?? []
-                        let transcript = result?.bestTranscription.formattedString
-                        let update = RecognitionUpdate(
-                            transcript: transcript,
-                            hasConfidence: segments.contains { $0.confidence > 0.6 },
-                            isFinal: result?.isFinal ?? false,
-                            errorDescription: error?.localizedDescription,
-                            generation: recognitionAttempt)
-                        Task { await self.handleRecognition(update) }
-                    })
-                captureInvalidationObserver.start(
+                try captureInvalidationObserver.start(
                     engine: preparedCapture.engine,
                     onConfigurationChange: { [weak self] in
                         Task {
@@ -451,6 +431,31 @@ actor TalkModeRuntime {
                                 reason: "system woke",
                                 expectedRecognitionGeneration: recognitionAttempt)
                         }
+                    },
+                    startEngine: { try preparedCapture.start() })
+                return preparedCapture
+            },
+            discard: {
+                captureInvalidationObserver.stop()
+                $0.discard()
+            },
+            publish: { preparedCapture in
+                self.recognitionRequest = preparedCapture.request
+                self.audioEngine = preparedCapture.engine
+                self.activeInputResolution = preparedCapture.activeInputResolution
+                self.recognitionTask = recognizer.recognitionTask(
+                    with: preparedCapture.request,
+                    resultHandler: { [weak self, recognitionAttempt] result, error in
+                        guard let self else { return }
+                        let segments = result?.bestTranscription.segments ?? []
+                        let transcript = result?.bestTranscription.formattedString
+                        let update = RecognitionUpdate(
+                            transcript: transcript,
+                            hasConfidence: segments.contains { $0.confidence > 0.6 },
+                            isFinal: result?.isFinal ?? false,
+                            errorDescription: error?.localizedDescription,
+                            generation: recognitionAttempt)
+                        Task { await self.handleRecognition(update) }
                     })
             },
             onFailure: { enableVoiceProcessing, error in
@@ -611,7 +616,6 @@ actor TalkModeRuntime {
         self.stopRecognition()
         await sendAndSpeak(text)
     }
-
 }
 
 // MARK: - Gateway + TTS
