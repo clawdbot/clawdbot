@@ -1,5 +1,6 @@
 // @vitest-environment node
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import {
@@ -11,14 +12,6 @@ import type { SessionCapability } from "./session-capability.ts";
 
 const SESSION_EVENT_REFRESH_DEBOUNCE_MS = 200;
 const SESSION_EVENT_REFRESH_MAX_WAIT_MS = 1_000;
-
-function deferred<T>() {
-  let resolve: (value: T) => void = () => undefined;
-  const promise = new Promise<T>((next) => {
-    resolve = next;
-  });
-  return { promise, resolve };
-}
 
 function installPageLifecycle() {
   const documentEvents = new EventTarget();
@@ -729,9 +722,9 @@ describe("event-driven session list refresh", () => {
     "preserves queued explicit options when the event debounce fires $timing the active request completes",
     async ({ fireBeforeInitialCompletion }) => {
       vi.useFakeTimers();
-      const firstList = deferred<SessionsListResult>();
-      const secondList = deferred<SessionsListResult>();
-      const secondListStarted = deferred<void>();
+      const firstList = createDeferred<SessionsListResult>();
+      const secondList = createDeferred<SessionsListResult>();
+      const secondListStarted = createDeferred();
       let listCalls = 0;
       const request = vi.fn(async (method: string, _params?: unknown) => {
         if (method !== "sessions.list") {
@@ -832,9 +825,9 @@ describe("event-driven session list refresh", () => {
     "keeps event invalidation $timing",
     async ({ eventBeforeAppend, queueForeground, eventDuringForeground, expectedCalls }) => {
       vi.useFakeTimers();
-      const firstList = deferred<SessionsListResult>();
-      const secondList = deferred<SessionsListResult>();
-      const secondListStarted = deferred<void>();
+      const firstList = createDeferred<SessionsListResult>();
+      const secondList = createDeferred<SessionsListResult>();
+      const secondListStarted = createDeferred();
       let listCalls = 0;
       const request = vi.fn(async (method: string, _params?: unknown) => {
         if (method !== "sessions.list") {
@@ -907,8 +900,8 @@ describe("event-driven session list refresh", () => {
 
   it("queues one trailing refresh for an event during an in-flight refresh", async () => {
     vi.useFakeTimers();
-    const secondList = deferred<SessionsListResult>();
-    const thirdListStarted = deferred<void>();
+    const secondList = createDeferred<SessionsListResult>();
+    const thirdListStarted = createDeferred();
     let listCalls = 0;
     const request = vi.fn(async (method: string) => {
       if (method !== "sessions.list") {
@@ -949,7 +942,7 @@ describe("event-driven session list refresh", () => {
   it("defers a queued filtered refresh when the page hides during its active request", async () => {
     vi.useFakeTimers();
     const page = installPageLifecycle();
-    const activeRefresh = deferred<SessionsListResult>();
+    const activeRefresh = createDeferred<SessionsListResult>();
     let filteredCalls = 0;
     const request = vi.fn(async (method: string, params?: { archived?: string }) => {
       if (method !== "sessions.list") {
