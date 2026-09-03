@@ -7,7 +7,7 @@ import {
   type QaBusConversationKind,
   type QaBusMessage,
 } from "../extensions/qa-channel/api.js";
-import { createQaBusState, startQaBusServer } from "../extensions/qa-lab/bus-api.js";
+import { createQaBusState, startQaBusServer } from "../extensions/qa-lab/api.js";
 import { createMessageTool } from "../src/agents/tools/message-tool-execution.js";
 import { buildThreadingToolContext } from "../src/auto-reply/reply/agent-runner-utils.js";
 import { resolveReplyToMode } from "../src/auto-reply/reply/reply-threading.js";
