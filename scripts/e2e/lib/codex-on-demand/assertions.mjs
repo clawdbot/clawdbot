@@ -4,7 +4,7 @@ import path from "node:path";
 import {
   assertNoLegacyPrimaryAuthRows,
   assertOpenAiEnvAuthProfileStore,
-  readSharedAuthProfileStoreText,
+  readCanonicalAuthProfileStoreText,
 } from "../auth-profile-store-assertions.mjs";
 import {
   assertPathInside,
@@ -103,7 +103,7 @@ if (providerRuntime && providerRuntime !== "codex") {
 
 const openClawStateDir = stateDir();
 assertNoLegacyPrimaryAuthRows(openClawStateDir);
-const authRaw = readSharedAuthProfileStoreText(openClawStateDir);
+const authRaw = readCanonicalAuthProfileStoreText(openClawStateDir);
 if (!authRaw) {
   throw new Error("auth profile SQLite store row was not persisted");
 }
