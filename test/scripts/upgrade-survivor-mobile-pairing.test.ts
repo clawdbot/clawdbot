@@ -668,15 +668,40 @@ describe("upgrade survivor mobile pairing client", () => {
     expect(source).not.toContain("mobile-backup");
   });
 
-  it("requires the known watch-command reapproval for every candidate reconnect", () => {
+  it("requires the known watch-command reapproval only for 2026.7.1 baselines", () => {
     const source = readFileSync(RUNNER_PATH, "utf8");
     const reconnect = source.slice(
-      source.indexOf("verify_mobile_pairing()"),
+      source.indexOf("mobile_pairing_expects_node_surface_reapproval()"),
       source.indexOf("verify_mobile_pairing_once()"),
     );
-    expect(reconnect).toContain("--expect-known-node-surface-reapproval true");
+    const result = execFileSync(
+      "bash",
+      [
+        "-c",
+        `set -eu
+${reconnect.slice(0, reconnect.indexOf("\nverify_mobile_pairing()"))}
+for baseline_version in 2026.7.1 2026.7.1-2 2026.8.1; do
+  if mobile_pairing_expects_node_surface_reapproval; then
+    printf '%s=true\\n' "$baseline_version"
+  else
+    printf '%s=false\\n' "$baseline_version"
+  fi
+done
+`,
+      ],
+      { encoding: "utf8" },
+    );
+    expect(result.trim().split("\n")).toEqual([
+      "2026.7.1=true",
+      "2026.7.1-2=true",
+      "2026.8.1=false",
+    ]);
+    expect(reconnect).toContain('expect_known_node_surface_reapproval="false"');
+    expect(reconnect).toContain('expect_known_node_surface_reapproval="true"');
+    expect(reconnect).toContain(
+      '--expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"',
+    );
     expect(reconnect).not.toContain("candidate_install_mode");
-    expect(reconnect).not.toContain("--expect-known-node-surface-reapproval false");
   });
 
   it("passes candidate source provenance into the isolated package runner", () => {

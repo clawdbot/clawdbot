@@ -1118,15 +1118,30 @@ bootstrap_mobile_pairing() {
   return "$stop_status"
 }
 
+mobile_pairing_expects_node_surface_reapproval() {
+  case "$baseline_version" in
+    2026.7.1 | 2026.7.1-*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 verify_mobile_pairing() {
   local phase_name="$1"
   local evidence_file="$2"
+  local expect_known_node_surface_reapproval="false"
+  if mobile_pairing_expects_node_surface_reapproval; then
+    expect_known_node_surface_reapproval="true"
+  fi
   run_mobile_pairing_client verify \
     --package-root "$(package_root)" \
     --credentials "$MOBILE_PAIRING_CREDENTIALS" \
     --evidence "$evidence_file" \
     --phase "$phase_name" \
-    --expect-known-node-surface-reapproval true
+    --expect-known-node-surface-reapproval "$expect_known_node_surface_reapproval"
 }
 
 verify_mobile_pairing_once() {
