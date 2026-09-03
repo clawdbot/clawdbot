@@ -379,7 +379,7 @@ suite.define(() => {
         await disabled.waitFor();
         expect(await cell.getByText("Fixture widget two", { exact: true }).count()).toBe(0);
         expect(
-          await disabled.getByRole("button", { name: "Remove", exact: true }).isEnabled(),
+          await disabled.getByRole("button", { name: "Delete", exact: true }).isEnabled(),
         ).toBe(true);
         await page.screenshot({ path: path.join(suite.artifactDir, "widget-removed.png") });
 

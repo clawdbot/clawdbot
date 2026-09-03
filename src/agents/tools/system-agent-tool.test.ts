@@ -198,7 +198,7 @@ describe("openclaw tool", () => {
     finishReview({ pluginId: "authored-plugin", nativeControlUi: true, sha256: args.sha256 });
     const result = await pending;
     expect(toolText(result)).toContain("Reviewed plugin artifact");
-    expect(toolText(result)).toContain("OpenClaw operator UI");
+    expect(toolText(result)).toContain("requesting session's permission policy");
     expect(resolveSystemAgentProposalTransition({ args, resultText: toolText(result) })).toEqual({
       proposal: hashSystemAgentOperation(operation),
       operation,
