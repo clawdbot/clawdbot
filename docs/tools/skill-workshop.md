@@ -518,7 +518,7 @@ proposals.
 <state-dir>/
   state/openclaw.sqlite
   agents/<agentId>/
-    workshop-skills/<skill-name>/
+    agent/workshop-skills/<skill-name>/
       SKILL.md
       assets/
       examples/
