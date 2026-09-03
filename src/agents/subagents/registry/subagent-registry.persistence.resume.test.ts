@@ -647,6 +647,123 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it.each([
+    { activationSettlement: false, requesterYielded: undefined, label: "persisted" },
+    {
+      activationSettlement: true,
+      requesterYielded: undefined,
+      label: "activation-created normal",
+    },
+    { activationSettlement: true, requesterYielded: true, label: "activation-created yielded" },
+  ] as const)(
+    "bounds restored $label requester-settle wakes after Gateway activation",
+    async ({ activationSettlement, requesterYielded }) => {
+      const stateDir = tempDirs.make("openclaw-subagent-");
+      let activeWakes = 0;
+      let maxActiveWakes = 0;
+      const wakeResolvers: Array<() => void> = [];
+      const wakeRequester = vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            activeWakes += 1;
+            maxActiveWakes = Math.max(maxActiveWakes, activeWakes);
+            wakeResolvers.push(() => {
+              activeWakes -= 1;
+              resolve(false);
+            });
+          }),
+      );
+      mod.testing.setDepsForTest({
+        ...createSubagentRegistryTestDeps({
+          callGateway: vi.mocked(callGatewayModule.callGateway),
+          maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
+        }),
+      });
+
+      await withRegistryState(stateDir, async () => {
+        const endedAt = Date.now();
+        const restoredRuns = Array.from({ length: 3 }, (_, index): SubagentRunRecord => {
+          const runId = `run-restored-wake-${index}`;
+          return {
+            runId,
+            childSessionKey: `agent:main:subagent:restored-wake-${index}`,
+            requesterSessionKey: `agent:main:requester-${index}`,
+            requesterDisplayKey: `requester-${index}`,
+            task: "resume a durable requester wake",
+            cleanup: "keep",
+            createdAt: endedAt - 1_000,
+            endedReason: "subagent-complete",
+            execution: {
+              status: "terminal",
+              startedAt: endedAt - 500,
+              endedAt,
+              outcome: { status: "ok" },
+            },
+            expectsCompletionMessage: true,
+            completion: { required: true, resultText: "done", capturedAt: endedAt },
+            delivery: { status: "delivered", deliveredAt: endedAt },
+            cleanupHandled: true,
+            cleanupCompletedAt: endedAt,
+            ...(activationSettlement
+              ? {
+                  requesterTurnRunId: `requester-turn-${index}`,
+                  requesterTurnYielded: requesterYielded ?? undefined,
+                  taskRunId: runId,
+                }
+              : { requesterSettleWake: { status: "pending", attemptCount: 0 } }),
+          };
+        });
+        saveSubagentRegistryToSqlite(
+          new Map(restoredRuns.map((entry) => [entry.runId, entry] as const)),
+        );
+
+        if (activationSettlement) {
+          await Promise.all(
+            restoredRuns.map((entry, index) =>
+              writeSubagentSessionEntry({
+                stateDir,
+                agentId: "main",
+                sessionKey: entry.childSessionKey,
+                sessionId: `sess-restored-wake-${index}`,
+                defaultSessionId: `sess-restored-wake-${index}`,
+              }),
+            ),
+          );
+        }
+
+        mod.initSubagentRegistry();
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(wakeRequester).not.toHaveBeenCalled();
+
+        activateRegistry();
+        try {
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(2));
+          expect(activeWakes).toBe(2);
+          expect(maxActiveWakes).toBe(2);
+
+          wakeResolvers.shift()?.();
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(3));
+          expect(maxActiveWakes).toBe(2);
+        } finally {
+          while (wakeResolvers.length > 0) {
+            while (wakeResolvers.length > 0) {
+              wakeResolvers.shift()?.();
+            }
+            await new Promise<void>((resolve) => {
+              setImmediate(resolve);
+            });
+            if (activeWakes === 0) {
+              break;
+            }
+          }
+          await vi.waitFor(() => expect(activeWakes).toBe(0));
+        }
+      });
+    },
+  );
+
   it("keeps dismissed terminal delivery dormant and TTL-eligible after restore", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     await withRegistryState(stateDir, async () => {

@@ -38,6 +38,7 @@ import {
   renderDesktopConnection,
   renderDesktopCredentials,
   renderDesktopNotice,
+  renderDesktopPanelContent,
   renderDesktopPanelHeader,
   renderDesktopPicker,
 } from "./desktop-panel-view.ts";
@@ -601,14 +602,13 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
       if (operationId !== this.launchOperationId || source !== this.source) {
         return;
       }
-      this.launchingApp = null;
     } catch (error) {
       if (operationId !== this.launchOperationId || source !== this.source) {
         return;
       }
-      this.launchingApp = null;
       this.launchErrorText = formatUiError(error);
     }
+    this.launchingApp = null;
   }
 
   override render() {
@@ -701,26 +701,26 @@ class OpenClawDesktopPanel extends OpenClawLitElement {
         aria-label=${t("desktop.title")}
       >
         ${this.embedded ? nothing : this.dockLayout.renderResizer("bp", t("desktop.resize"))}
-        ${this.embedded
-          ? nothing
-          : renderDesktopPanelHeader({
-              dock,
-              fullscreenControl: this.fullscreenMode.renderButton(),
-              onDock: (nextDock) => this.dockLayout.setDock(nextDock),
-              onOpenWindow: () =>
-                openDesktopFocus(this.basePath, this.environmentId, this.controlling),
-              onClose: () => this.closePanel(),
-            })}
-        <div class="desktop-content">
-          ${notice}
-          ${this.state === "picker"
-            ? picker
-            : this.state === "inventory-error" || this.state === "disconnected"
-              ? recovery
-              : this.state === "credentials"
-                ? credentials
-                : connection}
-        </div>
+        ${
+          this.embedded
+            ? nothing
+            : renderDesktopPanelHeader({
+                dock,
+                fullscreenControl: this.fullscreenMode.renderButton(),
+                onDock: (nextDock) => this.dockLayout.setDock(nextDock),
+                onOpenWindow: () =>
+                  openDesktopFocus(this.basePath, this.environmentId, this.controlling),
+                onClose: () => this.closePanel(),
+              })
+        }
+        ${renderDesktopPanelContent({
+          state: this.state,
+          notice,
+          picker,
+          recovery,
+          credentials,
+          connection,
+        })}
       </section>
     `;
   }

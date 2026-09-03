@@ -1,7 +1,7 @@
 // Ci Node Test Plan tests cover ci node test plan script behavior.
 import { existsSync, globSync, readdirSync } from "node:fs";
 import { isAbsolute, join, matchesGlob, relative, resolve } from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   createChangedExtensionFallbackShards,
   createChangedNodeTestShards,
@@ -119,6 +119,13 @@ function listAllToolingTestFiles(): string[] {
 }
 
 describe("scripts/lib/ci-node-test-plan.mts", () => {
+  // Read-only cases share this baseline; inventory and timing mutations build fresh plans.
+  let defaultShards: ReturnType<typeof createNodeTestShards>;
+
+  beforeAll(() => {
+    defaultShards = createNodeTestShards();
+  });
+
   it("binds split timing identity to exact complete-file membership", () => {
     const common = {
       configs: ["test/vitest/vitest.gateway-server.config.ts"],
@@ -245,7 +252,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps Chromium files in the UI CI owner and Node-driven Playwright files in Node stripes", () => {
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
     const uiStripes = shards.filter((shard) =>
       shard.shardName.startsWith("core-runtime-media-ui-"),
     );
@@ -665,15 +672,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           !group.includePatterns.includes("src/gateway/server.sessions.create.test.ts"),
       ),
     ).toBe(true);
-    timings.mockImplementation(
-      (runner): Readonly<Record<string, number>> =>
-        runner === "blacksmith"
-          ? {
-              "agentic-agents-core-models": 123,
-              "core-unit-fast-1": 100,
-              "core-runtime-hooks": 80,
-            }
-          : {},
+    timings.mockImplementation((runner): Readonly<Record<string, number>> =>
+      runner === "blacksmith"
+        ? {
+            "agentic-agents-core-models": 123,
+            "core-unit-fast-1": 100,
+            "core-runtime-hooks": 80,
+          }
+        : {},
     );
     const updated = createNodeTestShardBundles(options);
     const tail = updated.find((shard) =>
@@ -1350,7 +1356,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("splits the slow core unit shards while keeping paired source/security coverage", () => {
-    const coreUnitShards = createNodeTestShards()
+    const coreUnitShards = defaultShards
       .filter((shard) => shard.shardName.startsWith("core-unit-"))
       .map((shard) => ({
         configs: shard.configs,
@@ -1573,7 +1579,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       },
     ];
 
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
     for (const { prefix, stripeConfigs, supportConfigs } of cases) {
       const stripes = shards.filter(
         (shard) => /^.+-\d+$/u.test(shard.shardName) && shard.shardName.startsWith(`${prefix}-`),
@@ -1609,7 +1615,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("names the node shard checks as core test lanes", () => {
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
 
     expect(shards).not.toHaveLength(0);
     expect(shards.map((shard) => shard.checkName)).toEqual(
@@ -1622,7 +1628,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps extension, bundled, contracts, and channels configs out of the core node lane", () => {
-    const configs = createNodeTestShards().flatMap((shard) => shard.configs);
+    const configs = defaultShards.flatMap((shard) => shard.configs);
 
     expect(configs).not.toContain("test/vitest/vitest.channels.config.ts");
     expect(configs).not.toContain("test/vitest/vitest.contracts.config.ts");
@@ -1639,7 +1645,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       .toSorted((left, right) => left.localeCompare(right));
     const actualConfigs = [
       ...new Set(
-        createNodeTestShards()
+        defaultShards
           .filter((shard) => shard.shardName.startsWith("agentic-"))
           .flatMap((shard) => shard.configs),
       ),
@@ -1650,7 +1656,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("marks only dist-dependent shards for built artifact restore", () => {
-    const requiresDistShardNames = createNodeTestShards()
+    const requiresDistShardNames = defaultShards
       .filter((shard) => shard.requiresDist)
       .map((shard) => shard.shardName);
 
@@ -1670,7 +1676,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/gateway/gateway-concurrent-streams.test.ts",
       "src/gateway/gateway-cron-process-identity.windows.test.ts",
     ];
-    const full = createNodeTestShards();
+    const full = defaultShards;
     const compact = createNodeTestShardBundles({ compact: true, compactMode: "pull-request" });
     for (const shards of [full, compact]) {
       expect(
@@ -1721,7 +1727,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
 
   it("splits tooling checks independently from built artifacts", () => {
     const compilerFixture = "test/scripts/write-unified-entry-dts.test.ts";
-    const toolingShards = createNodeTestShards().filter((shard) =>
+    const toolingShards = defaultShards.filter((shard) =>
       shard.shardName.startsWith("core-tooling"),
     );
     const compilerParent = toolingShards.find((shard) =>
@@ -1798,14 +1804,14 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("assigns Blacksmith runners to every core node shard", () => {
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
 
     expect(shards).not.toHaveLength(0);
     expect(shards.every((shard) => shard.runner?.startsWith("blacksmith-"))).toBe(true);
   });
 
   it("splits core runtime configs into smaller source-only shards", () => {
-    const runtimeShards = createNodeTestShards()
+    const runtimeShards = defaultShards
       .filter((shard) => shard.shardName.startsWith("core-runtime-"))
       .map((shard) => ({
         configs: shard.configs,
@@ -2076,9 +2082,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps the full TUI PTY suite in its dedicated built-CLI shard", () => {
-    const tuiPtyShard = createNodeTestShards().find(
-      (shard) => shard.shardName === "core-runtime-tui-pty",
-    );
+    const tuiPtyShard = defaultShards.find((shard) => shard.shardName === "core-runtime-tui-pty");
 
     expect(tuiPtyShard).toMatchObject({
       checkName: "checks-node-core-runtime-tui-pty",
@@ -2093,7 +2097,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("covers every infra test exactly once across core runtime infra shards", () => {
-    const infraShards = createNodeTestShards().filter((shard) =>
+    const infraShards = defaultShards.filter((shard) =>
       shard.shardName.startsWith("core-runtime-infra-"),
     );
     const actual = infraShards
@@ -2136,7 +2140,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("covers every cron test exactly once across core runtime cron shards", () => {
-    const cronShards = createNodeTestShards().filter((shard) =>
+    const cronShards = defaultShards.filter((shard) =>
       shard.shardName.startsWith("core-runtime-cron-"),
     );
     const actual = cronShards
@@ -2153,7 +2157,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("splits the agentic lane into control-plane, command, agent, gateway, SDK, and plugin shards", () => {
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
     const controlPlaneShards = shards.filter((shard) =>
       shard.shardName.startsWith("agentic-control-plane-"),
     );
@@ -2478,9 +2482,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps plugin prerelease npm install behavior on the release-only agentic plugin shard", () => {
-    const pluginsShard = createNodeTestShards().find(
-      (shard) => shard.shardName === "agentic-plugins",
-    );
+    const pluginsShard = defaultShards.find((shard) => shard.shardName === "agentic-plugins");
 
     expect(pluginsShard).toEqual({
       checkName: "checks-node-agentic-plugins",
@@ -2495,7 +2497,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("covers flat agents-core and explicitly nested isolated tests exactly once", () => {
-    const actual = createNodeTestShards()
+    const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("agentic-agents-core-"))
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
@@ -2513,7 +2515,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("keeps embedded-agent tests in four bounded config surfaces", () => {
-    const shard = createNodeTestShards().find(
+    const shard = defaultShards.find(
       (candidate) => candidate.shardName === "agentic-agents-embedded",
     );
     const incompleteTurnFiles = new Set(agentVitestProjectOwners.embeddedIncompleteTurn.include);
@@ -2592,7 +2594,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       createNodeTestShards({ includeReleaseOnlyPluginShards: false }),
     );
     expect(createNodeTestShards({ ...options, includeReleaseOnlyPluginShards: true })).toEqual(
-      createNodeTestShards(),
+      defaultShards,
     );
   });
 
@@ -2653,7 +2655,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   );
 
   it("splits auto-reply into balanced core/top-level and reply subtree shards", () => {
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
     const autoReplyShards = shards
       .filter((shard) => shard.shardName.startsWith("auto-reply"))
       .map((shard) => ({
@@ -2737,7 +2739,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("covers every auto-reply reply test exactly once across split shards", () => {
-    const actual = createNodeTestShards()
+    const actual = defaultShards
       .filter((shard) => shard.shardName.startsWith("auto-reply-reply-"))
       .flatMap((shard) => shard.includePatterns ?? [])
       .toSorted((a, b) => a.localeCompare(b));
@@ -2758,7 +2760,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
         "src/auto-reply/reply/dispatch-from-config.lifecycle.test.ts",
       ],
     ]);
-    const shards = createNodeTestShards();
+    const shards = defaultShards;
 
     for (const [shardName, entrypoint] of dispatchEntrypoints) {
       expect(shards.find((shard) => shard.shardName === shardName)?.includePatterns).toEqual([

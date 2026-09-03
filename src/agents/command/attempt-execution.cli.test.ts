@@ -3374,6 +3374,34 @@ describe("CLI attempt execution", () => {
     },
   );
 
+  it("keeps a plugin-owned CLI request on the CLI path after usage records its runtime", async () => {
+    const sessionEntry = makeSessionEntry("plugin-cli-session", {
+      pluginOwnerId: "cli-owner",
+      modelSelectionLocked: true,
+      agentRuntimeOverride: "claude-cli",
+      agentHarnessId: "claude-cli",
+    });
+    runCliAgentMock.mockResolvedValueOnce(makeCliResult("continued"));
+
+    await runAgentAttempt({
+      sessionKey: "agent:main:main",
+      workspaceDir: tmpDir,
+      agentDir: tmpDir,
+      providerOverride: "anthropic",
+      modelOverride: "claude-sonnet-4-6",
+      sessionEntry,
+      agentHarnessRuntimeOverride: "claude-cli",
+      runId: "plugin-cli-continuation",
+    });
+
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    expectMockArgFields(runCliAgentMock, {
+      provider: "claude-cli",
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
+
   it("routes canonical Anthropic models through the configured Claude CLI runtime", async () => {
     const sessionKey = "agent:main:direct:canonical-claude-cli";
     const sessionEntry = makeSessionEntry("openclaw-session-canonical-cli");
@@ -4644,31 +4672,6 @@ describe("embedded attempt harness pinning", () => {
       agentHarnessRuntimeOverride: "openclaw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
-    });
-  });
-
-  it("keeps a plugin-owned CLI request on the CLI path after usage records its runtime", async () => {
-    const sessionEntry = makeSessionEntry("plugin-cli-session", {
-      pluginOwnerId: "cli-owner",
-      modelSelectionLocked: true,
-      agentRuntimeOverride: "claude-cli",
-      agentHarnessId: "claude-cli",
-    });
-    runCliAgentMock.mockResolvedValueOnce(makeCliResult("continued"));
-
-    await runHarnessAttempt({
-      providerOverride: "anthropic",
-      modelOverride: "claude-sonnet-4-6",
-      sessionEntry,
-      agentHarnessRuntimeOverride: "claude-cli",
-      runId: "plugin-cli-continuation",
-    });
-
-    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
-    expectMockArgFields(runCliAgentMock, {
-      provider: "claude-cli",
-      modelProvider: "anthropic",
-      model: "claude-sonnet-4-6",
     });
   });
 

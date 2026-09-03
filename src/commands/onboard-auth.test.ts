@@ -19,17 +19,15 @@ import {
 } from "../plugins/provider-auth-helpers.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 
-const providerEnvVarsById = vi.hoisted(
-  (): Record<string, readonly string[]> => ({
-    "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
-    byteplus: ["BYTEPLUS_API_KEY"],
-    moonshot: ["MOONSHOT_API_KEY"],
-    openai: ["OPENAI_API_KEY"],
-    opencode: ["OPENCODE_API_KEY"],
-    "opencode-go": ["OPENCODE_API_KEY"],
-    volcengine: ["VOLCANO_ENGINE_API_KEY"],
-  }),
-);
+const providerEnvVarsById = vi.hoisted((): Record<string, readonly string[]> => ({
+  "cloudflare-ai-gateway": ["CLOUDFLARE_AI_GATEWAY_API_KEY"],
+  byteplus: ["BYTEPLUS_API_KEY"],
+  moonshot: ["MOONSHOT_API_KEY"],
+  openai: ["OPENAI_API_KEY"],
+  opencode: ["OPENCODE_API_KEY"],
+  "opencode-go": ["OPENCODE_API_KEY"],
+  volcengine: ["VOLCANO_ENGINE_API_KEY"],
+}));
 
 vi.mock("../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/paths.js")>()),

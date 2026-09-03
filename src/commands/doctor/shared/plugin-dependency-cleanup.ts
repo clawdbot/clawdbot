@@ -337,22 +337,18 @@ async function collectLegacyPluginDependencyTargetEntries(
       cwd: process.cwd(),
     });
   const roots = uniqueSorted([resolveStateDir(env), resolveConfigDir(env), packageRoot]);
-  const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map(
-    (entry): CleanupTarget => ({
-      kind: "legacy",
-      path: path.join(resolveUserPath(entry, env), "plugin-runtime-deps"),
-    }),
-  );
+  const stateDirectoryRoots = splitPathList(env.STATE_DIRECTORY).map((entry): CleanupTarget => ({
+    kind: "legacy",
+    path: path.join(resolveUserPath(entry, env), "plugin-runtime-deps"),
+  }));
   const targets: CleanupTarget[] = [
     ...collectExplicitStageTargets(env),
     ...stateDirectoryRoots,
     ...roots.flatMap((root) => [
-      ...[...LEGACY_DIRECT_CHILD_NAMES].map(
-        (name): CleanupTarget => ({
-          kind: "legacy",
-          path: path.join(root, name),
-        }),
-      ),
+      ...[...LEGACY_DIRECT_CHILD_NAMES].map((name): CleanupTarget => ({
+        kind: "legacy",
+        path: path.join(root, name),
+      })),
       {
         kind: "legacy",
         path: path.join(root, ".local", "bundled-plugin-runtime-deps"),
@@ -409,12 +405,10 @@ export async function detectLegacyPluginDependencyStateIssues(
   const cleanupRoots = await collectExistingCleanupRoots(cleanupRootPaths);
   const staleRootCandidates = filterLegacyStaleRootCandidates(targets, cleanupRootPaths);
   const preparedTargets = await prepareCleanupTargets(staleRootCandidates.targets, cleanupRoots);
-  return preparedTargets.removalTargets.map(
-    (target): LegacyPluginDependencyStateIssue => ({
-      kind: "legacy-plugin-dependency-state",
-      path: target,
-    }),
-  );
+  return preparedTargets.removalTargets.map((target): LegacyPluginDependencyStateIssue => ({
+    kind: "legacy-plugin-dependency-state",
+    path: target,
+  }));
 }
 
 export function legacyPluginDependencyStateIssueToHealthFinding(

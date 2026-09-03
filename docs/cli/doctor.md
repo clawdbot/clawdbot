@@ -53,13 +53,20 @@ manual allowlist rules unchanged. Rerun affected workflows and choose
 Explicit repair stops the matching managed Gateway before inspecting plugins or
 mutable state, excludes other processes during repair, verifies readiness,
 and restarts the same service once. It preserves the service definition and does
-not start a service that was already stopped. Run repair from a shell outside the
-Gateway process tree. For externally supervised or unmatched installations, stop
+not activate a service confirmed offline before maintenance. A loaded, enabled
+macOS job between respawns is not offline: Doctor stops it before repair and
+resumes it afterward. Run repair from a shell outside the Gateway process tree. For externally supervised or unmatched installations, stop
 and start the Gateway through its owning supervisor.
 
 This maintenance window also applies when repair ultimately finds no changes.
-Diagnostic runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
+Runs without `--fix`, `--repair`, or `--yes` do not enter maintenance.
 Custom state directories remain runtime-only and do not adopt a native service.
+
+`--force` alone does not select repair mode: `openclaw doctor --force` remains
+guided and still requires interactive consent before an eligible service rewrite.
+With `--fix`, `--repair`, or `--yes`, it allows aggressive config/state repairs
+but preserves the installed service definition. Force does not bypass service
+ownership, write-access, or interactive-only confirmation requirements.
 
 <Warning>
   `doctor --fix` follows explicitly configured workspace and store paths, including
@@ -85,6 +92,31 @@ Doctor can repair its selected state without changing or starting that service.
 If migration or config repair cannot finish, Doctor leaves the stopped service
 stopped and reports an incomplete repair. Resolve the reported blocker, rerun
 `openclaw doctor --fix`, then start the service through its owner.
+
+## Gateway service recovery
+
+Run `openclaw gateway status --deep` to inspect the installed service and its
+runtime before choosing a recovery action. Use `openclaw gateway install` for a
+missing service, `openclaw gateway start` for an installed service that is not
+loaded, or `openclaw gateway install --force` from the intended installation to
+replace its service definition. Externally managed services still belong to
+their supervisor.
+
+For legacy services or conflicting systemd scopes, run `openclaw doctor`
+interactively to review the findings and confirm supported cleanup. Cleanup
+reports what it removed or skipped; it does not guarantee a replacement service
+will be installed. Explicit repair maintenance skips this separate cleanup flow.
+
+## Remote Gateway recovery
+
+With `gateway.mode: "remote"`, a failed Gateway health check does not trigger
+local service install, start, restart, or bootstrap prompts. Check the remote
+URL, credentials, and SSH tunnel or network connection. If the Gateway itself
+needs recovery, run service commands on the host that runs it. A loopback remote
+URL can be an SSH tunnel; it does not make the Gateway a local service.
+
+See [Remote access](/gateway/remote) for connection checks. Other Doctor config
+and state checks still follow the selected posture above.
 
 ## Control UI assets
 
@@ -141,7 +173,7 @@ openclaw channels status --probe
 | `--no-workspace-suggestions`    | Disable workspace memory/search suggestions.                                                                                                                                                                |
 | `--yes`                         | Accept defaults and enter repair maintenance without prompting.                                                                                                                                             |
 | `--repair` / `--fix`            | Apply recommended repairs while coordinating maintenance with the matching managed Gateway (`--fix` is an alias). Preserve the installed service definition; use explicit `gateway` commands to replace it. |
-| `--force`                       | Apply aggressive config/state repairs. Repair maintenance still preserves the installed service definition.                                                                                                 |
+| `--force`                       | Allow aggressive repair choices. Alone, remains guided; with `--fix`, `--repair`, or `--yes`, preserves the installed service definition.                                                                   |
 | `--non-interactive`             | Run without prompts; safe automatic migrations still apply. Combine with `--fix`, `--repair`, or `--yes` to enter repair maintenance.                                                                       |
 | `--generate-gateway-token`      | Generate and configure a gateway token.                                                                                                                                                                     |
 | `--allow-exec`                  | Allow doctor to execute configured `exec` SecretRefs while verifying secrets.                                                                                                                               |

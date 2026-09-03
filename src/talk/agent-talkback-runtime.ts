@@ -19,6 +19,7 @@ export type RealtimeVoiceAgentTalkbackResult = {
 export type RealtimeVoiceAgentTalkbackQueue = {
   close(): void;
   enqueue(question: string, metadata?: unknown): void;
+  isIdle(): boolean;
 };
 
 /** Runtime dependencies and policy knobs for the talkback queue. */
@@ -186,6 +187,7 @@ export function createRealtimeVoiceAgentTalkbackQueue(
   };
 
   return {
+    isIdle: () => !active && pendingQuestions.length === 0,
     close: () => {
       if (closed) {
         return;

@@ -144,12 +144,10 @@ const state = vi.hoisted(() => ({
   loadFullModelCatalogMock: vi.fn(async () => {
     throw new Error("full model catalog should not materialize");
   }),
-  loadPreparedModelCatalogSnapshotMock: vi.fn(
-    async (): Promise<ModelCatalogSnapshot> => ({
-      entries: [],
-      routeVariants: [],
-    }),
-  ),
+  loadPreparedModelCatalogSnapshotMock: vi.fn(async (): Promise<ModelCatalogSnapshot> => ({
+    entries: [],
+    routeVariants: [],
+  })),
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
     prompt: "",
     skills: [],

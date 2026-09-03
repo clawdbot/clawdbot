@@ -1318,12 +1318,10 @@ describe("cron service timer regressions", () => {
 
   it("respects abort signals while retrying one-shot main-session wake-now heartbeat runs", async () => {
     const abortController = new AbortController();
-    const runHeartbeatOnce = vi.fn(
-      async (): Promise<HeartbeatRunResult> => ({
-        status: "skipped",
-        reason: "requests-in-flight",
-      }),
-    );
+    const runHeartbeatOnce = vi.fn(async (): Promise<HeartbeatRunResult> => ({
+      status: "skipped",
+      reason: "requests-in-flight",
+    }));
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
     const mainJob: CronJob = {

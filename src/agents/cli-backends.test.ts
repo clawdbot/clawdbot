@@ -164,12 +164,10 @@ describe("resolveCliBackendConfig", () => {
   });
 
   it("normalizes the registered adapter with agent and runtime config context", () => {
-    const normalizeConfig = vi.fn(
-      (config: CliBackendConfig): CliBackendConfig => ({
-        ...config,
-        args: [...(config.args ?? []), "--normalized"],
-      }),
-    );
+    const normalizeConfig = vi.fn((config: CliBackendConfig): CliBackendConfig => ({
+      ...config,
+      args: [...(config.args ?? []), "--normalized"],
+    }));
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [runtimeEntry({ normalizeConfig })],
       resolvePluginSetupCliBackend: () => undefined,

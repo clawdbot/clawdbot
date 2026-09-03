@@ -83,13 +83,13 @@ extensions/browser/src/browser/pw-download-capture.ts	1
 extensions/browser/src/browser/pw-role-snapshot.ts	1
 extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-navigation.ts	1
-extensions/browser/src/browser/pw-session.page-cdp.ts	4
+extensions/browser/src/browser/pw-session.page-cdp.ts	2
 extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2
 extensions/browser/src/browser/pw-tools-core.interactions.content.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	3
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
-extensions/browser/src/browser/pw-tools-core.state.ts	3
+extensions/browser/src/browser/pw-tools-core.state.ts	2
 extensions/browser/src/browser/routes/agent.act.normalize.ts	1
 extensions/browser/src/browser/routes/agent.act.shared.ts	3
 extensions/browser/src/browser/routes/agent.act.ts	2
@@ -222,7 +222,7 @@ extensions/codex/src/app-server/session-binding.ts	2
 extensions/codex/src/app-server/shared-client.ts	4
 extensions/codex/src/app-server/side-question.ts	8
 extensions/codex/src/app-server/startup-binding.ts	2
-extensions/codex/src/app-server/thread-fingerprints.ts	2
+extensions/codex/src/app-server/thread-fingerprints.ts	1
 extensions/codex/src/app-server/thread-lifecycle-run.ts	1
 extensions/codex/src/app-server/tool-abort-terminal-reason.ts	1
 extensions/codex/src/app-server/tool-progress-normalization.ts	1
@@ -1363,14 +1363,14 @@ extensions/whatsapp/src/group-config-path.ts	4
 extensions/whatsapp/src/inbound-policy.ts	1
 extensions/whatsapp/src/inbound/durable-payload.ts	2
 extensions/whatsapp/src/inbound/extract.ts	10
-extensions/whatsapp/src/inbound/group-metadata-cache.ts	7
+extensions/whatsapp/src/inbound/group-metadata-cache.ts	4
 extensions/whatsapp/src/inbound/ingress-lifecycle.ts	2
 extensions/whatsapp/src/inbound/media.ts	4
 extensions/whatsapp/src/inbound/message-delivery.ts	1
 extensions/whatsapp/src/inbound/message-enrichment.ts	3
 extensions/whatsapp/src/inbound/outbound-mentions.ts	1
 extensions/whatsapp/src/inbound/send-api.ts	5
-extensions/whatsapp/src/inbound/socket-session.ts	5
+extensions/whatsapp/src/inbound/socket-session.ts	3
 extensions/whatsapp/src/qa-driver.runtime.ts	1
 extensions/whatsapp/src/quoted-message.ts	1
 extensions/whatsapp/src/reconnect.ts	1
@@ -1891,7 +1891,7 @@ src/agents/model-auth-model.ts	2
 src/agents/model-catalog.ts	1
 src/agents/model-fallback-attempt.ts	1
 src/agents/model-fallback-runner.ts	2
-src/agents/model-provider-auth.ts	4
+src/agents/model-provider-auth.ts	1
 src/agents/model-provider-auth.worker.ts	1
 src/agents/model-scan.ts	3
 src/agents/model-selection-shared.ts	1
@@ -3337,7 +3337,7 @@ src/plugin-sdk/core.ts	4
 src/plugin-sdk/dedupe-runtime.ts	1
 src/plugin-sdk/discord.ts	3
 src/plugin-sdk/extension-shared.ts	6
-src/plugin-sdk/facade-activation-check.runtime.ts	3
+src/plugin-sdk/facade-activation-check.runtime.ts	2
 src/plugin-sdk/facade-loader.ts	4
 src/plugin-sdk/facade-runtime.ts	6
 src/plugin-sdk/file-lock.ts	10
@@ -3856,7 +3856,7 @@ ui/src/components/config-form-collection-draft.ts	5
 ui/src/components/config-form-copy-on-write.ts	1
 ui/src/components/config-form-structured-draft.ts	3
 ui/src/components/config-form.analyze.ts	1
-ui/src/components/config-form.node.collection.ts	5
+ui/src/components/config-form.node.collection.ts	2
 ui/src/components/config-form.node.scalar.ts	5
 ui/src/components/config-form.node.shared.ts	3
 ui/src/components/config-form.node.ts	1
@@ -3986,7 +3986,6 @@ ui/src/pages/chat/chat-thread-grouping.ts	2
 ui/src/pages/chat/chat-thread-items.ts	3
 ui/src/pages/chat/components/chat-audio-player.ts	1
 ui/src/pages/chat/components/chat-composer-plus-menu.ts	1
-ui/src/pages/chat/components/chat-composer-slash-menu.ts	1
 ui/src/pages/chat/components/chat-composer-view.ts	1
 ui/src/pages/chat/components/chat-composer.ts	5
 ui/src/pages/chat/components/chat-effort-picker.ts	6

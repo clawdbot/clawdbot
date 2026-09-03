@@ -65,6 +65,12 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment: mocks.isContainerEnvironment,
 }));
 
+vi.mock("../daemon/systemd.js", () => ({
+  findInstalledSystemdGatewayScope: vi
+    .fn<typeof import("../daemon/systemd.js").findInstalledSystemdGatewayScope>()
+    .mockResolvedValue(null),
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => ({
   inspectProviderToolSchemasWithPlugin: () => [],
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
@@ -726,6 +732,8 @@ describe("doctor gateway runtime checks", () => {
       credentialsRequired: true,
       message:
         "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+      fixHint:
+        "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
     },
     {
       label: "an unavailable Gateway authentication SecretRef",
@@ -733,6 +741,8 @@ describe("doctor gateway runtime checks", () => {
       credentialsRequired: false,
       message:
         "Gateway status could not be inspected because this CLI has no usable token/password or paired device token for read-scope RPCs.",
+      fixHint:
+        "Configure the Gateway token/password or pair this device, then rerun the selected health check.",
     },
     {
       label: "temporary Gateway authentication rate limiting",
@@ -744,12 +754,15 @@ describe("doctor gateway runtime checks", () => {
       }),
       credentialsRequired: false,
       message: GATEWAY_HEALTH_RATE_LIMITED_MESSAGE,
+      fixHint: "Wait for the temporary authentication lockout to expire, then rerun doctor.",
     },
     {
       label: "an unreachable Gateway with terminal control characters",
       error: new Error("connect ECONNREFUSED 127.0.0.1:5829\u001b]52;c;attack\u0007\u009b"),
       credentialsRequired: false,
       message: "Gateway status could not be inspected: connect ECONNREFUSED 127.0.0.1:5829",
+      fixHint:
+        "Inspect the service with `openclaw gateway status --deep`, or run `openclaw doctor` for guided checks.",
     },
   ])("reports $label from exactly one sanitized status attempt", async (entry) => {
     if (entry.error instanceof GatewayClientRequestError) {
@@ -767,6 +780,7 @@ describe("doctor gateway runtime checks", () => {
         message: entry.message,
         path: "gateway.mode",
         target: "http://127.0.0.1:5829",
+        fixHint: entry.fixHint,
       }),
     ]);
     expect(JSON.stringify(findings)).not.toContain("SYNTHETIC_PRIVATE_TOKEN");
@@ -812,7 +826,8 @@ describe("doctor gateway runtime checks", () => {
         checkId: "core/doctor/gateway-health",
         severity: "warning",
         message: expect.stringContaining("intentionally skipped"),
-        fixHint: expect.stringContaining("--allow-exec"),
+        fixHint:
+          "Rerun `openclaw doctor --lint --only core/doctor/gateway-health --allow-exec` to permit configured secret execution.",
       }),
     ]);
     expect(JSON.stringify(findings)).not.toContain("PRIVATE_REF_ID");
@@ -847,25 +862,59 @@ describe("doctor gateway runtime checks", () => {
     expect(JSON.stringify(findings)).not.toContain("token=secret");
   });
 
-  it("reports missing local gateway daemon service", async () => {
-    mocks.readGatewayServiceState.mockResolvedValueOnce({
+  it.each([
+    {
+      label: "missing",
       installed: false,
-      loadState: { status: "not-loaded" },
+      loadState: "not-loaded",
+      runtimeStatus: "stopped",
+      message: "Gateway service is not installed.",
+      path: "gateway.mode",
+      fixHint: "Run `openclaw gateway install` to install the service.",
+    },
+    {
+      label: "installed but not loaded",
+      installed: true,
+      loadState: "not-loaded",
+      runtimeStatus: "stopped",
+      message: "Gateway service is installed but not loaded.",
+      path: "/tmp/gateway.service",
+      fixHint: "Start the installed service with `openclaw gateway start`.",
+    },
+    {
+      label: "loaded with unconfirmed runtime",
+      installed: true,
+      loadState: "loaded",
+      runtimeStatus: "unknown",
+      message: "Gateway service runtime is unknown, not running.",
+      path: "/tmp/gateway.service",
+      fixHint:
+        "Run `openclaw gateway status --deep` to inspect the service before choosing a recovery action.",
+    },
+  ])("reports actionable advice for a $label local gateway daemon", async (entry) => {
+    mocks.readGatewayServiceState.mockResolvedValueOnce({
+      installed: entry.installed,
+      loadState: { status: entry.loadState },
       running: false,
       env: {},
-      command: null,
+      command: entry.installed
+        ? { programArguments: ["openclaw", "gateway"], sourcePath: "/tmp/gateway.service" }
+        : null,
+      runtime: { status: entry.runtimeStatus },
     });
 
     await expect(
       collectGatewayDaemonFindings({ cfg: { gateway: { mode: "local" } } }),
-    ).resolves.toContainEqual({
-      checkId: "core/doctor/gateway-daemon",
-      severity: "warning",
-      message: "Gateway service is not installed.",
-      path: "gateway.mode",
-      target: "openclaw-gateway",
-      fixHint: "Run `openclaw doctor --fix` or `openclaw gateway install` to install it.",
-    });
+    ).resolves.toEqual([
+      {
+        checkId: "core/doctor/gateway-daemon",
+        severity: "warning",
+        message: entry.message,
+        path: entry.path,
+        target: "openclaw-gateway",
+        fixHint: entry.fixHint,
+      },
+    ]);
   });
 
   it("skips daemon findings for remote gateway mode", async () => {

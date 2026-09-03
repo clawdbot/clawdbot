@@ -32,9 +32,9 @@ export function renderNewSessionDraftVisibility(options: NewSessionComposerCapab
   return html`
     <button
       type="button"
-      class="new-session-page__visibility new-session-page__visibility--draft ${active
-        ? "new-session-page__visibility--active"
-        : ""}"
+      class="new-session-page__visibility new-session-page__visibility--draft ${
+        active ? "new-session-page__visibility--active" : ""
+      }"
       role="switch"
       aria-label=${label}
       aria-checked=${String(active)}
