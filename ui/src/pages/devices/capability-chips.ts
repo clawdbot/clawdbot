@@ -4,112 +4,32 @@ import { t } from "../../i18n/index.ts";
 
 type CapabilityPresentation = {
   icon: TemplateResult;
-  labelKey: string;
-  descriptionKey: string;
+  /** i18n leaf under `devices.capabilities`. */
+  key: string;
 };
 
 const CAPABILITY_PRESENTATIONS = new Map<string, CapabilityPresentation>(
   Object.entries({
-    browser: {
-      icon: icons.globe,
-      labelKey: "devices.capabilities.browser.label",
-      descriptionKey: "devices.capabilities.browser.description",
-    },
-    canvas: {
-      icon: icons.panelsTopLeft,
-      labelKey: "devices.capabilities.canvas.label",
-      descriptionKey: "devices.capabilities.canvas.description",
-    },
-    screen: {
-      icon: icons.monitor,
-      labelKey: "devices.capabilities.screen.label",
-      descriptionKey: "devices.capabilities.screen.description",
-    },
-    computer: {
-      icon: icons.monitorSmartphone,
-      labelKey: "devices.capabilities.computer.label",
-      descriptionKey: "devices.capabilities.computer.description",
-    },
-    file: {
-      icon: icons.folder,
-      labelKey: "devices.capabilities.file.label",
-      descriptionKey: "devices.capabilities.file.description",
-    },
-    system: {
-      icon: icons.terminal,
-      labelKey: "devices.capabilities.system.label",
-      descriptionKey: "devices.capabilities.system.description",
-    },
-    mcp: {
-      icon: icons.plug,
-      labelKey: "devices.capabilities.mcp.label",
-      descriptionKey: "devices.capabilities.mcp.description",
-    },
-    "local-inference": {
-      icon: icons.cpu,
-      labelKey: "devices.capabilities.localInference.label",
-      descriptionKey: "devices.capabilities.localInference.description",
-    },
-    camera: {
-      icon: icons.camera,
-      labelKey: "devices.capabilities.camera.label",
-      descriptionKey: "devices.capabilities.camera.description",
-    },
-    talk: {
-      icon: icons.mic,
-      labelKey: "devices.capabilities.talk.label",
-      descriptionKey: "devices.capabilities.talk.description",
-    },
-    location: {
-      icon: icons.target,
-      labelKey: "devices.capabilities.location.label",
-      descriptionKey: "devices.capabilities.location.description",
-    },
-    notifications: {
-      icon: icons.bell,
-      labelKey: "devices.capabilities.notifications.label",
-      descriptionKey: "devices.capabilities.notifications.description",
-    },
-    contacts: {
-      icon: icons.users,
-      labelKey: "devices.capabilities.contacts.label",
-      descriptionKey: "devices.capabilities.contacts.description",
-    },
-    calendar: {
-      icon: icons.calendarClock,
-      labelKey: "devices.capabilities.calendar.label",
-      descriptionKey: "devices.capabilities.calendar.description",
-    },
-    reminders: {
-      icon: icons.listChecks,
-      labelKey: "devices.capabilities.reminders.label",
-      descriptionKey: "devices.capabilities.reminders.description",
-    },
-    device: {
-      icon: icons.smartphone,
-      labelKey: "devices.capabilities.device.label",
-      descriptionKey: "devices.capabilities.device.description",
-    },
-    photos: {
-      icon: icons.image,
-      labelKey: "devices.capabilities.photos.label",
-      descriptionKey: "devices.capabilities.photos.description",
-    },
-    sms: {
-      icon: icons.messageSquare,
-      labelKey: "devices.capabilities.sms.label",
-      descriptionKey: "devices.capabilities.sms.description",
-    },
-    health: {
-      icon: icons.activity,
-      labelKey: "devices.capabilities.health.label",
-      descriptionKey: "devices.capabilities.health.description",
-    },
-    motion: {
-      icon: icons.radio,
-      labelKey: "devices.capabilities.motion.label",
-      descriptionKey: "devices.capabilities.motion.description",
-    },
+    browser: { icon: icons.globe, key: "browser" },
+    canvas: { icon: icons.panelsTopLeft, key: "canvas" },
+    screen: { icon: icons.monitor, key: "screen" },
+    computer: { icon: icons.monitorSmartphone, key: "computer" },
+    file: { icon: icons.folder, key: "file" },
+    system: { icon: icons.terminal, key: "system" },
+    mcp: { icon: icons.plug, key: "mcp" },
+    "local-inference": { icon: icons.cpu, key: "localInference" },
+    camera: { icon: icons.camera, key: "camera" },
+    talk: { icon: icons.mic, key: "talk" },
+    location: { icon: icons.target, key: "location" },
+    notifications: { icon: icons.bell, key: "notifications" },
+    contacts: { icon: icons.users, key: "contacts" },
+    calendar: { icon: icons.calendarClock, key: "calendar" },
+    reminders: { icon: icons.listChecks, key: "reminders" },
+    device: { icon: icons.smartphone, key: "device" },
+    photos: { icon: icons.image, key: "photos" },
+    sms: { icon: icons.messageSquare, key: "sms" },
+    health: { icon: icons.activity, key: "health" },
+    motion: { icon: icons.radio, key: "motion" },
   } satisfies Record<string, CapabilityPresentation>),
 );
 
@@ -155,8 +75,10 @@ export function renderCapabilityChips(caps: readonly string[]) {
       ${visible.map((cap) => {
         const presentation = CAPABILITY_PRESENTATIONS.get(cap);
         const icon = presentation?.icon ?? icons.puzzle;
-        const label = presentation ? t(presentation.labelKey) : cap;
-        const title = presentation ? t(presentation.descriptionKey) : cap;
+        const label = presentation ? t(`devices.capabilities.${presentation.key}.label`) : cap;
+        const title = presentation
+          ? t(`devices.capabilities.${presentation.key}.description`)
+          : cap;
         return renderCapabilityChip(icon, label, title);
       })}
       ${overflow > 0
