@@ -108,6 +108,18 @@ export function extractTtsDirectiveFacts(text: string): {
     if (provider || Object.keys(values).length > 0) {
       next.directives ??= [];
       next.directives.push({ ...(provider ? { provider } : {}), values });
+    } else {
+      // The model wrapped its spoken reply in [[tts:<free text>]] (reading the
+      // inbound TTS hint as "wrap the reply in the tag") instead of emitting
+      // key=value directives. Preserve that body as the visible reply text so
+      // the channel does not collapse to the empty "No reply was generated"
+      // fallback. Mirrors how [[tts]]...[[/tts]] and [[tts:text]]...[[/tts:text]]
+      // already carry their body as the spoken text.
+      const spoken = body.trim();
+      if (spoken) {
+        next.text ??= spoken;
+        return spoken;
+      }
     }
     return "";
   });
