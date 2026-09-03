@@ -148,15 +148,20 @@ class WearProxyControllerTest {
     }
 
   @Test
-  fun agentsAndGatewayControlsStayOnThePhoneRuntimeBoundary() =
+  fun phoneGatewayReconnectRestoresWearStatusAndRequests() =
     runTest {
       var gatewayRequests = 0
+      val requestedMethods = mutableListOf<String>()
       var connected = true
       var selectedAgent = "main"
       val controller =
         WearProxyController(
-          requestGateway = { _, _ ->
+          requestGateway = { method, _ ->
             gatewayRequests += 1
+            requestedMethods += method
+            if (!connected) {
+              throw WearProxyGatewayException("unavailable", "Phone gateway is offline")
+            }
             buildJsonObject {}
           },
           isGatewayConnected = { connected },
@@ -189,7 +194,10 @@ class WearProxyControllerTest {
         )
       val selectedStatus = controller.handle(request(WearRpcMethod.ProxyStatus))
       val disconnected = controller.handle(request(WearRpcMethod.GatewayDisconnect))
+      assertEquals(0, gatewayRequests)
+      val offlineSessions = controller.handle(request(WearRpcMethod.SessionsList))
       val reconnected = controller.handle(request(WearRpcMethod.GatewayConnect))
+      val recoveredSessions = controller.handle(request(WearRpcMethod.SessionsList))
 
       val statusResult = checkNotNull(status.result).jsonObject
       val agentsResult = checkNotNull(agents.result).jsonObject
@@ -218,7 +226,18 @@ class WearProxyControllerTest {
           .jsonPrimitive.content
           .toBoolean(),
       )
-      assertEquals(0, gatewayRequests)
+      assertFalse(offlineSessions.ok)
+      assertEquals("unavailable", offlineSessions.error?.code)
+      assertTrue(recoveredSessions.ok)
+      assertEquals(
+        0,
+        checkNotNull(recoveredSessions.result)
+          .jsonObject
+          .getValue("sessions")
+          .jsonArray.size,
+      )
+      assertEquals(2, gatewayRequests)
+      assertEquals(listOf("sessions.list", "sessions.list"), requestedMethods)
     }
 
   @Test
