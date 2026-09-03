@@ -762,7 +762,7 @@ class ChatComposerLayoutTest {
   }
 
   @Test
-  fun progressCardSharesComposerSurfaceAndExpandsUpward() {
+  fun progressCardDocksBehindIndependentComposerAndExpandsUpward() {
     showChat()
     showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
@@ -777,20 +777,28 @@ class ChatComposerLayoutTest {
     val expandedCard = card.getUnclippedBoundsInRoot()
     val composerAfter = composer.getUnclippedBoundsInRoot()
     val editorAfter = editor.getUnclippedBoundsInRoot()
+    val expectedUnderlap = 18.dp
     assertTrue(
-      "The collapsed progress card must live inside the composer surface",
-      collapsedCard.top >= composerBefore.top && collapsedCard.bottom <= composerBefore.bottom,
+      "The collapsed progress card must start above the independent composer surface",
+      collapsedCard.top < composerBefore.top,
     )
+    assertEquals(
+      "The progress card must underlap the composer by the shared dock depth",
+      expectedUnderlap.value,
+      (collapsedCard.bottom - composerBefore.top).value,
+      0.5f,
+    )
+    assertEquals("Expanding progress must not move the composer top", composerBefore.top.value, composerAfter.top.value, 0.5f)
     assertEquals("Expanding progress must not move the composer bottom", composerBefore.bottom.value, composerAfter.bottom.value, 0.5f)
     assertEquals("Expanding progress must not move the editor top", editorBefore.top.value, editorAfter.top.value, 0.5f)
     assertEquals("Expanding progress must not move the editor bottom", editorBefore.bottom.value, editorAfter.bottom.value, 0.5f)
     assertEquals(
-      "The expanded progress card must share the composer surface top",
-      composerAfter.top.value,
-      expandedCard.top.value,
+      "The attached progress edge must stay docked while its body expands upward",
+      collapsedCard.bottom.value,
+      expandedCard.bottom.value,
       0.5f,
     )
-    assertTrue("The composer surface must expand upward", composerAfter.top < composerBefore.top)
+    assertTrue("The progress surface must expand upward", expandedCard.top < collapsedCard.top)
     assertComposerControlsVisible()
   }
 
