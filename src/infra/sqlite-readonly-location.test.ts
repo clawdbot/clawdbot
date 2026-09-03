@@ -542,6 +542,28 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
   });
 
+  it("keeps worker stderr tails valid at a UTF-16 boundary", async () => {
+    const tempDir = tempDirs.make("openclaw-sqlite-readonly-stderr-");
+    const preloadPath = path.join(tempDir, "stderr-preload.cjs");
+    const expectedTail = "x".repeat(3_999);
+    fs.writeFileSync(
+      preloadPath,
+      `process.on("exit", () => process.stderr.write(${JSON.stringify(`🤖${expectedTail}`)}));`,
+    );
+    const missingPath = path.join(tempDir, "missing.db");
+
+    await withEnvAsync({ NODE_OPTIONS: `--require=${preloadPath}` }, async () => {
+      let message = "";
+      try {
+        await prepareSqliteReadOnlyLocation(missingPath);
+      } catch (error) {
+        message = error instanceof Error ? error.message : String(error);
+      }
+
+      expect(message.split("stderr (tail): ")[1]).toBe(expectedTail);
+    });
+  });
+
   it("propagates sync public entry point failures", () => {
     const missingPath = path.join(tempDirs.make("openclaw-sqlite-readonly-missing-"), "missing.db");
     expect(() => prepareSqliteReadOnlyLocationSync(missingPath)).toThrow(
