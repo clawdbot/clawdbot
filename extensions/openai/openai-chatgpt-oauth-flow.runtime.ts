@@ -96,8 +96,12 @@ function sendOAuthHtmlResponse(
   res.end(html);
 }
 
-async function startLocalOAuthServer(state: string): Promise<OAuthServerInfo> {
+async function startLocalOAuthServer(
+  state: string,
+  assertCurrent?: () => void,
+): Promise<OAuthServerInfo> {
   const http = await loadNodeOAuthHttp();
+  assertCurrent?.();
   let settleWait: ((value: { code: string } | null) => void) | undefined;
   const waitForCodePromise = new Promise<{ code: string } | null>((resolve) => {
     settleWait = resolve;
@@ -221,16 +225,19 @@ export async function loginOpenAICodex(options: {
   onManualCodeInput?: () => Promise<string>;
   originator?: string;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
 }): Promise<OAuthCredentials> {
+  options.assertCurrent?.();
   throwIfOAuthLoginAborted(options.signal);
   const { verifier, redirectUri, state, url } = await createOpenAIAuthorizationFlow(
     options.originator ?? "openclaw",
     REDIRECT_URI,
   );
-  const server = await startLocalOAuthServer(state);
+  const server = await startLocalOAuthServer(state, options.assertCurrent);
 
   let code: string | undefined;
   try {
+    options.assertCurrent?.();
     throwIfOAuthLoginAborted(options.signal);
     await withOAuthLoginAbort(
       Promise.resolve(
@@ -316,6 +323,7 @@ export async function loginOpenAICodex(options: {
     return resolveOpenAICredentials(
       await exchangeOpenAIAuthorizationCode(code, verifier, redirectUri, {
         signal: options.signal,
+        assertCurrent: options.assertCurrent,
       }),
     );
   } finally {

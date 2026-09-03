@@ -532,6 +532,15 @@ Gateway owns the private per-person commit; `configPatch`, `defaultModel`, and t
 returned shared profile id are not applied. Mark credential prompts sensitive.
 Use this capability only when the provider permits this credential use.
 
+Personal-account calls always supply `ctx.assertCurrent`. Preserve this
+closure-bound check through provider helpers and invoke it immediately before
+external effects, including discovery, polling and token exchange after any
+interactive or asynchronous wait. With `fetchWithSsrFGuard`, pass it as
+`beforeRequest` so it runs after DNS/proxy preparation and on redirects. Keep
+forwarding `ctx.signal` to cancel in-flight work; a signal alone does not recheck
+the person's current permission. Standalone CLI/onboarding calls may omit the
+check because they do not carry a Gateway person's authority.
+
 An optional `matchesPersonalAccount(credential, existing)` auth-method hook can
 prove that an OAuth reconnect is the same provider account. Match the complete
 identity, not an email or a shared workspace alone. Without that proof, a new

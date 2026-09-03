@@ -792,62 +792,85 @@ describe("users model-account connection lifecycle", () => {
     },
   );
 
-  it.each(["disconnect", "invalidation", "role", "merge", "answerer disconnect"] as const)(
-    "fences %s during provider I/O",
-    async (change) => {
-      const writer: GatewayOperatorRoleDefinition = {
-        agents: "*",
-        scopes: ["operator.write"],
-        sessions: { others: "none" },
-      };
-      config = { gateway: { roles: { default: "writer", definitions: { writer } } } };
-      const deferred = createDeferredCore<ProviderAuthResult>();
+  it.each(
+    (["before", "during"] as const).flatMap((phase) =>
+      (["disconnect", "invalidation", "role", "merge", "answerer disconnect"] as const).map(
+        (change) => ({ phase, change }),
+      ),
+    ),
+  )("fences $change $phase provider I/O", async ({ phase, change }) => {
+    const writer: GatewayOperatorRoleDefinition = {
+      agents: "*",
+      scopes: ["operator.write"],
+      sessions: { others: "none" },
+    };
+    config = { gateway: { roles: { default: "writer", definitions: { writer } } } };
+    const deferred = createDeferredCore<ProviderAuthResult>();
+    if (phase === "during") {
       exchange.mockReturnValueOnce(deferred.promise);
-      const flow = await startFlow();
-      const answerer = change === "answerer disconnect" ? createClient() : self;
-      await complete(flow, "profile-1", answerer);
-      await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
-      if (change === "disconnect") {
-        clients.delete(self);
-      }
-      if (change === "invalidation") {
-        self.invalidated = true;
-      }
-      if (change === "role") {
-        writer.scopes = ["operator.read"];
-      }
-      if (change === "merge") {
-        resolveUserProfileId.mockImplementation((id) =>
-          id === "profile-1" ? "profile-merged" : id,
-        );
-      }
-      if (change === "answerer disconnect") {
-        clients.delete(answerer);
-      }
-      deferred.resolve(authorized);
-      await vi.waitFor(() => expect(exchange).toHaveResolved());
-      await runAuth.mock.results[0]!.value;
-      // A merged-away owner cannot authorize even an observation of its old operation.
-      const observer = createClient("profile-admin", ["operator.admin"]);
-      if (change === "merge") {
-        expect(
-          await rpc(
-            "users.authConnect.status",
-            { profileId: "profile-1", connectId: flow.connectId },
-            observer,
-          ),
-        ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
-        expect(writes).toEqual([]);
-        return;
-      }
-      config = {};
-      expect(await terminal(flow, "failed", "profile-1", observer)).toEqual({
-        status: "failed",
-        reason: "authority",
+    }
+    const ready = createDeferredCore();
+    const beforeIo = createDeferredCore();
+    if (phase === "before") {
+      runAuth.mockImplementationOnce(async (ctx) => {
+        const value = await ctx.prompter.text({ message: "Provider credential", sensitive: true });
+        ready.resolve();
+        await beforeIo.promise;
+        ctx.assertCurrent?.();
+        return exchange(value, ctx.signal);
       });
+    }
+    const flow = await startFlow();
+    const answerer = change === "answerer disconnect" ? createClient() : self;
+    await complete(flow, "profile-1", answerer);
+    if (phase === "before") {
+      await ready.promise;
+    } else {
+      await vi.waitFor(() => expect(exchange).toHaveBeenCalledOnce());
+    }
+    if (change === "disconnect") {
+      clients.delete(self);
+    }
+    if (change === "invalidation") {
+      self.invalidated = true;
+    }
+    if (change === "role") {
+      writer.scopes = ["operator.read"];
+    }
+    if (change === "merge") {
+      resolveUserProfileId.mockImplementation((id) => (id === "profile-1" ? "profile-merged" : id));
+    }
+    if (change === "answerer disconnect") {
+      clients.delete(answerer);
+    }
+    beforeIo.resolve();
+    deferred.resolve(authorized);
+    await Promise.allSettled([runAuth.mock.results[0]!.value]);
+    if (phase === "before") {
+      expect(exchange).not.toHaveBeenCalled();
+    } else {
+      expect(exchange).toHaveResolved();
+    }
+    // A merged-away owner cannot authorize even an observation of its old operation.
+    const observer = createClient("profile-admin", ["operator.admin"]);
+    if (change === "merge") {
+      expect(
+        await rpc(
+          "users.authConnect.status",
+          { profileId: "profile-1", connectId: flow.connectId },
+          observer,
+        ),
+      ).toHaveBeenCalledWith(false, undefined, expect.objectContaining({ code: "FORBIDDEN" }));
       expect(writes).toEqual([]);
-    },
-  );
+      return;
+    }
+    config = {};
+    expect(await terminal(flow, "failed", "profile-1", observer)).toEqual({
+      status: "failed",
+      reason: "authority",
+    });
+    expect(writes).toEqual([]);
+  });
 
   it.each(["cancel", "supersede", "expiry", "stop"] as const)(
     "fences late credentials after %s",

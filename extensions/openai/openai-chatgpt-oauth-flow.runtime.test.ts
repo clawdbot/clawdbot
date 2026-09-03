@@ -2,6 +2,7 @@
 import { EventEmitter, once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -243,6 +244,85 @@ describe("OpenAI Codex OAuth flow", () => {
     await expect(loginPromise).rejects.toThrow("Login cancelled");
     expect(onAuth).not.toHaveBeenCalled();
   });
+
+  it.each(["callback", "manual input", "transport preparation"] as const)(
+    "revalidates live authority after held %s before exchanging the code",
+    async (boundary) => {
+      const held = createDeferred<void>();
+      const release = createDeferred<void>();
+      const controller = new AbortController();
+      const agent = new Agent();
+      let current = true;
+      const sendToken = vi.fn(async () => ({
+        response: new Response(
+          JSON.stringify({
+            access_token: fakeJwt({
+              "https://api.openai.com/auth": { chatgpt_account_id: "account" },
+            }),
+            refresh_token: "refresh",
+            expires_in: 60,
+          }),
+        ),
+        release: vi.fn(async () => undefined),
+      }));
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(
+        async ({ beforeRequest }: { beforeRequest?: () => void }) => {
+          if (boundary === "transport preparation") {
+            held.resolve();
+            await release.promise;
+          }
+          beforeRequest?.();
+          return await sendToken();
+        },
+      );
+      const outcome = loginOpenAICodex({
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("owner retired");
+          }
+        },
+        onAuth: async ({ url }) => {
+          if (boundary === "callback") {
+            const authUrl = new URL(url);
+            const callback = new URL(authUrl.searchParams.get("redirect_uri") ?? "");
+            callback.searchParams.set("state", authUrl.searchParams.get("state") ?? "");
+            callback.searchParams.set("code", "synthetic-code");
+            await requestCallback(callback.toString(), agent);
+            held.resolve();
+            await release.promise;
+          }
+        },
+        onPrompt: async () => "synthetic-code",
+        onManualCodeInput: async () => {
+          if (boundary === "manual input") {
+            held.resolve();
+            await release.promise;
+          }
+          return "synthetic-code";
+        },
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await held.promise;
+        current = false;
+        release.resolve();
+        const result = await outcome;
+        expect(sendToken).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          error: expect.objectContaining({ message: expect.stringContaining("owner retired") }),
+        });
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        controller.abort();
+        release.resolve();
+        await outcome;
+        agent.destroy();
+      }
+    },
+  );
 
   it("closes the callback listener when cancellation outlives a pending browser presentation", async () => {
     const events = new EventEmitter();

@@ -323,6 +323,7 @@ export function createModelAccountConnectService(options: {
             method,
             prompter,
             signal,
+            assertCurrent: () => assertLive(operation),
             isRemote: true,
             secretInputMode: "plaintext",
             allowSecretRefPrompt: false,

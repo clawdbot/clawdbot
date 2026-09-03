@@ -246,6 +246,7 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
   env?: NodeJS.ProcessEnv;
   runtime: RuntimeEnv;
   signal?: AbortSignal;
+  assertCurrent?: () => void;
   /** Force remote/manual browser presentation for a connected GUI client. */
   isRemote?: boolean;
   prompter: WizardPrompter;
@@ -264,6 +265,7 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
     prompter: params.prompter,
     runtime: params.runtime,
     ...(params.signal ? { signal: params.signal } : {}),
+    ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
     opts: params.opts,
     secretInputMode: params.secretInputMode,
     allowSecretRefPrompt: params.allowSecretRefPrompt,

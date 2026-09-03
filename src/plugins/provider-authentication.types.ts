@@ -55,6 +55,8 @@ export type ProviderAuthContext = {
   runtime: RuntimeEnv;
   /** Cancels browser callbacks, device polling, and other app-owned auth work. */
   signal?: AbortSignal;
+  /** Personal-account methods must recheck live caller authority immediately before external effects. */
+  assertCurrent?: () => void;
   /**
    * Optional onboarding CLI options that triggered this auth flow.
    *
