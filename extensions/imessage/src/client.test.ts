@@ -48,6 +48,12 @@ function createMockChild(): MockChild {
   return child;
 }
 
+function createCompletedMockChild(exitCode = 0): MockChild {
+  const child = createMockChild();
+  queueMicrotask(() => child.emit("close", exitCode, null));
+  return child;
+}
+
 let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
 let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestError;
 let privateApiStatus: typeof import("./private-api-status.js");
@@ -75,7 +81,11 @@ describe("IMessageRpcClient child stream error handling", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("VITEST", "");
     child = createMockChild();
-    spawnMock.mockReset().mockReturnValue(child);
+    spawnMock
+      .mockReset()
+      .mockImplementation((_command, args: string[]) =>
+        args[0] === "launch" ? createCompletedMockChild() : child,
+      );
   });
 
   afterEach(async () => {
@@ -413,7 +423,11 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("VITEST", "");
     child = createMockChild();
-    spawnMock.mockReset().mockReturnValue(child);
+    spawnMock
+      .mockReset()
+      .mockImplementation((_command, args: string[]) =>
+        args[0] === "launch" ? createCompletedMockChild() : child,
+      );
   });
 
   afterEach(() => {
@@ -454,6 +468,12 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     const error = await pending.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
     expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
+    expect(spawnMock).toHaveBeenNthCalledWith(
+      2,
+      cliPath,
+      ["launch", "--json"],
+      expect.objectContaining({ stdio: ["ignore", "ignore", "pipe"] }),
+    );
 
     child.emit("close", 0, null);
     await client.stop();
