@@ -23,6 +23,9 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "meta": "meta"
+    },
     "providers": {
       "meta": {
         "baseUrl": "https://api.meta.ai/v1",

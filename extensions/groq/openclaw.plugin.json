@@ -44,6 +44,9 @@
     }
   ],
   "modelCatalog": {
+    "modelsDev": {
+      "groq": "groq"
+    },
     "providers": {
       "groq": {
         "baseUrl": "https://api.groq.com/openai/v1",

@@ -20,6 +20,10 @@
     ]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "stepfun": "stepfun-ai",
+      "stepfun-plan": "stepfun-ai-step-plan"
+    },
     "providers": {
       "stepfun": {
         "baseUrl": "https://api.stepfun.ai/v1",

@@ -8,6 +8,9 @@
   "enabledByDefault": true,
   "providers": ["cohere"],
   "modelCatalog": {
+    "modelsDev": {
+      "cohere": "cohere"
+    },
     "providers": {
       "cohere": {
         "baseUrl": "https://api.cohere.ai/compatibility/v1",

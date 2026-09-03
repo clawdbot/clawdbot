@@ -40,6 +40,9 @@
     "videoGenerationProviders": ["together"]
   },
   "modelCatalog": {
+    "modelsDev": {
+      "together": "togetherai"
+    },
     "providers": {
       "together": {
         "baseUrl": "https://api.together.xyz/v1",

@@ -48,6 +48,10 @@
     }
   },
   "modelCatalog": {
+    "modelsDev": {
+      "qwen": "alibaba-coding-plan",
+      "qwen-token-plan": "alibaba-token-plan"
+    },
     "suppressions": [
       {
         "provider": "qwen",
