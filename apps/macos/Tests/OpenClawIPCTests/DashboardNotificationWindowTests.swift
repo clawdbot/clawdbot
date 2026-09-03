@@ -341,11 +341,13 @@ extension DashboardWindowOwnershipTests {
         try await self.waitForDashboard(clicked, path: "/")
         try await self.waitForDashboard(other, path: "/")
         let windows = [main, clicked, other].compactMap(\.window)
-        clicked.show()
-        try #require(NSApp.orderedWindows.first(where: { windows.contains($0) }) === clicked.window)
-        try #require(windows.first(where: \.isKeyWindow).map { $0 === clicked.window } ?? true)
         await gate.hold()
         let click = Task { @MainActor in
+            // Focus and admission are one UI action; yielding between them lets
+            // unrelated AppKit tests choose the window before this click starts.
+            clicked.show()
+            #expect(NSApp.orderedWindows.first(where: { windows.contains($0) }) === clicked.window)
+            #expect(windows.first(where: \.isKeyWindow).map { $0 === clicked.window } ?? true)
             try await manager.openBackgroundSession(self.completion(), target: .primary, sourceURL: server.url())
         }
         await gate.waitUntilRequested()

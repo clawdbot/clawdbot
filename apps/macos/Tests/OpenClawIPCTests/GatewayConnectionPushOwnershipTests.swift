@@ -11,6 +11,11 @@ extension GatewayConnectionControlTests {
         replacement: String) async throws
     {
         try await TestIsolation.withIsolatedState {
+            let previousMode = AppStateStore.shared.connectionMode
+            // This synthetic transport owns no local process. Recovery's process
+            // handoff is exercised by the dedicated local/remote recovery fixtures.
+            AppStateStore.shared.connectionMode = .unconfigured
+            defer { AppStateStore.shared.connectionMode = previousMode }
             let source = GatewayConnectionEndpointSource(endpoint: GatewayConnection.EndpointSnapshot(
                 config: (URL(string: "ws://127.0.0.1:49225")!, nil, nil), routeAuthority: nil, revision: 1))
             let mainKey = LockIsolated("a-main")

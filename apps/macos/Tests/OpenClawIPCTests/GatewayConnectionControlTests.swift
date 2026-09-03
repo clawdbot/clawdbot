@@ -383,6 +383,60 @@ private func assertConfigLookupCannotRecreateRoute(
         }
     }
 
+    @Test(arguments: [false, true]) @MainActor
+    func `intentional disconnect retires queued recovery`(pendingFailure: Bool) async throws {
+        let shutdown = GatewayConnectionSuspensionGate()
+        let retireClient: @Sendable (GatewayChannelActor) async -> Void = { client in
+            await shutdown.suspend()
+            await client.shutdown()
+        }
+        try await self.withIsolatedRecoveryFixture(clientShutdown: retireClient) { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, session in
+            _ = try await connection.request(method: "health", params: nil, retryTransportFailures: false)
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            if pendingFailure {
+                control.endpointDidChange(.unavailable(mode: .local, reason: "offline", routeRevision: 1))
+            } else {
+                _ = try await control.health()
+                #expect(control.state == .connected)
+            }
+
+            let proof = Task {
+                await shutdown.waitUntilStarted()
+                // Hold transport retirement open while any previously queued recovery gets its turn.
+                let deadline = ContinuousClock.now + .milliseconds(200)
+                while GatewayProcessManager.shared.status == .stopped, ContinuousClock.now < deadline {
+                    try? await Task.sleep(for: .milliseconds(2))
+                }
+                #expect(GatewayProcessManager.shared.status == .stopped)
+                #expect(control.state == .disconnected)
+                #expect(session.snapshotMakeCount() == 1)
+                await shutdown.open()
+            }
+            await control.disconnect()
+            await proof.value
+        }
+    }
+
+    @Test @MainActor
+    func `current endpoint failure still starts control recovery`() async throws {
+        try await self.withIsolatedRecoveryFixture { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        } operation: { connection, _ in
+            let control = ControlChannel(gateway: connection, endpointRevision: { 1 })
+            control.endpointDidChange(.unavailable(mode: .local, reason: "offline", routeRevision: 1))
+            let deadline = ContinuousClock.now + .seconds(2)
+            while GatewayProcessManager.shared.status == .stopped, ContinuousClock.now < deadline {
+                try? await Task.sleep(for: .milliseconds(2))
+            }
+            #expect(GatewayProcessManager.shared.status != .stopped)
+            await control.disconnect()
+        }
+    }
+
     @Test @MainActor
     func `genuine transport failure still activates and retries local gateway recovery`() async throws {
         try await self.assertUncancelledFailureRecovers(URLError(.networkConnectionLost))
@@ -1280,6 +1334,7 @@ extension GatewayConnectionControlTests {
     @MainActor
     private func withIsolatedRecoveryFixture<T>(
         mode: AppState.ConnectionMode = .local,
+        clientShutdown: @escaping @Sendable (GatewayChannelActor) async -> Void = { await $0.shutdown() },
         _ sendHook: @escaping GatewayTestWebSocketTask.SendHook,
         operation: (GatewayConnection, GatewayTestWebSocketSession) async throws -> T) async throws -> T
     {
@@ -1308,11 +1363,13 @@ extension GatewayConnectionControlTests {
                     endpointProvider: {
                         GatewayConnection.EndpointSnapshot(
                             config: (url: URL(string: "ws://127.0.0.1:\(port)")!, token: nil, password: nil),
-                            routeAuthority: nil)
+                            routeAuthority: nil,
+                            revision: 1)
                     },
                     supportsSharedEndpointRecovery: true,
                     activationBindingKeyProvider: { nil },
-                    sessionBox: WebSocketSessionBox(session: session))
+                    sessionBox: WebSocketSessionBox(session: session),
+                    clientShutdown: clientShutdown)
                 let manager = GatewayProcessManager.shared
                 let priorMode = AppStateStore.shared.connectionMode
                 AppStateStore.shared.connectionMode = mode

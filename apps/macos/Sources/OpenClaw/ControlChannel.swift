@@ -161,7 +161,6 @@ final class ControlChannel {
                 self.logger.info("control channel state -> connecting")
             case .disconnected:
                 self.logger.info("control channel state -> disconnected")
-                self.scheduleRecovery(reason: "disconnected")
             case let .degraded(message):
                 let detail = message.isEmpty ? "degraded" : "degraded: \(message)"
                 self.logger.info("control channel state -> \(detail, privacy: .public)")
@@ -187,6 +186,7 @@ final class ControlChannel {
         // Endpoint stream delivery can lag source adoption; fence UI publication directly.
         if self.compatibilityAlerts.observeEndpoint(revision: self.endpointRevision()) {
             self.cancelPendingStateTask()
+            self.cancelRecovery()
             self.retireActivity()
         }
         return self.compatibilityAlerts.routeGeneration
@@ -273,6 +273,7 @@ final class ControlChannel {
         case .local:
             await self.configure()
         case let .remote(target, identity):
+            let generation = self.synchronizeRouteGeneration()
             do {
                 _ = (target, identity)
                 let idSet = !identity.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -281,9 +282,10 @@ final class ControlChannel {
                         "target=\(target, privacy: .public) identitySet=\(idSet, privacy: .public)")
                 self.setStateThrottled(.connecting)
                 _ = try await GatewayEndpointStore.shared.ensureRemoteControlTunnel()
-                await self.refreshEndpoint(reason: "configure")
+                await self.refreshEndpoint(reason: "configure", generation: generation)
             } catch {
-                self.setStateThrottled(.degraded(error.localizedDescription))
+                guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
+                self.setStateThrottled(.degraded(error.localizedDescription), generation: generation)
                 throw error
             }
         }
@@ -291,10 +293,10 @@ final class ControlChannel {
 
     func endpointDidChange(_ state: GatewayEndpointState) {
         guard state.routeRevision == self.endpointRevision() else { return }
-        _ = self.synchronizeRouteGeneration()
+        let generation = self.synchronizeRouteGeneration()
         switch state {
         case .ready:
-            Task { await self.refreshEndpoint(reason: "endpoint changed") }
+            Task { await self.refreshEndpoint(reason: "endpoint changed", generation: generation) }
         case .connecting:
             self.setStateThrottled(.connecting)
         case let .unavailable(_, reason, _):
@@ -302,21 +304,27 @@ final class ControlChannel {
         }
     }
 
-    func refreshEndpoint(reason: String) async {
+    func refreshEndpoint(reason: String, generation: UInt64? = nil) async {
+        let generation = generation ?? self.synchronizeRouteGeneration()
+        guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
         self.logger.info("control channel refresh endpoint reason=\(reason, privacy: .public)")
-        let generation = self.synchronizeRouteGeneration()
+        if self.eventTask == nil { self.startEventStream() }
         self.setStateThrottled(.connecting)
         do {
             try await self.establishGatewayConnection()
             guard self.reconcileCurrentConnection(generation: generation) else { return }
             PresenceReporter.shared.sendImmediate(reason: "connect")
         } catch {
+            guard !Task.isCancelled else { return }
             self.reportFailure(error, generation: generation)
         }
     }
 
     func disconnect() async {
         self.compatibilityAlerts.routeChanged()
+        self.cancelRecovery()
+        self.eventTask?.cancel()
+        self.eventTask = nil
         self.retireActivity()
         self.setStateThrottled(.disconnected)
         await self.gateway.shutdown()
@@ -372,6 +380,7 @@ final class ControlChannel {
     private func performRequest(_ operation: () async throws -> Data) async throws -> Data {
         try Task.checkCancellation()
         let generation = self.synchronizeRouteGeneration()
+        if self.eventTask == nil { self.startEventStream() }
         do {
             let data = try await operation()
             try Task.checkCancellation()
@@ -532,7 +541,16 @@ final class ControlChannel {
         return true
     }
 
+    private func cancelRecovery() {
+        self.recoveryTask?.cancel()
+        self.recoveryTask = nil
+        self.lastRecoveryAt = nil
+    }
+
     private func scheduleRecovery(reason: String) {
+        let generation = self.synchronizeRouteGeneration()
+        let mode = AppStateStore.shared.connectionMode
+        guard mode != .unconfigured else { return }
         let now = Date()
         if let last = self.lastRecoveryAt, now.timeIntervalSince(last) < 10 { return }
         guard self.recoveryTask == nil else { return }
@@ -540,11 +558,12 @@ final class ControlChannel {
 
         self.recoveryTask = Task { [weak self] in
             guard let self else { return }
-            let mode = await MainActor.run { AppStateStore.shared.connectionMode }
-            guard mode != .unconfigured else {
-                self.recoveryTask = nil
-                return
+            defer {
+                if generation == self.synchronizeRouteGeneration() { self.recoveryTask = nil }
             }
+            // Explicit disconnect and route replacement retire recovery before it can manage a process or tunnel.
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration(),
+                  AppStateStore.shared.connectionMode == mode, self.state != .connected else { return }
 
             let trimmedReason = reason.trimmingCharacters(in: .whitespacesAndNewlines)
             let reasonText = trimmedReason.isEmpty ? "unknown" : trimmedReason
@@ -565,14 +584,15 @@ final class ControlChannel {
                 }
             }
 
-            await self.refreshEndpoint(reason: "recovery:\(reasonText)")
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration(),
+                  AppStateStore.shared.connectionMode == mode else { return }
+            await self.refreshEndpoint(reason: "recovery:\(reasonText)", generation: generation)
+            guard !Task.isCancelled, generation == self.synchronizeRouteGeneration() else { return }
             if case .connected = self.state {
                 self.logger.info("control channel recovery finished")
             } else if case let .degraded(message) = self.state {
                 self.logger.error("control channel recovery failed \(message, privacy: .public)")
             }
-
-            self.recoveryTask = nil
         }
     }
 
