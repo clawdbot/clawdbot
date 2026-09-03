@@ -72,6 +72,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     sessionKey: string;
     replySpy: HeartbeatReplySpy;
     agentId?: string;
+    heartbeat?: Parameters<typeof runHeartbeatOnce>[0]["heartbeat"];
+    source?: Parameters<typeof runHeartbeatOnce>[0]["source"];
   }) {
     await params.seedSession(params.sessionKey, { lastChannel: "whatsapp", lastTo: "+1555" });
 
@@ -80,6 +82,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     await runHeartbeatOnce({
       cfg: params.cfg,
       agentId: params.agentId,
+      heartbeat: params.heartbeat,
+      source: params.source,
       deps: {
         getReplyFromConfig: params.replySpy,
         getQueueSize: () => 0,
@@ -103,6 +107,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     timeoutSeconds?: number;
     lightContext?: boolean;
     isolatedSession?: boolean;
+    heartbeat?: Parameters<typeof runHeartbeatOnce>[0]["heartbeat"];
+    source?: Parameters<typeof runHeartbeatOnce>[0]["source"];
   }) {
     return withHeartbeatFixture(async ({ tmpDir, storePath, replySpy, seedSession }) => {
       const cfg: OpenClawConfig = {
@@ -129,6 +135,8 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
         cfg,
         sessionKey,
         replySpy,
+        heartbeat: params.heartbeat,
+        source: params.source,
       });
       return result.opts;
     });
@@ -208,6 +216,20 @@ describe("runHeartbeatOnce – heartbeat model override", () => {
     expectReplyOptions(replyOpts, {
       isHeartbeat: true,
       timeoutOverrideSeconds: 45,
+    });
+  });
+
+  it("keeps configured run options when a direct wake overrides only the destination", async () => {
+    const replyOpts = await runDefaultsHeartbeat({
+      timeoutSeconds: 45,
+      lightContext: true,
+      heartbeat: { target: "last" },
+      source: "manual",
+    });
+    expectReplyOptions(replyOpts, {
+      isHeartbeat: true,
+      timeoutOverrideSeconds: 45,
+      bootstrapContextMode: "lightweight",
     });
   });
 

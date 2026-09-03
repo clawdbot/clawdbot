@@ -46,6 +46,7 @@ export type StreamSessionIssuer = (request: {
 
 type CallManagerHooks = {
   onCallAnswered?: (call: CallRecord) => void;
+  onCallerSpeech?: (call: CallRecord) => void;
   streamSessionIssuer?: StreamSessionIssuer;
 };
 

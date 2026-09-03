@@ -19,7 +19,7 @@ const suite = createControlUiE2eSuite({
 suite.define(() => {
   it("guides a pending microphone request and clears guidance when voice connects", async () => {
     await suite.withPage({ permissions: ["microphone"] }, async ({ page }) => {
-      await installMockGateway(page, {
+      const gateway = await installMockGateway(page, {
         methodResponses: {
           "talk.catalog": videoTalkCatalog("openai"),
           "talk.client.create": {
@@ -55,7 +55,8 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await captureMicrophoneLossProof(page, "microphone-access-pending.png");
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(0);
+      await captureMicrophoneLossProof(suite, page, "prepared-input-pending.png");
       const guidance = page.locator('.agent-chat__talk-status[role="status"]');
       await expect
         .poll(() => guidance.allTextContents())
@@ -74,7 +75,8 @@ suite.define(() => {
         .poll(() => page.locator('.agent-chat__voice-activity[data-status="listening"]').count())
         .toBe(1);
       await expect.poll(() => guidance.count()).toBe(0);
-      await captureMicrophoneLossProof(page, "microphone-access-ready.png");
+      expect(await gateway.getRequests("talk.client.create")).toHaveLength(1);
+      await captureMicrophoneLossProof(suite, page, "prepared-input-ready.png");
       await page.getByRole("button", { name: "Stop voice input" }).click();
     });
   });
@@ -118,10 +120,10 @@ suite.define(() => {
           )
           .toMatchObject({ status: "listening" });
       } catch (error) {
-        await captureMicrophoneLossProof(page, "microphone-loss-setup-failure.png");
+        await captureMicrophoneLossProof(suite, page, "microphone-loss-setup-failure.png");
         throw error;
       }
-      await captureMicrophoneLossProof(page, "microphone-loss-before-listening.png");
+      await captureMicrophoneLossProof(suite, page, "microphone-loss-before-listening.png");
 
       await page.evaluate(() => {
         (
@@ -148,7 +150,7 @@ suite.define(() => {
           }),
         )
         .toEqual({ tracksStopped: 1, peerClosed: true, trackState: "ended", audioElements: 0 });
-      await captureMicrophoneLossProof(page, "microphone-loss-after-error.png");
+      await captureMicrophoneLossProof(suite, page, "microphone-loss-after-error.png");
       await gateway.waitForRequest("talk.client.close");
       await page.getByRole("button", { name: "Dismiss voice input error" }).click();
       console.info(

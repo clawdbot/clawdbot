@@ -22,19 +22,16 @@ import type { ResolvedGatewayAuth } from "./auth.js";
 import { parseControlUiResourcePath } from "./control-ui-contract.js";
 import { respondNotFound as sendNotFound } from "./control-ui-http-utils.js";
 import { sendMethodNotAllowed } from "./http-common.js";
+import {
+  createHttpImageRepresentation,
+  resolveHttpImageMimeType,
+  sendHttpImageResponse,
+  type HttpImageRepresentation,
+} from "./http-image-response.js";
 import { authorizeControlUiReadRequestOrReply } from "./http-utils.js";
 
 const PLUGIN_ID_RE =
   /^(?:[a-z0-9][a-z0-9._-]{0,127}|@[a-z0-9][a-z0-9._-]{0,63}\/[a-z0-9][a-z0-9._-]{0,127})$/iu;
-const ALLOWED_IMAGE_MIME_TYPES = new Set([
-  "image/avif",
-  "image/gif",
-  "image/jpeg",
-  "image/png",
-  "image/svg+xml",
-  "image/webp",
-  "image/x-icon",
-]);
 const SVG_MIME_TYPE = "image/svg+xml";
 const PLUGIN_ICON_CACHE_MAX_ENTRIES = 128;
 export const LINK_FAVICON_MAX_BYTES = 64 * 1024;
@@ -47,14 +44,9 @@ export const PLUGIN_ICON_MAX_REDIRECTS = 3;
 export const PLUGIN_ICON_REQUEST_TIMEOUT_MS = 5_000;
 export const PLUGIN_ICON_CACHE_TTL_MS = 60 * 60 * 1000;
 
-type PluginIconPayload = {
-  body: Buffer;
-  contentType: string;
-};
-
 type PluginIconCacheEntry = {
   expiresAt: number;
-  promise: Promise<PluginIconPayload | null>;
+  promise: Promise<HttpImageRepresentation | null>;
 };
 
 let pluginIconCache = new Map<string, PluginIconCacheEntry>();
@@ -76,11 +68,6 @@ function normalizeLinkFaviconHostname(value: string): string | null {
   }
 }
 
-function normalizeMimeType(contentType: string | undefined): string | undefined {
-  const normalized = contentType?.split(";", 1)[0]?.trim().toLowerCase() || undefined;
-  return normalized === "image/vnd.microsoft.icon" ? "image/x-icon" : normalized;
-}
-
 async function validateImageMime(body: Buffer, contentType: string): Promise<boolean> {
   if (contentType === SVG_MIME_TYPE) {
     const text = body.toString("utf8");
@@ -91,7 +78,7 @@ async function validateImageMime(body: Buffer, contentType: string): Promise<boo
     );
   }
   const detected = await fileTypeFromBuffer(body);
-  return normalizeMimeType(detected?.mime) === contentType;
+  return resolveHttpImageMimeType(detected?.mime) === contentType;
 }
 
 function rememberIcon(
@@ -112,7 +99,7 @@ async function loadCatalogIcon(params: {
   requireHttps?: boolean;
   retainFailureForMs?: number;
   limitConcurrency?: boolean;
-}): Promise<PluginIconPayload | null> {
+}): Promise<HttpImageRepresentation | null> {
   let parsed: URL;
   try {
     parsed = new URL(params.iconUrl);
@@ -159,19 +146,12 @@ async function loadCatalogIcon(params: {
           },
         },
       });
-      const contentType = normalizeMimeType(loaded.contentType);
-      if (
-        !contentType ||
-        !ALLOWED_IMAGE_MIME_TYPES.has(contentType) ||
-        !(await validateImageMime(loaded.buffer, contentType))
-      ) {
+      const contentType = resolveHttpImageMimeType(loaded.contentType);
+      if (!contentType || !(await validateImageMime(loaded.buffer, contentType))) {
         return null;
       }
-      if (contentType === SVG_MIME_TYPE) {
-        return { body: loaded.buffer, contentType };
-      }
-      if (contentType === "image/x-icon") {
-        return { body: loaded.buffer, contentType };
+      if (contentType === SVG_MIME_TYPE || contentType === "image/x-icon") {
+        return createHttpImageRepresentation(loaded.buffer, contentType);
       }
       const metadata = readImageMetadataFromHeader(loaded.buffer);
       if (
@@ -196,10 +176,7 @@ async function loadCatalogIcon(params: {
       if (normalized.data.byteLength > (params.maxBytes ?? PLUGIN_ICON_MAX_BYTES)) {
         return null;
       }
-      return {
-        body: normalized.data,
-        contentType: "image/png",
-      };
+      return createHttpImageRepresentation(normalized.data, "image/png");
     } catch {
       return null;
     }
@@ -321,23 +298,11 @@ export async function handlePluginIconHttpRequest(
     return true;
   }
 
-  res.statusCode = 200;
-  res.setHeader("content-type", icon.contentType);
-  res.setHeader("content-length", String(icon.body.byteLength));
-  res.setHeader("cache-control", "private, max-age=3600");
-  res.setHeader("cross-origin-resource-policy", "same-origin");
-  res.setHeader("x-content-type-options", "nosniff");
-  // The UI fetches these bytes and renders only a validated image blob. Making
-  // every response a sandboxed attachment prevents direct same-origin navigation.
-  res.setHeader(
-    "content-security-policy",
-    "default-src 'none'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'; sandbox",
-  );
-  res.setHeader(
-    "content-disposition",
-    `attachment; filename="${faviconHostname ? "link-favicon" : "plugin-icon"}"`,
-  );
-  // HEAD uses the same authenticated, cached representation; only its body is omitted.
-  res.end(method === "HEAD" ? undefined : icon.body);
+  sendHttpImageResponse({
+    req,
+    res,
+    image: icon,
+    filename: faviconHostname ? "link-favicon" : "plugin-icon",
+  });
   return true;
 }

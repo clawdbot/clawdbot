@@ -569,6 +569,7 @@ export async function handleInlineActions(params: {
     const { buildStatusReply } = await loadCommandsRuntime();
     const inlineStatusReply = await buildStatusReply({
       cfg,
+      agentId,
       command,
       sessionEntry: targetSessionEntry,
       sessionKey,

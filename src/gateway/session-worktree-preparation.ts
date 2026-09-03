@@ -7,7 +7,6 @@ import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { prepareWorktreeSessionTitle } from "./dashboard-session-title.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */
@@ -17,13 +16,12 @@ export async function prepareSessionWorktree(params: {
   name?: string;
   baseRef?: string;
   label?: string;
-  title?: ReturnType<typeof prepareWorktreeSessionTitle>;
   runSetupScript: boolean;
   signal?: AbortSignal;
   commitGuard?: () => void;
   onProgress?: CreateManagedWorktreeParams["onProgress"];
 }): ReturnType<PrepareGatewaySessionLifecycle> {
-  const { target, workspace, title, commitGuard } = params;
+  const { target, workspace, commitGuard } = params;
   try {
     const repository = await managedWorktrees.resolveRepositoryPaths(workspace);
     commitGuard?.();
@@ -61,14 +59,13 @@ export async function prepareSessionWorktree(params: {
         );
       }
     }
-    const generatedTitle = existingDirectory ? undefined : await title?.generated;
     commitGuard?.();
     const worktree = await managedWorktrees.create({
       repoRoot: workspace,
       ownerKind: "session",
       ownerId: target.key,
       name: params.name,
-      suggestedName: slugifyWorktreeTitle(params.label ?? generatedTitle ?? title?.source ?? ""),
+      suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       baseRef: params.baseRef,
       runSetupScript: params.runSetupScript,
       signal: params.signal,

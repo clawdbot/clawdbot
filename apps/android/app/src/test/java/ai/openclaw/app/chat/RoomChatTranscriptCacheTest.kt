@@ -1,9 +1,10 @@
 package ai.openclaw.app.chat
 
-import androidx.room.Room
+import androidx.room3.Room
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -14,20 +15,27 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import java.util.concurrent.Executor
 
 @RunWith(RobolectricTestRunner::class)
 @OptIn(ExperimentalCoroutinesApi::class)
 class RoomChatTranscriptCacheTest {
-  private var deferTransactions = false
-  private val deferredTransactions = ArrayDeque<Runnable>()
+  private var deferNextDatabaseOperation = false
+  private var deferredDatabaseOperation: Runnable? = null
   private val database: GatewayCacheDatabase =
     Room
       .inMemoryDatabaseBuilder(RuntimeEnvironment.getApplication(), GatewayCacheDatabase::class.java)
       .allowMainThreadQueries()
-      .setQueryExecutor { it.run() }
-      .setTransactionExecutor {
-        if (deferTransactions) deferredTransactions.addLast(it) else it.run()
-      }.build()
+      .setQueryCoroutineContext(
+        Executor { operation ->
+          if (deferNextDatabaseOperation) {
+            deferNextDatabaseOperation = false
+            deferredDatabaseOperation = operation
+          } else {
+            operation.run()
+          }
+        }.asCoroutineDispatcher(),
+      ).build()
   private val store = RoomChatTranscriptCache(database = database)
 
   @After
@@ -90,6 +98,7 @@ class RoomChatTranscriptCacheTest {
           val text = if (++historyRequests == 1) "history A" else "history B"
           historyResponse("session-1", listOf(ReplayHistoryMessage("assistant", text, historyRequests.toLong())))
         }
+
         "health" -> {
           if (++healthRequests == 1) {
             healthStarted?.complete(Unit)
@@ -97,8 +106,14 @@ class RoomChatTranscriptCacheTest {
           }
           "{}"
         }
-        "sessions.list" -> """{"sessions":[{"key":"main"},{"key":"other"}]}"""
-        else -> "{}"
+
+        "sessions.list" -> {
+          """{"sessions":[{"key":"main"},{"key":"other"}]}"""
+        }
+
+        else -> {
+          "{}"
+        }
       }
     }
   }
@@ -131,11 +146,12 @@ class RoomChatTranscriptCacheTest {
   fun queuedTranscriptWriteSurvivesSwitchToADifferentSession() =
     runTest {
       val controller = cachedController()
-      // Keep the cache mutation queue busy with a real Room session-list transaction.
-      deferTransactions = true
+      // Hold the session-list Room operation while it owns the cache mutation queue.
+      // Later reads can proceed, but transcript writes must wait across the session switch.
+      deferNextDatabaseOperation = true
       controller.refreshSessions()
       runCurrent()
-      assertEquals(1, deferredTransactions.size)
+      val releaseSessionWrite = requireNotNull(deferredDatabaseOperation)
 
       controller.load("main")
       runCurrent()
@@ -148,8 +164,7 @@ class RoomChatTranscriptCacheTest {
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
       assertTrue(loadTranscript(sessionKey = "other").isEmpty())
 
-      deferTransactions = false
-      deferredTransactions.removeFirst().run()
+      releaseSessionWrite.run()
       advanceUntilIdle()
 
       assertEquals(listOf("history B"), controller.messages.value.map { it.content.single().text })
@@ -314,36 +329,47 @@ class RoomChatTranscriptCacheTest {
   @Test
   fun legacyTranscriptRowsRemainReadable() =
     runTest {
-      database.dao().insertMessages(
+      val encoded =
         listOf(
+          """["legacy one","legacy two"]""",
+          """[{"type":"text","text":"structured legacy"}]""",
+          """{"content":[],"provenance":{"kind":"internal_system","sourceTool":"restart-sentinel"},"__openclaw":{"kind":"compaction","id":"checkpoint-1","tokensBefore":42500.0,"tokensAfter":2000.0}}""",
+          """{"content":[],"provenance":{"kind":"internal_system"},"__openclaw":{"kind":"compaction"}}""",
+        )
+      database.dao().insertMessages(
+        encoded.mapIndexed { index, payload ->
           CachedMessageEntity(
             gatewayId = "gateway-a",
             agentId = "main",
             sessionKey = "main",
-            rowOrder = 0,
+            rowOrder = index,
             role = "assistant",
-            textPartsJson = """["legacy one","legacy two"]""",
-            timestampMs = 10,
+            textPartsJson = payload,
+            timestampMs = 10L + index,
             idempotencyKey = null,
-          ),
-          CachedMessageEntity(
-            gatewayId = "gateway-a",
-            agentId = "main",
-            sessionKey = "main",
-            rowOrder = 1,
-            role = "assistant",
-            textPartsJson = """[{"type":"text","text":"structured legacy"}]""",
-            timestampMs = 11,
-            idempotencyKey = null,
-          ),
-        ),
+          )
+        },
       )
 
       val loaded = loadTranscript()
 
       assertEquals(listOf("legacy one", "legacy two"), loaded[0].content.map { it.text })
       assertEquals(listOf("structured legacy"), loaded[1].content.map { it.text })
-      assertEquals(listOf(null, null), loaded.map { it.senderLabel })
+      assertTrue(loaded.all { it.senderLabel == null })
+      assertEquals(ChatMessageProvenance("internal_system", "restart-sentinel"), loaded[2].provenance)
+      assertEquals(ChatTranscriptMarker("compaction", "checkpoint-1", 42_500.0, 2_000.0), loaded[2].transcriptMarker)
+      assertEquals(ChatMessageProvenance("internal_system"), loaded[3].provenance)
+      assertEquals(ChatTranscriptMarker("compaction"), loaded[3].transcriptMarker)
+
+      saveTranscript(messages = loaded)
+      assertEquals(
+        encoded.drop(2),
+        database
+          .dao()
+          .messages("gateway-a", "main", "main")
+          .drop(2)
+          .map { it.textPartsJson },
+      )
     }
 
   @Test

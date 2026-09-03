@@ -1,8 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  copyAttemptDeliveryState,
-  createTerminalToolPresentationTracker,
-} from "./terminal-resolution.js";
+import { copyAttemptDeliveryState } from "./attempt-delivery-state.js";
+import { createTerminalToolPresentationTracker } from "./terminal-resolution.js";
 
 describe("terminal presentation and delivery state", () => {
   it("carries presentation across retries until a newer tool outcome replaces it", () => {

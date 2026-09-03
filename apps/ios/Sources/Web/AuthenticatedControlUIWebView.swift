@@ -5,6 +5,11 @@ import WebKit
 
 /// URL, credential, and WebView plumbing shared by authenticated Control UI pages.
 enum AuthenticatedControlUI {
+    private struct StoredOperatorAuthorization {
+        let identity: DeviceIdentity
+        let entry: DeviceAuthEntry
+    }
+
     private static let queryComponentAllowed = CharacterSet(
         charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
     private static let pathSegmentAllowed = CharacterSet(
@@ -49,32 +54,74 @@ enum AuthenticatedControlUI {
     static func authUserScript(
         config: GatewayConnectConfig?,
         pageURL: URL?,
-        storedOperatorToken: String?) -> String?
+        storedOperatorToken: String?,
+        usesNativeNavigationChrome: Bool = false) -> String?
     {
         guard let config, let pageURL else { return nil }
-        var payload: [String: String] = ["gatewayUrl": config.url.absoluteString]
+        var payload: [String: Any] = ["gatewayUrl": config.url.absoluteString]
         let token = config.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let storedToken = storedOperatorToken?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let password = config.password?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let storedAuthorization = Self.storedOperatorAuthorization(
+            config: config,
+            expectedToken: storedToken)
+        if let storedAuthorization {
+            payload["client"] = [
+                "id": config.nodeOptions.clientId,
+                "mode": "ui",
+                "platform": InstanceIdentity.platformString,
+                "deviceFamily": InstanceIdentity.deviceFamily,
+                "instanceId": InstanceIdentity.instanceId,
+                "scopes": storedAuthorization.entry.scopes,
+            ]
+        }
         if !token.isEmpty {
             payload["token"] = token
-        } else if !storedToken.isEmpty {
+        } else if storedAuthorization == nil, !storedToken.isEmpty {
             payload["token"] = storedToken
         }
         if !password.isEmpty {
             payload["password"] = password
         }
-        guard payload["token"] != nil || payload["password"] != nil else { return nil }
+        guard payload["token"] != nil || payload["password"] != nil || storedAuthorization != nil else {
+            return nil
+        }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let json = String(data: data, encoding: .utf8)
         else {
             return nil
         }
+        let deviceAuthSeed = storedAuthorization.flatMap { Self.deviceAuthSeed(
+            gatewayURL: config.url,
+            authorization: $0)
+        } ?? "null"
         let allowedOrigin = Self.jsStringLiteral(Self.originString(for: pageURL))
         return """
         (() => {
           try {
             if (location.origin !== \(allowedOrigin)) return;
+            const deviceAuthSeed = \(deviceAuthSeed);
+            if (deviceAuthSeed) {
+              const gateway = new URL(deviceAuthSeed.gatewayUrl, location.href);
+              gateway.hash = "";
+              const path = gateway.pathname === "/"
+                ? ""
+                : gateway.pathname.replace(/\\/+$/, "") || gateway.pathname;
+              const scope = `${gateway.protocol}//${gateway.host}${path}${gateway.search}`;
+              localStorage.setItem(
+                "openclaw-device-identity-v1",
+                JSON.stringify(deviceAuthSeed.identity));
+              localStorage.setItem(
+                `openclaw.device.auth.v1:${scope}`,
+                JSON.stringify(deviceAuthSeed.authorization));
+              localStorage.removeItem("openclaw.device.auth.v1");
+            }
+            if (\(usesNativeNavigationChrome)) {
+              Object.defineProperty(window, "__OPENCLAW_NATIVE_WEB_CHROME__", {
+                value: true,
+                configurable: true,
+              });
+            }
             Object.defineProperty(window, "__OPENCLAW_NATIVE_CONTROL_AUTH__", {
               value: \(json),
               configurable: true,
@@ -85,17 +132,7 @@ enum AuthenticatedControlUI {
     }
 
     static func storedOperatorToken(config: GatewayConnectConfig?) -> String? {
-        guard let config else { return nil }
-        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
-        // must honor that boundary or a stale token can override the supplied password.
-        guard config.nodeOptions.allowStoredDeviceAuth else { return nil }
-        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
-        guard let identity = DeviceIdentityStore.loadOrCreatePersisted() else { return nil }
-        return DeviceAuthStore.loadToken(
-            deviceId: identity.deviceId,
-            role: "operator",
-            gatewayID: gatewayID)?
-            .token
+        self.storedOperatorAuthorization(config: config)?.entry.token
     }
 
     static func webContentIdentity(config: GatewayConnectConfig?, storedOperatorToken: String?) -> Int {
@@ -130,6 +167,74 @@ enum AuthenticatedControlUI {
         return String(raw.dropFirst().dropLast())
     }
 
+    private static func storedOperatorAuthorization(
+        config: GatewayConnectConfig?,
+        expectedToken: String? = nil) -> StoredOperatorAuthorization?
+    {
+        guard let config else { return nil }
+        // Endpoint handoffs may explicitly suppress device-token reuse; every auth surface
+        // must honor that boundary or a stale token can override the supplied password.
+        guard config.nodeOptions.includeDeviceIdentity,
+              config.nodeOptions.allowStoredDeviceAuth
+        else { return nil }
+        let profile = config.nodeOptions.deviceIdentityProfile
+        let gatewayID = config.nodeOptions.deviceAuthGatewayID ?? config.effectiveStableID
+        guard let identity = DeviceIdentityStore.loadOrCreatePersisted(profile: profile),
+              let entry = DeviceAuthStore.loadToken(
+                  deviceId: identity.deviceId,
+                  role: "operator",
+                  gatewayID: gatewayID,
+                  profile: profile)
+        else { return nil }
+        if let expectedToken,
+           entry.token.trimmingCharacters(in: .whitespacesAndNewlines) != expectedToken
+        {
+            return nil
+        }
+        return StoredOperatorAuthorization(identity: identity, entry: entry)
+    }
+
+    private static func deviceAuthSeed(
+        gatewayURL: URL,
+        authorization: StoredOperatorAuthorization) -> String?
+    {
+        guard let publicKey = base64URL(authorization.identity.publicKey),
+              let privateKey = base64URL(authorization.identity.privateKey)
+        else { return nil }
+        let identity: [String: Any] = [
+            "version": 1,
+            "deviceId": authorization.identity.deviceId,
+            "publicKey": publicKey,
+            "privateKey": privateKey,
+            "createdAtMs": authorization.identity.createdAtMs,
+        ]
+        let entry: [String: Any] = [
+            "token": authorization.entry.token,
+            "role": "operator",
+            "scopes": authorization.entry.scopes,
+            "updatedAtMs": authorization.entry.updatedAtMs,
+        ]
+        let seed: [String: Any] = [
+            "gatewayUrl": gatewayURL.absoluteString,
+            "identity": identity,
+            "authorization": [
+                "version": 1,
+                "deviceId": authorization.identity.deviceId,
+                "tokens": ["operator": entry],
+            ],
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: seed) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func base64URL(_ value: String) -> String? {
+        guard let data = Data(base64Encoded: value) else { return nil }
+        return data.base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
+    }
+
     private static func pagePath(basePath rawPath: String, path: String) -> String {
         let withLeadingSlash = rawPath.isEmpty || rawPath.hasPrefix("/") ? rawPath : "/" + rawPath
         let basePath = withLeadingSlash.isEmpty || withLeadingSlash == "/"
@@ -141,12 +246,29 @@ enum AuthenticatedControlUI {
 }
 
 @MainActor
+enum AuthenticatedControlUIWebViewNavigationDecision: Equatable {
+    case allow
+    case cancel
+    case cancelAndExitScope
+}
+
+@MainActor
 final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDelegate {
     private let expectedOrigin: GatewayTLSAuthority?
+    private let allowedMainFramePathPrefix: String?
+    private let onMainFrameNavigationOutsideScope: (() -> Void)?
     private let tls: GatewayTLSParams?
+    private var hasExitedNavigationScope = false
 
-    init(url: URL, tls: GatewayTLSParams?) {
+    init(
+        url: URL,
+        tls: GatewayTLSParams?,
+        allowedMainFramePathPrefix: String? = nil,
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+    {
         self.expectedOrigin = GatewayTLSAuthority(url: url)
+        self.allowedMainFramePathPrefix = allowedMainFramePathPrefix.map(Self.normalizedPath)
+        self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
         self.tls = tls
     }
 
@@ -155,9 +277,14 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
         decidePolicyFor navigationAction: WKNavigationAction,
         decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void)
     {
-        decisionHandler(self.allowsNavigation(
+        let decision = self.navigationDecision(
             to: navigationAction.request.url,
-            isMainFrame: navigationAction.targetFrame?.isMainFrame) ? .allow : .cancel)
+            isMainFrame: navigationAction.targetFrame?.isMainFrame)
+        decisionHandler(decision == .allow ? .allow : .cancel)
+        if decision == .cancelAndExitScope, !self.hasExitedNavigationScope {
+            self.hasExitedNavigationScope = true
+            self.onMainFrameNavigationOutsideScope?()
+        }
     }
 
     func webView(
@@ -200,15 +327,46 @@ final class AuthenticatedControlUIWebViewCoordinator: NSObject, WKNavigationDele
     }
 
     func allowsNavigation(to candidateURL: URL?, isMainFrame: Bool?) -> Bool {
+        self.navigationDecision(to: candidateURL, isMainFrame: isMainFrame) == .allow
+    }
+
+    func navigationDecision(
+        to candidateURL: URL?,
+        isMainFrame: Bool?) -> AuthenticatedControlUIWebViewNavigationDecision
+    {
         if isMainFrame == false {
-            return true
+            return .allow
         }
-        guard isMainFrame == true, let candidateURL else { return false }
-        return GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin
+        guard isMainFrame == true, let candidateURL else { return .cancel }
+        guard GatewayTLSAuthority(url: candidateURL) == self.expectedOrigin else { return .cancel }
+        guard let allowedMainFramePathPrefix else { return .allow }
+        let candidatePath = Self.normalizedPath(candidateURL.path)
+        guard allowedMainFramePathPrefix != "/" else { return .allow }
+        return candidatePath == allowedMainFramePathPrefix ||
+            candidatePath.hasPrefix(allowedMainFramePathPrefix + "/")
+            ? .allow
+            : .cancelAndExitScope
     }
 
     func matchesExpectedAuthority(host: String, port: Int) -> Bool {
         self.expectedOrigin?.matches(host: host, port: port) == true
+    }
+
+    private static func normalizedPath(_ path: String) -> String {
+        var segments: [Substring] = []
+        for segment in path.split(separator: "/", omittingEmptySubsequences: true) {
+            switch segment {
+            case ".":
+                continue
+            case "..":
+                if !segments.isEmpty {
+                    segments.removeLast()
+                }
+            default:
+                segments.append(segment)
+            }
+        }
+        return "/" + segments.joined(separator: "/")
     }
 }
 
@@ -219,9 +377,29 @@ struct AuthenticatedControlUIWebView: UIViewRepresentable {
     let url: URL
     let authScript: String?
     let tls: GatewayTLSParams?
+    let allowedMainFramePathPrefix: String?
+    let onMainFrameNavigationOutsideScope: (() -> Void)?
+
+    init(
+        url: URL,
+        authScript: String?,
+        tls: GatewayTLSParams?,
+        allowedMainFramePathPrefix: String? = nil,
+        onMainFrameNavigationOutsideScope: (() -> Void)? = nil)
+    {
+        self.url = url
+        self.authScript = authScript
+        self.tls = tls
+        self.allowedMainFramePathPrefix = allowedMainFramePathPrefix
+        self.onMainFrameNavigationOutsideScope = onMainFrameNavigationOutsideScope
+    }
 
     func makeCoordinator() -> AuthenticatedControlUIWebViewCoordinator {
-        AuthenticatedControlUIWebViewCoordinator(url: self.url, tls: self.tls)
+        AuthenticatedControlUIWebViewCoordinator(
+            url: self.url,
+            tls: self.tls,
+            allowedMainFramePathPrefix: self.allowedMainFramePathPrefix,
+            onMainFrameNavigationOutsideScope: self.onMainFrameNavigationOutsideScope)
     }
 
     func makeUIView(context: Context) -> WKWebView {

@@ -98,6 +98,8 @@ When no `x-openclaw-session-key` header or `user` field is provided, `/v1/chat/c
 `openclaw health` asks the running gateway for its health snapshot (no direct channel
 sockets from the CLI). By default it returns a fresh cached gateway snapshot and the
 gateway refreshes that cache in the background; `--verbose` forces a live probe instead.
+Snapshots describe loaded and configured channels. Stored credentials alone do not
+activate a channel or add it to Gateway health; use channel setup to enable it.
 The command reports linked creds/auth age when available, per-channel probe summaries,
 session-store summary, and probe duration. Live probes use bounded account concurrency
 and a Gateway-owned deadline, so one slow account returns a structured timeout while

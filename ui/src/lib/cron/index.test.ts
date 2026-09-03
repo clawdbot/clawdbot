@@ -13,8 +13,6 @@ import {
   addCronJob,
   cancelCronEdit,
   createInitialCronState,
-  getVisibleCronJobs,
-  loadCronFailingCount,
   loadCronModelSuggestions,
   toggleCronJob,
   loadCronJobsPage,
@@ -879,7 +877,6 @@ describe("cron controller", () => {
     );
     expect(request).toHaveBeenCalledWith("cron.get", { id: staleJob.id });
     expect(state.cronJobs).toEqual([]);
-    expect(getVisibleCronJobs(state)).toEqual([]);
     expect(state.cronJobsTotal).toBe(0);
     expect(state.cronEditingJobId).toBe(authoritativeJob.id);
     expect(state.cronEditingJob).toEqual(authoritativeJob);
@@ -3033,62 +3030,6 @@ describe("cron one-shot schedule precision", () => {
       kind: "at",
       at: originalMinute.toISOString(),
     });
-  });
-});
-
-describe("loadCronFailingCount", () => {
-  it("queries the unfiltered enabled+error total and stores it", async () => {
-    const request = vi.fn(async () => ({ jobs: [], total: 4, offset: 0, limit: 1 }));
-    const state = createStateWithRequest(request);
-    await loadCronFailingCount(state);
-
-    expect(request).toHaveBeenCalledWith("cron.list", {
-      enabled: "enabled",
-      includeDeliveryPreviews: false,
-      lastRunStatus: "error",
-      limit: 1,
-      offset: 0,
-    });
-    expect(state.cronFailingCount).toBe(4);
-  });
-
-  it("refreshes after job mutations such as pause/resume", async () => {
-    const job = createCronJob({ id: "job-1", name: "Pause me" });
-    const request = vi.fn(async (method: string, payload?: unknown) => {
-      if (
-        method === "cron.list" &&
-        (payload as { lastRunStatus?: string })?.lastRunStatus === "error"
-      ) {
-        return { jobs: [], total: 1, offset: 0, limit: 1 };
-      }
-      if (method === "cron.list") {
-        return emptyCronListResponse();
-      }
-      if (method === "cron.status") {
-        return { enabled: true, jobs: 0 };
-      }
-      if (method === "cron.update") {
-        return { ...job, enabled: false, configRevision: "config-revision-2" };
-      }
-      return {};
-    });
-    const state = createStateWithRequest(request, { cronJobs: [job] });
-    await toggleCronJob(state, job, false);
-
-    expect(state.cronFailingCount).toBe(1);
-  });
-
-  it("degrades to null on request failure without touching cronError", async () => {
-    const request = vi.fn(async () => {
-      throw new Error("nope");
-    });
-    const state = createStateWithRequest(request, {
-      cronFailingCount: 2,
-    });
-    await loadCronFailingCount(state);
-
-    expect(state.cronFailingCount).toBeNull();
-    expect(state.cronError).toBeNull();
   });
 });
 

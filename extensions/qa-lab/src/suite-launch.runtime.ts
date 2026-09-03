@@ -18,6 +18,7 @@ import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
 import {
   defaultQaSuiteConcurrencyForTransport,
   normalizeQaTransportId,
+  prepareQaTransportAdapterFactories,
   type QaTransportDriver,
 } from "./qa-transport-registry.js";
 import { renderQaMarkdownReport, type QaReportScenario } from "./report.js";
@@ -759,6 +760,11 @@ async function runUnifiedQaSuite(params: {
   const repoRoot = path.resolve(params.runParams?.repoRoot ?? process.cwd());
   const outputDir = await resolveQaSuiteOutputDir(repoRoot, params.runParams?.outputDir);
   await invalidateQaSuiteArtifactGeneration(outputDir);
+  const adapterFactories = await prepareQaTransportAdapterFactories({
+    factories: params.runParams?.adapterFactories,
+    driver: params.runParams?.channelDriver,
+    cells: params.plan.expectedCells,
+  });
   // Only an explicitly selected single flow may replace the unified suite's mock default.
   const [selectedScenario] = params.plan.scenarios;
   const selectedProviderMode =
@@ -847,9 +853,7 @@ async function runUnifiedQaSuite(params: {
       const usesContributedChannelDriver = Boolean(
         channelId &&
         params.runParams?.channelDriver === "live" &&
-        params.runParams.adapterFactories?.find((factory) =>
-          factory.matches({ channelId, driver: "live" }),
-        ),
+        adapterFactories?.find((factory) => factory.matches({ channelId, driver: "live" })),
       );
       // Isolated adapters may use the caller's full suite budget; every partition
       // still has weight one in the global scheduler below.
@@ -978,6 +982,7 @@ async function runUnifiedQaSuite(params: {
             }
             const result = await runFlowSuite({
               ...params.runParams,
+              adapterFactories,
               ...(progress
                 ? {
                     lab: progress.createPartitionLab(
@@ -1090,6 +1095,7 @@ async function runUnifiedQaSuite(params: {
             kind,
             runParams: {
               ...params.runParams,
+              adapterFactories,
               outputDir: suitePartitionOutputDir(outputDir, kind),
               writeEvidenceFile: false,
               providerMode,

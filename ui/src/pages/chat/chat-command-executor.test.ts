@@ -587,17 +587,24 @@ describe("executeSlashCommand directives", () => {
     });
   });
 
-  it("passes selected-agent scope for global compaction", async () => {
+  it("refreshes successful compaction without a duplicate command message", async () => {
     const request = vi.fn(async (method: string, _payload?: unknown) => {
       if (method === "sessions.compact") {
-        return { ok: true, compacted: false };
+        return { ok: true, compacted: true };
       }
       throw new Error(`unexpected method: ${method}`);
     });
 
-    await executeSlashCommand(createTestGatewayClient(request), "global", "compact", "", {
-      agentId: "work",
-    });
+    const result = await executeSlashCommand(
+      createTestGatewayClient(request),
+      "global",
+      "compact",
+      "",
+      {
+        agentId: "work",
+      },
+    );
+    expect(result).toEqual({ action: "refresh" });
 
     expect(request).toHaveBeenCalledWith("sessions.compact", {
       key: "global",

@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { hasProviderTransportDispatcherPool } from "../../agents/provider-runtime-lifecycle.js";
@@ -126,6 +127,56 @@ describe("PinnedDispatcherPool", () => {
 
     await pool.closeAll();
   });
+
+  it.each(["expiry", "retirement", "shutdown"] as const)(
+    "keeps request contexts out of pool-owned %s cleanup",
+    async (reason) => {
+      const requestScope = new AsyncLocalStorage<object>();
+      const sessionScope = new AsyncLocalStorage<object>();
+      const request = {};
+      const session = {};
+      const closed = createDeferredCore<[object | undefined, object | undefined]>();
+      const close = vi.fn(async () => {
+        closed.resolve([requestScope.getStore(), sessionScope.getStore()]);
+      });
+      let pool: PinnedDispatcherPool | undefined;
+      try {
+        await requestScope.run(request, () =>
+          sessionScope.run(session, async () => {
+            pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 5 });
+            const lease = pool.acquire({
+              key: "origin-a/pin-a",
+              groupKey: "origin-a",
+              createDispatcher: () => {
+                expect(requestScope.getStore()).toBe(request);
+                expect(sessionScope.getStore()).toBe(session);
+                return { close } as unknown as Dispatcher;
+              },
+            });
+            expect(lease).toBeDefined();
+            if (reason === "retirement") {
+              pool.acquire({
+                key: "origin-a/pin-b",
+                groupKey: "origin-a",
+                createDispatcher: () => createDispatcher().dispatcher,
+              });
+            }
+            if (reason === "shutdown") {
+              await pool.closeAll();
+            } else {
+              await lease!.release();
+            }
+            expect(requestScope.getStore()).toBe(request);
+            expect(sessionScope.getStore()).toBe(session);
+          }),
+        );
+        expect(await closed.promise).toEqual([undefined, undefined]);
+        expect(close).toHaveBeenCalledOnce();
+      } finally {
+        await pool?.closeAll();
+      }
+    },
+  );
 
   it("fences a closed generation from later acquisition", async () => {
     const pool = new PinnedDispatcherPool({ maxEntries: 1, idleTtlMs: 60_000 });

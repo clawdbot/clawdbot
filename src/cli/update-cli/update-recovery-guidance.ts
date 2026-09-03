@@ -7,11 +7,12 @@ type UnsafeUpdateRecovery = Extract<
 >;
 
 export function resolveUnsafeUpdateRecoveryGuidance(
-  reason: UnsafeUpdateRecovery["reason"],
+  reason?: UnsafeUpdateRecovery["reason"],
 ): string {
-  const updateCommand = formatCliCommand("openclaw update");
-  if (reason === "rollback-checkout-dirty") {
-    return `From the update root shown above, run \`git status --short\`, resolve the reported changes, then rerun \`${updateCommand}\`.`;
+  const triageCommand = formatCliCommand("openclaw triage");
+  const guidance = `Run \`${triageCommand}\` on this machine to open a coding agent that can diagnose and repair the installation.`;
+  if (reason === "state-migration-started") {
+    return `${guidance} Candidate Doctor may have migrated state; keep the candidate installed and do not roll back code alone.`;
   }
-  return `Review the failed recovery step above, repair the checkout or installation, then rerun \`${updateCommand}\`.`;
+  return guidance;
 }

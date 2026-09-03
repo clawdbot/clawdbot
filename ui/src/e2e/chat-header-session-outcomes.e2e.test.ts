@@ -1,7 +1,7 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
   controlUiSessionPath,
@@ -12,12 +12,12 @@ import {
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "header-outcomes-followup",
-);
+let proofDir: string;
+beforeEach(() => {
+  if (captureProof) {
+    proofDir = createControlUiE2eArtifactDir("header-outcomes-followup");
+  }
+});
 
 async function capture(page: Page, name: string): Promise<void> {
   if (captureProof) {
@@ -97,12 +97,6 @@ async function startPlacementReclaim(
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    if (captureProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
-  });
-
   it("does not resurrect a reveal failure after navigating away", async () => {
     const context = await suite.newBrowserContext(proofContextOptions());
     const page = await context.newPage();
@@ -215,11 +209,7 @@ suite.define(() => {
           ),
         )
         .toBe(sessionA);
-      await visiblePane
-        .getByRole("alert")
-        .locator("summary")
-        .getByText(message, { exact: true })
-        .waitFor();
+      await visiblePane.getByRole("alert").getByText(message, { exact: true }).waitFor();
 
       await page.getByRole("button", { name: "Runs on Cloud" }).click();
       await page.getByText("Stop cloud worker…", { exact: true }).waitFor();

@@ -55,13 +55,17 @@ function unsupportedKey(message: string): Error {
   return new Error(`COMPUTER_UNSUPPORTED_KEY: ${message}`);
 }
 
-export function normalizeModifiers(value: string | undefined): string[] {
-  if (!value?.trim()) {
-    return [];
-  }
-  return value.split("+").map((entry) => {
+function modifierAlias(value: string, platform: NodeJS.Platform): string | undefined {
+  const normalized = MODIFIER_ALIASES.get(value.toLowerCase());
+  // CUA's macOS backend silently ignores meta; Linux requires that spelling.
+  // Resolve against the provider's platform for both chords and pointer input.
+  return platform === "darwin" && normalized === "meta" ? "cmd" : normalized;
+}
+
+function normalizeModifierList(entries: string[], platform: NodeJS.Platform): string[] {
+  return entries.map((entry) => {
     const raw = entry.trim();
-    const normalized = MODIFIER_ALIASES.get(raw.toLowerCase());
+    const normalized = modifierAlias(raw, platform);
     if (!normalized) {
       throw unsupportedKey(`unknown modifier ${JSON.stringify(raw)}`);
     }
@@ -69,17 +73,17 @@ export function normalizeModifiers(value: string | undefined): string[] {
   });
 }
 
-function normalizeKey(value: string): string {
+export function normalizeModifiers(value: string | undefined, platform: NodeJS.Platform): string[] {
+  return value?.trim() ? normalizeModifierList(value.split("+"), platform) : [];
+}
+
+function normalizeKey(value: string, platform: NodeJS.Platform): string {
   const raw = value.trim();
   if (!raw) {
     throw unsupportedKey("key chord contains an empty key");
   }
   const lowered = raw.toLowerCase();
-  const modifier = MODIFIER_ALIASES.get(lowered);
-  if (modifier) {
-    return modifier;
-  }
-  const named = KEY_ALIASES.get(lowered);
+  const named = modifierAlias(lowered, platform) ?? KEY_ALIASES.get(lowered);
   if (named) {
     return named;
   }
@@ -98,20 +102,14 @@ function normalizeKey(value: string): string {
   throw unsupportedKey(`unknown key ${JSON.stringify(raw)}`);
 }
 
-export function parseKeyChord(value: string | undefined): { key: string; modifiers: string[] } {
+export function parseKeyChord(value: string | undefined, platform: NodeJS.Platform) {
   const segments = value?.split("+").map((entry) => entry.trim()) ?? [];
   const rawKey = segments.pop();
   if (!rawKey) {
     throw unsupportedKey("key chord is empty");
   }
-  const modifiers = segments.map((entry) => {
-    const normalized = MODIFIER_ALIASES.get(entry.toLowerCase());
-    if (!normalized) {
-      throw unsupportedKey(`unknown modifier ${JSON.stringify(entry)}`);
-    }
-    return normalized;
-  });
-  return { key: normalizeKey(rawKey), modifiers };
+  const modifiers = normalizeModifierList(segments, platform);
+  return { key: normalizeKey(rawKey, platform), modifiers };
 }
 
 export function scalePoint(

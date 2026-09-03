@@ -12,7 +12,7 @@ function readTokenCount(record: JsonObject, key: string): number | undefined {
 function readCodexThreadTokenUsage(params: JsonObject): ReturnType<typeof normalizeUsage> {
   const tokenUsage = isJsonObject(params.tokenUsage) ? params.tokenUsage : undefined;
   const last = tokenUsage && isJsonObject(tokenUsage.last) ? tokenUsage.last : undefined;
-  return last ? normalizeCodexThreadTokenUsage(last) : undefined;
+  return last ? normalizeCodexResponseTokenUsage(last) : undefined;
 }
 
 export function readCodexThreadContextSnapshot(params: JsonObject): {
@@ -21,7 +21,6 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   cacheWriteInputTokens?: number;
   inputTokens?: number;
   modelContextWindow?: number;
-  outputTokens?: number;
   promptTokens?: number;
   reasoningOutputTokens?: number;
 } {
@@ -35,7 +34,6 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
   const inputTokens = last ? readTokenCount(last, "inputTokens") : undefined;
   const cachedInputTokens = last ? readTokenCount(last, "cachedInputTokens") : undefined;
   const cacheWriteInputTokens = last ? readTokenCount(last, "cacheWriteInputTokens") : undefined;
-  const outputTokens = last ? readTokenCount(last, "outputTokens") : undefined;
   const reasoningOutputTokens = last ? readTokenCount(last, "reasoningOutputTokens") : undefined;
   return {
     ...(activeContextTokens !== undefined ? { activeContextTokens } : {}),
@@ -43,7 +41,6 @@ export function readCodexThreadContextSnapshot(params: JsonObject): {
     ...(cacheWriteInputTokens !== undefined ? { cacheWriteInputTokens } : {}),
     ...(inputTokens !== undefined ? { inputTokens } : {}),
     ...(modelContextWindow && modelContextWindow > 0 ? { modelContextWindow } : {}),
-    ...(outputTokens !== undefined ? { outputTokens } : {}),
     ...(inputTokens !== undefined ? { promptTokens: inputTokens } : {}),
     ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
   };
@@ -62,19 +59,9 @@ export function projectCodexThreadUsageUpdate(
   }
 }
 
-export function normalizeCodexThreadTokenUsage(
-  record: JsonObject,
-): ReturnType<typeof normalizeUsage> {
-  return normalizeCodexTokenUsageBreakdown(record);
-}
-
 export function normalizeCodexResponseTokenUsage(
   record: JsonObject,
 ): ReturnType<typeof normalizeUsage> {
-  return normalizeCodexTokenUsageBreakdown(record);
-}
-
-function normalizeCodexTokenUsageBreakdown(record: JsonObject): ReturnType<typeof normalizeUsage> {
   // v2 TokenUsageBreakdown. inputTokens includes cached input; OpenClaw usage
   // tracks uncached input, cache reads, and cache writes separately.
   const totalTokens = readTokenCount(record, "totalTokens");
@@ -130,14 +117,19 @@ export class CodexResponseCompletionProjection {
     this.usage = undefined;
   }
 
-  record(params: JsonObject): void {
+  record(params: JsonObject, reportOutputTokens?: (outputTokens: number) => void): void {
     const responseId = readString(params, "responseId");
-    if (responseId) {
-      this.responseIds.add(responseId);
+    if (!responseId || this.responseIds.has(responseId)) {
+      return;
     }
+    this.responseIds.add(responseId);
     const usage = isJsonObject(params.usage) ? params.usage : undefined;
     // Every provider completion replaces the prior response snapshot. A final
     // response with missing or malformed usage must leave freshness unknown.
     this.usage = usage ? normalizeCodexResponseTokenUsage(usage) : undefined;
+    const outputTokens = this.usage?.output;
+    if (outputTokens !== undefined) {
+      reportOutputTokens?.(outputTokens);
+    }
   }
 }

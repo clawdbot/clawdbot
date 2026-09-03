@@ -616,6 +616,7 @@ describe("scoped vitest configs", () => {
       expect.arrayContaining(cliProcessTestFiles.map((file) => file.replace("src/cli/", ""))),
     );
     const processTestConfig = requireTestConfig(defaultCliProcessConfig);
+    expect(processTestConfig.include).toContain("src/cli/update-dry-run-state.process.test.ts");
     expect(processTestConfig.include).toEqual(cliProcessTestFiles);
     for (const file of cliProcessTestFiles) {
       expect(matchingExcludePatterns(processTestConfig.exclude ?? [], file), file).toEqual([]);
@@ -1137,7 +1138,17 @@ describe("scoped vitest configs", () => {
   it("normalizes ui include patterns relative to the scoped dir", () => {
     const testConfig = requireTestConfig(defaultUiConfig);
     expect(testConfig.dir).toBe(process.cwd());
-    expect(testConfig.include).toEqual(["ui/src/**/*.test.ts"]);
+    expect(testConfig.include?.every((pattern) => pattern.startsWith("ui/src/"))).toBe(true);
+    for (const [file, included] of [
+      ["ui/src/pages/chat/chat-view.test.ts", true],
+      ["ui/src/components/form-controls.browser.test.ts", true],
+      ["ui/src/components/markdown-mermaid.runtime.browser.test.ts", false],
+    ] as const) {
+      expect(
+        testConfig.include?.some((pattern) => path.matchesGlob(file, pattern)),
+        file,
+      ).toBe(included);
+    }
     expect(testConfig.exclude).toContain("ui/src/**/*.e2e.test.ts");
   });
 

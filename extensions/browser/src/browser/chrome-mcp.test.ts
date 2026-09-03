@@ -6,7 +6,7 @@ import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildChromeMcpArgsFromOptions, normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
+import { normalizeChromeMcpOptions } from "./chrome-mcp-options.js";
 import {
   ChromeMcpDocumentUnavailableError,
   clickChromeMcpCoords,
@@ -244,24 +244,116 @@ describe("chrome MCP page parsing", () => {
     vi.unstubAllEnvs();
   });
 
-  it("passes HTTP CDP endpoints to Chrome MCP as browserUrl discovery endpoints", () => {
-    const args = buildChromeMcpArgsFromOptions(
-      normalizeChromeMcpOptions({ cdpUrl: "http://127.0.0.1:9222" }),
-    );
+  it.each([undefined, "npx"])(
+    "uses pinned Chrome MCP for HTTP endpoints with command %s",
+    (mcpCommand) => {
+      const { command, args } = normalizeChromeMcpOptions({
+        cdpUrl: "http://127.0.0.1:9222",
+        mcpCommand,
+      });
 
-    expect(args).toContain("--browserUrl");
-    expect(args).toContain("http://127.0.0.1:9222");
-    expect(args).not.toContain("--wsEndpoint");
-  });
+      expect(command).toBe("npx");
+      expect(args.slice(0, 2)).toEqual(["-y", "chrome-devtools-mcp@1.8.0"]);
+      expect(args).toContain("--browserUrl");
+      expect(args).toContain("http://127.0.0.1:9222");
+      expect(args).not.toContain("--wsEndpoint");
+    },
+  );
 
   it("passes direct WebSocket CDP endpoints to Chrome MCP as wsEndpoint attachments", () => {
-    const args = buildChromeMcpArgsFromOptions(
-      normalizeChromeMcpOptions({ cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc" }),
-    );
+    const { args } = normalizeChromeMcpOptions({
+      cdpUrl: "ws://127.0.0.1:9222/devtools/browser/abc",
+    });
 
     expect(args).toContain("--wsEndpoint");
     expect(args).toContain("ws://127.0.0.1:9222/devtools/browser/abc");
     expect(args).not.toContain("--browserUrl");
+  });
+
+  const credentialEndpointUrl = new URL("https://browser.example/?token=fixture-token");
+  credentialEndpointUrl.username = "fixture-user";
+  credentialEndpointUrl.password = "fixture-password";
+  const credentialEndpoint = credentialEndpointUrl.href;
+  it.each([
+    { label: "missing", mcpArgs: ["--browserUrl"] },
+    {
+      label: "invalid",
+      mcpArgs: [
+        "--browserUrl",
+        credentialEndpoint.replace("browser.example", "browser.example:bad"),
+      ],
+    },
+    {
+      label: "duplicate",
+      mcpArgs: ["--browserUrl", "https://browser.example/", "-u", credentialEndpoint],
+    },
+    {
+      label: "conflicting",
+      mcpArgs: [
+        "--browserUrl",
+        credentialEndpoint,
+        "--wsEndpoint",
+        "ws://browser.example/devtools/browser/one",
+      ],
+    },
+    { label: "wrong protocol", mcpArgs: ["--wsEndpoint", credentialEndpoint] },
+    { label: "object-shaped", mcpArgs: ["--browserUrl.host", credentialEndpoint] },
+  ])(
+    "rejects $label endpoint arguments before creating a session without echoing secrets",
+    async ({ mcpArgs }) => {
+      const factory = vi.fn(async () => createFakeSession());
+      setChromeMcpSessionFactoryForTest(factory);
+
+      const attempt = ensureChromeMcpAvailable("chrome-live", { mcpArgs });
+
+      await expect(attempt).rejects.toThrow(/endpoint arguments/);
+      await expect(attempt).rejects.not.toThrow(/fixture-user|fixture-password|fixture-token/);
+      expect(factory).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps endpoint-looking arguments after -- positional", () => {
+    const cdpUrl = "https://configured.example";
+    const positionalArgs = ["--browserUrl", "https://positional.example"];
+    const { args, browserUrl } = normalizeChromeMcpOptions({
+      cdpUrl,
+      mcpArgs: ["--", ...positionalArgs],
+    });
+
+    expect(browserUrl).toBe(cdpUrl);
+    expect(args.slice(0, args.indexOf("--"))).toContain(cdpUrl);
+    expect(args.slice(args.indexOf("--") + 1)).toEqual(positionalArgs);
+  });
+
+  it.each([["--autoConnect=false"], ["--auto-connect", "false"], ["--no-auto-connect"]])(
+    "does not substitute cdpUrl for the explicit local connection choice %s",
+    (...mcpArgs) => {
+      const cdpUrl = "https://configured.example";
+      const { args, browserUrl } = normalizeChromeMcpOptions({ cdpUrl, mcpArgs });
+
+      expect(browserUrl).toBeUndefined();
+      expect(args).not.toContain(cdpUrl);
+      expect(args.slice(-mcpArgs.length)).toEqual(mcpArgs);
+    },
+  );
+
+  it("preserves unrelated custom command arguments verbatim", () => {
+    const mcpArgs = [
+      "--headless=false",
+      "--user-data-dir",
+      "/tmp/chrome profile",
+      "--chrome-arg=--disable-features=One,Two",
+    ];
+    const options = normalizeChromeMcpOptions({ mcpCommand: "custom-chrome-mcp", mcpArgs });
+
+    expect(options.command).toBe("custom-chrome-mcp");
+    expect(options.args).toEqual([
+      "--autoConnect",
+      "--no-usage-statistics",
+      "--experimentalStructuredContent",
+      "--experimental-page-id-routing",
+      ...mcpArgs,
+    ]);
   });
 
   it("keeps document-bound evaluations on one pinned target and raw snapshot uid", async () => {

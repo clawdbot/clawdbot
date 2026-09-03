@@ -24,7 +24,7 @@ import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-termi
 import { agentCommandFromGatewayIngress } from "../../commands/agent.js";
 import { isAbortError } from "../../infra/abort-signal.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
-import { formatErrorMessageWithCode, readErrorName } from "../../infra/errors.js";
+import { readErrorName } from "../../infra/errors.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createRunningTaskRun } from "../../tasks/detached-task-runtime.js";
 import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
@@ -33,6 +33,7 @@ import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js"
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
+import { errorShapeFromError } from "../error-shape.js";
 import {
   tryFinalizeTrackedAgentTask,
   type GatewayAgentTaskTrackingMode,
@@ -186,6 +187,15 @@ export function dispatchAgentRunFromGateway(params: {
       );
       return false;
     }
+  };
+  let runOwnerCleanedUp = false;
+  const cleanupRunOwner = () => {
+    if (runOwnerCleanedUp) {
+      return;
+    }
+    runOwnerCleanedUp = true;
+    clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
+    params.cleanupAbortController();
   };
   const cronCreatorAuthorityCapability = params.cronCreatorAuthority
     ? createCronCreatorAuthorityCapability(
@@ -342,6 +352,7 @@ export function dispatchAgentRunFromGateway(params: {
           keys: params.dedupeKeys,
           entry: { ts: Date.now(), ok: false, payload: failedPayload, error },
         });
+        cleanupRunOwner();
         params.io.emitFinal([false, failedPayload, error], {
           runId: params.runId,
           error: summary,
@@ -349,13 +360,17 @@ export function dispatchAgentRunFromGateway(params: {
         return;
       }
       persistTerminalDedupe();
+      // A final response resumes durable delivery cleanup. Release the terminal
+      // run owner first so exact-session deletion cannot race this admission.
+      cleanupRunOwner();
       // Send a second res frame (same id) so TS clients with expectFinal can wait.
       // Swift clients will typically treat the first res as the result and ignore this.
       params.io.emitFinal([true, payload, undefined], { runId: params.runId });
     })
     .catch(async (err: unknown) => {
       const aborted = isGatewayAgentAbortRejection(err, params.abortController.signal);
-      const renderedErr = formatErrorMessageWithCode(err);
+      const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err);
+      const renderedErr = error.message;
       const stopReason = aborted
         ? resolveGatewayAgentAbortStopReason(params.abortController.signal)
         : isAbortError(err)
@@ -377,7 +392,6 @@ export function dispatchAgentRunFromGateway(params: {
           log: params.context.logGateway,
         });
       }
-      const error = errorShape(ErrorCodes.UNAVAILABLE, renderedErr);
       Object.defineProperty(error, "cause", { value: err });
       const payload = {
         runId: params.runId,
@@ -409,13 +423,11 @@ export function dispatchAgentRunFromGateway(params: {
         onRecovered: () => persistTerminalDedupe(true),
       });
       persistTerminalDedupe(settled);
+      cleanupRunOwner();
       params.io.emitFinal([aborted && settled, payload, aborted && settled ? undefined : error], {
         runId: params.runId,
         ...(aborted ? {} : { error: renderedErr }),
       });
     })
-    .finally(() => {
-      clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
-      params.cleanupAbortController();
-    });
+    .finally(cleanupRunOwner);
 }

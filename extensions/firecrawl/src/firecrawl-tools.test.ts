@@ -30,7 +30,7 @@ describe("firecrawl tools", () => {
   const priorFetch = global.fetch;
   let fetchFirecrawlContent: typeof import("../api.js").fetchFirecrawlContent;
   let createFirecrawlWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlWebSearchProvider;
-  let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-free-search-provider.js").createFirecrawlFreeWebSearchProvider;
+  let createFirecrawlFreeWebSearchProvider: typeof import("./firecrawl-search-provider.js").createFirecrawlFreeWebSearchProvider;
   let createFirecrawlWebFetchProvider: typeof import("./firecrawl-fetch-provider.js").createFirecrawlWebFetchProvider;
   let createFirecrawlSearchTool: typeof import("./firecrawl-search-tool.js").createFirecrawlSearchTool;
   let createFirecrawlScrapeTool: typeof import("./firecrawl-scrape-tool.js").createFirecrawlScrapeTool;
@@ -43,8 +43,7 @@ describe("firecrawl tools", () => {
     ({ fetchFirecrawlContent } = await import("../api.js"));
     ({ createFirecrawlWebFetchProvider } = await import("./firecrawl-fetch-provider.js"));
     ({ createFirecrawlWebSearchProvider } = await import("./firecrawl-search-provider.js"));
-    ({ createFirecrawlFreeWebSearchProvider } =
-      await import("./firecrawl-free-search-provider.js"));
+    ({ createFirecrawlFreeWebSearchProvider } = await import("./firecrawl-search-provider.js"));
     ({ createFirecrawlSearchTool } = await import("./firecrawl-search-tool.js"));
     ({ createFirecrawlScrapeTool } = await import("./firecrawl-scrape-tool.js"));
     ({
@@ -1184,7 +1183,7 @@ describe("firecrawl tools", () => {
         query: "web search",
         count: 6.5,
       }),
-    ).rejects.toThrow("count must be an integer from 1 to 10");
+    ).rejects.toThrow(/^count must be an integer from 1 to 100$/);
     await expect(
       searchTool.execute("call-search-timeout", {
         query: "web search",

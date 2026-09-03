@@ -1,6 +1,29 @@
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  constants as fsConstants,
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
+import { afterAll } from "vitest";
+import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+type PerformanceTemplate = {
+  root: string;
+  git: string;
+  target: string;
+  reportCommit: string;
+};
+
+const templateDirs = createTempDirTracker();
+const performanceTemplates = new Map<"base" | "publish", PerformanceTemplate>();
+afterAll(() => {
+  templateDirs.cleanup();
+  performanceTemplates.clear();
+});
 
 export type PerformanceFixtureOptions = {
   mode: "target" | "record" | "tested" | "kova" | "baseline" | "prepare" | "publish";
@@ -17,7 +40,10 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
   const seed = path.join(workspace, "seed");
   const reports = path.join(temp, "reports");
   const input = path.join(temp, "input");
-  const git = execFileSync("which", ["git"], { encoding: "utf8" }).trim();
+  const reuseDefault = !options.baseline && !options.duplicate;
+  const templateKind = options.mode === "publish" ? "publish" : "base";
+  const template = reuseDefault ? performanceTemplates.get(templateKind) : undefined;
+  const git = template?.git ?? execFileSync("which", ["git"], { encoding: "utf8" }).trim();
   const gitEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
@@ -38,11 +64,6 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     mkdirSync(path.dirname(file), { recursive: true });
     writeFileSync(file, value);
   };
-  mkdirSync(temp, { recursive: true });
-  mkdirSync(seed);
-  run(workspace, "init", "--bare", "--initial-branch=main", remote);
-  run(seed, "init", "--initial-branch=main");
-  write(path.join(seed, "README.md"), "fixture\n");
   const dest = "openclaw-performance/main/123-1/mock-provider";
   const previous = "openclaw-performance/main/100-1/mock-provider";
   const pointer = "openclaw-performance/main/latest-mock-provider.json";
@@ -53,35 +74,57 @@ export function preparePerformanceFixture(root: string, options: PerformanceFixt
     run(cwd, "add", ".");
     run(cwd, "commit", "-m", "fixture report");
   };
-  if (options.baseline !== "absent") {
-    commitReport(seed, options.duplicate ? dest : previous);
-    if (options.baseline === "invalid") write(path.join(seed, pointer), "{invalid");
-    if (options.baseline === "trailing-newline")
-      write(path.join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
-  }
-  run(seed, "add", ".");
-  run(seed, "commit", "--allow-empty", "-m", "fixture seed");
-  run(seed, "push", remote, "HEAD:main");
-  run(workspace, "init", "--initial-branch=main");
-  write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
-  run(workspace, "add", "src");
-  run(workspace, "commit", "-m", "fixture target");
-  const target = run(workspace, "rev-parse", "HEAD");
-  mkdirSync(reports);
-  let reportCommit = "a".repeat(40);
-  if (options.mode === "publish") {
-    run(reports, "init", "--initial-branch=main");
-    run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
-    run(reports, "fetch", "--depth=1", remote, "main");
-    run(reports, "checkout", "-B", "main", "FETCH_HEAD");
-    run(reports, "config", "core.hooksPath", "/dev/null");
-    commitReport(reports, dest);
-    reportCommit = run(reports, "rev-parse", "HEAD");
-    write(path.join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
-    if (options.race) {
-      commitReport(seed, "openclaw-performance/main/200-1/mock-provider");
-      run(seed, "push", remote, "HEAD:main");
+  const copyOptions = { recursive: true, mode: fsConstants.COPYFILE_FICLONE };
+  if (template) {
+    cpSync(template.root, workspace, copyOptions);
+  } else {
+    mkdirSync(temp, { recursive: true });
+    mkdirSync(seed);
+    run(workspace, "init", "--bare", "--initial-branch=main", remote);
+    run(seed, "init", "--initial-branch=main");
+    write(path.join(seed, "README.md"), "fixture\n");
+    if (options.baseline !== "absent") {
+      commitReport(seed, options.duplicate ? dest : previous);
+      if (options.baseline === "invalid") {
+        write(path.join(seed, pointer), "{invalid");
+      }
+      if (options.baseline === "trailing-newline") {
+        write(path.join(seed, pointer), JSON.stringify({ path: previous + "\n" }));
+      }
     }
+    run(seed, "add", ".");
+    run(seed, "commit", "--allow-empty", "-m", "fixture seed");
+    run(seed, "push", remote, "HEAD:main");
+    run(workspace, "init", "--initial-branch=main");
+    write(path.join(workspace, "src/config/zod-schema.agent-defaults.ts"), "    mediaModels: z\n");
+    run(workspace, "add", "src");
+    run(workspace, "commit", "-m", "fixture target");
+    mkdirSync(reports);
+    if (options.mode === "publish") {
+      run(reports, "init", "--initial-branch=main");
+      run(reports, "remote", "add", "origin", "https://github.com/openclaw/clawgrit-reports.git");
+      // Keep FETCH_HEAD's source description valid when the snapshot is copied.
+      run(reports, "fetch", "--depth=1", path.relative(reports, remote), "main");
+      run(reports, "checkout", "-B", "main", "FETCH_HEAD");
+      run(reports, "config", "core.hooksPath", "/dev/null");
+      commitReport(reports, dest);
+      write(path.join(reports, ".git/preexisting.lock"), "not invocation-owned\n");
+    }
+  }
+  const target = template?.target ?? run(workspace, "rev-parse", "HEAD");
+  const reportCommit =
+    template?.reportCommit ??
+    (options.mode === "publish" ? run(reports, "rev-parse", "HEAD") : "a".repeat(40));
+  if (!template && reuseDefault) {
+    // Snapshot complete repositories and their identities before scenario mutation.
+    // Copies own their refs, index and objects; no live process or remote is shared.
+    const templateRoot = templateDirs.make(`openclaw-performance-${templateKind}-template-`);
+    cpSync(workspace, templateRoot, copyOptions);
+    performanceTemplates.set(templateKind, { root: templateRoot, git, target, reportCommit });
+  }
+  if (options.mode === "publish" && options.race) {
+    commitReport(seed, "openclaw-performance/main/200-1/mock-provider");
+    run(seed, "push", remote, "HEAD:main");
   }
   write(path.join(input, "kova/reports/mock-provider/report.json"), "{}\n");
   write(path.join(input, "kova/reports/mock-provider/report.md"), "report\n");

@@ -4,14 +4,19 @@
  * The shared module owns classification and message contracts; this adapter
  * binds those contracts to embedded-run abort, status, and steering primitives.
  */
-import type { EmbeddedAgentQueueMessageOutcome } from "../agents/embedded-agent-runner/runs.js";
-import { getDiagnosticSessionActivitySnapshot } from "../logging/diagnostic-run-activity.js";
+import type {
+  ActiveEmbeddedRunOwner,
+  EmbeddedAgentQueueMessageOutcome,
+} from "../agents/embedded-agent-runner/runs.js";
+import { isAbortError } from "../infra/abort-signal.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import {
   buildRealtimeVoiceAgentCancelProviderResult,
   buildRealtimeVoiceAgentFollowupSteeringText,
   formatRealtimeVoiceAgentQueueRejection,
   formatRealtimeVoiceAgentStatus,
   resolveRealtimeVoiceAgentControlIntent,
+  type RealtimeVoiceAgentControlProviderResult,
   type RealtimeVoiceAgentControlResult,
   type RealtimeVoiceAgentRunActivity,
 } from "./agent-run-control-shared.js";
@@ -34,6 +39,15 @@ export {
   type RealtimeVoiceAgentControlResult,
 } from "./agent-run-control-shared.js";
 
+/** Host error projection needs server-side redaction, outside browser-shared contracts. */
+export function buildRealtimeVoiceAgentErrorProviderResult(
+  error: unknown,
+): RealtimeVoiceAgentControlProviderResult | { error: string } {
+  return isAbortError(error)
+    ? buildRealtimeVoiceAgentCancelProviderResult()
+    : { error: formatErrorMessage(error) };
+}
+
 type RealtimeVoiceAgentControlDeps = {
   abortEmbeddedAgentRun: (sessionId: string) => boolean;
   queueEmbeddedAgentMessageWithOutcomeAsync: (
@@ -51,12 +65,22 @@ type RealtimeVoiceAgentControlDeps = {
     sessionKey?: string;
   }) => RealtimeVoiceAgentRunActivity;
   resolveActiveEmbeddedRunSessionId: (sessionKey: string) => string | undefined;
+  resolveActiveEmbeddedRunOwnerByRunId?: (runId: string) => ActiveEmbeddedRunOwner | undefined;
+  resolveActiveReplyRunOwnerForSignal?: (
+    signal: AbortSignal,
+  ) => Pick<ActiveEmbeddedRunOwner, "sessionId" | "sessionKey" | "abort"> | undefined;
 };
 
 /** Apply a spoken status, cancel, steer, or follow-up request to an active run. */
 export async function controlRealtimeVoiceAgentRun(
   params: {
     sessionKey: string;
+    /** Exact admitted owner; null forbids lookup, omission retains legacy session-key control. */
+    runTarget?: {
+      runId: string;
+      signal: AbortSignal;
+      isCurrent: (sessionId?: string) => boolean;
+    } | null;
     text: string;
     mode?: unknown;
     recentEvents?: readonly TalkEvent[];
@@ -64,18 +88,35 @@ export async function controlRealtimeVoiceAgentRun(
   providedDeps?: RealtimeVoiceAgentControlDeps,
 ): Promise<RealtimeVoiceAgentControlResult> {
   // Provider registration consumes the shared policy without starting the agent runtime.
-  const deps = providedDeps ?? {
-    ...(await import("../agents/embedded-agent-runner/runs.js")),
-    ...(await import("../agents/embedded-agent-runner/active-run-projections.js")),
-    getDiagnosticSessionActivitySnapshot,
-  };
+  const deps =
+    providedDeps ?? (await import("./agent-run-control.runtime.js")).realtimeVoiceControlRuntime;
   const sessionKey = params.sessionKey.trim();
   const text = params.text.trim();
   const intent = resolveRealtimeVoiceAgentControlIntent({ text, mode: params.mode });
   const mode = intent.mode;
-  const sessionId = deps.resolveActiveEmbeddedRunSessionId(sessionKey);
-  const activity = deps.getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey });
-  const active = Boolean(sessionId || activity.activeWorkKind || activity.hasActiveEmbeddedRun);
+  const target = params.runTarget;
+  const candidate =
+    target && !target.signal.aborted && target.isCurrent()
+      ? (deps.resolveActiveEmbeddedRunOwnerByRunId?.(target.runId) ??
+        deps.resolveActiveReplyRunOwnerForSignal?.(target.signal))
+      : undefined;
+  const exactOwner =
+    candidate?.sessionKey === sessionKey && target?.isCurrent(candidate.sessionId)
+      ? candidate
+      : undefined;
+  const sessionId =
+    target === undefined
+      ? deps.resolveActiveEmbeddedRunSessionId(sessionKey)
+      : exactOwner?.sessionId;
+  // Global keys are shared across agents. Exact selectors never consult another
+  // session's key-only diagnostics, including when their live owner disappeared.
+  const activity =
+    target === undefined
+      ? deps.getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey })
+      : sessionId
+        ? deps.getDiagnosticSessionActivitySnapshot({ sessionId })
+        : undefined;
+  const active = Boolean(sessionId || activity?.activeWorkKind || activity?.hasActiveEmbeddedRun);
 
   // Status is read-only and can answer from diagnostic activity even when the
   // active embedded run id has already disappeared.
@@ -114,7 +155,8 @@ export async function controlRealtimeVoiceAgentRun(
         suppress: false,
       };
     }
-    const aborted = deps.abortEmbeddedAgentRun(sessionId);
+    const aborted =
+      target === undefined ? deps.abortEmbeddedAgentRun(sessionId) : exactOwner?.abort() === true;
     const message = aborted
       ? "Cancelled the active OpenClaw run."
       : "OpenClaw could not cancel the active run.";

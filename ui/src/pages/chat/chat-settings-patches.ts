@@ -24,9 +24,7 @@ type ChatCommandSettingsContext = {
   defaultAgentId?: string;
   agentId?: string;
 };
-type PendingPatchStore = WeakMap<SessionCapability, Map<string, Promise<boolean>>>;
-
-const pendingChatPickerPatches: PendingPatchStore = new WeakMap();
+const pendingChatPickerPatches = new WeakMap<SessionCapability, Map<string, Promise<boolean>>>();
 
 function resolveChatPickerPatchKey(
   host: ChatPickerPatchHost,
@@ -64,40 +62,13 @@ function resolveChatPickerPatchKey(
   return `agent:${normalizeAgentId(resolvedAgentId)}:${settingsKey}`;
 }
 
-function getPendingPatch(
-  store: PendingPatchStore,
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  agentId?: string,
-): Promise<boolean> | undefined {
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  return store.get(host.sessions)?.get(patchKey);
-}
-
-function trackLatestPatch(
-  store: PendingPatchStore,
-  host: ChatPickerPatchHost,
-  sessionKey: string,
-  patchPromise: Promise<boolean>,
-  agentId?: string,
-): void {
-  const pendingBySession = store.get(host.sessions) ?? new Map<string, Promise<boolean>>();
-  store.set(host.sessions, pendingBySession);
-  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
-  pendingBySession.set(patchKey, patchPromise);
-  void patchPromise.finally(() => {
-    if (pendingBySession.get(patchKey) === patchPromise) {
-      pendingBySession.delete(patchKey);
-    }
-  });
-}
-
 export function getPendingChatPickerPatch(
   host: ChatPickerPatchHost,
   sessionKey: string,
   agentId?: string,
 ): Promise<boolean> | undefined {
-  return getPendingPatch(pendingChatPickerPatches, host, sessionKey, agentId);
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
+  return pendingChatPickerPatches.get(host.sessions)?.get(patchKey);
 }
 
 function trackPendingChatSettingsPatch(
@@ -106,7 +77,16 @@ function trackPendingChatSettingsPatch(
   patchPromise: Promise<boolean>,
   agentId?: string,
 ): void {
-  trackLatestPatch(pendingChatPickerPatches, host, sessionKey, patchPromise, agentId);
+  const pendingBySession =
+    pendingChatPickerPatches.get(host.sessions) ?? new Map<string, Promise<boolean>>();
+  pendingChatPickerPatches.set(host.sessions, pendingBySession);
+  const patchKey = resolveChatPickerPatchKey(host, sessionKey, agentId);
+  pendingBySession.set(patchKey, patchPromise);
+  void patchPromise.finally(() => {
+    if (pendingBySession.get(patchKey) === patchPromise) {
+      pendingBySession.delete(patchKey);
+    }
+  });
 }
 
 export function patchChatSessionSettings(

@@ -17,7 +17,6 @@ import { migrateLegacyMainSessionKeys } from "../config/sessions/legacy-main-ses
 import { isPerAgentSessionStoreConfig } from "../config/sessions/session-store-config.js";
 import { resolveConfiguredAgentDatabaseTargets } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   collectRelevantDoctorPluginIds,
   listPluginDoctorSessionStoreAgentIds,
@@ -90,7 +89,11 @@ import {
   detectLegacyMeetingTranscripts,
   migrateLegacyMeetingTranscripts,
 } from "./state-migrations.meeting-transcripts.js";
-import { mergeNotices } from "./state-migrations.messages.js";
+import {
+  formatStartupMigrationFailure,
+  logStateMigrationResult,
+  mergeNotices,
+} from "./state-migrations.messages.js";
 import {
   detectLegacyNodeHostConfig,
   migrateLegacyNodeHostConfig,
@@ -513,82 +516,91 @@ export async function detectLegacyStateMigrations(params: {
   const nodeHost = detectDoctorOwnedState(detectLegacyNodeHostConfig);
   const subagentRegistry = detectDoctorOwnedState(detectLegacySubagentRegistry);
   const rescuePending = detectDoctorOwnedState(detectLegacyRescuePending);
-  const configuredChannels = Object.entries(params.cfg.channels ?? {});
-  // Doctor already resolved this migration owner; plugin defaults must not infer it again.
-  let migrationOwnerConfig = params.cfg;
-  if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
-    const agents = structuredClone(params.cfg.agents);
-    delete agents.ownership;
-    for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
-      entry.default = normalizeAgentId(agentId) === targetAgentId;
-    }
-    for (const entry of agents.list ?? []) {
-      entry.default = normalizeAgentId(entry.id) === targetAgentId;
-    }
-    migrationOwnerConfig = { ...params.cfg, agents };
-  }
-  const configuredAccountIds = Object.fromEntries(
-    configuredChannels.map(([channelId, value]) => {
-      const channelConfig =
-        value && typeof value === "object" && !Array.isArray(value)
-          ? (value as { accounts?: unknown; defaultAccount?: unknown })
-          : undefined;
-      const plugin = getChannelPlugin(channelId as ChannelId);
-      const accountIds = [
-        ...(plugin?.config.listAccountIds(params.cfg) ?? []),
-        ...(channelConfig?.accounts &&
-        typeof channelConfig.accounts === "object" &&
-        !Array.isArray(channelConfig.accounts)
-          ? Object.keys(channelConfig.accounts)
-          : []),
-        ...(typeof channelConfig?.defaultAccount === "string"
-          ? [channelConfig.defaultAccount]
-          : []),
-        ...(params.cfg.bindings ?? []).flatMap((binding) => {
-          const accountId =
-            binding.match?.channel === channelId
-              ? resolveConcreteBindingAccountId(binding.match.accountId)
-              : undefined;
-          return accountId ? [accountId] : [];
-        }),
-      ];
-      return [
-        channelId,
-        Array.from(new Set(accountIds.map((entry) => entry.trim()).filter(Boolean))),
-      ];
-    }),
-  );
   const channelPairing = detectLegacyChannelPairingState({
     sourceDir: oauthDir,
-    configuredChannelIds: configuredChannels.map(([channelId]) => channelId),
-    configuredDefaultAccountIds: Object.fromEntries(
-      configuredChannels.flatMap(([channelId, value]) => {
-        const boundAccountId = params.cfg.bindings?.find(
-          (binding) =>
-            normalizeAgentId(binding.agentId) === targetAgentId &&
-            binding.match?.channel === channelId &&
-            resolveConcreteBindingAccountId(binding.match.accountId) !== undefined,
-        )?.match.accountId;
-        const concreteBoundAccountId = resolveConcreteBindingAccountId(boundAccountId);
-        if (concreteBoundAccountId) {
-          return [[channelId, concreteBoundAccountId]];
+    configuredChannelIds: Object.keys(params.cfg.channels ?? {}),
+    resolveAccounts: () => {
+      const configuredChannels = Object.entries(params.cfg.channels ?? {});
+      // Doctor already resolved this migration owner; plugin defaults must not infer it again.
+      let migrationOwnerConfig = params.cfg;
+      if (migrationAgentId && listAgentIds(params.cfg).length > 1 && params.cfg.agents) {
+        const agents = structuredClone(params.cfg.agents);
+        delete agents.ownership;
+        for (const [agentId, entry] of Object.entries(agents.entries ?? {})) {
+          entry.default = normalizeAgentId(agentId) === targetAgentId;
         }
-        const defaultAccount =
-          value && typeof value === "object" && !Array.isArray(value)
-            ? (value as { defaultAccount?: unknown }).defaultAccount
-            : undefined;
-        if (typeof defaultAccount === "string" && defaultAccount.trim()) {
-          return [[channelId, defaultAccount.trim()]];
+        for (const entry of agents.list ?? []) {
+          entry.default = normalizeAgentId(entry.id) === targetAgentId;
         }
-        const plugin = getChannelPlugin(channelId as ChannelId);
-        if (plugin) {
-          const accountId = resolveChannelDefaultAccountId({ plugin, cfg: migrationOwnerConfig });
-          return [[channelId, accountId]];
-        }
-        return [[channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID]];
-      }),
-    ),
-    configuredAccountIds,
+        migrationOwnerConfig = { ...params.cfg, agents };
+      }
+      const configuredAccountIds = Object.fromEntries(
+        configuredChannels.map(([channelId, value]) => {
+          const channelConfig =
+            value && typeof value === "object" && !Array.isArray(value)
+              ? (value as { accounts?: unknown; defaultAccount?: unknown })
+              : undefined;
+          const plugin = getChannelPlugin(channelId as ChannelId);
+          const accountIds = [
+            ...(plugin?.config.listAccountIds(params.cfg) ?? []),
+            ...(channelConfig?.accounts &&
+            typeof channelConfig.accounts === "object" &&
+            !Array.isArray(channelConfig.accounts)
+              ? Object.keys(channelConfig.accounts)
+              : []),
+            ...(typeof channelConfig?.defaultAccount === "string"
+              ? [channelConfig.defaultAccount]
+              : []),
+            ...(params.cfg.bindings ?? []).flatMap((binding) => {
+              const accountId =
+                binding.match?.channel === channelId
+                  ? resolveConcreteBindingAccountId(binding.match.accountId)
+                  : undefined;
+              return accountId ? [accountId] : [];
+            }),
+          ];
+          return [
+            channelId,
+            Array.from(new Set(accountIds.map((entry) => entry.trim()).filter(Boolean))),
+          ];
+        }),
+      );
+      return {
+        defaultAccountIds: Object.fromEntries(
+          configuredChannels.flatMap(([channelId, value]) => {
+            const boundAccountId = params.cfg.bindings?.find(
+              (binding) =>
+                normalizeAgentId(binding.agentId) === targetAgentId &&
+                binding.match?.channel === channelId &&
+                resolveConcreteBindingAccountId(binding.match.accountId) !== undefined,
+            )?.match.accountId;
+            const concreteBoundAccountId = resolveConcreteBindingAccountId(boundAccountId);
+            if (concreteBoundAccountId) {
+              return [[channelId, concreteBoundAccountId]];
+            }
+            const defaultAccount =
+              value && typeof value === "object" && !Array.isArray(value)
+                ? (value as { defaultAccount?: unknown }).defaultAccount
+                : undefined;
+            if (typeof defaultAccount === "string" && defaultAccount.trim()) {
+              return [[channelId, defaultAccount.trim()]];
+            }
+            const plugin = getChannelPlugin(channelId as ChannelId);
+            if (plugin) {
+              const accountId = resolveChannelDefaultAccountId({
+                plugin,
+                cfg: migrationOwnerConfig,
+              });
+              return [[channelId, accountId]];
+            }
+            return [
+              [channelId, configuredAccountIds[channelId]?.toSorted()[0] ?? DEFAULT_ACCOUNT_ID],
+            ];
+          }),
+        ),
+        accountIds: configuredAccountIds,
+      };
+    },
   });
   const pluginPlanWarnings: string[] = [];
   const pluginPlans =
@@ -1185,6 +1197,10 @@ export async function autoMigrateLegacyState(params: {
       ? repairOpenClawStateDatabaseSchema(stateSchemaOptions)
       : repairOpenClawStateDatabaseSchemaIfNeeded(stateSchemaOptions);
   if (stateSchema.warnings.length > 0) {
+    // A failed canonical schema repair is an error: runtime cannot safely open this store.
+    if (params.doctorOnlyStateMigrations !== true) {
+      throw new Error(formatStartupMigrationFailure(stateSchema.warnings));
+    }
     return {
       migrated: stateDirResult.migrated || stateSchema.changes.length > 0,
       skipped: false,
@@ -1193,6 +1209,12 @@ export async function autoMigrateLegacyState(params: {
       ...(stateDirResult.notices?.length ? { notices: stateDirResult.notices } : {}),
     };
   }
+  // Preserve retired locators before advisory early returns can permit config repair.
+  const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
+  const configMachineState = migrateLegacyConfigMachineState({
+    config: pluginDoctorConfig,
+    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
+  });
   const agentMigrationOptions = {
     configuredAgentDatabaseTargets: resolveConfiguredAgentDatabaseTargets(params.cfg, { env }),
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
@@ -1204,19 +1226,21 @@ export async function autoMigrateLegacyState(params: {
       : { changes: [], warnings: [] };
   const transcriptDirectives =
     mediaPersistence.warnings.length === 0
-      ? migrateHistoricalTranscriptDirectives(agentMigrationOptions)
+      ? await migrateHistoricalTranscriptDirectives(agentMigrationOptions)
       : { changes: [], warnings: [] };
   if (transcriptDirectives.warnings.length > 0 || mediaPersistence.warnings.length > 0) {
     return {
       migrated:
         stateDirResult.migrated ||
         stateSchema.changes.length > 0 ||
+        configMachineState.changes.length > 0 ||
         transcriptDirectives.changes.length > 0 ||
         mediaPersistence.changes.length > 0,
       skipped: false,
       changes: [
         ...stateDirResult.changes,
         ...stateSchema.changes,
+        ...configMachineState.changes,
         ...transcriptDirectives.changes,
         ...mediaPersistence.changes,
       ],
@@ -1233,11 +1257,6 @@ export async function autoMigrateLegacyState(params: {
     params.doctorOnlyStateMigrations === true
       ? migrateLegacyProfileWorkspace({ env, homedir })
       : { changes: [], warnings: [] };
-  const pluginDoctorConfig = params.pluginDoctorConfig ?? params.cfg;
-  const configMachineState = migrateLegacyConfigMachineState({
-    config: pluginDoctorConfig,
-    env: { ...env, OPENCLAW_STATE_DIR: stateDir },
-  });
   const pluginSessionStoreAgentIds = listPluginDoctorSessionStoreAgentIds({
     config: pluginDoctorConfig,
     env,
@@ -1275,25 +1294,6 @@ export async function autoMigrateLegacyState(params: {
           legacySessionSurfaces,
         })
       : { changes: [], warnings: [] };
-
-  const logMigrationResults = (changes: string[], warnings: string[], notices: string[]) => {
-    const logger = params.log ?? createSubsystemLogger("state-migrations");
-    if (changes.length > 0) {
-      logger.info(
-        `Auto-migrated legacy state:\n${changes.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-    if (warnings.length > 0) {
-      logger.warn(
-        `Legacy state migration warnings:\n${warnings.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-    if (notices.length > 0) {
-      logger.info(
-        `Legacy state migration notes:\n${notices.map((entry) => `- ${entry}`).join("\n")}`,
-      );
-    }
-  };
 
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
@@ -1408,7 +1408,7 @@ export async function autoMigrateLegacyState(params: {
       deviceAuth,
       deviceIdentity,
     ]);
-    logMigrationResults(changes, warnings, notices);
+    logStateMigrationResult({ changes, warnings, notices }, params.log);
     return {
       migrated: stateDirResult.migrated || changes.length > 0,
       skipped: false,
@@ -1447,7 +1447,7 @@ export async function autoMigrateLegacyState(params: {
     meetingTranscripts,
     ...migrations.finalNoticeSources,
   ]);
-  logMigrationResults(changes, warnings, notices);
+  logStateMigrationResult({ changes, warnings, notices }, params.log);
   return {
     // Custom agent roots omit transcript changes from their shared-state report.
     // Preserve the completed migration status without claiming agent ownership.

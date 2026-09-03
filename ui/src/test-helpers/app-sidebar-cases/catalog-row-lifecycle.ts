@@ -23,6 +23,7 @@ describe("AppSidebar catalog row lifecycle", () => {
       )!;
       adoptedRow.label = label;
       adoptedRow.displayName = "Captured native title";
+      adoptedRow.boardFace = "dashboard";
       const { sidebar } = await mountSidebar(
         createGateway({} as GatewayBrowserClient),
         sessions.sessions,
@@ -37,6 +38,9 @@ describe("AppSidebar catalog row lifecycle", () => {
       expect(row?.querySelector(".sidebar-recent-session__name")?.textContent).toBe(expected);
       expect(row?.querySelector("[data-session-menu]")?.getAttribute("aria-label")).toContain(
         expected,
+      );
+      expect(row?.querySelector("a")?.getAttribute("href")).toBe(
+        "/dashboard/main/adopted-title?nav=collapsed",
       );
     },
   );
@@ -109,12 +113,15 @@ describe("AppSidebar catalog row lifecycle", () => {
       await sidebar.updateComplete;
     };
     await setLabel("A long catalog session title");
-    const oldLabel = sidebar.querySelector<HTMLElement>(".hover-marquee");
+    const labelSelector = "[data-catalog-session-key] .sidebar-recent-session__name";
+    const oldLabel = sidebar.querySelector<HTMLElement>(labelSelector);
+    expect(oldLabel?.textContent).toBe("A long catalog session title");
     oldLabel?.classList.add("hover-marquee--scrolling");
     oldLabel?.style.setProperty("--hover-marquee-shift", "-80px");
     await setLabel("Short");
 
-    const updatedLabel = sidebar.querySelector<HTMLElement>(".hover-marquee");
+    const updatedLabel = sidebar.querySelector<HTMLElement>(labelSelector);
+    expect(updatedLabel?.textContent).toBe("Short");
     expect(updatedLabel).not.toBe(oldLabel);
     expect(updatedLabel?.classList.contains("hover-marquee--scrolling")).toBe(false);
     expect(updatedLabel?.style.getPropertyValue("--hover-marquee-shift")).toBe("");

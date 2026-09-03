@@ -107,7 +107,11 @@ describe("discord voice opus codec", () => {
 
       const onVerbose = vi.fn();
       const onWarn = vi.fn();
-      const decoded = await decode(Readable.from(packets), { onVerbose, onWarn });
+      const decoded = await decode(Readable.from(packets), {
+        maxBytes: 20 * 1024 * 1024,
+        onVerbose,
+        onWarn,
+      });
       expect(decoded.length).toBe(960 * 2 * 2);
       expect(onVerbose).toHaveBeenCalledWith("opus decoder: libopus-wasm");
       expect(onWarn).not.toHaveBeenCalled();
@@ -123,6 +127,7 @@ describe("discord voice opus codec", () => {
 
     expect(packets).toHaveLength(1);
     const decoded = await decodeOpusStream(Readable.from(packets), {
+      maxBytes: 20 * 1024 * 1024,
       onVerbose: vi.fn(),
       onWarn: vi.fn(),
     });
@@ -142,6 +147,7 @@ describe("discord voice opus codec", () => {
       );
 
       const decoded = await decode(stream, {
+        maxBytes: 20 * 1024 * 1024,
         onError,
         onVerbose: vi.fn(),
         onWarn: vi.fn(),
@@ -151,6 +157,35 @@ describe("discord voice opus codec", () => {
       expect(decoded).toHaveLength(960 * 2 * 2);
     },
   );
+  it("rejects oversized decoded input without returning a truncated successful capture", async () => {
+    const stream = Readable.from([
+      Buffer.from([0xf8, 0xff, 0xfe]),
+      Buffer.from([0xf8, 0xff, 0xfe]),
+    ]);
+    await expect(
+      decodeOpusStream(stream, {
+        maxBytes: 3840,
+        onVerbose: vi.fn(),
+        onWarn: vi.fn(),
+      }),
+    ).rejects.toThrow("speak a shorter segment");
+    expect(stream.destroyed).toBe(true);
+  });
+
+  it("streams audio beyond a batch-sized budget without accumulating or truncating it", async () => {
+    let bytes = 0;
+    await decodeOpusStreamChunks(
+      Readable.from(Array.from({ length: 3 }, () => Buffer.from([0xf8, 0xff, 0xfe]))),
+      {
+        onChunk: (pcm) => {
+          bytes += pcm.length;
+        },
+        onVerbose: vi.fn(),
+        onWarn: vi.fn(),
+      },
+    );
+    expect(bytes).toBe(3 * 3840);
+  });
 });
 
 describe("createDiscordOpusPlaybackStream child stream errors", () => {

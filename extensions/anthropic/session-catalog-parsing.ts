@@ -4,7 +4,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CLAUDE_LOCAL_SESSION_HOST_ID } from "./session-catalog-adoption.js";
 import { isExactClaudeSessionCursor } from "./session-catalog-cursor.js";
-import { MAX_STRING_LENGTH, parsePullRequestSummary } from "./session-catalog-discovery.js";
+import { MAX_STRING_LENGTH, parsePullRequestSummary } from "./session-catalog-desktop.js";
 import { ClaudeCatalogParamsError } from "./session-catalog-shared.js";
 import type {
   ClaudeSessionCatalogPage,
@@ -13,7 +13,7 @@ import type {
 
 const DEFAULT_PAGE_LIMIT = 50;
 export const MAX_PAGE_LIMIT = 100;
-export const DEFAULT_TRANSCRIPT_LIMIT = 20;
+const DEFAULT_TRANSCRIPT_LIMIT = 20;
 export const MAX_TRANSCRIPT_LIMIT = 50;
 export const MAX_HOSTS = 100;
 const MAX_SEARCH_LENGTH = 500;

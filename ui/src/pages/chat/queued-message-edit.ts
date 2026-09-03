@@ -2,7 +2,9 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-queue-order.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -14,7 +16,7 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
@@ -50,23 +52,10 @@ function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
     return null;
   }
   return {
-    ...resolveStoredChatOutboxScope(host, host.sessionKey),
+    ...resolveUiConversationIdentity(host, host.sessionKey),
     gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
     recoveryScope: host.client?.recoveryScope?.trim() || undefined,
   };
-}
-
-function queuedMessageEditSourceMatches(edit: QueuedMessageEdit, item: ChatQueueItem): boolean {
-  return (
-    item.id === edit.source.id &&
-    item.sendRunId === edit.source.sendRunId &&
-    item.sendAttempts === edit.source.sendAttempts &&
-    item.sendState === edit.source.sendState &&
-    item.agentId === edit.source.agentId &&
-    item.sessionKey === edit.source.sessionKey &&
-    item.orderKey === edit.source.orderKey &&
-    item.attachmentPayload?.key === edit.source.attachmentPayload?.key
-  );
 }
 
 /** Closed outcomes so the page owns the operator-visible wording. */
@@ -117,23 +106,8 @@ export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: stri
       pane.chatQueuedEdit?.id === id &&
       pane.chatQueuedEdit.gatewayOwner === gatewayOwner &&
       storedChatOutboxScopeKey(pane.chatQueuedEdit) ===
-        storedChatOutboxScopeKey(resolveStoredChatOutboxScope(pane, pane.sessionKey)),
+        storedChatOutboxScopeKey(resolveUiConversationIdentity(pane, pane.sessionKey)),
   );
-}
-
-/** Removal is a conflicting shared-outbox action while any pane owns the row draft. */
-export function isQueuedMessageRemovalBlocked(host: QueuedMessageEditHost, id: string): boolean {
-  return isQueuedMessageBeingEdited(host, id);
-}
-
-/** Reordering is also conflicting: submit must not restore a stale position. */
-export function isQueuedMessageReorderBlocked(host: QueuedMessageEditHost, id: string): boolean {
-  return isQueuedMessageBeingEdited(host, id);
-}
-
-/** Retrying must not dispatch the source payload while another pane edits it. */
-export function isQueuedMessageRetryBlocked(host: QueuedMessageEditHost, id: string): boolean {
-  return isQueuedMessageBeingEdited(host, id);
 }
 
 export function beginQueuedMessageEdit(
@@ -226,7 +200,7 @@ export function retireEditedQueuedMessageSource(
       edit.sourceWasDurable ||
       isDurableQueuedMessage(host, edit.id) ||
       !source ||
-      !queuedMessageEditSourceMatches(edit, source)
+      !sameQueuedDeliveryVersion(source, edit.source)
     ) {
       return;
     }

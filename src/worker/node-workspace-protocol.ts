@@ -166,10 +166,14 @@ export function parseNodeWorkerWorkspaceExecInput(
         ? !hasExactOwnKeys(
             value.transfer,
             ["direction", "token", "manifestRef"],
-            ["attachments"],
+            ["attachments", "seedKey"],
           ) ||
           !validRef(manifestRef) ||
-          (value.transfer.attachments !== undefined && value.transfer.attachments !== true)
+          (value.transfer.attachments !== undefined && value.transfer.attachments !== true) ||
+          (value.transfer.seedKey !== undefined &&
+            (typeof value.transfer.seedKey !== "string" ||
+              !/^[a-f0-9]{64}$/u.test(value.transfer.seedKey) ||
+              value.transfer.attachments !== undefined))
         : direction === "upload"
           ? !hasExactOwnKeys(value.transfer, ["direction", "token", "baseManifestRef"]) ||
             !validRef(baseManifestRef)
@@ -183,6 +187,9 @@ export function parseNodeWorkerWorkspaceExecInput(
             direction,
             token,
             manifestRef: manifestRef as string,
+            ...(typeof value.transfer.seedKey === "string"
+              ? { seedKey: value.transfer.seedKey }
+              : {}),
             ...(value.transfer.attachments === true ? { attachments: true } : {}),
           }
         : { direction: "upload", token, baseManifestRef: baseManifestRef as string };

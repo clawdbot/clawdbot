@@ -13,7 +13,7 @@ import {
   applyScriptRunResult,
   applyTriggerNoFireResult,
 } from "./timer-outcomes.js";
-import { applyTriggerRunResult, resolveNextRunAtMsOrDisable } from "./timer-trigger.js";
+import { applyTriggerRunResult } from "./timer-trigger.js";
 
 export const STARTUP_INTERRUPTED_ERROR = "cron: job interrupted by gateway restart";
 
@@ -145,7 +145,14 @@ export function restoreFinalizedStartupRun(params: {
     return undefined;
   }
   const replacementAtMs = resolveOneShotReplacementAtMs(job, startedAt);
-  const scheduleOwnership = replacementAtMs === undefined ? "current" : "stale";
+  const persistedNextRunAtMs = asDateTimestampMs(job.state.nextRunAtMs);
+  // Finalization writes history first, so a later one-shot slot or disable in
+  // the job row owns lifecycle state when startup replays that older history.
+  const scheduleOwnership =
+    job.schedule.kind === "at" &&
+    (!job.enabled || (persistedNextRunAtMs !== undefined && persistedNextRunAtMs > startedAt))
+      ? "stale"
+      : "current";
   job.state.startupCatchupAtMs = undefined;
   if (params.triggerEval?.fired === false) {
     applyTriggerNoFireResult(
@@ -188,6 +195,9 @@ export function restoreFinalizedStartupRun(params: {
     {
       replay: true,
       scheduleOwnership,
+      ...(scheduleOwnership === "current"
+        ? { replaySchedule: { nextRunAtMs: entry.nextRunAtMs } }
+        : {}),
       deferredNotifications: params.deferredNotifications,
     },
   );
@@ -207,25 +217,6 @@ export function restoreFinalizedStartupRun(params: {
     ) {
       job.state.lastFailureAlertAtMs = endedAt;
     }
-  }
-  const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
-  job.state.nextRunAtMs =
-    job.state.autoDisabled || finalizedNextRunAtMs === undefined
-      ? undefined
-      : resolveNextRunAtMsOrDisable({
-          state,
-          job,
-          candidate: finalizedNextRunAtMs,
-          deferredNotifications: params.deferredNotifications,
-        });
-  // The finalized ledger row owns the schedule decision made before the stale
-  // store write. No next run means that one-shot was permanently disabled.
-  if (
-    job.schedule.kind === "at" &&
-    replacementAtMs === undefined &&
-    entry.nextRunAtMs === undefined
-  ) {
-    job.enabled = false;
   }
   if (params.triggerEval) {
     applyTriggerRunResult(

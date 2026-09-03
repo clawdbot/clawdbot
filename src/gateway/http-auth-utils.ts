@@ -154,27 +154,35 @@ async function resolveAuthenticatedHttpUserProfile(params: {
   req: IncomingMessage;
 }): Promise<AuthenticatedHttpUserProfile> {
   const authenticatedUserId = normalizeOptionalString(params.authResult.user);
-  if (!params.cfg.gateway?.roles) {
-    return {};
-  }
+  const rolesConfigured = Boolean(params.cfg.gateway?.roles);
   if (!authenticatedUserId) {
-    if (usesSharedSecretGatewayMethod(params.authResult.method)) {
+    if (!rolesConfigured || usesSharedSecretGatewayMethod(params.authResult.method)) {
       return {};
     }
     throw new Error("operator role policies require a verified durable user profile");
   }
-  const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
-    authResult: params.authResult,
-    authConfig: params.cfg.gateway.auth,
-    requestHeaders: params.req.headers,
-  });
-  const profile = syncGitHubIdentity
-    ? await syncGitHubIdentity()
-    : params.authResult.tailscaleIdentity
-      ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
-      : ensureProfileForEmail(authenticatedUserId);
-  const profileId = "profileId" in profile ? profile.profileId : profile.id;
-  return resolveHttpProfile(profileId, profile.updatedAt, params.cfg);
+  try {
+    const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+      authResult: params.authResult,
+      authConfig: params.cfg.gateway?.auth,
+      requestHeaders: params.req.headers,
+      preferCachedIdentity: !rolesConfigured,
+    });
+    const profile = syncGitHubIdentity
+      ? await syncGitHubIdentity()
+      : params.authResult.tailscaleIdentity
+        ? ensureProfileForTailscaleIdentity(params.authResult.tailscaleIdentity)
+        : ensureProfileForEmail(authenticatedUserId);
+    const profileId = "profileId" in profile ? profile.profileId : profile.id;
+    return resolveHttpProfile(profileId, profile.updatedAt, params.cfg);
+  } catch (error) {
+    // Attribution enriches authenticated requests; only configured roles make
+    // durable profile resolution a prerequisite for authorization.
+    if (rolesConfigured) {
+      throw error;
+    }
+    return {};
+  }
 }
 
 function resolveHttpProfile(profileId: string, updatedAt: number, cfg: OpenClawConfig) {
@@ -596,10 +604,7 @@ async function checkGatewayHttpRequestAuthWith(
     browserOriginPolicy,
   });
   if (!authResult.ok) {
-    return {
-      ok: false,
-      authResult,
-    };
+    return { ok: false, authResult };
   }
   let authenticatedProfile;
   try {

@@ -64,6 +64,10 @@ export function normalizeSessionKeyForUiComparison(sessionKey: string | undefine
   if (!raw) {
     return "";
   }
+  // Only opaque channel IDs need structural parsing to preserve tail casing.
+  if (!/(?:^|:)(?:catalog|matrix|signal)(?=:|$)/i.test(raw)) {
+    return raw.toLowerCase();
+  }
   const parts = raw.split(":");
   let bodyStart = 0;
   while (parts.length - bodyStart >= 3 && parts[bodyStart]?.toLowerCase() === "agent") {

@@ -1,4 +1,4 @@
-import type { ChatAttachment, DurableComposerDraftAttachment } from "../../lib/chat/chat-types.ts";
+import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../lib/chat/composer-draft-store.runtime.ts";
 import { nextDraftRevision } from "../../lib/chat/outbox-store-draft-state.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
@@ -11,6 +11,7 @@ import {
   hydrateDurableComposerAttachments,
   reportDurableComposerStorageError,
   writeDurableComposerSnapshot,
+  type DurableChatComposerSnapshot,
 } from "../chat/durable-composer-persistence.ts";
 
 type NewSessionDraftState = {
@@ -19,19 +20,9 @@ type NewSessionDraftState = {
   incognito: boolean;
 };
 
-type DraftSnapshot = {
-  scope: DurableComposerDraftScope;
-  expectedRevision: number;
-  expectedWriteId?: string;
-  expectedWriteIds: string[];
-  revision: number;
-  text: string;
-  attachments: DurableComposerDraftAttachment[] | null;
-  writeId: string;
-};
+type DraftLineage = { revision: number; writeId?: string; localWriteIds: Set<string> };
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
-const loadDurableComposerStore = () => durableComposerStore;
 const NEW_SESSION_DRAFT_PERSIST_DELAY_MS = 200;
 
 export class NewSessionDraftPersistence {
@@ -47,12 +38,10 @@ export class NewSessionDraftPersistence {
   private pristineMutationBaseline = 0;
   private restoreGeneration = 0;
   private restoredIdentity = "";
-  private pending: DraftSnapshot | null = null;
+  private pending: DurableChatComposerSnapshot | null = null;
   private timer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private incognitoRetirement: Promise<void> = Promise.resolve();
-  private readonly committedByScope = new Map<string, number>();
-  private readonly committedWriteIdByScope = new Map<string, string>();
-  private readonly localWriteIdsByScope = new Map<string, Set<string>>();
+  private readonly lineageByScope = new Map<string, DraftLineage>();
 
   constructor(
     private readonly read: () => NewSessionDraftState,
@@ -158,94 +147,86 @@ export class NewSessionDraftPersistence {
     this.timer = globalThis.setTimeout(() => this.persistNow(), NEW_SESSION_DRAFT_PERSIST_DELAY_MS);
   }
 
-  retireActive(): Promise<void> {
+  async retireActive(): Promise<void> {
     this.mutationGeneration += 1;
     this.discardPending();
     const requestedRevision = nextDraftRevision(this.revision);
     this.revision = requestedRevision;
     const scope = this.scope();
     if (!scope) {
-      return Promise.resolve();
+      return;
     }
-    return this.enqueueWrite(async () => {
-      const { retireDurableComposerDraft } = await loadDurableComposerStore();
-      const identity = durableComposerScopeIdentity(scope);
-      const minimumRevision = Math.max(requestedRevision, this.committedByScope.get(identity) ?? 0);
-      const result = await retireDurableComposerDraft(scope, minimumRevision);
-      if (result.status === "storage-failed") {
-        reportDurableComposerStorageError(scope, this.onStorageError);
-      } else if (result.status === "persisted") {
-        this.localWriteIdsByScope.delete(identity);
-        this.adoptCommittedRevision(scope, result.revision ?? minimumRevision, result.writeId);
-      }
-    });
+    const { retireDurableComposerDraft } = await durableComposerStore;
+    const lineage = this.lineage(scope);
+    const minimumRevision = Math.max(requestedRevision, lineage.revision);
+    const result = await retireDurableComposerDraft(scope, minimumRevision);
+    if (result.status === "storage-failed") {
+      reportDurableComposerStorageError(scope, this.onStorageError);
+    } else if (result.status === "persisted") {
+      lineage.localWriteIds.clear();
+      this.adoptCommittedRevision(scope, result.revision ?? minimumRevision, result.writeId);
+    }
   }
 
-  clearSubmittedDraft(): Promise<void> {
+  async clearSubmittedDraft(): Promise<void> {
     this.persistNow();
     this.mutationGeneration += 1;
     const scope = this.scope();
     if (!scope) {
-      return Promise.resolve();
+      return;
     }
     const submitted = this.read();
     const submittedAttachments = captureDurableChatAttachments(submitted.attachments);
-    return this.enqueueWrite(async () => {
-      const { readDurableComposerDraft } = await loadDurableComposerStore();
-      const identity = durableComposerScopeIdentity(scope);
-      let expectedRevision = this.committedByScope.get(identity) ?? 0;
-      let expectedWriteId = this.committedWriteIdByScope.get(identity);
-      // A closing source page can finish an identical write between read and CAS.
-      // Re-read boundedly; differing newer content always wins immediately.
-      for (let attempt = 0; attempt < 3; attempt += 1) {
-        const current = await readDurableComposerDraft(scope);
-        if (current.status === "storage-failed") {
-          reportDurableComposerStorageError(scope, this.onStorageError);
-          return;
-        }
-        const currentRevision =
-          (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
-        const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
-        if (currentRevision !== expectedRevision || currentWriteId !== expectedWriteId) {
-          if (
-            current.status !== "found" ||
-            !(await durableComposerDraftMatches(
-              current.draft,
-              submitted.message,
-              submittedAttachments,
-            ))
-          ) {
-            return;
-          }
-          expectedRevision = currentRevision;
-          expectedWriteId = currentWriteId;
-          this.adoptCommittedRevision(scope, currentRevision, currentWriteId);
-        }
-        const revision = nextDraftRevision(Math.max(this.revision, expectedRevision));
-        const writeId = `clear:${revision}`;
-        const { result } = await writeDurableComposerSnapshot({
-          scope,
-          expectedRevision,
-          ...(expectedWriteId ? { expectedWriteId } : {}),
-          revision,
-          text: "",
-          storedAttachments: [],
-          writeId,
-        });
-        if (result.status === "persisted") {
-          this.adoptCommittedRevision(
-            scope,
-            result.revision ?? revision,
-            result.writeId ?? writeId,
-          );
-          return;
-        }
-        if (result.status === "storage-failed") {
-          reportDurableComposerStorageError(scope, this.onStorageError);
-          return;
-        }
+    const { readDurableComposerDraft } = await durableComposerStore;
+    const lineage = this.lineage(scope);
+    let expectedRevision = lineage.revision;
+    let expectedWriteId = lineage.writeId;
+    // A closing source page can finish an identical write between read and CAS.
+    // Re-read boundedly; differing newer content always wins immediately.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const current = await readDurableComposerDraft(scope);
+      if (current.status === "storage-failed") {
+        reportDurableComposerStorageError(scope, this.onStorageError);
+        return;
       }
-    });
+      const currentRevision =
+        (current.status === "found" ? current.draft.revision : current.revision) ?? 0;
+      const currentWriteId = current.status === "found" ? current.draft.writeId : current.writeId;
+      if (currentRevision !== expectedRevision || currentWriteId !== expectedWriteId) {
+        if (
+          current.status !== "found" ||
+          !(await durableComposerDraftMatches(
+            current.draft,
+            submitted.message,
+            submittedAttachments,
+          ))
+        ) {
+          return;
+        }
+        expectedRevision = currentRevision;
+        expectedWriteId = currentWriteId;
+        this.adoptCommittedRevision(scope, currentRevision, currentWriteId);
+      }
+      const revision = nextDraftRevision(Math.max(this.revision, expectedRevision));
+      const writeId = `clear:${revision}`;
+      const { result } = await writeDurableComposerSnapshot({
+        scope,
+        expectedRevision,
+        ...(expectedWriteId ? { expectedWriteId } : {}),
+        revision,
+        text: "",
+        storedAttachments: [],
+        writeId,
+      });
+      if (result.status === "persisted") {
+        this.adoptCommittedRevision(scope, result.revision ?? revision, result.writeId ?? writeId);
+        return;
+      }
+      if (result.status === "storage-failed") {
+        reportDurableComposerStorageError(scope, this.onStorageError);
+        return;
+      }
+    }
   }
 
   persistNow() {
@@ -259,19 +240,11 @@ export class NewSessionDraftPersistence {
       return;
     }
     this.pending = null;
-    void this.enqueueWrite(async () => {
-      const identity = durableComposerScopeIdentity(snapshot.scope);
+    // Start each captured write before teardown; native transactions and CAS
+    // order writes without delaying attachments behind a promise chain.
+    void (async () => {
       try {
-        const { result, payloadUnavailable } = await writeDurableComposerSnapshot({
-          scope: snapshot.scope,
-          expectedRevision: snapshot.expectedRevision,
-          ...(snapshot.expectedWriteId ? { expectedWriteId: snapshot.expectedWriteId } : {}),
-          expectedWriteIds: snapshot.expectedWriteIds,
-          revision: snapshot.revision,
-          text: snapshot.text,
-          storedAttachments: snapshot.attachments,
-          writeId: snapshot.writeId,
-        });
+        const { result, payloadUnavailable } = await writeDurableComposerSnapshot(snapshot);
         if (payloadUnavailable) {
           reportDurableComposerStorageError(snapshot.scope, this.onStorageError);
         }
@@ -297,13 +270,9 @@ export class NewSessionDraftPersistence {
         this.restoredIdentity = "";
         this.activateRoute(this.routeKey);
       } finally {
-        const localWriteIds = this.localWriteIdsByScope.get(identity);
-        localWriteIds?.delete(snapshot.writeId);
-        if (localWriteIds?.size === 0) {
-          this.localWriteIdsByScope.delete(identity);
-        }
+        this.forgetLocalWrite(snapshot);
       }
-    });
+    })();
   }
 
   disconnect() {
@@ -322,26 +291,24 @@ export class NewSessionDraftPersistence {
     };
   }
 
-  private snapshot(): DraftSnapshot | null {
+  private snapshot(): DurableChatComposerSnapshot | null {
     const scope = this.scope();
     if (!scope || this.revision <= 0) {
       return null;
     }
     const state = this.read();
-    const identity = durableComposerScopeIdentity(scope);
-    const expectedWriteIds = [...(this.localWriteIdsByScope.get(identity) ?? [])];
+    const lineage = this.lineage(scope);
+    const expectedWriteIds = [...lineage.localWriteIds];
     const writeId = `${this.revision}:${Math.random().toString(36).slice(2)}`;
-    this.rememberLocalWriteId(identity, writeId);
+    lineage.localWriteIds.add(writeId);
     return {
       scope,
-      expectedRevision: this.committedByScope.get(identity) ?? 0,
-      ...(this.committedWriteIdByScope.get(identity)
-        ? { expectedWriteId: this.committedWriteIdByScope.get(identity) }
-        : {}),
+      expectedRevision: lineage.revision,
+      ...(lineage.writeId ? { expectedWriteId: lineage.writeId } : {}),
       expectedWriteIds,
       revision: this.revision,
       text: state.message,
-      attachments: captureDurableChatAttachments(state.attachments),
+      storedAttachments: captureDurableChatAttachments(state.attachments),
       writeId,
     };
   }
@@ -352,7 +319,7 @@ export class NewSessionDraftPersistence {
     mutationGeneration: number,
     signature: string,
   ) {
-    const { readDurableComposerDraft } = await loadDurableComposerStore();
+    const { readDurableComposerDraft } = await durableComposerStore;
     const result = await readDurableComposerDraft(scope);
     if (result.status === "storage-failed") {
       reportDurableComposerStorageError(scope, this.onStorageError);
@@ -360,16 +327,10 @@ export class NewSessionDraftPersistence {
     }
     const storedRevision = result.status === "found" ? result.draft.revision : result.revision;
     const storedWriteId = result.status === "found" ? result.draft.writeId : result.writeId;
-    const identity = durableComposerScopeIdentity(scope);
-    if (storedRevision !== undefined) {
-      this.committedByScope.set(identity, storedRevision);
-      if (storedWriteId) {
-        this.committedWriteIdByScope.set(identity, storedWriteId);
-      }
-    } else {
-      this.committedByScope.delete(identity);
-      this.committedWriteIdByScope.delete(identity);
-    }
+    const lineage = this.lineage(scope);
+    // An absent authoritative row clears committed facts, never in-flight IDs.
+    lineage.revision = storedRevision ?? 0;
+    lineage.writeId = storedWriteId;
     const current = this.read();
     const currentScope = this.scope();
     if (
@@ -427,12 +388,6 @@ export class NewSessionDraftPersistence {
     this.apply(result.status === "found" ? result.draft.text : "", attachments);
   }
 
-  private enqueueWrite(run: () => Promise<void>): Promise<void> {
-    // Flush timers before teardown, then start each IndexedDB transaction independently.
-    // Store ordering and revision CAS serialize writes without promise-chain delays.
-    return run();
-  }
-
   private clearTimer() {
     if (this.timer === null) {
       return;
@@ -448,18 +403,29 @@ export class NewSessionDraftPersistence {
     if (!snapshot) {
       return;
     }
+    this.forgetLocalWrite(snapshot);
+  }
+
+  private forgetLocalWrite(snapshot: DurableChatComposerSnapshot) {
     const identity = durableComposerScopeIdentity(snapshot.scope);
-    const localWriteIds = this.localWriteIdsByScope.get(identity);
-    localWriteIds?.delete(snapshot.writeId);
-    if (localWriteIds?.size === 0) {
-      this.localWriteIdsByScope.delete(identity);
+    const lineage = this.lineageByScope.get(identity);
+    if (!lineage) {
+      return;
+    }
+    lineage.localWriteIds.delete(snapshot.writeId);
+    if (!lineage.revision && !lineage.writeId && !lineage.localWriteIds.size) {
+      this.lineageByScope.delete(identity);
     }
   }
 
-  private rememberLocalWriteId(identity: string, writeId: string) {
-    const writeIds = this.localWriteIdsByScope.get(identity) ?? new Set<string>();
-    writeIds.add(writeId);
-    this.localWriteIdsByScope.set(identity, writeIds);
+  private lineage(scope: DurableComposerDraftScope): DraftLineage {
+    const identity = durableComposerScopeIdentity(scope);
+    let lineage = this.lineageByScope.get(identity);
+    if (!lineage) {
+      lineage = { revision: 0, localWriteIds: new Set() };
+      this.lineageByScope.set(identity, lineage);
+    }
+    return lineage;
   }
 
   private adoptCommittedRevision(
@@ -468,9 +434,10 @@ export class NewSessionDraftPersistence {
     writeId?: string,
   ) {
     const identity = durableComposerScopeIdentity(scope);
-    this.committedByScope.set(identity, revision);
+    const lineage = this.lineage(scope);
+    lineage.revision = revision;
     if (writeId) {
-      this.committedWriteIdByScope.set(identity, writeId);
+      lineage.writeId = writeId;
     }
     const currentScope = this.scope();
     if (

@@ -171,7 +171,6 @@ function loadGatewaySessionSnapshot(
     return { row: null };
   }
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
-    storePath,
     store,
     key: canonicalKey,
     now,
@@ -223,7 +222,6 @@ export function buildGatewaySessionInfo(params: {
 }): GatewaySessionRow {
   const now = params.now ?? Date.now();
   const storeChildSessionsByKey = buildSingleRowStoreChildSessionsByKey({
-    storePath: params.storePath,
     store: params.store,
     key: params.key,
     now,

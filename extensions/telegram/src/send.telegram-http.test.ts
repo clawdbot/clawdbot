@@ -111,6 +111,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
     dispatch: () => Promise<void>,
     mediaUrl?: string,
     rich = false,
+    assertPlatformSendAuthorized?: () => void,
   ) {
     if (entry === "public") {
       return sendMessageTelegram("123", text, {
@@ -120,6 +121,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
         replyToMessageId: 7,
         quoteText: "quote",
         onPlatformSendDispatch: dispatch,
+        assertPlatformSendAuthorized,
         ...(mediaUrl ? { mediaUrl, mediaLocalRoots: [mediaDir], buttons } : {}),
         ...(rich ? { buttons } : {}),
       });
@@ -152,8 +154,28 @@ describe("Telegram physical send acceptance over HTTP", () => {
       textMode: rich ? undefined : "html",
       richMessages: rich,
       onPlatformSendDispatch: dispatch,
+      assertPlatformSendAuthorized,
     });
   }
+
+  it("fences provider-owned delivery after async dispatch refresh and before HTTP", async () => {
+    const authorityRevoked = new Error("delivery authority revoked after dispatch refresh");
+    let authorityActive = true;
+    const dispatch = async () => {
+      await Promise.resolve();
+      authorityActive = false;
+    };
+    const assertPlatformSendAuthorized = () => {
+      if (!authorityActive) {
+        throw authorityRevoked;
+      }
+    };
+
+    await expect(
+      sendThrough("direct", "answer", dispatch, undefined, false, assertPlatformSendAuthorized),
+    ).rejects.toBe(authorityRevoked);
+    expect(requests).toHaveLength(0);
+  });
 
   it.each(["direct", "public"] as const)(
     "preserves %s operation callbacks through quote and format fallback",
