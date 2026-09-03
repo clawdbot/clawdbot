@@ -75,6 +75,7 @@ function intent(previousSelection: UpdateGenerationSelection | null, stable: boo
     stagingRoot: "/manager/.openclaw-stage",
     serviceBefore: { managed: true, running: true, enabled: true },
     previousSelection,
+    previousPackageVersion: previousSelection ? "1.0.0" : null,
     stableBindingAlreadyVerified: stable,
   });
 }
@@ -90,6 +91,11 @@ class MemoryLedger implements UpdateGenerationLedgerHook {
   #revision = 0;
   #snapshot: UpdateGenerationTransactionSnapshot | null = null;
   #receipts = new Map<string, UpdateGenerationTransactionSnapshot>();
+
+  constructor(snapshot: UpdateGenerationTransactionSnapshot | null = null) {
+    this.#snapshot = snapshot ? structuredClone(snapshot) : null;
+    this.#revision = Number(snapshot?.revision ?? 0);
+  }
 
   async read(namespaceKey: string): Promise<UpdateGenerationTransactionSnapshot | null> {
     return this.#snapshot?.record.namespaceKey === namespaceKey
@@ -397,6 +403,16 @@ describe("durable update generation transaction contract", () => {
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "record-rolled-back" });
+    expect(() =>
+      append(
+        record,
+        receipt("rolled-back", 7, {
+          selection: previous,
+          launcherVersion: "2.0.0",
+          serviceRunning: true,
+        }),
+      ),
+    ).toThrow("does not prove previous runtime and service convergence");
     record = append(
       record,
       receipt("rolled-back", 7, {
@@ -511,6 +527,89 @@ describe("durable update generation transaction contract", () => {
     await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(first);
   });
 
+  it("atomically rolls a cleaned namespace into a new transaction", async () => {
+    const previous = selection("a");
+    const candidate = selection("b");
+    let priorRecord = append(null, intent(previous, true));
+    priorRecord = append(
+      priorRecord,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceRoot: "/stage/candidate",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    priorRecord = append(
+      priorRecord,
+      receipt("generation-materialized", 2, {
+        role: "candidate",
+        generation: { ...candidate, packageVersion: "2.0.0" },
+      }),
+    );
+    priorRecord = append(
+      priorRecord,
+      receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
+    );
+    priorRecord = append(priorRecord, receipt("candidate-selected", 4, { selection: candidate }));
+    priorRecord = append(
+      priorRecord,
+      receipt("completion", 5, {
+        packageVersion: "2.0.0",
+        launcherVersion: "2.0.0",
+        serviceRunning: true,
+      }),
+    );
+    priorRecord = append(
+      priorRecord,
+      receipt("cleanup-intent", 6, {
+        generationIds: [],
+        protectedGenerationIds: [previous.generationId, candidate.generationId],
+      }),
+    );
+    priorRecord = append(
+      priorRecord,
+      receipt("cleanup-completed", 7, { removedGenerationIds: [], deferred: [] }),
+    );
+    const priorSnapshot = { revision: "8", record: priorRecord };
+    const ledger = new MemoryLedger(priorSnapshot);
+    const nextTransactionId = "update-transaction-2";
+    const nextIntent = {
+      ...intent(candidate, true),
+      transactionId: nextTransactionId,
+      receiptId: buildUpdateGenerationReceiptId({
+        transactionId: nextTransactionId,
+        sequence: 0,
+        kind: "intent",
+      }),
+      previousPackageVersion: "2.0.0",
+    };
+
+    const next = await persistUpdateGenerationReceipt({
+      ledger,
+      snapshot: priorSnapshot,
+      receipt: nextIntent,
+    });
+    expect(next.record).toEqual({
+      formatVersion: 1,
+      transactionId: nextTransactionId,
+      namespaceKey: NAMESPACE_KEY,
+      receipts: [nextIntent],
+    });
+    await expect(
+      persistUpdateGenerationReceipt({
+        ledger: new MemoryLedger({ revision: "5", record: priorRecord }),
+        snapshot: {
+          revision: "5",
+          record: { ...priorRecord, receipts: priorRecord.receipts.slice(0, -2) },
+        },
+        receipt: nextIntent,
+      }),
+    ).rejects.toThrow("requires completed prior cleanup");
+  });
+
   it("rejects a completion claim before candidate selection", () => {
     const record = append(null, intent(selection("a"), true));
     expect(() =>
@@ -529,6 +628,9 @@ describe("durable update generation transaction contract", () => {
     expect(() => append(null, intent(null, true))).toThrow(
       "A verified stable binding requires a previous generation selection",
     );
+    expect(() =>
+      append(null, { ...intent(selection("a"), true), previousPackageVersion: null }),
+    ).toThrow("Previous generation selection and package version must be recorded together");
     expect(() =>
       parseUpdateGenerationTransactionRecord({
         formatVersion: 1,

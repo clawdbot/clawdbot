@@ -52,6 +52,7 @@ export type UpdateGenerationTransactionReceipt =
       stagingRoot: string;
       serviceBefore: UpdateGenerationServiceIntent;
       previousSelection: UpdateGenerationSelection | null;
+      previousPackageVersion: string | null;
       stableBindingAlreadyVerified: boolean;
     })
   | (UpdateGenerationReceiptBase & {
@@ -156,7 +157,9 @@ export type UpdateGenerationLedgerCompareAndSwapResult =
  *
  * `compareAndSwap` must atomically validate the namespace revision, persist the
  * receipt and resulting record, and return the same snapshot when receiptId is
- * replayed. It must serialize all selector and cleanup work for namespaceKey.
+ * replayed. It must retain receipt replay identity across transaction rollover
+ * and serialize all selector and cleanup work for namespaceKey. A new intent
+ * replaces the current record only after its cleanup-completed receipt.
  */
 export type UpdateGenerationLedgerHook = {
   read(namespaceKey: string): Promise<UpdateGenerationTransactionSnapshot | null>;
@@ -286,6 +289,11 @@ function assertReceiptTransition(
   if (!record) {
     if (receipt.kind !== "intent" || receipt.sequence !== 0) {
       throw new Error("An update generation transaction must start with intent sequence 0");
+    }
+    if (Boolean(receipt.previousSelection) !== Boolean(receipt.previousPackageVersion)) {
+      throw new Error(
+        "Previous generation selection and package version must be recorded together",
+      );
     }
     if (receipt.stableBindingAlreadyVerified && !receipt.previousSelection) {
       throw new Error("A verified stable binding requires a previous generation selection");
@@ -419,8 +427,16 @@ function assertReceiptTransition(
     if (!selectionsEqual(pending.to, receipt.selection)) {
       throw new Error("Rollback completion differs from its intent");
     }
-    if (receipt.serviceRunning !== projection.intent.serviceBefore.running) {
-      throw new Error("Rollback completion does not restore the prior service intent");
+    const previousPackageVersion =
+      projection.generations.previous?.packageVersion ?? projection.intent.previousPackageVersion;
+    if (
+      !previousPackageVersion ||
+      receipt.launcherVersion !== previousPackageVersion ||
+      receipt.serviceRunning !== projection.intent.serviceBefore.running
+    ) {
+      throw new Error(
+        "Rollback completion does not prove previous runtime and service convergence",
+      );
     }
   }
   if (receipt.kind === "cleanup-intent") {
@@ -499,7 +515,18 @@ export async function persistUpdateGenerationReceipt(params: {
     }
     return params.snapshot;
   }
-  const nextRecord = appendUpdateGenerationReceipt(params.snapshot?.record ?? null, params.receipt);
+  let priorRecord: UpdateGenerationTransactionRecord | null = params.snapshot?.record ?? null;
+  if (params.receipt.kind === "intent" && priorRecord) {
+    const priorProjection = projectUpdateGenerationTransaction(priorRecord);
+    if (priorProjection.latest.kind !== "cleanup-completed") {
+      throw new Error("A new update generation transaction requires completed prior cleanup");
+    }
+    if (params.receipt.transactionId === priorRecord.transactionId) {
+      throw new Error("A new update generation transaction requires a unique transaction id");
+    }
+    priorRecord = null;
+  }
+  const nextRecord = appendUpdateGenerationReceipt(priorRecord, params.receipt);
   const result = await params.ledger.compareAndSwap({
     namespaceKey: nextRecord.namespaceKey,
     expectedRevision: params.snapshot?.revision ?? null,

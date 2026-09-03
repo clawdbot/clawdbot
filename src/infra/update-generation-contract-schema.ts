@@ -79,6 +79,7 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       stagingRoot: nonEmptyStringSchema,
       serviceBefore: serviceIntentSchema,
       previousSelection: updateGenerationSelectionSchema.nullable(),
+      previousPackageVersion: nonEmptyStringSchema.nullable(),
       stableBindingAlreadyVerified: z.boolean(),
     })
     .strict(),
@@ -201,11 +202,17 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
 
 export const updateGenerationTransactionReceiptSchema =
   updateGenerationTransactionReceiptUnion.superRefine((receipt, context) => {
-    if (
-      receipt.kind === "intent" &&
-      receipt.stableBindingAlreadyVerified &&
-      !receipt.previousSelection
-    ) {
+    if (receipt.kind !== "intent") {
+      return;
+    }
+    if (Boolean(receipt.previousSelection) !== Boolean(receipt.previousPackageVersion)) {
+      context.addIssue({
+        code: "custom",
+        path: ["previousPackageVersion"],
+        message: "Previous generation selection and package version must be recorded together",
+      });
+    }
+    if (receipt.stableBindingAlreadyVerified && !receipt.previousSelection) {
       context.addIssue({
         code: "custom",
         path: ["previousSelection"],

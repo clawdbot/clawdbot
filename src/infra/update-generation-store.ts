@@ -430,6 +430,13 @@ async function assertGenerationEntrypoint(
   return entrypoint;
 }
 
+async function assertOwnedGenerationRoot(generationRoot: string): Promise<void> {
+  const stat = await fs.lstat(generationRoot).catch(() => null);
+  if (!stat?.isDirectory() || stat.isSymbolicLink()) {
+    throw new Error(`Selected update generation root is unavailable: ${generationRoot}`);
+  }
+}
+
 export async function resolveSelectedUpdateGeneration(params: {
   namespaceRoot: string;
   verifyManifest?: boolean;
@@ -450,6 +457,7 @@ export async function resolveSelectedUpdateGeneration(params: {
     throw new Error(`Selected update generation namespace is incomplete: ${namespace.root}`);
   }
   const paths = generationPaths(namespace, selection.generationId);
+  await assertOwnedGenerationRoot(paths.generationRoot);
   const stat = await fs.lstat(paths.payloadRoot).catch(() => null);
   if (!stat?.isDirectory() || stat.isSymbolicLink()) {
     throw new Error(`Selected update generation is unavailable: ${paths.payloadRoot}`);
@@ -484,6 +492,7 @@ export async function replaceUpdateGenerationSelector(params: {
     throw new Error(`Unable to create update generation namespace: ${params.namespaceRoot}`);
   }
   const paths = generationPaths(namespace, params.next.generationId);
+  await assertOwnedGenerationRoot(paths.generationRoot);
   const manifest = await captureUpdateGenerationManifest(paths.payloadRoot);
   if (manifest.digest !== params.next.manifestSha256) {
     throw new Error("Refusing to select an update generation with a mismatched manifest");

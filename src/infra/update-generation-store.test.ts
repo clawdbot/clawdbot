@@ -466,6 +466,36 @@ describe("update generation fail-closed boundaries", () => {
     });
   });
 
+  it("rejects a generation root symlink before following its payload", async () => {
+    await withGenerationTestDir("openclaw-generation-root-symlink-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      await writeRuntime(stageRoot, "1.0.0");
+      const generation = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: stageRoot,
+        version: "1.0.0",
+      });
+      const selected = selectionOf(generation);
+      await replaceUpdateGenerationSelector({ namespaceRoot, expected: null, next: selected });
+      const redirectedRoot = path.join(base, "redirected-generation");
+      await fs.rename(generation.generationRoot, redirectedRoot);
+      await fs.symlink(
+        redirectedRoot,
+        generation.generationRoot,
+        process.platform === "win32" ? "junction" : undefined,
+      );
+
+      await expect(
+        resolveSelectedUpdateGeneration({ namespaceRoot, verifyManifest: true }),
+      ).rejects.toThrow("generation root is unavailable");
+      await expect(
+        replaceUpdateGenerationSelector({ namespaceRoot, expected: selected, next: selected }),
+      ).rejects.toThrow("generation root is unavailable");
+      await expect(readUpdateGenerationSelector(namespaceRoot)).resolves.toEqual(selected);
+    });
+  });
+
   it("does not accept a symlink installed during launcher creation", async () => {
     await withGenerationTestDir("openclaw-generation-launcher-race-", async (base) => {
       const namespaceRoot = path.join(base, "managed");
