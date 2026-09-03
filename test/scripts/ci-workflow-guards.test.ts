@@ -2515,8 +2515,8 @@ NODE
       (step: { name?: string }) => step.name === "Validate control UI locale refresh",
     );
 
-    expect(refresh.if).toBe(
-      "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success'",
+    expect(refresh.if.replace(/\s+/gu, " ")).toBe(
+      "always() && needs.resolve-base.result == 'success' && (needs.publisher-preflight.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.publish && needs.publisher-preflight.result == 'skipped')) && !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)",
     );
     expect(refresh.strategy.matrix.locale).toEqual(NATIVE_I18N_LOCALES);
     expect(controlUiWorkflow.concurrency["cancel-in-progress"]).toBe(false);
@@ -2532,7 +2532,9 @@ NODE
       "${{ fromJSON(needs.resolve-base.outputs.locales) }}",
     );
     expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
-    expect(workflow.concurrency.group).toBe("native-app-locale-refresh");
+    expect(workflow.concurrency.group.replace(/\s+/gu, " ")).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only && format('native-app-locale-preflight-{0}', github.ref) || 'native-app-locale-refresh' }}",
+    );
     expect(controlUiResolveBase.if).not.toContain("chore(ui): refresh control ui locales");
     const controlResolveCondition = controlUiResolveBase.if.replace(/\s+/gu, " ");
     expect(controlResolveCondition).toBe(
@@ -2540,16 +2542,36 @@ NODE
     );
     expect(controlResolveCondition).not.toContain("inputs.token_preflight_only");
     expect(controlResolveCondition).not.toContain("github.ref_type");
-    expect(nativeResolveBase.if).toBe(
-      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')",
+    expect(nativeResolveBase.if.replace(/\s+/gu, " ")).toBe(
+      "github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') || ((!inputs.publish || inputs.preflight_only) && github.ref_type == 'branch'))",
     );
+    const nativeResolveStep = nativeResolveBase.steps.find(
+      (step: { name?: string }) => step.name === "Resolve source commit",
+    );
+    expect(nativeResolveStep.env.WORKFLOW_SHA).toBe("${{ github.workflow_sha }}");
+    expect(nativeResolveStep.env.NON_PUBLISHING.replace(/\s+/gu, " ")).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && (!inputs.publish || inputs.preflight_only) }}",
+    );
+    expect(nativeResolveStep.run).toContain('if [[ "${NON_PUBLISHING}" == "true" ]]; then');
+    expect(nativeResolveStep.run).toContain('sha="${WORKFLOW_SHA}"');
     expect(controlUiWorkflow.on.workflow_dispatch.inputs.token_preflight_only).toEqual({
       description: "Verify generated PR App permissions without running locale generation.",
       required: false,
       default: false,
       type: "boolean",
     });
-    expect(workflow.on.workflow_dispatch?.inputs).toBeUndefined();
+    expect(workflow.on.workflow_dispatch.inputs.publish).toEqual({
+      description: "Publish the generated locale PR after validation.",
+      required: false,
+      default: true,
+      type: "boolean",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.preflight_only).toEqual({
+      description: "Verify an exact branch dispatch without translation or publishing secrets.",
+      required: false,
+      default: false,
+      type: "boolean",
+    });
     expect(workflow.on.push.paths).toContain("ui/src/i18n/.i18n/glossary.*.json");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native/**");
     expect(workflow.on.push.paths).toContain("apps/.i18n/native-source.json");
@@ -2607,6 +2629,20 @@ NODE
       "apps/android/app/src/thirdParty",
     );
     expect(nativePublishStep.with["auto-merge"]).toBe("true");
+    expect(nativePublishStep.if).toBe("github.event_name != 'workflow_dispatch' || inputs.publish");
+    const nativePatchStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Prepare non-publishing locale patch",
+    );
+    const nativePatchUploadStep = nativeFinalize.steps.find(
+      (step: { name?: string }) => step.name === "Upload non-publishing locale patch",
+    );
+    expect(nativePatchStep.if).toBe("github.event_name == 'workflow_dispatch' && !inputs.publish");
+    expect(nativePatchStep.run).toContain("Unexpected generated path");
+    expect(nativePatchStep.run).toContain("git diff --cached --binary --full-index");
+    expect(nativePatchUploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);
+    expect(nativePatchUploadStep.if).toBe(
+      "github.event_name == 'workflow_dispatch' && !inputs.publish",
+    );
     expect(controlUiRefreshStep.run).toContain("run_refresh anthropic");
     expect(controlUiRefreshStep.run).toContain("retrying with OpenAI");
     expect(controlUiRefreshStep.run).toContain("run_openai_refresh");
@@ -2661,11 +2697,7 @@ NODE
       expect(ownerWorkflow.on.push.paths).toContain(PUBLISH_GENERATED_PR_ACTION);
       const resolveBase = ownerWorkflow.jobs["resolve-base"];
       const resolveStep = resolveBase.steps.find(
-        (step: { name?: string }) =>
-          step.name ===
-          (ownerWorkflow === controlUiWorkflow
-            ? "Resolve source commit"
-            : "Resolve default branch head"),
+        (step: { name?: string }) => step.name === "Resolve source commit",
       );
       expect(resolveBase.outputs.sha).toBe("${{ steps.base.outputs.sha }}");
       expect(resolveStep.env.GH_TOKEN).toBe("${{ github.token }}");
@@ -2711,7 +2743,11 @@ NODE
 
     for (const preflight of [controlUiPreflight, nativePreflight]) {
       expect(preflight.needs).toBe("resolve-base");
-      expect(preflight.if).toBe("needs.resolve-base.result == 'success'");
+      expect(preflight.if.replace(/\s+/gu, " ")).toBe(
+        preflight === nativePreflight
+          ? "needs.resolve-base.result == 'success' && (github.event_name != 'workflow_dispatch' || (inputs.publish && !inputs.preflight_only))"
+          : "needs.resolve-base.result == 'success'",
+      );
       expect(preflight.strategy).toBeUndefined();
       expect(preflight.steps).toHaveLength(3);
       const checkoutStep = preflight.steps.find(
@@ -2963,9 +2999,9 @@ NODE
       expect(refreshJob.needs).toEqual(["resolve-base", "publisher-preflight"]);
       expect(finalizeJob.needs).toEqual(["resolve-base", "publisher-preflight", "refresh"]);
       const isNative = automationBranch.includes("native");
-      expect(finalizeJob.if).toBe(
+      expect(finalizeJob.if.replace(/\s+/gu, " ")).toBe(
         isNative
-          ? "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success'"
+          ? "always() && needs.resolve-base.result == 'success' && (needs.publisher-preflight.result == 'success' || (github.event_name == 'workflow_dispatch' && !inputs.publish && needs.publisher-preflight.result == 'skipped')) && needs.refresh.result == 'success'"
           : "needs.resolve-base.result == 'success' && needs.publisher-preflight.result == 'success' && needs.refresh.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.token_preflight_only)",
       );
       expect(uploadStep.uses).toBe(UPLOAD_ARTIFACT_V7);

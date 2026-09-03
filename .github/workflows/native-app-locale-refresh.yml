@@ -25,12 +25,26 @@ on:
       - .github/actions/publish-generated-pr/action.yml
       - .github/workflows/native-app-locale-refresh.yml
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the generated locale PR after validation.
+        required: false
+        default: true
+        type: boolean
+      preflight_only:
+        description: Verify an exact branch dispatch without translation or publishing secrets.
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
 concurrency:
-  group: native-app-locale-refresh
+  group: >-
+    ${{ github.event_name == 'workflow_dispatch' && inputs.preflight_only &&
+      format('native-app-locale-preflight-{0}', github.ref) ||
+      'native-app-locale-refresh' }}
   # Finish the active full refresh; GitHub retains only the newest pending run for this group.
   # Publisher overlap checks defer stale generated paths to that queued reconciliation run.
   cancel-in-progress: false
@@ -39,23 +53,33 @@ jobs:
   resolve-base:
     if: >-
       github.repository == 'openclaw/openclaw' &&
-      (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main')
+      (github.event_name != 'workflow_dispatch' ||
+        (inputs.publish && !inputs.preflight_only && github.ref == 'refs/heads/main') ||
+        ((!inputs.publish || inputs.preflight_only) && github.ref_type == 'branch'))
     runs-on: ubuntu-latest
     outputs:
       sha: ${{ steps.base.outputs.sha }}
     steps:
-      - name: Resolve default branch head
+      - name: Resolve source commit
         id: base
         env:
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
           GH_TOKEN: ${{ github.token }}
           REPOSITORY: ${{ github.repository }}
+          NON_PUBLISHING: >-
+            ${{ github.event_name == 'workflow_dispatch' &&
+              (!inputs.publish || inputs.preflight_only) }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          sha="$(
-            timeout --signal=TERM --kill-after=10s 60s \
-              gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
-          )"
+          if [[ "${NON_PUBLISHING}" == "true" ]]; then
+            sha="${WORKFLOW_SHA}"
+          else
+            sha="$(
+              timeout --signal=TERM --kill-after=10s 60s \
+                gh api --method GET "repos/${REPOSITORY}/commits/${DEFAULT_BRANCH}" --jq .sha
+            )"
+          fi
           if [[ ! "${sha}" =~ ^[0-9a-f]{40}$ ]]; then
             echo "Unable to resolve ${DEFAULT_BRANCH} to an exact commit." >&2
             exit 1
@@ -65,7 +89,10 @@ jobs:
   publisher-preflight:
     name: Verify generated PR App permissions
     needs: resolve-base
-    if: needs.resolve-base.result == 'success'
+    if: >-
+      needs.resolve-base.result == 'success' &&
+      (github.event_name != 'workflow_dispatch' ||
+        (inputs.publish && !inputs.preflight_only))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -107,8 +134,12 @@ jobs:
   refresh:
     needs: [resolve-base, publisher-preflight]
     if: >-
+      always() &&
       needs.resolve-base.result == 'success' &&
-      needs.publisher-preflight.result == 'success'
+      (needs.publisher-preflight.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          needs.publisher-preflight.result == 'skipped')) &&
+      !(github.event_name == 'workflow_dispatch' && inputs.preflight_only)
     strategy:
       fail-fast: false
       max-parallel: 2
@@ -250,11 +281,14 @@ jobs:
           retention-days: 1
 
   finalize:
-    name: Commit native locale refresh
+    name: Finalize native locale refresh
     needs: [resolve-base, publisher-preflight, refresh]
     if: >-
+      always() &&
       needs.resolve-base.result == 'success' &&
-      needs.publisher-preflight.result == 'success' &&
+      (needs.publisher-preflight.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' && !inputs.publish &&
+          needs.publisher-preflight.result == 'skipped')) &&
       needs.refresh.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -296,7 +330,42 @@ jobs:
       - name: Validate native locale refresh
         run: node --import tsx scripts/native-app-i18n.ts check
 
+      - name: Prepare non-publishing locale patch
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        run: |
+          set -euo pipefail
+          patch="${RUNNER_TEMP}/native-app-locale-refresh.patch"
+          git add -A
+          while IFS= read -r path; do
+            case "${path}" in
+              apps/.i18n/native/* | \
+              apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt | \
+              apps/android/app/src/main/res/values*/assistant.xml | \
+              apps/android/app/src/main/res/values*/strings.xml | \
+              apps/android/app/src/thirdParty/res/values*/accessibility_strings.xml | \
+              apps/android/wear/src/main/res/values*/strings.xml | \
+              apps/ios/Resources/Localizable.xcstrings | \
+              apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings | \
+              apps/ios/Sources/*.lproj/InfoPlist.strings | \
+              apps/ios/WatchApp/*.lproj/InfoPlist.strings | \
+              apps/ios/ShareExtension/*.lproj/InfoPlist.strings | \
+              apps/ios/ActivityWidget/*.lproj/InfoPlist.strings) ;;
+              *) echo "Unexpected generated path: ${path}" >&2; exit 1 ;;
+            esac
+          done < <(git diff --cached --name-only)
+          git diff --cached --binary --full-index > "${patch}"
+
+      - name: Upload non-publishing locale patch
+        if: github.event_name == 'workflow_dispatch' && !inputs.publish
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: native-app-locale-refresh-${{ needs.resolve-base.outputs.sha }}
+          path: ${{ runner.temp }}/native-app-locale-refresh.patch
+          if-no-files-found: error
+          retention-days: 1
+
       - name: Open or update generated locale PR
+        if: github.event_name != 'workflow_dispatch' || inputs.publish
         uses: ./.github/actions/publish-generated-pr
         with:
           contents-client-id: Iv23liOECG0slfuhz093
