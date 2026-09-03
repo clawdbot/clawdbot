@@ -19,6 +19,30 @@ export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";
 /** Sort direction for paginated cron listing. */
 export type CronSortDir = "asc" | "desc";
 
+/** Metadata attached to cron pages that are filtered by caller or operator-role scope. */
+export type CronListVisibility = {
+  mode: "caller" | "role";
+  restricted: true;
+  warning: string;
+};
+
+/** Combines independent scope disclosures without losing the original restriction reason. */
+export function mergeCronListVisibility(
+  current: CronListVisibility | undefined,
+  added: Pick<CronListVisibility, "mode" | "warning">,
+): CronListVisibility {
+  return current
+    ? {
+        ...current,
+        warning: `${current.warning} ${added.warning}`,
+      }
+    : {
+        mode: added.mode,
+        restricted: true,
+        warning: added.warning,
+      };
+}
+
 /** Input contract for filtered, sorted, offset-based cron job pages. */
 export type CronListPageOptions = {
   includeDisabled?: boolean;
@@ -44,4 +68,6 @@ export type CronListPageResult<TJobs extends readonly CronJob[] = CronJob[]> = {
   limit: number;
   hasMore: boolean;
   nextOffset: number | null;
+  /** Present when the page is a restricted view rather than a global inventory. */
+  visibility?: CronListVisibility;
 };

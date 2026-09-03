@@ -90,5 +90,11 @@ export async function listCronPageForCallerScope({
     limit,
     hasMore: nextOffset < total,
     nextOffset: nextOffset < total ? nextOffset : null,
+    visibility: {
+      mode: "caller",
+      restricted: true,
+      warning:
+        "Automation list is restricted to automations visible to the calling agent. Inaccessible automations are omitted; total, pagination, and snapshotRevision describe this restricted view, not the complete Gateway inventory.",
+    },
   };
 }
