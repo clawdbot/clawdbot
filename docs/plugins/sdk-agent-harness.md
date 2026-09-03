@@ -452,7 +452,8 @@ are a separate case. They register a Gateway question and then wait, and the
 prompt that lets a person answer it is published by whatever runs the tool. A
 harness whose tools go through the embedded tool lifecycle gets that publication
 from its tool-start handler. A harness that dispatches tools itself passes
-`questionPrompt` to `createOpenClawCodingTools` instead: `send` is the run's
+`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+builds a tool surface — a side thread is its own such path: `send` is the run's
 `onToolResult`, and `messageChannel` is the conversation the prompt would appear
 in. Leave it out and the question is registered but never shown, so the turn
 waits out its whole timeout and then reports that nobody answered.
