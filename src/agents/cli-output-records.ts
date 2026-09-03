@@ -315,11 +315,7 @@ export function describeClaudeTurnStop(failure: {
 // Reasons the CLI reports when it ended the turn on purpose after work may
 // already have run: a hook or an abort cut the turn short, or a budget ran
 // out. Replaying one of these on another model would re-run its tool effects.
-// Every other reply-less reason is named in the error text but stays
-// failover-eligible: the SDK does not document whether provider-side reasons
-// (`model_error`, `rapid_refill_breaker`) or pre-tool setup failures reach a
-// `success` record without `is_error`, and a retry there is the pre-existing
-// behavior rather than a new risk.
+// Other reasons keep the existing retryable provider/setup path.
 const CLAUDE_TURN_STOP_REASONS = new Set([
   "hook_stopped",
   "stop_hook_prevented",
@@ -328,8 +324,8 @@ const CLAUDE_TURN_STOP_REASONS = new Set([
   "budget_exhausted",
 ]);
 
-/** A reply-less Claude result that ended for a reason other than completing. */
-export function readClaudeReplyLessTerminalReason(
+/** Reads a reply-less Claude result that the backend deliberately stopped. */
+function readClaudeTurnStop(
   parsed: Record<string, unknown>,
 ): { terminalReason: string; stopReason?: string } | undefined {
   const terminalReason =
@@ -346,6 +342,7 @@ export function readClaudeReplyLessTerminalReason(
     terminalReason === "completed" ||
     terminalReason === "max_turns" ||
     terminalReason === "background_requested" ||
+    !CLAUDE_TURN_STOP_REASONS.has(terminalReason) ||
     unwrapNestedCliResultText(collectCliText(parsed.result)).trim() ||
     collectExplicitCliErrorText(parsed)
   ) {
@@ -365,10 +362,8 @@ function readClaudeTerminalFailure(
   const terminalReason =
     typeof parsed.terminal_reason === "string" ? parsed.terminal_reason.trim() : "";
   if (subtype !== "error_max_turns" && terminalReason !== "max_turns") {
-    const stop = readClaudeReplyLessTerminalReason(parsed);
-    return stop && CLAUDE_TURN_STOP_REASONS.has(stop.terminalReason)
-      ? { reason: "turn_stopped", ...stop }
-      : undefined;
+    const stop = readClaudeTurnStop(parsed);
+    return stop ? { reason: "turn_stopped", ...stop } : undefined;
   }
   const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
   for (const error of errors) {
@@ -501,7 +496,7 @@ export function parseCliJson(
     usage = readCliUsage(parsed) ?? usage;
     const claudeDialect = isClaudeStreamJsonDialect({ backend, providerId: providerId ?? "" });
     const terminalFailure = claudeDialect ? readClaudeTerminalFailure(parsed) : undefined;
-    if (terminalFailure) {
+    if (terminalFailure && !(terminalFailure.reason === "turn_stopped" && text.trim())) {
       return {
         text: "",
         sessionId,
@@ -509,12 +504,6 @@ export function parseCliJson(
         errorText: resolveCliTerminalErrorText(parsed, terminalFailure),
         terminalFailure,
       };
-    }
-    // Outside the stop allowlist the reason is still named, but the turn stays
-    // failover-eligible, so no terminal failure is recorded.
-    const namedStop = claudeDialect ? readClaudeReplyLessTerminalReason(parsed) : undefined;
-    if (namedStop) {
-      return { text: "", sessionId, usage, errorText: describeClaudeTurnStop(namedStop) };
     }
     const subtype = typeof parsed.subtype === "string" ? parsed.subtype.trim() : "";
     const shouldClassifyError =

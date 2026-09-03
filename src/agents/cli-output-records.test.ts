@@ -177,7 +177,7 @@ describe("parseCliJson", () => {
         type: "result",
         subtype: "success",
         session_id: "session-json-long-reason",
-        terminal_reason: `hook\u0007stopped\n${"x".repeat(200)}`,
+        terminal_reason: "hook_stopped",
         stop_reason: "y".repeat(200),
         result: "",
       },
@@ -188,7 +188,12 @@ describe("parseCliJson", () => {
         text: "",
         sessionId: "session-json-long-reason",
         usage: undefined,
-        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook stopped ${"x".repeat(51)}, stop_reason: ${"y".repeat(64)}).`,
+        errorText: `Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: ${"y".repeat(64)}).`,
+        terminalFailure: {
+          reason: "turn_stopped",
+          terminalReason: "hook_stopped",
+          stopReason: "y".repeat(64),
+        },
       },
     },
     {
@@ -216,28 +221,6 @@ describe("parseCliJson", () => {
           terminalReason: "aborted_tools",
           stopReason: "tool_use",
         },
-      },
-    },
-    {
-      name: "names a reply-less provider-side terminal reason without recording a stop",
-      input: {
-        type: "result",
-        subtype: "success",
-        is_error: false,
-        session_id: "session-json-model-error",
-        stop_reason: "end_turn",
-        terminal_reason: "model_error",
-        result: "",
-      },
-      command: "claude",
-      sessionIdFields: ["session_id"],
-      providerId: "claude-cli",
-      expected: {
-        text: "",
-        sessionId: "session-json-model-error",
-        usage: undefined,
-        errorText:
-          "Claude CLI ended the turn without a reply (terminal_reason: model_error, stop_reason: end_turn).",
       },
     },
     {
@@ -346,6 +329,33 @@ describe("parseCliJson", () => {
     );
 
     expect(result).toEqual(expected);
+  });
+
+  it("keeps earlier assistant text when a later terminal result is reply-less", () => {
+    const result = parseCliJson(
+      [
+        JSON.stringify({
+          type: "assistant",
+          message: { content: [{ type: "text", text: "partial answer" }] },
+        }),
+        JSON.stringify({
+          type: "result",
+          subtype: "success",
+          session_id: "session-json-earlier-text",
+          stop_reason: "tool_use",
+          terminal_reason: "hook_stopped",
+          result: "",
+        }),
+      ].join("\n"),
+      { command: "claude", output: "json", sessionIdFields: ["session_id"] },
+      "claude-cli",
+    );
+
+    expect(result).toEqual({
+      text: "partial answer",
+      sessionId: "session-json-earlier-text",
+      usage: undefined,
+    });
   });
 
   it("recovers mixed-output Claude session metadata from embedded JSON objects", () => {

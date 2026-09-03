@@ -28,7 +28,6 @@ import {
 import * as cliOutputLifecycle from "./cli-output-lifecycle.js";
 import {
   decodeCliRecords,
-  describeClaudeTurnStop,
   isClaudeStreamJsonDialect,
   isClaudeStreamJsonResult,
   isClaudeSyntheticNoResponse,
@@ -37,7 +36,6 @@ import {
   isStreamJsonDialect,
   missingMessageBoundarySeparator,
   parseClaudeCliJsonlResult,
-  readClaudeReplyLessTerminalReason,
   parseClaudeCliStreamingDelta,
   pickCliResumeCheckpointId,
   pickCliSessionId,
@@ -52,7 +50,6 @@ import {
   frameBoundedCliJsonlChunk,
   streamJsonOutputLimitErrorText,
 } from "./cli-output-stream-limits.js";
-
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
@@ -435,16 +432,9 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
         toolTracker.pendingByIndex.size === 0 &&
         toolTracker.startedIds.size === 0 &&
         toolTracker.resultDeliveredIds.size === 0;
-      // A reply-less reason outside the stop allowlist is named but leaves the
-      // turn failover-eligible, and only when nothing at all was delivered.
-      const namedStop =
-        claudeStreamJson && !stoppedTurn && !syntheticNoResponse && !text
-          ? readClaudeReplyLessTerminalReason(parsed)
-          : undefined;
       output = {
         ...result,
         text,
-        ...(namedStop ? { errorText: describeClaudeTurnStop(namedStop) } : {}),
         ...(syntheticNoResponse
           ? {
               errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
