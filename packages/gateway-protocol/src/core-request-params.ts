@@ -32,11 +32,11 @@ export type GatewayCoreRequestParams = {
   "sessions.github.options": Static<typeof GitHubSchema.SessionGitHubOptionsParamsSchema>;
   "sessions.github.status": Static<typeof GitHubSchema.SessionGitHubStatusParamsSchema>;
   "sessions.github.confirm": GitHubSchema.SessionGitHubConfirmParams;
+  "users.authConnect.catalog": UsersSchema.UsersAuthConnectCatalogParams;
   "users.authConnect.start": UsersSchema.UsersAuthConnectStartParams;
-  "users.authConnect.complete": UsersSchema.UsersAuthConnectCompleteParams;
+  "users.authConnect.answer": UsersSchema.UsersAuthConnectAnswerParams;
   "users.authConnect.status": UsersSchema.UsersAuthConnectStatusParams;
   "users.authConnect.cancel": UsersSchema.UsersAuthConnectCancelParams;
-  "users.authConnect.token": UsersSchema.UsersAuthConnectTokenParams;
   "users.listAuthLinks": UsersSchema.UsersListAuthLinksParams;
   "users.listModelAccounts": UsersSchema.UsersListModelAccountsParams;
   "users.selectModelAccount": UsersSchema.UsersSelectModelAccountParams;

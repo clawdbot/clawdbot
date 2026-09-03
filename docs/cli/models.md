@@ -156,19 +156,21 @@ Manages `agents.defaults.model.fallbacks`. `openclaw models image-fallbacks list
 
 ## Personal model accounts
 
-Use `models accounts` for accounts owned by your signed-in person on the selected Gateway. The CLI and **Settings → Profile → Model accounts** use the same Gateway account store, including when the server is shared.
+Use `models accounts` for accounts owned by your signed-in person on the selected Gateway. The CLI and **Settings → Profile → Connected accounts** use the same Gateway account store, including when the server is shared.
 
 | Scope          | Command                                            | Where the credential belongs                                        |
 | -------------- | -------------------------------------------------- | ------------------------------------------------------------------- |
-| Personal       | `models accounts login <provider>`                 | Your verified profile on the selected Gateway, which may be remote. |
+| Personal       | `models accounts login [provider]`                 | Your verified profile on the selected Gateway, which may be remote. |
 | System / agent | `models auth login --provider <id> [--agent <id>]` | The OpenClaw installation on the machine running the command.       |
 
 To configure system/agent credentials for a remote server, run `models auth` on that server with its OpenClaw state/config. Configuring a remote Gateway URL on your laptop does not make `models auth` write to the server.
 
 ```bash
 openclaw models accounts list
-openclaw models accounts login anthropic
-openclaw models accounts login openai
+openclaw models accounts login
+openclaw models accounts login anthropic --method api-key
+openclaw models accounts login openai --method device-code
+openclaw models accounts login xai --method api-key
 openclaw models accounts use <account-id>
 openclaw models accounts clear-default <provider>
 ```
@@ -181,7 +183,11 @@ If no person is identified, the command stops before provider sign-in and explai
 
 `list` needs `operator.read` and returns one page of at most 50 saved accounts: id, provider, friendly label, auth type, and whether each is the new-session default. It never returns credentials. Use `--json` for structured output and `list --cursor <nextCursor>` for the next page.
 
-`login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal. For Anthropic, run `claude setup-token` separately and paste its output into the hidden prompt. For OpenAI, follow the ChatGPT sign-in link; the command waits for the browser callback or a redirect URL pasted into its hidden prompt. Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt; a closed connection must start a fresh attempt. Provider tokens and redirect URLs are not accepted as command arguments or through chat.
+`login`, `use`, and `clear-default` need `operator.write`. `login` requires an interactive terminal and offers the same provider and sign-in methods as **Add account** in the Control UI. Omit the provider to choose from the Gateway's catalog; use `--method <id>` to select a method directly. The catalog includes only methods enabled for personal accounts by their provider plugin, not every system/agent setup method.
+
+Anthropic uses an API key for personal setup, not a Claude subscription token. OpenAI offers API key, browser sign-in, and device-code methods; Grok (`xai`) offers API key and device sign-in. Follow the steps shown by the selected Gateway. Credentials and authorization codes go into protected inputs, never command arguments or chat. During browser sign-in, the CLI keeps checking for completion even while a redirect prompt is open.
+
+Keep the command running until it reports a terminal result. Ctrl-C cancels that exact sign-in attempt and waits for the Gateway's acknowledgment; a closed connection must start a fresh attempt. Saving an account does not by itself prove that a model request will succeed.
 
 `use` selects an already-saved account for new sessions without signing in again. `clear-default` removes only the personal default for that provider: it keeps saved credentials and existing session selections. Neither operation revokes provider access. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for collaborator, fork, and failover behavior.
 

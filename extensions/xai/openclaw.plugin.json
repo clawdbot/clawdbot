@@ -91,6 +91,7 @@
     {
       "provider": "xai",
       "method": "api-key",
+      "personalAccount": true,
       "choiceId": "xai-api-key",
       "appGuidedSecret": true,
       "choiceLabel": "xAI API key",
@@ -106,6 +107,7 @@
     {
       "provider": "xai",
       "method": "oauth",
+      "personalAccount": true,
       "choiceId": "xai-oauth",
       "appGuidedAuth": "device-code",
       "choiceLabel": "xAI OAuth",

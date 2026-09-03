@@ -1,8 +1,9 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
@@ -24,7 +25,6 @@ import {
   type LookupFn,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { createModelAccountAuthorization } from "./model-account-authorization.js";
 import {
   createOpenAIAuthorizationFlow,
   resolveOpenAICallbackHost,
@@ -36,6 +36,7 @@ import {
   refreshOpenAIAccessToken,
 } from "./openai-chatgpt-oauth-token.runtime.js";
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
+import { buildOpenAIProvider } from "./openai-provider.js";
 
 function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
@@ -243,6 +244,55 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(onAuth).not.toHaveBeenCalled();
   });
 
+  it("closes the callback listener when cancellation outlives a pending browser presentation", async () => {
+    const events = new EventEmitter();
+    const ready = once(events, "ready");
+    const release = once(events, "release");
+    const controller = new AbortController();
+    const rejected = vi.fn();
+    const login = loginOpenAICodex({
+      onAuth: async ({ url }) => {
+        events.emit("ready", url);
+        await release;
+      },
+      onPrompt: vi.fn(async () => "unused-code"),
+      signal: controller.signal,
+    }).catch(rejected);
+    let socket: Socket | undefined;
+    try {
+      const [url] = await ready;
+      const redirectUri = new URL(url).searchParams.get("redirect_uri");
+      if (!redirectUri) {
+        throw new Error("expected the callback redirect URI");
+      }
+      const callbackSocket = await connectIdleSocket(redirectUri);
+      socket = callbackSocket;
+      const socketErrors: Error[] = [];
+      callbackSocket.on("error", (error) => socketErrors.push(error));
+      const closed = new Promise<void>((resolve) => {
+        callbackSocket.once("close", () => resolve());
+      });
+      controller.abort();
+      await vi.waitFor(() =>
+        expect(rejected).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Login cancelled" }),
+        ),
+      );
+      await closed;
+      expect(socket.destroyed).toBe(true);
+      // Forced callback shutdown may reset a preconnected socket instead of sending FIN.
+      for (const error of socketErrors) {
+        expect(error).toMatchObject({ code: "ECONNRESET" });
+      }
+      expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      events.emit("release");
+      await login;
+      socket?.destroy();
+    }
+  });
+
   it("waits for Node OAuth runtime before creating an authorization flow", async () => {
     const callbackHost = resolveOpenAICallbackHost();
     const flow = await createOpenAIAuthorizationFlow(
@@ -431,13 +481,6 @@ describe("OpenAI Codex OAuth flow", () => {
       operation: "exchange",
       summary: "Login cancelled",
     });
-
-    const authorization = await createModelAccountAuthorization();
-    await expect(authorization.exchange("code", controller.signal)).resolves.toEqual({
-      status: "failed",
-      reason: "exchange",
-    });
-    expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe token exchange lifetimes", async () => {
@@ -561,7 +604,7 @@ describe("OpenAI model-account credential ownership", () => {
     { name: "missing user claims", accountId: "workspace-1", userId: undefined, matches: false },
   ])(
     "matches $name from token claims, never email or stored workspace metadata",
-    async ({ accountId, userId, matches }) => {
+    ({ accountId, userId, matches }) => {
       const access = fakeJwt({
         "https://api.openai.com/auth": {
           chatgpt_account_id: "workspace-1",
@@ -569,48 +612,49 @@ describe("OpenAI model-account credential ownership", () => {
         },
         "https://api.openai.com/profile": { email: "same@example.test" },
       });
-      mockTokenResponse({
-        access_token: access,
-        refresh_token: "synthetic-refresh",
-        expires_in: 3600,
-      });
-      const authorization = await createModelAccountAuthorization();
-      const result = await authorization.exchange("synthetic-code", new AbortController().signal);
-      if (result.status !== "authorized") {
-        throw new Error("Expected an authorized model-account credential.");
-      }
-      expect(
-        result.matchesCredential({
-          ...result.credential,
-          // Deliberately identical metadata must not substitute for the actual token identity.
-          accountId: "workspace-1",
-          access: fakeJwt({
-            "https://api.openai.com/auth": {
-              chatgpt_account_id: accountId,
-              chatgpt_user_id: userId,
-            },
-            "https://api.openai.com/profile": { email: "same@example.test" },
+      const credential: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access,
+        refresh: "synthetic-refresh",
+        expires: 1,
+      };
+      for (const methodId of ["oauth", "device-code"]) {
+        const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
+        expect(method?.matchesPersonalAccount).toBeTypeOf("function");
+        expect(
+          method?.matchesPersonalAccount?.(credential, {
+            ...credential,
+            // Identical stored metadata must not substitute for the actual token identity.
+            accountId: "workspace-1",
+            access: fakeJwt({
+              "https://api.openai.com/auth": {
+                chatgpt_account_id: accountId,
+                chatgpt_user_id: userId,
+              },
+              "https://api.openai.com/profile": { email: "same@example.test" },
+            }),
           }),
-        }),
-      ).toBe(matches);
+        ).toBe(matches);
+      }
     },
   );
 
-  it("accepts a first connection without a user claim but refuses to replace any prior credential", async () => {
-    mockTokenResponse({
-      access_token: fakeJwt({
+  it("refuses to replace any prior credential without an incoming user claim", () => {
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: fakeJwt({
         "https://api.openai.com/auth": { chatgpt_account_id: "workspace-1" },
       }),
-      refresh_token: "synthetic-refresh",
-      expires_in: 3600,
-    });
-    const authorization = await createModelAccountAuthorization();
-    const result = await authorization.exchange("synthetic-code", new AbortController().signal);
-    if (result.status !== "authorized") {
-      throw new Error("Expected an authorized first connection.");
+      refresh: "synthetic-refresh",
+      expires: 1,
+    };
+    for (const methodId of ["oauth", "device-code"]) {
+      const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
+      expect(method?.matchesPersonalAccount).toBeTypeOf("function");
+      expect(method?.matchesPersonalAccount?.(credential, credential)).toBe(false);
     }
-    expect(result.credential.accountId).toBe("workspace-1");
-    expect(result.matchesCredential(result.credential)).toBe(false);
   });
 });
 

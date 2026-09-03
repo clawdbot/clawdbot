@@ -11,6 +11,7 @@ import { coerceSecretRef } from "../../config/types.secrets.js";
 import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
 import { asBoolean } from "../../utils/boolean.js";
 import { AUTH_STORE_VERSION, authProfilesLog } from "./constants.js";
+import { oauthCredentialMetadataSchema } from "./credential-schema.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { isLegacyOAuthRef } from "./legacy-oauth-ref.js";
 import { AuthProfileStoreUnreadableError } from "./legacy-source-diagnostic.js";
@@ -191,15 +192,8 @@ function normalizeRawCredentialEntry(raw: Record<string, unknown>): Partial<Auth
     for (const field of [
       "access",
       "refresh",
-      "idToken",
-      "clientId",
-      "enterpriseUrl",
-      "projectId",
-      "accountId",
-      "chatgptPlanType",
-      "subscriptionType",
-      "rateLimitTier",
-    ] as const) {
+      ...Object.keys(oauthCredentialMetadataSchema.shape),
+    ]) {
       const value = normalizeOptionalCredentialString(entry[field]);
       if (value !== undefined) {
         normalized[field] = value;

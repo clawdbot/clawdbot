@@ -42,7 +42,7 @@ Creator source follows scheduled jobs and inherited creation policies; a require
 
 ## Per-person model accounts
 
-Each teammate can sign in to a model account for their Gateway profile. New sessions they start prefer that account instead of the Gateway default. This supports ChatGPT/Codex OAuth and Claude subscription tokens; it does not guarantee that every turn bills the same account.
+Each teammate can sign in to a model account for their Gateway profile. New sessions they start prefer that account instead of the Gateway default. Available providers and sign-in methods come from the Gateway's provider plugins; selecting an account does not guarantee that every turn bills that account.
 
 There are two sign-ins: the Gateway identifies **you**, then the provider authorizes **your model account**. CLI and web UI use the same personal account store on the selected Gateway. A shared server does not turn personal sign-in into shared credentials. System/agent credentials are a separate scope, managed through `models auth` on the machine running that OpenClaw installation.
 
@@ -55,22 +55,25 @@ There are four separate pieces:
 | Chat selection   | The account already selected for one chat. Collaborators and forks keep that selection.               |
 | Sign-in attempt  | A temporary, cancellable operation. No account is saved until sign-in succeeds.                       |
 
-Open **Settings → Profile → Model accounts** on an identified connection with `operator.write`:
+Open **Settings → Profile → Connected accounts**, select **Add account**, then choose a provider and sign-in method. Adding an account needs an identified connection with `operator.write`.
 
-- Choose **Sign in** beside **ChatGPT** to open the OpenAI sign-in link. When the browser runs on the Gateway host and the callback port is available, the Gateway receives the `localhost:1455` redirect automatically. With a remote browser or occupied callback port, paste the full redirect URL into the Profile page instead. Keep the Profile connection open until it reports success.
-- **Claude** takes the output of `claude setup-token` run on your own machine; its **Sign in** button saves that account (`users.authConnect.token`).
+- **Anthropic** accepts an API key for personal setup, not a Claude subscription token.
+- **OpenAI** offers API key, ChatGPT/Codex browser sign-in, and device-code sign-in.
+- **Grok (xAI)** offers API key and device sign-in.
 
-Before either flow, check the **Gateway**, **Person**, and **Scope: Personal** rows. The person is your saved verified profile, not an unsaved display-name edit. If the connection has no personal identity, the section explains what is missing and links to **Connection settings** instead of showing credential inputs. Use the Gateway's identity-bearing endpoint; a shared token, local connection, or paired device alone does not identify you. Browser identity does not transfer to the CLI. See [personal-account CLI setup](/cli/models#personal-model-accounts).
+The chooser shows only provider methods enabled for personal accounts on that Gateway. Follow its instructions and use the protected input for credentials or authorization codes. A browser callback can finish while an input is open; keep the Profile connection open until it reports the result. Saving credentials is separate from verifying a successful model request.
+
+Before adding an account, check the **Gateway**, **Person**, and **Scope: Personal** rows. The person is your saved verified profile, not an unsaved display-name edit. If the connection has no personal identity, the section explains what is missing and links to **Connection settings** instead of showing credential inputs. Use the Gateway's identity-bearing endpoint; a shared token, local connection, or paired device alone does not identify you. Browser identity does not transfer to the CLI. See [personal-account CLI setup](/cli/models#personal-model-accounts).
 
 The page lists saved accounts with friendly labels and marks the new-chat default. Select another saved account to change that default without signing in again. **Load more** continues through larger account lists. **Use Gateway defaults for new chats** clears the personal default; the saved accounts stay available.
 
-The page reports the exact sign-in operation as pending, exchanging, connected, cancelled, expired, or failed. **Cancel** asks the Gateway to retire that operation, including an exchange already in flight. Disconnecting, losing permission, or restarting the Gateway prevents an unfinished sign-in from saving credentials; start a new sign-in after reconnecting. Refreshing profile identity does not interrupt account controls.
+The page reports the exact sign-in operation as pending, connected, cancelled, expired, or failed. **Cancel** asks the Gateway to retire that operation, including an exchange already in flight. Disconnecting, losing permission, or restarting the Gateway prevents an unfinished sign-in from saving credentials; start a new sign-in after reconnecting. Refreshing profile identity does not interrupt account controls.
 
 In **New session** or an existing chat, open the model menu and use **Account for this chat** to choose one of your saved accounts for the selected provider. The account picker remains available when **Automatic** has no eligible models. In New session, choosing an account previews eligible models before your first message. The selection applies to the session you create and can also be used for [draft-title preparation](/web/control-ui#new-session-names) before you press Start; it does not change your new-chat default or saved model preference. Changing accounts discards the old title suggestion. In an existing chat, it changes that chat's selection.
 
 The account control shows a collaborator a person-level label for someone else's personal account, not its private email, provider account label, or account id. The label describes the selection, not a billing receipt: configured shared failover accounts can still be used.
 
-The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login <provider>` to sign in, or `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
+The CLI uses the same Gateway operations through [`openclaw models accounts`](/cli/models#personal-model-accounts). Run `openclaw models accounts login` to choose a provider and method, or supply `login <provider> --method <id>` directly. Use `list` to inspect saved accounts. Each command shows the selected Gateway, verified person, and Personal scope. It targets that person, not `--agent` or the operating-system username.
 
 Ask OpenClaw (Custodian) requires administrator access and a working configured inference route. Ask it to manage your personal model accounts, or enter **model accounts**. In the Control UI it opens the Profile controls; in a terminal it gives the CLI commands. If Custodian is unavailable, use Profile or the CLI directly. The handoff makes no change by itself. Complete sign-in in the protected controls or hidden terminal prompt, never in the conversation. Delegated agent requests cannot open or complete the human sign-in flow.
 

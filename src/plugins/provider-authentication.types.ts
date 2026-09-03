@@ -176,6 +176,11 @@ export type ProviderAuthMethod = {
    * method-specific auth choices while keeping the provider id stable.
    */
   wizard?: ProviderPluginWizardSetup;
+  /** Proven provider identity for reconnecting an owned personal account; absent means a new slot. */
+  matchesPersonalAccount?: (
+    credential: AuthProfileCredential,
+    existing: AuthProfileCredential,
+  ) => boolean;
   run: (ctx: ProviderAuthContext) => Promise<ProviderAuthResult>;
   runNonInteractive?: (
     ctx: ProviderAuthMethodNonInteractiveContext,

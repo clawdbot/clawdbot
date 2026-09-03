@@ -4,10 +4,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
-  UsersAuthConnectResult,
+  UsersAuthConnectCatalogResult,
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
+  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -38,27 +39,44 @@ const claudeAccount: UserModelAccount = {
   authProfileId: "anthropic:personal",
   provider: "anthropic",
   label: "Ada · Claude",
-  authType: "token",
+  authType: "api_key",
   selected: true,
 };
+const catalog: UsersAuthConnectCatalogResult = {
+  providers: [
+    { id: "openai", label: "OpenAI", methods: [{ id: "browser", label: "Browser sign-in" }] },
+    { id: "anthropic", label: "Anthropic", methods: [{ id: "api-key", label: "API key" }] },
+    { id: "xai", label: "Grok", methods: [{ id: "api-key", label: "API key" }] },
+  ],
+};
+const redirectStep = (attempt = 1): WizardStep => ({
+  id: `redirect-${attempt}`,
+  type: "text",
+  message: "Paste the redirect URL or wait for sign-in to finish.",
+  externalUrl: `https://auth.openai.com/oauth/authorize?state=${attempt}`,
+});
 
 async function mountAccounts(
   handle: (
     method: string,
     params?: unknown,
-  ) => Promise<UsersAuthConnectStatusResult | UsersAuthConnectResult | UsersListAuthLinksResult>,
+  ) => Promise<UsersAuthConnectStatusResult | UsersListAuthLinksResult>,
   {
     expiresInMs = 60_000,
     scopes = ["operator.write"],
     accounts: initialAccounts = [],
     inventoryPages,
     gatewayUrl,
+    step,
+    connectedAccounts = [connectedAccount, claudeAccount],
   }: {
     expiresInMs?: number;
     scopes?: string[];
     accounts?: UserModelAccount[];
     inventoryPages?: UsersListModelAccountsResult[];
     gatewayUrl?: string;
+    step?: WizardStep;
+    connectedAccounts?: UserModelAccount[];
   } = {},
 ) {
   let starts = 0;
@@ -74,10 +92,13 @@ async function mountAccounts(
   const fixtures = [
     ...savedAccounts,
     ...(inventoryPages?.flatMap((page) => page.accounts) ?? []),
-    connectedAccount,
-    claudeAccount,
+    ...connectedAccounts,
   ];
+  const presented = new Set<string>();
   const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.authConnect.catalog") {
+      return catalog;
+    }
     if (method === "users.listModelAccounts") {
       const page = inventoryPages?.[inventoryPage++];
       if (page) {
@@ -94,10 +115,12 @@ async function mountAccounts(
       starts += 1;
       return {
         connectId: `connect-${starts}`,
-        url: `https://auth.openai.com/oauth/authorize?state=${starts}`,
         expiresAtMs: Date.now() + expiresInMs,
-        autoCallback: true,
       };
+    }
+    if (method === "users.authConnect.status" && !presented.has(`connect-${starts}`)) {
+      presented.add(`connect-${starts}`);
+      return { status: "pending", step: step ?? redirectStep(starts) };
     }
     const result = await handle(method, params);
     if ("links" in result) {
@@ -148,14 +171,23 @@ async function mountAccounts(
   provider.append(accounts);
   document.body.append(provider);
   await vi.waitFor(() =>
-    expect(button(accounts, ".profile-auth-connect-start").disabled).toBe(false),
+    expect(button(accounts, ".profile-auth-add-account").disabled).toBe(false),
   );
   return {
     accounts,
     request,
-    async start() {
+    async start(providerId = "openai") {
+      button(accounts, ".profile-auth-add-account").click();
+      await vi.waitFor(() =>
+        expect(
+          accounts.querySelector(`.profile-auth-provider wa-option[value="${providerId}"]`),
+        ).not.toBeNull(),
+      );
+      await select(accounts, ".profile-auth-provider", providerId);
       button(accounts, ".profile-auth-connect-start").click();
       await vi.waitFor(() => expect(accounts.querySelector(".model-accounts-flow")).not.toBeNull());
+      await vi.advanceTimersByTimeAsync(0);
+      await accounts.updateComplete;
     },
     emit(phase: ApplicationGatewaySnapshot["phase"]) {
       snapshot = { ...snapshot, phase };
@@ -178,6 +210,13 @@ async function input(accounts: ModelAccounts, selector: string, value: string) {
   element.dispatchEvent(new Event("input", { bubbles: true }));
   await accounts.updateComplete;
   return element;
+}
+
+async function select(accounts: ModelAccounts, selector: string, value: string) {
+  const element = accounts.querySelector<HTMLElement & { value: string }>(selector)!;
+  element.value = value;
+  element.dispatchEvent(new Event("change", { bubbles: true }));
+  await accounts.updateComplete;
 }
 
 beforeEach(async () => {
@@ -281,7 +320,7 @@ it("discards an inventory reply from the previous connection", async () => {
   await harness.accounts.updateComplete;
   expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
   await vi.waitFor(() =>
-    expect(button(harness.accounts, ".profile-auth-connect-start").disabled).toBe(false),
+    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
   );
 });
 
@@ -331,10 +370,11 @@ it("polls one authorization at a time and uses its recorded outcome", async () =
   expect(polls).toBe(1);
   await vi.advanceTimersByTimeAsync(6_000);
   expect(polls).toBe(1);
-  exchanging.resolve({ status: "exchanging" });
-  await vi.waitFor(() =>
-    expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.exchangingHint")),
-  );
+  exchanging.resolve({
+    status: "pending",
+    step: { id: "saving", type: "progress", executor: "gateway", message: "Saving account…" },
+  });
+  await vi.waitFor(() => expect(harness.accounts.textContent).toContain("Saving account…"));
   expect(button(harness.accounts, ".profile-auth-connect-cancel").disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(2_000);
   await harness.accounts.updateComplete;
@@ -367,18 +407,18 @@ it.each([
   await harness.accounts.updateComplete;
   expect(harness.accounts.textContent).toContain(t(message));
   expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull();
-  expect(button(harness.accounts, ".profile-auth-connect-start").disabled).toBe(false);
+  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
   await vi.advanceTimersByTimeAsync(10_000);
   expect(
     harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
-  ).toHaveLength(1);
+  ).toHaveLength(2);
 });
 
 it("waits for cancellation and ignores a late completion from the cancelled attempt", async () => {
   const completion = createDeferred<UsersAuthConnectStatusResult>();
   const cancellation = createDeferred<UsersAuthConnectStatusResult>();
   const harness = await mountAccounts(async (method) => {
-    if (method === "users.authConnect.complete") {
+    if (method === "users.authConnect.answer") {
       return completion.promise;
     }
     if (method === "users.authConnect.cancel") {
@@ -389,12 +429,12 @@ it("waits for cancellation and ignores a late completion from the cancelled atte
   await harness.start();
   await input(
     harness.accounts,
-    ".profile-auth-connect-redirect",
+    ".wizard-step__form input",
     "http://localhost:1455/auth/callback?code=code&state=1",
   );
-  button(harness.accounts, ".profile-auth-connect-finish").click();
+  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
   await vi.waitFor(() =>
-    expect(harness.request).toHaveBeenCalledWith("users.authConnect.complete", expect.anything()),
+    expect(harness.request).toHaveBeenCalledWith("users.authConnect.answer", expect.anything()),
   );
   button(harness.accounts, ".profile-auth-connect-cancel").click();
   await harness.accounts.updateComplete;
@@ -410,7 +450,7 @@ it("waits for cancellation and ignores a late completion from the cancelled atte
   await harness.accounts.updateComplete;
   expect(harness.accounts.textContent).toContain(t("profilePage.modelAccounts.notices.cancelled"));
   expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
-  expect(button(harness.accounts, ".profile-auth-connect-start").disabled).toBe(false);
+  expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false);
 });
 
 it("does not apply an old poll after reconnecting and starting a new attempt", async () => {
@@ -421,14 +461,14 @@ it("does not apply an old poll after reconnecting and starting a new attempt", a
   harness.emit("reconnecting");
   harness.emit("connected");
   await vi.waitFor(() =>
-    expect(button(harness.accounts, ".profile-auth-connect-start").disabled).toBe(false),
+    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
   );
   await harness.start();
   oldPoll.resolve(connectedResult);
   await vi.advanceTimersByTimeAsync(0);
   await harness.accounts.updateComplete;
   expect(
-    harness.accounts.querySelector<HTMLAnchorElement>(".profile-auth-connect-open")?.href,
+    harness.accounts.querySelector<HTMLAnchorElement>(".wizard-step__external-link")?.href,
   ).toContain("state=2");
   expect(harness.accounts.textContent).not.toContain(connectedAccount.label);
   expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
@@ -466,19 +506,21 @@ it("stops at the operation deadline without pretending an unknown attempt expire
   await vi.advanceTimersByTimeAsync(10_000);
   expect(
     harness.request.mock.calls.filter(([method]) => method === "users.authConnect.status"),
-  ).toHaveLength(2);
+  ).toHaveLength(3);
 });
 
-it("shows personal sign-in context before writers enter a masked token", async () => {
+it("shows personal sign-in context before writers enter a masked credential", async () => {
   const harness = await mountAccounts(
     async (method, params) => {
-      expect(method).toBe("users.authConnect.token");
+      expect(method).toBe("users.authConnect.answer");
       expect(params).toEqual({
         profileId: "profile-1",
-        provider: "anthropic",
-        token: "test-token",
+        connectId: "connect-1",
+        stepId: "api-key",
+        value: "test-key",
       });
       return {
+        status: "connected",
         authProfileId: "anthropic:personal",
         links: [{ provider: "anthropic", authProfileId: "anthropic:personal", updatedAt: 1 }],
       };
@@ -486,6 +528,7 @@ it("shows personal sign-in context before writers enter a masked token", async (
     {
       gatewayUrl:
         "wss://synthetic-user:synthetic-password@test.invalid/control?token=synthetic-query#synthetic-fragment",
+      step: { id: "api-key", type: "text", message: "Enter your API key", sensitive: true },
     },
   );
   expect(harness.accounts.querySelector(".profile-auth-link-input")).toBeNull();
@@ -493,15 +536,106 @@ it("shows personal sign-in context before writers enter a masked token", async (
   expect(harness.accounts.innerHTML).not.toContain("synthetic-");
   expect(harness.accounts.textContent).toContain("Ada");
   expect(harness.accounts.textContent).toContain("Personal");
-  expect(button(harness.accounts, ".profile-auth-connect-claude-submit").textContent?.trim()).toBe(
-    "Sign in",
-  );
-  const token = await input(harness.accounts, ".profile-auth-connect-claude", "test-token");
+  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
+  await harness.start("anthropic");
+  const token = await input(harness.accounts, ".wizard-step__form input", "test-key");
   expect(token.type).toBe("password");
-  button(harness.accounts, ".profile-auth-connect-claude-submit").click();
+  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
   await vi.waitFor(() => expect(harness.accounts.textContent).toContain(claudeAccount.label));
   expect(harness.accounts.querySelector(".model-accounts-notice")?.textContent).toContain(
     "Account added.",
   );
   expect(token.value).toBe("");
+});
+
+it("adds a catalog-provided account through its masked auth step without provider-specific controls", async () => {
+  const step = {
+    id: "grok-key",
+    type: "text" as const,
+    title: "Grok API key",
+    message: "Enter your Grok API key",
+    sensitive: true,
+  };
+  const account: UserModelAccount = {
+    authProfileId: "xai:personal",
+    provider: "xai",
+    label: "Ada · Grok",
+    authType: "api_key",
+    selected: true,
+  };
+  const saving = createDeferred();
+  const validationError = "That answer is not valid. Check the sign-in instructions and try again.";
+  const harness = await mountAccounts(
+    async (method, params) => {
+      if (method === "users.authConnect.status") {
+        return { status: "pending", step };
+      }
+      expect(method).toBe("users.authConnect.answer");
+      if ((params as { stepId: string }).stepId === "notice") {
+        expect(params).toEqual({
+          profileId: "profile-1",
+          connectId: "connect-1",
+          stepId: "notice",
+        });
+        return { status: "pending", step };
+      }
+      if ((params as { value: string }).value === "invalid") {
+        return { status: "pending", step, error: validationError };
+      }
+      expect(params).toEqual({
+        profileId: "profile-1",
+        connectId: "connect-1",
+        stepId: step.id,
+        value: "synthetic-grok-key",
+      });
+      await saving.promise;
+      return {
+        status: "connected",
+        authProfileId: account.authProfileId,
+        links: [{ provider: account.provider, authProfileId: account.authProfileId, updatedAt: 1 }],
+      };
+    },
+    {
+      step: { id: "notice", type: "note", message: "Use your own API key." },
+      connectedAccounts: [account],
+    },
+  );
+  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
+  await harness.start("xai");
+  expect(harness.accounts.textContent).toContain("Use your own API key.");
+  const noteButton = button(harness.accounts, ".wizard-step__actions button.primary");
+  noteButton.click();
+  await vi.waitFor(() =>
+    expect(harness.accounts.querySelector('input[type="password"]')).not.toBeNull(),
+  );
+  noteButton.click();
+  expect(
+    harness.request.mock.calls.filter(([method]) => method === "users.authConnect.answer"),
+  ).toHaveLength(1);
+  expect(harness.request).toHaveBeenCalledWith("users.authConnect.start", {
+    profileId: "profile-1",
+    provider: "xai",
+    method: "api-key",
+  });
+  const credential = await input(harness.accounts, 'input[type="password"]', "invalid");
+  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
+  await vi.waitFor(() =>
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      validationError,
+    ),
+  );
+  await vi.waitFor(() => expect(credential.disabled).toBe(false));
+  await input(harness.accounts, 'input[type="password"]', "synthetic-grok-key");
+  await vi.advanceTimersByTimeAsync(2_000);
+  await harness.accounts.updateComplete;
+  expect(credential.value).toBe("synthetic-grok-key");
+  expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(validationError);
+  button(harness.accounts, '.wizard-step__form button[type="submit"]').click();
+  await vi.waitFor(() => expect(credential.disabled).toBe(true));
+  expect(credential.value).toBe("");
+  saving.resolve();
+  await vi.waitFor(() => expect(harness.accounts.querySelector(".model-accounts-flow")).toBeNull());
+  expect(harness.accounts.querySelector('input[type="password"]')).toBeNull();
+  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+  expect(harness.accounts.textContent).toContain(account.label);
 });

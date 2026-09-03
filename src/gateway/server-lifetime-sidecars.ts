@@ -79,6 +79,7 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
 }): Promise<void> {
   await params.chatMetadataLifecycle.attachContext(params.gatewayRequestContext, params.sidecars);
   const modelAccountConnect = createModelAccountConnectService({
+    getConfig: params.gatewayRequestContext.getRuntimeConfig,
     onChanged: () => broadcastChatMetadataChanged(params.gatewayRequestContext),
   });
   params.gatewayRequestContext.modelAccountConnectService = modelAccountConnect;

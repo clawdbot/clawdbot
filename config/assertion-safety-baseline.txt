@@ -1417,7 +1417,6 @@ extensions/xai/src/x-search-shared.ts	1
 extensions/xai/stream.ts	5
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
-extensions/xai/xai-oauth.ts	1
 extensions/xiaomi/onboard.ts	1
 extensions/xiaomi/speech-provider.ts	2
 extensions/zai/detect.ts	1

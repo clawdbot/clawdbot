@@ -193,13 +193,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
       return (Array.isArray(res) ? res : []) as T[];
     },
 
-    async text(params: {
-      message: string;
-      initialValue?: string;
-      placeholder?: string;
-      validate?: (value: string) => string | undefined;
-      sensitive?: boolean;
-    }): Promise<string> {
+    async text(params: Parameters<WizardPrompter["text"]>[0]): Promise<string> {
       const res = await session.awaitAnswer(
         createStep({
           type: "text",
@@ -210,6 +204,7 @@ function createWizardSessionPrompter(session: WizardSession): WizardPrompter {
           executor: "client",
         }),
         params.validate,
+        params.signal,
       );
       const value =
         res === null || res === undefined
@@ -328,6 +323,11 @@ export class WizardSession {
     return this.terminalResult();
   }
 
+  /** A non-consuming view for polling clients; retired prompts are never replayed. */
+  getCurrentStep(): WizardStep | undefined {
+    return this.status === "running" ? (this.currentStep ?? this.progressSteps.at(-1)) : undefined;
+  }
+
   private terminalResult(): WizardNextResult {
     return {
       done: true,
@@ -395,13 +395,7 @@ export class WizardSession {
     this.status = "cancelled";
     this.error = "cancelled";
     this.abortController.abort(new WizardCancelledError());
-    this.currentStep = null;
-    for (const [, pending] of this.answerDeferred) {
-      // Reject all pending prompt promises so the runner can unwind through its
-      // normal cancellation path.
-      pending.deferred.reject(new WizardCancelledError());
-    }
-    this.answerDeferred.clear();
+    this.rejectPendingAnswers();
     this.progressSteps = [];
     this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
@@ -490,21 +484,46 @@ export class WizardSession {
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
+      // Browser completion can win while manual input is pending. Terminal
+      // sessions must retire that prompt and reject retained answer handles.
+      this.rejectPendingAnswers();
       this.resolveStep(null);
     }
+  }
+
+  private rejectPendingAnswers() {
+    this.currentStep = null;
+    for (const pending of this.answerDeferred.values()) {
+      pending.deferred.reject(new WizardCancelledError());
+    }
+    this.answerDeferred.clear();
   }
 
   async awaitAnswer(
     step: WizardStep,
     validate?: (value: string) => string | undefined,
+    signal?: AbortSignal,
   ): Promise<unknown> {
     if (this.status !== "running") {
       throw new Error("wizard: session not running");
     }
-    this.pushStep(step);
+    signal?.throwIfAborted();
     const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
-    return await deferred.promise;
+    const abort = () => {
+      this.answerDeferred.delete(step.id);
+      if (this.currentStep?.id === step.id) {
+        this.currentStep = null;
+      }
+      deferred.reject(signal?.reason);
+    };
+    signal?.addEventListener("abort", abort, { once: true });
+    this.pushStep(step);
+    try {
+      return await deferred.promise;
+    } finally {
+      signal?.removeEventListener("abort", abort);
+    }
   }
 
   private resolveStep(step: WizardStep | null) {

@@ -2,8 +2,12 @@ import { html } from "lit";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
+  UsersAuthConnectCatalogResult,
   UsersAuthConnectStartResult,
+  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
+import { providerDisplayLabel, renderProviderBrandIcon } from "../../components/provider-icon.ts";
+import { renderPicker } from "../../components/select-picker.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -12,8 +16,8 @@ import {
   renderSettingsStatus,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderWizardStepControls } from "../../components/wizard-step-controls.ts";
 import { t } from "../../i18n/index.ts";
-import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 
 type ModelAccountsContext = {
   gatewayUrl: string;
@@ -36,33 +40,29 @@ export type ModelAccountsSectionProps = {
   notice: string | null;
   statusUnavailable: boolean;
   linkDraft: string;
-  connectFlow: (UsersAuthConnectStartResult & { status: "pending" | "exchanging" }) | null;
-  connectRedirectDraft: string;
-  claudeTokenDraft: string;
+  signIn: {
+    providers: UsersAuthConnectCatalogResult["providers"];
+    provider: string;
+    method: string;
+  } | null;
+  connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null;
+  stepValue: unknown;
   onLinkDraftInput: (value: string) => void;
   onLink: () => void;
   onUnlink: (provider: string) => void;
   onSelectAccount: (authProfileId: string) => void;
   onLoadMore: () => void;
   onRefresh: () => void;
+  onAddAccount: () => void;
+  onProviderChange: (provider: string) => void;
+  onMethodChange: (method: string) => void;
+  onCloseSignIn: () => void;
   onConnectStart: () => void;
-  onConnectRedirectInput: (value: string) => void;
-  onConnectComplete: () => void;
+  onStepValueChange: (stepId: string, value: unknown) => void;
+  onStepAnswer: (stepId: string, value: unknown) => void;
   onConnectCancel: () => void;
   onConnectCheck: () => void;
-  onClaudeTokenInput: (value: string) => void;
-  onClaudeConnect: () => void;
 };
-
-function providerLabel(provider: string): string {
-  if (provider === "openai") {
-    return t("profilePage.modelAccounts.providerChatgpt");
-  }
-  if (provider === "anthropic") {
-    return t("profilePage.modelAccounts.providerClaude");
-  }
-  return provider;
-}
 
 function inputValue(event: Event): string {
   // SAFETY: each @input listener below is bound to its own text input element.
@@ -98,7 +98,7 @@ function renderLinkedRow(props: ModelAccountsSectionProps, link: UserProfileAuth
       <span class="model-accounts__id"
         >${account?.label ?? t("profilePage.modelAccounts.gatewayAccount")}</span
       >
-      <span class="model-accounts__provider">${providerLabel(link.provider)}</span>
+      <span class="model-accounts__provider">${providerDisplayLabel(link.provider)}</span>
     `,
     description: html`${t("profilePage.modelAccounts.linkedDescription")}${account
       ? accountIdDetail(props.accounts, account)
@@ -121,7 +121,7 @@ function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserMo
   return renderSettingsRow({
     title: html`
       <span class="model-accounts__id">${account.label}</span>
-      <span class="model-accounts__provider">${providerLabel(account.provider)}</span>
+      <span class="model-accounts__provider">${providerDisplayLabel(account.provider)}</span>
     `,
     description: html`${t(
       `profilePage.modelAccounts.authTypes.${account.authType}`,
@@ -140,93 +140,90 @@ function renderSavedAccountRow(props: ModelAccountsSectionProps, account: UserMo
   });
 }
 
-function renderChatgptFlow(props: ModelAccountsSectionProps) {
-  const flow = props.connectFlow;
-  if (!flow) {
-    return renderSettingsRow({
-      title: t("profilePage.modelAccounts.connectChatgpt"),
-      description: t("profilePage.modelAccounts.connectChatgptDescription"),
-      control: html`
-        <button
-          type="button"
-          class="btn btn--sm primary profile-auth-connect-start"
-          ?disabled=${props.busy}
-          @click=${() => props.onConnectStart()}
-        >
-          ${t("profilePage.modelAccounts.connectAction")}
-        </button>
-      `,
-    });
+function renderSignIn(props: ModelAccountsSectionProps) {
+  const choice = props.signIn;
+  if (!choice) {
+    return "";
   }
+  const provider = choice.providers.find((entry) => entry.id === choice.provider);
+  const flow = props.connectFlow;
+  const step = flow?.step;
+  const cancel = html`<button
+    type="button"
+    class="btn btn--sm profile-auth-connect-cancel"
+    ?disabled=${props.cancelBusy}
+    @click=${flow ? props.onConnectCancel : props.onCloseSignIn}
+  >
+    ${t("profilePage.modelAccounts.cancelAction")}
+  </button>`;
   return renderSettingsRow({
-    title: t("profilePage.modelAccounts.connectChatgpt"),
-    description: flow.autoCallback
-      ? t("profilePage.modelAccounts.redirectAutoDescription")
-      : t("profilePage.modelAccounts.redirectDescription"),
+    title: flow
+      ? (flow.step?.title ?? provider?.label ?? t("profilePage.modelAccounts.connectAction"))
+      : t("profilePage.modelAccounts.addAccount"),
     stacked: true,
-    control: html`
-      <div class="model-accounts-flow">
-        <a
-          class="btn primary profile-auth-connect-open"
-          href=${flow.url}
-          target=${EXTERNAL_LINK_TARGET}
-          rel=${buildExternalLinkRel()}
-        >
-          ${t("profilePage.modelAccounts.openSignIn")}
-        </a>
-        <form
-          class="model-accounts-form"
-          @submit=${(event: SubmitEvent) => {
-            event.preventDefault();
-            props.onConnectComplete();
-          }}
-        >
-          <input
-            class="settings-input profile-auth-connect-redirect"
-            type="text"
-            aria-label=${t("profilePage.modelAccounts.redirectPlaceholder")}
-            .value=${props.connectRedirectDraft}
-            placeholder=${t("profilePage.modelAccounts.redirectPlaceholder")}
-            ?disabled=${props.busy}
-            @input=${(event: Event) => props.onConnectRedirectInput(inputValue(event))}
-          />
-          <button
-            type="submit"
-            class="btn btn--sm primary profile-auth-connect-finish"
-            ?disabled=${props.busy || !props.connectRedirectDraft.trim()}
-          >
-            ${t("profilePage.modelAccounts.confirmAction")}
-          </button>
-          <button
-            type="button"
-            class="btn btn--sm profile-auth-connect-cancel"
-            ?disabled=${props.cancelBusy}
-            @click=${() => props.onConnectCancel()}
-          >
-            ${t("profilePage.modelAccounts.cancelAction")}
-          </button>
-        </form>
-        ${flow.autoCallback || flow.status === "exchanging"
-          ? html`<span class="model-accounts-hint" aria-live="polite">
-              ${t(
-                flow.status === "exchanging"
-                  ? "profilePage.modelAccounts.exchangingHint"
-                  : "profilePage.modelAccounts.waitingHint",
-              )}
-            </span>`
-          : ""}
-        ${props.statusUnavailable
-          ? html`<button
+    control: flow
+      ? html`<div class="model-accounts-flow">
+          ${step
+            ? renderWizardStepControls({
+                step,
+                value: props.stepValue,
+                busy: props.busy,
+                inputId: "profile-account-auth-answer",
+                leadingAction: cancel,
+                onValueChange: (value) => props.onStepValueChange(step.id, value),
+                onAnswer: (value) => props.onStepAnswer(step.id, value),
+              })
+            : html`<span role="status">${t("common.loading")}</span>${cancel}`}
+          ${props.statusUnavailable
+            ? html`<button
+                type="button"
+                class="btn btn--sm profile-auth-connect-check"
+                ?disabled=${props.cancelBusy}
+                @click=${props.onConnectCheck}
+              >
+                ${t("profilePage.modelAccounts.checkStatusAction")}
+              </button>`
+            : ""}
+        </div>`
+      : html`<div class="model-accounts-choice">
+          ${renderPicker({
+            label: t("profilePage.modelAccounts.provider"),
+            className: "profile-auth-provider",
+            value: choice.provider || null,
+            options: choice.providers.map((entry) => ({ value: entry.id, label: entry.label })),
+            disabled: props.busy,
+            renderLeading: (entry) => renderProviderBrandIcon(entry.value),
+            onChange: props.onProviderChange,
+          })}
+          ${provider
+            ? renderPicker({
+                label: t("profilePage.modelAccounts.method"),
+                className: "profile-auth-method",
+                value: choice.method || null,
+                options: provider.methods.map((method) => ({
+                  value: method.id,
+                  label: method.label,
+                  description: method.hint,
+                })),
+                disabled: props.busy,
+                onChange: props.onMethodChange,
+              })
+            : ""}
+          ${!props.busy && !props.error && choice.providers.length === 0
+            ? html`<span>${t("profilePage.modelAccounts.noMethods")}</span>`
+            : ""}
+          <div class="wizard-step__actions">
+            ${cancel}
+            <button
               type="button"
-              class="btn btn--sm profile-auth-connect-check"
-              ?disabled=${props.cancelBusy}
-              @click=${() => props.onConnectCheck()}
+              class="btn btn--sm primary profile-auth-connect-start"
+              ?disabled=${props.busy || !choice.method}
+              @click=${props.onConnectStart}
             >
-              ${t("profilePage.modelAccounts.checkStatusAction")}
-            </button>`
-          : ""}
-      </div>
-    `,
+              ${t("profilePage.modelAccounts.connectAction")}
+            </button>
+          </div>
+        </div>`,
   });
 }
 
@@ -285,41 +282,7 @@ function renderModelAccountRows(props: ModelAccountsSectionProps) {
           </button>`,
         })
       : ""}
-    ${renderChatgptFlow(props)}
-    ${renderSettingsRow({
-      title: t("profilePage.modelAccounts.connectClaude"),
-      description: t("profilePage.modelAccounts.connectClaudeDescription"),
-      stackedOnNarrow: true,
-      control: html`
-        <form
-          class="model-accounts-form"
-          @submit=${(event: SubmitEvent) => {
-            event.preventDefault();
-            props.onClaudeConnect();
-          }}
-        >
-          <input
-            class="settings-input profile-auth-connect-claude"
-            type="password"
-            autocomplete="off"
-            spellcheck="false"
-            aria-label=${t("profilePage.modelAccounts.connectClaude")}
-            .value=${props.claudeTokenDraft}
-            placeholder=${t("profilePage.modelAccounts.claudeTokenPlaceholder")}
-            ?disabled=${props.busy}
-            @input=${(event: Event) => props.onClaudeTokenInput(inputValue(event))}
-          />
-          <button
-            type="submit"
-            class="btn btn--sm profile-auth-connect-claude-submit"
-            ?disabled=${props.busy || !props.claudeTokenDraft.trim()}
-          >
-            ${t("profilePage.modelAccounts.connectAction")}
-          </button>
-        </form>
-      `,
-    })}
-    ${props.showManualLink ? renderManualLinkRow(props) : ""}
+    ${renderSignIn(props)} ${props.showManualLink ? renderManualLinkRow(props) : ""}
     ${props.notice
       ? html`<div class="settings-row model-accounts-notice" role="status">
           <span class="settings-row__desc">${props.notice}</span>
@@ -379,14 +342,23 @@ export function renderModelAccountsSection(
       title: t("profilePage.modelAccounts.title"),
       description: t("profilePage.modelAccounts.description"),
       actions: props
-        ? html`<button
-            type="button"
-            class="btn btn--sm profile-auth-accounts-refresh"
-            ?disabled=${props.inventoryLoading}
-            @click=${props.onRefresh}
-          >
-            ${t("common.refresh")}
-          </button>`
+        ? html`${!props.signIn
+              ? html`<button
+                  type="button"
+                  class="btn btn--sm primary profile-auth-add-account"
+                  ?disabled=${props.busy}
+                  @click=${props.onAddAccount}
+                >
+                  ${t("profilePage.modelAccounts.addAccount")}
+                </button>`
+              : ""}<button
+              type="button"
+              class="btn btn--sm profile-auth-accounts-refresh"
+              ?disabled=${props.inventoryLoading}
+              @click=${props.onRefresh}
+            >
+              ${t("common.refresh")}
+            </button>`
         : undefined,
     },
     rows,

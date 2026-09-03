@@ -129,13 +129,11 @@ export const validateUsersSetAvatarResult = compile(S.UsersSetAvatarResultSchema
 export const validateUsersListAuthLinksParams = compile(S.UsersListAuthLinksParamsSchema);
 export const validateUsersListModelAccountsParams = compile(S.UsersListModelAccountsParamsSchema);
 export const validateUsersSelectModelAccountParams = compile(S.UsersSelectModelAccountParamsSchema);
+export const validateUsersAuthConnectCatalogParams = compile(S.UsersAuthConnectCatalogParamsSchema);
 export const validateUsersAuthConnectStartParams = compile(S.UsersAuthConnectStartParamsSchema);
-export const validateUsersAuthConnectCompleteParams = compile(
-  S.UsersAuthConnectCompleteParamsSchema,
-);
+export const validateUsersAuthConnectAnswerParams = compile(S.UsersAuthConnectAnswerParamsSchema);
 export const validateUsersAuthConnectStatusParams = compile(S.UsersAuthConnectStatusParamsSchema);
 export const validateUsersAuthConnectCancelParams = compile(S.UsersAuthConnectCancelParamsSchema);
-export const validateUsersAuthConnectTokenParams = compile(S.UsersAuthConnectTokenParamsSchema);
 export const validateUsersLinkAuthProfileParams = compile(S.UsersLinkAuthProfileParamsSchema);
 export const validateUsersUnlinkAuthProfileParams = compile(S.UsersUnlinkAuthProfileParamsSchema);
 export const validateAgentIdentityParams = compile(S.AgentIdentityParamsSchema);

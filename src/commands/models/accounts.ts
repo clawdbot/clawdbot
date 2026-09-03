@@ -1,13 +1,13 @@
-import { password } from "@clack/prompts";
 import type {
-  UsersAuthConnectResult,
+  UsersAuthConnectCatalogResult,
+  UsersAuthConnectStartParams,
   UsersAuthConnectStartResult,
-  UsersAuthConnectStatusParams,
   UsersAuthConnectStatusResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
   UsersUnlinkAuthProfileResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
+import type { WizardStep } from "../../../packages/gateway-protocol/src/schema/wizard.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { isTerminalInteractive } from "../../cli/terminal-interactivity.js";
 import type { GatewayClient } from "../../gateway/client.js";
@@ -15,7 +15,8 @@ import { openUrl } from "../../infra/browser-open.js";
 import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { ExitError, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
-import { validateAnthropicSetupToken } from "../auth-token.js";
+import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
 import {
   withModelsAccountsGateway,
   type ModelsAccountsGatewayOptions,
@@ -26,122 +27,234 @@ export type ModelsAccountsOptions = ModelsAccountsGatewayOptions & { json?: bool
 const SESSION_DEFAULT_NOTE =
   "This default applies to new sessions. Existing sessions keep their selected account.";
 
-async function readAccountSecret(
+async function selectAccountChoice<T extends { id: string; label: string; hint?: string }>(
   message: string,
-  signal: AbortSignal,
-  validate?: (value: string) => string | undefined,
-): Promise<string> {
-  signal.throwIfAborted();
-  const value = await password({
-    message,
-    mask: "",
-    input: process.stdin,
-    output: process.stderr,
-    signal,
-    clearOnError: true,
-    validate: (input) => {
-      const normalized = input?.trim() ?? "";
-      if (!normalized || normalized.length > 8192) {
-        return "Enter a value between 1 and 8192 characters.";
-      }
-      return validate?.(normalized);
-    },
-  });
-  signal.throwIfAborted();
-  if (typeof value === "symbol") {
-    throw new ExitError(130, "Personal account sign-in cancelled.");
-  }
-  const secret = value.trim();
-  registerSecretValueForRedaction(secret);
-  return secret;
-}
-
-function isPending(result: UsersAuthConnectStatusResult): boolean {
-  return result.status === "pending" || result.status === "exchanging";
-}
-
-async function waitForConnection(
-  client: GatewayClient,
-  params: UsersAuthConnectStatusParams,
-  signal: AbortSignal,
-): Promise<UsersAuthConnectStatusResult> {
-  while (true) {
-    const result = await client.request<UsersAuthConnectStatusResult>(
-      "users.authConnect.status",
-      params,
-      { signal },
+  choices: T[],
+  requested: string | undefined,
+  prompter: WizardPrompter,
+): Promise<T> {
+  if (choices.length === 0) {
+    throw new Error(
+      `No ${message.toLowerCase()} is available for personal accounts on this Gateway.`,
     );
-    if (!isPending(result)) {
-      return result;
-    }
-    await sleep(1_000, signal);
   }
+  const id =
+    requested?.trim() ??
+    (choices.length === 1
+      ? choices[0]?.id
+      : await prompter.select({
+          message,
+          options: choices.map((choice) => ({
+            value: choice.id,
+            label: sanitizeTerminalText(choice.label),
+            hint: choice.hint && sanitizeTerminalText(choice.hint),
+          })),
+          searchable: true,
+        }));
+  const selected = choices.find((choice) => choice.id === id);
+  if (!selected) {
+    throw new Error(
+      `Unknown ${message.toLowerCase()} ${sanitizeTerminalText(id ?? "")}. Available: ${choices.map((choice) => sanitizeTerminalText(choice.id)).join(", ")}.`,
+    );
+  }
+  return selected;
 }
 
-async function connectOpenAI(
+async function answerAccountStep(
+  step: WizardStep,
+  signal: AbortSignal,
+  runtime: RuntimeEnv,
+): Promise<unknown> {
+  const prompter = createClackPrompter(process.stderr, signal);
+  signal.throwIfAborted();
+  if (step.externalUrl) {
+    runtime.error(`Open this URL to continue:\n${sanitizeTerminalText(step.externalUrl)}`);
+    await openUrl(step.externalUrl);
+    signal.throwIfAborted();
+  }
+  const message = sanitizeTerminalText(step.message ?? step.title ?? "Continue");
+  const options =
+    step.options?.map((option) => ({
+      ...option,
+      label: sanitizeTerminalText(option.label),
+      hint: option.hint && sanitizeTerminalText(option.hint),
+    })) ?? [];
+  switch (step.type) {
+    case "note":
+      if (step.format === "plain") {
+        await prompter.plain?.(message);
+      } else {
+        await prompter.note(message, step.title && sanitizeTerminalText(step.title));
+      }
+      return undefined;
+    case "text": {
+      const value = await prompter.text({
+        message,
+        sensitive: step.sensitive,
+        placeholder: step.placeholder && sanitizeTerminalText(step.placeholder),
+        initialValue:
+          typeof step.initialValue === "string"
+            ? sanitizeTerminalText(step.initialValue)
+            : undefined,
+      });
+      if (step.sensitive) {
+        registerSecretValueForRedaction(value);
+      }
+      return value;
+    }
+    case "select":
+      return await prompter.select({
+        message,
+        options,
+        initialValue: step.initialValue,
+        searchable: true,
+      });
+    case "multiselect":
+      return await prompter.multiselect({
+        message,
+        options,
+        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
+        searchable: true,
+      });
+    case "confirm":
+    case "action":
+      return await prompter.confirm({
+        message,
+        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
+      });
+    case "progress":
+      return undefined;
+  }
+  return undefined;
+}
+
+async function connectAccount(
   client: GatewayClient,
-  profileId: string,
+  start: UsersAuthConnectStartParams,
   signal: AbortSignal,
   runtime: RuntimeEnv,
 ): Promise<UsersAuthConnectStatusResult> {
   signal.throwIfAborted();
-  // Even after Ctrl-C, consume start's bounded response so cancellation can name
-  // the exact operation; aborting only the request could leave its id unknown.
-  const started = await client.request<UsersAuthConnectStartResult>("users.authConnect.start", {
-    profileId,
-    provider: "openai",
-  });
-  const params = { profileId, connectId: started.connectId };
-  const completed = new AbortController();
-  const waiting = AbortSignal.any([signal, completed.signal]);
-  let poll: Promise<UsersAuthConnectStatusResult> | undefined;
-  let manual: Promise<UsersAuthConnectStatusResult> | undefined;
+  // Consume start's bounded response even after Ctrl-C so cancellation can
+  // retire the exact operation instead of leaving an unknown id on the Gateway.
+  const started = await client.request<UsersAuthConnectStartResult>(
+    "users.authConnect.start",
+    start,
+  );
+  const params = { profileId: start.profileId, connectId: started.connectId };
+  let active:
+    | {
+        id: string;
+        controller: AbortController;
+        answer: Promise<{ value: unknown } | { error: unknown }>;
+      }
+    | undefined;
+  let displayedProgress: string | undefined;
+  const retirePrompt = async () => {
+    active?.controller.abort();
+    await active?.answer;
+    active = undefined;
+  };
   try {
-    waiting.throwIfAborted();
-    runtime.error(`Open this URL to sign in to ChatGPT:\n${sanitizeTerminalText(started.url)}`);
-    await openUrl(started.url);
-    waiting.throwIfAborted();
-    runtime.error(
-      "Waiting for browser sign-in. If it does not finish automatically, paste the final redirect URL below. Ctrl-C cancels sign-in.",
+    signal.throwIfAborted();
+    let result = await client.request<UsersAuthConnectStatusResult>(
+      "users.authConnect.status",
+      params,
+      { signal },
     );
-    poll = waitForConnection(client, params, waiting);
-    const result = poll;
-    manual = readAccountSecret("Final redirect URL (hidden)", waiting).then(
-      async (redirectInput) => {
-        const response = await client.request<UsersAuthConnectStatusResult>(
-          "users.authConnect.complete",
-          { ...params, redirectInput },
-          { signal: waiting },
+    while (result.status === "pending") {
+      const step = result.step;
+      if (active?.id !== step?.id) {
+        await retirePrompt();
+      }
+      if (step?.type === "progress" || (step?.type === "action" && step.executor !== "client")) {
+        if (displayedProgress !== step.id) {
+          runtime.error(sanitizeTerminalText(step.message ?? step.title ?? "Working…"));
+          displayedProgress = step.id;
+        }
+      } else if (step && !active) {
+        const controller = new AbortController();
+        active = {
+          id: step.id,
+          controller,
+          answer: answerAccountStep(
+            step,
+            AbortSignal.any([signal, controller.signal]),
+            runtime,
+          ).then(
+            (value) => ({ value }),
+            (error: unknown) => ({ error }),
+          ),
+        };
+      }
+      // Status polling continues while input is open. RPCs remain serial so a
+      // late poll cannot overwrite an answered step or terminal result.
+      const tick = new AbortController();
+      let answer: { value: unknown } | { error: unknown } | undefined;
+      try {
+        answer = await Promise.race([
+          sleep(1_000, AbortSignal.any([signal, tick.signal])).then(() => undefined),
+          ...(active ? [active.answer] : []),
+        ]);
+      } finally {
+        tick.abort();
+      }
+      signal.throwIfAborted();
+      if (answer && active) {
+        const stepId = active.id;
+        await retirePrompt();
+        if ("error" in answer) {
+          throw answer.error;
+        }
+        result = await client.request<UsersAuthConnectStatusResult>(
+          "users.authConnect.answer",
+          { ...params, stepId, value: answer.value },
+          { signal },
         );
-        return isPending(response) ? await result : response;
-      },
-    );
-    return await Promise.race([poll, manual]);
+        if (result.status === "pending" && result.error) {
+          runtime.error(sanitizeTerminalText(result.error));
+        }
+      } else {
+        result = await client.request<UsersAuthConnectStatusResult>(
+          "users.authConnect.status",
+          params,
+          { signal },
+        );
+      }
+    }
+    return result;
   } catch (error) {
-    completed.abort();
+    await retirePrompt();
     let cancelled: UsersAuthConnectStatusResult;
     try {
-      // Do not attach the aborted prompt signal: keep this socket until the
-      // Gateway acknowledges cancellation or its bounded request fails.
+      // Keep the initiating socket until cancellation is acknowledged; the
+      // cancelled prompt signal must not abort this bounded request.
       cancelled = await client.request<UsersAuthConnectStatusResult>(
         "users.authConnect.cancel",
         params,
         { timeoutMs: 3_000 },
       );
-    } catch {
+      if (cancelled.status === "pending") {
+        throw new Error("The sign-in operation is still pending.", { cause: error });
+      }
+    } catch (cancelError) {
       throw new Error(
         "Could not confirm sign-in cancellation. The connection is closing; run `openclaw models accounts list` to check whether an account was saved.",
+        { cause: cancelError },
       );
     }
-    if (cancelled.status === "connected" || error instanceof ExitError) {
+    if (
+      cancelled.status === "connected" ||
+      error instanceof WizardCancelledError ||
+      signal.aborted
+    ) {
       return cancelled;
     }
-    throw new Error("Sign-in did not complete. Re-run `openclaw models accounts login openai`.", {
+    throw new Error("Sign-in did not complete. Re-run `openclaw models accounts login`.", {
       cause: error,
     });
   } finally {
-    completed.abort();
-    await Promise.allSettled([poll, manual]);
+    await retirePrompt();
   }
 }
 
@@ -161,9 +274,7 @@ export async function modelsAccountsListCommand(
     }
     runtime.log("Personal model accounts:");
     if (result.accounts.length === 0) {
-      runtime.log(
-        "No saved accounts on this page. Use `openclaw models accounts login <provider>`.",
-      );
+      runtime.log("No saved accounts on this page. Use `openclaw models accounts login`.");
     }
     for (const account of result.accounts) {
       runtime.log(
@@ -180,68 +291,77 @@ export async function modelsAccountsListCommand(
 }
 
 export async function modelsAccountsLoginCommand(
-  options: ModelsAccountsOptions & { provider: string },
+  options: ModelsAccountsOptions & { provider?: string; method?: string },
   runtime: RuntimeEnv,
 ): Promise<void> {
-  const provider = options.provider.trim().toLowerCase();
-  if (provider !== "openai" && provider !== "anthropic") {
-    throw new Error("Personal account login supports openai (ChatGPT) and anthropic (Claude).");
-  }
   if (!isTerminalInteractive(process.stderr)) {
     throw new Error(
-      "Personal account login requires an interactive terminal for hidden input. Run this command in a terminal, or use Profile in the Control UI. Never paste a token or redirect URL into chat or command arguments.",
+      "Personal account login requires an interactive terminal for protected input. Run this command in a terminal, or use Connected accounts in Profile. Never paste credentials or authorization codes into chat or command arguments.",
     );
   }
-  await withModelsAccountsGateway(
-    options,
-    "write",
-    runtime,
-    async ({ client, signal, profile }) => {
-      const profileId = profile.id;
-      let result: UsersAuthConnectStatusResult;
-      if (provider === "openai") {
-        result = await connectOpenAI(client, profileId, signal, runtime);
-      } else {
-        runtime.error(
-          "Run `claude setup-token` in another terminal, then paste its token below. Do not send it in chat.",
-        );
-        const token = await readAccountSecret(
-          "Claude setup-token (hidden)",
-          signal,
-          validateAnthropicSetupToken,
+  try {
+    await withModelsAccountsGateway(
+      options,
+      "write",
+      runtime,
+      async ({ client, signal, profile }) => {
+        const profileId = profile.id;
+        const catalog = await client.request<UsersAuthConnectCatalogResult>(
+          "users.authConnect.catalog",
+          { profileId },
+          { signal },
         );
         signal.throwIfAborted();
-        const saved = await client.request<UsersAuthConnectResult>("users.authConnect.token", {
-          profileId,
-          provider,
-          token,
-        });
-        result = { status: "connected", ...saved };
-      }
-      if (options.json) {
-        writeRuntimeJson(runtime, { profileId, provider, ...result });
-      }
-      if (result.status === "connected") {
-        if (!options.json) {
-          runtime.log(
-            `Signed in: ${sanitizeTerminalText(result.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
-          );
+        const prompter = createClackPrompter(process.stderr, signal);
+        const provider = await selectAccountChoice(
+          "Provider",
+          catalog.providers,
+          options.provider,
+          prompter,
+        );
+        const method = await selectAccountChoice(
+          "Sign-in method",
+          provider.methods,
+          options.method,
+          prompter,
+        );
+        signal.throwIfAborted();
+        const result = await connectAccount(
+          client,
+          { profileId, provider: provider.id, method: method.id },
+          signal,
+          runtime,
+        );
+        if (options.json) {
+          writeRuntimeJson(runtime, { profileId, provider: provider.id, ...result });
         }
-        return;
-      }
-      if (result.status === "cancelled") {
-        runtime.error("Personal account sign-in cancelled.");
-        throw new ExitError(130);
-      }
-      if (options.json) {
-        throw new ExitError(1);
-      }
-      const reason = result.status === "failed" ? ` (${result.reason})` : "";
-      throw new Error(
-        `Personal account sign-in ${result.status}${reason}. Re-run the login command.`,
-      );
-    },
-  );
+        if (result.status === "connected") {
+          if (!options.json) {
+            runtime.log(
+              `Signed in: ${sanitizeTerminalText(result.authProfileId)}. ${SESSION_DEFAULT_NOTE}`,
+            );
+          }
+          return;
+        }
+        if (result.status === "cancelled") {
+          runtime.error("Personal account sign-in cancelled.");
+          throw new ExitError(130);
+        }
+        if (options.json) {
+          throw new ExitError(1);
+        }
+        const reason = result.status === "failed" ? ` (${result.reason})` : "";
+        throw new Error(
+          `Personal account sign-in ${result.status}${reason}. Re-run the login command.`,
+        );
+      },
+    );
+  } catch (error) {
+    if (error instanceof WizardCancelledError) {
+      throw new ExitError(130, "Personal account sign-in cancelled.");
+    }
+    throw error;
+  }
 }
 
 export async function modelsAccountsUseCommand(

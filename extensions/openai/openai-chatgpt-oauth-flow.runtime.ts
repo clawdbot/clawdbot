@@ -232,10 +232,16 @@ export async function loginOpenAICodex(options: {
   let code: string | undefined;
   try {
     throwIfOAuthLoginAborted(options.signal);
-    await options.onAuth({
-      url,
-      instructions: "A browser window should open. Complete login to finish.",
-    });
+    await withOAuthLoginAbort(
+      Promise.resolve(
+        options.onAuth({
+          url,
+          instructions: "A browser window should open. Complete login to finish.",
+        }),
+      ),
+      options.signal,
+      server.cancelWait,
+    );
     throwIfOAuthLoginAborted(options.signal);
 
     if (options.onManualCodeInput) {

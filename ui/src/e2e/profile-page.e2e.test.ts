@@ -557,15 +557,34 @@ suite.define(() => {
         });
         const gateway = await openProfilePage(page, {
           "users.listModelAccounts": inventory(personal),
+          "users.authConnect.catalog": {
+            providers: [
+              {
+                id: "openai",
+                label: "OpenAI",
+                methods: [
+                  { id: "browser", label: "Browser sign-in" },
+                  { id: "api-key", label: "API key" },
+                ],
+              },
+              { id: "xai", label: "Grok", methods: [{ id: "api-key", label: "API key" }] },
+            ],
+          },
           "users.authConnect.start": {
-            sequence: [1, 2].map((attempt) => ({
+            sequence: [1, 2, 3].map((attempt) => ({
               connectId: `connect-${attempt}`,
-              url: `https://auth.openai.com/oauth/authorize?state=demo-${attempt}`,
               expiresAtMs: Date.now() + 60_000,
-              autoCallback: true,
             })),
           },
-          "users.authConnect.status": { status: "pending" },
+          "users.authConnect.status": {
+            status: "pending",
+            step: {
+              id: "redirect",
+              type: "text",
+              message: "Finish signing in, or paste the redirect URL here.",
+              externalUrl: "https://auth.openai.com/oauth/authorize?state=demo-1",
+            },
+          },
         });
         // Anchor on the always-rendered manual-link row: the Sign in button swaps
         // for the flow UI once clicked, so it cannot identify the section.
@@ -579,18 +598,41 @@ suite.define(() => {
           section.locator(".settings-row").filter({
             has: page.locator(".settings-row__title", { hasText: new RegExp(`^${title}$`, "u") }),
           });
+        let signInAttempt = 0;
+        const startSignIn = async (providerId = "openai") => {
+          signInAttempt += 1;
+          await section.getByRole("button", { name: "Add account", exact: true }).click();
+          const picker = section.locator(".profile-auth-provider");
+          await picker.click();
+          if (captureUiProof) {
+            await expect(picker.locator('wa-option[value="xai"]')).toBeVisible();
+            await section.screenshot({
+              animations: "disabled",
+              path: path.join(proofDir, `connected-accounts-providers-${signInAttempt}.png`),
+            });
+          }
+          await picker.locator(`wa-option[value="${providerId}"]`).click();
+          if (providerId === "openai") {
+            const methods = section.locator(".profile-auth-method");
+            await methods.click();
+            await methods.locator('wa-option[value="browser"]').click();
+          }
+          await expect(section.locator(".profile-auth-connect-start")).toHaveText("Sign in");
+          await section.locator(".profile-auth-connect-start").click();
+        };
 
         await expect(contextRow("Gateway")).toContainText(new URL(suite.server.baseUrl).host);
         await expect(contextRow("Person")).toContainText(testProfile.displayName);
         await expect(contextRow("Scope")).toContainText("Personal");
-        await expect(section.locator(".profile-auth-connect-start")).toHaveText("Sign in");
+        await expect(section.getByRole("heading", { name: "Connected accounts" })).toBeVisible();
+        await expect(section.locator('input[type="password"]')).toHaveCount(0);
 
         await expect(selectedAccount.locator(".model-accounts__id").textContent()).resolves.toBe(
           personal.label,
         );
         await expect(
           selectedAccount.locator(".model-accounts__provider").textContent(),
-        ).resolves.toContain("ChatGPT");
+        ).resolves.toContain("OpenAI");
         await expect(section.locator(".profile-auth-link-unlink").isEnabled()).resolves.toBe(true);
         if (captureUiProof) {
           await section.screenshot({
@@ -599,18 +641,17 @@ suite.define(() => {
           });
         }
 
-        await section.locator(".profile-auth-connect-start").click();
-        const openSignIn = section.locator(".profile-auth-connect-open");
+        await startSignIn();
+        const openSignIn = section.locator(".wizard-step__external-link");
         await openSignIn.waitFor({ timeout: 10_000 });
         await expect(contextRow("Person")).toContainText(testProfile.displayName);
         await expect(openSignIn.getAttribute("href")).resolves.toBe(
           "https://auth.openai.com/oauth/authorize?state=demo-1",
         );
-        // Finish stays disabled until a redirect URL is pasted; auto mode shows the wait hint.
-        await expect(section.locator(".profile-auth-connect-finish").isEnabled()).resolves.toBe(
-          false,
+        await expect(section.locator("#profile-account-auth-answer")).toBeVisible();
+        await expect(section.locator(".wizard-step__message")).toHaveText(
+          "Finish signing in, or paste the redirect URL here.",
         );
-        await expect(section.locator(".model-accounts-hint").isVisible()).resolves.toBe(true);
         if (captureUiProof) {
           await section.screenshot({
             animations: "disabled",
@@ -635,16 +676,19 @@ suite.define(() => {
           });
         }
 
-        await gateway.setMethodResponse("users.authConnect.status", { status: "exchanging" });
-        await section.locator(".profile-auth-connect-start").click();
-        await expect(section.locator(".model-accounts-hint")).toHaveText("Completing sign-in…");
+        await gateway.setMethodResponse("users.authConnect.status", {
+          status: "pending",
+          step: { id: "saving", type: "progress", executor: "gateway", message: "Saving account…" },
+        });
+        await startSignIn();
+        await expect(section.locator(".wizard-step__progress")).toHaveText("Saving account…");
         await page.locator(".profile-refresh").click();
         await expect.poll(async () => (await gateway.getRequests("users.self")).length).toBe(2);
         await expect(section.locator(".profile-auth-connect-cancel")).toBeEnabled();
         if (captureUiProof) {
           await section.screenshot({
             animations: "disabled",
-            path: path.join(proofDir, "model-accounts-exchanging.png"),
+            path: path.join(proofDir, "model-accounts-saving.png"),
           });
         }
         savedAccounts.push(connected);
@@ -659,7 +703,7 @@ suite.define(() => {
         await expect(section.locator(".model-accounts-flow")).toHaveCount(0);
         await expect(selectedAccount.locator(".model-accounts__id")).toHaveText(connected.label);
         await expect(section.locator('[role="status"]')).toContainText("Account added.");
-        await expect(section.locator(".profile-auth-connect-start")).toBeEnabled();
+        await expect(section.locator(".profile-auth-add-account")).toBeEnabled();
         const polls = await gateway.getRequests("users.authConnect.status");
         expect(polls.at(-1)?.params).toEqual({ profileId: testProfile.id, connectId: "connect-2" });
         if (captureUiProof) {
@@ -700,6 +744,60 @@ suite.define(() => {
           await section.screenshot({
             animations: "disabled",
             path: path.join(proofDir, "model-accounts-default-cleared.png"),
+          });
+        }
+
+        const grok: UserModelAccount = {
+          authProfileId: "xai:personal",
+          provider: "xai",
+          label: "Test Person · Grok",
+          authType: "api_key",
+          selected: true,
+        };
+        await gateway.setMethodResponse("users.authConnect.status", {
+          status: "pending",
+          step: {
+            id: "api-key",
+            type: "text",
+            sensitive: true,
+            message: "Enter your Grok API key",
+          },
+        });
+        await startSignIn("xai");
+        const keyInput = section.locator("#profile-account-auth-answer");
+        await expect(keyInput).toHaveAttribute("type", "password");
+        await keyInput.fill("synthetic-grok-key");
+        await gateway.deferNext("users.authConnect.answer");
+        if (captureUiProof) {
+          await section.screenshot({
+            animations: "disabled",
+            path: path.join(proofDir, "connected-accounts-grok-input.png"),
+          });
+        }
+        await section.locator('.wizard-step__form button[type="submit"]').click();
+        const answer = await gateway.waitForRequest("users.authConnect.answer");
+        expect(answer.params).toEqual({
+          profileId: testProfile.id,
+          connectId: "connect-3",
+          stepId: "api-key",
+          value: "synthetic-grok-key",
+        });
+        await expect(keyInput).toHaveValue("");
+        await expect(keyInput).toBeDisabled();
+        savedAccounts.push(grok);
+        await gateway.setMethodResponse("users.listModelAccounts", inventory(grok));
+        await gateway.resolveDeferred("users.authConnect.answer", {
+          status: "connected",
+          authProfileId: grok.authProfileId,
+          links: inventory(grok).links,
+        });
+        await expect(selectedAccount.locator(".model-accounts__id")).toHaveText(grok.label);
+        await expect(section.locator('input[type="password"]')).toHaveCount(0);
+        await expect(section.locator(".model-accounts-notice")).toHaveText("Account added.");
+        if (captureUiProof) {
+          await section.screenshot({
+            animations: "disabled",
+            path: path.join(proofDir, "connected-accounts-grok-added.png"),
           });
         }
       },

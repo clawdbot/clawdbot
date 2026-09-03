@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { DatabaseSync } from "node:sqlite";
 import { z } from "zod";
+import { inlineAuthProfileCredentialSchema } from "../agents/auth-profiles/credential-schema.js";
 import { coerceProfileUsageStats } from "../agents/auth-profiles/profile-usage-stats.js";
 import type { AuthProfileCredential, ProfileUsageStats } from "../agents/auth-profiles/types.js";
 import {
@@ -21,35 +22,10 @@ import {
 import { isUserModelAuthProfileId, parseUserModelAuthProfileId } from "./user-model-account-id.js";
 import { selectResolvedUserProfileById } from "./user-profiles-internal.js";
 
-const credentialFields = {
-  provider: z.string().min(1),
-  email: z.string().optional(),
-  displayName: z.string().optional(),
-  copyToAgents: z.literal(false).optional(),
-};
-const credentialSchema = z.discriminatedUnion("type", [
-  z.strictObject({
-    ...credentialFields,
-    type: z.literal("oauth"),
-    access: z.string().min(1),
-    refresh: z.string().min(1),
-    expires: z.number().positive(),
-    idToken: z.string().optional(),
-    clientId: z.string().optional(),
-    accountId: z.string().optional(),
-    enterpriseUrl: z.string().optional(),
-    projectId: z.string().optional(),
-    chatgptPlanType: z.string().optional(),
-    subscriptionType: z.string().optional(),
-    rateLimitTier: z.string().optional(),
-  }),
-  z.strictObject({
-    ...credentialFields,
-    type: z.literal("token"),
-    token: z.string().min(1),
-    expires: z.number().positive().optional(),
-  }),
-]);
+const credentialSchema = inlineAuthProfileCredentialSchema.refine(
+  (credential) => credential.copyToAgents !== true,
+  "Personal model accounts cannot be copied to agent stores.",
+);
 const linksSchema = z.strictObject({
   version: z.literal(1),
   links: z.record(
@@ -75,7 +51,7 @@ export type UserModelAccount = {
   authProfileId: string;
   provider: string;
   label: string;
-  authType: "oauth" | "token";
+  authType: AuthProfileCredential["type"];
   selected: boolean;
 };
 
@@ -206,8 +182,10 @@ function readProfile(
     if (credential.idToken) {
       registerSecretValueForRedaction(credential.idToken);
     }
-  } else {
+  } else if (credential.type === "token") {
     registerSecretValueForRedaction(credential.token);
+  } else {
+    registerSecretValueForRedaction(credential.key);
   }
   return { credential, usageStats };
 }

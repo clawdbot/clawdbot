@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -110,6 +111,98 @@ describe("personal model accounts", () => {
     expect(listUserModelAccounts({ profileId: profile.id }, options)).toEqual({ accounts: [] });
     expect(hasPrivateAccountState(profile.id, options)).toBe(false);
   });
+
+  it("retains a normalized personal API key across reopen without exposing it in inventory", () => {
+    const options = stateOptions();
+    const alice = ensureProfileForEmail("key-alice@example.test", options);
+    const bob = ensureProfileForEmail("key-bob@example.test", options);
+    const { authProfileId } = connectUserModelAccount(
+      {
+        ownerProfileId: alice.id,
+        credential: {
+          type: "api_key",
+          provider: "xai",
+          key: "  synthetic-personal-api-key\r\n",
+          displayName: "Personal Grok",
+          metadata: { account: "synthetic-account" },
+        },
+        assertCurrent() {},
+      },
+      options,
+    );
+
+    closeOpenClawStateDatabaseByPath(options.path);
+
+    expect(readUserModelAuthProfile(authProfileId, options)?.credential).toEqual({
+      type: "api_key",
+      provider: "xai",
+      key: "synthetic-personal-api-key",
+      displayName: "Personal Grok",
+      metadata: { account: "synthetic-account" },
+    });
+    expect(listUserModelAccounts({ profileId: alice.id }, options)).toEqual({
+      accounts: [
+        {
+          authProfileId,
+          provider: "xai",
+          label: "Personal Grok",
+          authType: "api_key",
+          selected: true,
+        },
+      ],
+    });
+    expect(listUserModelAccounts({ profileId: bob.id }, options)).toEqual({ accounts: [] });
+  });
+
+  it.each([
+    {
+      name: "API-key SecretRef",
+      credential: {
+        type: "api_key",
+        provider: "xai",
+        keyRef: { source: "env", provider: "default", id: "XAI_API_KEY" },
+      },
+    },
+    {
+      name: "token SecretRef",
+      credential: {
+        type: "token",
+        provider: "synthetic",
+        tokenRef: { source: "env", provider: "default", id: "SYNTHETIC_TOKEN" },
+      },
+    },
+    {
+      name: "inline API-key reference",
+      credential: { type: "api_key", provider: "xai", key: "${XAI_API_KEY}" },
+    },
+    {
+      name: "inline token reference",
+      credential: { type: "token", provider: "synthetic", token: "$SYNTHETIC_TOKEN" },
+    },
+    {
+      name: "portable credential",
+      credential: {
+        type: "api_key",
+        provider: "xai",
+        key: "synthetic-personal-key",
+        copyToAgents: true,
+      },
+    },
+  ] satisfies Array<{ name: string; credential: AuthProfileCredential }>)(
+    "rejects personal $name without changing owner state",
+    ({ credential }) => {
+      const options = stateOptions();
+      const owner = ensureProfileForEmail("inline-owner@example.test", options);
+      expect(() =>
+        connectUserModelAccount(
+          { ownerProfileId: owner.id, credential, assertCurrent() {} },
+          options,
+        ),
+      ).toThrow();
+      expect(listUserProfileAuthLinks(owner.id, options)).toEqual([]);
+      expect(hasPrivateAccountState(owner.id, options)).toBe(false);
+    },
+  );
 
   it("lists retained owned accounts without secrets and can select them again after clearing a default", () => {
     const options = stateOptions();

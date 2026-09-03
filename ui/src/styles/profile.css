@@ -77,7 +77,7 @@
   gap: var(--space-3);
 }
 
-/* ── Model accounts (per-person OAuth links and connect flows) ── */
+/* Personal connected accounts and sign-in steps. */
 
 .model-accounts__id {
   font-family: var(--mono);
@@ -90,7 +90,8 @@
   vertical-align: middle;
 }
 
-.model-accounts-flow {
+.model-accounts-flow,
+.model-accounts-choice {
   display: flex;
   flex-direction: column;
   align-items: flex-start;
@@ -109,11 +110,6 @@
 .model-accounts-form .settings-input {
   flex: 1 1 auto;
   min-width: 0;
-}
-
-.model-accounts-hint {
-  font-size: var(--control-ui-text-sm);
-  color: var(--muted);
 }
 
 .model-accounts-error .settings-row__desc {

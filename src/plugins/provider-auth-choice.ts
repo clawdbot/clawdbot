@@ -250,8 +250,8 @@ export async function runProviderPluginAuthMethodUnpersisted(params: {
   isRemote?: boolean;
   prompter: WizardPrompter;
   method: ProviderAuthMethod;
-  agentDir: string;
-  workspaceDir: string;
+  agentDir?: string;
+  workspaceDir?: string;
   secretInputMode?: ProviderAuthOptionBag["secretInputMode"];
   allowSecretRefPrompt?: boolean;
   opts?: Partial<ProviderAuthOptionBag>;

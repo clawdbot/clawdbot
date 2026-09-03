@@ -12,6 +12,7 @@ import { i18n, t } from "../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import type { ModelAccounts } from "./model-accounts.ts";
 import { ProfilePage } from "./profile-page.ts";
 
 const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
@@ -25,6 +26,17 @@ const modelAccountProfile: UserProfile = {
   emails: ["ada@example.test"],
   githubIdentity: null,
   hasAvatar: false,
+};
+const modelAccountCatalog = {
+  providers: [
+    { id: "openai", label: "OpenAI", methods: [{ id: "browser", label: "Browser sign-in" }] },
+  ],
+};
+const modelAccountStep = {
+  id: "redirect",
+  type: "text",
+  message: "Paste the redirect URL or wait for sign-in to finish.",
+  externalUrl: "https://auth.openai.com/oauth/authorize?state=s",
 };
 // Keep the element class on the same post-reset i18n module as this test.
 if (!customElements.get(PROFILE_PAGE_TEST_TAG)) {
@@ -179,6 +191,20 @@ function selectProfileAvatar(page: ParentNode) {
   avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+async function startProfileSignIn(page: ParentNode) {
+  page.querySelector<HTMLButtonElement>(".profile-auth-add-account")!.click();
+  await waitForFast(() => expect(page.querySelector('wa-option[value="openai"]')).not.toBeNull());
+  const picker = page.querySelector<HTMLElement & { value: string }>(".profile-auth-provider")!;
+  picker.value = "openai";
+  picker.dispatchEvent(new Event("change", { bubbles: true }));
+  await waitForFast(() =>
+    expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
+      false,
+    ),
+  );
+  page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")!.click();
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -250,19 +276,13 @@ it("renders identity before a Usage statistics link without requesting usage dat
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
+    ...modelAccountProfile,
     emails: [],
     githubIdentity: {
       login: "octocat",
       profileUrl: "https://github.com/octocat",
       avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
     },
-    hasAvatar: false,
   };
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
@@ -312,19 +332,13 @@ it("loads and updates co-author consent separately from verified GitHub identity
 
 it("treats a malformed co-author preference as opted out", async () => {
   const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
+    ...modelAccountProfile,
     emails: [],
     githubIdentity: {
       login: "octocat",
       profileUrl: "https://github.com/octocat",
       avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
     },
-    hasAvatar: false,
   };
   const request = vi.fn(async (method: string) => {
     if (method === "users.self") {
@@ -352,19 +366,13 @@ it("treats a malformed co-author preference as opted out", async () => {
 
 it("keeps co-author credit on until the person opts out", async () => {
   const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
+    ...modelAccountProfile,
     emails: [],
     githubIdentity: {
       login: "octocat",
       profileUrl: "https://github.com/octocat",
       avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
     },
-    hasAvatar: false,
   };
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "users.self") {
@@ -468,9 +476,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
   ).toBe(false);
   expect(page.querySelector("#settings-profile-identity")).toBeNull();
   expect(page.querySelector(".profile-refresh")).toBeNull();
-  expect(
-    page.querySelector(".profile-auth-connect-start, .profile-auth-connect-claude"),
-  ).toBeNull();
+  expect(page.querySelector('.profile-auth-add-account, input[type="password"]')).toBeNull();
   expect(page.textContent).toContain("ws://test.invalid");
   expect(page.textContent).toContain("Personal");
   [...page.querySelectorAll("button")]
@@ -635,17 +641,7 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
 });
 
 it("keeps identity refresh single-flight and allows retry after settlement", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
+  const profile = { ...modelAccountProfile };
   let rejectIdentity: ((reason: Error) => void) | undefined;
   const firstIdentity = new Promise<never>((_resolve, reject) => {
     rejectIdentity = reject;
@@ -698,15 +694,8 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
 
 it("replaces an in-flight identity request after a same-client reconnect", async () => {
   const staleProfile: UserProfile = {
-    id: "profile-1",
+    ...modelAccountProfile,
     displayName: "Stale identity",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
   };
   const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
   let resolveStale: ((value: { profile: UserProfile }) => void) | undefined;
@@ -944,18 +933,24 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
       };
     }
     if (method === "users.authConnect.start") {
-      expect(params).toEqual({ profileId: "profile-1", provider: "openai" });
+      expect(params).toEqual({ profileId: "profile-1", provider: "openai", method: "browser" });
       return {
         connectId: "connect-1",
-        url: "https://auth.openai.com/oauth/authorize?state=s",
         expiresAtMs: Date.now() + 60_000,
       };
     }
-    if (method === "users.authConnect.complete") {
+    if (method === "users.authConnect.catalog") {
+      return modelAccountCatalog;
+    }
+    if (method === "users.authConnect.status") {
+      return { status: "pending", step: modelAccountStep };
+    }
+    if (method === "users.authConnect.answer") {
       expect(params).toEqual({
         profileId: "profile-1",
         connectId: "connect-1",
-        redirectInput: "http://localhost:1455/auth/callback?code=abc&state=s",
+        stepId: "redirect",
+        value: "http://localhost:1455/auth/callback?code=abc&state=s",
       });
       await completion.promise;
       links = [{ provider: "openai", authProfileId: "openai:ada", updatedAt: 5 }];
@@ -973,25 +968,23 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   provider.append(page);
   document.body.append(provider);
 
-  await waitForFast(() => expect(page.querySelector(".profile-auth-connect-start")).not.toBeNull());
-  page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")!.click();
+  await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
+  await startProfileSignIn(page);
   await waitForFast(() =>
-    expect(page.querySelector(".profile-auth-connect-redirect")).not.toBeNull(),
+    expect(page.querySelector("#profile-account-auth-answer")).not.toBeNull(),
   );
-  expect(page.querySelector<HTMLAnchorElement>(".profile-auth-connect-open")?.href).toContain(
+  expect(page.querySelector<HTMLAnchorElement>(".wizard-step__external-link")?.href).toContain(
     "auth.openai.com",
   );
 
-  const redirect = page.querySelector<HTMLInputElement>(".profile-auth-connect-redirect")!;
+  const redirect = page.querySelector<HTMLInputElement>("#profile-account-auth-answer")!;
   redirect.value = "http://localhost:1455/auth/callback?code=abc&state=s";
   redirect.dispatchEvent(new Event("input", { bubbles: true }));
-  await page.updateComplete;
-  page.querySelector<HTMLButtonElement>(".profile-auth-connect-finish")!.click();
+  await page.querySelector<ModelAccounts>("openclaw-model-accounts")!.updateComplete;
+  page.querySelector<HTMLButtonElement>('.wizard-step__form button[type="submit"]')!.click();
 
   await waitForFast(() =>
-    expect(request.mock.calls.some(([method]) => method === "users.authConnect.complete")).toBe(
-      true,
-    ),
+    expect(request.mock.calls.some(([method]) => method === "users.authConnect.answer")).toBe(true),
   );
   page.querySelector<HTMLButtonElement>(".profile-refresh")!.click();
   await waitForFast(() =>
@@ -1002,10 +995,8 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
   );
   completion.resolve();
   await waitForFast(() => expect(page.textContent).toContain("Ada · Personal workspace"));
-  expect(page.querySelector(".profile-auth-connect-redirect")).toBeNull();
-  expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
-    false,
-  );
+  expect(page.querySelector("#profile-account-auth-answer")).toBeNull();
+  expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(false);
   expect(page.querySelector<HTMLButtonElement>(".profile-auth-link-unlink")?.disabled).toBe(false);
 });
 
@@ -1020,13 +1011,22 @@ it("uses the canonical self profile after a merge while presence still carries i
       return { profileId: profile.id, accounts: [], links: [] };
     }
     if (method === "users.authConnect.start") {
-      expect(params).toEqual({ profileId: "profile-after-merge", provider: "openai" });
+      expect(params).toEqual({
+        profileId: "profile-after-merge",
+        provider: "openai",
+        method: "browser",
+      });
       return {
         connectId: "connect-after-merge",
-        url: "https://auth.openai.com/oauth/authorize?state=merged",
         expiresAtMs: Date.now() + 60_000,
-        autoCallback: false,
       };
+    }
+    if (method === "users.authConnect.catalog") {
+      expect(params).toEqual({ profileId: "profile-after-merge" });
+      return modelAccountCatalog;
+    }
+    if (method === "users.authConnect.status") {
+      return { status: "pending", step: modelAccountStep };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -1039,7 +1039,7 @@ it("uses the canonical self profile after a merge while presence still carries i
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);
   document.body.append(provider);
-  await waitForFast(() => expect(page.querySelector(".profile-auth-connect-start")).not.toBeNull());
+  await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
 
   // users.self resolves the merge immediately; profile-change events do not rewrite presence.
   profile = { ...profile, id: "profile-after-merge", displayName: "Canonical person" };
@@ -1051,7 +1051,7 @@ it("uses the canonical self profile after a merge while presence still carries i
   );
   expect(harness.context.gateway.snapshot.selfUser?.id).toBe("profile-before-merge");
   await waitForFast(() =>
-    expect(page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")?.disabled).toBe(
+    expect(page.querySelector<HTMLButtonElement>(".profile-auth-add-account")?.disabled).toBe(
       false,
     ),
   );
@@ -1060,11 +1060,12 @@ it("uses the canonical self profile after a merge while presence still carries i
       "Canonical person",
     ),
   );
-  page.querySelector<HTMLButtonElement>(".profile-auth-connect-start")!.click();
+  await startProfileSignIn(page);
   await waitForFast(() =>
     expect(request).toHaveBeenCalledWith("users.authConnect.start", {
       profileId: "profile-after-merge",
       provider: "openai",
+      method: "browser",
     }),
   );
 });

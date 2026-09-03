@@ -3,11 +3,13 @@ import type { IncomingHttpHeaders } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import type {
+  UsersAuthConnectCatalogResult,
   UsersAuthConnectStartResult,
   UsersAuthConnectStatusResult,
   UsersListModelAccountsResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { stripAnsi } from "../../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildMinimalGatewayHelloOkPayload,
@@ -19,6 +21,8 @@ import {
 import { ExitError } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { DEVICE_CODE_PHISHING_WARNING } from "../../wizard/prompts.js";
+import { WizardSession } from "../../wizard/session.js";
 import {
   modelsAccountsClearDefaultCommand,
   modelsAccountsLoginCommand,
@@ -27,10 +31,17 @@ import {
 } from "./accounts.js";
 
 const mocks = vi.hoisted(() => ({
+  cancellation: Symbol("clack:cancel"),
   password: vi.fn<typeof import("@clack/prompts").password>(),
+  autocomplete: vi.fn<typeof import("@clack/prompts").autocomplete>(),
   openUrl: vi.fn(async () => false),
 }));
-vi.mock("@clack/prompts", () => ({ password: mocks.password }));
+vi.mock("@clack/prompts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@clack/prompts")>()),
+  isCancel: (value: unknown) => value === mocks.cancellation,
+  password: mocks.password,
+  autocomplete: mocks.autocomplete,
+}));
 vi.mock("../../infra/browser-open.js", () => ({ openUrl: mocks.openUrl }));
 
 const PROFILE_ID = "person-test";
@@ -40,6 +51,18 @@ const connected = {
   authProfileId: ACCOUNT_ID,
   links: [{ provider: "openai", authProfileId: ACCOUNT_ID, updatedAt: 1 }],
 } satisfies UsersAuthConnectStatusResult;
+const catalog = {
+  providers: [
+    { id: "openai", label: "OpenAI", methods: [{ id: "oauth", label: "Browser sign-in" }] },
+  ],
+} satisfies UsersAuthConnectCatalogResult;
+const inputStep = {
+  id: "redirect-input",
+  type: "text",
+  message: "Final redirect URL",
+  sensitive: true,
+  externalUrl: "https://auth.example/authorize?state=synthetic-state",
+} as const;
 const self = {
   profile: {
     id: PROFILE_ID,
@@ -102,7 +125,12 @@ async function withGateway(
                   sendMinimalGatewayResponse(
                     socket,
                     id,
-                    payload ?? (request.method === "users.self" ? self : {}),
+                    payload ??
+                      (request.method === "users.self"
+                        ? self
+                        : request.method === "users.authConnect.catalog"
+                          ? catalog
+                          : {}),
                   );
                 }
                 return undefined;
@@ -174,8 +202,6 @@ function expectPersonalContext(output: ReturnType<typeof runtime>, url: string):
 function startResult(): UsersAuthConnectStartResult {
   return {
     connectId: "operation-one",
-    url: "https://auth.example/authorize?state=synthetic-state",
-    autoCallback: true,
     expiresAtMs: Date.now() + 60_000,
   };
 }
@@ -185,9 +211,9 @@ function waitForPromptAbort(): void {
     ({ signal }) =>
       new Promise((resolve) => {
         if (signal?.aborted) {
-          resolve(Symbol("cancel"));
+          resolve(mocks.cancellation);
         } else {
-          signal?.addEventListener("abort", () => resolve(Symbol("cancel")), { once: true });
+          signal?.addEventListener("abort", () => resolve(mocks.cancellation), { once: true });
         }
       }),
   );
@@ -201,6 +227,7 @@ beforeEach(() => {
     Object.defineProperty(stream, "isTTY", { configurable: true, value: true });
   }
   mocks.password.mockReset();
+  mocks.autocomplete.mockReset();
   mocks.openUrl.mockClear();
 });
 afterEach(() => {
@@ -352,48 +379,147 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it("sends a hidden Claude token only to the person's Gateway and reports metadata", async () => {
-    const token = `sk-ant-oat01-${"synthetic".repeat(10)}`;
+  it("uses Gateway provider/method choices and sends a hidden API key only as the exact step answer", async () => {
+    const apiKey = "synthetic-personal-api-key";
+    const invalidKey = "synthetic-invalid-key";
+    const validationError =
+      "That answer is not valid. Check the sign-in instructions and try again.";
+    const keyStep = { id: "api-key", type: "text", message: "API key", sensitive: true } as const;
+    let answers = 0;
     const output = runtime();
+    const choices = {
+      providers: [
+        { id: "openai", label: "OpenAI", methods: [{ id: "oauth", label: "Browser" }] },
+        {
+          id: "xai",
+          label: "Grok",
+          methods: [
+            { id: "api-key", label: "API key" },
+            { id: "device-code", label: "Device code" },
+          ],
+        },
+      ],
+    } satisfies UsersAuthConnectCatalogResult;
+    mocks.autocomplete.mockResolvedValueOnce("xai").mockResolvedValueOnce("api-key");
     await withGateway(
-      (request) =>
-        request.method === "users.authConnect.token"
-          ? { authProfileId: ACCOUNT_ID, links: [] }
-          : undefined,
+      ({ method }) => {
+        if (method === "users.authConnect.catalog") {
+          return choices;
+        }
+        if (method === "users.authConnect.start") {
+          return startResult();
+        }
+        if (method === "users.authConnect.status") {
+          return { status: "pending", step: keyStep };
+        }
+        if (method === "users.authConnect.answer") {
+          return ++answers === 1
+            ? { status: "pending", step: keyStep, error: validationError }
+            : { status: "connected", authProfileId: ACCOUNT_ID, links: [] };
+        }
+        return undefined;
+      },
       async ({ port, url, requests, connections }) => {
         mocks.password.mockImplementation(async () => {
           expectPersonalContext(output, url);
-          return token;
+          return answers === 0 ? invalidKey : apiKey;
         });
-        await modelsAccountsLoginCommand({ port, provider: "anthropic", json: true }, output);
+        await modelsAccountsLoginCommand({ port, json: true }, output);
         expect(requests.map(({ method, params }) => ({ method, params }))).toEqual([
           { method: "users.self", params: {} },
+          { method: "users.authConnect.catalog", params: { profileId: PROFILE_ID } },
           {
-            method: "users.authConnect.token",
-            params: { profileId: PROFILE_ID, provider: "anthropic", token },
+            method: "users.authConnect.start",
+            params: { profileId: PROFILE_ID, provider: "xai", method: "api-key" },
+          },
+          {
+            method: "users.authConnect.status",
+            params: { profileId: PROFILE_ID, connectId: "operation-one" },
+          },
+          {
+            method: "users.authConnect.answer",
+            params: {
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
+              stepId: "api-key",
+              value: invalidKey,
+            },
+          },
+          {
+            method: "users.authConnect.answer",
+            params: {
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
+              stepId: "api-key",
+              value: apiKey,
+            },
           },
         ]);
         expect(connections).toHaveLength(1);
-        expect(mocks.password).toHaveBeenCalledWith(
-          expect.objectContaining({ mask: "", output: process.stderr, input: process.stdin }),
+        expect(mocks.autocomplete).toHaveBeenCalledTimes(2);
+        expect(mocks.autocomplete).toHaveBeenNthCalledWith(
+          1,
+          expect.objectContaining({
+            options: [
+              expect.objectContaining({ value: "openai" }),
+              expect.objectContaining({ value: "xai" }),
+            ],
+          }),
         );
+        expect(mocks.autocomplete).toHaveBeenNthCalledWith(
+          2,
+          expect.objectContaining({
+            options: [
+              expect.objectContaining({ value: "api-key" }),
+              expect.objectContaining({ value: "device-code" }),
+            ],
+          }),
+        );
+        expect(mocks.password).toHaveBeenCalledTimes(2);
+        expect(mocks.password).toHaveBeenCalledWith(
+          expect.objectContaining({ output: process.stderr, signal: expect.any(AbortSignal) }),
+        );
+        expect(output.error).toHaveBeenCalledWith(validationError);
         expectJsonOutput(output, {
           profileId: PROFILE_ID,
-          provider: "anthropic",
+          provider: "xai",
           status: "connected",
           authProfileId: ACCOUNT_ID,
           links: [],
         });
-        expect(
-          JSON.stringify([
-            output.log.mock.calls,
-            output.error.mock.calls,
-            output.writeJson.mock.calls,
-          ]),
-        ).not.toContain(token);
+        const printed = JSON.stringify([
+          output.log.mock.calls,
+          output.error.mock.calls,
+          output.writeJson.mock.calls,
+        ]);
+        expect(printed).not.toContain(apiKey);
+        expect(printed).not.toContain(invalidKey);
       },
     );
   });
+
+  it.each([
+    { provider: "missing", method: undefined, error: "Unknown provider" },
+    { provider: "openai", method: "missing", error: "Unknown sign-in method" },
+  ])(
+    "rejects an unavailable catalog selection before starting: $error",
+    async ({ provider, method, error }) => {
+      await withGateway(
+        () => undefined,
+        async ({ port, requests }) => {
+          await expect(
+            modelsAccountsLoginCommand({ port, provider, method }, runtime()),
+          ).rejects.toThrow(error);
+          expect(requests.map((request) => request.method)).toEqual([
+            "users.self",
+            "users.authConnect.catalog",
+          ]);
+          expect(mocks.password).not.toHaveBeenCalled();
+          expect(mocks.openUrl).not.toHaveBeenCalled();
+        },
+      );
+    },
+  );
 
   it.each(["openai", "anthropic"])(
     "rejects non-TTY %s sign-in without consuming input",
@@ -407,46 +533,103 @@ describe("personal model account CLI over an identified Gateway connection", () 
     },
   );
 
-  it("keeps one socket from OAuth start through hidden redirect completion", async () => {
+  it("renders a real device-code note before exact ACK, polls progress, and keeps the protected answer on one socket", async () => {
     const redirectInput =
       "http://localhost:1455/auth/callback?code=synthetic-private-code&state=synthetic-state";
     mocks.password.mockResolvedValue(redirectInput);
     const output = runtime();
-    await withGateway(
-      ({ method }) => {
-        if (method === "users.authConnect.start") {
-          return startResult();
-        }
-        if (method === "users.authConnect.status") {
-          return { status: "pending" };
-        }
-        if (method === "users.authConnect.complete") {
-          return connected;
-        }
-        return undefined;
-      },
-      async ({ port, requests, connections }) => {
-        await modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output);
-        expect(connections).toHaveLength(1);
-        expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
-        expect(
-          requests.find(({ method }) => method === "users.authConnect.complete")?.params,
-        ).toEqual({ profileId: PROFILE_ID, connectId: "operation-one", redirectInput });
-        expect(requests.some(({ method }) => method === "users.authConnect.cancel")).toBe(false);
-        expectJsonOutput(output, {
-          profileId: PROFILE_ID,
-          provider: "openai",
-          ...connected,
-        });
-        expect(
-          JSON.stringify([
-            output.log.mock.calls,
-            output.error.mock.calls,
-            output.writeJson.mock.calls,
-          ]),
-        ).not.toContain("synthetic-private-code");
-      },
-    );
+    const verificationUrl = "https://auth.example/device";
+    const code = "ABCD-1234";
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    const session = new WizardSession(async (prompter) => {
+      await prompter.openUrl?.(verificationUrl);
+      await prompter.deviceCode?.({
+        title: "Provider device sign-in",
+        code,
+        expiresInMinutes: 15,
+        message: "Enter this one-time code on the provider's sign-in page.",
+      });
+    });
+    let noteAcknowledged = false;
+    let renderedAtAck = "";
+    try {
+      const deviceStep = (await session.next()).step;
+      if (!deviceStep) {
+        throw new Error("Expected the WizardSession device-code step.");
+      }
+      await withGateway(
+        async ({ method, params }) => {
+          if (method === "users.authConnect.start") {
+            return startResult();
+          }
+          if (method === "users.authConnect.status") {
+            return {
+              status: "pending",
+              step: noteAcknowledged ? inputStep : deviceStep,
+            };
+          }
+          if (method === "users.authConnect.answer") {
+            if (params.stepId === deviceStep.id) {
+              renderedAtAck = stripAnsi(
+                stderr.mock.calls.map(([chunk]) => String(chunk)).join(""),
+              ).replace(/[│\s]+/gu, " ");
+              await session.answer(deviceStep.id, undefined);
+              await session.whenSettled();
+              noteAcknowledged = true;
+              return {
+                status: "pending",
+                step: { id: "preparing", type: "progress", message: "Preparing browser sign-in" },
+              };
+            }
+            return connected;
+          }
+          return undefined;
+        },
+        async ({ port, requests, connections }) => {
+          await modelsAccountsLoginCommand({ port, provider: "openai", json: true }, output);
+          expect(connections).toHaveLength(1);
+          expect(new Set(requests.map(({ socket }) => socket)).size).toBe(1);
+          expect(
+            requests
+              .filter(({ method }) => method === "users.authConnect.answer")
+              .map(({ params }) => params),
+          ).toEqual([
+            { profileId: PROFILE_ID, connectId: "operation-one", stepId: deviceStep.id },
+            {
+              profileId: PROFILE_ID,
+              connectId: "operation-one",
+              stepId: inputStep.id,
+              value: redirectInput,
+            },
+          ]);
+          expect(mocks.openUrl).toHaveBeenCalledTimes(2);
+          expect(mocks.openUrl).toHaveBeenNthCalledWith(1, verificationUrl);
+          expect(mocks.openUrl).toHaveBeenNthCalledWith(2, inputStep.externalUrl);
+          expect(renderedAtAck).toContain(`Code: ${code}`);
+          expect(renderedAtAck).toContain("Code expires in 15 minutes.");
+          expect(renderedAtAck).toContain(
+            "Enter this one-time code on the provider's sign-in page.",
+          );
+          expect(renderedAtAck).toContain(DEVICE_CODE_PHISHING_WARNING);
+          expect(requests.some(({ method }) => method === "users.authConnect.cancel")).toBe(false);
+          expectJsonOutput(output, {
+            profileId: PROFILE_ID,
+            provider: "openai",
+            ...connected,
+          });
+          expect(
+            JSON.stringify([
+              output.log.mock.calls,
+              output.error.mock.calls,
+              output.writeJson.mock.calls,
+            ]),
+          ).not.toContain("synthetic-private-code");
+        },
+      );
+    } finally {
+      session.cancel();
+      await session.whenSettled();
+    }
   });
 
   it.each([
@@ -460,12 +643,15 @@ describe("personal model account CLI over an identified Gateway connection", () 
     async ({ result, exitCode }) => {
       waitForPromptAbort();
       const output = runtime();
+      let polls = 0;
       await withGateway(
         ({ method }) =>
           method === "users.authConnect.start"
             ? startResult()
             : method === "users.authConnect.status"
-              ? result
+              ? ++polls === 1
+                ? { status: "pending", step: inputStep }
+                : result
               : undefined,
         async ({ port, requests }) => {
           const command = modelsAccountsLoginCommand(
@@ -481,7 +667,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
           expect(
             requests.some(
               ({ method }) =>
-                method === "users.authConnect.complete" || method === "users.authConnect.cancel",
+                method === "users.authConnect.answer" || method === "users.authConnect.cancel",
             ),
           ).toBe(false);
           expectJsonOutput(output, {
@@ -495,7 +681,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
   );
 
   it("waits for exact cancellation acknowledgment before closing the initiating socket", async () => {
-    mocks.password.mockResolvedValue(Symbol("cancel"));
+    mocks.password.mockResolvedValue(mocks.cancellation);
     const received = createDeferredCore<Request>();
     const acknowledged = createDeferredCore<UsersAuthConnectStatusResult>();
     const output = runtime();
@@ -505,7 +691,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
           return startResult();
         }
         if (request.method === "users.authConnect.status") {
-          return { status: "pending" };
+          return { status: "pending", step: inputStep };
         }
         if (request.method === "users.authConnect.cancel") {
           received.resolve(request);
@@ -557,6 +743,7 @@ describe("personal model account CLI over an identified Gateway connection", () 
         await command;
         expect(requests.map(({ method }) => method)).toEqual([
           "users.self",
+          "users.authConnect.catalog",
           "users.authConnect.start",
           "users.authConnect.cancel",
         ]);
@@ -573,12 +760,16 @@ describe("personal model account CLI over an identified Gateway connection", () 
 
   it("stops on connection loss and never carries the operation to another socket", async () => {
     waitForPromptAbort();
+    let polls = 0;
     await withGateway(
       ({ method, socket }) => {
         if (method === "users.authConnect.start") {
           return startResult();
         }
         if (method === "users.authConnect.status") {
+          if (++polls === 1) {
+            return { status: "pending", step: inputStep };
+          }
           socket.close(1001, "gone");
         }
         return undefined;

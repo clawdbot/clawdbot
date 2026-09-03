@@ -273,55 +273,78 @@ describe("OAuthManagerRefreshError", () => {
 });
 
 describe("createOAuthManager", () => {
-  it("serializes personal refreshes across agents in the identity owner without CLI bootstrap or shared copies", async () => {
-    await withOAuthAgentDirs("oauth-manager-personal-", async ({ mainAgentDir, agentDir }) => {
-      const owner = ensureProfileForEmail("alice@example.test");
-      const credential = createCredential({ expires: Date.now() - 60_000 });
-      const { authProfileId: profileId } = connectUserModelAccount({
-        ownerProfileId: owner.id,
-        credential,
-        assertCurrent() {},
-      });
-      const refreshCredential = vi.fn(async () => ({
-        access: "personal-rotated-access",
-        refresh: "personal-rotated-refresh",
-        expires: Date.now() + 600_000,
-      }));
-      const readBootstrapCredential = vi.fn(() => createCredential());
-      const manager = createOAuthManager({
-        buildApiKey: async (_provider, value) => value.access,
-        refreshCredential,
-        readBootstrapCredential,
-        isRefreshTokenReusedError: () => false,
-      });
-      const results = await Promise.all(
-        [mainAgentDir, agentDir].map((targetAgentDir) =>
-          manager.resolveOAuthAccess({
-            store: ensureAuthProfileStore(targetAgentDir, { profileId }),
-            profileId,
-            credential,
-            agentDir: targetAgentDir,
-          }),
-        ),
-      );
+  it.each([
+    { provider: "openai", metadata: undefined },
+    {
+      provider: "xai",
+      metadata: {
+        tokenEndpoint: "https://auth.x.ai/oauth2/token",
+        deviceAuthorizationEndpoint: "https://auth.x.ai/oauth2/device/authorize",
+        issuer: "https://auth.x.ai",
+        authFlow: "device-code",
+      },
+    },
+  ])(
+    "serializes $provider personal refreshes without CLI bootstrap or shared copies",
+    async ({ provider, metadata }) => {
+      await withOAuthAgentDirs("oauth-manager-personal-", async ({ mainAgentDir, agentDir }) => {
+        const owner = ensureProfileForEmail("alice@example.test");
+        const credential = createCredential({
+          provider,
+          ...metadata,
+          expires: Date.now() - 60_000,
+        });
+        const { authProfileId: profileId } = connectUserModelAccount({
+          ownerProfileId: owner.id,
+          credential,
+          assertCurrent() {},
+        });
+        const refreshCredential = vi.fn(async (current: OAuthCredential) => {
+          expect(current).toEqual(credential);
+          return {
+            access: "personal-rotated-access",
+            refresh: "personal-rotated-refresh",
+            expires: Date.now() + 600_000,
+            ...metadata,
+          };
+        });
+        const readBootstrapCredential = vi.fn(() => createCredential());
+        const manager = createOAuthManager({
+          buildApiKey: async (_provider, value) => value.access,
+          refreshCredential,
+          readBootstrapCredential,
+          isRefreshTokenReusedError: () => false,
+        });
+        const results = await Promise.all(
+          [mainAgentDir, agentDir].map((targetAgentDir) =>
+            manager.resolveOAuthAccess({
+              store: ensureAuthProfileStore(targetAgentDir, { profileId }),
+              profileId,
+              credential,
+              agentDir: targetAgentDir,
+            }),
+          ),
+        );
 
-      expect(results.map((result) => result?.apiKey)).toEqual([
-        "personal-rotated-access",
-        "personal-rotated-access",
-      ]);
-      expect(refreshCredential).toHaveBeenCalledTimes(1);
-      expect(readBootstrapCredential).not.toHaveBeenCalled();
-      expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
-        access: "personal-rotated-access",
-        refresh: "personal-rotated-refresh",
+        expect(results.map((result) => result?.apiKey)).toEqual([
+          "personal-rotated-access",
+          "personal-rotated-access",
+        ]);
+        expect(refreshCredential).toHaveBeenCalledTimes(1);
+        expect(readBootstrapCredential).not.toHaveBeenCalled();
+        expect(readUserModelAuthProfile(profileId)?.credential).toMatchObject({
+          access: "personal-rotated-access",
+          refresh: "personal-rotated-refresh",
+          ...metadata,
+        });
+        for (const targetAgentDir of [undefined, mainAgentDir, agentDir]) {
+          expect(
+            ensureAuthProfileStoreWithoutExternalProfiles(targetAgentDir).profiles[profileId],
+          ).toBeUndefined();
+        }
       });
-      for (const targetAgentDir of [undefined, mainAgentDir, agentDir]) {
-        expect(
-          ensureAuthProfileStoreWithoutExternalProfiles(targetAgentDir).profiles[profileId],
-        ).toBeUndefined();
-      }
-    });
-  });
+    },
+  );
 
   it("does not overwrite a personal reconnect while a refresh is in flight", async () => {
     await withOAuthAgentDirs("oauth-manager-personal-reconnect-", async ({ agentDir }) => {

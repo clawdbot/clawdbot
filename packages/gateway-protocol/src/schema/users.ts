@@ -13,6 +13,7 @@ import {
 } from "./agents-models-skills.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { WizardAnswerSchema, WizardStepSchema } from "./wizard.js";
 
 export const USER_PREFS_ENTRY_LIMIT = 32;
 export const USER_PREFS_PROFILE_KEY_LIMIT = 128;
@@ -112,7 +113,7 @@ export const UserModelAccountSchema = closedObject({
   authProfileId: ModelAuthProfileIdSchema,
   provider: ModelAuthProviderIdSchema,
   label: Type.String({ minLength: 1, maxLength: 256 }),
-  authType: Type.Union([Type.Literal("oauth"), Type.Literal("token")]),
+  authType: Type.Union([Type.Literal("api_key"), Type.Literal("oauth"), Type.Literal("token")]),
   selected: Type.Boolean(),
 });
 export const UsersListModelAccountsParamsSchema = closedObject({
@@ -176,20 +177,37 @@ export const UsersUnlinkAuthProfileResultSchema = closedObject({
   links: Type.Array(UserProfileAuthLinkSchema),
 });
 
+export const UsersAuthConnectCatalogParamsSchema = closedObject({
+  profileId: UserProfileIdSchema,
+});
+export const UsersAuthConnectCatalogResultSchema = closedObject({
+  providers: Type.Array(
+    closedObject({
+      id: ModelAuthProviderIdSchema,
+      label: NonEmptyString,
+      methods: Type.Array(
+        closedObject({
+          id: NonEmptyString,
+          label: NonEmptyString,
+          hint: Type.Optional(Type.String()),
+        }),
+      ),
+    }),
+  ),
+});
 export const UsersAuthConnectStartParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
-  provider: Type.Literal("openai"),
+  provider: ModelAuthProviderIdSchema,
+  method: NonEmptyString,
 });
 export const UsersAuthConnectStartResultSchema = closedObject({
   connectId: ModelAuthConnectIdSchema,
-  url: NonEmptyString,
   expiresAtMs: Type.Integer({ minimum: 0 }),
-  autoCallback: Type.Optional(Type.Boolean()),
 });
-export const UsersAuthConnectCompleteParamsSchema = closedObject({
+export const UsersAuthConnectAnswerParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
   connectId: ModelAuthConnectIdSchema,
-  redirectInput: Type.String({ minLength: 1, maxLength: 8192 }),
+  ...WizardAnswerSchema.properties,
 });
 export const UsersAuthConnectStatusParamsSchema = closedObject({
   profileId: UserProfileIdSchema,
@@ -197,8 +215,11 @@ export const UsersAuthConnectStatusParamsSchema = closedObject({
 });
 export const UsersAuthConnectCancelParamsSchema = UsersAuthConnectStatusParamsSchema;
 export const UsersAuthConnectStatusResultSchema = Type.Union([
-  closedObject({ status: Type.Literal("pending") }),
-  closedObject({ status: Type.Literal("exchanging") }),
+  closedObject({
+    status: Type.Literal("pending"),
+    step: Type.Optional(WizardStepSchema),
+    error: Type.Optional(Type.String()),
+  }),
   closedObject({
     status: Type.Literal("connected"),
     authProfileId: ModelAuthProfileIdSchema,
@@ -216,11 +237,6 @@ export const UsersAuthConnectStatusResultSchema = Type.Union([
     ]),
   }),
 ]);
-export const UsersAuthConnectTokenParamsSchema = closedObject({
-  profileId: UserProfileIdSchema,
-  provider: Type.Literal("anthropic"),
-  token: Type.String({ minLength: 1, maxLength: 8192 }),
-});
 export const UsersAuthConnectResultSchema = closedObject({
   authProfileId: ModelAuthProfileIdSchema,
   links: Type.Array(UserProfileAuthLinkSchema),
@@ -274,11 +290,12 @@ export type UsersSelectModelAccountResult = Static<typeof UsersSelectModelAccoun
 export type ChatAccountSelection = Static<typeof ChatAccountSelectionSchema>;
 export type UsersAuthConnectStartParams = Static<typeof UsersAuthConnectStartParamsSchema>;
 export type UsersAuthConnectStartResult = Static<typeof UsersAuthConnectStartResultSchema>;
-export type UsersAuthConnectCompleteParams = Static<typeof UsersAuthConnectCompleteParamsSchema>;
+export type UsersAuthConnectAnswerParams = Static<typeof UsersAuthConnectAnswerParamsSchema>;
+export type UsersAuthConnectCatalogParams = Static<typeof UsersAuthConnectCatalogParamsSchema>;
+export type UsersAuthConnectCatalogResult = Static<typeof UsersAuthConnectCatalogResultSchema>;
 export type UsersAuthConnectStatusParams = Static<typeof UsersAuthConnectStatusParamsSchema>;
 export type UsersAuthConnectCancelParams = Static<typeof UsersAuthConnectCancelParamsSchema>;
 export type UsersAuthConnectStatusResult = Static<typeof UsersAuthConnectStatusResultSchema>;
-export type UsersAuthConnectTokenParams = Static<typeof UsersAuthConnectTokenParamsSchema>;
 export type UsersAuthConnectResult = Static<typeof UsersAuthConnectResultSchema>;
 export type UsersListAuthLinksParams = Static<typeof UsersListAuthLinksParamsSchema>;
 export type UsersListAuthLinksResult = Static<typeof UsersListAuthLinksResultSchema>;

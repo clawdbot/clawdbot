@@ -11,7 +11,6 @@ export {
   OPENAI_DEFAULT_TTS_VOICE,
 } from "./default-models.js";
 export { openaiMediaUnderstandingProvider } from "./media-understanding-provider.js";
-export { createModelAccountAuthorization } from "./model-account-authorization.js";
 export { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
 export { refreshOpenAICodexToken } from "./openai-chatgpt-provider.runtime.js";
 export { buildOpenAIProvider } from "./openai-provider.js";

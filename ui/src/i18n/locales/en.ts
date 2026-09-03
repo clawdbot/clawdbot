@@ -3548,7 +3548,11 @@ export const en: TranslationMap & {
       },
     },
     modelAccounts: {
-      title: "Model accounts",
+      title: "Connected accounts",
+      addAccount: "Add account",
+      provider: "Provider",
+      method: "Sign-in method",
+      noMethods: "No personal sign-in methods are available. Ask your administrator for help.",
       gateway: "Gateway",
       gatewayUnavailable: "Endpoint unavailable",
       person: "Person",
@@ -3579,13 +3583,13 @@ export const en: TranslationMap & {
       savedAccounts: "Saved accounts",
       loadMore: "Load more saved accounts",
       inventoryFailed: "Could not load saved accounts. Refresh to retry.",
-      authTypes: { oauth: "Browser sign-in · saved account", token: "Setup token · saved account" },
-      providerChatgpt: "ChatGPT",
-      providerClaude: "Claude",
-      waitingHint: "Waiting for the sign-in to finish…",
-      exchangingHint: "Completing sign-in…",
+      authTypes: {
+        oauth: "Browser sign-in · saved account",
+        token: "Token · saved account",
+        api_key: "API key · saved account",
+      },
       checkStatusAction: "Check status",
-      actionFailed: "Could not update model accounts. Try again.",
+      actionFailed: "Could not update connected accounts. Try again.",
       statusFailed: "Could not check sign-in status. Check again or cancel this attempt.",
       statusTimedOut: "Sign-in has not finished. Check its status or cancel and sign in again.",
       notices: {
@@ -3611,22 +3615,8 @@ export const en: TranslationMap & {
       inputPlaceholder: "openai:alice",
       linkAction: "Use for new chats",
       unlinkAction: "Use gateway default",
-      connectChatgpt: "Sign in to ChatGPT",
-      connectChatgptDescription:
-        "Sign in with your own ChatGPT account for new sessions you start.",
       connectAction: "Sign in",
-      openSignIn: "Open OpenAI sign-in",
-      redirectDescription:
-        "After approving, copy the full localhost URL from the tab that fails to load and paste it here.",
-      redirectAutoDescription:
-        "Finish signing in — this page updates by itself. If the sign-in tab shows an error instead, paste its URL here.",
-      redirectPlaceholder: "http://localhost:1455/auth/callback?code=…",
-      confirmAction: "Finish",
       cancelAction: "Cancel",
-      connectClaude: "Sign in to Claude",
-      connectClaudeDescription:
-        'Run "claude setup-token" on your own machine and paste the token it prints.',
-      claudeTokenPlaceholder: "sk-ant-oat01-…",
     },
   },
   tasksPage: {

@@ -68,15 +68,18 @@ export function registerModelsAccountsCli(models: Command): void {
 
   addAccountOptions(
     accounts
-      .command("login <provider>")
-      .description(
-        "Sign in to openai (ChatGPT) or anthropic (Claude setup-token) using a secure prompt",
-      ),
-  ).action(async (provider: string, _opts: unknown, command: Command) => {
-    await run(command, (commands, runtime, options) =>
-      commands.modelsAccountsLoginCommand({ ...options, provider }, runtime.defaultRuntime),
-    );
-  });
+      .command("login [provider]")
+      .description("Add a personal account using this Gateway's provider and sign-in methods"),
+  )
+    .option("--method <id>", "Choose a sign-in method instead of prompting")
+    .action(async (provider: string | undefined, opts: { method?: string }, command: Command) => {
+      await run(command, (commands, runtime, options) =>
+        commands.modelsAccountsLoginCommand(
+          { ...options, provider, method: opts.method },
+          runtime.defaultRuntime,
+        ),
+      );
+    });
 
   addAccountOptions(
     accounts

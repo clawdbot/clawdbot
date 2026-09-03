@@ -11942,69 +11942,93 @@ public struct UsersUnlinkAuthProfileResult: Codable, Sendable {
     }
 }
 
+public struct UsersAuthConnectCatalogParams: Codable, Sendable {
+    public let profileid: String
+
+    public init(
+        profileid: String)
+    {
+        self.profileid = profileid
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case profileid = "profileId"
+    }
+}
+
+public struct UsersAuthConnectCatalogResult: Codable, Sendable {
+    public let providers: [[String: AnyCodable]]
+
+    public init(
+        providers: [[String: AnyCodable]])
+    {
+        self.providers = providers
+    }
+}
+
 public struct UsersAuthConnectStartParams: Codable, Sendable {
     public let profileid: String
     public let provider: String
+    public let method: String
 
     public init(
         profileid: String,
-        provider: String)
+        provider: String,
+        method: String)
     {
         self.profileid = profileid
         self.provider = provider
+        self.method = method
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileid = "profileId"
         case provider
+        case method
     }
 }
 
 public struct UsersAuthConnectStartResult: Codable, Sendable {
     public let connectid: String
-    public let url: String
     public let expiresatms: Int
-    public let autocallback: Bool?
 
     public init(
         connectid: String,
-        url: String,
-        expiresatms: Int,
-        autocallback: Bool? = nil)
+        expiresatms: Int)
     {
         self.connectid = connectid
-        self.url = url
         self.expiresatms = expiresatms
-        self.autocallback = autocallback
     }
 
     private enum CodingKeys: String, CodingKey {
         case connectid = "connectId"
-        case url
         case expiresatms = "expiresAtMs"
-        case autocallback = "autoCallback"
     }
 }
 
-public struct UsersAuthConnectCompleteParams: Codable, Sendable {
+public struct UsersAuthConnectAnswerParams: Codable, Sendable {
     public let profileid: String
     public let connectid: String
-    public let redirectinput: String
+    public let stepid: String
+    public let value: AnyCodable?
 
     public init(
         profileid: String,
         connectid: String,
-        redirectinput: String)
+        stepid: String,
+        value: AnyCodable? = nil)
     {
         self.profileid = profileid
         self.connectid = connectid
-        self.redirectinput = redirectinput
+        self.stepid = stepid
+        self.value = value
     }
 
     private enum CodingKeys: String, CodingKey {
         case profileid = "profileId"
         case connectid = "connectId"
-        case redirectinput = "redirectInput"
+        case stepid = "stepId"
+        case value
     }
 }
 
@@ -12041,28 +12065,6 @@ public struct UsersAuthConnectCancelParams: Codable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case profileid = "profileId"
         case connectid = "connectId"
-    }
-}
-
-public struct UsersAuthConnectTokenParams: Codable, Sendable {
-    public let profileid: String
-    public let provider: String
-    public let token: String
-
-    public init(
-        profileid: String,
-        provider: String,
-        token: String)
-    {
-        self.profileid = profileid
-        self.provider = provider
-        self.token = token
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case profileid = "profileId"
-        case provider
-        case token
     }
 }
 
@@ -24493,21 +24495,30 @@ public enum ChatAccountSelection: Codable, Sendable {
 
 public struct UsersAuthConnectStatusResultPending: Codable, Sendable {
     public let status: String
+    public let step: WizardStep?
+    public let error: String?
 
-    public init()
+    public init(
+        step: WizardStep? = nil,
+        error: String? = nil
+    )
     {
         self.status = "pending"
+        self.step = step
+        self.error = error
     }
 
     private enum CodingKeys: String, CodingKey {
         case status
+        case step
+        case error
     }
 
     public init(from decoder: Decoder) throws {
         let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
         let unexpectedKeys = rawContainer.allKeys
             .map(\.stringValue)
-            .filter { !Set(["status"]).contains($0) }
+            .filter { !Set(["status", "step", "error"]).contains($0) }
         if !unexpectedKeys.isEmpty {
             throw DecodingError.dataCorrupted(
                 .init(
@@ -24526,54 +24537,15 @@ public struct UsersAuthConnectStatusResultPending: Codable, Sendable {
             )
         }
         self.status = "pending"
+        self.step = try container.decodeIfPresent(WizardStep.self, forKey: .step)
+        self.error = try container.decodeIfPresent(String.self, forKey: .error)
     }
 
     public func encode(to encoder: Encoder) throws {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode("pending", forKey: .status)
-    }
-}
-
-public struct UsersAuthConnectStatusResultExchanging: Codable, Sendable {
-    public let status: String
-
-    public init()
-    {
-        self.status = "exchanging"
-    }
-
-    private enum CodingKeys: String, CodingKey {
-        case status
-    }
-
-    public init(from decoder: Decoder) throws {
-        let rawContainer = try decoder.container(keyedBy: GatewayAnyCodingKey.self)
-        let unexpectedKeys = rawContainer.allKeys
-            .map(\.stringValue)
-            .filter { !Set(["status"]).contains($0) }
-        if !unexpectedKeys.isEmpty {
-            throw DecodingError.dataCorrupted(
-                .init(
-                    codingPath: rawContainer.codingPath,
-                    debugDescription: "Unexpected keys for UsersAuthConnectStatusResultExchanging: \(unexpectedKeys.sorted().joined(separator: ", "))"
-                )
-            )
-        }
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        let decodedStatus = try container.decode(String.self, forKey: .status)
-        guard decodedStatus == "exchanging" else {
-            throw DecodingError.dataCorruptedError(
-                forKey: .status,
-                in: container,
-                debugDescription: "Expected status to equal exchanging"
-            )
-        }
-        self.status = "exchanging"
-    }
-
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode("exchanging", forKey: .status)
+        try container.encodeIfPresent(step, forKey: .step)
+        try container.encodeIfPresent(error, forKey: .error)
     }
 }
 
@@ -24728,7 +24700,6 @@ public struct UsersAuthConnectStatusResultFailed: Codable, Sendable {
 
 public enum UsersAuthConnectStatusResult: Codable, Sendable {
     case pending(UsersAuthConnectStatusResultPending)
-    case exchanging(UsersAuthConnectStatusResultExchanging)
     case connected(UsersAuthConnectStatusResultConnected)
     case cancelled(UsersAuthConnectStatusResultCancelled)
     case expired(ToolsGitHubAuthorizeExpiredResult)
@@ -24743,7 +24714,6 @@ public enum UsersAuthConnectStatusResult: Codable, Sendable {
         let discriminator = try container.decode(String.self, forKey: .discriminator)
         switch discriminator {
         case "pending": self = try .pending(UsersAuthConnectStatusResultPending(from: decoder))
-        case "exchanging": self = try .exchanging(UsersAuthConnectStatusResultExchanging(from: decoder))
         case "connected": self = try .connected(UsersAuthConnectStatusResultConnected(from: decoder))
         case "cancelled": self = try .cancelled(UsersAuthConnectStatusResultCancelled(from: decoder))
         case "expired": self = try .expired(ToolsGitHubAuthorizeExpiredResult(from: decoder))
@@ -24760,7 +24730,6 @@ public enum UsersAuthConnectStatusResult: Codable, Sendable {
     public func encode(to encoder: Encoder) throws {
         switch self {
         case .pending(let value): try value.encode(to: encoder)
-        case .exchanging(let value): try value.encode(to: encoder)
         case .connected(let value): try value.encode(to: encoder)
         case .cancelled(let value): try value.encode(to: encoder)
         case .expired(let value): try value.encode(to: encoder)

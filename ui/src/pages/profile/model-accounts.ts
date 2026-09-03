@@ -4,12 +4,13 @@ import { property, state } from "lit/decorators.js";
 import type {
   UserModelAccount,
   UserProfileAuthLink,
-  UsersAuthConnectResult,
+  UsersAuthConnectCatalogResult,
   UsersAuthConnectStartResult,
   UsersAuthConnectStatusResult,
   UsersListAuthLinksResult,
   UsersListModelAccountsResult,
   UsersSelectModelAccountResult,
+  WizardStep,
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import {
@@ -21,10 +22,7 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomContentsElement } from "../../lit/openclaw-element.ts";
-import {
-  renderModelAccountsSection,
-  type ModelAccountsSectionProps,
-} from "./model-accounts-section.ts";
+import { renderModelAccountsSection } from "./model-accounts-section.ts";
 
 type AccountTarget = {
   client: GatewayBrowserClient;
@@ -32,7 +30,12 @@ type AccountTarget = {
   profileId: string;
   canAdmin: boolean;
 };
-type AccountAction = "request" | "complete" | "cancel";
+type AccountAction = "request" | "answer" | "cancel";
+type SignInChoice = {
+  providers: UsersAuthConnectCatalogResult["providers"];
+  provider: string;
+  method: string;
+};
 
 /** Model-account actions belong to the connection, not the profile editor's refresh cycle. */
 export class ModelAccounts extends OpenClawLightDomContentsElement {
@@ -51,9 +54,9 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
   @state() private notice: "connected" | "cancelled" | "expired" | "selected" | "cleared" | null =
     null;
   @state() private linkDraft = "";
-  @state() private connectFlow: ModelAccountsSectionProps["connectFlow"] = null;
-  @state() private connectRedirectDraft = "";
-  @state() private claudeTokenDraft = "";
+  @state() private signIn: SignInChoice | null = null;
+  @state() private connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
+  @state() private stepValue: unknown;
   @state() private statusUnavailable = false;
 
   private target: AccountTarget | null = null;
@@ -118,9 +121,9 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     this.error = null;
     this.notice = null;
     this.linkDraft = "";
+    this.signIn = null;
     this.connectFlow = null;
-    this.connectRedirectDraft = "";
-    this.claudeTokenDraft = "";
+    this.stepValue = undefined;
     this.statusUnavailable = false;
     if (this.target) {
       void this.loadAccounts();
@@ -176,7 +179,7 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     apply: (result: T) => void,
   ) {
     const target = this.target;
-    if (!target || (this.action && !(action === "cancel" && this.action === "complete"))) {
+    if (!target || (this.action && !(action === "cancel" && this.action === "answer"))) {
       return;
     }
     const generation = ++this.generation;
@@ -197,7 +200,7 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     } finally {
       if (this.isCurrent(target, generation)) {
         this.action = null;
-        this.schedulePoll();
+        this.schedulePoll(this.connectFlow?.step ? 2000 : 0);
       }
     }
   }
@@ -239,33 +242,77 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     );
   }
 
+  private openSignIn() {
+    this.signIn = { providers: [], provider: "", method: "" };
+    void this.runAction(
+      "request",
+      (target) =>
+        target.client.request<UsersAuthConnectCatalogResult>("users.authConnect.catalog", {
+          profileId: target.profileId,
+        }),
+      (result) => {
+        this.signIn = { providers: result.providers, provider: "", method: "" };
+      },
+    );
+  }
+
+  private selectProvider(provider: string) {
+    const choice = this.signIn;
+    const entry = choice?.providers.find((candidate) => candidate.id === provider);
+    if (choice && entry && !this.action && !this.connectFlow) {
+      this.signIn = {
+        ...choice,
+        provider,
+        method: entry.methods.length === 1 ? (entry.methods[0]?.id ?? "") : "",
+      };
+    }
+  }
+
   private startConnect() {
+    const choice = this.signIn;
+    if (
+      !choice?.providers.some(
+        (provider) =>
+          provider.id === choice.provider &&
+          provider.methods.some((method) => method.id === choice.method),
+      )
+    ) {
+      return;
+    }
     void this.runAction(
       "request",
       (target) =>
         target.client.request<UsersAuthConnectStartResult>("users.authConnect.start", {
           profileId: target.profileId,
-          provider: "openai",
+          provider: choice.provider,
+          method: choice.method,
         }),
       (result) => {
-        this.connectFlow = { ...result, status: "pending" };
-        this.connectRedirectDraft = "";
+        this.connectFlow = result;
+        this.stepValue = undefined;
       },
     );
   }
 
   private applyConnectStatus(result: UsersAuthConnectStatusResult) {
-    if (result.status === "pending" || result.status === "exchanging") {
+    if (result.status === "pending") {
+      if (result.error) {
+        this.error = formatUiError(result.error);
+      }
       if (this.connectFlow) {
-        this.connectFlow = { ...this.connectFlow, status: result.status };
+        if (this.connectFlow.step?.id !== result.step?.id) {
+          this.stepValue = result.step?.sensitive ? undefined : result.step?.initialValue;
+        }
+        this.connectFlow = { ...this.connectFlow, step: result.step };
       }
       return;
     }
     this.error = null;
     this.statusUnavailable = false;
     this.stopPoll();
+    this.signIn = null;
     this.connectFlow = null;
-    this.connectRedirectDraft = "";
+    this.stepValue = undefined;
     if (result.status === "failed") {
       this.error = t(`profilePage.modelAccounts.connectErrors.${result.reason}`);
       return;
@@ -277,10 +324,9 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     this.notice = result.status;
   }
 
-  private connectStatus(action: "complete" | "cancel" | "status") {
+  private connectStatus(action: "cancel" | "status") {
     const flow = this.connectFlow;
-    const redirectInput = this.connectRedirectDraft.trim();
-    if (!flow || (action === "complete" && !redirectInput)) {
+    if (!flow) {
       return;
     }
     void this.runAction(
@@ -289,31 +335,31 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
         target.client.request<UsersAuthConnectStatusResult>(`users.authConnect.${action}`, {
           profileId: target.profileId,
           connectId: flow.connectId,
-          ...(action === "complete" ? { redirectInput } : {}),
         }),
       (result) => this.applyConnectStatus(result),
     );
   }
 
-  private connectClaude() {
-    const token = this.claudeTokenDraft.trim();
-    if (!token) {
+  private answerStep(stepId: string, value: unknown) {
+    const flow = this.connectFlow;
+    const step = flow?.step;
+    if (!flow || !step || step.id !== stepId || step.type === "progress") {
       return;
     }
+    // Do not retain submitted secrets while the Gateway runs the provider-owned step.
+    if (step.sensitive) {
+      this.stepValue = undefined;
+    }
     void this.runAction(
-      "request",
+      "answer",
       (target) =>
-        target.client.request<UsersAuthConnectResult>("users.authConnect.token", {
+        target.client.request<UsersAuthConnectStatusResult>("users.authConnect.answer", {
           profileId: target.profileId,
-          provider: "anthropic",
-          token,
+          connectId: flow.connectId,
+          stepId: step.id,
+          ...(value !== undefined ? { value } : {}),
         }),
-      (result) => {
-        this.applyLinks(result.links);
-        this.claudeTokenDraft = "";
-        this.notice = "connected";
-        void this.loadAccounts();
-      },
+      (result) => this.applyConnectStatus(result),
     );
   }
 
@@ -324,13 +370,13 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
     }
   }
 
-  private schedulePoll() {
+  private schedulePoll(interval = 2000) {
     this.stopPoll();
     const flow = this.connectFlow;
     if (!flow || !this.target || this.action) {
       return;
     }
-    const delay = Math.max(0, Math.min(2000, flow.expiresAtMs - Date.now()));
+    const delay = Math.max(0, Math.min(interval, flow.expiresAtMs - Date.now()));
     this.pollTimer = setTimeout(() => {
       this.pollTimer = null;
       void this.pollStatus();
@@ -404,18 +450,15 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
             inventoryLoading: this.inventoryLoading,
             inventoryError: this.inventoryError,
             showManualLink: this.target.canAdmin,
-            busy:
-              this.inventoryLoading ||
-              this.action !== null ||
-              this.connectFlow?.status === "exchanging",
-            cancelBusy: this.action !== null && this.action !== "complete",
+            busy: this.inventoryLoading || this.action !== null,
+            cancelBusy: this.action !== null && this.action !== "answer",
             error: this.error,
             notice: this.notice ? t(`profilePage.modelAccounts.notices.${this.notice}`) : null,
             statusUnavailable: this.statusUnavailable,
             linkDraft: this.linkDraft,
+            signIn: this.signIn,
             connectFlow: this.connectFlow,
-            connectRedirectDraft: this.connectRedirectDraft,
-            claudeTokenDraft: this.claudeTokenDraft,
+            stepValue: this.stepValue,
             onLinkDraftInput: (value) => {
               this.linkDraft = value;
             },
@@ -424,17 +467,28 @@ export class ModelAccounts extends OpenClawLightDomContentsElement {
             onSelectAccount: (authProfileId) => this.selectAccount(authProfileId),
             onLoadMore: () => void this.loadAccounts(this.nextCursor),
             onRefresh: () => void this.loadAccounts(),
-            onConnectStart: () => this.startConnect(),
-            onConnectRedirectInput: (value) => {
-              this.connectRedirectDraft = value;
+            onAddAccount: () => this.openSignIn(),
+            onProviderChange: (provider) => this.selectProvider(provider),
+            onMethodChange: (method) => {
+              if (this.signIn && !this.action && !this.connectFlow) {
+                this.signIn = { ...this.signIn, method };
+              }
             },
-            onConnectComplete: () => this.connectStatus("complete"),
+            onCloseSignIn: () => {
+              if (!this.action && !this.connectFlow) {
+                this.signIn = null;
+                this.error = null;
+              }
+            },
+            onConnectStart: () => this.startConnect(),
+            onStepValueChange: (stepId, value) => {
+              if (this.connectFlow?.step?.id === stepId) {
+                this.stepValue = value;
+              }
+            },
+            onStepAnswer: (stepId, value) => this.answerStep(stepId, value),
             onConnectCancel: () => this.connectStatus("cancel"),
             onConnectCheck: () => this.connectStatus("status"),
-            onClaudeTokenInput: (value) => {
-              this.claudeTokenDraft = value;
-            },
-            onClaudeConnect: () => this.connectClaude(),
           }
         : null,
     );

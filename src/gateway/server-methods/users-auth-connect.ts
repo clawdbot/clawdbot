@@ -2,15 +2,13 @@ import {
   ErrorCodes,
   errorShape,
   validateUsersAuthConnectCancelParams,
-  validateUsersAuthConnectCompleteParams,
+  validateUsersAuthConnectAnswerParams,
   validateUsersAuthConnectStartParams,
   validateUsersAuthConnectStatusParams,
-  validateUsersAuthConnectTokenParams,
+  validateUsersAuthConnectCatalogParams,
   validateUsersListModelAccountsParams,
   validateUsersSelectModelAccountParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
-import { validateAnthropicSetupToken } from "../../plugins/provider-auth-token.js";
 import { UserProfileNotFoundError } from "../../state/user-profiles.js";
 import type { ModelAccountConnectAction } from "../model-account-authority.js";
 import {
@@ -93,18 +91,21 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
     validateUsersAuthConnectStartParams,
     (options) =>
       runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.start(action, options.params.provider),
+        service.start(action, options.params.provider, options.params.method),
       ),
   ),
-  "users.authConnect.complete": defineValidatedGatewayMethod(
-    "users.authConnect.complete",
-    validateUsersAuthConnectCompleteParams,
-    (options) => {
-      registerSecretValueForRedaction(options.params.redirectInput);
-      return runConnectRequest(options, options.params.profileId, (service, action) =>
-        service.complete(action, options.params.connectId, options.params.redirectInput),
-      );
-    },
+  "users.authConnect.answer": defineValidatedGatewayMethod(
+    "users.authConnect.answer",
+    validateUsersAuthConnectAnswerParams,
+    (options) =>
+      runConnectRequest(options, options.params.profileId, (service, action) =>
+        service.answer(
+          action,
+          options.params.connectId,
+          options.params.stepId,
+          options.params.value,
+        ),
+      ),
   ),
   "users.authConnect.status": defineValidatedGatewayMethod(
     "users.authConnect.status",
@@ -122,19 +123,12 @@ export const usersAuthConnectHandlers: GatewayRequestHandlers = {
         service.cancel(action, options.params.connectId),
       ),
   ),
-  "users.authConnect.token": defineValidatedGatewayMethod(
-    "users.authConnect.token",
-    validateUsersAuthConnectTokenParams,
-    (options) => {
-      registerSecretValueForRedaction(options.params.token);
-      return runConnectRequest(options, options.params.profileId, (service, action) => {
-        const token = options.params.token.trim();
-        const invalidReason = validateAnthropicSetupToken(token);
-        if (invalidReason) {
-          throw new ModelAccountConnectInputError(invalidReason);
-        }
-        return service.token(action, { type: "token", provider: options.params.provider, token });
-      });
-    },
+  "users.authConnect.catalog": defineValidatedGatewayMethod(
+    "users.authConnect.catalog",
+    validateUsersAuthConnectCatalogParams,
+    (options) =>
+      runConnectRequest(options, options.params.profileId, (service, action) =>
+        service.catalog(action),
+      ),
   ),
 };

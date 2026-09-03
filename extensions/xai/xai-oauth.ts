@@ -14,7 +14,10 @@ import {
 } from "openclaw/plugin-sdk/provider-auth";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
@@ -545,14 +548,6 @@ function resolveXaiOAuthIdentity(tokens: XaiOAuthTokenResponse): XaiOAuthIdentit
   };
 }
 
-function readCredentialString<TKey extends string>(
-  credential: OAuthCredential & Partial<Record<TKey, unknown>>,
-  key: TKey,
-): string | undefined {
-  const value = credential[key];
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 function isLegacyXaiOAuthTokenEndpoint(endpoint: string): boolean {
   try {
     const url = new URL(endpoint);
@@ -566,7 +561,7 @@ async function resolveXaiOAuthRefreshTokenEndpoint(
   credential: OAuthCredential,
   options: XaiOAuthFetchOptions,
 ): Promise<string> {
-  const cachedEndpoint = readCredentialString(credential, "tokenEndpoint");
+  const cachedEndpoint = normalizeOptionalString(credential.tokenEndpoint);
   // Rediscover when there is no cached endpoint, or when an older persisted
   // credential still points at the retired endpoint, so refresh writes back the
   // current OAuth token endpoint.
@@ -702,5 +697,5 @@ export async function refreshXaiOAuthCredential(
     ...(identity.accountId ? { accountId: identity.accountId } : {}),
     tokenEndpoint,
     issuer: XAI_OAUTH_ISSUER,
-  } as OAuthCredential;
+  };
 }
