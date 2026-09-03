@@ -4,6 +4,8 @@ import {
   createTestConfinedFilesystemForAuthentication,
 } from "../../test/helpers/update-generation-broker-fixture.js";
 import { TestUpdateGenerationMemoryLedger as MemoryLedger } from "../../test/helpers/update-generation-memory-ledger.js";
+import { UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH } from "./update-generation-broker-decoder.js";
+import { parseUpdateGenerationTransactionReceipt } from "./update-generation-contract-parser.js";
 import {
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
@@ -91,6 +93,39 @@ function candidateIntent(generationId = selection("b").generationId, sequence = 
 }
 
 describe("update generation durable admission", () => {
+  it("bounds cleanup arrays to the broker decoder limit", () => {
+    const oversized = Array.from(
+      { length: UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH + 1 },
+      (_, index) => index.toString(16).padStart(32, "0"),
+    );
+    const valid = receipt("cleanup-intent", 1, {
+      generationIds: [],
+      protectedGenerationIds: [],
+    });
+    for (const field of ["generationIds", "protectedGenerationIds"] as const) {
+      expect(() =>
+        parseUpdateGenerationTransactionReceipt({ ...valid, [field]: oversized }),
+      ).toThrow();
+    }
+  });
+
+  it("rejects explicit undefined service enablement before durable admission", async () => {
+    const ledger = new MemoryLedger();
+    const malformed = {
+      ...intent(selection("a")),
+      serviceBefore: { managed: true, running: true, enabled: undefined },
+    };
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: FILESYSTEM,
+        ledger,
+        snapshot: null,
+        receipt: malformed,
+      }),
+    ).rejects.toThrow("enablement must be omitted or boolean");
+    await expect(ledger.read(NAMESPACE_KEY)).resolves.toBeNull();
+  });
+
   it("rejects blank materialization fields before durable admission", async () => {
     const ledger = new MemoryLedger();
     const snapshot = await persistUpdateGenerationReceipt({
@@ -101,10 +136,27 @@ describe("update generation durable admission", () => {
     });
     const valid = candidateIntent();
 
-    for (const malformed of [
+    const unsafeEntrypoints = [
+      "openclaw.mjs\0ignored",
+      "entry:payload.mjs",
+      "dir/CON",
+      "dir/CONIN$.mjs",
+      "dir/CONOUT$",
+      "dir/CON .mjs",
+      "dir/aux.mjs",
+      "dir/entry.",
+      "dir/entry ",
+      "dir/entry?.mjs",
+      "dir/entry\u001f.mjs",
+    ];
+    const malformedReceipts = [
       { ...valid, sourceArtifactId: " \t " },
       { ...valid, packageVersion: "\n" },
-    ]) {
+    ];
+    for (const entrypointRelativePath of unsafeEntrypoints) {
+      malformedReceipts.push({ ...valid, entrypointRelativePath });
+    }
+    for (const malformed of malformedReceipts) {
       await expect(
         persistUpdateGenerationReceipt({
           filesystem: FILESYSTEM,

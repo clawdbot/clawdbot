@@ -14,7 +14,7 @@ type DecodeShape =
   | { kind: "object"; fields: Readonly<Record<string, DecodeShape>> }
   | { kind: "string" };
 
-const MAX_BROKER_ARRAY_LENGTH = 10_000;
+export const UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH = 10_000;
 const stringShape = { kind: "string" } as const;
 const numberShape = { kind: "number" } as const;
 const booleanShape = { kind: "boolean" } as const;
@@ -211,7 +211,7 @@ function decodeArray(value: unknown, shape: Extract<DecodeShape, { kind: "array"
     typeof lengthValue !== "number" ||
     !Number.isSafeInteger(lengthValue) ||
     lengthValue < 0 ||
-    lengthValue > MAX_BROKER_ARRAY_LENGTH
+    lengthValue > UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH
   ) {
     throw new TypeError(`${path}.length is invalid`);
   }

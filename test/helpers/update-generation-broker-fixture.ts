@@ -247,7 +247,6 @@ export async function authenticateTestRecoveryObservation(params: {
   const pair =
     selected &&
     rollback &&
-    params.physical.selectorDurable &&
     params.physical.generations.some(
       (generation) =>
         generation.generationId === selected.generationId &&

@@ -1,20 +1,17 @@
 /** Runtime decoding for durable update-generation transaction records. */
 import { z } from "zod";
-import { decodeUpdateGenerationBrokerReceipt } from "./update-generation-broker-decoder.js";
+import {
+  decodeUpdateGenerationBrokerReceipt,
+  UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH,
+} from "./update-generation-broker-decoder.js";
 import type { UpdateGenerationBrokerReceipt } from "./update-generation-confined-filesystem.js";
+import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 const generationIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const nonEmptyStringSchema = z.string().min(1);
 const nonBlankStringSchema = z.string().refine((value) => value.trim().length > 0);
 const nonNegativeIntegerSchema = z.number().int().nonnegative().safe();
-const relativeEntrypointSchema = nonEmptyStringSchema.refine((value) => {
-  const normalized = value.replaceAll("\\", "/");
-  return (
-    !normalized.startsWith("/") &&
-    !/^[A-Za-z]:\//u.test(normalized) &&
-    normalized.split("/").every((part) => part !== "" && part !== "." && part !== "..")
-  );
-});
+const relativeEntrypointSchema = nonEmptyStringSchema.refine(isSafeUpdateGenerationEntrypointPath);
 
 const manifestSchema = z
   .object({
@@ -234,8 +231,10 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
     .object({
       ...receiptBase,
       kind: z.literal("cleanup-intent"),
-      generationIds: z.array(generationIdSchema),
-      protectedGenerationIds: z.array(generationIdSchema),
+      generationIds: z.array(generationIdSchema).max(UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH),
+      protectedGenerationIds: z
+        .array(generationIdSchema)
+        .max(UPDATE_GENERATION_BROKER_MAX_ARRAY_LENGTH),
     })
     .strict(),
   z
@@ -269,6 +268,31 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
 
 export const updateGenerationTransactionReceiptSchema =
   updateGenerationTransactionReceiptUnion.superRefine((receipt, context) => {
+    if (
+      receipt.kind === "intent" &&
+      Object.hasOwn(receipt.serviceBefore, "enabled") &&
+      receipt.serviceBefore.enabled === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["serviceBefore", "enabled"],
+        message: "Service intent enablement must be omitted or boolean",
+      });
+    }
+    if (
+      (receipt.kind === "completion" || receipt.kind === "rolled-back") &&
+      Object.hasOwn(receipt, "serviceEnabled") &&
+      receipt.serviceEnabled === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["serviceEnabled"],
+        message:
+          receipt.kind === "completion"
+            ? "does not prove candidate and service convergence"
+            : "does not prove previous runtime and service convergence",
+      });
+    }
     if (receipt.kind !== "intent") {
       return;
     }

@@ -152,6 +152,10 @@ class CapturingLedger implements UpdateGenerationLedgerHook {
     return this.snapshot;
   }
 
+  async readReceipt(): Promise<UpdateGenerationTransactionSnapshot | null> {
+    return null;
+  }
+
   async compareAndSwap(params: {
     namespaceKey: string;
     expectedRevision: string | null;
@@ -337,13 +341,34 @@ describe("update generation ledger hook", () => {
       }),
     ).rejects.toThrow("replayed different receipt content");
 
-    const fabricatedRecord = appendUpdateGenerationReceipt(null, firstReceipt);
+    const fabricatedTransactionId = "fabricated-update-transaction";
+    const fabricatedReceipt = {
+      ...firstReceipt,
+      transactionId: fabricatedTransactionId,
+      receiptId: buildUpdateGenerationReceiptId({
+        transactionId: fabricatedTransactionId,
+        sequence: 0,
+        kind: "intent",
+      }),
+    };
+    const fabricatedRecord = appendUpdateGenerationReceipt(null, fabricatedReceipt);
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: { revision: first.revision, record: fabricatedRecord },
+        receipt: fabricatedReceipt,
+      }),
+    ).rejects.toThrow("missing from the authoritative ledger");
+    await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(first);
+
+    const orphanedRecord = appendUpdateGenerationReceipt(null, firstReceipt);
     const emptyLedger = new MemoryLedger();
     await expect(
       persistUpdateGenerationReceipt({
         filesystem: AUTHENTICATION_FILESYSTEM,
         ledger: emptyLedger,
-        snapshot: { revision: "fabricated", record: fabricatedRecord },
+        snapshot: { revision: "fabricated", record: orphanedRecord },
         receipt: firstReceipt,
       }),
     ).rejects.toThrow("missing from the authoritative ledger");
@@ -366,6 +391,30 @@ describe("update generation ledger hook", () => {
       }),
     ).rejects.toThrow("ledger revision changed");
     await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(first);
+
+    const second = await persistUpdateGenerationReceipt({
+      filesystem: AUTHENTICATION_FILESYSTEM,
+      ledger,
+      snapshot: first,
+      receipt: candidateIntent,
+    });
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: null,
+        receipt: candidateIntent,
+      }),
+    ).resolves.toEqual(second);
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: null,
+        receipt: { ...candidateIntent, sourceArtifactId: "stage:poisoned" },
+      }),
+    ).rejects.toThrow("replayed different receipt content");
+    await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(second);
   });
 
   it("atomically rolls a cleaned namespace into a new transaction", async () => {
@@ -395,6 +444,7 @@ describe("update generation ledger hook", () => {
       receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
     );
     priorRecord = append(priorRecord, receipt("candidate-selected", 4, { selection: candidate }));
+    const selectedRecord = priorRecord;
     priorRecord = append(
       priorRecord,
       receipt("completion", 5, {
@@ -440,6 +490,27 @@ describe("update generation ledger hook", () => {
     ).rejects.toThrow("continue its broker revision chain");
     await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(priorSnapshot);
 
+    for (const malformed of [
+      { ...nextIntent, previousSelection: selection("c") },
+      { ...nextIntent, previousPackageVersion: "9.9.9" },
+      {
+        ...nextIntent,
+        previousSelection: null,
+        previousPackageVersion: null,
+        stableBindingAlreadyVerified: false,
+      },
+    ]) {
+      await expect(
+        persistUpdateGenerationReceipt({
+          filesystem: AUTHENTICATION_FILESYSTEM,
+          ledger,
+          snapshot: priorSnapshot,
+          receipt: malformed,
+        }),
+      ).rejects.toThrow("continue the terminal runtime");
+      await expect(ledger.read(NAMESPACE_KEY)).resolves.toEqual(priorSnapshot);
+    }
+
     const next = await persistUpdateGenerationReceipt({
       filesystem: AUTHENTICATION_FILESYSTEM,
       ledger,
@@ -460,6 +531,90 @@ describe("update generation ledger hook", () => {
         receipt: nextIntent,
       }),
     ).resolves.toEqual(next);
+    const historicalReceipt = priorRecord.receipts[0];
+    if (!historicalReceipt) {
+      throw new Error("expected a prior transaction receipt");
+    }
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: priorSnapshot,
+        receipt: historicalReceipt,
+      }),
+    ).resolves.toEqual(priorSnapshot);
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger,
+        snapshot: next,
+        receipt: historicalReceipt,
+      }),
+    ).resolves.toEqual(priorSnapshot);
+
+    let rolledBackRecord = append(
+      selectedRecord,
+      receipt("rollback-intent", 5, {
+        from: candidate,
+        to: previous,
+        reason: "post-selection verification failed",
+      }),
+    );
+    rolledBackRecord = append(
+      rolledBackRecord,
+      receipt("rolled-back", 6, {
+        selection: previous,
+        launcherVersion: "1.0.0",
+        serviceRunning: true,
+        serviceEnabled: true,
+      }),
+    );
+    rolledBackRecord = append(
+      rolledBackRecord,
+      receipt("cleanup-intent", 7, {
+        generationIds: [],
+        protectedGenerationIds: [previous.generationId, candidate.generationId],
+      }),
+    );
+    rolledBackRecord = append(
+      rolledBackRecord,
+      receipt("cleanup-completed", 8, { removedGenerationIds: [], deferred: [] }),
+    );
+    const rolledBackSnapshot = { revision: "9", record: rolledBackRecord };
+    const rolledBackLedger = new MemoryLedger(rolledBackSnapshot);
+    const rolledBackTransactionId = "update-transaction-after-rollback";
+    const rolledBackIntent = {
+      ...intent(previous, true),
+      transactionId: rolledBackTransactionId,
+      receiptId: buildUpdateGenerationReceiptId({
+        transactionId: rolledBackTransactionId,
+        sequence: 0,
+        kind: "intent",
+      }),
+      brokerRevision: projectUpdateGenerationTransaction(rolledBackRecord).brokerRevision,
+    };
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger: rolledBackLedger,
+        snapshot: rolledBackSnapshot,
+        receipt: {
+          ...rolledBackIntent,
+          previousSelection: candidate,
+          previousPackageVersion: "2.0.0",
+        },
+      }),
+    ).rejects.toThrow("continue the terminal runtime");
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger: rolledBackLedger,
+        snapshot: rolledBackSnapshot,
+        receipt: rolledBackIntent,
+      }),
+    ).resolves.toMatchObject({
+      record: { transactionId: rolledBackTransactionId, receipts: [rolledBackIntent] },
+    });
     await expect(
       persistUpdateGenerationReceipt({
         filesystem: AUTHENTICATION_FILESYSTEM,

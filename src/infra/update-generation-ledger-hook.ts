@@ -9,6 +9,7 @@ import {
 import {
   appendUpdateGenerationReceipt,
   projectUpdateGenerationTransaction,
+  type UpdateGenerationSelection,
   type UpdateGenerationTransactionReceipt,
   type UpdateGenerationTransactionRecord,
 } from "./update-generation-contract.js";
@@ -40,6 +41,11 @@ export type UpdateGenerationLedgerCompareAndSwapResult =
  */
 export type UpdateGenerationLedgerHook = {
   read(namespaceKey: string): Promise<UpdateGenerationTransactionSnapshot | null>;
+  /** Read-only lookup retained across transaction rollover for idempotent receipt retries. */
+  readReceipt(params: {
+    namespaceKey: string;
+    receiptId: string;
+  }): Promise<UpdateGenerationTransactionSnapshot | null>;
   compareAndSwap(params: {
     namespaceKey: string;
     expectedRevision: string | null;
@@ -63,6 +69,23 @@ export async function authenticateUpdateGenerationTransactionRecord(
     throw new Error("Generation transaction is outside the confined provider scope");
   }
   return authenticated;
+}
+
+function terminalGenerationBeforeRollover(record: UpdateGenerationTransactionRecord): {
+  selection: UpdateGenerationSelection;
+  packageVersion: string;
+} {
+  const projection = projectUpdateGenerationTransaction(record);
+  const selection = projection.rolledBack
+    ? (projection.baselineSelection ?? projection.intent.previousSelection)
+    : projection.candidateSelection;
+  const packageVersion = projection.rolledBack
+    ? (projection.generations.previous?.packageVersion ?? projection.intent.previousPackageVersion)
+    : projection.generations.candidate?.packageVersion;
+  if (!selection || !packageVersion) {
+    throw new Error("Completed update generation transaction has no terminal runtime");
+  }
+  return { selection, packageVersion };
 }
 
 export async function persistUpdateGenerationReceipt(params: {
@@ -92,15 +115,22 @@ export async function persistUpdateGenerationReceipt(params: {
   ) {
     throw new Error("Update generation ledger snapshot belongs to a different namespace");
   }
-  const replay = snapshot?.record.receipts.find(
+  const localReplay = snapshot?.record.receipts.find(
     (persisted) => persisted.receiptId === receipt.receiptId,
   );
-  if (replay && snapshot) {
-    if (!isDeepStrictEqual(replay, receipt)) {
-      throw new Error("Update generation receipt id was replayed with different content");
-    }
-    const authoritative = await params.ledger.read(snapshot.record.namespaceKey);
-    if (!authoritative || !authoritative.revision.trim()) {
+  if (localReplay && !isDeepStrictEqual(localReplay, receipt)) {
+    throw new Error("Update generation receipt id was replayed with different content");
+  }
+  const replayNamespace = snapshot?.record.namespaceKey ?? params.filesystem.namespaceKey;
+  const authoritative = await params.ledger.readReceipt({
+    namespaceKey: replayNamespace,
+    receiptId: receipt.receiptId,
+  });
+  if (!authoritative && localReplay) {
+    throw new Error("Update generation receipt replay is missing from the authoritative ledger");
+  }
+  if (authoritative) {
+    if (!authoritative.revision.trim()) {
       throw new Error("Update generation receipt replay is missing from the authoritative ledger");
     }
     const authoritativeRecord = await authenticateUpdateGenerationTransactionRecord(
@@ -129,6 +159,14 @@ export async function persistUpdateGenerationReceipt(params: {
       receipt.brokerRevision !== priorProjection.brokerRevision
     ) {
       throw new Error("A new generation transaction must continue its broker revision chain");
+    }
+    const terminal = terminalGenerationBeforeRollover(priorRecord);
+    if (
+      !receipt.stableBindingAlreadyVerified ||
+      !isDeepStrictEqual(receipt.previousSelection, terminal.selection) ||
+      receipt.previousPackageVersion !== terminal.packageVersion
+    ) {
+      throw new Error("A new generation transaction must continue the terminal runtime");
     }
     priorRecord = null;
   }

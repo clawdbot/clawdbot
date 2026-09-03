@@ -7,6 +7,7 @@ import type {
 import { buildUpdateGenerationBrokerOperationId } from "./update-generation-confined-filesystem.js";
 /** Crash recovery decisions for durable generation-addressed updates. */
 import {
+  pendingUpdateGenerationBrokerMutationKind,
   projectUpdateGenerationTransaction,
   type UpdateGenerationProjection,
   type UpdateGenerationRole,
@@ -59,7 +60,10 @@ function buildPendingUpdateGenerationBrokerRequest(
 ): UpdateGenerationPendingBrokerRequest | null {
   const state = projectUpdateGenerationTransaction(record);
   const latest = state.latestTransition;
-  if (state.latest.kind === "failure") {
+  if (
+    state.latest.kind === "failure" &&
+    state.latest.operation !== pendingUpdateGenerationBrokerMutationKind(latest)
+  ) {
     return null;
   }
   const base = (kind: UpdateGenerationPendingBrokerRequest["kind"]) => ({
@@ -217,7 +221,7 @@ function selectionIsPhysicallyRunnable(
     selection &&
     physical.selectorDurable &&
     selectionsEqual(physical.selector, selection) &&
-    observedGenerationMatches(physical, selection.generationId, selection.manifestSha256),
+    observedGenerationMatches(physical, selection.generationId, selection.manifestSha256, true),
   );
 }
 
@@ -330,14 +334,9 @@ export async function adjudicateUpdateGenerationTransaction(
   }
   if (latest.kind === "rollback-intent") {
     if (selectionsEqual(physical.selector, latest.to)) {
-      if (!physical.selectorDurable) {
-        return {
-          action: "stabilize-selector",
-          selection: latest.to,
-          reason: "rollback selector replacement is visible but not proven durable",
-        };
-      }
-      if (!selectionIsPhysicallyRunnable(physical, latest.to)) {
+      if (
+        !observedGenerationMatches(physical, latest.to.generationId, latest.to.manifestSha256, true)
+      ) {
         return {
           action: "inconsistent",
           reason: "rollback selector does not name a runnable prior generation",
@@ -353,6 +352,13 @@ export async function adjudicateUpdateGenerationTransaction(
         return {
           action: "inconsistent",
           reason: "rollback selector converged without both retained generations",
+        };
+      }
+      if (!physical.selectorDurable) {
+        return {
+          action: "stabilize-selector",
+          selection: latest.to,
+          reason: "rollback selector replacement is visible but not proven durable",
         };
       }
       return {
@@ -402,6 +408,16 @@ export async function adjudicateUpdateGenerationTransaction(
   }
   if (latest.kind === "baseline-selection-intent") {
     if (selectionsEqual(physical.selector, latest.selection)) {
+      if (
+        !observedGenerationMatches(
+          physical,
+          latest.selection.generationId,
+          latest.selection.manifestSha256,
+          true,
+        )
+      ) {
+        return { action: "inconsistent", reason: "selected baseline generation is unavailable" };
+      }
       if (!physical.selectorDurable) {
         return {
           action: "stabilize-selector",
@@ -409,9 +425,10 @@ export async function adjudicateUpdateGenerationTransaction(
           reason: "baseline selector replacement is visible but not proven durable",
         };
       }
-      return selectionIsPhysicallyRunnable(physical, latest.selection)
-        ? { action: "record-baseline-selected", reason: "baseline selector replacement completed" }
-        : { action: "inconsistent", reason: "selected baseline generation is unavailable" };
+      return {
+        action: "record-baseline-selected",
+        reason: "baseline selector replacement completed",
+      };
     }
     return selectionsEqual(physical.selector, state.intent.previousSelection) &&
       observedGenerationMatches(
@@ -453,14 +470,9 @@ export async function adjudicateUpdateGenerationTransaction(
   }
   if (latest.kind === "candidate-selection-intent") {
     if (selectionsEqual(physical.selector, latest.to)) {
-      if (!physical.selectorDurable) {
-        return {
-          action: "stabilize-selector",
-          selection: latest.to,
-          reason: "candidate selector replacement is visible but not proven durable",
-        };
-      }
-      if (!selectionIsPhysicallyRunnable(physical, latest.to)) {
+      if (
+        !observedGenerationMatches(physical, latest.to.generationId, latest.to.manifestSha256, true)
+      ) {
         return {
           action: "inconsistent",
           reason: "candidate selector does not name a runnable generation",
@@ -476,6 +488,13 @@ export async function adjudicateUpdateGenerationTransaction(
         return {
           action: "inconsistent",
           reason: "candidate selector converged without both retained generations",
+        };
+      }
+      if (!physical.selectorDurable) {
+        return {
+          action: "stabilize-selector",
+          selection: latest.to,
+          reason: "candidate selector replacement is visible but not proven durable",
         };
       }
       return {
@@ -519,6 +538,7 @@ export async function adjudicateUpdateGenerationTransaction(
         physical,
         latest.generation.generationId,
         latest.generation.manifestSha256,
+        true,
       ) ||
       (latest.role === "candidate" &&
         (!baselineIsPhysicallyRunnable(state, physical) || !physical.bindingConverged))

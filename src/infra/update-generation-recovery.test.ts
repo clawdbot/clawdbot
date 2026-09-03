@@ -62,6 +62,14 @@ function receipt<Kind extends ReceiptKind>(
   } as ReceiptOf<Kind>;
 }
 
+function failureReceipt(sequence: number, operation: string, serviceRestored: boolean) {
+  return receipt("failure", sequence, {
+    operation,
+    reason: `${operation} failed`,
+    serviceRestored,
+  });
+}
+
 function selection(character: string): UpdateGenerationSelection {
   return {
     formatVersion: 1,
@@ -130,14 +138,18 @@ async function expectRecovery(params: {
   action: UpdateGenerationRecoveryAction;
   nextReceipt?: UpdateGenerationTransactionReceipt;
 }): Promise<void> {
-  expect(await adjudicateUpdateGenerationTransaction(params.record, params.physical)).toMatchObject(
-    {
-      action: params.action,
-    },
-  );
+  const decision = await adjudicateUpdateGenerationTransaction(params.record, params.physical);
+  expect(decision).toMatchObject({ action: params.action });
   if (params.nextReceipt) {
     expect(() => append(params.record, params.nextReceipt!)).not.toThrow();
   }
+}
+
+async function expectInconsistent(
+  record: UpdateGenerationTransactionRecord,
+  state: TestUpdateGenerationRecoveryState,
+): Promise<void> {
+  await expectRecovery({ record, physical: state, action: "inconsistent" });
 }
 
 describe("update generation recovery transition matrix", () => {
@@ -197,11 +209,7 @@ describe("update generation recovery transition matrix", () => {
       to: candidate,
     });
     const candidateSelected = receipt("candidate-selected", 10, { selection: candidate });
-    const failure = receipt("failure", 11, {
-      operation: "doctor",
-      reason: "injected failure",
-      serviceRestored: false,
-    });
+    const failure = failureReceipt(11, "doctor", false);
     const rollbackIntent = receipt("rollback-intent", 12, {
       from: candidate,
       to: previous,
@@ -245,6 +253,14 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: previousMaterialized,
     });
     record = append(record, previousMaterialized);
+    await expectInconsistent(
+      record,
+      physical({
+        selector: null,
+        generations: [previous],
+        parentDirectoryDurable: false,
+      }),
+    );
     await expectRecovery({
       record,
       physical: physical({ selector: null, generations: [previous] }),
@@ -252,20 +268,16 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: baselineIntent,
     });
     record = append(record, baselineIntent);
-    await expectRecovery({
+    await expectInconsistent(record, physical({ selector: null, generations: [] }));
+    await expectInconsistent(
       record,
-      physical: physical({ selector: null, generations: [] }),
-      action: "inconsistent",
-    });
-    await expectRecovery({
-      record,
-      physical: physical({
-        selector: null,
+      physical({
+        selector: previous,
+        selectorDurable: false,
         generations: [previous],
         parentDirectoryDurable: false,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({ selector: null, generations: [previous] }),
@@ -338,25 +350,24 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateIntentSelection,
     });
     record = append(record, candidateIntentSelection);
-    await expectRecovery({
+    await expectInconsistent(
       record,
-      physical: physical({
-        selector: previous,
-        generations: [previous],
+      physical({
+        selector: candidate,
+        selectorDurable: false,
+        generations: [candidate],
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
-    await expectRecovery({
+    );
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: previous,
         generations: [previous, candidate],
         parentDirectoryDurable: false,
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({
@@ -376,25 +387,23 @@ describe("update generation recovery transition matrix", () => {
       }),
       action: "stabilize-selector",
     });
-    await expectRecovery({
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: candidate,
         generations: [candidate],
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
-    await expectRecovery({
+    );
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: candidate,
         generations: [previous, candidate],
         parentDirectoryDurable: false,
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({
@@ -406,25 +415,23 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: candidateSelected,
     });
     record = append(record, candidateSelected);
-    await expectRecovery({
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: candidate,
         generations: [candidate],
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
-    await expectRecovery({
+    );
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: candidate,
         generations: [previous, candidate],
         parentDirectoryDurable: false,
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({
@@ -447,15 +454,15 @@ describe("update generation recovery transition matrix", () => {
       nextReceipt: rollbackIntent,
     });
     record = append(record, rollbackIntent);
-    await expectRecovery({
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: previous,
+        selectorDurable: false,
         generations: [previous],
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({
@@ -475,16 +482,15 @@ describe("update generation recovery transition matrix", () => {
       }),
       action: "stabilize-selector",
     });
-    await expectRecovery({
+    await expectInconsistent(
       record,
-      physical: physical({
+      physical({
         selector: previous,
         generations: [previous, candidate],
         parentDirectoryDurable: false,
         bindingConverged: true,
       }),
-      action: "inconsistent",
-    });
+    );
     await expectRecovery({
       record,
       physical: physical({
@@ -617,11 +623,10 @@ describe("update generation recovery transition matrix", () => {
         ],
       }),
     );
-    await expectRecovery({
-      record: bootstrap,
-      physical: physical({ selector: previous, generations: [], bindingConverged: true }),
-      action: "inconsistent",
-    });
+    await expectInconsistent(
+      bootstrap,
+      physical({ selector: previous, generations: [], bindingConverged: true }),
+    );
   });
 
   it("never resumes a durable pre-activation failure implicitly", async () => {
@@ -649,14 +654,7 @@ describe("update generation recovery transition matrix", () => {
         entrypointRelativePath: candidate.entrypointRelativePath,
       }),
     );
-    materialization = append(
-      materialization,
-      receipt("failure", 2, {
-        operation: "materialize-generation",
-        reason: "broker disconnected after durable intent",
-        serviceRestored: true,
-      }),
-    );
+    materialization = append(materialization, failureReceipt(2, "materialize-generation", true));
     await expectRecovery({
       record: materialization,
       physical: physical({
@@ -719,11 +717,7 @@ describe("update generation recovery transition matrix", () => {
     );
     const selectionFailure = append(
       beforeSelectionReceipt,
-      receipt("failure", beforeSelectionReceipt.receipts.length, {
-        operation: "switch-selector",
-        reason: "selector outcome requires operator adjudication",
-        serviceRestored: true,
-      }),
+      failureReceipt(beforeSelectionReceipt.receipts.length, "switch-selector", true),
     );
     await expectRecovery({
       record: selectionFailure,
@@ -811,8 +805,17 @@ describe("update generation recovery transition matrix", () => {
     expect(committedBeforeCrash?.receipt.kind).toBe("materialize-generation");
     expect(broker.mutationCount()).toBe(1);
 
+    const failed = append(record, failureReceipt(2, "materialize-generation", true));
+    const unrelatedFailure = append(record, failureReceipt(2, "switch-selector", true));
+    await expect(
+      reconcilePendingUpdateGenerationBrokerMutation({
+        record: unrelatedFailure,
+        filesystem: broker.filesystem,
+      }),
+    ).resolves.toBeNull();
+
     const recovered = await reconcilePendingUpdateGenerationBrokerMutation({
-      record,
+      record: failed,
       filesystem: broker.filesystem,
     });
     expect(recovered).toEqual(committedBeforeCrash);
@@ -850,16 +853,16 @@ describe("update generation recovery transition matrix", () => {
     expect(broker.mutationCount()).toBe(2);
 
     const materialized = {
-      ...receipt("generation-materialized", 2, {
+      ...receipt("generation-materialized", 3, {
         role: "previous",
         generation: { ...previous, packageVersion: "1.0.0" },
       }),
-      evidence: {
-        materialization: recovered.receipt,
-        parentDirectorySync,
-      },
+      evidence: { materialization: recovered.receipt, parentDirectorySync },
     };
-    record = appendUpdateGenerationReceipt(record, materialized);
+    expect(() => appendUpdateGenerationReceipt(unrelatedFailure, materialized)).toThrow(
+      "requires durable adjudication",
+    );
+    record = appendUpdateGenerationReceipt(failed, materialized);
     expect(projectUpdateGenerationTransaction(record).brokerRevision).toBe(
       parentDirectorySync.revision,
     );

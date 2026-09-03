@@ -15,6 +15,7 @@ import type {
   UpdateGenerationManifest,
   UpdateGenerationSelection,
 } from "./update-generation-contract.js";
+import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 
 export type UpdateGenerationBrokerOperationKind =
   | "materialize-generation"
@@ -230,7 +231,6 @@ function assertSelection(selection: unknown): asserts selection is UpdateGenerat
   }
   // SAFETY: Every selection field is validated below before the value escapes this function.
   const candidate = selection as UpdateGenerationSelection;
-  const normalizedEntrypoint = candidate.entrypointRelativePath?.replaceAll("\\", "/");
   if (
     candidate.formatVersion !== 1 ||
     typeof candidate.generationId !== "string" ||
@@ -238,11 +238,7 @@ function assertSelection(selection: unknown): asserts selection is UpdateGenerat
     typeof candidate.manifestSha256 !== "string" ||
     !SHA256.test(candidate.manifestSha256) ||
     typeof candidate.entrypointRelativePath !== "string" ||
-    !candidate.entrypointRelativePath ||
-    !normalizedEntrypoint ||
-    normalizedEntrypoint.startsWith("/") ||
-    /^[A-Za-z]:\//u.test(normalizedEntrypoint) ||
-    normalizedEntrypoint.split("/").some((part) => part === "" || part === "." || part === "..")
+    !isSafeUpdateGenerationEntrypointPath(candidate.entrypointRelativePath)
   ) {
     throw new TypeError("Invalid generation selection in broker operation");
   }
@@ -529,11 +525,8 @@ function assertReceiptMatchesRequest(
     }
     if (receipt.retainedPair !== null) {
       assertRetainedPair(receipt.retainedPair);
-      if (
-        !receipt.selectorDurable ||
-        !selectionsEqual(receipt.selector, receipt.retainedPair.selected)
-      ) {
-        throw new Error("Recovery retained pair does not match the durable selector");
+      if (!selectionsEqual(receipt.selector, receipt.retainedPair.selected)) {
+        throw new Error("Recovery retained pair does not match the observed selector");
       }
       for (const selection of [receipt.retainedPair.selected, receipt.retainedPair.rollback]) {
         const observed = receipt.generations.find(

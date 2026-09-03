@@ -289,6 +289,7 @@ describe("confined update-generation filesystem contract", () => {
       "update-generation-contract-schema.ts",
       "update-generation-contract-types.ts",
       "update-generation-contract.ts",
+      "update-generation-entrypoint-path.ts",
       "update-generation-evidence.ts",
       "update-generation-ledger-hook.ts",
       "update-generation-recovery.ts",
@@ -380,6 +381,30 @@ describe("confined update-generation filesystem contract", () => {
     const selectorProvider = new FixtureConfinedFilesystem(signedRecoveryObservation());
     await expect(selectorProvider.perform(selector)).rejects.toThrow("must be an object");
     expect(selectorProvider.invokeCount).toBe(0);
+
+    for (const entrypointRelativePath of [
+      "openclaw.mjs\0ignored",
+      "entry:payload.mjs",
+      "dir/CON",
+      "dir/CONIN$.mjs",
+      "dir/CONOUT$",
+      "dir/CON .mjs",
+      "dir/aux.mjs",
+      "dir/entry.",
+      "dir/entry ",
+      "dir/entry*.mjs",
+      "dir/entry\u001f.mjs",
+    ]) {
+      const invalidEntrypoint = materializationRequest();
+      invalidEntrypoint.generation.entrypointRelativePath = entrypointRelativePath;
+      const provider = new FixtureConfinedFilesystem(
+        signedMaterializationReceipt(materializationRequest()),
+      );
+      await expect(provider.perform(invalidEntrypoint)).rejects.toThrow(
+        "Invalid generation selection",
+      );
+      expect(provider.invokeCount).toBe(0);
+    }
   });
 
   it("rejects invalid mutating revisions even when re-signed", () => {
@@ -405,6 +430,16 @@ describe("confined update-generation filesystem contract", () => {
         `missing ${field}`,
       ).toThrow();
     }
+  });
+
+  it("accepts retained-pair evidence before selector directory synchronization", () => {
+    const receipt = signedRecoveryObservation();
+    if (receipt.kind !== "observe-recovery") {
+      throw new Error("expected a recovery observation");
+    }
+    receipt.selectorDurable = false;
+    signReceipt(receipt);
+    expect(() => assertUpdateGenerationBrokerReceiptIsValid(receipt)).not.toThrow();
   });
 
   it("rejects forged non-boolean crash-durability claims even when re-signed", () => {

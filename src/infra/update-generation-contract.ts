@@ -7,6 +7,7 @@ import type {
   UpdateGenerationTransactionReceipt,
   UpdateGenerationTransactionRecord,
 } from "./update-generation-contract-types.js";
+import { isSafeUpdateGenerationEntrypointPath } from "./update-generation-entrypoint-path.js";
 import {
   assertBrokerEvidenceChain,
   assertBrokerEvidenceOperationIds,
@@ -62,10 +63,26 @@ function assertSelection(selection: UpdateGenerationSelection): void {
     selection.formatVersion !== 1 ||
     !/^[a-f0-9]{32}$/u.test(selection.generationId) ||
     !SHA256.test(selection.manifestSha256) ||
-    !selection.entrypointRelativePath
+    !isSafeUpdateGenerationEntrypointPath(selection.entrypointRelativePath)
   ) {
     throw new TypeError("Invalid update generation selection");
   }
+}
+
+export function pendingUpdateGenerationBrokerMutationKind(
+  transition: UpdateGenerationProjection["latestTransition"],
+): "materialize-generation" | "switch-selector" | "cleanup-generations" | null {
+  if (transition.kind === "generation-materialization-intent") {
+    return "materialize-generation";
+  }
+  if (
+    transition.kind === "baseline-selection-intent" ||
+    transition.kind === "candidate-selection-intent" ||
+    transition.kind === "rollback-intent"
+  ) {
+    return "switch-selector";
+  }
+  return transition.kind === "cleanup-intent" ? "cleanup-generations" : null;
 }
 
 function assertReceiptFollowsLatest(
@@ -82,16 +99,25 @@ function assertReceiptFollowsLatest(
     return;
   }
   if (projection.latest.kind === "failure") {
-    if (
-      projection.latestTransition.kind === "candidate-selected" &&
-      receipt.kind === "rollback-intent"
-    ) {
+    const pending = projection.latestTransition;
+    if (pending.kind === "candidate-selected" && receipt.kind === "rollback-intent") {
       return;
     }
-    if (receipt.kind !== "failure-adjudicated") {
+    if (receipt.kind === "failure-adjudicated") {
+      return;
+    }
+    const pendingMutationKind = pendingUpdateGenerationBrokerMutationKind(pending);
+    const reconcilesPendingBrokerMutation =
+      projection.latest.operation === pendingMutationKind &&
+      ((pending.kind === "generation-materialization-intent" &&
+        receipt.kind === "generation-materialized") ||
+        (pending.kind === "baseline-selection-intent" && receipt.kind === "baseline-selected") ||
+        (pending.kind === "candidate-selection-intent" && receipt.kind === "candidate-selected") ||
+        (pending.kind === "rollback-intent" && receipt.kind === "rolled-back") ||
+        (pending.kind === "cleanup-intent" && receipt.kind === "cleanup-completed"));
+    if (!reconcilesPendingBrokerMutation) {
       throw new Error("Unresolved update generation failure requires durable adjudication");
     }
-    return;
   }
   if (receipt.kind === "failure-adjudicated") {
     throw new Error("Failure adjudication requires an unresolved failure receipt");
