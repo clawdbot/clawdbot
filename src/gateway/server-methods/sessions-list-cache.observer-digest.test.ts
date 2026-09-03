@@ -21,11 +21,15 @@ function observerState(
   sessionId: string,
   previousDigest: NonNullable<SessionObserverState["previousDigest"]>,
 ): SessionObserverState {
+  const runId = previousDigest.runId;
+  if (!runId) {
+    throw new Error("previous digest run id missing");
+  }
   return {
     ...createSessionActivityNoteState(),
     sessionKey,
     sessionId,
-    runId: previousDigest.runId,
+    runId,
     agentId: "main",
     startedAt: 0,
     lastActivityAt: 0,
