@@ -53,7 +53,7 @@ it.each(["disconnect", "close", "manifest"] as const)(
       expect(publications()).toEqual([]);
       connection.connect(gateway);
       expect(publications()).toEqual([
-        ["node.event", { event: NODE_HOST_STATS_EVENT, payload: stats }],
+        ["node.event", { event: NODE_HOST_STATS_EVENT, payloadJSON: JSON.stringify(stats) }],
       ]);
       await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS - 1);
       expect(publications()).toHaveLength(1);

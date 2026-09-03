@@ -109,50 +109,18 @@ describe("NodeHostWorkerBridgeClient", () => {
     client.close();
   });
 
-  it("forwards invoke results without creating gateway request waits", async () => {
+  it("forwards invoke results and events without creating gateway request waits", async () => {
     const messages: unknown[] = [];
     const client = new NodeHostWorkerBridgeClient((message) => messages.push(message));
 
     client.setConnection(1, true);
     await client.request("node.invoke.result", { id: "invoke-1", ok: true });
+    await client.request("node.event", { event: "exec.started", payloadJSON: "{}" });
 
     expect(messages).toEqual([
       { type: "invoke-result", generation: 1, result: { id: "invoke-1", ok: true } },
+      { type: "node-event", generation: 1, event: { event: "exec.started", payloadJSON: "{}" } },
     ]);
-  });
-
-  it.each([
-    {
-      event: "node.host.stats",
-      payload: { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 },
-    },
-    { event: "exec.started", payloadJSON: "{}" },
-  ])("preserves node.event parameters and Gateway acknowledgement: $event", async (params) => {
-    const write = vi.fn();
-    const client = new NodeHostWorkerBridgeClient(write);
-    client.setConnection(1, true);
-    const response = client.request("node.event", params);
-    try {
-      expect(write).toHaveBeenCalledWith({
-        type: "gateway-request",
-        generation: 1,
-        id: "gateway-1",
-        method: "node.event",
-        params,
-        timeoutMs: 15_000,
-      });
-      client.handleResponse({
-        type: "gateway-response",
-        generation: 1,
-        id: "gateway-1",
-        ok: true,
-        result: { ok: true, handled: false },
-      });
-      await expect(response).resolves.toEqual({ ok: true, handled: false });
-    } finally {
-      client.close();
-      await response.catch(() => {});
-    }
   });
 
   it("tunnels invoke progress and waits for gateway acceptance", async () => {

@@ -16,6 +16,7 @@ import { redactSensitiveText } from "../logging/redact.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 import type { NodeHostClient } from "./client.js";
 import { sampleNodeHostStats } from "./host-stats.js";
+import { buildNodeEventParams } from "./node-event-params.js";
 import type { prepareNodeHostRuntime, NodeHostInventory } from "./runtime.js";
 
 type PreparedRuntime = Awaited<ReturnType<typeof prepareNodeHostRuntime>>;
@@ -145,8 +146,9 @@ export function startNodeHostConnection({
         return;
       }
       try {
-        const payload = sampleNodeHostStats();
-        await connectionClient.request("node.event", { event: NODE_HOST_STATS_EVENT, payload });
+        // payloadJSON keeps the native bridge's fire-and-forget node-event frame usable.
+        const params = buildNodeEventParams(NODE_HOST_STATS_EVENT, sampleNodeHostStats());
+        await connectionClient.request("node.event", params);
       } catch (error) {
         if (generation === gatewayConnectionGeneration && !failureLogged) {
           failureLogged = true;

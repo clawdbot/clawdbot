@@ -174,7 +174,7 @@ it("publishes hosting through the app route and retires it on disconnect", async
 
 it("publishes host stats through the native bridge only while connected", async () => {
   const { input, messages, stop } = startWorkerFixture(false);
-  const publications = () => messages.filter((message) => message.method === "node.event");
+  const publications = () => messages.filter((message) => message.type === "node-event");
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
     expect(publications()).toEqual([]);
@@ -189,13 +189,12 @@ it("publishes host stats through the native bridge only while connected", async 
     );
     expect(publications()).toHaveLength(1);
     expect(publications()[0]).toMatchObject({
-      type: "gateway-request",
+      type: "node-event",
       generation: 1,
-      method: "node.event",
-      params: { event: NODE_HOST_STATS_EVENT },
+      event: { event: NODE_HOST_STATS_EVENT },
     });
-    const params = publications()[0]?.params as { payload: unknown };
-    expect(validateNodeHostStatsPayload(params.payload)).toBe(true);
+    const params = publications()[0]?.event as { payloadJSON: string };
+    expect(validateNodeHostStatsPayload(JSON.parse(params.payloadJSON))).toBe(true);
     await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
     expect(publications()).toHaveLength(2);
     input.emit(
