@@ -290,6 +290,9 @@ describe("createOpenClawCodingTools availability guidance", () => {
     expect(tool?.description).toContain("configured agent (see agents_list);");
     expect(tool?.description).toContain("`groupId` groups a batch; await with agents_wait.");
     expect(tool?.description).toContain(
+      "(`all` default: all sessions, cross-agent per tools.agentToAgent)",
+    );
+    expect(tool?.description).toContain(
       "No spawn for quick lookup/single read. Check spawns via `subagents`/`sessions_history`. After spawn,",
     );
   });

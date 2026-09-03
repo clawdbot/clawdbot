@@ -93,6 +93,7 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   // Request policy reads the published config; listeners and startup-owned
   // resources retain the broad Gateway restart rule below.
   { prefix: "gateway.http.endpoints", kind: "hot" },
+  { prefix: "gateway.http.securityHeaders.strictTransportSecurity", kind: "hot" },
   { prefix: "gateway.tools", kind: "hot" },
   { prefix: "gateway.cliAgents", kind: "hot" },
   { prefix: "gateway.controlUi.environment", kind: "hot" },
@@ -103,14 +104,10 @@ const BASE_RELOAD_RULES: ReloadRule[] = [
   { prefix: "gateway.controlUi.allowExternalEmbedUrls", kind: "hot" },
   { prefix: "gateway.controlUi.automaticallyFetchFavicons", kind: "hot" },
   { prefix: "gateway.nodes.browser", kind: "hot" },
-  // Pairing approvals retain policy across async probes and store locks, so
-  // pairing settings must keep restart ownership until the approval owner fences them.
+  { prefix: "gateway.nodes.pairing", kind: "hot" },
   { prefix: "gateway.push.apns.relay", kind: "hot" },
-  // gateway.terminal.* deliberately has no rule here: it falls through to the
-  // `gateway` restart rule below. The terminal drives the Control UI CSP (WASM
-  // permissions) and the bootstrap availability flag, both fixed at document
-  // load, plus live PTYs — none can hot-update a connected client, so a change
-  // must restart the gateway (clients reconnect with a fresh page and CSP).
+  // New PTYs use the committed shell; availability/CSP and detach timers stay startup-owned.
+  { prefix: "gateway.terminal.shell", kind: "hot" },
   { prefix: "hooks.gmail", kind: "hot", actions: ["restart-gmail-watcher"] },
   { prefix: "hooks", kind: "hot", actions: ["reload-hooks"] },
   {

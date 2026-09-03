@@ -24,6 +24,7 @@ import type {
 import type { AgentHarnessRuntimeArtifactBinding } from "../../harness/runtime-artifact.types.js";
 import type { McpConnectAction } from "../../mcp-connect-action.js";
 import type { McpAppChannelView } from "../../mcp-ui-resource.js";
+import type { ModelRef } from "../../model-selection.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
 import type { AgentRunTimeoutPhase } from "../../run-timeout-attribution.js";
 import type { AgentRuntimeModelAttempt, AgentRuntimePlan } from "../../runtime-plan/types.js";
@@ -158,8 +159,15 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   delegationCapability?: DelegationCapability;
   /** Concrete degraded-runtime reason for this attempt, when known. */
   degradedReason?: string | null;
-  /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
+  /** Final prepared harness for this attempt; not evidence of native session/model ownership. */
   agentHarnessId?: string;
+  /** Non-authorizing expectation; the harness must verify its current private binding. */
+  expectedSessionRuntimeOwnership?: {
+    model: "native";
+    auth: "native" | "host";
+    /** Host-prepared credentials must still target this exact native tuple at inference. */
+    modelRef?: ModelRef;
+  };
   /** Capture a local harness implementation only for setup/verified continuations. */
   captureRuntimeArtifact?: boolean;
   /** Exact implementation that must own the attempt before it creates a native thread. */
@@ -250,6 +258,8 @@ export type EmbeddedRunAttemptResult = {
   agentHarnessId?: string;
   /** Current physical model attempt; replaced from the prepared runtime plan at the boundary. */
   modelAttempt?: AgentRuntimeModelAttempt;
+  /** Native owner's selected tuple, distinct from response/billing model attribution. */
+  runtimeModelSelection?: ModelRef;
   /** Exact credential material fingerprint reported by a harness-owned auth boundary. */
   authBindingFingerprint?: string;
   /** Exact local implementation used by a plugin-owned harness attempt. */

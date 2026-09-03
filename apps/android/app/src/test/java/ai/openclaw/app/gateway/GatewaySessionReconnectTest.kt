@@ -4,6 +4,7 @@ import ai.openclaw.app.NotificationNodeEventOutbox
 import ai.openclaw.app.PendingNotificationNodeEvent
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -12,6 +13,7 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -458,6 +460,81 @@ class GatewaySessionReconnectTest {
         assertNull(withTimeoutOrNull(200) { unexpectedRequest.await() })
       } finally {
         shutdownReconnectHarness(harness, server)
+      }
+    }
+
+  @Test
+  fun retiringConnectionRejectsQueuedRequestsBeforeSocketCancellation() =
+    runBlocking {
+      for (fireAndForget in listOf(false, true)) {
+        val connected = CompletableDeferred<Unit>()
+        val cancelStarted = CompletableDeferred<Unit>()
+        val allowCancel = CountDownLatch(1)
+        val requestSeen = CompletableDeferred<Unit>()
+        val errors = ConcurrentLinkedQueue<GatewaySession.ErrorShape>()
+        val server =
+          startGatewayServer(json = Json) { webSocket, id, method ->
+            if (method == "connect") {
+              webSocket.send(connectResponseFrame(id))
+            } else {
+              requestSeen.complete(Unit)
+            }
+          }
+        val harness = createReconnectHarness(onConnected = { connected.complete(Unit) })
+        var replacement: Job? = null
+        var pending: Job? = null
+        var writeLock: Mutex? = null
+        val lockOwner = Any()
+        try {
+          connectNodeSession(harness.session, server.port)
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { connected.await() }
+          val connection = readField<Any>(harness.session, "currentConnection")
+          val socketField = connection.javaClass.getDeclaredField("socket").apply { isAccessible = true }
+          val socket = socketField.get(connection) as WebSocket
+          socketField.set(
+            connection,
+            object : WebSocket by socket {
+              override fun cancel() {
+                // Hold only the interval after logical retirement and before physical cancellation.
+                // All sends still reach the real OkHttp socket and MockWebServer peer.
+                cancelStarted.complete(Unit)
+                check(allowCancel.await(LIFECYCLE_TEST_TIMEOUT_MS, TimeUnit.MILLISECONDS))
+                socket.cancel()
+              }
+            },
+          )
+          val heldWriteLock = readField<Mutex>(harness.session, "writeLock").also { writeLock = it }
+          heldWriteLock.lock(lockOwner)
+          val queued =
+            async(start = CoroutineStart.UNDISPATCHED) {
+              runCatching {
+                if (fireAndForget) {
+                  harness.session.sendRequestFrame("transport-fence-test", null, onError = errors::add)
+                } else {
+                  harness.session.request("transport-fence-test", null)
+                }
+              }
+            }.also { pending = it }
+          assertTrue(queued.isActive)
+          replacement = launch(Dispatchers.IO) { connectNodeSession(harness.session, server.port) }
+          withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { cancelStarted.await() }
+          assertFalse(harness.session.isReady())
+          heldWriteLock.unlock(lockOwner)
+          val result = withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { queued.await() }
+          if (result.isSuccess) withTimeout(LIFECYCLE_TEST_TIMEOUT_MS) { requestSeen.await() }
+          assertTrue(
+            "Retired request reached peer=${requestSeen.isCompleted}; fireAndForget=$fireAndForget",
+            result.exceptionOrNull() is GatewayRequestNotEnqueued,
+          )
+          assertFalse(requestSeen.isCompleted)
+        } finally {
+          allowCancel.countDown()
+          writeLock?.takeIf { it.holdsLock(lockOwner) }?.unlock(lockOwner)
+          pending?.cancelAndJoin()
+          replacement?.join()
+          shutdownReconnectHarness(harness, server)
+        }
+        assertTrue("Rejected enqueue must not create an asynchronous reply watcher", errors.isEmpty())
       }
     }
 

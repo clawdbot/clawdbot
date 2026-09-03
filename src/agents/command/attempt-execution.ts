@@ -37,10 +37,12 @@ import {
 } from "../../gateway/server-methods/agent-timestamp.js";
 import { emitAgentAuditEvent, emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import type { StopReason } from "../../llm/types.js";
 import { redactSensitiveText } from "../../logging/redact.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
+import { resolveSessionPinnedHarnessId } from "../../sessions/agent-harness-session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import {
   buildPersistedUserTurnMessage,
@@ -57,7 +59,11 @@ import {
 import { resolveUserPath } from "../../utils.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { PreparedAgentRunAdmission } from "../admitted-run-context.js";
-import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../agent-run-terminal-outcome.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+  type AgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import type { AgentRunTerminalReplySnapshot } from "../agent-run-terminal-reply.js";
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStore } from "../auth-profiles/store.js";
@@ -234,6 +240,7 @@ type PersistTextTurnTranscriptParams = {
     api: string;
     provider: string;
     model: string;
+    stopReason: StopReason;
     usage?: TranscriptUsage;
   };
 };
@@ -396,7 +403,7 @@ async function persistTextTurnTranscript(
         provider: params.assistant.provider,
         model: params.assistant.model,
         usage: resolveTranscriptUsage(params.assistant.usage),
-        stopReason: "stop",
+        stopReason: params.assistant.stopReason,
         timestamp: Date.now(),
       },
       ...(prepareAssistantTranscriptMessage
@@ -484,6 +491,7 @@ export async function persistAcpTurnTranscript(params: {
   assistantIdempotencyKey?: string;
   expectedSessionId?: string;
   finalText: string;
+  terminalOutcome: AgentRunTerminalOutcome;
   sessionId: string;
   sessionKey: string;
   sessionFile?: string;
@@ -495,6 +503,7 @@ export async function persistAcpTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
 }): Promise<PersistTextTurnTranscriptResult> {
+  const outcome = classifyAgentRunTerminalOutcome(params.terminalOutcome);
   return await persistTextTurnTranscript({
     ...params,
     ...(params.userInput ? { userMessage: buildPersistedUserTurnMessage(params.userInput) } : {}),
@@ -502,6 +511,7 @@ export async function persistAcpTurnTranscript(params: {
       api: "openai-responses",
       provider: "openclaw",
       model: "acp-runtime",
+      stopReason: outcome === "success" ? "stop" : outcome === "failure" ? "error" : "aborted",
     },
   });
 }
@@ -540,6 +550,7 @@ export async function persistCliTurnTranscript(params: {
       api: "cli",
       provider,
       model,
+      stopReason: "stop",
       // The marker is terminal for fallback scans: without it, readers could
       // skip this turn and revive an older cumulative usage record as fresh.
       usage: resolveCliTranscriptUsage(result.meta.agentMeta?.lastCallUsage),
@@ -746,8 +757,11 @@ export function runAgentAttempt(params: {
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
   const requestedAgentHarnessId = isRawModelRun ? "openclaw" : undefined;
   const sessionRuntimeOverride = isRawModelRun ? undefined : params.agentHarnessRuntimeOverride;
+  const pinnedHarnessId = isRawModelRun
+    ? undefined
+    : resolveSessionPinnedHarnessId(params.sessionEntry);
   const locksSessionRuntimeOverride =
-    sessionRuntimeOverride !== undefined && params.sessionEntry?.modelSelectionLocked === true;
+    pinnedHarnessId !== undefined && sessionRuntimeOverride === pinnedHarnessId;
   const sessionCliRuntime =
     sessionRuntimeOverride &&
     !locksSessionRuntimeOverride &&
@@ -1322,7 +1336,7 @@ export function runAgentAttempt(params: {
     sessionRoot: params.sessionEntry?.sessionRoot,
     config: params.cfg,
     ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
-    agentHarnessId: embeddedAgentHarnessOverride,
+    agentHarnessId: pinnedHarnessId,
     modelSelectionLocked: !isRawModelRun && params.sessionEntry?.modelSelectionLocked === true,
     agentHarnessRuntimeOverride: embeddedAgentHarnessOverride,
     agentHarnessRuntimePreparationHint:
@@ -1566,7 +1580,7 @@ function resolveAcpToolTerminalReason(
   return "failed";
 }
 
-function resolveAcpLifecycleEndFields(
+export function resolveAcpLifecycleEndFields(
   signal: AbortSignal | undefined,
   stopReason?: string,
   resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"],
@@ -1847,9 +1861,7 @@ export function emitAcpLifecycleEnd(params: {
   sessionKey?: string;
   agentId?: string;
   lifecycleGeneration?: string;
-  abortSignal?: AbortSignal;
-  stopReason?: string;
-  resultStatus?: Extract<AcpRuntimeEvent, { type: "done" }>["status"];
+  endFields: ReturnType<typeof resolveAcpLifecycleEndFields>;
   terminalReply?: AgentRunTerminalReplySnapshot;
   auditOnly?: boolean;
   completionSource?: "reply-dispatch";
@@ -1857,17 +1869,16 @@ export function emitAcpLifecycleEnd(params: {
   finalizeAcpToolsForRun(
     params.toolTracker,
     params.runId,
-    resolveAcpToolTerminalReason(
-      params.abortSignal,
-      params.stopReason,
-      undefined,
-      params.resultStatus,
-    ),
+    params.endFields.stopReason === "timeout"
+      ? "timed_out"
+      : params.endFields.aborted
+        ? "cancelled"
+        : "failed",
   );
   return emitAcpTerminalLifecycle(params, {
     phase: "end",
     endedAt: Date.now(),
-    ...resolveAcpLifecycleEndFields(params.abortSignal, params.stopReason, params.resultStatus),
+    ...params.endFields,
     ...(params.terminalReply ? { terminalReply: params.terminalReply } : {}),
   });
 }

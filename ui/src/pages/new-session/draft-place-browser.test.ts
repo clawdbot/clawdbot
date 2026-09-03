@@ -63,6 +63,7 @@ function createBrowser(
       cloudProfileId: "",
       pendingPlacement: { sessionKey: "", gatewayUrl: "", recoveryScope: "" },
       agentsHydrated: false,
+      runtimeId: "",
     }),
     {
       requestUpdate: vi.fn(),

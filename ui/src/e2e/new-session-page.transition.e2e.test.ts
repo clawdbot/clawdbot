@@ -695,7 +695,8 @@ suite.define(() => {
             await acceptedMarkdown
               .getByRole("button", { name: "Expand table", exact: true })
               .click();
-            const expandedTable = page.getByRole("dialog", { name: "Expanded table", exact: true });
+            const expandedTable = page.locator("openclaw-modal-dialog.markdown-table-modal");
+            await page.getByRole("dialog", { name: "Expanded table", exact: true }).waitFor();
             await expandedTable.getByRole("cell", { name: "Ready", exact: true }).waitFor();
             await expandedTable
               .getByRole("button", { name: "Close expanded table", exact: true })

@@ -254,26 +254,31 @@ describe("broadcast serialization failures", () => {
 });
 
 describe("presence recipient projection", () => {
-  it("delivers credential-free metadata invalidations only to readable operators", () => {
-    const readers = [makeClient("reader"), makeClient("admin")];
-    readers[1]!.client.connect.scopes = ["operator.admin"];
-    const denied = [makeClient("no-scope"), makeClient("node")];
-    denied[0]!.client.connect.scopes = [];
-    denied[1]!.client.connect.role = "node";
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new Set([...readers, ...denied].map(({ client }) => client)),
-    });
-    broadcast("chat.metadata.changed", {});
-    for (const peer of readers) {
-      expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
-        event: "chat.metadata.changed",
-        payload: {},
+  it.each(["chat.metadata.changed", "node.presence", "node.hostStats"])(
+    "delivers %s only to readable operators",
+    (event) => {
+      const readers = [makeClient("reader"), makeClient("writer"), makeClient("admin")];
+      readers[1]!.client.connect.scopes = ["operator.write"];
+      readers[2]!.client.connect.scopes = ["operator.admin"];
+      const denied = [makeClient("no-scope"), makeClient("node"), makeClient("pairing")];
+      denied[0]!.client.connect.scopes = [];
+      denied[1]!.client.connect.role = "node";
+      denied[2]!.client.connect.scopes = ["operator.pairing"];
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new Set([...readers, ...denied].map(({ client }) => client)),
       });
-    }
-    for (const peer of denied) {
-      expect(peer.socket.send).not.toHaveBeenCalled();
-    }
-  });
+      broadcast(event, {});
+      for (const peer of readers) {
+        expect(JSON.parse(peer.socket.send.mock.lastCall![0])).toMatchObject({
+          event,
+          payload: {},
+        });
+      }
+      for (const peer of denied) {
+        expect(peer.socket.send).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("preserves scoped sentinels, recipient ordering, and current visibility without changing the source", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {

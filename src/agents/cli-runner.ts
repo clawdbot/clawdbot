@@ -543,6 +543,7 @@ export async function runPreparedCliAgent(
           modelId: context.modelId,
           usage: output.usage,
           stopReason: resolveCliAssistantStopReason(output),
+          yielded: output.yielded,
         });
         await finalizeCliContextEngineTurn({
           context,

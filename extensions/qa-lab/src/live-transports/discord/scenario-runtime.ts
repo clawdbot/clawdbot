@@ -213,7 +213,28 @@ export async function runDiscordScenario(
       expectedTextIncludes: run.expectedTextIncludes,
       message: matched.message,
     });
-    return { details: "reply matched" };
+    const requestStartedAt = sent.timestamp;
+    const responseObservedAt = matched.message.timestamp;
+    const rttMs = discordQaScenarioSupport.testing.computeDiscordRttMs(
+      requestStartedAt,
+      responseObservedAt,
+    );
+    return {
+      details: "reply matched",
+      ...(requestStartedAt === undefined ? {} : { requestStartedAt }),
+      ...(responseObservedAt === undefined ? {} : { responseObservedAt }),
+      ...(rttMs === undefined || requestStartedAt === undefined || responseObservedAt === undefined
+        ? {}
+        : {
+            rttMs,
+            rttMeasurement: {
+              finalMatchedReplyRttMs: rttMs,
+              requestStartedAt,
+              responseObservedAt,
+              source: "request-to-observed-message" as const,
+            },
+          }),
+    };
   } catch (error) {
     if (
       !run.expectReply &&

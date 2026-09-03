@@ -1675,6 +1675,41 @@ describe("run-node script", () => {
     });
   });
 
+  it("ignores newer tracked config mtimes when Git proves the checkout is clean", async ({
+    tmp,
+  }) => {
+    await setupStampedProject(tmp, {
+      files: { [ROOT_TSDOWN]: "export default {};\n" },
+      oldPaths: [ROOT_SRC],
+      newPaths: [ROOT_TSCONFIG, ROOT_PACKAGE, ROOT_TSDOWN],
+    });
+
+    const requirement = resolveBuildRequirement(createBuildRequirementDeps(tmp));
+
+    expect(requirement).toEqual({
+      shouldBuild: false,
+      reason: "clean",
+    });
+  });
+
+  it("uses newer config mtimes when Git state is unavailable", async ({ tmp }) => {
+    await setupStampedProject(tmp, {
+      oldPaths: [ROOT_SRC],
+      newPaths: [ROOT_TSCONFIG, ROOT_PACKAGE],
+    });
+    const { spawnSync } = createSpawnRecorder();
+
+    const requirement = resolveBuildRequirement({
+      ...createBuildRequirementDeps(tmp),
+      spawnSync,
+    });
+
+    expect(requirement).toEqual({
+      shouldBuild: true,
+      reason: "config_newer",
+    });
+  });
+
   it("reports clean in sparse worktrees without bundled plugin sources", async ({ tmp }) => {
     await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
     await fs.rm(resolvePath(tmp, "extensions"), { recursive: true, force: true });
@@ -2248,14 +2283,16 @@ describe("run-node script", () => {
     expect(spawnCalls).toEqual([statusCommandSpawn()]);
   });
 
-  it("rebuilds when tsdown config is newer than the build stamp", async ({ tmp }) => {
+  it("rebuilds when tsdown config is dirty", async ({ tmp }) => {
     await setupStampedProject(tmp, {
       files: { [ROOT_TSDOWN]: "export default {};\n" },
       oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE],
       newPaths: [ROOT_TSDOWN],
     });
 
-    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder();
+    const { spawnCalls, spawn, spawnSync } = createCurrentGitSpawnRecorder({
+      gitStatus: ` M ${ROOT_TSDOWN}\n`,
+    });
     const exitCode = await runStatusCommand({
       tmp,
       spawn,

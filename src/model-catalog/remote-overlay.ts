@@ -80,10 +80,6 @@ export function getRemoteModelCatalogPricing(
   return getActiveRemoteModelCatalog(config)?.pricing;
 }
 
-function resetRemoteModelCatalogOverlayForTest(): void {
-  cachedOverlay = undefined;
-}
-
 function setRemoteModelCatalogOverlaySourcesForTest(sources?: {
   bundledGeneratedAt?: typeof bundledCatalogGeneratedAt;
   readStoredCatalog?: typeof readRemoteModelCatalog;
@@ -97,7 +93,6 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
   (globalThis as Record<PropertyKey, unknown>)[
     Symbol.for("openclaw.remoteModelCatalogOverlayTestApi")
   ] = {
-    resetRemoteModelCatalogOverlayForTest,
     setRemoteModelCatalogOverlaySourcesForTest,
   };
 }

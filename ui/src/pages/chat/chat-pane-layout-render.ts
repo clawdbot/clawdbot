@@ -184,6 +184,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       connected: state.connected,
       pendingQuestion: companionThread.pendingQuestion,
       onClearCompanion: () => void this.clearSessionCompanion(),
+      onRefreshTasks: backgroundTasks.onRefresh,
+      tasksLoading: backgroundTasks.loading,
       discussion,
       discussionAvailable,
       discussionOpenUrl: discussion?.openUrl ?? null,

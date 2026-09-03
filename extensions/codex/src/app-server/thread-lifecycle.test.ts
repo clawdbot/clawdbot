@@ -472,6 +472,7 @@ describe("Codex ring-zero thread config", () => {
       expect(config?.["tools.experimental_request_user_input.enabled"]).toBe(false);
       expect(config?.["features.multi_agent"]).toBe(false);
       expect(config?.["features.multi_agent_v2"]).toBe(false);
+      expect(config?.["features.context_management"]).toBe(false);
       expect(config?.["features.goals"]).toBe(false);
       expect(config?.["orchestrator.mcp.enabled"]).toBe(false);
       expect(config?.["orchestrator.skills.enabled"]).toBe(false);
@@ -659,6 +660,7 @@ describe("Codex delegation capability", () => {
     const appServer = createAppServerOptions() as never;
     const config = {
       "features.apps": true,
+      "features.context_management": { experimental_mode: true },
       "features.current_time_reminder": true,
       "features.deferred_executor": true,
       "features.hooks": true,
@@ -703,6 +705,7 @@ describe("Codex delegation capability", () => {
       for (const disabledFeature of [
         "agents.enabled",
         "features.apps",
+        "features.context_management",
         "features.current_time_reminder",
         "features.deferred_executor",
         "features.hooks",
@@ -750,6 +753,7 @@ describe("Codex delegation capability", () => {
     ];
     for (const normal of normalRequests) {
       expect(normal.config?.["features.apps"]).toBe(true);
+      expect(normal.config?.["features.context_management"]).toEqual({ experimental_mode: true });
       expect(normal.config?.["features.image_generation"]).toBe(true);
       expect(normal.config?.["features.multi_agent"]).toBe(true);
       expect(normal.config?.["features.multi_agent_v2"]).toBe(true);
@@ -3267,7 +3271,7 @@ describe("Codex thread-effective app attestation", () => {
       expect(request.mock.invocationCallOrder[1]).toBeLessThan(
         mutate.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
-      await expect(
+      expect(
         testCodexAppServerBindingStore.read(
           sessionBindingIdentity({
             sessionId: params.sessionId,
@@ -3276,7 +3280,7 @@ describe("Codex thread-effective app attestation", () => {
             config: params.config,
           }),
         ),
-      ).resolves.toMatchObject({
+      ).toMatchObject({
         threadId: "thread-linear",
         pluginAppsFingerprint: fingerprint,
       });
@@ -3338,7 +3342,7 @@ describe("Codex thread-effective app attestation", () => {
     expect(request.mock.calls[2]?.[1]).toEqual({ threadId: "thread-linear-blocked" });
     expect(request.mock.calls[2]?.[2]).toEqual({ timeoutMs: 5_000 });
     expect(abandonClient).not.toHaveBeenCalled();
-    await expect(
+    expect(
       testCodexAppServerBindingStore.read(
         sessionBindingIdentity({
           sessionId: params.sessionId,
@@ -3347,7 +3351,7 @@ describe("Codex thread-effective app attestation", () => {
           config: params.config,
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).toBeUndefined();
   });
 
   it.each([
@@ -3423,7 +3427,7 @@ describe("Codex thread-effective app attestation", () => {
         "thread/delete",
       ]);
       expect(abandonClient).not.toHaveBeenCalled();
-      await expect(
+      expect(
         testCodexAppServerBindingStore.read(
           sessionBindingIdentity({
             sessionId: params.sessionId,
@@ -3432,7 +3436,7 @@ describe("Codex thread-effective app attestation", () => {
             config: params.config,
           }),
         ),
-      ).resolves.toBeUndefined();
+      ).toBeUndefined();
     },
   );
 
@@ -3606,6 +3610,55 @@ describe("Codex app-server adopted thread lifecycle", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["native-tools", "delegation"] as const)(
+    "preserves expected native ownership instead of starting a fresh %s-restricted thread",
+    async (restriction) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      const { identity, threadId } = await seedAdoptedThreadBinding(params, workspaceDir);
+      const nativeModel = threadStartResult(threadId);
+      await testCodexAppServerBindingStore.mutate(identity, {
+        kind: "patch",
+        threadId,
+        patch: { model: nativeModel.model, modelProvider: nativeModel.modelProvider },
+      });
+      params.expectedSessionRuntimeOwnership = {
+        model: "native",
+        auth: "host",
+        modelRef: { model: nativeModel.model, provider: nativeModel.modelProvider },
+      };
+      if (restriction === "delegation") {
+        params.delegationCapability = "report_only";
+      }
+      const before = testCodexAppServerBindingStore.read(identity);
+      const fixture = await createLeasedCodexLifecycleHarness({
+        agentDir: path.join(tempDir, "agent"),
+        persistedThreads: [threadId],
+        respond: (method) => {
+          throw new Error(`unexpected method: ${method}`);
+        },
+      });
+      try {
+        await expect(
+          startOrResumeThread({
+            client: fixture.client,
+            params,
+            cwd: workspaceDir,
+            dynamicTools: [],
+            appServer: createThreadLifecycleAppServerOptions(),
+            ...(restriction === "native-tools" ? { nativeCodeModeEnabled: false } : {}),
+          }),
+        ).rejects.toMatchObject({ name: "AgentHarnessPreflightError" });
+        expect(fixture.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
+          false,
+        );
+        expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
+      } finally {
+        fixture.client.close();
+      }
+    },
+  );
+
   it("keeps OpenClaw from overriding App Server model selection across resumes", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -3668,7 +3721,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       preserveNativeModel: true,
     });
 
-    const persisted = await testCodexAppServerBindingStore.read(identity);
+    const persisted = testCodexAppServerBindingStore.read(identity);
     expect(persisted).toMatchObject({
       model: "native-model-2",
       modelProvider: "ollama",
@@ -3712,7 +3765,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
       const release = vi.fn();
       await retainCodexAppServerLiveThread(harness.client, threadId, release);
       const reserveResumeThread = vi.fn(() => ({ release: vi.fn() }));
-      const before = await testCodexAppServerBindingStore.read(identity);
+      const before = testCodexAppServerBindingStore.read(identity);
       try {
         await expect(
           startOrResumeThread({
@@ -3727,7 +3780,7 @@ describe("Codex app-server adopted thread lifecycle", () => {
 
         expect(harness.request.mock.calls.map(([method]) => method)).toEqual(["thread/read"]);
         expect(release).not.toHaveBeenCalled();
-        expect(await testCodexAppServerBindingStore.read(identity)).toEqual(before);
+        expect(testCodexAppServerBindingStore.read(identity)).toEqual(before);
         expect(reserveResumeThread).not.toHaveBeenCalled();
       } finally {
         harness.client.close();
@@ -3783,7 +3836,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       const abandonClient = vi.fn(async () => {
         harness.client.close();
       });
-      const initial = await testCodexAppServerBindingStore.read(identity);
+      const initial = testCodexAppServerBindingStore.read(identity);
       const write = harness.process.stdin.write.bind(harness.process.stdin);
       vi.spyOn(harness.process.stdin, "write").mockImplementation((...args) => {
         const written = write(...args);
@@ -3873,7 +3926,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
               },
             });
           }
-          expect(await testCodexAppServerBindingStore.read(identity)).toEqual(initial);
+          expect(testCodexAppServerBindingStore.read(identity)).toEqual(initial);
           return;
         }
         expect(settled).toMatchObject({ value: { threadId: finalThreadId } });
@@ -3887,7 +3940,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         expect(requests[2].params).toEqual({ threadId: probeThreadId });
         expect(requests[3].params.ephemeral === true).toBe(incognito);
         expect([...subscriptions]).toEqual([sourceThreadId, finalThreadId]);
-        expect(await testCodexAppServerBindingStore.read(identity)).toMatchObject({
+        expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
           threadId: finalThreadId,
           model: "gpt-5.6-luna",
           modelProvider: "openai",
@@ -3913,6 +3966,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       `rollout-${finalThreadId}.jsonl`,
     );
     attempt.modelId = "outer-global-default";
+    attempt.expectedSessionRuntimeOwnership = { model: "native", auth: "native" };
     const identity = await seedPendingSupervisionBinding({
       attempt,
       cwd: workspaceDir,
@@ -4073,7 +4127,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     expect(materialized.pendingSupervisionBranch).toBeUndefined();
     expect(materialized.historyCoveredThrough).not.toBe(new Date(0).toISOString());
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: finalThreadId,
       model: "native-effective",
       modelProvider: "native-provider",
@@ -4118,7 +4172,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       conversationSourceTransferComplete: true,
       lifecycle: { action: "resumed" },
     });
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
         commonParams.appServer,
         attempt.agentDir,
@@ -4272,7 +4326,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       mcp_servers: { "request-only": { command: "request-mcp" } },
     });
     expect(resumeParams.config).not.toHaveProperty("mcp_servers.inherited");
-    const restoredBinding = await testCodexAppServerBindingStore.read(identity);
+    const restoredBinding = testCodexAppServerBindingStore.read(identity);
     expect(restoredBinding?.pendingSupervisionBranch).toBeUndefined();
     expect(restoredBinding).not.toHaveProperty("restrictedToolSurface");
   });
@@ -4357,7 +4411,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         (failedThread === "probe" ? [] : [finalThreadId]).map((threadId) => ({ threadId })),
       );
       expect(abandonClient).not.toHaveBeenCalled();
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: sourceThreadId,
         pendingSupervisionBranch: { sourceThreadId },
       });
@@ -4457,12 +4511,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
         "app/installed",
         "thread/inject_items",
       ]);
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         threadId: finalThreadId,
         pluginAppsFingerprint: fingerprint,
       });
       expect(
-        (await testCodexAppServerBindingStore.read(identity))?.pendingSupervisionBranch,
+        testCodexAppServerBindingStore.read(identity)?.pendingSupervisionBranch,
       ).toBeUndefined();
     },
   );
@@ -4570,12 +4624,12 @@ describe("Codex app-server supervised branch lifecycle", () => {
       expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
       expect(request.mock.calls[5]?.[1]).toEqual({ threadId: finalThreadId });
       expect(abandonClient).not.toHaveBeenCalled();
-      await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+      expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
         pendingSupervisionBranch: { sourceThreadId },
       });
       expect(
-        (await testCodexAppServerBindingStore.read(identity))?.pendingSupervisionBranch
-          ?.cleanupThreadIds ?? [],
+        testCodexAppServerBindingStore.read(identity)?.pendingSupervisionBranch?.cleanupThreadIds ??
+          [],
       ).toEqual([]);
     },
   );
@@ -4636,7 +4690,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       "thread/unsubscribe",
     ]);
     expect(abandonClient).toHaveBeenCalledOnce();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       pendingSupervisionBranch: {
         sourceThreadId,
         cleanupThreadIds: [finalThreadId],
@@ -4757,7 +4811,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       },
       pending: { sourceThreadId, connectionFingerprint, lastTurnId },
     });
-    const persisted = await testCodexAppServerBindingStore.read(identity);
+    const persisted = testCodexAppServerBindingStore.read(identity);
     expect(persisted).toMatchObject({ threadId: finalThreadId });
     expect(persisted?.pendingSupervisionBranch).toBeUndefined();
   });
@@ -4809,7 +4863,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     ]);
     expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: {
         sourceThreadId,
@@ -4868,7 +4922,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     ]);
     expect(request.mock.calls.some(([method]) => method === "thread/fork")).toBe(false);
     expect(request.mock.calls.some(([method]) => method === "thread/start")).toBe(false);
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: {
         sourceThreadId,
@@ -4958,7 +5012,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
 
     await expect(startOrResumeThread(commonParams)).rejects.toThrow("temporary fork rejected");
     expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/read", "thread/fork"]);
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: { sourceThreadId },
     });
@@ -5030,7 +5084,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     ]);
     expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
     expect(request.mock.calls[4]?.[1]).toEqual({ threadId: finalThreadId });
-    const persisted = await testCodexAppServerBindingStore.read(identity);
+    const persisted = testCodexAppServerBindingStore.read(identity);
     expect(persisted).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: { sourceThreadId, lastTurnId },
@@ -5094,7 +5148,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       .map(([, requestParams]) => (requestParams as { threadId: string }).threadId);
     expect(archivedThreadIds).toEqual([finalThreadId]);
     expect(abandonClient).not.toHaveBeenCalled();
-    const persisted = await testCodexAppServerBindingStore.read(identity);
+    const persisted = testCodexAppServerBindingStore.read(identity);
     expect(persisted).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: {
@@ -5127,7 +5181,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         cwd: workspaceDir,
         pending: { sourceThreadId },
       });
-      const initial = await testCodexAppServerBindingStore.read(identity);
+      const initial = testCodexAppServerBindingStore.read(identity);
       const storageError = new Error("tracking storage failure");
       let failed = false;
       let retry = false;
@@ -5216,7 +5270,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
       expect([...nativeThreads]).toEqual(
         archive === "rejected" ? [sourceThreadId, unarchivedId] : [sourceThreadId],
       );
-      expect(await testCodexAppServerBindingStore.read(identity)).toEqual({
+      expect(testCodexAppServerBindingStore.read(identity)).toEqual({
         ...initial,
         pendingSupervisionBranch: {
           ...initial!.pendingSupervisionBranch,
@@ -5231,7 +5285,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         lifecycle: { action: "forked" },
       });
       expect([...nativeThreads]).toEqual([sourceThreadId, `${finalThreadId}-retry`]);
-      const persisted = await testCodexAppServerBindingStore.read(identity);
+      const persisted = testCodexAppServerBindingStore.read(identity);
       expect(persisted?.threadId).toBe(`${finalThreadId}-retry`);
       expect(persisted?.pendingSupervisionBranch).toBeUndefined();
       if (archiveFails) {
@@ -5282,11 +5336,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
       });
       const bindingStore: CodexAppServerBindingStore = {
         ...testCodexAppServerBindingStore,
-        read: async (storeIdentity) => {
+        read: (storeIdentity) => {
           if (failed && owner === "unreadable") {
             throw readError;
           }
-          return await testCodexAppServerBindingStore.read(storeIdentity);
+          return testCodexAppServerBindingStore.read(storeIdentity);
         },
         mutate: async (storeIdentity, mutation) => {
           if (
@@ -5313,7 +5367,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
                 identity.sessionId,
               );
             }
-            preserved = await testCodexAppServerBindingStore.read(
+            preserved = testCodexAppServerBindingStore.read(
               owner === "other generation" ? { ...identity, sessionId: "successor" } : identity,
             );
             throw storageError;
@@ -5343,7 +5397,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         "thread/start",
       ]);
       expect(
-        await testCodexAppServerBindingStore.read(
+        testCodexAppServerBindingStore.read(
           owner === "other generation" ? { ...identity, sessionId: "successor" } : identity,
         ),
       ).toEqual(preserved);
@@ -5405,7 +5459,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         .map(([, requestParams]) => requestParams),
     ).toEqual([{ threadId: probeThreadId }]);
     expect(abandonClient).not.toHaveBeenCalled();
-    const committedBinding = await testCodexAppServerBindingStore.read(identity);
+    const committedBinding = testCodexAppServerBindingStore.read(identity);
     expect(committedBinding).toMatchObject({ threadId: finalThreadId });
     expect(committedBinding).not.toHaveProperty("pendingSupervisionBranch");
   });
@@ -5465,7 +5519,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         .filter(([method]) => method === "thread/unsubscribe" || method === "thread/archive")
         .map(([, requestParams]) => requestParams),
     ).toEqual([{ threadId: probeThreadId }]);
-    const committedBinding = await testCodexAppServerBindingStore.read(identity);
+    const committedBinding = testCodexAppServerBindingStore.read(identity);
     expect(committedBinding).toMatchObject({ threadId: finalThreadId });
     expect(committedBinding).not.toHaveProperty("pendingSupervisionBranch");
   });
@@ -5498,8 +5552,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn(async (storeIdentity) => {
-        const current = await testCodexAppServerBindingStore.read(storeIdentity);
+      read: vi.fn((storeIdentity) => {
+        const current = testCodexAppServerBindingStore.read(storeIdentity);
         if (current?.threadId !== finalThreadId || current.pendingSupervisionBranch) {
           return current;
         }
@@ -5532,7 +5586,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         .map(([, requestParams]) => requestParams),
     ).toEqual([{ threadId: probeThreadId }]);
     expect(abandonClient).toHaveBeenCalledOnce();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: finalThreadId,
     });
   });
@@ -5566,11 +5620,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn(async (storeIdentity) => {
+      read: vi.fn((storeIdentity) => {
         if (commitFailed) {
           throw new Error("binding verification read failed");
         }
-        return await testCodexAppServerBindingStore.read(storeIdentity);
+        return testCodexAppServerBindingStore.read(storeIdentity);
       }),
       mutate: vi.fn(async (storeIdentity, mutation) => {
         if (mutation.kind === "commit-pending-supervision-branch") {
@@ -5599,7 +5653,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         .map(([, requestParams]) => requestParams),
     ).toEqual([{ threadId: probeThreadId }]);
     expect(abandonClient).toHaveBeenCalledOnce();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: {
         sourceThreadId,
@@ -5637,8 +5691,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
     let commitFailed = false;
     const bindingStore: CodexAppServerBindingStore = {
       ...testCodexAppServerBindingStore,
-      read: vi.fn(async (storeIdentity) => {
-        const current = await testCodexAppServerBindingStore.read(storeIdentity);
+      read: vi.fn((storeIdentity) => {
+        const current = testCodexAppServerBindingStore.read(storeIdentity);
         if (!commitFailed || !current?.pendingSupervisionBranch) {
           return current;
         }
@@ -5677,7 +5731,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         .map(([, requestParams]) => requestParams),
     ).toEqual([{ threadId: probeThreadId }]);
     expect(abandonClient).toHaveBeenCalledOnce();
-    await expect(testCodexAppServerBindingStore.read(identity)).resolves.toMatchObject({
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
       threadId: sourceThreadId,
       pendingSupervisionBranch: {
         sourceThreadId,
@@ -5787,7 +5841,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         abandonClient.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
       );
       expect(abandonClient).toHaveBeenCalledOnce();
-      const persisted = await testCodexAppServerBindingStore.read(identity);
+      const persisted = testCodexAppServerBindingStore.read(identity);
       expect(persisted).toMatchObject({
         threadId: sourceThreadId,
         pendingSupervisionBranch: { sourceThreadId },
@@ -5899,7 +5953,7 @@ describe("Codex app-server thread lifecycle timing", () => {
     expect(message).toContain("thread-resume-request:9ms@9ms");
   });
 
-  it("warns on slow start even when trace logging is disabled", async () => {
+  it("warns on slow start even when profiling and trace logging are disabled", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     let nowMs = 0;
@@ -5919,7 +5973,7 @@ describe("Codex app-server thread lifecycle timing", () => {
       dynamicTools: [],
       appServer: createThreadLifecycleAppServerOptions(),
       timing: {
-        enabled: true,
+        enabled: false,
         now: () => nowMs,
         log,
         totalThresholdMs: 10,

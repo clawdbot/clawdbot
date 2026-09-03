@@ -37,6 +37,7 @@ dispatch.
 | `security-fast`                    | Private key detection, changed-workflow audit via `zizmor`, and production lockfile audit                                                                                                                                                                                                                | Always on non-draft pushes and PRs                     |
 | `pnpm-store-warmup`                | Warm the lockfile-pinned Actions cache for fork PRs, manual runs, and same-repo docs-only PRs                                                                                                                                                                                                            | Node or docs-check lanes without an exact-cache writer |
 | `build-artifacts`                  | Build `dist/`, Control UI, built-CLI smoke checks, startup memory, and embedded built-artifact checks                                                                                                                                                                                                    | Node-relevant changes                                  |
+| `control-ui-performance`           | Compare Control UI CSS with the exact base revision and enforce asset budgets independently of artifact generation                                                                                                                                                                                       | Runtime-build or Control UI test changes               |
 | `control-ui-i18n`                  | Verify generated Control UI locale bundles, metadata, and translation memory; advisory on automatic runs, blocking on manual release CI                                                                                                                                                                  | Control UI i18n-relevant changes and manual CI         |
 | `checks-fast-core`                 | Fast Linux correctness lanes: environment-variable, max-lines, and assertion-safety baseline ratchets, bundled + protocol, Bun launcher, and the CI-routing fast task                                                                                                                                    | Node-relevant changes                                  |
 | `qa-smoke-ci-profile`              | Self-contained balanced parts of the automatic QA Smoke coverage set; one private-overlay build per part (the smoke set has no docker-lane or Control UI scenarios; the run step fails closed if one returns)                                                                                            | Pushes and manual runs; PRs only on QA-owned surfaces  |
@@ -120,6 +121,37 @@ including the SDK declaration writer, so local builds do not depend on CI's
 and reserves native-memory headroom. If the default budget cannot fit the build,
 it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
 remains the explicit operator override for attempting a different budget.
+
+## Control UI size budgets
+
+`pnpm ui:build` produces and verifies the bundle, then reports its compressed
+sizes. Budget violations do not prevent artifact generation. The separate
+`control-ui-performance` job enforces the budgets without blocking other jobs
+from building or testing the same source.
+
+Startup CSS has a 45 KiB advisory target and a 50 KiB hard ceiling. Growth below
+1 KiB passes; an increase of 1 KiB or more in either startup CSS or the largest
+CSS file fails the comparison. The existing largest-file, JavaScript, request-count,
+and isolated-renderer ceilings still apply independently. Reports include exact
+bytes, base deltas, and remaining headroom, with an early warning when the largest
+CSS file has less than 1 KiB of headroom.
+
+CI builds the selected checkout and the exact preflight base with the same
+installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
+normalized through the candidate's pinned compressor before comparison. The
+report identifies both revisions and the toolchain. There is no manually updated
+CSS baseline, and the cumulative ceilings still bound a series of small changes.
+
+Run the same comparison locally after installing dependencies:
+
+```bash
+pnpm ui:check-performance:base <base-commit-sha>
+```
+
+To enforce absolute budgets on an existing build, run `pnpm ui:check-performance`.
+Use `--base-dist <directory>` to compare with an already-built base, or
+`--report-only` to report violations without failing. Missing or malformed build
+artifacts remain errors in report-only mode.
 
 ## Watching pull request CI
 
@@ -665,7 +697,7 @@ Expanded large/small jobs admit 210 predicted seconds and retain the shared 80-r
 
 `checks-ui-e2e` emits seven rows for non-frozen targets with the named-project contract on Blacksmith first attempts: six combined Control UI shards and one browser-extension row. Freshly planned hosted, hybrid and frozen targets with that contract retain twelve Control UI shards plus the browser row. Missing attempt metadata also retains that wider plan. Historical targets without the contract retain four total rows on the Blacksmith planner profile or fourteen on GitHub and hybrid profiles. The 2026-09-02 inventory at `49fb9c5` contains 359 files: 329 parallel bundle consumers, three parallel self-owned files, seven serial bundle consumers, and 20 serial private source/custom-build files. Ordinary CI excludes seven real-Gateway files, leaving 352. Four native projects represent resource ownership without adding jobs or execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` share group 0 with at most two workers total, then `ui-e2e-serial` and `ui-e2e-serial-standalone` share group 1 with one worker. Local throttling and explicit worker limits still apply. The shared weighted sequencer charges each file by its measured duration divided by that project's effective worker count and assigns every discovered specification once across the selected Control UI rows. The root config keeps the complete inventory visible for discovery. Serial scheduling still protects private source servers that share a Vite optimizer cache, real Gateways, and the runtime-budget measurement; test cases, deadlines, and isolation are unchanged.
 
-Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. The dedicated real-Gateway job still runs its complete canonical inventory in one Vitest invocation, including suites outside the UI source directory. Its six bundle consumers share the preview; MCP conformance owns a private source server. Both serial resource groups use the same single-worker phase. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
+Every selected project discovers Chromium. The first selected bundle-consuming project builds one private production bundle/preview and publishes its URL through Vitest's invocation-scoped root context; later consumers share it until invocation teardown. Standalone projects have no bundle setup or URL bridge, so standalone-only selections skip that build. The dedicated real-Gateway job still runs its complete canonical inventory in one Vitest invocation, including suites outside the UI source directory. Before that invocation, `OPENCLAW_BUILD_PRIVATE_QA=1 pnpm build:ci-artifacts` builds the runtime, private QA modules, and Control UI together. This keeps same-origin build identities aligned and prevents media bootstrap from rebuilding the runtime behind the UI; use the same preparation for a local run of the complete inventory. Its six bundle consumers share the preview; MCP conformance owns a private source server. Both serial resource groups use the same single-worker phase. Enabled manual proof capture uses the shared upload directory, including the MCP and Logs suites.
 
 Eligible `control-ui` rows request `blacksmith-32vcpu-ubuntu-2404`; the browser-extension row keeps the 8-vCPU request and the real-Gateway job keeps 16. Backend, event, contributor-trust and cache-write boundaries are unchanged, including hybrid first attempts and trusted contributor forks. In [run 33692146223](https://github.com/openclaw/openclaw/actions/runs/33692146223), the two slowest UI rows requested the 8-vCPU label but reported two CPUs; their 356/383-second test steps set the 8:20 non-Windows wall. The same run's 32-vCPU jobs reported eight CPUs. The larger request added no workers. In [run 33695337496](https://github.com/openclaw/openclaw/actions/runs/33695337496), all twelve UI rows reported eight CPUs and finished by 4:38 from workflow creation, with 102–145-second test steps. That margin supports consolidating to six rows; reduced-row timings still require native proof. Stale file weights also need the existing refit's independent-run and replacement thresholds, rather than a one-run manual adjustment.
 

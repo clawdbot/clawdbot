@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
@@ -38,6 +39,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
@@ -78,6 +80,7 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import * as runAttemptResources from "./run-attempt-resources.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
@@ -1974,6 +1977,74 @@ describe("runCodexAppServerAttempt", () => {
       expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
     },
   );
+  it("persists terminal failure when the execution device disconnects during finalization", async () => {
+    const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
+    const startupSpy = vi.spyOn(attemptStartup, "startCodexAttemptThread");
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-terminal-disconnect.jsonl"),
+      path.join(tempDir, "workspace-terminal-disconnect"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "sessions-terminal-disconnect.json"),
+      "session-terminal-disconnect",
+    );
+    const preparedMessages: AssistantMessage[] = [];
+    params.prepareAssistantTranscriptMessage = (message) => {
+      preparedMessages.push(structuredClone(message));
+      return message;
+    };
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => {
+      expect(resourcesSpy.mock.results[0]?.value.projectorRef.current).toBeDefined();
+    });
+    const projector = resourcesSpy.mock.results[0]?.value.projectorRef.current;
+    const onExecutionDisconnect = startupSpy.mock.calls[0]?.[0].onExecutionDisconnect;
+    if (!projector || !onExecutionDisconnect) {
+      throw new Error("Expected the attempt's active projector and execution disconnect owner");
+    }
+    const disconnectError = new Error("Paired execution device disconnected during finalization.");
+    const buildResult = projector.buildResult.bind(projector);
+    vi.spyOn(projector, "buildResult").mockImplementationOnce((...args) => {
+      const result = buildResult(...args);
+      // Inject device loss at the real enrichment await, after the initial snapshot exists.
+      queueMicrotask(() => onExecutionDisconnect(disconnectError));
+      return result;
+    });
+    const text = "Answer text generated before the device was lost.";
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "agentMessage",
+        id: "terminal-answer",
+        phase: "final_answer",
+        text,
+      }),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).rejects.toBe(disconnectError);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "error", error: disconnectError.message }),
+    });
+    const expectedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: "error",
+      errorMessage: disconnectError.message,
+    };
+    const persistedMessage = (await readTranscriptMessagesByIdentity(params)).find(
+      (message) => message.idempotencyKey === "codex-app-server:thread-1:turn-1:assistant",
+    );
+    expect({ preparedMessages, persistedMessage }).toEqual({
+      preparedMessages: [expect.objectContaining(expectedAssistant)],
+      persistedMessage: expect.objectContaining(expectedAssistant),
+    });
+  });
+
   it.each([true, false])(
     "checkpoints raw patch output and network provenance with commentary persistence %s",
     async (persistCommentary) => {
@@ -7265,9 +7336,73 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.approvalsReviewer).toBe("user");
   });
 
-  it.each(["stdio", "websocket", "unix", "proxy"] as const)(
-    "preserves supervised native model and transport/home guards over %s",
-    async (transport) => {
+  it("rejects a newly observed native model before inference with stale prepared host auth", async () => {
+    const { sessionFile, workspaceDir, agentDir } = createRunPaths();
+    const modelRef = { provider: "openai", model: "gpt-5.5" };
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      preserveNativeModel: true,
+      authProfileId: "openai:host",
+      model: modelRef.model,
+      modelProvider: modelRef.provider,
+    });
+    const harness = createStartedThreadHarness(
+      async (method) => {
+        if (method === "thread/resume") {
+          return {
+            ...threadStartResult("thread-existing", { cwd: workspaceDir }),
+            model: "gpt-5.6-luna",
+            modelProvider: "openai",
+          };
+        }
+        // Keep pre-fix execution finite: the regression is accepting inference, not a timeout.
+        if (method === "turn/start") {
+          return { turn: { id: "turn-1", status: "completed", items: [] } };
+        }
+        return undefined;
+      },
+      { persistedThreads: ["thread-existing"] },
+    );
+    const params = createParams(sessionFile, workspaceDir, { provider: "openai" });
+    params.agentDir = agentDir;
+    params.modelId = modelRef.model;
+    params.model = { ...params.model, id: modelRef.model };
+    params.authProfileId = "openai:host";
+    params.resolvedApiKey = "prepared-host-api-key";
+    params.authProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:host": { type: "api_key", provider: "openai", key: "prepared-host-api-key" },
+      },
+    };
+    const expectedOwnership = { model: "native" as const, auth: "host" as const, modelRef };
+    params.expectedSessionRuntimeOwnership = expectedOwnership;
+    const result = await runCodexAppServerAttempt(params).catch((error: unknown) => {
+      if (!(error instanceof Error)) {
+        throw error;
+      }
+      return error;
+    });
+    expect(harness.requests.some(({ method }) => method === "thread/resume")).toBe(true);
+    expect(harness.requests.some(({ method }) => method === "turn/start")).toBe(false);
+    expect(result instanceof Error || Boolean(readAttemptTerminal(result).promptError)).toBe(true);
+    expect(await readCodexAppServerBinding(sessionFile)).toMatchObject({
+      threadId: "thread-existing",
+      preserveNativeModel: true,
+      model: "gpt-5.6-luna",
+      modelProvider: "openai",
+    });
+  });
+
+  it.each([
+    { transport: "stdio", hasAnswer: true },
+    { transport: "stdio", hasAnswer: false },
+    { transport: "proxy", hasAnswer: true },
+    { transport: "proxy", hasAnswer: false },
+    { transport: "websocket", hasAnswer: false },
+    { transport: "unix", hasAnswer: false },
+  ] as const)(
+    "preserves supervised native model and transport/home guards over $transport (answer: $hasAnswer)",
+    async ({ transport, hasAnswer }) => {
       const { sessionFile, workspaceDir, agentDir } = createRunPaths();
       const codexHome = path.join(tempDir, "review-codex-home");
       vi.stubEnv("CODEX_HOME", codexHome);
@@ -7307,7 +7442,7 @@ describe("runCodexAppServerAttempt", () => {
       });
       const nativeResponse = {
         ...threadStartResult("thread-existing", { cwd: workspaceDir }),
-        model: "gpt-5.5",
+        model: "gpt-5.6-luna",
         modelProvider: "openai",
         approvalsReviewer: "auto_review",
         serviceTier: "priority",
@@ -7419,22 +7554,43 @@ describe("runCodexAppServerAttempt", () => {
         }
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-existing", turn: { id: "turn-1", status: "completed" } },
+          params: {
+            threadId: "thread-existing",
+            turn: {
+              id: "turn-1",
+              status: "completed",
+              items: hasAnswer
+                ? [{ type: "agentMessage", id: "native-answer", text: "native answer" }]
+                : [],
+            },
+          },
         });
         const result = await run;
         expect(result.terminal).toEqual({ kind: "ok" });
-        expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
-        expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+        expect(result.runtimeModelSelection).toEqual({
+          provider: "openai",
+          model: "gpt-5.6-luna",
+        });
         expect(capture).not.toHaveBeenCalled();
-        expect(warn).toHaveBeenCalledWith(
-          "codex settled-turn finalization context is unavailable",
-          expect.objectContaining({
-            runId: params.runId,
-            threadId: "thread-existing",
-            turnId: "turn-1",
-            reason: "native_auth_finalization_unsupported",
-          }),
-        );
+        if (hasAnswer) {
+          expect(result.currentAttemptAssistant).toMatchObject({
+            provider: "openai",
+            model: "gpt-5.6-luna",
+          });
+          expect(result.settledTurnFinalizationContext).toBeUndefined();
+        } else {
+          expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
+          expect(Object.isFrozen(result.settledTurnFinalizationContext)).toBe(true);
+          expect(warn).toHaveBeenCalledWith(
+            "codex settled-turn finalization context is unavailable",
+            expect.objectContaining({
+              runId: params.runId,
+              threadId: "thread-existing",
+              turnId: "turn-1",
+              reason: "native_auth_finalization_unsupported",
+            }),
+          );
+        }
         expect(result.messagesSnapshot).toContainEqual(
           expect.objectContaining({
             role: "toolResult",

@@ -7,6 +7,7 @@ import path from "node:path";
 import { parse, type Node as AcornNode } from "acorn";
 import {
   WORKER_BUNDLE_ENTRY_PATH,
+  WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH,
   WORKER_BUNDLE_RSYNC_RECEIVER_PATH,
 } from "../src/shared/worker-bundle-hash.js";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
@@ -15,6 +16,7 @@ const DEFAULT_ENTRYPOINTS = ["dist/entry.js", "dist/cli/run-main.js"];
 const WORKER_DEPLOY_ENTRYPOINTS = [
   `dist/worker/${WORKER_BUNDLE_ENTRY_PATH}`,
   `dist/worker/${WORKER_BUNDLE_RSYNC_RECEIVER_PATH}`,
+  `dist/worker/${WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH}`,
 ] as const;
 const DEFAULT_GATEWAY_RUN_CHUNK_MAX_BYTES = 70 * 1024;
 const GATEWAY_RUN_CHUNK_MARKER_SETS = [
@@ -36,6 +38,7 @@ const STATIC_IMPORT_RE =
 type CliBootstrapCheckParams = {
   rootDir?: string;
   entrypoints?: string[];
+  workerDeployEntrypoints?: readonly string[];
   distDir?: string;
   gatewayRunChunkMaxBytes?: number;
   fs?: typeof fs;
@@ -352,8 +355,8 @@ export function collectGatewayRunChunkBudgetErrors(params: CliBootstrapCheckPara
 export function collectWorkerDeployArtifactErrors(params: CliBootstrapCheckParams = {}) {
   const rootDir = params.rootDir ?? process.cwd();
   const fsImpl = params.fs ?? fs;
-  const entrypoints = WORKER_DEPLOY_ENTRYPOINTS.map((entrypoint) =>
-    path.resolve(rootDir, entrypoint),
+  const entrypoints = (params.workerDeployEntrypoints ?? WORKER_DEPLOY_ENTRYPOINTS).map(
+    (entrypoint) => path.resolve(rootDir, entrypoint),
   );
   const artifactDir = path.dirname(entrypoints[0]!);
   const artifactNames = new Set(

@@ -17,6 +17,7 @@ import {
 } from "./runtime-postbuild-shared.mjs";
 
 const GENERATED_BUNDLED_SKILLS_DIR = "bundled-skills";
+const PACKAGE_ICON_PATH = path.join("assets", "icon.png");
 const TRANSIENT_COPY_ERROR_CODES = new Set(["EEXIST", "ENOENT", "ENOTEMPTY", "EBUSY"]);
 const COPY_RETRY_DELAYS_MS = [10, 25, 50];
 
@@ -217,6 +218,24 @@ function linkSourcePluginDependencies(pluginDir: string, distNodeModules: string
   }
 }
 
+function copyPackageIcon(pluginDir: string, distPluginDir: string): void {
+  const source = path.join(pluginDir, PACKAGE_ICON_PATH);
+  const target = path.join(distPluginDir, PACKAGE_ICON_PATH);
+  let sourceIsFile = false;
+  try {
+    sourceIsFile = fs.lstatSync(source).isFile();
+  } catch {
+    // Missing or unreadable presentation assets must not invalidate the plugin package.
+  }
+  if (!sourceIsFile) {
+    removePathIfExists(target);
+    return;
+  }
+  removePathIfExists(target);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.copyFileSync(source, target);
+}
+
 /**
  * Copies bundled plugin metadata and package extension files.
  */
@@ -290,8 +309,10 @@ export function copyBundledPluginMetadata(params: CopyMetadataParams = {}): void
         ? { ...mergedManifest, skills: copiedSkills }
         : mergedManifest;
       writeTextFileIfChanged(distManifestPath, `${JSON.stringify(bundledManifest, null, 2)}\n`);
+      copyPackageIcon(pluginDir, distPluginDir);
     } else {
       removeFileIfExists(distManifestPath);
+      removeFileIfExists(path.join(distPluginDir, PACKAGE_ICON_PATH));
     }
 
     if (!fs.existsSync(packageJsonPath)) {

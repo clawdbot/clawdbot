@@ -96,7 +96,10 @@ describe("Web Push preference saves", () => {
       container,
     );
 
-    const preferences = container.querySelector<HTMLElement>(".settings-page .settings-page");
+    // Preference sections stack inside the page column; a nested .settings-page
+    // would reapply the 760px max-width and inset them from the card above.
+    expect(container.querySelector(".settings-page .settings-page")).toBeNull();
+    const preferences = container.querySelector<HTMLElement>(".settings-page .settings-stack");
     const preferenceGroup = expectDefined(preferences, "notification preferences group");
     expect(preferenceGroup.querySelector("input, select")).not.toBeNull();
     expect(preferenceGroup.hasAttribute("inert")).toBe(true);
@@ -159,7 +162,7 @@ describe("Web Push preference controls", () => {
     const onDevice = vi.fn<DevicePreferencesListener>();
     const container = renderPreferences({ onDevice });
     const deviceGroup = expectDefined(
-      container.querySelectorAll(".settings-page .settings-page .settings-group")[1],
+      container.querySelectorAll(".settings-page .settings-stack .settings-group")[1],
       "device preference group",
     );
 

@@ -10,6 +10,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
 import ai.openclaw.app.i18n.NativeStringResources
@@ -121,7 +122,7 @@ class ChatComposerLayoutTest {
   fun tearDown() {
     viewModelStore.clear()
     setApplicationRuntime(originalRuntime)
-    runtime.disconnect()
+    closeNodeRuntimeTestFixture(runtime)
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     NativeStringResources.install(app)
@@ -445,13 +446,13 @@ class ChatComposerLayoutTest {
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
     val fontScale = mutableStateOf(1f)
     showChat(viewportWidth = 320.dp, viewportHeight = 640.dp, fontScale = { fontScale.value }, talkActive = true)
-    val requestField = ChatController::class.java.getDeclaredField("requestGateway").apply { isAccessible = true }
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val originalRequest = requestField.get(controller) as suspend (String, String?) -> String
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
     var modelLabel = "GPT-5.6 Sol"
-    val request: suspend (String, String?) -> String = { method, params ->
-      val response = originalRequest(method, params)
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      val response = originalRequest(gatewayId, method, params)
       if (method == "chat.metadata") {
         val metadata = Json.parseToJsonElement(response).jsonObject
         val models =
@@ -544,12 +545,12 @@ class ChatComposerLayoutTest {
           },
         )
       }.toString()
-    val requestField = ChatController::class.java.getDeclaredField("requestGateway").apply { isAccessible = true }
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
-    val request = requestField.get(controller) as suspend (String, String?) -> String
-    val progressRequest: suspend (String, String?) -> String = { method, params ->
-      if (method == "progressCard.get") response else request(method, params)
+    val request = requestField.get(controller) as suspend (String, String, String?) -> String
+    val progressRequest: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      if (method == "progressCard.get") response else request(gatewayId, method, params)
     }
     composeRule.runOnIdle {
       requestField.set(controller, progressRequest)

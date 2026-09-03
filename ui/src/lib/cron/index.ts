@@ -30,7 +30,7 @@ import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../gateway-errors.ts";
-import { parseCronEveryMs } from "./decimal.ts";
+import { parseCronDurationMs } from "./decimal.ts";
 
 export { loadCronScopeStats } from "./scope.ts";
 
@@ -355,7 +355,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
-    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
     if (everyMs === undefined) {
       errors.everyAmount = "cron.errors.everyAmountInvalid";
     } else if (form.triggerEnabled && everyMs < resolveCronTriggerMinIntervalMs()) {
@@ -367,11 +367,8 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     }
     if (!form.scheduleExact) {
       const staggerAmount = form.staggerAmount.trim();
-      if (staggerAmount) {
-        const stagger = toNumber(staggerAmount, 0);
-        if (stagger <= 0) {
-          errors.staggerAmount = "cron.errors.staggerAmountInvalid";
-        }
+      if (staggerAmount && !parseCronDurationMs(staggerAmount, form.staggerUnit, true)) {
+        errors.staggerAmount = "cron.errors.staggerAmountInvalid";
       }
     }
   }
@@ -829,8 +826,8 @@ function formatDateTimeLocal(input: string): string {
 
 // Render everyMs back to the largest unit that divides it exactly, falling through
 // to decimal seconds. Sub-second remainders are built from BigInt quotient/remainder,
-// not float division, so every integer millisecond up to Number.MAX_SAFE_INTEGER
-// round-trips losslessly through parseCronEveryMs when the job is resaved.
+// not float division, so every accepted millisecond round-trips losslessly
+// through parseCronDurationMs when the job is resaved.
 function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" | "everyUnit"> {
   if (everyMs % 86_400_000 === 0) {
     return { everyAmount: String(everyMs / 86_400_000), everyUnit: "days" };
@@ -841,11 +838,11 @@ function parseEverySchedule(everyMs: number): Pick<CronFormState, "everyAmount" 
   if (everyMs % 60_000 === 0) {
     return { everyAmount: String(everyMs / 60_000), everyUnit: "minutes" };
   }
-  return { everyAmount: everyMsToSecondsString(everyMs), everyUnit: "seconds" };
+  return { everyAmount: durationMsToSecondsString(everyMs), everyUnit: "seconds" };
 }
 
-function everyMsToSecondsString(everyMs: number): string {
-  const value = BigInt(everyMs);
+function durationMsToSecondsString(ms: number): string {
+  const value = BigInt(ms);
   const whole = value / 1_000n;
   const remainder = value % 1_000n;
   if (remainder === 0n) {
@@ -867,13 +864,13 @@ function parseStaggerSchedule(
   if (staggerMs % 60_000 === 0) {
     return {
       scheduleExact: false,
-      staggerAmount: String(Math.max(1, staggerMs / 60_000)),
+      staggerAmount: String(staggerMs / 60_000),
       staggerUnit: "minutes",
     };
   }
   return {
     scheduleExact: false,
-    staggerAmount: String(Math.max(1, Math.ceil(staggerMs / 1_000))),
+    staggerAmount: durationMsToSecondsString(staggerMs),
     staggerUnit: "seconds",
   };
 }
@@ -1002,7 +999,7 @@ function hasUnchangedCronSchedule(form: CronFormState, job: CronJob): boolean {
     return form.scheduleAt === formatDateTimeLocal(schedule.at);
   }
   if (schedule.kind === "every") {
-    return parseCronEveryMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
+    return parseCronDurationMs(form.everyAmount, form.everyUnit) === schedule.everyMs;
   }
   if (schedule.kind === "cron") {
     const stagger = parseStaggerSchedule(schedule.staggerMs);
@@ -1026,7 +1023,7 @@ function buildCronSchedule(form: CronFormState) {
     return { kind: "at" as const, at: new Date(ms).toISOString() };
   }
   if (form.scheduleKind === "every") {
-    const everyMs = parseCronEveryMs(form.everyAmount, form.everyUnit);
+    const everyMs = parseCronDurationMs(form.everyAmount, form.everyUnit);
     if (everyMs === undefined) {
       throw new Error(t("cron.errors.invalidIntervalAmount"));
     }
@@ -1043,11 +1040,10 @@ function buildCronSchedule(form: CronFormState) {
   if (!staggerAmount) {
     return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined };
   }
-  const staggerValue = toNumber(staggerAmount, 0);
-  if (staggerValue <= 0) {
+  const staggerMs = parseCronDurationMs(staggerAmount, form.staggerUnit, true);
+  if (staggerMs === undefined) {
     throw new Error(t("cron.errors.invalidStaggerAmount"));
   }
-  const staggerMs = form.staggerUnit === "minutes" ? staggerValue * 60_000 : staggerValue * 1_000;
   return { kind: "cron" as const, expr, tz: form.cronTz.trim() || undefined, staggerMs };
 }
 
@@ -1180,7 +1176,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
       : undefined;
     const editingPayload = editingJob ? getCronJobPayload(editingJob) : null;
     const sourceJob = editingJob ?? state.cronCloningJob;
-    // Form fields cannot represent process commands, anchors, or full timestamp/stagger precision.
+    // Form fields cannot represent process commands, anchors, or full timestamp precision.
     const schedule =
       sourceJob && hasUnchangedCronSchedule(form, sourceJob)
         ? editingJob
