@@ -490,9 +490,11 @@ export function renderNumberInput(params: ConfigNodeRenderParams): TemplateResul
       aria-label=${label}
       aria-describedby=${describedBy || nothing}
       aria-invalid="false"
-      placeholder=${schema.default !== undefined
-        ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
-        : nothing}
+      placeholder=${
+        schema.default !== undefined
+          ? t("configForm.defaultValue", { value: formatConfigValueText(schema.default) })
+          : nothing
+      }
       min=${constraints.min ?? nothing}
       max=${constraints.max ?? nothing}
       step=${constraints.step}

@@ -659,7 +659,12 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
     if (manifest.runId !== expected.runId) {
       fail(`${manifest.family} workflow run id does not match the reducer context`);
     }
-    if (manifest.runAttempt !== expected.runAttempt) {
+    // Failed-job reruns retain successful artifacts from earlier attempts of this run.
+    if (
+      !Number.isInteger(manifest.runAttempt) ||
+      manifest.runAttempt < 1 ||
+      manifest.runAttempt > expected.runAttempt
+    ) {
       fail(`${manifest.family} workflow run attempt does not match the reducer context`);
     }
     for (const tool of ["xcode", "fastlane", "node"]) {
