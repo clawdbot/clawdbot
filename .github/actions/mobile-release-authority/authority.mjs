@@ -181,8 +181,8 @@ function validateTrustedWorkflow() {
   }
 }
 
-function runAttempt(runId, attempt = "1") {
-  return JSON.parse(gh(["api", `repos/${repository}/actions/runs/${runId}/attempts/${attempt}`]));
+function runAttemptOne(runId) {
+  return JSON.parse(gh(["api", `repos/${repository}/actions/runs/${runId}/attempts/1`]));
 }
 
 function runIdentity(runValue) {
@@ -232,7 +232,12 @@ function expectedRun(params) {
   };
 }
 
-function validateCurrentDispatchContext() {
+function validateDispatchLifecycle(params, status, conclusion) {
+  // Dispatch inputs are immutable, but run lifecycle can change after any external validation.
+  return validateRunIdentity(runAttemptOne(params.runId), expectedRun(params), status, conclusion);
+}
+
+function validateCurrentDispatchEnvironment() {
   const currentRunId = positiveDecimal(process.env.GITHUB_RUN_ID ?? "", "current run ID");
   const currentActor = process.env.GITHUB_ACTOR ?? "";
   const currentTriggeringActor = process.env.GITHUB_TRIGGERING_ACTOR ?? "";
@@ -247,18 +252,16 @@ function validateCurrentDispatchContext() {
   ) {
     fail("Mobile beta release must be an original canonical main workflow dispatch.");
   }
-  const timestamp = validateRunIdentity(
-    runAttempt(currentRunId),
-    expectedRun({
-      actor: currentActor,
-      runId: currentRunId,
-      triggeringActor: currentTriggeringActor,
-      workflowSha,
-    }),
-    "in_progress",
-    null,
-  );
-  return { actor: currentActor, runId: currentRunId, timestamp };
+  return {
+    actor: currentActor,
+    runId: currentRunId,
+    triggeringActor: currentTriggeringActor,
+    workflowSha,
+  };
+}
+
+function validateCurrentDispatchLifecycle(current) {
+  return validateDispatchLifecycle(current, "in_progress", null);
 }
 
 function collaboratorPermission(login) {
@@ -759,14 +762,13 @@ function validateReceiptTuple(receipt) {
 }
 
 function validateOriginalRun(receipt, expectedStatus, expectedConclusion) {
-  const timestamp = validateRunIdentity(
-    runAttempt(authorityRunId),
-    expectedRun({
+  const timestamp = validateDispatchLifecycle(
+    {
       actor: receipt.actor,
       runId: authorityRunId,
       triggeringActor: receipt.triggeringActor,
       workflowSha: receipt.workflowSha,
-    }),
+    },
     expectedStatus,
     expectedConclusion,
   );
@@ -806,7 +808,8 @@ async function authorize() {
   if (recovery) {
     fail("Initial authorization cannot run in recovery mode.");
   }
-  const current = validateCurrentDispatchContext();
+  const current = validateCurrentDispatchEnvironment();
+  const timestamp = validateCurrentDispatchLifecycle(current);
   if (
     authorityRunId !== current.runId ||
     actor !== current.actor ||
@@ -816,10 +819,11 @@ async function authorize() {
   }
   collaboratorPermission(actor);
   const candidate = await validateStableReleaseCandidate(workflowSha, true);
+  collaboratorPermission(actor);
   const receipt = {
     actor,
     ...candidate,
-    buildTimestamp: current.timestamp,
+    buildTimestamp: timestamp,
     kind: "openclaw-mobile-release-authority",
     platform,
     repository,
@@ -833,6 +837,7 @@ async function authorize() {
     workflowPath,
     workflowSha,
   };
+  validateOriginalRun(receipt, "in_progress", null);
   const bytes = canonicalBytes(receipt);
   const destination = receiptPath();
   fs.mkdirSync(path.dirname(destination), { recursive: true });
@@ -841,7 +846,7 @@ async function authorize() {
     actor,
     approved: "true",
     artifact_name: `mobile-release-ref-${platform}-${authorityRunId}-1`,
-    build_timestamp: current.timestamp,
+    build_timestamp: timestamp,
     gateway_version: candidate.gatewayVersion,
     receipt_digest: sha256(bytes),
     run_id: authorityRunId,
@@ -856,7 +861,8 @@ async function revalidateUpload() {
   if (recovery) {
     fail("Store upload revalidation cannot run in recovery mode.");
   }
-  const current = validateCurrentDispatchContext();
+  const current = validateCurrentDispatchEnvironment();
+  validateCurrentDispatchLifecycle(current);
   if (authorityRunId !== current.runId) {
     fail("Store upload must remain in its original authority run.");
   }
@@ -868,6 +874,7 @@ async function revalidateUpload() {
   validateCandidateAgainstReceipt(candidate, receipt);
   validateTargetCheckout();
   collaboratorPermission(receipt.actor);
+  validateOriginalRun(receipt, "in_progress", null);
   output({
     gateway_version: receipt.gatewayVersion,
     receipt_digest: receiptDigest,
@@ -913,9 +920,19 @@ function validateIntentTuple(intent, receipt, receiptDigest) {
   }
 }
 
+function validateRecordRunLifecycle(current, receipt) {
+  if (recovery) {
+    validateOriginalRun(receipt, "completed", "failure");
+    validateCurrentDispatchLifecycle(current);
+    return;
+  }
+  validateOriginalRun(receipt, "in_progress", null);
+}
+
 async function validateRecordAuthority() {
   validateTargetInputs();
-  const current = validateCurrentDispatchContext();
+  const current = validateCurrentDispatchEnvironment();
+  validateCurrentDispatchLifecycle(current);
   const verifyRecoveryRefs = recovery ? stableReleaseRefs(workflowSha, targetSha, true) : null;
   const { receipt, receiptDigest } = readReceipt();
   validateReceiptTuple(receipt);
@@ -926,19 +943,17 @@ async function validateRecordAuthority() {
     if (current.runId === authorityRunId || current.actor !== receipt.actor) {
       fail("Record-only recovery must be a new dispatch by the original release actor.");
     }
-    validateOriginalRun(receipt, "completed", "failure");
-  } else {
-    if (current.runId !== authorityRunId || current.actor !== receipt.actor) {
-      fail("Release recording must remain in the original protected workflow run.");
-    }
-    validateOriginalRun(receipt, "in_progress", null);
+  } else if (current.runId !== authorityRunId || current.actor !== receipt.actor) {
+    fail("Release recording must remain in the original protected workflow run.");
   }
+  validateRecordRunLifecycle(current, receipt);
   collaboratorPermission(receipt.actor);
   const candidate = await validateStableReleaseCandidate(receipt.workflowSha, false);
   validateCandidateAgainstReceipt(candidate, receipt);
   verifyRecoveryRefs?.();
   collaboratorPermission(receipt.actor);
-  return { intent, receipt };
+  validateRecordRunLifecycle(current, receipt);
+  return { current, intent, receipt };
 }
 
 function readReleaseRef(ref) {
@@ -964,7 +979,7 @@ async function recordReleaseRef() {
   if (!releaseRefToken) {
     fail("MOBILE_RELEASE_REF_TOKEN is required only for the trusted record phase.");
   }
-  const { intent, receipt } = await validateRecordAuthority();
+  const { current, intent, receipt } = await validateRecordAuthority();
   const ref = mobileReleaseRefForIntent(intent);
   const existing = readReleaseRef(ref);
   if (existing && existing !== targetSha) {
@@ -975,6 +990,7 @@ async function recordReleaseRef() {
       fail("Mobile release branch changed immediately before immutable ref creation.");
     }
     collaboratorPermission(receipt.actor);
+    validateRecordRunLifecycle(current, receipt);
     try {
       createReleaseRef(ref);
     } catch {

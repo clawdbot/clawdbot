@@ -206,11 +206,16 @@ fs.appendFileSync(process.env.GH_LOG, JSON.stringify({
   token: process.env.GH_TOKEN || ""
 }) + "\\n");
 
-function next(name, fallback) {
-  const values = (process.env[name] || fallback).split(",");
+function increment(name) {
   const file = path.join(process.env.GH_STATE_DIR, name);
   const index = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;
   fs.writeFileSync(file, String(index + 1));
+  return index;
+}
+
+function next(name, fallback) {
+  const values = (process.env[name] || fallback).split(",");
+  const index = increment(name);
   return values[Math.min(index, values.length - 1)];
 }
 
@@ -231,8 +236,27 @@ if (endpoint.includes("/collaborators/")) {
   const triggeringActor = isCurrent
     ? process.env.GITHUB_TRIGGERING_ACTOR
     : process.env.MOBILE_TRIGGERING_ACTOR;
-  const status = isCurrent ? "in_progress" : (process.env.GH_ORIGINAL_STATUS || "in_progress");
-  const conclusion = isCurrent ? null : JSON.parse(process.env.GH_ORIGINAL_CONCLUSION || "null");
+  const currentCancelled = path.join(process.env.GH_STATE_DIR, "GH_CURRENT_CANCELLED");
+  const cancelled = isCurrent && fs.existsSync(currentCancelled);
+  const status = cancelled
+    ? "completed"
+    : isCurrent
+    ? next("GH_CURRENT_STATUSES", process.env.GH_CURRENT_STATUS || "in_progress")
+    : next("GH_ORIGINAL_STATUSES", process.env.GH_ORIGINAL_STATUS || "in_progress");
+  const conclusion = cancelled
+    ? "cancelled"
+    : JSON.parse(isCurrent
+      ? next("GH_CURRENT_CONCLUSIONS", process.env.GH_CURRENT_CONCLUSION || "null")
+      : next("GH_ORIGINAL_CONCLUSIONS", process.env.GH_ORIGINAL_CONCLUSION || "null"));
+  const runAttempt = Number(isCurrent
+    ? next("GH_CURRENT_ATTEMPTS", "1")
+    : next("GH_ORIGINAL_ATTEMPTS", "1"));
+  if (!isCurrent) {
+    const originalRead = increment("GH_ORIGINAL_LIFECYCLE_READS") + 1;
+    if (originalRead === Number(process.env.GH_CANCEL_CURRENT_AFTER_ORIGINAL_READ || "0")) {
+      fs.writeFileSync(currentCancelled, "1");
+    }
+  }
   process.stdout.write(JSON.stringify({
     actor: { login: actor },
     conclusion,
@@ -241,7 +265,7 @@ if (endpoint.includes("/collaborators/")) {
     head_sha: isCurrent ? process.env.MOBILE_WORKFLOW_SHA : process.env.GH_ORIGINAL_WORKFLOW_SHA,
     id: Number(runId),
     path: process.env.MOBILE_WORKFLOW_PATH + "@refs/heads/main",
-    run_attempt: 1,
+    run_attempt: runAttempt,
     run_started_at: ${JSON.stringify(BUILD_TIMESTAMP)},
     status,
     triggering_actor: { login: triggeringActor }
@@ -515,6 +539,36 @@ function recordOverrides(fixture: Fixture, outputs: Record<string, string>): Nod
   };
 }
 
+function prepareRecoveryOverrides(
+  fixture: Fixture,
+  outputs: Record<string, string>,
+): NodeJS.ProcessEnv {
+  git(fixture.source, "checkout", "-b", "trusted-main-after-upload", fixture.baseSha);
+  git(fixture.source, "commit", "--allow-empty", "-m", "advance trusted main after upload");
+  const recoveryWorkflowSha = git(fixture.source, "rev-parse", "HEAD");
+  git(fixture.trusted, "fetch", "origin", recoveryWorkflowSha);
+  git(fixture.trusted, "checkout", "--detach", recoveryWorkflowSha);
+  return {
+    ...recordOverrides(fixture, outputs),
+    GH_ORIGINAL_CONCLUSION: '"failure"',
+    GH_ORIGINAL_STATUS: "completed",
+    GH_MAIN_REFS: `${recoveryWorkflowSha},${recoveryWorkflowSha}`,
+    GITHUB_RUN_ID: "999",
+    GITHUB_SHA: recoveryWorkflowSha,
+    MOBILE_RECOVERY: "true",
+    MOBILE_WORKFLOW_SHA: recoveryWorkflowSha,
+  };
+}
+
+function expectOnlyAttemptOneLifecycleReads(
+  trace: Array<{ args: string[]; token: string }>,
+  expectedCount: number,
+): void {
+  const lifecycleReads = trace.filter(({ args }) => args[1]?.includes("/actions/runs/"));
+  expect(lifecycleReads).toHaveLength(expectedCount);
+  expect(lifecycleReads.every(({ args }) => args[1]?.endsWith("/attempts/1"))).toBe(true);
+}
+
 describe("mobile release authority", () => {
   it("authorizes an exact five-file release candidate and emits an attested v2 receipt", () => {
     const fixture = createFixture();
@@ -696,6 +750,152 @@ describe("mobile release authority", () => {
     const dirty = runAuthority(fixture, "revalidate", receiptOverrides(outputs));
     expect(dirty.status).toBe(1);
     expect(dirty.stderr).toContain("tracked changes");
+  });
+
+  it("rejects cancellation after candidate authorization before receipt output", () => {
+    const fixture = createFixture();
+    const result = runAuthority(fixture, "authorize", {
+      GH_CURRENT_CONCLUSIONS: 'null,"cancelled"',
+      GH_CURRENT_STATUSES: "in_progress,completed",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 2);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(fs.existsSync(path.join(fixture.runnerTemp, "mobile-release-ref-ios"))).toBe(false);
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects cancellation after upload validation before success output", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    resetState(fixture);
+    const result = runAuthority(fixture, "revalidate", {
+      ...receiptOverrides(outputs),
+      GH_CURRENT_CONCLUSIONS: 'null,null,"cancelled"',
+      GH_CURRENT_STATUSES: "in_progress,in_progress,completed",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 3);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects run-attempt drift after upload validation", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    resetState(fixture);
+    const result = runAuthority(fixture, "revalidate", {
+      ...receiptOverrides(outputs),
+      GH_CURRENT_ATTEMPTS: "1,1,2",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 3);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects cancellation before normal record authority returns", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "validate-record", {
+      ...recordOverrides(fixture, outputs),
+      GH_CURRENT_CONCLUSIONS: 'null,null,"cancelled"',
+      GH_CURRENT_STATUSES: "in_progress,in_progress,completed",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 3);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects recovery cancellation and original-run drift before record authority returns", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+
+    resetState(fixture);
+    const cancelled = runAuthority(fixture, "validate-record", {
+      ...recovery,
+      GH_CURRENT_CONCLUSIONS: 'null,null,"cancelled"',
+      GH_CURRENT_STATUSES: "in_progress,in_progress,completed",
+    });
+    const cancelledTrace = readGhTrace(fixture.ghLog);
+    expect(cancelled.status).toBe(1);
+    expect(cancelled.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(cancelledTrace, 5);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(cancelledTrace.some(({ args }) => args.includes("POST"))).toBe(false);
+
+    resetState(fixture);
+    const originalDrift = runAuthority(fixture, "validate-record", {
+      ...recovery,
+      GH_ORIGINAL_CONCLUSIONS: '"failure","success"',
+    });
+    const originalDriftTrace = readGhTrace(fixture.ghLog);
+    expect(originalDrift.status).toBe(1);
+    expect(originalDrift.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(originalDriftTrace, 4);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(originalDriftTrace.some(({ args }) => args.includes("POST"))).toBe(false);
+  });
+
+  it("rejects cancellation immediately before immutable ref creation", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "record", {
+      ...recordOverrides(fixture, outputs),
+      GH_CURRENT_CONCLUSIONS: 'null,null,null,"cancelled"',
+      GH_CURRENT_STATUSES: "in_progress,in_progress,in_progress,completed",
+      MOBILE_RELEASE_REF_TOKEN: "write-token",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 4);
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
+  });
+
+  it("rechecks recovery lifecycle after the original-run read before ref creation", () => {
+    const fixture = createFixture();
+    const outputs = authorize(fixture);
+    signIntentFile(fixture, outputs);
+    const recovery = prepareRecoveryOverrides(fixture, outputs);
+    resetState(fixture);
+    const result = runAuthority(fixture, "record", {
+      ...recovery,
+      GH_CANCEL_CURRENT_AFTER_ORIGINAL_READ: "3",
+      MOBILE_RELEASE_REF_TOKEN: "write-token",
+    });
+    const trace = readGhTrace(fixture.ghLog);
+    const lifecycleReads = trace.filter(({ args }) => args[1]?.includes("/actions/runs/"));
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("run identity is not exact");
+    expectOnlyAttemptOneLifecycleReads(trace, 7);
+    expect(lifecycleReads.at(-1)?.args[1]).toContain("/actions/runs/999/attempts/1");
+    expect(fs.readFileSync(fixture.outputPath, "utf8")).toBe("");
+    expect(trace.some(({ args }) => args.includes("POST"))).toBe(false);
+    expect(fs.existsSync(path.join(fixture.stateDir, "release-ref"))).toBe(false);
   });
 
   it("rejects permission revocation after upload candidate validation", () => {
