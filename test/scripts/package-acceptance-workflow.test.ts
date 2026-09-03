@@ -757,6 +757,51 @@ function runCandidateAcquisitionStep(
   return { output, result };
 }
 
+function runFullReleaseCandidateRequest(packagePublished: boolean) {
+  const step = workflowStep(
+    workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image"),
+    "Build full release candidate request",
+  );
+  const workdir = tempDirs.make("full-release-candidate-request-");
+  const harnessRoot = resolve(workdir, ".release-harness");
+  const outputPath = resolve(workdir, "github-output");
+  mkdirSync(harnessRoot);
+  symlinkSync(resolve("scripts"), resolve(harnessRoot, "scripts"), "dir");
+  writeFileSync(outputPath, "", "utf8");
+  const result = spawnSync("bash", ["-c", step.run ?? ""], {
+    cwd: workdir,
+    encoding: "utf8",
+    env: {
+      ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "false",
+      ALLOW_UNRELEASED_CHANGELOG: "false",
+      GITHUB_OUTPUT: outputPath,
+      NODE_OPTIONS: "--preserve-symlinks-main",
+      PACKAGE_PUBLISHED: String(packagePublished),
+      PATH: process.env.PATH,
+      RELEASE_PROFILE: "beta",
+      RELEASE_SOAK: "false",
+      RUNNER_TEMP: workdir,
+      SHARED_IMAGE_POLICY: "no-push-artifact",
+      TARGET_REPOSITORY: "openclaw/openclaw",
+      TARGET_SHA: "a".repeat(40),
+      TOOLING_SHA: "b".repeat(40),
+      UPGRADE_SURVIVOR_BASELINE: "openclaw@latest",
+      UPGRADE_SURVIVOR_BASELINES: "",
+      UPGRADE_SURVIVOR_SCENARIOS: "",
+    },
+  });
+  const output = Object.fromEntries(
+    readFileSync(outputPath, "utf8")
+      .split("\n")
+      .filter(Boolean)
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+  return { output, result };
+}
+
 function createReleaseChecksContextFixture() {
   const root = tempDirs.make("release-checks-context-repo-");
   const repo = resolve(root, "context-source");
@@ -5944,10 +5989,20 @@ describe("package artifact reuse", () => {
     expect(prepare.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
       emit_candidate_evidence: true,
+      package_published: "${{ fromJSON(inputs.request_json).packagePublished }}",
       prepare_only: true,
       release_soak: "${{ fromJSON(inputs.request_json).releaseSoak }}",
       shared_image_policy: "${{ fromJSON(inputs.request_json).sharedImagePolicy }}",
     });
+    expect(
+      readWorkflow(LIVE_E2E_WORKFLOW).on?.workflow_call?.inputs?.package_published,
+    ).toMatchObject({
+      default: false,
+      required: false,
+      type: "boolean",
+    });
+    expect(request.env?.PACKAGE_PUBLISHED).toBe("${{ inputs.package_published }}");
+    expect(request.run).toContain('--argjson packagePublished "$PACKAGE_PUBLISHED"');
     expect(prepare.with?.published_upgrade_survivor_scenarios).toBe(
       "${{ join(fromJSON(inputs.request_json).upgradeSurvivorScenarios, ',') }}",
     );
@@ -6286,6 +6341,16 @@ describe("package artifact reuse", () => {
     expect(weekly.with).not.toHaveProperty("allow_frozen_target_scenario_omissions");
     expect(readWorkflow(UPDATE_MIGRATION_WORKFLOW).on?.schedule).toBeUndefined();
   });
+
+  it.each([false, true])(
+    "reconstructs packagePublished=%s in the produced candidate request",
+    (packagePublished) => {
+      const { output, result } = runFullReleaseCandidateRequest(packagePublished);
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(JSON.parse(output.json ?? "{}")).toMatchObject({ packagePublished });
+    },
+  );
 
   it("gives memory extension shards enough CPU without lowering their planner cost", () => {
     const workflow = readFileSync(PLUGIN_PRERELEASE_WORKFLOW, "utf8");
