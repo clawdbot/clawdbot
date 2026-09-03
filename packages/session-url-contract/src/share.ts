@@ -28,6 +28,7 @@ export const CONTROL_UI_RESERVED_ROUTE_SEGMENTS: readonly string[] = Object.free
   "lobsterdex",
   "logs",
   "mcp",
+  "meetings",
   "memory-import",
   "model-providers",
   "model-setup",

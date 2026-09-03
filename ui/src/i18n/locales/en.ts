@@ -2324,6 +2324,7 @@ export const en: TranslationMap & {
   tabs: {
     agents: "Agents",
     activity: "Activity",
+    meetings: "Meetings",
     apps: "Apps",
     portals: "Portals",
     approvals: "Approvals",
@@ -2367,6 +2368,7 @@ export const en: TranslationMap & {
   subtitles: {
     agents: "Workspaces, tools, identities.",
     activity: "Recent sessions across people using this gateway.",
+    meetings: "Meeting notes and transcripts across this gateway.",
     apps: "Companion apps for phone, watch, desktop, and browser.",
     portals: "Live previews from agent-run applications.",
     approvals: "Recent exec, plugin, and system-agent approvals.",

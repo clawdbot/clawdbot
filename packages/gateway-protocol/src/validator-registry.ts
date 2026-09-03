@@ -509,3 +509,6 @@ export const validateUpdateRunParams = compile(S.UpdateRunParamsSchema);
 export const validateUiCommandParams = compile(S.UiCommandParamsSchema);
 export const validateWebLoginStartParams = compile(S.WebLoginStartParamsSchema);
 export const validateWebLoginWaitParams = compile(S.WebLoginWaitParamsSchema);
+
+export const validateTranscriptsListParams = compile(S.TranscriptsListParamsSchema);
+export const validateTranscriptsGetParams = compile(S.TranscriptsGetParamsSchema);
