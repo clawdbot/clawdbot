@@ -17,8 +17,8 @@ runFakeCodexAppServer({
       sendResult(
         createFakeInitializeResponse({
           name: "openclaw-codex-media-path-e2e",
-          version: "0.151.0",
-          userAgent: "openclaw-codex-media-path-e2e/0.151.0 (Docker; test)",
+          version: "0.153.1",
+          userAgent: "openclaw-codex-media-path-e2e/0.153.1 (Docker; test)",
         }),
       ),
     "thread/start": ({ params, sendResult }) =>
@@ -27,7 +27,7 @@ runFakeCodexAppServer({
           params,
           threadId: "thread-codex-media-path-e2e",
           sessionId: "session-codex-media-path-e2e",
-          version: "0.151.0",
+          version: "0.153.1",
         }),
       ),
     "turn/start": ({ sendResult }) => {

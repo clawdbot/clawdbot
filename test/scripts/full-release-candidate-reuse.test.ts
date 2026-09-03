@@ -23,6 +23,8 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const NOW = Date.parse("2026-08-28T12:00:00Z");
 const EXPIRES_AT = "2026-09-04T12:00:00Z";
+// CLI subprocesses use the real clock; keep their artifacts clear of the expiry margin.
+const CLI_EXPIRES_AT = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
 const REPOSITORY = "openclaw/openclaw";
 const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
@@ -156,13 +158,20 @@ function constituentArtifactReader(manifest: CandidateConstituentSource) {
   };
 }
 
-async function fixture() {
+async function fixture(expiresAt = EXPIRES_AT) {
   const manifest = fullReleaseCandidateManifestFixture();
+  for (const constituent of [
+    manifest.package,
+    manifest.prepublishPluginRegistry,
+    manifest.sharedImage,
+  ]) {
+    constituent.artifact.expiresAt = expiresAt;
+  }
   const archive = await archiveWithManifest(manifest);
   return {
     archive,
     manifest,
-    metadata: artifactMetadata(archive),
+    metadata: artifactMetadata(archive, { expires_at: expiresAt }),
   };
 }
 
@@ -553,7 +562,7 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest } = await fixture();
+    const { archive, manifest } = await fixture(CLI_EXPIRES_AT);
     const artifacts = Array.from({ length: 6 }, (_, index) => {
       const runId = 80 + index;
       const jobs = workflowJobs(manifest, { runId });
@@ -561,6 +570,7 @@ esac
       writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
       writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
       return artifactMetadata(archive, {
+        expires_at: CLI_EXPIRES_AT,
         created_at: new Date(NOW - index * 1000).toISOString(),
         id: 400 + index,
         workflow_run: {
@@ -638,7 +648,7 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest, metadata } = await fixture();
+    const { archive, manifest, metadata } = await fixture(CLI_EXPIRES_AT);
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
