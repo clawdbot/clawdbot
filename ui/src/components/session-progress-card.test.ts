@@ -94,19 +94,22 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
 
-  it("refreshes relative time while connected and stops after disconnect", async () => {
+  it("refreshes relative time while connected and stops after disconnect", () => {
     const container = document.createElement("div");
-    render(
+    const part = render(
       renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
       container,
     );
     expect(container.querySelector("time")?.textContent).toBe("Updated just now");
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    vi.advanceTimersByTime(60_000);
+    expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
+
+    part.setConnected(false);
+    vi.advanceTimersByTime(60_000);
     expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
 
     render(null, container);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("labels activity from the last minute as just now", () => {
