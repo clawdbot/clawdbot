@@ -221,18 +221,7 @@ describe("Codex app inventory across physical process restart", () => {
             return { config: currentConfig, layers: [] };
           }
           if (method === "config/batchWrite") {
-            expect(requestParams.edits).toEqual([
-              {
-                keyPath: `apps."${appId}".links."account".approvals_reviewer`,
-                value: null,
-                mergeStrategy: "replace",
-              },
-            ]);
-            nativeLinkPolicy.approvals_reviewer = null;
-            if (requestParams.reloadUserConfig === true) {
-              reloadUserConfig();
-            }
-            return { status: "ok" };
+            throw new Error("App admission must not mutate saved native settings");
           }
           if (method === "configRequirements/read") {
             return { requirements: null };
@@ -580,7 +569,7 @@ describe("Codex app inventory across physical process restart", () => {
   );
 
   it.each(["cold", "warm"])(
-    "rechecks durable account app ask policy on %s continuation",
+    "reconfigures the %s thread when native ask override keys change",
     async (lifecycle) => {
       const f = await continuation(false, lifecycle, {
         codexPlugins: {
@@ -604,10 +593,14 @@ describe("Codex app inventory across physical process restart", () => {
       }
       const boundary = f.calls.length;
       const second = await f.process.run();
-      expect(f.nativeLinkPolicy.approvals_reviewer).toBeNull();
+      expect(f.nativeLinkPolicy.approvals_reviewer).toBe("auto_review");
       const writes = f.calls.slice(boundary).filter((call) => call.method === "config/batchWrite");
-      expect(writes).toHaveLength(1);
-      expect(second.threadId).toBe(f.first.threadId);
+      expect(writes).toHaveLength(0);
+      if (lifecycle === "cold") {
+        expect(second.threadId).toBe(f.first.threadId);
+      } else {
+        expect(second.threadId).not.toBe(f.first.threadId);
+      }
       expect(f.readBinding()?.pluginAppPolicyContext?.apps[appId]).toMatchObject({
         source: "account",
         destructiveApprovalMode: "ask",
@@ -617,11 +610,25 @@ describe("Codex app inventory across physical process restart", () => {
           [appId]: {
             enabled: true,
             approvals_reviewer: "user",
-            links: { account: { approvals_reviewer: null } },
+            links: { account: { approvals_reviewer: "user", default_tools_approval_mode: "auto" } },
           },
         },
       });
-      expect(writes[0]?.params.reloadUserConfig).toBe(true);
+      // A later native reload keeps this thread's higher-precedence ask overlay.
+      expect(
+        await retainCodexAppServerLiveThread(
+          f.process.client,
+          second.threadId,
+          undefined,
+          second.liveThreadConfigFingerprint,
+        ),
+      ).toBe(true);
+      f.process.reloadUserConfig();
+      const third = await f.process.run();
+      expect(third.threadId).toBe(second.threadId);
+      expect(f.process.loadedThreads.get(third.threadId)).toMatchObject({
+        apps: { [appId]: { links: { account: { approvals_reviewer: "user" } } } },
+      });
     },
   );
 

@@ -10,6 +10,7 @@ import {
 import { isCodexAppServerRequestTimeoutError, type CodexAppServerClient } from "./client.js";
 import type { CodexPluginDestructiveApprovalMode } from "./config.js";
 import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
+import { buildCodexAppApprovalOverrides } from "./plugin-app-approval-overrides.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
@@ -595,6 +596,17 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
     const currentApp = apps[appId];
     if (!currentApp) {
       continue;
+    }
+    if (currentApp.destructiveApprovalMode === "ask") {
+      // Captured ask can tighten today's policy. Pin the link reviewer too;
+      // per-tool prompt ceilings below do not override native account reviewers.
+      Object.assign(
+        appPatch,
+        buildCodexAppApprovalOverrides(currentPolicy.config, {
+          id: appId,
+          approvalOverrideToolConfigKeys: [],
+        }),
+      );
     }
     const storedAppCeiling = appApprovalCeiling(captured.destructiveApprovalMode);
     const currentAppCeiling = appApprovalCeiling(defaultApprovalMode(currentApp));
