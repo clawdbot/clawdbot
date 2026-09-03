@@ -28,14 +28,14 @@ function codexModel(model = "gpt-5.4", id = model) {
   };
 }
 
-function threadStartResult(model: string) {
+function threadStartResult(model: string, modelProvider = "openai") {
   return {
     thread: {
       id: "thread-finalizer",
       sessionId: "session-finalizer",
       preview: "",
       ephemeral: true,
-      modelProvider: "openai",
+      modelProvider,
       createdAt: 1,
       updatedAt: 1,
       status: { type: "idle" },
@@ -49,7 +49,7 @@ function threadStartResult(model: string) {
       turns: [],
     },
     model,
-    modelProvider: "openai",
+    modelProvider,
     cwd: "/tmp/finalizer",
     approvalPolicy: "on-request",
     approvalsReviewer: "user",
@@ -110,6 +110,7 @@ function createClientFactory(
     emptyAnswer?: boolean;
     completeTurn?: boolean;
     models?: ReturnType<typeof codexModel>[];
+    modelProvider?: string;
   } = {},
 ) {
   const methods: string[] = [];
@@ -132,7 +133,7 @@ function createClientFactory(
       return { requirements: null };
     }
     if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
-      return threadStartResult(params.model);
+      return threadStartResult(params.model, options.modelProvider);
     }
     if (method === "mcpServerStatus/list") {
       return {
@@ -561,11 +562,15 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
     ).toMatchObject({ sandbox: "read-only", approvalPolicy: "on-request" });
   });
 
-  it("preserves the configured native model provider when no override is supplied", async () => {
-    const fake = createClientFactory();
+  it("preserves and reports the configured native provider when no override is supplied", async () => {
+    const model = "gpt-5.6-luna";
+    const fake = createClientFactory({
+      modelProvider: "synthetic-native-provider",
+      models: [codexModel(model)],
+    });
 
-    await runBoundedCodexAppServerTurn({
-      model: { mode: "required", id: "gpt-5.4" },
+    const result = await runBoundedCodexAppServerTurn({
+      model: { mode: "required", id: model },
       timeoutMs: 5_000,
       options: {
         clientFactory: fake.factory,
@@ -581,6 +586,10 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
 
     const startParams = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     expect(startParams).not.toHaveProperty("modelProvider");
+    expect(result.nativeSelection).toEqual({
+      model,
+      modelProvider: "synthetic-native-provider",
+    });
     expect(fake.factory).toHaveBeenCalledWith(
       expect.objectContaining({ startOptions: expect.objectContaining({ homeScope: "user" }) }),
     );
@@ -619,12 +628,16 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
         requiredModalities: ["text"],
         isolation: "configured-transport",
       }),
-    ).resolves.toMatchObject({ model: id, text: "The message was sent successfully." });
+    ).resolves.toMatchObject({
+      model: id,
+      nativeSelection: { model: "codex-execution-model", modelProvider: "openai" },
+      text: "The message was sent successfully.",
+    });
 
     const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(threadStart).toMatchObject({ model: "codex-execution-model" });
-    expect(turnStart).toMatchObject({ model: "codex-execution-model" });
+    expect(turnStart).not.toHaveProperty("model");
   });
 
   it("keeps hidden models out of live-default selection", async () => {
@@ -649,13 +662,14 @@ describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
       }),
     ).resolves.toMatchObject({
       model: "visible-model",
+      nativeSelection: { model: "visible-execution-model", modelProvider: "openai" },
       text: "The message was sent successfully.",
     });
 
     const threadStart = fake.request.mock.calls.find(([method]) => method === "thread/start")?.[1];
     const turnStart = fake.request.mock.calls.find(([method]) => method === "turn/start")?.[1];
     expect(threadStart).toMatchObject({ model: "visible-execution-model" });
-    expect(turnStart).toMatchObject({ model: "visible-execution-model" });
+    expect(turnStart).not.toHaveProperty("model");
   });
 
   it("rejects a missing required model before starting a thread", async () => {

@@ -21,12 +21,22 @@ function freezeProjection(value: JsonValue): void {
   }
 }
 
+type CodexSettledTurnSelection = {
+  model: string;
+  modelProvider?: string;
+  authProfileId?: string;
+};
+
 /** Only the Codex owner interprets this bounded, detached replay projection. */
 export class CodexSettledTurnContext {
   readonly source = "harness";
 
-  constructor(readonly data: JsonValue[]) {
+  constructor(
+    readonly data: JsonValue[],
+    readonly selection: CodexSettledTurnSelection,
+  ) {
     freezeProjection(data);
+    Object.freeze(selection);
     Object.freeze(this);
   }
 }
@@ -110,14 +120,21 @@ function* verifiedSettledMessages(
 
 /** Verifies and freezes a complete replay projection while reading the active branch. */
 export async function captureCodexSettledTurnFinalizationContext(
-  params: CodexMirroredSessionHistoryTarget & SettledTurnMessages,
+  params: CodexMirroredSessionHistoryTarget &
+    SettledTurnMessages &
+    Partial<CodexSettledTurnSelection>,
 ): Promise<CodexSettledTurnContext | undefined> {
   try {
+    const { model, modelProvider, authProfileId } = params;
+    if (!model) {
+      throw new Error("Codex settled-turn model selection is unavailable");
+    }
     return await readCodexMirroredSessionHistory(
       params,
       (messages) =>
         new CodexSettledTurnContext(
           projectSettledCodexMessages(verifiedSettledMessages(messages, params)),
+          { model, modelProvider, authProfileId },
         ),
     );
   } catch (error) {
