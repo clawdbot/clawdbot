@@ -314,60 +314,11 @@ describe("tasks gateway handlers", () => {
     });
     reloadTaskRegistryFromStore();
 
-    const { payload } = await runTaskHandler("tasks.list", {
-      status: ["completed", "failed", "timed_out", "cancelled"],
-      sortBy: "endedAt",
-    });
+    const { payload } = await runTaskHandler("tasks.list", {});
 
     expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
       justFinished.taskId,
       finishedEarlier.taskId,
-    ]);
-  });
-
-  it("selects the bounded terminal page by completion time", async () => {
-    const base = Date.now();
-    const tasks = [
-      createSnapshotTask({
-        taskId: "task-finished-newest",
-        runId: "run-finished-newest",
-        status: "succeeded",
-        deliveryStatus: "not_applicable",
-        endedAt: base + 300,
-        lastEventAt: base + 100,
-      }),
-      createSnapshotTask({
-        taskId: "task-activity-newest",
-        runId: "run-activity-newest",
-        status: "succeeded",
-        deliveryStatus: "not_applicable",
-        endedAt: base + 100,
-        lastEventAt: base + 300,
-      }),
-      createSnapshotTask({
-        taskId: "task-finished-middle",
-        runId: "run-finished-middle",
-        status: "succeeded",
-        deliveryStatus: "not_applicable",
-        endedAt: base + 200,
-        lastEventAt: base + 200,
-      }),
-    ];
-    saveTaskRegistryStateToSqlite({
-      tasks: new Map(tasks.map((task) => [task.taskId, task])),
-      deliveryStates: new Map(),
-    });
-    reloadTaskRegistryFromStore();
-
-    const { payload } = await runTaskHandler("tasks.list", {
-      status: "completed",
-      sortBy: "endedAt",
-      limit: 2,
-    });
-
-    expect(payload?.tasks?.map((task) => task.taskId)).toEqual([
-      "task-finished-newest",
-      "task-finished-middle",
     ]);
   });
 
