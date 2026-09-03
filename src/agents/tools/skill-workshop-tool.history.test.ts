@@ -2,10 +2,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { recordSkillCollectionReviewHistory } from "../../skills/workshop/collection-review-state.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
+
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
@@ -20,7 +23,12 @@ describe("skill_workshop collection history", () => {
     });
     cleanups.push(async () => await testState.cleanup());
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-history-");
-    const tool = createSkillWorkshopTool({ workspaceDir, env: testState.env });
+    const tool = createSkillWorkshopTool({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      env: testState.env,
+    });
 
     await expect(tool.execute("empty-history", { action: "history" })).resolves.toMatchObject({
       content: [{ type: "text", text: "No recorded collection reviews." }],
@@ -29,6 +37,7 @@ describe("skill_workshop collection history", () => {
 
     const createTime = Date.UTC(2026, 7, 18, 12, 34, 56);
     recordSkillCollectionReviewHistory(
+      "main",
       createTime,
       {
         backupId: "backup-42",
@@ -71,6 +80,7 @@ describe("skill_workshop collection history", () => {
       );
     for (let review = 0; review < 20; review += 1) {
       recordSkillCollectionReviewHistory(
+        "main",
         review,
         {
           backupId: `backup-${review}`,

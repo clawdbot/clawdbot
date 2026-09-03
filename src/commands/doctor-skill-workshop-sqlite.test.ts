@@ -93,8 +93,11 @@ describe("doctor Skill Workshop SQLite migration", () => {
       store: { env: testState.env },
     });
 
-    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+    await expect(
+      inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
+    ).resolves.toEqual({
       externalProposalCount: 1,
+      externalProposalCountsByAgent: { main: 1 },
       legacyBackupRootCount: 0,
     });
     const first = await migrateLegacySkillWorkshopProposals({
@@ -109,8 +112,11 @@ describe("doctor Skill Workshop SQLite migration", () => {
       statusReason: "Skill Workshop no longer edits skills outside its own directory.",
     });
     await expect(fs.readFile(skillFile, "utf8")).resolves.toBe(skillContent);
-    await expect(inspectLegacySkillWorkshopMigration(testState.env)).resolves.toEqual({
+    await expect(
+      inspectLegacySkillWorkshopMigration({ config: {}, env: testState.env }),
+    ).resolves.toEqual({
       externalProposalCount: 0,
+      externalProposalCountsByAgent: {},
       legacyBackupRootCount: 0,
     });
     await expect(
@@ -194,6 +200,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     const revised = await reviseSkillProposal({
       workspaceDir,
       agentId: "main",
+      config: {},
       proposalId,
       content: "# Shipped Workshop\n\nRevised after upgrade.\n",
     });
@@ -205,7 +212,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     });
 
     await expect(
-      applySkillProposal({ workspaceDir, agentId: "main", proposalId }),
+      applySkillProposal({ workspaceDir, agentId: "main", config: {}, proposalId }),
     ).resolves.toMatchObject({
       record: { id: proposalId, status: "applied" },
     });
@@ -299,7 +306,7 @@ describe("doctor Skill Workshop SQLite migration", () => {
     ).resolves.toMatchObject({ detected: 1, migrated: 1, warnings: [] });
     await expect(readSkillProposalRollback(proposalId)).resolves.toMatchObject(rollback);
 
-    await expect(listSkillProposals({ agentId: "main" })).resolves.toMatchObject({
+    await expect(listSkillProposals({ config: {}, agentId: "main" })).resolves.toMatchObject({
       proposals: [expect.objectContaining({ id: proposalId, status: "pending" })],
     });
     await expect(fs.readFile(targetSupportFile, "utf8")).resolves.toBe(supportContent);
@@ -307,11 +314,12 @@ describe("doctor Skill Workshop SQLite migration", () => {
     const revised = await reviseSkillProposal({
       workspaceDir,
       agentId: "main",
+      config: {},
       proposalId,
       content: "# Partial Workshop\n\nRevised after recovery.\n",
     });
     await expect(
-      applySkillProposal({ workspaceDir, agentId: "main", proposalId }),
+      applySkillProposal({ workspaceDir, agentId: "main", config: {}, proposalId }),
     ).resolves.toMatchObject({ record: { id: proposalId, status: "applied" } });
     await expect(fs.readFile(revised.record.target.skillFile, "utf8")).resolves.toContain(
       "Revised after recovery.",

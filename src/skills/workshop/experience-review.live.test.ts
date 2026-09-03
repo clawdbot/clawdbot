@@ -119,6 +119,7 @@ describe("skill experience review diagnostics", () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     try {
       recordSkillExperienceReviewOutcome(
+        "main",
         diagnosticWorkspace,
         {
           attemptedAtMs: 1,

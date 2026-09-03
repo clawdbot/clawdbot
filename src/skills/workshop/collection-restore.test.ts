@@ -14,9 +14,9 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { bumpSkillsSnapshotVersion, getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import { writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
 import {
-  listWritableSkillCollection,
-  reconcileSkillCollection,
-  restoreLatestSkillCollectionBackup,
+  listWritableSkillCollection as listWritableSkillCollectionImpl,
+  reconcileSkillCollection as reconcileSkillCollectionImpl,
+  restoreLatestSkillCollectionBackup as restoreLatestSkillCollectionBackupImpl,
 } from "./collection-reconcile.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 import { applySkillProposal, proposeCreateSkill } from "./service.js";
@@ -55,6 +55,15 @@ let testState: OpenClawTestState;
 let workspaceDir: string;
 let skillsRoot: string;
 
+const listWritableSkillCollection = (
+  options?: Parameters<typeof listWritableSkillCollectionImpl>[0],
+) => listWritableSkillCollectionImpl({ config: {}, agentId: "main", ...options });
+const reconcileSkillCollection = (params: Parameters<typeof reconcileSkillCollectionImpl>[0]) =>
+  reconcileSkillCollectionImpl({ config: {}, agentId: "main", ...params });
+const restoreLatestSkillCollectionBackup = (
+  params: Parameters<typeof restoreLatestSkillCollectionBackupImpl>[0],
+) => restoreLatestSkillCollectionBackupImpl({ config: {}, agentId: "main", ...params });
+
 beforeEach(async () => {
   copyDirectoryBefore.mockReset();
   copyDirectoryBefore.mockResolvedValue(undefined);
@@ -68,7 +77,7 @@ beforeEach(async () => {
     prefix: "openclaw-skill-collection-state-",
   });
   workspaceDir = await fs.realpath(await tempDirs.make("openclaw-skill-collection-workspace-"));
-  skillsRoot = resolveWorkshopSkillsDir(testState.env);
+  skillsRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
 });
 
 afterEach(async () => {
@@ -115,6 +124,9 @@ describe("skill collection backup and restore", () => {
 
     const manifestPath = path.join(
       testState.stateDir,
+      "agents",
+      "main",
+      "agent",
       "skill-workshop",
       "collection-backups",
       result.backupId,
@@ -399,6 +411,9 @@ describe("skill collection backup and restore", () => {
     const skillFile = path.join(skillDir, "SKILL.md");
     const backupRoot = path.join(
       await fs.realpath(testState.stateDir),
+      "agents",
+      "main",
+      "agent",
       "skill-workshop",
       "collection-backups",
     );
@@ -605,6 +620,8 @@ async function writeWorkshopOwnedSkills(
   for (const skill of skills) {
     const proposal = await proposeCreateSkill({
       workspaceDir,
+      config: {},
+      agentId: "main",
       env: testState.env,
       name: skill.name,
       description: skill.description,
@@ -612,6 +629,8 @@ async function writeWorkshopOwnedSkills(
     });
     await applySkillProposal({
       workspaceDir,
+      config: {},
+      agentId: "main",
       env: testState.env,
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,

@@ -68,7 +68,7 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       logger,
     });
 
-    expect(add).toHaveBeenCalledOnce();
+    expect(add).toHaveBeenCalledTimes(2);
     expect(add.mock.calls[0]?.[0]).toMatchObject({
       declarationKey: "skill-collection-review:main",
       enabled: false,
@@ -78,6 +78,10 @@ describe("reconcileSkillCollectionReviewJobs", () => {
       enabledExplicit: true,
       systemOwned: true,
     });
+    expect(add.mock.calls.map(([input]) => input.declarationKey)).toEqual([
+      "skill-collection-review:main",
+      "skill-collection-review:ops",
+    ]);
     expect(remove).toHaveBeenNthCalledWith(1, "stale-older", { systemOwned: true });
     expect(remove).toHaveBeenNthCalledWith(2, "stale-newer", { systemOwned: true });
     expect(remove).toHaveBeenCalledTimes(2);

@@ -270,14 +270,14 @@ describe("skills workshop cli", () => {
     expect(mocks.runtimeStdout.at(-1)).toContain("Applied");
     await expect(
       fs.readFile(
-        path.join(resolveWorkshopSkillsDir(testState.env), "paris-weather", "SKILL.md"),
+        path.join(resolveWorkshopSkillsDir({}, "main", testState.env), "paris-weather", "SKILL.md"),
         "utf8",
       ),
     ).resolves.toContain("Check current weather and alerts");
     await expect(
       fs.readFile(
         path.join(
-          resolveWorkshopSkillsDir(testState.env),
+          resolveWorkshopSkillsDir({}, "main", testState.env),
           "paris-weather",
           "references",
           "weather.md",

@@ -502,14 +502,14 @@ describe("experience review auto apply", () => {
         await review;
       }
 
-      const manifest = await listSkillProposals();
+      const manifest = await listSkillProposals({ config: candidate.config, agentId: "main" });
       expect(manifest.proposals).toHaveLength(1);
       expect(manifest.proposals[0]).toMatchObject({
         skillKey: "deployment-preflight",
         status: error ? "pending" : "applied",
       });
       const skillFile = path.join(
-        resolveWorkshopSkillsDir(testState.env),
+        resolveWorkshopSkillsDir({}, "main", testState.env),
         "deployment-preflight",
         "SKILL.md",
       );
@@ -590,12 +590,16 @@ describe("experience review auto apply", () => {
     });
   });
 
-  it("auto-applies updates to the global Workshop directory from a session worktree", async () => {
+  it("auto-applies updates to the agent Workshop directory from a session worktree", async () => {
     const canonicalWorkspaceDir = await tempDirs.make("openclaw-experience-canonical-");
     const worktreeWorkspaceDir = await tempDirs.make("openclaw-experience-worktree-");
-    const skillDir = path.join(resolveWorkshopSkillsDir(testState.env), "deployment-preflight");
+    const skillDir = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "deployment-preflight",
+    );
     const seedTool = createSkillWorkshopTool({
       workspaceDir: canonicalWorkspaceDir,
+      agentId: "main",
       config: { skills: { workshop: { approvalPolicy: "auto" } } },
     });
     const seeded = await seedTool.execute("seed-create", {
@@ -657,6 +661,7 @@ describe("experience review auto apply", () => {
 
     const manifest = await listSkillProposals({
       agentId: "main",
+      config: candidate.config,
     });
     const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
     expect(updateEntry).toMatchObject({
@@ -665,6 +670,7 @@ describe("experience review auto apply", () => {
     });
     const inspected = await inspectSkillProposal(updateEntry?.id ?? "", {
       agentId: "main",
+      config: candidate.config,
     });
     expect(inspected?.record.target.skillFile).toBe(path.join(skillDir, "SKILL.md"));
     await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
@@ -679,6 +685,7 @@ describe("experience review auto apply", () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-auto-apply-extend-");
     const seedTool = createSkillWorkshopTool({
       workspaceDir,
+      agentId: "main",
       config: { skills: { workshop: { approvalPolicy: "auto" } } },
     });
     const seeded = await seedTool.execute("seed-create", {
@@ -731,14 +738,18 @@ describe("experience review auto apply", () => {
       getCurrentConfig: () => candidate.config ?? {},
     });
 
-    const manifest = await listSkillProposals();
+    const manifest = await listSkillProposals({ config: candidate.config, agentId: "main" });
     const updateEntry = manifest.proposals.find((entry) => entry.kind === "update");
     expect(updateEntry).toMatchObject({
       skillKey: "deployment-preflight",
       status: "applied",
     });
     const liveSkill = await fs.readFile(
-      path.join(resolveWorkshopSkillsDir(testState.env), "deployment-preflight", "SKILL.md"),
+      path.join(
+        resolveWorkshopSkillsDir({}, "main", testState.env),
+        "deployment-preflight",
+        "SKILL.md",
+      ),
       "utf8",
     );
     expect(liveSkill).toContain("Operator-authored preflight steps.");
@@ -822,7 +833,9 @@ describe("experience review auto apply", () => {
       }),
     });
 
-    expect((await listSkillProposals()).proposals[0]).toMatchObject({
+    expect(
+      (await listSkillProposals({ config: candidate.config, agentId: "main" })).proposals[0],
+    ).toMatchObject({
       status: "pending",
     });
   });
@@ -830,7 +843,7 @@ describe("experience review auto apply", () => {
   it("records a failed apply and leaves the capture pending without retrying", async () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-apply-failure-workspace-");
     // A file where the skill directory must go makes the live write fail after the proposal exists.
-    const workshopSkillsDir = resolveWorkshopSkillsDir(testState.env);
+    const workshopSkillsDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     await fs.mkdir(workshopSkillsDir, { recursive: true });
     await fs.writeFile(path.join(workshopSkillsDir, "deployment-preflight"), "blocker");
     runEmbeddedAgent.mockImplementation(async (params) => {
@@ -870,7 +883,9 @@ describe("experience review auto apply", () => {
     ).rejects.toThrow();
 
     expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
-    expect((await listSkillProposals()).proposals[0]).toMatchObject({
+    expect(
+      (await listSkillProposals({ config: candidate.config, agentId: "main" })).proposals[0],
+    ).toMatchObject({
       status: "pending",
     });
     expect(Object.values(readSkillReviewOutcomes().experienceReviews)[0]).toMatchObject({
@@ -883,6 +898,8 @@ describe("experience review auto apply", () => {
     const workspaceDir = await tempDirs.make("openclaw-experience-manual-workspace-");
     const manual = await proposeCreateSkill({
       workspaceDir,
+      config: {},
+      agentId: "main",
       name: "deployment-preflight",
       description: "Manual deployment proposal.",
       content: "# Deployment Preflight\n\nReview this manually.\n",
@@ -924,7 +941,10 @@ describe("experience review auto apply", () => {
       { getCurrentConfig: () => config },
     );
 
-    const inspected = await inspectSkillProposal(manual.record.id);
+    const inspected = await inspectSkillProposal(manual.record.id, {
+      config,
+      agentId: "main",
+    });
     expect(inspected).toMatchObject({
       record: { status: "pending" },
       content: expect.stringContaining("Keep this manual revision pending"),

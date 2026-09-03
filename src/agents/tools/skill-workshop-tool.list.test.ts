@@ -9,9 +9,11 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const commitLockState = vi.hoisted(() => ({ active: false, calls: 0 }));
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 vi.mock("../../skills/workshop/target-lock.js", () => ({
   withSkillCollectionLock: async (fn: () => Promise<unknown>) => await fn(),
@@ -127,7 +129,7 @@ describe("skill_workshop list", () => {
         proposal_content: `# Limit Proposal ${index}\n`,
       });
     }
-    const workshopDir = resolveWorkshopSkillsDir(testState.env);
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     for (let index = 0; index < 51; index += 1) {
       await writeSkill({
         dir: path.join(workshopDir, `limit-proposal-${index}`),

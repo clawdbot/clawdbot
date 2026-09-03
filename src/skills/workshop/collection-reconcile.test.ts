@@ -13,7 +13,10 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { writeSkill, writeWorkspaceSkills } from "../test-support/e2e-test-helpers.js";
-import { listWritableSkillCollection, reconcileSkillCollection } from "./collection-reconcile.js";
+import {
+  listWritableSkillCollection as listWritableSkillCollectionImpl,
+  reconcileSkillCollection as reconcileSkillCollectionImpl,
+} from "./collection-reconcile.js";
 import { listSkillCollectionReviewOutcomes } from "./collection-review-state.js";
 import { stageSkillCollectionDrop } from "./collection-rollback.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
@@ -59,6 +62,12 @@ let testState: OpenClawTestState;
 let workspaceDir: string;
 let skillsRoot: string;
 
+const listWritableSkillCollection = (
+  options?: Parameters<typeof listWritableSkillCollectionImpl>[0],
+) => listWritableSkillCollectionImpl({ config: {}, agentId: "main", ...options });
+const reconcileSkillCollection = (params: Parameters<typeof reconcileSkillCollectionImpl>[0]) =>
+  reconcileSkillCollectionImpl({ config: {}, agentId: "main", ...params });
+
 beforeEach(async () => {
   copyDirectoryBefore.mockReset();
   copyDirectoryBefore.mockResolvedValue(undefined);
@@ -72,7 +81,7 @@ beforeEach(async () => {
     prefix: "openclaw-skill-collection-state-",
   });
   workspaceDir = await fs.realpath(await tempDirs.make("openclaw-skill-collection-workspace-"));
-  skillsRoot = resolveWorkshopSkillsDir(testState.env);
+  skillsRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
 });
 
 afterEach(async () => {
@@ -174,7 +183,7 @@ describe("skill collection reconciliation", () => {
       name: "deploy-two",
       reason: "merged into deploy-one",
     });
-    expect(listSkillCollectionReviewOutcomes({ env: testState.env })).toEqual([
+    expect(listSkillCollectionReviewOutcomes("main", { env: testState.env })).toEqual([
       {
         createTime: expect.any(Number),
         backupId: result.backupId,
@@ -197,13 +206,13 @@ describe("skill collection reconciliation", () => {
     ).toEqual([{ skill_key: "deploy-one", use_count: 3 }]);
 
     const backupRoots = await fs.readdir(
-      path.join(testState.stateDir, "skill-workshop", "collection-backups"),
+      path.join(testState.agentDir("main"), "skill-workshop", "collection-backups"),
     );
     expect(backupRoots).toHaveLength(1);
     await expect(
       fs.readFile(
         path.join(
-          testState.stateDir,
+          testState.agentDir("main"),
           "skill-workshop",
           "collection-backups",
           backupRoots[0]!,
@@ -229,7 +238,7 @@ describe("skill collection reconciliation", () => {
         .all(),
     ).toEqual([{ skill_key: "deploy-one", use_count: 3 }]);
     const backupDir = path.join(
-      testState.stateDir,
+      testState.agentDir("main"),
       "skill-workshop",
       "collection-backups",
       backupRoots[0]!,
@@ -281,7 +290,7 @@ describe("skill collection reconciliation", () => {
 
     expect(result).toMatchObject({ kept: ["untouched"], written: ["changed"], dropped: [] });
     await expect(fs.readFile(untouchedFile, "utf8")).resolves.toContain("Operator note.");
-    expect(listSkillCollectionReviewOutcomes({ env: testState.env })[0]).toMatchObject({
+    expect(listSkillCollectionReviewOutcomes("main", { env: testState.env })[0]).toMatchObject({
       kept: ["untouched"],
       written: ["changed"],
       dropped: [],
@@ -391,7 +400,7 @@ describe("skill collection reconciliation", () => {
           releaseLock = resolve;
         });
       },
-      { env: testState.env },
+      { env: testState.env, agentId: "main" },
     );
     await acquired;
 
@@ -533,6 +542,8 @@ describe("skill collection reconciliation", () => {
   it("surfaces proposal reads that exceed the collection lease wait", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir,
+      config: {},
+      agentId: "main",
       env: testState.env,
       name: "Contended Candidate",
       description: "Surface collection lock contention.",
@@ -550,7 +561,7 @@ describe("skill collection reconciliation", () => {
           releaseLock = resolve;
         });
       },
-      { env: testState.env },
+      { env: testState.env, agentId: "main" },
     );
     await acquired;
     const expectCollectionLeaseTimeout = async (operation: () => Promise<unknown>) => {
@@ -575,11 +586,13 @@ describe("skill collection reconciliation", () => {
 
     try {
       await expectCollectionLeaseTimeout(
-        async () => await listSkillProposals({ env: testState.env }),
+        async () => await listSkillProposals({ config: {}, agentId: "main", env: testState.env }),
       );
       await expectCollectionLeaseTimeout(
         async () =>
           await inspectSkillProposal(proposal.record.id, {
+            config: {},
+            agentId: "main",
             env: testState.env,
           }),
       );
@@ -618,6 +631,8 @@ async function writeWorkshopOwnedSkills(
   for (const skill of skills) {
     const proposal = await proposeCreateSkill({
       workspaceDir,
+      config: {},
+      agentId: "main",
       env: testState.env,
       name: skill.name,
       description: skill.description,
@@ -625,6 +640,8 @@ async function writeWorkshopOwnedSkills(
     });
     await applySkillProposal({
       workspaceDir,
+      config: {},
+      agentId: "main",
       env: testState.env,
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
@@ -643,7 +660,7 @@ function seedSkillUsage(skillNames: readonly string[]): void {
   `);
   for (const skillName of skillNames) {
     insert.run(
-      path.join(resolveWorkshopSkillsDir(testState.env), skillName, "SKILL.md"),
+      path.join(resolveWorkshopSkillsDir({}, "main", testState.env), skillName, "SKILL.md"),
       skillName,
       skillName,
       "openclaw-workspace",

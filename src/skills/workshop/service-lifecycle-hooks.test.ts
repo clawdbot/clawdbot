@@ -112,7 +112,11 @@ describe("Skill Workshop lifecycle hooks", () => {
     );
     await expect(
       fs.readFile(
-        path.join(resolveWorkshopSkillsDir(testState.env), "lifecycle-hook", "SKILL.md"),
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "lifecycle-hook",
+          "SKILL.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("# Lifecycle Hook");
@@ -183,7 +187,9 @@ describe("Skill Workshop lifecycle hooks", () => {
     expect(
       listSkillProposalEvents({ proposalId: proposal.record.id }).events.map((event) => event.type),
     ).toEqual(["created", "stale"]);
-    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+    await expect(
+      inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
+    ).resolves.toMatchObject({
       record: { status: "stale" },
     });
     expect(hookMocks.proposalChanged).toHaveBeenLastCalledWith(
@@ -227,7 +233,7 @@ describe("Skill Workshop lifecycle hooks", () => {
       }
     });
 
-    const inspection = inspectSkillProposal(first.record.id);
+    const inspection = inspectSkillProposal(first.record.id, { config: {}, agentId: "main" });
     await hookEntered.promise;
     try {
       const rejected = await rejectSkillProposal({
@@ -297,7 +303,9 @@ describe("Skill Workshop lifecycle hooks", () => {
       }),
     ).rejects.toThrow("Proposal scan failed");
 
-    await expect(inspectSkillProposal(proposal.record.id)).resolves.toMatchObject({
+    await expect(
+      inspectSkillProposal(proposal.record.id, { config: {}, agentId: "main" }),
+    ).resolves.toMatchObject({
       record: { status: "quarantined" },
     });
     expect(

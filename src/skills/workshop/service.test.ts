@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   closeOpenClawStateDatabaseByPath,
   closeOpenClawStateDatabaseForTest,
@@ -16,17 +17,17 @@ import {
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { renderProposalMarkdown, stripProposalFrontmatterForSkill } from "./frontmatter.js";
 import {
-  applySkillProposal,
-  getSkillProposalRunProgress,
-  inspectSkillProposal,
-  listSkillProposals,
-  proposeCreateSkill,
-  proposeUpdateSkill,
-  quarantineSkillProposal,
+  applySkillProposal as applySkillProposalImpl,
+  getSkillProposalRunProgress as getSkillProposalRunProgressImpl,
+  inspectSkillProposal as inspectSkillProposalImpl,
+  listSkillProposals as listSkillProposalsImpl,
+  proposeCreateSkill as proposeCreateSkillImpl,
+  proposeUpdateSkill as proposeUpdateSkillImpl,
+  quarantineSkillProposal as quarantineSkillProposalImpl,
   readSkillProposalDraftDirectory,
-  rejectSkillProposal,
-  resolvePendingSkillProposal,
-  reviseSkillProposal,
+  rejectSkillProposal as rejectSkillProposalImpl,
+  resolvePendingSkillProposal as resolvePendingSkillProposalImpl,
+  reviseSkillProposal as reviseSkillProposalImpl,
 } from "./service.js";
 import { resolveWorkshopSkillsDir } from "./skills-root.js";
 import { writeSkillProposalRollback } from "./store-sqlite-rollback.js";
@@ -44,6 +45,44 @@ const tempDirs = createTrackedTempDirs();
 const stateDirs = createTrackedTempDirs();
 let testEnv: NodeJS.ProcessEnv;
 let stateDir = "";
+const workshopConfig: OpenClawConfig = {};
+
+function workshopSkillsDir(agentId = "main"): string {
+  return resolveWorkshopSkillsDir(workshopConfig, agentId, testEnv);
+}
+
+function withWorkshopOwner<T extends { config?: OpenClawConfig; agentId?: string }>(input: T) {
+  return {
+    ...input,
+    config: input.config ?? workshopConfig,
+    agentId: input.agentId ?? "main",
+  };
+}
+
+const applySkillProposal = (input: Parameters<typeof applySkillProposalImpl>[0]) =>
+  applySkillProposalImpl(withWorkshopOwner(input));
+const getSkillProposalRunProgress = (
+  input: Parameters<typeof getSkillProposalRunProgressImpl>[0],
+) => getSkillProposalRunProgressImpl(withWorkshopOwner(input));
+const inspectSkillProposal = (
+  proposalId: string,
+  input?: Parameters<typeof inspectSkillProposalImpl>[1],
+) => inspectSkillProposalImpl(proposalId, withWorkshopOwner(input ?? {}));
+const listSkillProposals = (input?: Parameters<typeof listSkillProposalsImpl>[0]) =>
+  listSkillProposalsImpl(withWorkshopOwner(input ?? {}));
+const proposeCreateSkill = (input: Parameters<typeof proposeCreateSkillImpl>[0]) =>
+  proposeCreateSkillImpl(withWorkshopOwner(input));
+const proposeUpdateSkill = (input: Parameters<typeof proposeUpdateSkillImpl>[0]) =>
+  proposeUpdateSkillImpl(withWorkshopOwner(input));
+const quarantineSkillProposal = (input: Parameters<typeof quarantineSkillProposalImpl>[0]) =>
+  quarantineSkillProposalImpl(withWorkshopOwner(input));
+const rejectSkillProposal = (input: Parameters<typeof rejectSkillProposalImpl>[0]) =>
+  rejectSkillProposalImpl(withWorkshopOwner(input));
+const resolvePendingSkillProposal = (
+  input: Parameters<typeof resolvePendingSkillProposalImpl>[0],
+) => resolvePendingSkillProposalImpl(withWorkshopOwner(input));
+const reviseSkillProposal = (input: Parameters<typeof reviseSkillProposalImpl>[0]) =>
+  reviseSkillProposalImpl(withWorkshopOwner(input));
 
 beforeAll(async () => {
   stateDir = await stateDirs.make("openclaw-skill-workshop-state-");
@@ -97,6 +136,8 @@ async function createOwnedSkill(params: {
     name: params.name,
     description: params.description,
     content: params.body,
+    config: workshopConfig,
+    agentId: "main",
   });
   await applySkillProposal({
     workspaceDir: params.workspaceDir,
@@ -136,10 +177,14 @@ describe("skill workshop proposals", () => {
     const secondWorkspaceDir = await fs.realpath(await makeWorkspace());
     const firstTarget = resolveSkillProposalTarget({
       skillName: "shared-workshop-skill",
+      config: workshopConfig,
+      agentId: "main",
       env: testEnv,
     });
     const secondTarget = resolveSkillProposalTarget({
       skillName: "shared-workshop-skill",
+      config: workshopConfig,
+      agentId: "main",
       env: testEnv,
     });
     expect(firstTarget).toEqual(secondTarget);
@@ -242,7 +287,7 @@ describe("skill workshop proposals", () => {
       ],
     });
     expect(proposal.record.target.skillFile).toBe(
-      path.join(resolveWorkshopSkillsDir(testEnv), "weather-helper", "SKILL.md"),
+      path.join(workshopSkillsDir(), "weather-helper", "SKILL.md"),
     );
     expect(proposal.content).toContain("date: ");
 
@@ -268,31 +313,23 @@ describe("skill workshop proposals", () => {
     );
     await expect(
       fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir(testEnv),
-          "weather-helper",
-          "references",
-          "weather-api.md",
-        ),
+        path.join(workshopSkillsDir(), "weather-helper", "references", "weather-api.md"),
         "utf8",
       ),
     ).resolves.toContain("Use the current weather endpoint.");
     await expect(
       fs.readFile(
-        path.join(
-          resolveWorkshopSkillsDir(testEnv),
-          "weather-helper",
-          "scripts",
-          "check-weather.js",
-        ),
+        path.join(workshopSkillsDir(), "weather-helper", "scripts", "check-weather.js"),
         "utf8",
       ),
     ).resolves.toContain("parseWeather");
 
     expect(
-      listWritableWorkshopSkillSummaries({ env: testEnv }).find(
-        (skill) => skill.name === "weather-helper",
-      ),
+      listWritableWorkshopSkillSummaries({
+        config: workshopConfig,
+        agentId: "main",
+        env: testEnv,
+      }).find((skill) => skill.name === "weather-helper"),
     ).toMatchObject({
       name: "weather-helper",
       filePath: applied.targetSkillFile,
@@ -338,7 +375,7 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: created.record.id }),
     ).resolves.toBeDefined();
     const createdSkill = await fs.readFile(
-      path.join(resolveWorkshopSkillsDir(testEnv), "frontmatter-skill", "SKILL.md"),
+      path.join(workshopSkillsDir(), "frontmatter-skill", "SKILL.md"),
       "utf8",
     );
     expect(createdSkill).toContain("user-invocable: false");
@@ -372,7 +409,7 @@ describe("skill workshop proposals", () => {
 
   it("rejects create proposals when the target skill file already exists", async () => {
     const workspaceDir = await makeWorkspace();
-    const skillFile = path.join(resolveWorkshopSkillsDir(testEnv), "empty-skill", "SKILL.md");
+    const skillFile = path.join(workshopSkillsDir(), "empty-skill", "SKILL.md");
     await fs.mkdir(path.dirname(skillFile), { recursive: true });
     await fs.writeFile(skillFile, "", "utf8");
 
@@ -532,10 +569,7 @@ describe("skill workshop proposals", () => {
 
     await applySkillProposal({ workspaceDir, proposalId: proposal.record.id });
     await expect(
-      fs.readFile(
-        path.join(resolveWorkshopSkillsDir(testEnv), "draftable-skill", "SKILL.md"),
-        "utf8",
-      ),
+      fs.readFile(path.join(workshopSkillsDir(), "draftable-skill", "SKILL.md"), "utf8"),
     ).resolves.toBe(
       '---\nname: "draftable-skill"\ndescription: "Revised proposal"\n---\n\n# Draftable\n\nLater body.\n',
     );
@@ -597,7 +631,7 @@ describe("skill workshop proposals", () => {
     );
   });
 
-  it("keeps an agent's proposals global across session workspace changes", async () => {
+  it("keeps an agent's proposals across session workspace changes", async () => {
     const firstWorkspaceDir = await makeWorkspace();
     const secondWorkspaceDir = await makeWorkspace();
     const first = await proposeCreateSkill({
@@ -663,34 +697,45 @@ describe("skill workshop proposals", () => {
     ).resolves.toMatchObject({ status: "quarantined" });
   });
 
-  it("keeps unowned proposals global", async () => {
+  it("isolates proposals between agents", async () => {
     const firstWorkspaceDir = await makeWorkspace();
     const secondWorkspaceDir = await makeWorkspace();
     const first = await proposeCreateSkill({
+      config: workshopConfig,
+      agentId: "main",
       workspaceDir: firstWorkspaceDir,
-      name: "First Unowned Skill",
-      description: "Bound to the first workspace",
+      name: "First Agent Skill",
+      description: "Bound to the first agent",
       content: "# First\n",
     });
     const second = await proposeCreateSkill({
+      config: workshopConfig,
+      agentId: "other",
       workspaceDir: secondWorkspaceDir,
-      name: "Second Unowned Skill",
-      description: "Bound to the second workspace",
+      name: "Second Agent Skill",
+      description: "Bound to the second agent",
       content: "# Second\n",
     });
 
-    await expect(inspectSkillProposal(second.record.id)).resolves.toMatchObject({
-      record: { id: second.record.id },
+    await expect(
+      listSkillProposals({ config: workshopConfig, agentId: "main" }),
+    ).resolves.toMatchObject({
+      proposals: [expect.objectContaining({ id: first.record.id })],
     });
     await expect(
       rejectSkillProposal({
+        config: workshopConfig,
+        agentId: "main",
         workspaceDir: firstWorkspaceDir,
         proposalId: second.record.id,
       }),
-    ).resolves.toMatchObject({ status: "rejected" });
-    await expect(inspectSkillProposal(first.record.id)).resolves.toMatchObject({
-      record: { id: first.record.id },
-    });
+    ).rejects.toThrow(`Skill proposal not found: ${second.record.id}`);
+    await expect(
+      inspectSkillProposal(second.record.id, { config: workshopConfig, agentId: "main" }),
+    ).resolves.toBeNull();
+    await expect(
+      inspectSkillProposal(second.record.id, { config: workshopConfig, agentId: "other" }),
+    ).resolves.toMatchObject({ record: { id: second.record.id } });
   });
 
   it("updates only writable workspace skills and marks stale proposals when the target changes", async () => {
@@ -872,7 +917,10 @@ describe("skill workshop proposals", () => {
       proposalId: applied.record.id,
     });
 
-    const manifest = await readSkillProposalManifest();
+    const manifest = await readSkillProposalManifest(
+      { env: testEnv, config: workshopConfig, agentId: "main" },
+      { agentId: "main" },
+    );
     expect(
       manifest.proposals
         .toSorted((a, b) => a.skillKey.localeCompare(b.skillKey))
@@ -883,10 +931,10 @@ describe("skill workshop proposals", () => {
       ["draft-two", "quarantined"],
     ]);
     await expect(
-      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "draft-one", "SKILL.md")),
+      fs.access(path.join(workshopSkillsDir(), "draft-one", "SKILL.md")),
     ).rejects.toThrow();
     await expect(
-      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "draft-two", "SKILL.md")),
+      fs.access(path.join(workshopSkillsDir(), "draft-two", "SKILL.md")),
     ).rejects.toThrow();
 
     await expect(
@@ -1008,7 +1056,7 @@ describe("skill workshop proposals", () => {
           releaseLock = resolve;
         });
       },
-      { env: testEnv },
+      { env: testEnv, agentId: "main" },
     );
     await acquired;
     let settled = false;
@@ -1266,22 +1314,36 @@ describe("skill workshop proposals", () => {
 
   it("enforces configured proposal limits before writing proposal state", async () => {
     const workspaceDir = await makeWorkspace();
+    const otherWorkspaceDir = await makeWorkspace();
     const limitedConfig = { skills: { workshop: { maxPending: 1, maxSkillBytes: 1024 } } };
     const first = await proposeCreateSkill({
       workspaceDir,
       config: limitedConfig,
+      agentId: "main",
       name: "First Limited",
       description: "First limited proposal",
       content: "# First Limited\n",
     });
 
+    const second = await proposeCreateSkill({
+      workspaceDir: otherWorkspaceDir,
+      config: limitedConfig,
+      agentId: "other",
+      name: "Second Limited",
+      description: "Second limited proposal",
+      content: "# Second Limited\n",
+    });
+    await expect(
+      listSkillProposals({ config: limitedConfig, agentId: "other" }),
+    ).resolves.toMatchObject({ proposals: [expect.objectContaining({ id: second.record.id })] });
     await expect(
       proposeCreateSkill({
         workspaceDir,
         config: limitedConfig,
-        name: "Second Limited",
-        description: "Second limited proposal",
-        content: "# Second Limited\n",
+        agentId: "main",
+        name: "Third Limited",
+        description: "Third limited proposal",
+        content: "# Third Limited\n",
       }),
     ).rejects.toThrow("pending proposal limit");
     expect((await listSkillProposals()).proposals.map((entry) => entry.id)).toEqual([
@@ -1588,9 +1650,7 @@ describe("skill workshop proposals", () => {
     ).rejects.toThrow("Proposal scan failed");
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("quarantined");
     await expect(
-      fs.access(
-        path.join(resolveWorkshopSkillsDir(testEnv), "unsafe-support", "scripts", "run.js"),
-      ),
+      fs.access(path.join(workshopSkillsDir(), "unsafe-support", "scripts", "run.js")),
     ).rejects.toThrow();
   });
 
@@ -1626,7 +1686,7 @@ describe("skill workshop proposals", () => {
       applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
     ).rejects.toThrow("changed without updating metadata");
     await expect(
-      fs.access(path.join(resolveWorkshopSkillsDir(testEnv), "tamper-guard", "SKILL.md")),
+      fs.access(path.join(workshopSkillsDir(), "tamper-guard", "SKILL.md")),
     ).rejects.toThrow();
   });
 });

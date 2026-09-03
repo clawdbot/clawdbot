@@ -5,10 +5,12 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createConfiguredSkillWorkshopTool } from "./skill-workshop-tool-factory.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({

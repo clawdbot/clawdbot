@@ -22,18 +22,20 @@ import {
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
 import { listCoreToolSections } from "../tool-catalog.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
 let stateDir = "";
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function writeWorkshopSkills(
   skills: ReadonlyArray<{ name: string; description: string; body?: string }>,
 ): Promise<void> {
   for (const skill of skills) {
     await writeSkill({
-      dir: path.join(resolveWorkshopSkillsDir(testState.env), skill.name),
+      dir: path.join(resolveWorkshopSkillsDir({}, "main", testState.env), skill.name),
       name: skill.name,
       description: skill.description,
       body: skill.body,
@@ -42,7 +44,7 @@ async function writeWorkshopSkills(
 }
 
 function workshopSkillPath(name: string, ...parts: string[]): string {
-  return path.join(resolveWorkshopSkillsDir(testState.env), name, ...parts);
+  return path.join(resolveWorkshopSkillsDir({}, "main", testState.env), name, ...parts);
 }
 
 async function proposalArtifactPath(
@@ -84,6 +86,7 @@ describe("skill_workshop tool", () => {
     const seeded = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "duplicate",
       description: "Duplicate procedure",
       content: "# duplicate\n",
@@ -91,6 +94,7 @@ describe("skill_workshop tool", () => {
     await applySkillProposal({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: seeded.record.id,
       expectedRevisionHash: seeded.revisionHash,
     });
@@ -148,7 +152,7 @@ describe("skill_workshop tool", () => {
           releaseLock = resolve;
         });
       },
-      { env: testState.env },
+      { env: testState.env, agentId: "main" },
     );
     await acquired;
 
@@ -1017,7 +1021,7 @@ describe("skill_workshop tool", () => {
     consumeRunSkillUsage(runId);
   });
 
-  it("keeps proposal discovery global for the tool agent across workspace changes", async () => {
+  it("keeps proposal discovery for the tool agent across workspace changes", async () => {
     const firstWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-first-");
     const secondWorkspaceDir = await tempDirs.make("openclaw-skill-workshop-tool-second-");
     const firstTool = createSkillWorkshopTool({

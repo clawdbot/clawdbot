@@ -10,8 +10,8 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { resolveSkillWorkshopToolApproval } from "./policy.js";
-import { proposeCreateSkill } from "./service.js";
+import { resolveSkillWorkshopToolApproval as resolveSkillWorkshopToolApprovalImpl } from "./policy.js";
+import { proposeCreateSkill as proposeCreateSkillImpl } from "./service.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
@@ -22,6 +22,12 @@ const pendingApprovalConfig = {
     },
   },
 };
+
+const resolveSkillWorkshopToolApproval = (
+  params: Parameters<typeof resolveSkillWorkshopToolApprovalImpl>[0],
+) => resolveSkillWorkshopToolApprovalImpl({ agentId: "main", ...params });
+const proposeCreateSkill = (params: Parameters<typeof proposeCreateSkillImpl>[0]) =>
+  proposeCreateSkillImpl({ agentId: "main", ...params });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -173,7 +179,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
     });
 
     expect(result?.requireApproval?.description).toBe(
-      "Apply a pending proposal inside the global Skill Workshop directory.",
+      "Apply a pending proposal inside your agent's Workshop directory.",
     );
     expect(result?.requireApproval?.timeoutMs).toBe(70_000);
 
@@ -183,7 +189,7 @@ describe("resolveSkillWorkshopToolApproval", () => {
       config: pendingApprovalConfig,
     });
     expect(withoutWorkspace?.requireApproval?.description).toBe(
-      "Apply a pending proposal inside the global Skill Workshop directory.",
+      "Apply a pending proposal inside your agent's Workshop directory.",
     );
   });
 

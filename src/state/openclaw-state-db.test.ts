@@ -1558,6 +1558,7 @@ describe("openclaw state database", () => {
       },
     };
     legacy.exec(`
+      DROP TABLE skill_workshop_collection_reviews;
       CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
         proposal_id TEXT NOT NULL PRIMARY KEY,
         record_json TEXT NOT NULL,
@@ -1652,6 +1653,13 @@ describe("openclaw state database", () => {
         )
         .get(),
     ).toBeUndefined();
+    expect(
+      migrated.db
+        .prepare(
+          "SELECT owner_agent_id FROM skill_workshop_collection_reviews WHERE review_id = 'review-v15'",
+        )
+        .get(),
+    ).toEqual({ owner_agent_id: "main" });
     const proposals = migrated.db
       .prepare(
         "SELECT proposal_id, status, status_reason, record_json FROM skill_workshop_proposals ORDER BY proposal_id",
@@ -2105,7 +2113,7 @@ describe("openclaw state database", () => {
             "Retired legacy skill curator lifecycle and proposal origin-run tables",
             "Folded singleton state tables into config_machine_state (v12)",
             "Qualified historical cron creator attribution as unknown (v14)",
-            "Moved Skill Workshop ownership to its global directory (v16)",
+            "Moved Skill Workshop ownership to per-agent directories (v16)",
           ],
           warnings: [],
         });

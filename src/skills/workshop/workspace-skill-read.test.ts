@@ -39,14 +39,18 @@ async function writeSkill(dir: string, name: string, body = ""): Promise<void> {
 
 describe("listWritableWorkshopSkillSummaries", () => {
   it("uses the declared name for grouped skills when reading and updating", async () => {
-    const baseDir = path.join(resolveWorkshopSkillsDir(testState.env), "group", "folder-name");
+    const baseDir = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "group",
+      "folder-name",
+    );
     await writeSkill(baseDir, "declared-name");
 
-    expect(listWritableWorkshopSkillSummaries({ env: testState.env })).toEqual([
+    expect(listWritableWorkshopSkillSummaries({ agentId: "main", env: testState.env })).toEqual([
       expect.objectContaining({ name: "declared-name", baseDir }),
     ]);
     await expect(
-      readWritableWorkshopSkill("declared-name", { env: testState.env }),
+      readWritableWorkshopSkill("declared-name", { agentId: "main", env: testState.env }),
     ).resolves.toMatchObject({
       skillKey: "declared-name",
       baseDir,
@@ -54,6 +58,8 @@ describe("listWritableWorkshopSkillSummaries", () => {
     await expect(
       proposeUpdateSkill({
         workspaceDir: await tempDirs.make("openclaw-workshop-declared-name-workspace-"),
+        agentId: "main",
+        config: {},
         env: testState.env,
         skillName: "declared-name",
         content: "# Updated\n",
@@ -70,14 +76,14 @@ describe("listWritableWorkshopSkillSummaries", () => {
   });
 
   it("applies the configured per-source count and file-size limits", async () => {
-    const workshopDir = resolveWorkshopSkillsDir(testState.env);
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     for (const name of ["alpha", "beta", "gamma"]) {
       await writeSkill(path.join(workshopDir, name), name);
     }
     await writeSkill(path.join(workshopDir, "delta"), "delta", "x".repeat(2_000));
 
     const names = (config: Parameters<typeof listWritableWorkshopSkillSummaries>[0]) =>
-      listWritableWorkshopSkillSummaries({ ...config, env: testState.env }).map(
+      listWritableWorkshopSkillSummaries({ agentId: "main", ...config, env: testState.env }).map(
         (skill) => skill.name,
       );
     expect(names({})).toEqual(["alpha", "beta", "delta", "gamma"]);
@@ -88,19 +94,25 @@ describe("listWritableWorkshopSkillSummaries", () => {
     const sizeLimited = { config: { skills: { limits: { maxSkillFileBytes: 1_000 } } } };
     expect(names(sizeLimited)).toEqual(["alpha", "beta", "gamma"]);
     await expect(
-      readWritableWorkshopSkill("delta", { ...sizeLimited, env: testState.env }),
+      readWritableWorkshopSkill("delta", {
+        agentId: "main",
+        ...sizeLimited,
+        env: testState.env,
+      }),
     ).rejects.toThrow(/No Workshop-generated skill matched: delta/);
   });
 
   it("ignores a symlinked skill directory that leaves the Workshop root", async () => {
-    const workshopDir = resolveWorkshopSkillsDir(testState.env);
+    const workshopDir = resolveWorkshopSkillsDir({}, "main", testState.env);
     await writeSkill(path.join(workshopDir, "inside"), "inside");
     const outsideDir = path.join(await tempDirs.make("openclaw-workshop-outside-"), "outside");
     await writeSkill(outsideDir, "outside");
     await fs.symlink(outsideDir, path.join(workshopDir, "outside"), "dir");
 
     expect(
-      listWritableWorkshopSkillSummaries({ env: testState.env }).map((skill) => skill.name),
+      listWritableWorkshopSkillSummaries({ agentId: "main", env: testState.env }).map(
+        (skill) => skill.name,
+      ),
     ).toEqual(["inside"]);
   });
 });

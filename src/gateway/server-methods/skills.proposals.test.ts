@@ -227,14 +227,18 @@ describe("skills proposal gateway handlers", () => {
     );
     await expect(
       fs.readFile(
-        path.join(resolveWorkshopSkillsDir(testState.env), "weather-planner", "SKILL.md"),
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "weather-planner",
+          "SKILL.md",
+        ),
         "utf8",
       ),
     ).resolves.toContain("Use current weather and alerts.");
     await expect(
       fs.readFile(
         path.join(
-          resolveWorkshopSkillsDir(testState.env),
+          resolveWorkshopSkillsDir({}, "main", testState.env),
           "weather-planner",
           "references",
           "weather.md",
@@ -332,7 +336,7 @@ describe("skills proposal gateway handlers", () => {
     });
   });
 
-  it("keeps list and inspect global for the agent after its workspace changes", async () => {
+  it("keeps list and inspect scoped to the agent after its workspace changes", async () => {
     const firstWorkspaceDir = mocks.workspaceDir;
     const first = await callHandler("skills.proposals.create", {
       name: "First Gateway Skill",

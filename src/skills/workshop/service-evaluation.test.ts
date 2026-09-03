@@ -26,7 +26,7 @@ import { SkillProposalRevisionChangedError } from "./service-evaluation.js";
 import {
   applySkillProposal,
   evaluateSkillProposal,
-  inspectSkillProposal,
+  inspectSkillProposal as inspectSkillProposalImpl,
   listSkillProposalEvents,
   proposeCreateSkill,
   proposeUpdateSkill,
@@ -36,6 +36,10 @@ import { prepareSkillProposalSupportFiles } from "./store.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const inspectSkillProposal = (
+  proposalId: string,
+  options: Parameters<typeof inspectSkillProposalImpl>[1] = {},
+) => inspectSkillProposalImpl(proposalId, { config: {}, agentId: "main", ...options });
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({

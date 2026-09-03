@@ -9,10 +9,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 async function proposalDraftPath(proposalId: string): Promise<string> {
   const record = await readSkillProposalRecord(proposalId, { env: testState.env });
@@ -97,7 +99,11 @@ describe("skill_workshop terminal lifecycle", () => {
         ).toBe(expectedStatus);
         await expect(
           fs.access(
-            path.join(resolveWorkshopSkillsDir(testState.env), `${action}-${damage}`, "SKILL.md"),
+            path.join(
+              resolveWorkshopSkillsDir({}, "main", testState.env),
+              `${action}-${damage}`,
+              "SKILL.md",
+            ),
           ),
         ).rejects.toThrow();
       }

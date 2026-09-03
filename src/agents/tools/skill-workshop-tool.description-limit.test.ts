@@ -8,10 +8,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -75,7 +77,13 @@ describe("skill_workshop description validation", () => {
       "Skill proposal description is too large (161 bytes, max 160).",
     );
     await expect(
-      fs.access(path.join(resolveWorkshopSkillsDir(testState.env), "long-description", "SKILL.md")),
+      fs.access(
+        path.join(
+          resolveWorkshopSkillsDir({}, "main", testState.env),
+          "long-description",
+          "SKILL.md",
+        ),
+      ),
     ).rejects.toThrow();
     expect(collectionReconcile).not.toHaveProperty("result");
   });

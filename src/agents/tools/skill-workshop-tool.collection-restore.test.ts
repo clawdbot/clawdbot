@@ -5,10 +5,12 @@ import { applySkillProposal, proposeCreateSkill } from "../../skills/workshop/se
 import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 const cleanups: Array<() => Promise<void>> = [];
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 afterEach(async () => {
   await Promise.all(cleanups.splice(0).map(async (cleanup) => await cleanup()));
@@ -28,6 +30,7 @@ describe("skill_workshop collection restore", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "duplicate",
       description: "Duplicate procedure",
       content: "# Duplicate procedure\n",
@@ -35,6 +38,7 @@ describe("skill_workshop collection restore", () => {
     await applySkillProposal({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
     });
@@ -50,7 +54,7 @@ describe("skill_workshop collection restore", () => {
     });
     const backupId = (reconciled.details as { backupId: string }).backupId;
     const workshopSkillFile = path.join(
-      resolveWorkshopSkillsDir(testState.env),
+      resolveWorkshopSkillsDir({}, "main", testState.env),
       "duplicate",
       "SKILL.md",
     );

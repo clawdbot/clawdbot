@@ -102,7 +102,7 @@ describe("skill_workshop model projection", () => {
     async ({ modelContextWindowTokens, contentIncluded }) => {
       const workspaceDir = await tempDirs.make("openclaw-skill-collection-context-read-");
       await writeSkill({
-        dir: path.join(resolveWorkshopSkillsDir(testState.env), "large"),
+        dir: path.join(resolveWorkshopSkillsDir({}, "main", testState.env), "large"),
         name: "large",
         description: "Large procedure",
         body: `MODEL_VISIBLE_SKILL_BODY\n${"x".repeat(21_000)}`,

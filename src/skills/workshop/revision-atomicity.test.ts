@@ -161,6 +161,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       name: "Atomic Revision",
       description: "Keep proposal revisions whole across crashes",
       content: "# Atomic Revision\n\nVersion 1.\n",
@@ -177,6 +178,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     return await reviseSkillProposal({
       workspaceDir,
       env: testState.env,
+      agentId: "main",
       proposalId: proposal.record.id,
       expectedRevisionHash: proposal.revisionHash,
       content: `# Atomic Revision\n\nVersion ${version}.\n`,
@@ -193,6 +195,7 @@ describe("Skill Workshop revision generation atomicity", () => {
       evaluateSkillProposal({
         workspaceDir: params.workspaceDir,
         env: testState.env,
+        agentId: "main",
         proposalId: params.proposal.record.id,
         expectedRevisionHash: params.proposal.revisionHash,
       }),
@@ -202,6 +205,7 @@ describe("Skill Workshop revision generation atomicity", () => {
     await expect(
       inspectSkillProposal(params.proposal.record.id, {
         env: testState.env,
+        agentId: "main",
       }),
     ).resolves.toMatchObject({
       record: { proposedVersion: params.proposal.record.proposedVersion },

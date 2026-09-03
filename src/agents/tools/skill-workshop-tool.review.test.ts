@@ -12,10 +12,12 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
-import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
+import { createSkillWorkshopTool as createSkillWorkshopToolImpl } from "./skill-workshop-tool.js";
 
 const tempDirs = createTrackedTempDirs();
 let testState: OpenClawTestState;
+const createSkillWorkshopTool = (options: Parameters<typeof createSkillWorkshopToolImpl>[0]) =>
+  createSkillWorkshopToolImpl({ config: {}, agentId: "main", ...options });
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -240,7 +242,7 @@ describe("skill_workshop review mode", () => {
     });
     await reviewTool.execute("review-read", { action: "read", skill_name: "weather-planner" });
     const liveSkillFile = path.join(
-      resolveWorkshopSkillsDir(testState.env),
+      resolveWorkshopSkillsDir({}, "main", testState.env),
       "weather-planner",
       "SKILL.md",
     );
@@ -272,7 +274,7 @@ describe("skill_workshop review mode", () => {
     );
 
     const liveSkillFile = path.join(
-      resolveWorkshopSkillsDir(testState.env),
+      resolveWorkshopSkillsDir({}, "main", testState.env),
       "weather-planner",
       "SKILL.md",
     );
@@ -507,7 +509,7 @@ describe("skill_workshop review mode", () => {
       old_string: oldString,
     });
     const liveSkillFile = path.join(
-      resolveWorkshopSkillsDir(testState.env),
+      resolveWorkshopSkillsDir({}, "main", testState.env),
       "big-skill",
       "SKILL.md",
     );

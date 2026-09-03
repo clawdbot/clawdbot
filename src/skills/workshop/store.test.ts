@@ -19,6 +19,7 @@ import {
 import { updateSkillProposalRecord } from "./store.js";
 
 let testState: OpenClawTestState;
+const workshopConfig = {};
 
 beforeEach(async () => {
   testState = await createOpenClawTestState({
@@ -35,6 +36,8 @@ describe("Skill Workshop SQLite store", () => {
   it("commits a pending transition once and rejects stale record facts", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
+      config: workshopConfig,
+      agentId: "main",
       name: "Transition Compare And Swap",
       description: "Bind state transitions to authoritative proposal facts",
       content: "# Transition Compare And Swap\n",
@@ -84,7 +87,9 @@ describe("Skill Workshop SQLite store", () => {
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
         .get("skill_workshop_proposals"),
     ).toBeUndefined();
-    await expect(listSkillProposals()).resolves.toMatchObject({ proposals: [] });
+    await expect(
+      listSkillProposals({ config: workshopConfig, agentId: "main" }),
+    ).resolves.toMatchObject({ proposals: [] });
     expect(
       reopened.db
         .prepare("SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?")
@@ -120,6 +125,7 @@ describe("Skill Workshop SQLite store", () => {
   it("keeps arbitrary payload keys disjoint from durable evaluations", async () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
+      config: workshopConfig,
       agentId: "main",
       name: "Event Envelope",
       description: "Exercise event payload encoding",
@@ -173,6 +179,7 @@ describe("Skill Workshop SQLite store", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
       agentId: "main",
+      config: workshopConfig,
       name: "Event Page Budget",
       description: "Bound replay response size",
       content: "# Event Page Budget\n",
@@ -230,6 +237,7 @@ describe("Skill Workshop SQLite store", () => {
     const proposal = await proposeCreateSkill({
       workspaceDir: testState.stateDir,
       agentId: "main",
+      config: workshopConfig,
       name: "Oversized Stored Event",
       description: "Reject silent audit data loss",
       content: "# Oversized Stored Event\n",
