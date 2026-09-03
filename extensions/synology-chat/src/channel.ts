@@ -189,7 +189,11 @@ type SynologyChatPlugin = Omit<
   pairing: {
     idLabel: string;
     normalizeAllowEntry?: (entry: string) => string;
-    notifyApproval: (params: { cfg: OpenClawConfig; id: string }) => Promise<void>;
+    notifyApproval: (params: {
+      cfg: OpenClawConfig;
+      id: string;
+      accountId?: string;
+    }) => Promise<void>;
   };
   security: {
     resolveDmPolicy: (params: { cfg: OpenClawConfig; account: ResolvedSynologyChatAccount }) => {
@@ -524,8 +528,8 @@ function createSynologyChatPlugin(): SynologyChatPlugin {
         idLabel: "synologyChatUserId",
         message: "OpenClaw: your access has been approved.",
         normalizeAllowEntry: (entry: string) => normalizeLowercaseStringOrEmpty(entry),
-        notify: async ({ cfg, id, message }) => {
-          const account = resolveAccount(cfg);
+        notify: async ({ cfg, id, message, accountId }) => {
+          const account = resolveAccount(cfg, accountId);
           if (!account.incomingUrl) {
             return;
           }

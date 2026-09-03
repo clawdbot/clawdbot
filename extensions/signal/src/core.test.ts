@@ -394,6 +394,55 @@ describe("probeSignal", () => {
   });
 });
 
+describe("signalPlugin pairing.notifyApproval", () => {
+  const pairingCfg = {
+    channels: {
+      signal: {
+        defaultAccount: "alpha",
+        accounts: {
+          alpha: {
+            account: "+15550000001",
+            transport: { kind: "external-native" as const, url: "http://alpha.test" },
+          },
+          beta: {
+            account: "+15550000002",
+            transport: { kind: "external-native" as const, url: "http://beta.test" },
+          },
+        },
+      },
+    },
+  } as OpenClawConfig;
+
+  it.each([
+    {
+      name: "the approved account",
+      accountId: "beta",
+      account: "+15550000002",
+      baseUrl: "http://beta.test",
+    },
+    {
+      name: "the default account when no account was approved",
+      accountId: undefined,
+      account: "+15550000001",
+      baseUrl: "http://alpha.test",
+    },
+  ])("sends the approval from $name", async ({ accountId, account, baseUrl }) => {
+    const signalRpcRequest = vi
+      .spyOn(clientModule, "signalRpcRequest")
+      .mockResolvedValue({ timestamp: 1_700_000_000_000 } as never);
+
+    await signalPlugin.pairing!.notifyApproval!({
+      cfg: pairingCfg,
+      id: "+15551234567",
+      ...(accountId ? { accountId } : {}),
+    });
+
+    expect(signalRpcRequest).toHaveBeenCalledTimes(1);
+    expect(signalRpcRequest.mock.calls[0]?.[1]).toMatchObject({ account });
+    expect(signalRpcRequest.mock.calls[0]?.[2]).toMatchObject({ baseUrl });
+  });
+});
+
 describe("signal outbound", () => {
   it("resolves aliases through the message target resolver", async () => {
     const resolved = await signalPlugin.messaging?.targetResolver?.resolveTarget?.({
