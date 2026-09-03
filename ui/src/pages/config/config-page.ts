@@ -803,12 +803,15 @@ export class ConfigPage extends OpenClawLightDomElement {
       return existing.promise;
     }
     const gatewaySource = this.systemInfoGatewaySource;
+    let promise: Promise<void>;
     const isCurrent = () =>
       this.isConnected &&
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
-      this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
+      this.context.agentSelection.state.selectedId === agentId &&
+      // Agent selection can cycle A -> B -> A while the first A load is still pending.
+      this.sessionObserverModelsRequest?.promise === promise;
+    promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
       .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;

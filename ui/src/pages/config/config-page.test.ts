@@ -756,6 +756,55 @@ describe("ConfigPage session observer models", () => {
     expect(state.sessionObserverModelsUnavailable).toBe(true);
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
   });
+
+  it("keeps an earlier request stale after switching away and back to the same agent", async () => {
+    const firstMain = deferred<ModelCatalogResult>();
+    const writer = deferred<ModelCatalogResult>();
+    const secondMain = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
+      .mockReturnValueOnce(firstMain.promise)
+      .mockReturnValueOnce(writer.promise)
+      .mockReturnValueOnce(secondMain.promise);
+    const client = {} as GatewayBrowserClient;
+    const gateway = {
+      snapshot: { client, phase: "connected" },
+    } as unknown as ApplicationGateway;
+    const selectionState = { selectedId: "main" as string | null };
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      systemInfoGatewaySource: ApplicationGateway;
+      sessionObserverModels: ModelCatalogEntry[];
+      ensureSessionObserverModels: (
+        client: GatewayBrowserClient,
+        agentId: string | null,
+      ) => Promise<void>;
+    };
+    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
+    state.context = {
+      gateway,
+      agentSelection: { state: selectionState },
+    } as ApplicationContext;
+    state.systemInfoGatewaySource = gateway;
+
+    const firstMainLoad = state.ensureSessionObserverModels(client, "main");
+    selectionState.selectedId = "writer";
+    const writerLoad = state.ensureSessionObserverModels(client, "writer");
+    selectionState.selectedId = "main";
+    const secondMainLoad = state.ensureSessionObserverModels(client, "main");
+
+    const currentModels = [{ id: "current", name: "Current", provider: "openai" }];
+    secondMain.resolve({ models: currentModels });
+    await secondMainLoad;
+    expect(state.sessionObserverModels).toEqual(currentModels);
+
+    firstMain.resolve({ models: [{ id: "stale", name: "Stale", provider: "openai" }] });
+    writer.resolve({ models: [{ id: "writer", name: "Writer", provider: "openai" }] });
+    await Promise.all([firstMainLoad, writerLoad]);
+
+    expect(state.sessionObserverModels).toEqual(currentModels);
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe("ConfigPage curated mutation eligibility", () => {
