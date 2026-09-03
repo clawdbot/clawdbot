@@ -1,6 +1,7 @@
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../../ui/src/e2e/control-ui-e2e-suite.test-support.ts";
 import { controlUiSessionUrl } from "../../../ui/src/test-helpers/control-ui-e2e.ts";
@@ -109,11 +110,18 @@ suite.define(() => {
         async ({ page }) => {
           const eventSequence: string[] = [];
           let finalEvents = 0;
+          let activeUiSocket: WebSocket | undefined;
           page.on("websocket", (socket) => {
             if (new URL(socket.url()).origin !== new URL(gateway.wsUrl).origin) {
               return;
             }
+            // Reload briefly overlaps the retiring and replacement sockets. Observe only the
+            // active UI connection so broadcast approval events are not counted twice.
+            activeUiSocket = socket;
             socket.on("framereceived", ({ payload }) => {
+              if (socket !== activeUiSocket) {
+                return;
+              }
               const frame: unknown = JSON.parse(String(payload));
               if (!isRecord(frame) || frame.type !== "event") {
                 return;
