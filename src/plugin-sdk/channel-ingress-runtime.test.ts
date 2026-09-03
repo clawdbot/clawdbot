@@ -9,6 +9,9 @@ import {
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
 
+/** The lifecycle shape fan-in accepts, taken from the exported signature. */
+type FanInLifecycle = NonNullable<Parameters<typeof fanInChannelIngressLifecycles>[0][number]>;
+
 const identity = {
   primary: { normalize: (value) => value.trim().toLowerCase(), sensitivity: "pii" },
 } satisfies ChannelIngressIdentityDescriptor;
@@ -143,7 +146,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
   });
 
   it("fans failed settlement into modern failure and legacy abandonment", async () => {
-    const failed = vi.fn(async () => {});
+    const failed = vi.fn<NonNullable<FanInLifecycle["onFailed"]>>(async () => {});
     const abandoned = vi.fn(async () => {});
     const legacyAbandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
@@ -173,6 +176,28 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(failed.mock.calls[0]?.[0]).toHaveProperty("message", "adoption failed");
     expect(abandoned).not.toHaveBeenCalled();
     expect(legacyAbandoned).toHaveBeenCalledOnce();
+  });
+
+  it("settles each claim once when a consumer abandons after a rejected adoption", async () => {
+    const abandoned = vi.fn(async () => {});
+    const combined = fanInChannelIngressLifecycles([
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: async () => {
+          throw new Error("adoption failed");
+        },
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: abandoned,
+      },
+    ]);
+
+    await expect(combined.lifecycle?.onAdopted()).rejects.toThrow("adoption failed");
+    // A wrapper settles through the lifecycle rather than the abandon helper, so
+    // this is the call that used to consume a second retry attempt.
+    await combined.lifecycle?.onAbandoned();
+
+    expect(abandoned).toHaveBeenCalledTimes(1);
   });
 
   it("releases the claims a rejected adoption never reached", async () => {

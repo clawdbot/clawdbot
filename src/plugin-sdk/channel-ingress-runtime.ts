@@ -151,19 +151,31 @@ export function fanInChannelIngressLifecycles(
   }
 
   let handedOff = false;
+  // Set once every claim has reached a terminal disposition. A consumer that
+  // wraps this lifecycle abandons through onAbandoned rather than the abandon
+  // helper below, so without this the claims a rejected adoption already
+  // released would be settled a second time and consume a second retry.
+  let settledAll = false;
+  const settleOnce = async (run: () => Promise<void>) => {
+    if (settledAll) {
+      return;
+    }
+    settledAll = true;
+    await run();
+  };
   const fanOut = async (
     invoke: (lifecycle: ChannelIngressLifecycle) => void | Promise<void>,
     targets: readonly ChannelIngressLifecycle[] = lifecycles,
   ) => {
     await Promise.all(targets.map(async (lifecycle) => await invoke(lifecycle)));
   };
-  const abandonAll = () => fanOut((lifecycle) => lifecycle.onAbandoned());
+  const abandonAll = () => settleOnce(() => fanOut((lifecycle) => lifecycle.onAbandoned()));
   const failEach = (targets: readonly ChannelIngressLifecycle[], error: unknown) =>
     fanOut(
       (lifecycle) => (lifecycle.onFailed ? lifecycle.onFailed(error) : lifecycle.onAbandoned()),
       targets,
     );
-  const failAll = (error: unknown) => failEach(lifecycles, error);
+  const failAll = (error: unknown) => settleOnce(() => failEach(lifecycles, error));
   // Adoption runs in claim order so each durable source settles in the order it
   // was taken. Handoff is already marked by the time this runs, so a caller's
   // abandon after a rejection here is a no-op; release the claim that threw and
@@ -175,7 +187,7 @@ export function fanInChannelIngressLifecycles(
       } catch (error) {
         // Callers match the adoption error itself (isIngressAdoptionLostError),
         // so a failing release must not replace it.
-        await Promise.allSettled([failEach(lifecycles.slice(index), error)]);
+        await Promise.allSettled([settleOnce(() => failEach(lifecycles.slice(index), error))]);
         throw error;
       }
     }
@@ -184,8 +196,10 @@ export function fanInChannelIngressLifecycles(
   // Omit aggregate cancellation unless every durable source supports it. Callers
   // can then use settle/abandon without an acknowledged-but-unsettled claim.
   const cancelAll = () =>
-    fanOut((lifecycle) =>
-      lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+    settleOnce(() =>
+      fanOut((lifecycle) =>
+        lifecycle.onCancelled ? lifecycle.onCancelled() : lifecycle.onAbandoned(),
+      ),
     );
   return {
     lifecycle: {
