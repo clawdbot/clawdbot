@@ -35,17 +35,20 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
+import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "../../styles/profile.css";
 import "../../features/github-connections/github-connections.ts";
-import { renderIdentitySection } from "./identity-section.ts";
+import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import "./model-accounts.ts";
+import { renderIdentitySection } from "./identity-section.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { renderProfileHero } from "./profile-hero.ts";
+
+registerModelAccountsEnglish();
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
@@ -418,11 +421,13 @@ export class ProfilePage extends OpenClawLightDomElement {
     return html`<openclaw-model-accounts
       .identityId=${this.selfUser?.id ?? null}
       .profileId=${this.ownProfile?.id ?? null}
-      .personLabel=${this.ownProfile
-        ? this.ownProfile.displayName?.trim() ||
-          this.ownProfile.emails[0] ||
-          t("profilePage.modelAccounts.currentPerson")
-        : null}
+      .personLabel=${
+        this.ownProfile
+          ? this.ownProfile.displayName?.trim() ||
+            this.ownProfile.emails[0] ||
+            t("profilePage.modelAccounts.currentPerson")
+          : null
+      }
     ></openclaw-model-accounts>`;
   }
 
@@ -481,15 +486,17 @@ export class ProfilePage extends OpenClawLightDomElement {
             ${subtitleForRoute("profile")} ${renderLearnMoreLink(PROFILE_DOCS_URL)}
           </div>
         </div>
-        ${this.selfUser
-          ? html`<button
-              class="btn profile-refresh"
-              ?disabled=${this.identityLoading || this.identityBusy !== null}
-              @click=${() => this.refreshManually()}
-            >
-              ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
-            </button>`
-          : nothing}
+        ${
+          this.selfUser
+            ? html`<button
+                class="btn profile-refresh"
+                ?disabled=${this.identityLoading || this.identityBusy !== null}
+                @click=${() => this.refreshManually()}
+              >
+                ${this.identityLoading ? t("common.refreshing") : t("common.refresh")}
+              </button>`
+            : nothing
+        }
       </section>
       ${renderSettingsWorkspace(this.renderBody())}
     `;

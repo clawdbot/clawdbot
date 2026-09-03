@@ -392,7 +392,7 @@ export async function prepareGatewayLifecycle(params: {
     // plugin/channel or shared-state runtime they still need.
     void stopOutboundDeliveryRecoveryForClose();
     void stopMediaCleanupForClose();
-    runtimeState.stopGatewayUpdateCheck();
+    void runtimeState.stopGatewayUpdateCheck().catch(() => {});
     runtimeState.controlUiSessionPullRequests?.stop();
     runtimeState.sessionViewerPresence?.stop();
     kernel.setDispatchReady(false);
@@ -415,6 +415,7 @@ export async function prepareGatewayLifecycle(params: {
     await Promise.all([
       stopOutboundDeliveryRecoveryForClose(),
       stopMediaCleanupForClose(),
+      runtimeState.stopGatewayUpdateCheck(),
       stopConfigReloaderForClose().catch(() => {}),
     ]);
   };

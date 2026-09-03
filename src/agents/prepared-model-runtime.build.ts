@@ -188,6 +188,7 @@ function createFullModelCatalogAccess(params: {
   // Construction is lazy: automatic prepared reads do not start a thread. The first explicit
   // request initializes one registry and reuses that exact plugin generation until retirement.
   const worker = createPreparedModelCatalogWorker({
+    pluginRegistry: params.pluginGeneration.pluginRegistry,
     input: createPreparedModelCatalogWorkerInput({
       agentFacts: params.agentFacts,
       pluginMetadataSnapshot: params.pluginGeneration.pluginMetadataSnapshot,

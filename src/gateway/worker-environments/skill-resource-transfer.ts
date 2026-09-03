@@ -1,14 +1,22 @@
+import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { prepareSkillBundle } from "../../skills/library/bundle.js";
+import {
+  prepareSkillBundle,
+  SKILL_LIBRARY_MAX_PATH_COMPONENTS,
+} from "../../skills/library/bundle.js";
 import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import {
+  WORKER_ATTACHMENT_DIRECTORY_PATTERN,
+  WORKER_ATTACHMENT_DIRECTORY_PREFIX,
+} from "./workspace-path-exclusions.js";
 
-type ResourceLocation = { id: string; identity: string };
+type ResourceLocation = { directory: string; identity: string };
 type ResourceOperation =
-  | { op: "init" }
+  | { op: "init"; directory: string }
   | ({ op: "cleanup" } & ResourceLocation)
   | ({
       op: "write";
@@ -20,29 +28,33 @@ type ResourceOperation =
       data: string;
     } & ResourceLocation);
 
-// Resource names belong to this helper, not workspace argv. Only the receiver derives
-// temporary paths; lossless identities fence replacement, including large Windows indexes.
+// Only the canonical workspace crosses argv validation; resource-relative names stay in stdin.
+// Generation retention owns uncertain init results; lossless identities fence accepted copies.
 const RESOURCE_SCRIPT = String.raw`
-const fs=require('node:fs'), path=require('node:path'), os=require('node:os'), crypto=require('node:crypto');
+const fs=require('node:fs'), crypto=require('node:crypto');
+const workspace=process.argv[1];
 const identity=s=>String(s.dev)+':'+String(s.ino);
 function enter(p,id){const s=fs.lstatSync(p,{bigint:true});if(!s.isDirectory()||s.isSymbolicLink()||(id&&identity(s)!==id))throw Error('resource directory changed');process.chdir(p);if(identity(fs.statSync('.',{bigint:true}))!==identity(s))throw Error('resource directory changed');}
 try {
  const input=fs.readFileSync(0);if(input.length>${NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES})throw Error('resource request exceeds input limit');
  const request=JSON.parse(input.toString('utf8')),op=request?.op;
- const keys=op==='init'?['op']:op==='cleanup'?['op','id','identity']:op==='write'?['op','id','identity','name','offset','size','hash','executable','data']:[];
+ const keys=op==='init'?['op','directory']:op==='cleanup'?['op','directory','identity']:op==='write'?['op','directory','identity','name','offset','size','hash','executable','data']:[];
  if(!request||typeof request!=='object'||Array.isArray(request)||!keys.length||Object.keys(request).length!==keys.length||keys.some(key=>!Object.hasOwn(request,key)))throw Error('invalid resource operation');
- const id=op==='init'?crypto.randomUUID().replaceAll('-',''):request.id;
- if(typeof id!=='string'||id.length!==32||!/^[a-f0-9]{32}$/.test(id))throw Error('invalid resource id');
- const root=path.join(os.tmpdir(),'openclaw-skill-resources-'+id);
- if(op==='init'){fs.mkdirSync(root,{mode:0o700});fs.chmodSync(root,0o700);process.stdout.write(JSON.stringify({id,root,identity:identity(fs.lstatSync(root,{bigint:true}))}));}
+ const directory=request.directory;
+ if(typeof directory!=='string'||/^${WORKER_ATTACHMENT_DIRECTORY_PATTERN}$/.exec(directory)?.[0]!==directory)throw Error('invalid resource directory');
+ enter(workspace);
+ if(op==='init'){fs.mkdirSync(directory,{mode:0o700});enter(directory);fs.chmodSync('.',0o700);fs.writeFileSync('.gitignore','*\n',{mode:0o400,flag:'wx'});process.stdout.write(identity(fs.statSync('.',{bigint:true})));}
  else {
   if(typeof request.identity!=='string'||request.identity.match(/^\d+:\d+$/)?.[0]!==request.identity)throw Error('invalid resource identity');
-  enter(root,request.identity);
-  if(op==='cleanup'){fs.rmSync(root,{recursive:true});}
+  enter(directory,request.identity);
+  // Windows locks cwd against removal. Delete contents while pinned, then verify from its parent.
+  // Keep the ignore marker until payload deletion succeeds, so partial cleanup cannot expose inputs to Git.
+  if(op==='cleanup'){for(const entry of fs.readdirSync('.'))if(entry!=='.gitignore')fs.rmSync(entry,{recursive:true});fs.rmSync('.gitignore');enter(workspace);if(identity(fs.lstatSync(directory,{bigint:true}))!==request.identity)throw Error('resource directory changed');fs.rmdirSync(directory);}
   else {
    const {name,offset,size,hash,executable,data}=request;
    if(typeof name!=='string'||typeof data!=='string'||typeof executable!=='boolean'||typeof hash!=='string'||hash.length!==64||!/^[a-f0-9]{64}$/.test(hash))throw Error('invalid resource chunk');
-   const parts=name.split('/');if(parts.some(p=>!p||p==='.'||p==='..'||/[\\\x00]/.test(p))||parts.length>17)throw Error('invalid resource path');
+   // Bundle components cannot select Windows streams, drive-relative paths, aliases or devices.
+   const parts=name.split('/');if(parts.some(p=>!p||p==='.'||p==='..'||/[\\:\x00]/.test(p)||/[ .]$/.test(p)||/^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(p)||/^(conin|conout)\$$/i.test(p))||parts.length>${SKILL_LIBRARY_MAX_PATH_COMPONENTS + 1})throw Error('invalid resource path');
    for(const part of parts.slice(0,-1)){try{fs.mkdirSync(part,{mode:0o700});}catch(e){if(e.code!=='EEXIST')throw e;}enter(part);}
    const bytes=Buffer.from(data,'base64');
    if(!Number.isSafeInteger(offset)||!Number.isSafeInteger(size)||offset<0||size<0||size>1048576||offset+bytes.length>size||bytes.toString('base64')!==data)throw Error('invalid resource chunk');
@@ -55,10 +67,11 @@ try {
 }catch(e){process.stderr.write(String(e.message));process.exitCode=1;}
 `;
 
-/** Transfers the prepared catalog through either SSH or node placement transport, outside Git state. */
+/** Stages private turn inputs in the workspace generation, excluded from Git and reconciliation. */
 export async function transferSkillResources(params: {
   snapshot?: SkillSnapshot;
   tunnel: Pick<WorkerWorkspaceTunnelHandle, "runWorkspaceCommand">;
+  remoteWorkspaceDir: string;
   assertCurrent: () => void;
   signal?: AbortSignal;
   explicitSelections?: readonly import("../../skills/types.js").ExplicitSkillSelection[];
@@ -80,44 +93,31 @@ export async function transferSkillResources(params: {
     const assertDispatchCurrent = cleanup ? params.assertCurrent : check;
     assertDispatchCurrent();
     const result = await params.tunnel.runWorkspaceCommand({
-      argv: ["node", "-e", RESOURCE_SCRIPT],
+      argv: ["node", "-e", RESOURCE_SCRIPT, params.remoteWorkspaceDir],
       input: JSON.stringify(operation),
       transportRetry: "never",
       assertCurrent: assertDispatchCurrent,
       signal: cleanup ? undefined : params.signal,
       timeoutMs: cleanup ? 5000 : 60000,
     });
-    // Preserve the accepted cleanup locator before observing turn cancellation.
-    // The exact placement must still own every command, including cleanup.
-    if (operation.op === "init") {
-      params.assertCurrent();
-    } else {
+    // Accept the returned identity before observing cancellation; cleanup still requires
+    // exact placement authority. Lost replies remain under workspace-generation retention.
+    if (operation.op !== "init") {
       assertDispatchCurrent();
     }
     if (result.termination !== "exit" || result.code !== 0) {
       throw new Error(
-        "Skill resource transfer failed. Retry this turn after reconnecting the execution environment.",
+        `Skill resource ${cleanup ? "cleanup" : "transfer"} failed. Retry this turn after reconnecting the execution environment.`,
       );
     }
     return result.stdout;
   };
-  const initialized: ResourceLocation & { root: string } = JSON.parse(
-    await execute({ op: "init" }),
-  );
-  if (
-    typeof initialized.root !== "string" ||
-    initialized.root.length > 1024 ||
-    (!path.posix.isAbsolute(initialized.root.replaceAll("\\", "/")) &&
-      !path.win32.isAbsolute(initialized.root)) ||
-    typeof initialized.id !== "string" ||
-    initialized.id.length !== 32 ||
-    !/^[a-f0-9]{32}$/.test(initialized.id) ||
-    typeof initialized.identity !== "string" ||
-    initialized.identity.match(/^\d+:\d+$/)?.[0] !== initialized.identity
-  ) {
+  const directory = `${WORKER_ATTACHMENT_DIRECTORY_PREFIX}${randomUUID()}`;
+  const identity = await execute({ op: "init", directory });
+  if (identity.match(/^\d+:\d+$/)?.[0] !== identity) {
     throw new Error("Invalid skill resource location from execution environment.");
   }
-  const location = { id: initialized.id, identity: initialized.identity };
+  const location = { directory, identity };
   const cleanup = async () => {
     await execute({ op: "cleanup", ...location });
   };
@@ -180,7 +180,7 @@ export async function transferSkillResources(params: {
       if (!sourceBase) {
         throw new Error("Resource source path missing.");
       }
-      const remoteBase = `${initialized.root.replaceAll("\\", "/")}/${index}`;
+      const remoteBase = `${params.remoteWorkspaceDir.replaceAll("\\", "/")}/${directory}/${index}`;
       mounts.push({ hostPath: sourceBase, containerPath: remoteBase });
       if (selected) {
         selected.locationNote = `Read instructions at the location above. For remote execution, this exact bundle's scripts and resources are at ${remoteBase}; resolve relative execution paths against that directory.`;

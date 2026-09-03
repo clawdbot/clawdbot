@@ -55,8 +55,13 @@ Provider and channel execution paths must use the active runtime config snapshot
 
 ## Reusable runtime utilities
 
-Native command probes can use `signalProcessTree` from
-`openclaw/plugin-sdk/process-runtime`. Its `onComplete` callback runs after Unix
+Native command probes should use `runCommandWithTimeout` from
+`openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
+`killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
+before returning. For commands whose output is always UTF-8, such as JSON status
+probes, use `runUtf8CommandWithTimeout` from the same subpath.
+
+Existing process owners can use `signalProcessTree`. Its `onComplete` callback runs after Unix
 signaling or the bounded Windows `taskkill` attempt, not proof that every process
 exited. Keep the probe pending through cleanup, use `detached: true` only for a
 process group you created, and start Windows tree termination while its root is

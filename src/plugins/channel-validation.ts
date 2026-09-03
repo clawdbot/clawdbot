@@ -64,6 +64,8 @@ function collectMissingChannelMetaFields(meta?: Partial<ChannelMeta> | null): st
   return missing;
 }
 
+const CHANNEL_CAPABILITY_CHAT_TYPES = new Set(["direct", "group", "channel", "thread"]);
+
 /** Validates and normalizes a channel plugin registration before runtime catalog insertion. */
 export function normalizeRegisteredChannelPlugin(params: {
   pluginId: string;
@@ -81,6 +83,20 @@ export function normalizeRegisteredChannelPlugin(params: {
       pluginId: params.pluginId,
       source: params.source,
       message: "channel registration missing id",
+    });
+    return null;
+  }
+  const chatTypes = params.plugin.capabilities?.chatTypes;
+  if (
+    !Array.isArray(chatTypes) ||
+    chatTypes.length === 0 ||
+    chatTypes.some((chatType) => !CHANNEL_CAPABILITY_CHAT_TYPES.has(chatType))
+  ) {
+    params.pushDiagnostic({
+      level: "error",
+      pluginId: params.pluginId,
+      source: params.source,
+      message: `channel "${id}" registration missing or invalid required capabilities.chatTypes`,
     });
     return null;
   }

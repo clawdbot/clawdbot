@@ -147,7 +147,13 @@ describe("DesktopClient", () => {
     expect(instances[0]?.disconnect).toHaveBeenCalledOnce();
   });
 
-  it("forwards socket close metadata through the RFB disconnect callback", async () => {
+  it.each([
+    { clean: true, close: { code: 4000, reason: "control-taken" } },
+    { clean: false, close: { code: 1008, reason: "authentication rejected" } },
+    { clean: false, close: { code: 1006, reason: "" } },
+    { clean: false, close: undefined },
+    { clean: true, close: undefined },
+  ])("preserves RFB clean=$clean with socket close $close", async ({ clean, close }) => {
     const { Rfb, instances } = createFakeRfb();
     const socket = new FakeSocket("ws://control.example.test/desktop/observe");
     const onDisconnect = vi.fn();
@@ -160,10 +166,16 @@ describe("DesktopClient", () => {
       target: document.createElement("div"),
       onDisconnect,
     });
-    socket.dispatchEvent(new CloseEvent("close", { code: 4000, reason: "control-taken" }));
-    instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean: true } }));
+    if (close) {
+      socket.dispatchEvent(new CloseEvent("close", close));
+    }
+    instances[0]?.dispatchEvent(new CustomEvent("disconnect", { detail: { clean } }));
 
-    expect(onDisconnect).toHaveBeenCalledWith({ code: 4000, reason: "control-taken" });
+    expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ ...close, clean });
+    if (!close) {
+      socket.dispatchEvent(new CloseEvent("close", { code: 1000 }));
+      expect(onDisconnect).toHaveBeenCalledExactlyOnceWith({ clean });
+    }
   });
 
   it.each([

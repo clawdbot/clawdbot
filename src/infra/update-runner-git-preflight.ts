@@ -492,27 +492,25 @@ export async function runGitDevPreflight(params: {
     };
   }
   const worktreeDir = resolvePreflightWorktreeDir(preflightRoot);
-  const worktreeStep = await runStep(
-    params.step(
-      "preflight worktree",
-      ["git", "-C", params.gitRoot, "worktree", "add", "--detach", worktreeDir, preflightBaseSha],
-      params.gitRoot,
-    ),
-  );
-  if (worktreeStep.exitCode !== 0) {
-    await removePathRecursive(preflightRoot);
-    return {
-      status: "error",
-      reason:
-        classifyPreflightFailure(worktreeStep) === "insufficient-space"
-          ? "preflight-insufficient-space"
-          : "preflight-worktree-failed",
-    };
-  }
-
   let tested: PreflightCandidateResult | undefined;
   let cleanupFailed: boolean;
   try {
+    const worktreeStep = await runStep(
+      params.step(
+        "preflight worktree",
+        ["git", "-C", params.gitRoot, "worktree", "add", "--detach", worktreeDir, preflightBaseSha],
+        params.gitRoot,
+      ),
+    );
+    if (worktreeStep.exitCode !== 0) {
+      return {
+        status: "error",
+        reason:
+          classifyPreflightFailure(worktreeStep) === "insufficient-space"
+            ? "preflight-insufficient-space"
+            : "preflight-worktree-failed",
+      };
+    }
     for (const sha of candidates) {
       const candidate = await testPreflightCandidate({ ...params, worktreeDir, sha });
       if (candidate.status === "ok" || candidate.status === "insufficient-space") {
@@ -525,13 +523,22 @@ export async function runGitDevPreflight(params: {
       }
     }
   } finally {
+    // Cancellation ends candidate work, not cleanup of the worktree and its Git metadata.
+    // Keep cleanup commands in the owned process tree with their existing bounded budget.
+    const cleanupSignal = new AbortController().signal;
+    const cleanupTimeoutMs = Math.min(params.timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS);
+    const runCleanupCommand: CommandRunner = (argv, options) =>
+      params.runCommand(argv, { ...options, signal: cleanupSignal, timeoutMs: cleanupTimeoutMs });
+    // Interrupted creation can retain Git's initialization lock. This exact temporary
+    // worktree is owned here, so force twice instead of leaving a stale registration.
     const removeStep = await runStep({
       ...params.step(
         "preflight cleanup",
-        ["git", "-C", params.gitRoot, "worktree", "remove", "--force", worktreeDir],
+        ["git", "-C", params.gitRoot, "worktree", "remove", "--force", "--force", worktreeDir],
         params.gitRoot,
       ),
-      timeoutMs: Math.min(params.timeoutMs, PREFLIGHT_CLEANUP_TIMEOUT_MS),
+      runCommand: runCleanupCommand,
+      timeoutMs: cleanupTimeoutMs,
     });
     if (removeStep.exitCode !== 0 && (await repairPreflightCleanup(worktreeDir, preflightRoot))) {
       removeStep.exitCode = 0;
@@ -545,12 +552,9 @@ export async function runGitDevPreflight(params: {
       );
     }
     cleanupFailed = removeStep.exitCode !== 0;
-    await params
-      .runCommand(["git", "-C", params.gitRoot, "worktree", "prune"], {
-        cwd: params.gitRoot,
-        timeoutMs: params.timeoutMs,
-      })
-      .catch(() => null);
+    await runCleanupCommand(["git", "-C", params.gitRoot, "worktree", "prune"], {
+      cwd: params.gitRoot,
+    }).catch(() => null);
     await removePathRecursive(preflightRoot);
   }
   if (tested?.status !== "ok") {

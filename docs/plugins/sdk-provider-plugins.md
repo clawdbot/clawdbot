@@ -764,6 +764,14 @@ catalog, API-key auth, and dynamic model resolution.
       `ProviderPlugin.capabilities` and `suppressBuiltInModel`, are not listed
       here.
 
+      Keep `resolveSyntheticAuth` synchronous and bounded. External process/network login
+      checks belong in `prepareSyntheticAuth`, which receives the captured config,
+      environment, and cancellation signal and returns a synthetic auth result or
+      no result. OpenClaw retains completed availability within that preparation
+      generation. Read-only workers receive the final provider-ref outcome (including
+      unavailable), preserving alias precedence without rerunning external checks.
+      Cancelled preparation must reject after cleanup, not report a missing login.
+
       | Hook | When to use |
       | --- | --- |
       | `catalog` | Model catalog or base URL defaults |
@@ -774,6 +782,7 @@ catalog, API-key auth, and dynamic model resolution.
       | `applyNativeStreamingUsageCompat` | Native streaming-usage compat rewrites for config providers |
       | `resolveConfigApiKey` | Provider-owned env-marker auth resolution |
       | `resolveSyntheticAuth` | Local/self-hosted or config-backed synthetic auth |
+      | `prepareSyntheticAuth` | Asynchronously verify external auth before synchronous availability reads |
       | `resolveExternalAuthProfiles` | Overlay provider-owned external auth profiles for CLI/app-managed credentials |
       | `shouldDeferSyntheticProfileAuth` | Lower synthetic stored-profile placeholders behind env/config auth |
       | `resolveDynamicModel` | Accept arbitrary upstream model IDs |

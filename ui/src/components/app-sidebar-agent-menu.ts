@@ -237,9 +237,9 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
   const option = { value: agentId, label, agent };
   return html`
     <wa-dropdown-item
-      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active
-        ? "sidebar-agent-menu__agent-switch--active"
-        : ""}"
+      class="sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${
+        active ? "sidebar-agent-menu__agent-switch--active" : ""
+      }"
       value=${`${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId)}`}
       type="checkbox"
       role="menuitemradio"
@@ -252,13 +252,15 @@ function renderAgentRow(agent: AgentMenuAgent, params: SidebarAgentMenuParams) {
         </span>
         ${renderAgentSelectCopy(option)}
         <span class="sidebar-agent-menu__agent-status">
-          ${unread > 0
-            ? html`<span
-                class="session-unread-dot"
-                role="img"
-                aria-label=${t("sessionsView.unread")}
-              ></span>`
-            : nothing}
+          ${
+            unread > 0
+              ? html`<span
+                  class="session-unread-dot"
+                  role="img"
+                  aria-label=${t("sessionsView.unread")}
+                ></span>`
+              : nothing
+          }
         </span>
       </span>
     </wa-dropdown-item>
@@ -381,14 +383,16 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams) {
         aria-label=${t("agentChip.menuLabel")}
         style="position: fixed; left: ${position.x}px; top: ${position.top}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
       ></button>
-      ${agents.length > 1
-        ? html`
-            <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
-            <div class="sidebar-agent-menu__agent-grid">
-              ${rows.map((entry) => renderAgentRow(entry, params))}
-            </div>
-          `
-        : nothing}
+      ${
+        agents.length > 1
+          ? html`
+              <div class="sidebar-customize-menu__title">${t("agentChip.agents")}</div>
+              <div class="sidebar-agent-menu__agent-grid">
+                ${rows.map((entry) => renderAgentRow(entry, params))}
+              </div>
+            `
+          : nothing
+      }
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <wa-dropdown-item class="sidebar-customize-menu__item" value="command:new-agent">
         <span slot="icon" class="nav-item__icon" aria-hidden="true">${icons.users}</span>
@@ -498,11 +502,13 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         </span>
         <span class="sidebar-identity-menu__identity">
           <span class="sidebar-identity-menu__name" title=${profileName}>${profileName}</span>
-          ${profileEmail
-            ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
-                >${profileEmail}</span
-              >`
-            : nothing}
+          ${
+            profileEmail
+              ? html`<span class="sidebar-identity-menu__email" title=${profileEmail}
+                  >${profileEmail}</span
+                >`
+              : nothing
+          }
         </span>
       </wa-dropdown-item>
       <div class="sidebar-customize-menu__separator" role="separator"></div>
@@ -549,15 +555,17 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams) {
         <span class="sidebar-customize-menu__text">${t("agentChip.help")}</span>
         ${renderIdentityMenuHelpSubmenu()}
       </wa-dropdown-item>
-      ${params.offline
-        ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
-            <wa-dropdown-item
-              class="sidebar-customize-menu__item sidebar-identity-menu__retry"
-              value="command:retry-connect"
-            >
-              <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
-            </wa-dropdown-item>`
-        : nothing}
+      ${
+        params.offline
+          ? html`<div class="sidebar-customize-menu__separator" role="separator"></div>
+              <wa-dropdown-item
+                class="sidebar-customize-menu__item sidebar-identity-menu__retry"
+                value="command:retry-connect"
+              >
+                <span class="sidebar-customize-menu__text">${t("connection.retryNow")}</span>
+              </wa-dropdown-item>`
+          : nothing
+      }
       <div class="sidebar-customize-menu__separator" role="separator"></div>
       <div class="sidebar-identity-menu__footer">
         <openclaw-sidebar-build-chip

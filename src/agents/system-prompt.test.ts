@@ -9,7 +9,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { typedCases } from "../test-utils/typed-cases.js";
 import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
@@ -1681,7 +1681,7 @@ describe("buildAgentSystemPrompt", () => {
     const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
       pluginId: id,
       source: "test" as const,
-      plugin: { id },
+      plugin: createChannelTestPluginBase({ id }),
     }));
     const buildPrompt = () =>
       buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames: ["message"] });
