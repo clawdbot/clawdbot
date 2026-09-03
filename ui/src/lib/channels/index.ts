@@ -458,6 +458,7 @@ async function startWhatsAppLogin(
       qrDataUrl?: string;
       connected?: boolean;
     }>("web.login.start", {
+      channel: "whatsapp",
       force,
       timeoutMs: 30000,
       ...(accountId ? { accountId } : {}),
@@ -495,6 +496,7 @@ async function waitWhatsAppLogin(state: ChannelsState, accountId?: string): Prom
       connected?: boolean;
       qrDataUrl?: string;
     }>("web.login.wait", {
+      channel: "whatsapp",
       timeoutMs: 120000,
       currentQrDataUrl,
       ...(accountId ? { accountId } : {}),

@@ -20,6 +20,28 @@ func whatsappLoginWaitRequestTimeoutMs(
     return 1
 }
 
+func whatsappLoginStartParams(force: Bool) -> [String: AnyCodable] {
+    [
+        "channel": AnyCodable("whatsapp"),
+        "force": AnyCodable(force),
+        "timeoutMs": AnyCodable(30000),
+    ]
+}
+
+func whatsappLoginWaitParams(
+    timeoutMs: Int,
+    currentQrDataUrl: String?) -> [String: AnyCodable]
+{
+    var params: [String: AnyCodable] = [
+        "channel": AnyCodable("whatsapp"),
+        "timeoutMs": AnyCodable(timeoutMs),
+    ]
+    if let currentQrDataUrl {
+        params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
+    }
+    return params
+}
+
 extension ChannelsStore {
     func start() {
         guard !self.isPreview else { return }
@@ -96,10 +118,7 @@ extension ChannelsStore {
         defer { self.whatsappBusy = false }
         var shouldAutoWait = false
         do {
-            let params: [String: AnyCodable] = [
-                "force": AnyCodable(force),
-                "timeoutMs": AnyCodable(30000),
-            ]
+            let params = whatsappLoginStartParams(force: force)
             let result: WhatsAppLoginStartResult = try await GatewayConnection.shared.requestDecoded(
                 method: .webLoginStart,
                 params: params,
@@ -131,12 +150,9 @@ extension ChannelsStore {
                 timeoutMs: timeoutMs,
                 didRunFinalWait: &didRunFinalWait)
             {
-                var params: [String: AnyCodable] = [
-                    "timeoutMs": AnyCodable(remainingMs),
-                ]
-                if let currentQrDataUrl = self.whatsappLoginQrDataUrl {
-                    params["currentQrDataUrl"] = AnyCodable(currentQrDataUrl)
-                }
+                let params = whatsappLoginWaitParams(
+                    timeoutMs: remainingMs,
+                    currentQrDataUrl: self.whatsappLoginQrDataUrl)
                 let result: WhatsAppLoginWaitResult = try await GatewayConnection.shared.requestDecoded(
                     method: .webLoginWait,
                     params: params,
