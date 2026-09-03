@@ -114,6 +114,30 @@ describe("agent exec strict result classification", () => {
     });
   });
 
+  it("names an aborted run instead of a generic failure", () => {
+    const envelope = classifyAgentExecResult({
+      payloads: [{ text: "partial output" }],
+      meta: { durationMs: 1000, aborted: true },
+    });
+    expect(envelope).toMatchObject({
+      ok: false,
+      status: "error",
+      error: { kind: "aborted", message: "Agent run aborted" },
+    });
+  });
+
+  it("keeps a real error message on an aborted run", () => {
+    const envelope = classifyAgentExecResult({
+      payloads: [{ text: "stalled" }],
+      meta: {
+        durationMs: 1000,
+        aborted: true,
+        error: { kind: "provider_error", message: "provider socket closed" },
+      },
+    });
+    expect(envelope.error).toEqual({ kind: "provider_error", message: "provider socket closed" });
+  });
+
   it("classifies terminal timeouts separately", () => {
     const envelope = classifyAgentExecResult({
       payloads: [{ text: "timed out", isError: true }],
