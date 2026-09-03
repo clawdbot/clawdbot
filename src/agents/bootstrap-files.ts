@@ -8,7 +8,10 @@ import type { ChatType } from "../channels/chat-type.js";
 import { readRecentSessionTranscriptActiveEvents } from "../config/sessions/session-accessor.js";
 import type { AgentContextInjection } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadDeclaredExtraBootstrapFiles } from "../hooks/bundled/bootstrap-extra-files/declared-files.js";
+import {
+  isBundledExtraFilesHookSelected,
+  loadDeclaredExtraBootstrapFiles,
+} from "../hooks/bundled/bootstrap-extra-files/declared-files.js";
 import { isMemoryOriginEligibleForAutomaticInjection } from "../memory-host-sdk/host/types.js";
 import { classifyActiveMemoryWorkspacePaths } from "../plugins/memory-runtime.js";
 import { resolveUserPath } from "../utils.js";
@@ -307,8 +310,9 @@ type BootstrapFileResolutionParams = {
 /**
  * Hook effects a resolution applies. Doctor runs without the hook runtime, so
  * "diagnostic" also projects the additions the bundled bootstrap-extra-files
- * handler would make; registered handlers still run first and path dedupe in
- * sanitizeBootstrapFiles keeps the projection idempotent when both are present.
+ * handler would make when hook selection would load it; registered handlers
+ * still run first and path dedupe in sanitizeBootstrapFiles keeps the
+ * projection idempotent when both are present.
  */
 type BootstrapHookApplication = "none" | "registered" | "diagnostic";
 
@@ -390,7 +394,7 @@ async function resolveBootstrapFiles(
           agentId: params.agentId,
         });
   const declared =
-    hooks === "diagnostic"
+    hooks === "diagnostic" && isBundledExtraFilesHookSelected(params.config)
       ? await loadDeclaredExtraBootstrapFiles({
           config: params.config,
           workspaceDir: params.workspaceDir,

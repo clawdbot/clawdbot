@@ -1,19 +1,17 @@
 // Declarative resolver for the bundled bootstrap-extra-files hook. The handler
 // and hook-runtime-free callers (doctor) share it so both see the same additions.
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { tryResolveConfiguredAgentWorkspaceDir } from "../../../agents/agent-scope-config.js";
+import { resolveDefaultAgentWorkspaceDir } from "../../../agents/workspace-default.js";
 import { loadExtraBootstrapFilesWithDiagnostics } from "../../../agents/workspace.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveHookConfig } from "../../config.js";
+import { resolveLoadableHookEntries } from "../../workspace.js";
 
 const HOOK_KEY = "bootstrap-extra-files";
 
 /** Resolve legacy and current config keys for extra bootstrap file patterns. */
 function resolveExtraBootstrapPatterns(cfg: OpenClawConfig | undefined): string[] {
-  // The hook loader registers nothing while the hook system is off, so the
-  // declared projection must stay empty too or doctor would over-report.
-  if (cfg?.hooks?.internal?.enabled === false) {
-    return [];
-  }
   const hookConfig = resolveHookConfig(cfg, HOOK_KEY);
   if (!hookConfig || hookConfig.enabled === false) {
     return [];
@@ -27,6 +25,23 @@ function resolveExtraBootstrapPatterns(cfg: OpenClawConfig | undefined): string[
     return fromPatterns;
   }
   return normalizeTrimmedStringList(hookConfig.files);
+}
+
+/**
+ * True when hook selection would register the bundled handler. Managed and
+ * plugin hooks may replace it by name, and doctor must not describe files a
+ * replacement never adds. Discovery mirrors the Gateway loader's workspace.
+ */
+export function isBundledExtraFilesHookSelected(cfg: OpenClawConfig | undefined): boolean {
+  if (!cfg) {
+    return false;
+  }
+  const discoveryDir =
+    tryResolveConfiguredAgentWorkspaceDir(cfg) ?? resolveDefaultAgentWorkspaceDir();
+  const selected = resolveLoadableHookEntries(cfg, discoveryDir).find(
+    (entry) => entry.hook.name === HOOK_KEY,
+  );
+  return selected?.hook.source === "openclaw-bundled";
 }
 
 /** Loads the extra bootstrap files the hook config declares for a workspace. */
