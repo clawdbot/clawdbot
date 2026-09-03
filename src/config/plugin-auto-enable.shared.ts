@@ -1,7 +1,6 @@
 // Shares plugin auto-enable detection across config and runtime code.
 import { collectConfiguredModelRefs } from "@openclaw/model-catalog-core/configured-model-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { expectDefined } from "@openclaw/normalization-core";
 import {
   asOptionalObjectRecord,
   asOptionalRecord,
@@ -673,22 +672,24 @@ export function resolveConfiguredPluginAutoEnableCandidates(params: {
     }
   }
 
-  for (const { value: modelRef } of collectConfiguredModelRefs(params.config, {
-    includeChannelModelOverrides: false,
-  })) {
+  const configuredModelPluginIds = new Set<string>();
+  for (const modelRef of new Set(
+    collectConfiguredModelRefs(params.config, { includeChannelModelOverrides: false }).map(
+      ({ value }) => value,
+    ),
+  )) {
     const owningPluginIds = resolveOwningPluginIdsForModelRef({
       model: modelRef,
       config: params.config,
       env: params.env,
       manifestRegistry: params.registry,
     });
-    if (owningPluginIds?.length === 1) {
-      changes.push({
-        pluginId: expectDefined(owningPluginIds[0], "owning plugin ids entry at 0"),
-        kind: "provider-model-configured",
-        modelRef,
-      });
+    const pluginId = owningPluginIds?.length === 1 ? owningPluginIds[0] : undefined;
+    if (!pluginId || configuredModelPluginIds.has(pluginId)) {
+      continue;
     }
+    configuredModelPluginIds.add(pluginId);
+    changes.push({ pluginId, kind: "provider-model-configured", modelRef });
   }
 
   for (const providerId of collectConfiguredSpeechProviderIds(params.config)) {
@@ -834,22 +835,6 @@ function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): bool
     return true;
   }
   return hasMaterialPluginEntryConfig(cfg.plugins?.entries?.[pluginId]);
-}
-
-function compactConfiguredCandidatesForPreferenceCheck(
-  candidates: readonly PluginAutoEnableCandidate[],
-): PluginAutoEnableCandidate[] {
-  const seenProviderModelPlugins = new Set<string>();
-  return candidates.filter((candidate) => {
-    if (candidate.kind !== "provider-model-configured") {
-      return true;
-    }
-    if (seenProviderModelPlugins.has(candidate.pluginId)) {
-      return false;
-    }
-    seenProviderModelPlugins.add(candidate.pluginId);
-    return true;
-  });
 }
 
 function disableImplicitPreferredOverPlugin(params: {
@@ -1104,45 +1089,33 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   }
 
   const preferOverCache = new Map<string, string[]>();
-  const blockedPluginIds = new Set<string>();
-  const candidatePluginIds = new Set(params.candidates.map((entry) => entry.pluginId));
-  for (const pluginId of candidatePluginIds) {
-    if (isPluginDenied(next, pluginId) || isPluginExplicitlyDisabled(next, pluginId)) {
-      blockedPluginIds.add(pluginId);
-    }
-  }
-  const configuredForPreferenceCheck = compactConfiguredCandidatesForPreferenceCheck(
-    params.candidates,
-  );
 
   for (const entry of params.candidates) {
     const builtInChannelId = resolveAutoEnableChannelId({
       entry,
       manifestRegistry: params.manifestRegistry,
     });
-    if (blockedPluginIds.has(entry.pluginId)) {
+    if (isPluginDenied(next, entry.pluginId) || isPluginExplicitlyDisabled(next, entry.pluginId)) {
       continue;
     }
     if (
       shouldSkipPreferredPluginAutoEnable({
+        config: next,
         entry,
-        configured: configuredForPreferenceCheck,
+        configured: params.candidates,
         env: params.env,
         registry: params.manifestRegistry,
-        blockedPluginIds,
+        isPluginDenied,
+        isPluginExplicitlyDisabled,
         preferOverCache,
       })
     ) {
-      const nextConfig = disableImplicitPreferredOverPlugin({
+      next = disableImplicitPreferredOverPlugin({
         config: next,
         originalConfig: params.config ?? {},
         pluginId: entry.pluginId,
         manifestRegistry: params.manifestRegistry,
       });
-      if (nextConfig !== next) {
-        blockedPluginIds.add(entry.pluginId);
-        next = nextConfig;
-      }
       continue;
     }
 

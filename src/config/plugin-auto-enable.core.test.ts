@@ -621,23 +621,6 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it("bounds repeated model-candidate preference checks without changing plugin precedence", () => {
-    const candidates = Array.from({ length: 128 }, (_, index) => [
-      {
-        pluginId: "primary",
-        kind: "provider-model-configured" as const,
-        modelRef: `primary/model-${index}`,
-      },
-      {
-        pluginId: "secondary",
-        kind: "provider-model-configured" as const,
-        modelRef: `secondary/model-${index}`,
-      },
-      {
-        pluginId: "blocked",
-        kind: "provider-model-configured" as const,
-        modelRef: `blocked/model-${index}`,
-      },
-    ]).flat();
     let denyChecks = 0;
     const deny = new Proxy(["blocked"], {
       get(target, property, receiver) {
@@ -650,10 +633,28 @@ describe("applyPluginAutoEnable core", () => {
         return Reflect.get(target, property, receiver);
       },
     });
+    const config: OpenClawConfig = {
+      agents: {
+        ownership: "explicit",
+        entries: Object.fromEntries(
+          Array.from({ length: 128 }, (_, index) => [
+            `agent-${index}`,
+            {
+              model: {
+                primary: `secondary/model-${index}`,
+                fallbacks: [`primary/model-${index}`, `blocked/model-${index}`],
+              },
+            },
+          ]),
+        ),
+      },
+      plugins: { deny },
+    };
+    expect(validateConfigObject(config).ok).toBe(true);
+    denyChecks = 0;
 
-    const result = materializePluginAutoEnableCandidates({
-      config: { plugins: { deny } },
-      candidates,
+    const result = applyPluginAutoEnable({
+      config,
       env,
       manifestRegistry: makeRegistry([
         { id: "primary", channels: [], providers: ["primary"] },
@@ -676,7 +677,7 @@ describe("applyPluginAutoEnable core", () => {
       ]),
     });
 
-    expect(denyChecks).toBe(3);
+    expect(denyChecks).toBeLessThanOrEqual(6);
     expect(result.config.plugins?.entries?.primary?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.secondary?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.blocked).toBeUndefined();

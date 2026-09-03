@@ -12,6 +12,7 @@ import {
 } from "../plugins/plugin-cache-files.js";
 import { isRecord, resolveConfigDir, resolveUserPath } from "../utils.js";
 import type { PluginAutoEnableCandidate } from "./plugin-auto-enable.types.js";
+import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Maximum bytes to read from an external catalog file before rejecting it. */
 const MAX_EXTERNAL_CATALOG_BYTES = 16 * 1024 * 1024;
@@ -155,11 +156,13 @@ function getPluginAutoEnableCandidateCacheKey(candidate: PluginAutoEnableCandida
 }
 
 export function shouldSkipPreferredPluginAutoEnable(params: {
+  config: OpenClawConfig;
   entry: PluginAutoEnableCandidate;
   configured: readonly PluginAutoEnableCandidate[];
   env: NodeJS.ProcessEnv;
   registry: PluginManifestRegistry;
-  blockedPluginIds: ReadonlySet<string>;
+  isPluginDenied: (config: OpenClawConfig, pluginId: string) => boolean;
+  isPluginExplicitlyDisabled: (config: OpenClawConfig, pluginId: string) => boolean;
   preferOverCache: Map<string, string[]>;
 }): boolean {
   const getPreferredOverIds = (candidate: PluginAutoEnableCandidate): string[] => {
@@ -177,7 +180,10 @@ export function shouldSkipPreferredPluginAutoEnable(params: {
     if (other.pluginId === params.entry.pluginId) {
       continue;
     }
-    if (params.blockedPluginIds.has(other.pluginId)) {
+    if (
+      params.isPluginDenied(params.config, other.pluginId) ||
+      params.isPluginExplicitlyDisabled(params.config, other.pluginId)
+    ) {
       continue;
     }
     if (getPreferredOverIds(other).includes(params.entry.pluginId)) {
