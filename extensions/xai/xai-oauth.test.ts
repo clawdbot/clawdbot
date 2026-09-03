@@ -21,6 +21,19 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
+function invalidUtf8JsonResponse(prefix: string, suffix: string): Response {
+  const prefixBytes = new TextEncoder().encode(prefix);
+  const suffixBytes = new TextEncoder().encode(suffix);
+  const body = new Uint8Array(prefixBytes.length + 1 + suffixBytes.length);
+  body.set(prefixBytes);
+  body[prefixBytes.length] = 0xff;
+  body.set(suffixBytes, prefixBytes.length + 1);
+  return new Response(body, {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function createJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
@@ -433,6 +446,59 @@ describe("xAI OAuth", () => {
     expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
+  });
+
+  it("rejects invalid UTF-8 in xAI device-code token responses", async () => {
+    const progress = {
+      update: vi.fn(),
+      stop: vi.fn(),
+    };
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          authorization_endpoint: "https://auth.x.ai/oauth2/authorize",
+          device_authorization_endpoint: "https://auth.x.ai/oauth2/device/code",
+          token_endpoint: "https://auth.x.ai/oauth2/token",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          device_code: "device-code-1",
+          user_code: "ABCD-1234",
+          verification_uri: "https://accounts.x.ai/oauth2/device",
+          expires_in: 900,
+          interval: 5,
+        }),
+      )
+      .mockResolvedValueOnce(
+        invalidUtf8JsonResponse(
+          '{"access_token":"test-access-token-',
+          '","refresh_token":"test-refresh-token","expires_in":120}',
+        ),
+      );
+    vi.stubGlobal("fetch", fetchImpl);
+    const ctx: ProviderAuthContext = {
+      config: {},
+      isRemote: true,
+      openUrl: vi.fn(async () => {}),
+      prompter: createTestWizardPrompter({
+        progress: vi.fn(() => progress),
+        deviceCode: vi.fn(async () => {}),
+      }),
+      runtime: createRuntimeEnv(),
+      oauth: {
+        createVpsAwareHandlers: () => {
+          throw new Error("unexpected VPS OAuth handler request");
+        },
+      },
+    };
+
+    await expect(createXaiOAuthAuthMethod().run(ctx)).rejects.toThrow(
+      "xAI OAuth token response is missing access_token",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(progress.stop).toHaveBeenCalledWith("xAI OAuth failed");
   });
 
   it("falls back for unsafe xAI device-code lifetime fields", async () => {

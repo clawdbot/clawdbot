@@ -450,7 +450,7 @@ async function pollXaiDeviceCodeToken(
         onOverflow: ({ maxBytes }) =>
           new Error(`xAI device code response exceeds ${maxBytes} bytes`),
       });
-      body = JSON.parse(new TextDecoder().decode(buffer));
+      body = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(buffer));
     } catch {
       body = null;
     }
