@@ -33,6 +33,10 @@ import type { WorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import type { WorkerNodePortalCarrier } from "./portal-node-carrier.js";
 import { createWorkerProviderLifecycle } from "./provider-lifecycle.js";
 import type { WorkerProviderLifecycleInputOptions } from "./provider-lifecycle.types.js";
+import {
+  createSkillResourceAllocationCoordinator,
+  type SkillResourceAllocationCoordinator,
+} from "./skill-resource-allocation-coordinator.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerEnvironmentRecord,
@@ -88,6 +92,7 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
   generateWorkerCredential?: (bytes: number) => string;
   now?: () => number;
   logger?: { warn: (message: string) => void };
+  skillResourceAllocationCoordinator?: SkillResourceAllocationCoordinator;
   applyTranscriptCommit?: (params: {
     identity: WorkerConnectionIdentity;
     request: WorkerTranscriptCommitParams;
@@ -143,6 +148,8 @@ type WorkerEnvironmentReconcileGuard = (
 export function createWorkerEnvironmentService(options: WorkerEnvironmentServiceOptions) {
   const { store } = options;
   const warn = (message: string) => options.logger?.warn(message);
+  const skillResourceAllocations =
+    options.skillResourceAllocationCoordinator ?? createSkillResourceAllocationCoordinator();
   const operations = new KeyedAsyncQueue();
   const providerOperations = new KeyedAsyncQueue();
   const activeOperations = new Set<Promise<unknown>>();
@@ -463,13 +470,29 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     if (environmentId !== undefined) {
       return;
     }
+    let terminalPruneSafe = true;
     try {
-      store.pruneTerminalEnvironments();
-    } catch (error) {
-      // Pruning is opportunistic and retries on the next sweep; lock contention must not
-      // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
-      if (!isSqliteLockError(error)) {
-        throw error;
+      await skillResourceAllocations.recover({
+        getEnvironment: store.get,
+        startTunnel: environmentAccess.startTunnel,
+        onEnvironmentCleanupDeferred: () => {
+          terminalPruneSafe = false;
+        },
+        warn,
+      });
+    } catch {
+      terminalPruneSafe = false;
+      warn("Skill resource allocation cleanup failed; cleanup will retry");
+    }
+    if (terminalPruneSafe) {
+      try {
+        store.pruneTerminalEnvironments();
+      } catch (error) {
+        // Pruning is opportunistic and retries on the next sweep; lock contention must not
+        // turn a healthy worker reconciliation into a startup or periodic-reconcile failure.
+        if (!isSqliteLockError(error)) {
+          throw error;
+        }
       }
     }
   };
@@ -536,20 +559,28 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     unsubscribeSessionIdentityMutation = undefined;
     unsubscribeTurnClaimClosed?.();
     unsubscribeTurnClaimClosed = undefined;
-    // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
-    // inference or tunnel teardown can invalidate its closure-bound placement authority.
-    await closeReconcileEnvironmentGuard();
-    await options
-      .closeComputers?.()
-      .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
-    await inference.stop();
-    credentialBroker.clear();
-    options.liveEvents?.clear();
-    options.stopNodeWorkerBundleTransfers?.();
+    let shutdownError: unknown;
+    try {
+      // Shutdown owns the guard handoff: stop new admission and drain admitted recovery before
+      // inference or tunnel teardown can invalidate its closure-bound placement authority.
+      await closeReconcileEnvironmentGuard();
+      await options
+        .closeComputers?.()
+        .catch(() => warn("Session computer cleanup failed during Gateway shutdown"));
+      await inference.stop();
+      credentialBroker.clear();
+      options.liveEvents?.clear();
+      options.stopNodeWorkerBundleTransfers?.();
+    } catch (error) {
+      shutdownError = error;
+    }
     try {
       await Promise.all([environmentAccess.stopAllTunnels(), options.nodePortalCarrier?.stopAll()]);
-    } finally {
-      // Tunnel failures cannot release shutdown before admitted owner-bound operations drain.
+    } catch (error) {
+      shutdownError ??= error;
+    }
+    try {
+      // No earlier shutdown failure can release allocation ownership while admitted work remains.
       const reconciliation = reconcileInFlight;
       if (reconciliation) {
         await Promise.allSettled([reconciliation]);
@@ -561,6 +592,16 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
       turnRpc.clear();
       options.liveEvents?.clear();
       await options.closeNodeBootstrapArtifacts?.();
+    } catch (error) {
+      shutdownError ??= error;
+    }
+    try {
+      await skillResourceAllocations.stop();
+    } catch (error) {
+      shutdownError ??= error;
+    }
+    if (shutdownError) {
+      throw shutdownError;
     }
   };
 
@@ -692,7 +733,20 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
     takeMintedCredential: credentialBroker.takeMintedCredential,
     acquireTurnCredential: credentialBroker.acquireTurnCredential,
     acknowledgeCredentialDelivery: credentialBroker.acknowledgeCredentialDelivery,
-    startTunnel: environmentAccess.startTunnel,
+    skillResourceAllocations,
+    startTunnel: async (request: Parameters<typeof environmentAccess.startTunnel>[0]) => {
+      const tunnel = await environmentAccess.startTunnel(request);
+      void skillResourceAllocations
+        .recover({
+          getEnvironment: store.get,
+          startTunnel: environmentAccess.startTunnel,
+          warn,
+        })
+        .catch(() =>
+          warn("Skill resource allocation reconnect cleanup failed; cleanup will retry"),
+        );
+      return tunnel;
+    },
     stopTunnel: async (environmentId: string, ownerEpoch?: number) => {
       await Promise.all([
         environmentAccess.stopTunnel(environmentId, ownerEpoch),

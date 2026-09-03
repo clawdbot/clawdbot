@@ -50,7 +50,9 @@ describe("portable complete skill revision identity", () => {
     "a/./b",
     "CON.txt",
     "CONIN$",
-    "conout$",
+    "conin$.txt",
+    "nested/CONOUT$",
+    "nested/conout$.txt",
     "COM¹.txt",
     "LPT³",
     "file.",
@@ -61,6 +63,9 @@ describe("portable complete skill revision identity", () => {
     expect(() => prepareSkillLibraryBundle([markdown, { path: badPath, content: "x" }])).toThrow(
       "Non-portable",
     );
+  });
+  it.each(["CLOCK$", "ClOcK$.txt", "normal$.js"])("accepts portable dollar name %s", (name) => {
+    expect(() => prepareSkillBundle([markdown, { path: name, content: "x" }])).not.toThrow();
   });
   it("rejects case collisions, file/directory collisions, and oversized files", () => {
     for (const files of [

@@ -20,6 +20,8 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
+import { createSkillResourceAllocationCoordinator } from "./skill-resource-allocation-coordinator.js";
+import { createSkillResourceAllocationLedger } from "./skill-resource-allocation-ledger.js";
 import {
   createWorkerEnvironmentStore,
   type WorkerEnvironmentStore,
@@ -195,6 +197,7 @@ export function createService(
       | "prepareNodeBootstrap"
       | "prepareNodeRuntime"
       | "closeNodeRuntime"
+      | "closeNodeBootstrapArtifacts"
       | "prepareNodeEnrollment"
       | "closeNodeEnrollment"
       | "retireNodeEnrollment"
@@ -209,6 +212,7 @@ export function createService(
       | "nodeDesktopCarrier"
       | "placementStore"
       | "workerCredentialTtlMs"
+      | "skillResourceAllocationCoordinator"
     >
   > = {},
 ) {
@@ -232,6 +236,12 @@ export function createService(
     }),
     now: () => testState.nowMs,
     reconcileIntervalMs: 25,
+    skillResourceAllocationCoordinator: createSkillResourceAllocationCoordinator(
+      createSkillResourceAllocationLedger({
+        databaseOptions: { database: testState.stateDb },
+      }),
+      { ownershipDatabaseOptions: { database: testState.stateDb } },
+    ),
     ...serviceOptions,
   });
   return testState.service;
