@@ -96,7 +96,7 @@ describe("ChatGPT response model attestations", () => {
     expect((await stream("sse")).responseModel).toBe(responseModel);
   });
 
-  it("does not treat the terminal payload model as concrete identity", async () => {
+  it("preserves the provider model reported by a Responses lifecycle event", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn(async () =>
@@ -104,7 +104,22 @@ describe("ChatGPT response model attestations", () => {
       ),
     );
 
-    expect((await stream("sse")).responseModel).toBeUndefined();
+    expect((await stream("sse")).responseModel).toBe(model.id);
+  });
+
+  it("fails closed when a lifecycle model conflicts with response headers", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        completedSseResponse({
+          responseId: "resp_payload_header_conflict",
+          payloadModel: "gpt-5.6-sol",
+          headers: { "openai-model": "gpt-5.6-terra" },
+        }),
+      ),
+    );
+
+    expectConflict(await stream("sse"));
   });
 
   it("fails closed when HTTP and SSE model attestations conflict", async () => {

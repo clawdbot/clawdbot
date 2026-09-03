@@ -22,6 +22,14 @@ export { sortPromptCacheToolsByName as sortTransportToolsByName } from "../utils
 const MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS = 12;
 const MODEL_STREAM_COOPERATIVE_YIELD_MAX_EVENTS = 64;
 const OPENAI_RESPONSE_MODEL_HEADER_NAMES = new Set(["openai-model", "x-openai-model"]);
+const OPENAI_RESPONSE_MODEL_EVENT_TYPES = new Set([
+  "response.created",
+  "response.in_progress",
+  "response.completed",
+  "response.incomplete",
+  "response.failed",
+]);
+const OPENAI_DATED_MODEL_SUFFIX = /-(?:\d{8}|\d{4}-\d{2}-\d{2})$/;
 
 export const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 export const log = {
@@ -72,19 +80,48 @@ function readOpenAIResponseModelEvent(event: unknown): string[] {
   }
   const response = isRecord(event.response) ? event.response : undefined;
   return [
+    ...(OPENAI_RESPONSE_MODEL_EVENT_TYPES.has(String(event.type)) &&
+    typeof response?.model === "string" &&
+    response.model.trim()
+      ? [response.model.trim()]
+      : []),
     ...readOpenAIResponseModelHeaderRecord(response?.headers),
     ...readOpenAIResponseModelHeaderRecord(event.headers),
   ];
+}
+
+function reconcileOpenAIResponseModels(
+  current: string | undefined,
+  observed: string,
+): string | undefined {
+  if (!current || current === observed) {
+    return observed;
+  }
+  const currentBase = current.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  const observedBase = observed.replace(OPENAI_DATED_MODEL_SUFFIX, "");
+  if (currentBase !== observedBase) {
+    return undefined;
+  }
+  // Prefer dated provider evidence when the lifecycle event reports the
+  // documented undated id and a response header reports its concrete release.
+  if (currentBase === current && observedBase !== observed) {
+    return observed;
+  }
+  if (observedBase === observed && currentBase !== current) {
+    return current;
+  }
+  return undefined;
 }
 
 export function createResponseModelTracker(enabled = true) {
   let responseModel: string | undefined;
   const observe = (models: readonly string[]) => {
     for (const model of models) {
-      if (responseModel && responseModel !== model) {
+      const reconciled = reconcileOpenAIResponseModels(responseModel, model);
+      if (!reconciled) {
         throw new Error(OPENAI_RESPONSE_MODEL_CONFLICT);
       }
-      responseModel = model;
+      responseModel = reconciled;
     }
   };
   const begin = (headers?: Headers) => {

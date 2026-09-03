@@ -374,13 +374,13 @@ describe("managed ChatGPT OAuth response model", () => {
     expect(result.responseModel).toBe(responseModel);
   });
 
-  it("does not treat the terminal payload model as concrete identity without a header", async () => {
+  it("preserves the provider model reported by managed Responses lifecycle events", async () => {
     const tracked = trackedFetch(completedResponse);
     configureAiTransportHost({ buildModelFetch: () => tracked.fetch });
 
     const result = await createManagedFixtureStream(managedOpenAIStream, chatGptModel).result();
 
-    expect(result.responseModel).toBeUndefined();
+    expect(result.responseModel).toBe(openAIModel.id);
   });
 
   it("preserves the concrete model reported by managed SSE event headers", async () => {
