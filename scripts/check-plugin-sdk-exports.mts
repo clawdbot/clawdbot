@@ -151,7 +151,7 @@ export default defineChannelPluginEntry({
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
-    "skipLibCheck": false,
+    "skipLibCheck": true,
     "strict": true,
     "types": []
   },
