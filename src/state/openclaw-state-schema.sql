@@ -2198,7 +2198,6 @@ CREATE TABLE IF NOT EXISTS worker_session_tool_operations (
   operation_seed TEXT NOT NULL,
   status TEXT NOT NULL CHECK (status IN ('running', 'succeeded', 'failed', 'unknown')),
   child_session_key TEXT,
-  child_placement_identity_json TEXT,
   result_json TEXT,
   gateway_instance_id TEXT NOT NULL,
   created_at_ms INTEGER NOT NULL,

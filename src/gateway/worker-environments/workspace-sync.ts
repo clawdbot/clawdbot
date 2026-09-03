@@ -249,6 +249,7 @@ export function createWorkerWorkspaceActions(
       }),
       runTask,
     });
+    request.authorize?.();
     const temporaryDirectory = await fs.mkdtemp(
       path.join(resolvePreferredOpenClawTmpDir(), "openclaw-worker-workspace-sync-"),
     );

@@ -319,20 +319,10 @@ describe("worker placement restart recovery", () => {
         environmentId: "",
       };
       const harness = createHarness(placements, {
-        isInterruptedDelegatedChild: (placement: unknown) => {
-          if (typeof placement === "string") {
-            return placement === REQUEST.sessionKey;
-          }
-          if (!placement || typeof placement !== "object") {
-            return false;
-          }
-          const candidate = placement as typeof interrupted;
-          return (
-            candidate.sessionId === interrupted.sessionId &&
-            candidate.sessionKey === interrupted.sessionKey &&
-            candidate.environmentId === interrupted.environmentId
-          );
-        },
+        isInterruptedDelegatedChild: (placement) =>
+          placement.sessionId === interrupted.sessionId &&
+          placement.sessionKey === interrupted.sessionKey &&
+          placement.environmentId === interrupted.environmentId,
       });
       interrupted = {
         sessionId:

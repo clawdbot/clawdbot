@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { generateSecureToken } from "../../infra/secure-random.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
-import { ensureWorkerSessionToolOperationPlacementIdentityColumn } from "../../state/openclaw-state-db-schema-additive.js";
 import {
   isCurrentPlacementTurnClaim,
   required,
@@ -45,7 +44,9 @@ function parseInterruptedDelegatedChildPlacement(
   const parsed: unknown = JSON.parse(value);
   if (
     !isRecord(parsed) ||
-    Object.keys(parsed).length !== 3 ||
+    Object.keys(parsed).length !== 5 ||
+    parsed.version !== 1 ||
+    parsed.kind !== "child-placement" ||
     typeof parsed.sessionId !== "string" ||
     !parsed.sessionId ||
     typeof parsed.sessionKey !== "string" ||
@@ -62,6 +63,12 @@ function parseInterruptedDelegatedChildPlacement(
   };
 }
 
+function serializeInterruptedDelegatedChildPlacement(
+  placement: InterruptedDelegatedChildPlacement,
+): string {
+  return JSON.stringify({ version: 1, kind: "child-placement", ...placement });
+}
+
 export function bindWorkerSessionToolOperationPlacement(params: {
   db: DatabaseSync;
   instanceId: string;
@@ -69,13 +76,12 @@ export function bindWorkerSessionToolOperationPlacement(params: {
   operation: WorkerDelegatedSpawnOperation;
   placement: InterruptedDelegatedChildPlacement;
 }): void {
-  ensureWorkerSessionToolOperationPlacementIdentityColumn(params.db);
-  const identityJson = JSON.stringify(params.placement);
+  const identityJson = serializeInterruptedDelegatedChildPlacement(params.placement);
   const result = executeSqliteQuerySync(
     params.db,
     query(params.db)
       .updateTable("worker_session_tool_operations")
-      .set({ child_placement_identity_json: identityJson, updated_at_ms: params.updatedAtMs })
+      .set({ result_json: identityJson, updated_at_ms: params.updatedAtMs })
       .where("source_session_id", "=", params.operation.sourceSessionId)
       .where("source_claim_id", "=", params.operation.sourceClaimId)
       .where("tool_call_id", "=", params.operation.toolCallId)
@@ -85,8 +91,8 @@ export function bindWorkerSessionToolOperationPlacement(params: {
       .where("child_session_key", "=", params.placement.sessionKey)
       .where((expression) =>
         expression.or([
-          expression("child_placement_identity_json", "is", null),
-          expression("child_placement_identity_json", "=", identityJson),
+          expression("result_json", "is", null),
+          expression("result_json", "=", identityJson),
         ]),
       ),
   );
@@ -569,18 +575,11 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
       interruptedChildPlacements: InterruptedDelegatedChildPlacement[];
     } {
       return write((db) => {
-        ensureWorkerSessionToolOperationPlacementIdentityColumn(db);
         const operations = executeSqliteQuerySync(
           db,
           query(db)
             .selectFrom("worker_session_tool_operations")
-            .select([
-              "source_session_id",
-              "source_claim_id",
-              "tool_call_id",
-              "child_session_key",
-              "child_placement_identity_json",
-            ])
+            .select("result_json")
             .where("tool_name", "=", "sessions_spawn")
             // Unknown is the durable crash fence. Keep returning its child until the
             // owning turn lifecycle deletes the operation, including across restarts.
@@ -589,62 +588,11 @@ export function createPlacementSessionToolOperationOps(runtime: PlacementStoreRu
         const interruptedByIdentity = new Map<string, InterruptedDelegatedChildPlacement>();
         const timestamp = now();
         for (const operation of operations) {
-          let placement = operation.child_placement_identity_json
-            ? parseInterruptedDelegatedChildPlacement(operation.child_placement_identity_json)
-            : undefined;
-          if (!placement && operation.child_session_key) {
-            // Older same-version rows recorded only the child key. Adopt the one current
-            // effect-owning placement once, then retain that exact identity across restarts.
-            const matches = executeSqliteQuerySync(
-              db,
-              query(db)
-                .selectFrom("worker_session_placements")
-                .select(["session_id", "session_key", "environment_id"])
-                .where("session_key", "=", operation.child_session_key)
-                .where("environment_id", "is not", null),
-            ).rows;
-            const legacyPlacements = matches.flatMap((matched) =>
-              matched.environment_id
-                ? [
-                    {
-                      sessionId: matched.session_id,
-                      sessionKey: matched.session_key,
-                      environmentId: matched.environment_id,
-                    },
-                  ]
-                : [],
+          if (operation.result_json) {
+            interruptedByIdentity.set(
+              operation.result_json,
+              parseInterruptedDelegatedChildPlacement(operation.result_json),
             );
-            const [legacyPlacement] = legacyPlacements;
-            if (legacyPlacements.length === 1 && legacyPlacement) {
-              placement = legacyPlacement;
-              const identityJson = JSON.stringify(placement);
-              const adopted = executeSqliteQuerySync(
-                db,
-                query(db)
-                  .updateTable("worker_session_tool_operations")
-                  .set({
-                    child_placement_identity_json: identityJson,
-                    updated_at_ms: timestamp,
-                  })
-                  .where("source_session_id", "=", operation.source_session_id)
-                  .where("source_claim_id", "=", operation.source_claim_id)
-                  .where("tool_call_id", "=", operation.tool_call_id)
-                  .where("status", "in", ["running", "unknown"])
-                  .where("child_placement_identity_json", "is", null),
-              );
-              if (adopted.numAffectedRows !== 1n) {
-                throw new Error("Worker child placement recovery identity changed during adoption");
-              }
-            } else {
-              // Legacy key-only state cannot distinguish reused incarnations. Fence every
-              // current effect owner without choosing one identity or blocking Gateway startup.
-              for (const legacyPlacement of legacyPlacements) {
-                interruptedByIdentity.set(JSON.stringify(legacyPlacement), legacyPlacement);
-              }
-            }
-          }
-          if (placement) {
-            interruptedByIdentity.set(JSON.stringify(placement), placement);
           }
         }
         const result = executeSqliteQuerySync(
