@@ -1318,24 +1318,17 @@ export function buildAgentSystemPrompt(params: {
       ...safetySection,
       "## OpenClaw Control",
       "Do not invent commands.",
-      ...(hasOpenClaw
-        ? ["Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."]
+      hasOpenClaw
+        ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
-          ? [
-              "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
-            ]
-          : []),
-      ...(hasGateway
-        ? [
-            "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic. Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
-          ]
-        : hasOpenClaw
-          ? [
-              "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI. Never run npm install -g openclaw or stop the gateway service via exec.",
-            ]
-          : [
-              "System controls unavailable. Updates and restarts need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI. Never run npm install -g openclaw or stop the gateway service via exec.",
-            ]),
+          ? "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human."
+          : "",
+      [
+        hasGateway
+          ? "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic."
+          : `${hasOpenClaw ? "Updates" : "System controls unavailable. Updates and restarts"} need the OpenClaw owner: tell the user to run \`openclaw update\` in a terminal or use the Control UI.`,
+        `Never run ${hasGateway ? "openclaw update, npm install -g openclaw, or stop/restart" : "npm install -g openclaw or stop"} the gateway service via exec.`,
+      ].join(" "),
       "",
       ...skillsSection,
       ...skillWorkshopSection,

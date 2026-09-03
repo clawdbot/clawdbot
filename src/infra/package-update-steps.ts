@@ -1030,16 +1030,24 @@ export async function runGlobalPackageUpdateSteps(params: {
   const initialRecovery: UpdateRecovery = params.expectedGitCheckout
     ? { serviceRestartSafe: false, reason: "state-migration-started" }
     : await verifyPackageUpdateRecovery(originalPackageRoot);
-  let recovery = initialRecovery;
+  let liveTreeMutated = false;
+  let packageRollbackVerified: boolean | undefined;
   const steps: PackageUpdateStepResult[] = [];
   const packageUpdateFailure = async (
     failedStep: PackageUpdateStepResult,
     failureRoot: string | null,
     failedSteps = [failedStep],
   ): Promise<PackageUpdateStepsResult> => {
+    let recovery: UpdateRecovery = liveTreeMutated
+      ? {
+          serviceRestartSafe: false,
+          reason: "runtime-verification-failed",
+          ...(packageRollbackVerified === undefined ? {} : { packageRollbackVerified }),
+        }
+      : initialRecovery;
     // A discarded stage must not hide damage to the live tree. Before mutation,
     // recovery still belongs to the original runtime, verified again at failure.
-    if (recovery === initialRecovery && initialRecovery.serviceRestartSafe) {
+    if (!liveTreeMutated && initialRecovery.serviceRestartSafe) {
       const liveRecovery = await verifyPackageUpdateRecovery(originalPackageRoot);
       recovery =
         liveRecovery.serviceRestartSafe && liveRecovery.version === initialRecovery.version
@@ -1166,9 +1174,7 @@ export async function runGlobalPackageUpdateSteps(params: {
             preparedSpec.installCwd ?? process.cwd(),
           )
         : preparedSpec.installSpec;
-    if (!stagedInstall) {
-      recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-    }
+    liveTreeMutated ||= !stagedInstall;
     const updateStep = await params.runStep({
       name: "global update",
       argv: globalInstallArgs(
@@ -1212,9 +1218,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         npmPreflight.policy ?? undefined,
       );
       if (fallbackArgv) {
-        if (!stagedInstall) {
-          recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-        }
+        liveTreeMutated ||= !stagedInstall;
         const fallbackStep = await params.runStep({
           name: "global update (omit optional)",
           argv: fallbackArgv,
@@ -1380,11 +1384,10 @@ export async function runGlobalPackageUpdateSteps(params: {
         });
       }
       let failedVerification = verificationErrors.length > 0;
-      let postVerifyStep: PackageUpdateStepResult | null = null;
       if (stagedInstall && verificationErrors.length === 0) {
         // The swap exposes the candidate to the live prefix and Doctor can mutate state.
         // Only completed candidate verification/Doctor may authorize activation afterward.
-        recovery = { serviceRestartSafe: false, reason: "runtime-verification-failed" };
+        liveTreeMutated = true;
         const swap = await swapStagedNpmInstall({
           stage: stagedInstall,
           installTarget: params.installTarget,
@@ -1396,23 +1399,18 @@ export async function runGlobalPackageUpdateSteps(params: {
           steps.push(swap.postVerifyStep);
         }
         failedVerification = swap.status === "failed";
-        postVerifyStep = swap.postVerifyStep;
         // Verified rollback restores package files, not state changed by hooks.
         if (swap.status === "committed") {
           verifiedPackageRoot = params.installTarget.packageRoot ?? verifiedPackageRoot;
           afterVersion = candidateVersion;
         } else {
-          recovery = {
-            serviceRestartSafe: false,
-            reason: "runtime-verification-failed",
-            packageRollbackVerified: swap.packageRollbackVerified,
-          };
+          packageRollbackVerified = swap.packageRollbackVerified;
           afterVersion = await readPackageVersionIfPresent(livePackageRoot);
         }
       }
 
       if (!stagedInstall && !failedVerification) {
-        postVerifyStep = verifiedPackageRoot
+        const postVerifyStep = verifiedPackageRoot
           ? ((await params.postVerifyStep?.(verifiedPackageRoot)) ?? null)
           : null;
         if (postVerifyStep) {
@@ -1428,14 +1426,6 @@ export async function runGlobalPackageUpdateSteps(params: {
               "Required post-install verification did not produce a result; Gateway activation is unsafe.",
           });
         }
-      }
-      if (
-        !failedVerification &&
-        (!params.postVerifyStep ||
-          (postVerifyStep && !isBlockingPackageUpdateStep(postVerifyStep))) &&
-        candidateVersion
-      ) {
-        recovery = { serviceRestartSafe: true, version: candidateVersion };
       }
       if (failedVerification && stagedInstall) {
         afterVersion = await readPackageVersionIfPresent(livePackageRoot);
@@ -1454,7 +1444,9 @@ export async function runGlobalPackageUpdateSteps(params: {
       verifiedPackageRoot,
       afterVersion,
       failedStep,
-      recovery,
+      recovery: afterVersion
+        ? { serviceRestartSafe: true, version: afterVersion }
+        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
     };
   } catch (error) {
     const failedStep: PackageUpdateStepResult = {

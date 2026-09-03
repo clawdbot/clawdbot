@@ -288,7 +288,6 @@ export function createApplicationOverlays(
     },
     refreshUpdateStatus: updates.refreshUpdateStatus,
     runUpdate: updates.runUpdate,
-    setActiveSessionKeyProvider: updates.setActiveSessionKeyProvider,
     holdUpdate: updates.holdUpdate,
     async decideApproval(decision, approvalId, projectedApproval) {
       const active = approvalId

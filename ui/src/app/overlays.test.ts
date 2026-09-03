@@ -825,13 +825,13 @@ describe("application update overlays", () => {
     });
     const harness = createGatewayHarness(client(request));
     let updateRunningWhenDrained = false;
-    let activeSessionKey = "agent:main:originating-chat";
+    harness.update({ sessionKey: "agent:main:originating-chat" });
     const overlays = createApplicationOverlays(harness.gateway, {
-      getActiveSessionKey: () => activeSessionKey,
+      getActiveSessionKey: () => harness.gateway.snapshot.sessionKey,
       drainConfigWrites: async () => {
         order.push("drain");
         updateRunningWhenDrained = overlays.snapshot.updateRunning;
-        activeSessionKey = "agent:main:another-chat";
+        harness.update({ sessionKey: "agent:main:another-chat" });
         await Promise.resolve();
       },
     });
@@ -868,8 +868,9 @@ describe("application update overlays", () => {
         result: { status: "ok", after: { version: "2.0.0" } },
       });
       const harness = createGatewayHarness(client(request));
-      const overlays = createApplicationOverlays(harness.gateway);
-      overlays.setActiveSessionKeyProvider(() => activeSessionKey);
+      const overlays = createApplicationOverlays(harness.gateway, {
+        getActiveSessionKey: () => activeSessionKey,
+      });
 
       await overlays.runUpdate(options);
 

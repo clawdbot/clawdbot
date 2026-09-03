@@ -46,13 +46,8 @@ export const adoptUpdateCampaignMock = vi.fn<() => UpdateCampaignAdoption>(() =>
   status: "absent",
 }));
 export const readConfigFileSnapshotMock = vi.fn<() => Promise<ConfigFileSnapshot>>();
-type ManagedServiceUpdateHandoffResult = Awaited<
-  ReturnType<
-    typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
-  >
->;
 export const startManagedServiceUpdateHandoffMock = vi.fn<
-  (params?: { handoffId?: string; root?: string }) => Promise<ManagedServiceUpdateHandoffResult>
+  typeof import("../../infra/update-managed-service-handoff.js").startManagedServiceUpdateHandoff
 >(async (params) => ({
   status: "started",
   pid: 12345,
@@ -80,15 +75,14 @@ vi.mock("../server-restart-sentinel-notice.js", () => ({
   resolveGatewayLifecycleNoticeRoute: resolveGatewayLifecycleNoticeRouteMock,
 }));
 
-export const scheduleGatewaySigusr1RestartMock = vi.fn(() => ({ scheduled: true }));
+export const scheduleGatewaySigusr1RestartMock = vi.fn(
+  (
+    _opts?: Parameters<typeof import("../../infra/restart.js").scheduleGatewaySigusr1Restart>[0],
+  ) => ({ scheduled: true }),
+);
 
-type PostCoreFinalizeOutcome = Awaited<
-  ReturnType<
-    typeof import("../../infra/update-post-core-finalize.js").runPostCoreFinalizeAfterGatewayUpdate
-  >
->;
 export const runPostCoreFinalizeAfterGatewayUpdateMock = vi.fn<
-  () => Promise<PostCoreFinalizeOutcome>
+  typeof import("../../infra/update-post-core-finalize.js").runPostCoreFinalizeAfterGatewayUpdate
 >(async () => ({ status: "skipped", reason: "not-git-update" }));
 
 export type UpdateRunPayload = {
@@ -295,16 +289,14 @@ beforeEach(() => {
   refreshLatestUpdateRestartSentinelMock.mockResolvedValue(null);
   recordLatestUpdateRestartSentinelMock.mockClear();
   startManagedServiceUpdateHandoffMock.mockClear();
-  startManagedServiceUpdateHandoffMock.mockImplementation(
-    async (params?: { handoffId?: string; root?: string }) => ({
-      status: "started" as const,
-      pid: 12345,
-      command: "openclaw update --yes --timeout 1800",
-      logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
-      handoffId: params?.handoffId ?? "handoff-default",
-      installRoot: params?.root ?? "/tmp/openclaw",
-    }),
-  );
+  startManagedServiceUpdateHandoffMock.mockImplementation(async (params) => ({
+    status: "started",
+    pid: 12345,
+    command: "openclaw update --yes --timeout 1800",
+    logPath: "/tmp/openclaw-update-run-handoff/handoff.log",
+    handoffId: params?.handoffId ?? "handoff-default",
+    installRoot: params?.root ?? "/tmp/openclaw",
+  }));
   scheduleGatewaySigusr1RestartMock.mockClear();
   scheduleGatewaySigusr1RestartMock.mockReturnValue({ scheduled: true });
   runPostCoreFinalizeAfterGatewayUpdateMock.mockClear();

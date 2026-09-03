@@ -8,7 +8,6 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import type { CommandRunner } from "./update-global.js";
 
 describe("npm lifecycle policy preflight", () => {
   it.each([false, true])(
@@ -28,15 +27,19 @@ describe("npm lifecycle policy preflight", () => {
           probeError: "version probe failed",
         };
         const runStep = vi.fn();
+        const runCommand = vi.fn(createRootRunner(globalRoot));
         const result = await runGlobalPackageUpdateSteps({
           installTarget: target,
           installSpec: "openclaw@2.0.0",
           packageName: "openclaw",
-          runCommand: createRootRunner(globalRoot),
+          runCommand,
           runStep,
           timeoutMs: 1000,
         });
-        expect(result.failedStep).not.toBeNull();
+        expect(result.failedStep?.stderrTail).toContain(
+          "Unable to determine the owning npm version",
+        );
+        expect(runCommand).not.toHaveBeenCalled();
         expect(runStep).not.toHaveBeenCalled();
         expect(result.recovery).toEqual(
           corrupt
@@ -46,30 +49,6 @@ describe("npm lifecycle policy preflight", () => {
       });
     },
   );
-
-  it("stops before mutation when the owning npm version is unknown", async () => {
-    const runStep = vi.fn();
-    const runCommand = vi.fn<CommandRunner>();
-    const installTarget = createNpmTarget("/tmp/npm-policy-test/lib/node_modules");
-    installTarget.npmOwner = {
-      version: null,
-      lifecyclePolicy: null,
-      probeError: "version probe failed",
-    };
-
-    const result = await runGlobalPackageUpdateSteps({
-      installTarget,
-      installSpec: "openclaw@2.0.0",
-      packageName: "openclaw",
-      runCommand,
-      runStep,
-      timeoutMs: 1000,
-    });
-
-    expect(runCommand).not.toHaveBeenCalled();
-    expect(result.failedStep?.stderrTail).toContain("Unable to determine the owning npm version");
-    expect(runStep).not.toHaveBeenCalled();
-  });
 });
 
 describe("package update recovery safety", () => {
@@ -249,7 +228,6 @@ describe("package update recovery safety", () => {
         expect(result.recovery?.serviceRestartSafe).toBe(false);
         expect(result.failedStep?.stderrTail).toContain("source cleanup failed after commit");
         if (failure === "backup") {
-          expect(result.recovery?.serviceRestartSafe).toBe(false);
           await expect(
             fs.readFile(path.join(packageRoot, "dist", "index.js")),
           ).rejects.toMatchObject({ code: "ENOENT" });

@@ -5,7 +5,6 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
@@ -66,24 +65,6 @@ function readCapturedPayload(): RestartSentinelPayload {
     throw new Error("expected restart sentinel payload");
   }
   return sentinelState.capturedPayload;
-}
-
-function firstMockCall(
-  mock: { mock: { calls: Array<readonly unknown[]> } },
-  label: string,
-): readonly unknown[] {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error(`expected ${label} call`);
-  }
-  return call;
-}
-
-async function withProcessEnv<T>(
-  updates: Record<string, string | undefined>,
-  run: () => Promise<T>,
-): Promise<T> {
-  return await withEnvAsync(updates, run);
 }
 
 function mockGlobalInstallSurface() {
@@ -195,54 +176,31 @@ describe("update.run acknowledgement", () => {
 });
 
 describe("update.run sentinel deliveryContext", () => {
-  it("includes deliveryContext in sentinel payload when sessionKey is provided", async () => {
-    sentinelState.capturedPayload = undefined;
-
-    let responded = false;
-    await invokeUpdateRun({ sessionKey: "agent:main:webchat:dm:user-123" }, () => {
-      responded = true;
-    });
-
-    expect(responded).toBe(true);
-    expect(adoptUpdateCampaignMock).toHaveBeenCalledOnce();
-    const payload = readCapturedPayload();
-    expect(payload.deliveryContext).toEqual({
-      channel: "webchat",
-      to: "webchat:user-123",
-      accountId: "default",
-    });
-    expect(payload.continuation).toBeUndefined();
-  });
-
-  it("omits deliveryContext when no sessionKey is provided", async () => {
-    sentinelState.capturedPayload = undefined;
-
-    await invokeUpdateRun({});
-
-    const payload = readCapturedPayload();
-    expect(payload.deliveryContext).toBeUndefined();
-    expect(payload.threadId).toBeUndefined();
-    expect(payload.continuation).toBeUndefined();
-  });
-
-  it("includes threadId in sentinel payload for threaded sessions", async () => {
-    sentinelState.capturedPayload = undefined;
-
-    await invokeUpdateRun({ sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456" });
-
-    const payload = readCapturedPayload();
-    expect(payload.deliveryContext).toEqual({
-      channel: "slack",
-      to: "slack:C0123ABC",
-      accountId: "workspace-1",
-    });
-    expect(payload.threadId).toBe("1234567890.123456");
-    expect(payload.continuation).toBeUndefined();
-  });
+  it.each([
+    { sessionKey: undefined, deliveryContext: undefined, threadId: undefined },
+    {
+      sessionKey: "agent:main:webchat:dm:user-123",
+      deliveryContext: { channel: "webchat", to: "webchat:user-123", accountId: "default" },
+      threadId: undefined,
+    },
+    {
+      sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456",
+      deliveryContext: { channel: "slack", to: "slack:C0123ABC", accountId: "workspace-1" },
+      threadId: "1234567890.123456",
+    },
+  ])(
+    "preserves the sentinel route for $sessionKey",
+    async ({ sessionKey, deliveryContext, threadId }) => {
+      expect((await captureUpdateRunPayload({ sessionKey }))?.ok).toBe(true);
+      expect(adoptUpdateCampaignMock).toHaveBeenCalledOnce();
+      const payload = readCapturedPayload();
+      expect(payload.deliveryContext).toEqual(deliveryContext);
+      expect(payload.threadId).toBe(threadId);
+      expect(payload.continuation).toBeUndefined();
+    },
+  );
 
   it("uses an explicit continuationMessage in successful update sentinels", async () => {
-    sentinelState.capturedPayload = undefined;
-
     await invokeUpdateRun({
       sessionKey: "agent:main:webchat:dm:user-123",
       continuationMessage: "Check the running version and finish the update report.",
@@ -260,16 +218,13 @@ describe("update.run timeout normalization", () => {
     await invokeUpdateRun({ timeoutMs: 1 });
 
     expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    const [updateParams] = firstMockCall(runGatewayUpdateMock, "gateway update") as [
-      {
-        timeoutMs?: number;
-        allowGatewayServiceRepair?: boolean;
-        allowGatewayActivation?: boolean;
-      },
-    ];
-    expect(updateParams?.timeoutMs).toBe(1000);
-    expect(updateParams?.allowGatewayServiceRepair).toBe(false);
-    expect(updateParams?.allowGatewayActivation).toBe(false);
+    expect(runGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 1000,
+        allowGatewayServiceRepair: false,
+        allowGatewayActivation: false,
+      }),
+    );
   });
 });
 
@@ -280,26 +235,6 @@ describe("update.run restart scheduling", () => {
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
     expect(payload?.restart).toEqual({ scheduled: true });
-  });
-
-  it("skips restart when update fails", async () => {
-    runGatewayUpdateMock.mockResolvedValueOnce({
-      status: "error",
-      mode: "git",
-      reason: "build-failed",
-      steps: [],
-      durationMs: 100,
-    });
-
-    const payload = await captureUpdateRunPayload({
-      sessionKey: "agent:main:webchat:dm:user-123",
-      continuationMessage: "This should not run after a failed update.",
-    });
-
-    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
-    expect(payload?.ok).toBe(false);
-    expect(payload?.restart).toBeNull();
-    expect(sentinelState.capturedPayload?.continuation).toBeUndefined();
   });
 
   it.each([
@@ -318,9 +253,15 @@ describe("update.run restart scheduling", () => {
       durationMs: 100,
     });
 
-    const payload = await captureUpdateRunPayload();
+    const payload = await captureUpdateRunPayload({
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "This should not run after a failed update.",
+    });
 
+    expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
+    expect(payload?.restart).toBeNull();
+    expect(readCapturedPayload().continuation).toBeUndefined();
     expect(payload?.result?.status).toBe(status);
     expect(payload?.result?.reason).toBe(reason);
   });
@@ -329,7 +270,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload({}, {}),
     );
 
@@ -348,38 +289,30 @@ describe("update.run restart scheduling", () => {
         }),
       }),
     );
-    const [handoffParams] = firstMockCall(
-      startManagedServiceUpdateHandoffMock,
-      "managed handoff",
-    ) as [{ handoffId?: string; meta?: { handoffId?: string } }];
-    expect(handoffParams.meta?.handoffId).toBe(handoffParams.handoffId);
+    const handoffId = startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0].handoffId;
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        meta: expect.objectContaining({ handoffId }),
+      }),
+    );
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
-    const [restartParams] = firstMockCall(
-      scheduleGatewaySigusr1RestartMock,
-      "gateway restart schedule",
-    ) as [
-      {
-        delayMs?: number;
-        reason?: string;
-        successorOwner?: unknown;
-        skipCooldown?: boolean;
-        skipDeferral?: boolean;
-      },
-    ];
-    expect(restartParams?.reason).toBe("update.run");
-    expect(restartParams?.successorOwner).toEqual({
-      kind: "managed-update-handoff",
-      handoffId: handoffParams.handoffId,
-      installRoot: "/tmp/openclaw-global",
-    });
-    expect(restartParams?.skipCooldown).toBe(true);
-    expect(restartParams?.skipDeferral).toBe(true);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reason: "update.run",
+        successorOwner: {
+          kind: "managed-update-handoff",
+          handoffId,
+          installRoot: "/tmp/openclaw-global",
+        },
+        skipCooldown: true,
+        skipDeferral: true,
+      }),
+    );
     expect(payload?.ok).toBe(true);
     expect(payload?.result?.status).toBe("skipped");
     expect(payload?.result?.reason).toBe("managed-service-handoff-started");
-    expect(
-      (payload as { handoff?: { status?: string; command?: string } } | undefined)?.handoff,
-    ).toEqual({
+    expect(payload?.handoff).toEqual({
       status: "started",
       pid: 12345,
       command: "openclaw update --yes --timeout 1800",
@@ -390,7 +323,7 @@ describe("update.run restart scheduling", () => {
     expect(sentinel.status).toBe("skipped");
     expect(sentinel.stats).toEqual(
       expect.objectContaining({
-        handoffId: handoffParams.handoffId,
+        handoffId,
         reason: "managed-service-handoff-started",
       }),
     );
@@ -416,7 +349,7 @@ describe("update.run restart scheduling", () => {
       handoffId: "handoff-existing",
     });
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload({
         sessionKey: "agent:main:webchat:dm:user-123",
         continuationMessage: "Report the update result after restart.",
@@ -452,7 +385,7 @@ describe("update.run restart scheduling", () => {
     mockGlobalInstallSurface();
     sentinelState.restartSentinelWriteError = new Error("state database unavailable");
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -469,7 +402,7 @@ describe("update.run restart scheduling", () => {
       Object.assign(new Error("spawn ENOENT"), { code: "ENOENT" }),
     );
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -486,7 +419,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGlobalInstallSurface();
 
-    await withProcessEnv({ OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" }, () =>
+    await withEnvAsync({ OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service" }, () =>
       invokeUpdateRun({ restartDelayMs: 0 }),
     );
 
@@ -536,7 +469,7 @@ describe("update.run restart scheduling", () => {
       throw Object.assign(new Error("uv_cwd"), { code: "ENOENT", syscall: "uv_cwd" });
     });
     try {
-      await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+      await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
         invokeUpdateRun({}),
       );
     } finally {
@@ -554,7 +487,7 @@ describe("update.run restart scheduling", () => {
   it("preflights supervised git/dev updates before handing them to the CLI path", async () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -609,7 +542,7 @@ describe("update.run restart scheduling", () => {
       durationMs: 1,
     });
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -625,7 +558,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("schtasks");
     mockGitInstallSurface("C:\\openclaw");
 
-    const payload = await withProcessEnv(
+    const payload = await withEnvAsync(
       {
         OPENCLAW_SERVICE_MARKER: "openclaw",
         OPENCLAW_SERVICE_KIND: "gateway",
@@ -649,17 +582,13 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
-    const [handoffParams] = firstMockCall(
-      startManagedServiceUpdateHandoffMock,
-      "managed handoff",
-    ) as [{ channel?: string }];
-    expect(handoffParams).not.toHaveProperty("channel");
+    expect(startManagedServiceUpdateHandoffMock.mock.calls[0]?.[0]).not.toHaveProperty("channel");
     expect(payload?.handoff?.command).not.toContain("--channel");
   });
 
@@ -668,7 +597,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
-    const payload = await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    const payload = await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -688,7 +617,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
     mockGlobalInstallSurface();
 
-    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
+    await withEnvAsync({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
       captureUpdateRunPayload(),
     );
 
@@ -722,7 +651,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
-    const payload = await withProcessEnv(
+    const payload = await withEnvAsync(
       {
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
         INVOCATION_ID: "8a77e69a8f604bf0b7984879b9f17a7c",
@@ -749,7 +678,7 @@ describe("update.run restart scheduling", () => {
     detectRespawnSupervisorMock.mockReturnValueOnce("systemd");
     mockGitInstallSurface("/tmp/openclaw-git");
 
-    const payload = await withProcessEnv(
+    const payload = await withEnvAsync(
       {
         OPENCLAW_SYSTEMD_UNIT: undefined,
         OPENCLAW_SERVICE_MARKER: "openclaw",
@@ -810,7 +739,7 @@ describe("update.run restart scheduling", () => {
     mockGlobalInstallSurface();
     detectRespawnSupervisorMock.mockReturnValue("systemd");
 
-    const payload = await withProcessEnv(
+    const payload = await withEnvAsync(
       {
         OPENCLAW_SUPERVISOR_MODE: "external",
         OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway.service",
@@ -854,14 +783,12 @@ describe("update.run post-core plugin finalize", () => {
     const payload = await captureUpdateRunPayload();
 
     expect(runPostCoreFinalizeAfterGatewayUpdateMock).toHaveBeenCalledTimes(1);
-    const [finalizeParams] = firstMockCall(
-      runPostCoreFinalizeAfterGatewayUpdateMock,
-      "post-core finalize",
-    ) as [{ result?: UpdateRunResult; serviceRepairPolicy?: string }];
-    expect(finalizeParams.result?.mode).toBe("git");
-    expect(finalizeParams.result?.status).toBe("ok");
-    expect(finalizeParams.serviceRepairPolicy).toBe("external");
-    // Convergence succeeded, so the gateway is allowed to restart onto the new core.
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: expect.objectContaining({ mode: "git", status: "ok" }),
+        serviceRepairPolicy: "external",
+      }),
+    );
     expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledTimes(1);
     expect(payload?.ok).toBe(true);
     expect(payload?.result?.status).toBe("ok");
@@ -897,11 +824,7 @@ describe("update.run post-core plugin finalize", () => {
 
     await captureUpdateRunPayload();
 
-    const [finalizeParams] = firstMockCall(
-      runPostCoreFinalizeAfterGatewayUpdateMock,
-      "post-core finalize",
-    ) as [{ preUpdateConfig?: { sourceConfig?: OpenClawConfig; authoredConfig?: OpenClawConfig } }];
-    expect(finalizeParams.preUpdateConfig).toEqual({
+    expect(runPostCoreFinalizeAfterGatewayUpdateMock.mock.calls[0]?.[0].preUpdateConfig).toEqual({
       sourceConfig: preUpdateConfig,
       authoredConfig: preUpdateConfig,
     });
@@ -925,18 +848,5 @@ describe("update.run post-core plugin finalize", () => {
     expect(payload?.result?.status).toBe("error");
     expect(payload?.result?.reason).toBe("post-core-plugin-finalize-failed");
     expect(readCapturedPayload().status).toBe("error");
-  });
-
-  it("does not run finalize on the managed-service handoff path", async () => {
-    detectRespawnSupervisorMock.mockReturnValueOnce("launchd");
-    mockGlobalInstallSurface();
-
-    await withProcessEnv({ OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.gateway" }, () =>
-      captureUpdateRunPayload(),
-    );
-
-    expect(runGatewayUpdateMock).not.toHaveBeenCalled();
-    expect(runPostCoreFinalizeAfterGatewayUpdateMock).not.toHaveBeenCalled();
-    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledTimes(1);
   });
 });

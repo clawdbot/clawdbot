@@ -11,7 +11,6 @@ import { dispatchAssembledChannelTurn } from "../channels/turn/lifecycle.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
-import { findMostRecentDirectSessionWithRoute } from "../config/sessions/recent-direct-session.js";
 import { parseSessionThreadInfo } from "../config/sessions/thread-info.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -48,9 +47,11 @@ import type { OutboundReplyPayload } from "../plugin-sdk/reply-payload.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { removeCronRunContinuationSessionIfIdle } from "../tasks/cron-run-continuation-cleanup.js";
 import {
+  type DeliveryContext,
   deliveryContextFromSession,
   hasDeliveryTargetFields,
   mergeDeliveryContext,
+  normalizeDeliveryContext,
   sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import { INTERNAL_MESSAGE_CHANNEL, isDeliverableMessageChannel } from "../utils/message-channel.js";
@@ -60,7 +61,7 @@ import {
   enqueueRestartSentinelNotice,
   resolveGatewayLifecycleNoticeRoute,
 } from "./server-restart-sentinel-notice.js";
-import { loadCombinedSessionStoreForGatewayCore, loadSessionEntry } from "./session-utils.js";
+import { loadSessionEntry } from "./session-utils.js";
 import { runStartupTasks, type StartupTask } from "./startup-tasks.js";
 
 const log = createSubsystemLogger("gateway/restart-sentinel");
@@ -94,12 +95,7 @@ function enqueueRestartSentinelWake(
   message: string,
   sessionKey: string,
   agentId?: string,
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  },
+  deliveryContext?: DeliveryContext,
 ) {
   const eventOptions = {
     sessionKey,
@@ -145,14 +141,9 @@ function resolveQueuedRestartContinuationMessageId(entry: QueuedAgentTurnSession
   return entry.messageId;
 }
 
-function resolveQueuedSessionDeliveryContext(entry: QueuedSessionDelivery):
-  | {
-      channel?: string;
-      to?: string;
-      accountId?: string;
-      threadId?: string | number;
-    }
-  | undefined {
+function resolveQueuedSessionDeliveryContext(
+  entry: QueuedSessionDelivery,
+): DeliveryContext | undefined {
   if (entry.kind === "agentTurn" && entry.route) {
     return {
       channel: entry.route.channel,
@@ -327,12 +318,7 @@ function buildQueuedRestartContinuation(params: {
   route?: SessionDeliveryRoute;
   expectedSessionId?: string | undefined;
   revision: number;
-  deliveryContext?: {
-    channel?: string;
-    to?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
+  deliveryContext?: DeliveryContext;
   idempotencyKey?: string;
 }): QueuedSessionDeliveryPayload {
   const idempotencyKey =
@@ -487,39 +473,10 @@ async function loadRestartSentinelStartupTask(params: {
         }
         return { status: "ran" as const };
       }
-      const cfg = getRuntimeConfig();
-      const systemTarget = resolveSystemMainSessionTarget(cfg);
-      const mainSessionKey = systemTarget.sessionKey;
-      const mainContext = deliveryContextFromSession(loadSessionEntry(mainSessionKey).entry);
-      routedSessionKey =
-        hasDeliveryTargetFields(mainContext) && isDeliverableMessageChannel(mainContext.channel)
-          ? mainSessionKey
-          : findMostRecentDirectSessionWithRoute(loadCombinedSessionStoreForGatewayCore(cfg).store);
-      // Inferring an operator route must not transfer system-work ownership or resume their turn.
+      const systemTarget = resolveSystemMainSessionTarget(getRuntimeConfig());
+      // Session-less recovery belongs to system work, never another agent's recent conversation.
+      routedSessionKey = systemTarget.sessionKey;
       wakeAgentId = systemTarget.agentId;
-      if (!routedSessionKey) {
-        const wakeQueueId = await enqueueSessionDelivery(
-          buildQueuedRestartContinuation({
-            sessionKey: mainSessionKey,
-            agentId: systemTarget.agentId,
-            continuation: { kind: "systemEvent", text: message },
-            revision: sentinelRevision,
-            idempotencyKey: `restart-sentinel-wake:${mainSessionKey}:${sentinelRevision}`,
-          }),
-        );
-        if (payload.continuation) {
-          log.warn(`${summary}: continuation skipped: restart sentinel sessionKey unavailable`, {
-            sessionKey: mainSessionKey,
-            continuationKind: payload.continuation.kind,
-          });
-        }
-        const consumed = await clearRestartSentinelIfRevision(sentinelRevision);
-        if (!consumed) {
-          log.info(`${summary}: newer restart sentinel preserved while draining durable wake`);
-        }
-        await drainRestartContinuationQueue({ deps: params.deps, entryId: wakeQueueId, log });
-        return { status: "ran" as const };
-      }
     }
 
     const continuation = sessionKey ? payload.continuation : undefined;
@@ -527,7 +484,6 @@ async function loadRestartSentinelStartupTask(params: {
 
     const { cfg, entry, canonicalKey } = loadSessionEntry(routedSessionKey);
 
-    const sentinelContext = payload.deliveryContext;
     let sessionDeliveryContext = deliveryContextFromSession(entry);
     let chatType = sessionDeliveryOrigin(entry)?.chatType ?? "direct";
     if (
@@ -546,21 +502,20 @@ async function loadRestartSentinelStartupTask(params: {
       );
     }
 
-    const origin = mergeDeliveryContext(sentinelContext, sessionDeliveryContext);
+    const origin = sessionKey
+      ? mergeDeliveryContext(payload.deliveryContext, sessionDeliveryContext)
+      : sessionDeliveryContext;
 
     const route = resolveGatewayLifecycleNoticeRoute({
       cfg,
-      deliveryContext: origin,
-      threadId: payload.threadId ?? sessionThreadId,
+      deliveryContext:
+        sessionKey || (origin?.channel && isDeliverableMessageChannel(origin.channel))
+          ? origin
+          : undefined,
+      threadId: sessionKey ? (payload.threadId ?? sessionThreadId) : undefined,
     });
-    const deliveryContext = route
-      ? {
-          channel: route.channel,
-          to: route.to,
-          ...(route.accountId ? { accountId: route.accountId } : {}),
-          ...(route.threadId ? { threadId: route.threadId } : {}),
-        }
-      : wakeDeliveryContext;
+    const deliveryContext =
+      normalizeDeliveryContext(route) ?? (sessionKey ? wakeDeliveryContext : undefined);
     let continuationQueueId: string | undefined;
     let wakeQueueId: string | undefined;
     let noticeQueueId: string | undefined;

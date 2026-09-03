@@ -136,7 +136,12 @@ describe("handleUpdateCommand", () => {
     });
     expect(dispatch).toHaveBeenCalledExactlyOnceWith(
       "update.run",
-      { sessionKey: params.sessionKey, note: "/update", timeoutMs: 1_200_000 },
+      {
+        sessionKey: params.sessionKey,
+        note: "/update",
+        timeoutMs: 1_200_000,
+        requester: { channel: "telegram", senderId: "owner", accountId: undefined },
+      },
       {
         timeoutMs: 1_200_000,
         resolveGatewayContext: expect.any(Function),

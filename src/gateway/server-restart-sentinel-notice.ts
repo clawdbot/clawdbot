@@ -62,7 +62,6 @@ type GatewayLifecycleNotice = RestartSentinelNoticeRoute & {
   cfg: OpenClawConfig;
   message: string;
   sessionKey?: string;
-  abortSignal?: AbortSignal;
 };
 
 /** Resolve once before an update can replace lazily loaded channel modules. */
@@ -106,25 +105,22 @@ export function resolveGatewayLifecycleNoticeRoute(params: {
 
 /** Await one durable attempt; recovery retains failed custody without delaying shutdown. */
 export async function sendGatewayLifecycleNotice(
-  params: Omit<GatewayLifecycleNotice, "abortSignal"> & {
+  params: GatewayLifecycleNotice & {
     deps: CliDeps;
     deliveryIntentId: string;
   },
 ): Promise<boolean> {
-  const controller = new AbortController();
   let delivered = false;
-  const notice = { ...params, abortSignal: controller.signal };
   try {
     await withTimeout(
       (async () => {
-        const queued = await enqueueGatewayLifecycleNotice(notice, params.deliveryIntentId);
-        controller.signal.throwIfAborted();
+        const queued = await enqueueGatewayLifecycleNotice(params, params.deliveryIntentId);
         if (!queued.created) {
           return;
         }
         await deliverGatewayLifecycleNoticeAttempt(
           {
-            ...notice,
+            ...params,
             summary: "update.run notice",
             queueId: queued.id,
           },
@@ -138,8 +134,6 @@ export async function sendGatewayLifecycleNotice(
     );
   } catch (error) {
     log.warn(`update.run notice failed: ${formatErrorMessage(error)}`);
-  } finally {
-    controller.abort();
   }
   return delivered;
 }
@@ -151,9 +145,7 @@ type RestartSentinelNoticeEnqueueResult = { id: string; created: boolean };
 const activeRestartNoticeEnqueues = new Map<string, Promise<RestartSentinelNoticeEnqueueResult>>();
 
 export async function enqueueRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
-    cfg: OpenClawConfig;
-    message: string;
+  params: GatewayLifecycleNotice & {
     sessionKey: string;
     revision: number;
   },
@@ -218,7 +210,6 @@ async function enqueueRestartSentinelNoticeClaimed(
 ): Promise<RestartSentinelNoticeEnqueueResult> {
   const delivery = {
     cfg: params.cfg,
-    abortSignal: params.abortSignal,
     channel: params.channel,
     to: params.to,
     accountId: params.accountId,
@@ -235,7 +226,6 @@ async function enqueueRestartSentinelNoticeClaimed(
   const preparedBatch = await prepareOutboundPayloadBatch(delivery, {
     onBeforeFirstModifier: preparationOwner.beforeFirstModifier,
   });
-  params.abortSignal?.throwIfAborted();
   preparationOwner.markPrepared();
   const queued = await stageAndEnqueueOutboundDelivery(delivery, preparedBatch, {
     getStablePreparation: preparationOwner.current,
@@ -320,12 +310,10 @@ async function drainFailedRestartSentinelNotice(params: {
 }
 
 export async function deliverRestartSentinelNotice(
-  params: RestartSentinelNoticeRoute & {
+  params: GatewayLifecycleNotice & {
     deps: CliDeps;
-    cfg: OpenClawConfig;
     sessionKey: string;
     summary: string;
-    message: string;
     queueId: string;
   },
 ): Promise<void> {
@@ -367,7 +355,6 @@ async function deliverGatewayLifecycleNoticeAttempt(
     }
   };
   return await withActiveDeliveryClaim(params.queueId, async () => {
-    params.abortSignal?.throwIfAborted();
     try {
       const reservation = await reserveDeliveryAttempt(params.queueId, RESTART_NOTICE_MAX_ATTEMPTS);
       if (reservation.status === "exhausted") {
@@ -393,9 +380,7 @@ async function deliverGatewayLifecycleNoticeAttempt(
         cfg: params.cfg,
         sessionKey: params.sessionKey,
       });
-      params.abortSignal?.throwIfAborted();
       const send = await sendDurableMessageBatchCore({
-        abortSignal: params.abortSignal,
         cfg: params.cfg,
         channel: params.channel,
         to: params.to,

@@ -118,7 +118,7 @@ describe("gateway update action", () => {
           turnSourceThreadId: threadId,
         },
         () =>
-          createGatewayTool({ senderIsOwner: true }).execute(
+          createGatewayTool({ senderIsOwner: true, requesterSenderId: "owner" }).execute(
             "update",
             {
               action: "update.run",
@@ -135,6 +135,7 @@ describe("gateway update action", () => {
       expect(dispatchMock).toHaveBeenCalledExactlyOnceWith(
         "update.run",
         {
+          requester: { channel: "telegram", accountId: "primary", senderId: "owner" },
           sessionKey: "agent:main:telegram:direct:123",
           deliveryContext: {
             channel: "telegram",
@@ -169,14 +170,14 @@ describe("gateway update action", () => {
     },
   );
 
-  it("still calls without a caller session and reports the fallback", async () => {
+  it("still calls without a caller session", async () => {
     dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok", steps: [] } });
     const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
       action: "update.run",
     });
     expect(dispatchMock).toHaveBeenCalledOnce();
     expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(JSON.stringify(result.details)).toContain("No caller session");
+    expect(result.details).toMatchObject({ ok: true });
   });
 
   it("refuses an update without a hosting gateway instead of using a remote client", async () => {
@@ -219,17 +220,15 @@ describe("gateway update action", () => {
       handoff: { command, message },
     });
     expect(JSON.stringify(result.details)).not.toContain("do not include");
-    if (stepCount === 1) {
-      expect(JSON.stringify(result.details)).toContain("failure tail");
-    } else {
-      expect(result.details).toMatchObject({
-        failedSteps: expect.arrayContaining([{ name: "failed-0", exitCode: 1, stderrTail: "" }]),
-      });
-    }
+    expect(result.details).toMatchObject({
+      failedSteps: Array.from({ length: Math.min(3, stepCount) }, (_, index) => ({
+        name: `failed-${Math.max(0, stepCount - 3) + index}`,
+      })),
+    });
     expect(JSON.stringify(result.details)).toContain(`Run ${command} in a terminal.`);
   });
 
-  it("removes duplicate guidance before altering long manual instructions", async () => {
+  it("preserves long manual instructions without repeating them", async () => {
     const command = `openclaw update --tag ${"v".repeat(1100)}`;
     const message = "Recovery instructions. ".repeat(90);
     dispatchMock.mockResolvedValue({
@@ -245,14 +244,15 @@ describe("gateway update action", () => {
     expect(JSON.stringify(result.details)).toContain("exact manual instructions in handoff");
   });
 
-  it("reports an impossible budget instead of returning a truncated shell command", async () => {
+  it("preserves oversized manual instructions without throwing or truncating", async () => {
     dispatchMock.mockResolvedValue({
       ok: false,
       result: { status: "skipped", steps: [] },
       handoff: { status: "unavailable", command: "x".repeat(4000) },
     });
-    await expect(
-      createGatewayTool({ senderIsOwner: true }).execute("update", { action: "update.run" }),
-    ).rejects.toThrow("check the Control UI for the outcome and do not retry the update");
+    const result = await createGatewayTool({ senderIsOwner: true }).execute("update", {
+      action: "update.run",
+    });
+    expect(result.details).toMatchObject({ handoff: { command: "x".repeat(4000) } });
   });
 });

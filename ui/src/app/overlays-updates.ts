@@ -113,7 +113,6 @@ export function createApplicationUpdateOverlays(
   let updateHoldInFlight = false;
   let observedApplyingCampaignId: string | null = null;
   let currentFailure: { failure: UpdateFailureTriage; profileId: string | null } | null = null;
-  let getActiveSessionKey = hooks.getActiveSessionKey;
 
   function publish(failurePrepared = false) {
     const wasBusy = snapshot.updateRunning || snapshot.updateReconciliationPending;
@@ -486,9 +485,6 @@ export function createApplicationUpdateOverlays(
       }
     },
     refreshUpdateStatus,
-    setActiveSessionKeyProvider(this: void, provider: (() => string | undefined) | undefined) {
-      getActiveSessionKey = provider ?? hooks.getActiveSessionKey;
-    },
     async runUpdate(this: void, options?: { sessionKey?: string }) {
       const client = gateway.snapshot.client;
       if (
@@ -501,7 +497,7 @@ export function createApplicationUpdateOverlays(
       ) {
         return;
       }
-      const sessionKey = options?.sessionKey ?? getActiveSessionKey?.();
+      const sessionKey = options?.sessionKey ?? hooks.getActiveSessionKey?.();
       const generation = ++updateRunGeneration;
       updateStatusRevision += 1;
       updateRequestRunning = true;

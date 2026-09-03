@@ -118,7 +118,10 @@ const GatewayToolSchema = Type.Object({
   ),
 });
 
-export function createGatewayTool(options?: { senderIsOwner?: boolean }): AnyAgentTool {
+export function createGatewayTool(options?: {
+  senderIsOwner?: boolean;
+  requesterSenderId?: string | null;
+}): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
@@ -144,14 +147,17 @@ export function createGatewayTool(options?: { senderIsOwner?: boolean }): AnyAge
               channel: caller.turnSourceChannel,
               to: caller.turnSourceTo,
               accountId: caller.turnSourceAccountId,
-              ...(caller.turnSourceThreadId !== undefined
-                ? { threadId: caller.turnSourceThreadId }
-                : {}),
+              threadId: caller.turnSourceThreadId,
             }
           : undefined;
         const result = await callInProcessGatewayTool(
           "update.run",
           {
+            requester: {
+              channel: caller?.turnSourceChannel,
+              accountId: caller?.turnSourceAccountId,
+              senderId: options?.requesterSenderId ?? undefined,
+            },
             sessionKey: caller?.sessionKey,
             deliveryContext,
             note: readToolStringParam(params, "note"),
@@ -164,7 +170,7 @@ export function createGatewayTool(options?: { senderIsOwner?: boolean }): AnyAge
             signal,
           },
         );
-        return jsonResult(summarizeUpdateRunResponse(result, Boolean(caller?.sessionKey)));
+        return jsonResult(summarizeUpdateRunResponse(result));
       }
       const gatewayOpts = readGatewayCallOptions(params);
 

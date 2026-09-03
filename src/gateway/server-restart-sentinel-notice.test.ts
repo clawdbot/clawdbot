@@ -1,7 +1,6 @@
 // Exercises restart-notice retries against the real SQLite outbound queue.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import type { DurableMessageSendContextParams } from "../channels/message/send.js";
 import { getDeliveryQueueEntryStatus } from "../infra/delivery-queue-sqlite.js";
 import { runOutboundDeliveryInternal } from "../infra/outbound/deliver-queue.js";
 import { PlatformMessageNotDispatchedError } from "../infra/outbound/deliver-types.js";
@@ -194,39 +193,29 @@ describe("restart sentinel notice recovery", () => {
   it("bounds a blocked lifecycle send to ten seconds and preserves queued recovery", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const queueId = "update-run-ack:timeout";
-    const started = createDeferredCore<AbortSignal>();
-    mocks.sendDurableMessageBatch.mockImplementationOnce(
-      async ({ abortSignal }: DurableMessageSendContextParams) => {
-        if (!abortSignal) {
-          throw new Error("lifecycle notice must have a bounded signal");
-        }
-        started.resolve(abortSignal);
-        return await new Promise<never>((_resolve, reject) => {
-          abortSignal.addEventListener(
-            "abort",
-            () => reject(new Error("lifecycle notice aborted", { cause: abortSignal.reason })),
-            { once: true },
-          );
-        });
-      },
-    );
+    const started = createDeferredCore();
+    const finish = createDeferredCore();
+    mocks.sendDurableMessageBatch.mockImplementationOnce(async () => {
+      started.resolve();
+      await finish.promise;
+      return { status: "sent", results: [{ channel: "whatsapp", messageId: "late-ack" }] };
+    });
     let settled = false;
     const send = sendLifecycleNotice(queueId).finally(() => {
       settled = true;
     });
-    const signal = await started.promise;
+    await started.promise;
 
-    await vi.advanceTimersByTimeAsync(9_999);
-    expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(1);
-    await expect(send).resolves.toBe(false);
-
-    expect(signal.aborted).toBe(true);
-    await vi.waitFor(async () => {
-      expect(await loadPendingDelivery(queueId)).toMatchObject({
-        lastError: expect.stringContaining("aborted"),
-      });
-    });
+    try {
+      await vi.advanceTimersByTimeAsync(9_999);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      await expect(send).resolves.toBe(false);
+      expect(queueStatus(queueId)).toBe("pending");
+    } finally {
+      finish.resolve();
+      await vi.waitFor(() => expect(queueStatus(queueId)).toBe("completed"));
+    }
     expect(mocks.recoveryDeliver).not.toHaveBeenCalled();
   });
 
@@ -317,28 +306,6 @@ describe("restart sentinel notice recovery", () => {
     expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
-  it("reuses an existing stable notice without preparing another owner", async () => {
-    const first = await enqueueRestartSentinelNotice({
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
-      revision: 123,
-    });
-    const second = await enqueueRestartSentinelNotice({
-      cfg: {},
-      channel: "whatsapp",
-      to: "+15550002",
-      message: "restart complete",
-      sessionKey: "agent:main:main",
-      revision: 123,
-    });
-
-    expect(first.created).toBe(true);
-    expect(second).toEqual({ id: first.id, created: false });
-  });
-
   it("serializes stable notice preparation before modifiers can run twice", async () => {
     mocks.hookRunner.hasHooks.mockImplementation((name?: string) => name === "message_sending");
     let releaseModifier: (() => void) | undefined;
@@ -375,6 +342,7 @@ describe("restart sentinel notice recovery", () => {
       id: "restart-sentinel-notice:agent:main:main:123",
       created: false,
     });
+    await expect(enqueueRestartSentinelNotice(request)).resolves.toEqual(await second);
     expect(mocks.hookRunner.runMessageSending).toHaveBeenCalledOnce();
   });
 
