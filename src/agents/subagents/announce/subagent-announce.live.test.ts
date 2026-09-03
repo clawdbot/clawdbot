@@ -227,7 +227,7 @@ function createGatewayClient(params: {
 }
 
 async function readCompletionProvenance(sessionKey: string, agentId: string) {
-  const { entry, storePath } = loadSessionEntry(sessionKey, agentId);
+  const entry = loadSessionEntry({ agentId, sessionKey });
   if (!entry?.sessionId) {
     return undefined;
   }
@@ -237,7 +237,6 @@ async function readCompletionProvenance(sessionKey: string, agentId: string) {
       sessionEntry: entry,
       sessionId: entry.sessionId,
       sessionKey,
-      storePath,
     },
     { mode: "full", reason: "live subagent completion provenance verification" },
   );
