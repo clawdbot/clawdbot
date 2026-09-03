@@ -7700,9 +7700,7 @@ done
     );
 
     expect(dockerfile).toContain("OPENCLAW_DISABLE_BUNDLED_PLUGIN_POSTINSTALL=1");
-    expect(dockerfile).toContain(
-      "pnpm install --frozen-lockfile --ignore-scripts --filter openclaw",
-    );
+    expect(dockerfile).toContain("pnpm install --frozen-lockfile --ignore-scripts\n");
   });
 
   it("routes QR import Docker smoke through the timeout-aware run helper", () => {
