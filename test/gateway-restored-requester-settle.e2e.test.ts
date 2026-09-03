@@ -15,11 +15,14 @@ import { createDeferred } from "./helpers/promise.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "restored-settle/restored-settle";
+const PROBE_MARKER = "restored wake ordering probe";
+const RESTORED_WAKE_MARKER = "Every subagent spawned from this session has now settled";
 
 type HeldModelServer = {
   active: () => number;
   close: () => Promise<void>;
-  peak: () => number;
+  countRequestsContaining: (marker: string) => number;
+  peakRestored: () => number;
   release: (index: number) => void;
   releaseAll: () => void;
   requestCount: () => number;
@@ -107,19 +110,28 @@ describe("Gateway restored requester settlement", () => {
       }
 
       await instance.startGateway();
-      await vi.waitFor(() => expect(modelServer.requestCount(), instance.logs()).toBe(2), {
+      await vi.waitFor(
+        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
+        { interval: 20, timeout: 30_000 },
+      );
+      expect(modelServer.active(), instance.logs()).toBe(2);
+      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
+
+      const probe = instance.cli(["agent", "--message", PROBE_MARKER, "--json"]);
+      await vi.waitFor(() => expect(modelServer.countRequestsContaining(PROBE_MARKER)).toBe(1), {
         interval: 20,
         timeout: 30_000,
       });
-      expect(modelServer.active(), instance.logs()).toBe(2);
-      expect(modelServer.peak(), instance.logs()).toBe(2);
+      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2);
 
       modelServer.release(0);
-      await vi.waitFor(() => expect(modelServer.requestCount(), instance.logs()).toBe(3), {
-        interval: 20,
-        timeout: 30_000,
-      });
-      expect(modelServer.peak(), instance.logs()).toBe(2);
+      await vi.waitFor(
+        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
+        { interval: 20, timeout: 30_000 },
+      );
+      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
+      modelServer.releaseAll();
+      await expect(probe).resolves.toMatchObject({ code: 0 });
     },
   );
 });
@@ -130,6 +142,7 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
     agents: {
       defaults: {
         heartbeat: { every: "0m" },
+        maxConcurrent: 8,
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },
         skipBootstrap: true,
@@ -165,8 +178,10 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
 
 async function startHeldModelServer(): Promise<HeldModelServer> {
   const releases: Array<ReturnType<typeof createDeferred>> = [];
+  const requestBodies: string[] = [];
   let active = 0;
-  let peak = 0;
+  let activeRestored = 0;
+  let peakRestored = 0;
   let requestCount = 0;
   const server = createServer((request, response) => {
     void handleModelRequest(request, response).catch((error: unknown) => {
@@ -190,21 +205,29 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
       return;
     }
 
+    let body = "";
     for await (const chunk of request) {
-      // Drain the request before holding its response.
-      void chunk;
+      body += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
     }
     const index = requestCount;
     requestCount += 1;
+    requestBodies[index] = body;
     const release = createDeferred();
     releases[index] = release;
     active += 1;
-    peak = Math.max(peak, active);
+    const isRestored = body.includes(RESTORED_WAKE_MARKER);
+    if (isRestored) {
+      activeRestored += 1;
+      peakRestored = Math.max(peakRestored, activeRestored);
+    }
     try {
       await release.promise;
       writeModelResponse(response, index);
     } finally {
       active -= 1;
+      if (isRestored) {
+        activeRestored -= 1;
+      }
     }
   }
 
@@ -220,7 +243,9 @@ async function startHeldModelServer(): Promise<HeldModelServer> {
   };
   return {
     active: () => active,
-    peak: () => peak,
+    countRequestsContaining: (marker) =>
+      requestBodies.filter((body) => body.includes(marker)).length,
+    peakRestored: () => peakRestored,
     release: (index) => releases[index]?.resolve(),
     releaseAll,
     requestCount: () => requestCount,
