@@ -47,11 +47,18 @@ describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
     ["M-R", "^Test[M-R]"],
     ["S-Z", "^Test[S-Z]"],
   ])("passes Go tests in the %s partition", async (partition, pattern) => {
-    await execFileAsync(binaryPath, ["-test.count=1", `-test.run=${pattern}`], {
-      cwd: "scripts/docs-i18n",
-      encoding: "utf8",
-      // The user cache can be under /tmp when the test invocation owns it.
-      env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, "cache", partition) },
-    });
+    const { stdout } = await execFileAsync(
+      binaryPath,
+      ["-test.count=1", `-test.run=${pattern}`],
+      {
+        cwd: "scripts/docs-i18n",
+        encoding: "utf8",
+        // The user cache can be under /tmp when the test invocation owns it.
+        env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, "cache", partition) },
+      },
+    );
+    if (stdout.trim()) {
+      console.log(stdout.trim());
+    }
   });
 });
