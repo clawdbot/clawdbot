@@ -381,7 +381,7 @@ export async function loadListModelCatalogSnapshot(
     agentDir: context.agentDir,
     ...(workspaceDir ? { workspaceDir } : {}),
     readOnly: true,
-    refreshFullCatalog: true,
+    refreshFullCatalog: "stale",
   });
 }
 
