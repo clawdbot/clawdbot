@@ -667,15 +667,23 @@ catalog, API-key auth, and dynamic model resolution.
         wrapStreamFn: (ctx) => {
           if (!ctx.streamFn) return undefined;
           const inner = ctx.streamFn;
-          return async (params) => {
-            params.headers = {
-              ...params.headers,
-              "X-Acme-Version": "2",
-            };
-            return inner(params);
-          };
+          return (model, context, options) =>
+            inner(model, context, {
+              ...options,
+              headers: {
+                ...options?.headers,
+                "X-Acme-Version": "2",
+              },
+            });
         },
         ```
+
+        Existing wrappers may still pass the deprecated `maxRetries` stream option,
+        including `0`. Built-in text transports ignore it: the embedded runner owns
+        retry budgeting, and SDK-internal retries stay disabled. New wrappers should
+        omit the option. This shipped source contract is retained until a future
+        Plugin SDK major release and a published-plugin reader sweep confirm removal
+        is safe; it does not change image-generation or native-runtime retry policy.
       </Tab>
       <Tab title="Native transport identity">
         For providers that need native request/session headers or metadata on
