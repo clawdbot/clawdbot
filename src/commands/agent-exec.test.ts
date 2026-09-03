@@ -6,6 +6,7 @@ import { Readable } from "node:stream";
 import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForDead, waitForPidFile } from "../../test/helpers/process-wait.js";
 import { cleanupTempDirs, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AgentRunTerminalOutcomeError } from "../agents/agent-run-terminal-error.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
@@ -18,6 +19,7 @@ import {
 } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import {
   buildExecRunConfig,
   resolveAgentExecPrompt,
@@ -196,6 +198,74 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
+  it("bounds blocked service-relay construction through the shipped CLI command", async () => {
+    const root = tempDirs.make("openclaw-agent-exec-service-construction-");
+    const binDir = path.join(root, "bin");
+    const pidPath = path.join(root, "command.pid");
+    const configPath = path.join(root, "openclaw.json");
+    await fs.mkdir(binDir);
+    const claudePath = path.join(binDir, "claude");
+    await fs.writeFile(
+      claudePath,
+      `#!/bin/sh
+printf '%s' "$$" > ${JSON.stringify(pidPath)}
+sleep 60
+`,
+      "utf8",
+    );
+    await fs.chmod(claudePath, 0o755);
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        agents: {
+          defaults: {
+            model: { primary: "anthropic/claude-opus-4-7" },
+            models: {
+              "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+            },
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const completed = await withEnvAsync(
+      {
+        ANTHROPIC_API_KEY: "synthetic-proof-key",
+        NODE_DISABLE_COMPILE_CACHE: "1",
+        OPENCLAW_SERVICE_MARKER: "openclaw",
+        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+      },
+      async () => {
+        const { runtime } = createRuntime();
+        const result = agentExecCommand(
+          "probe",
+          { config: configPath, cwd: root, timeout: "1", json: true },
+          runtime,
+        );
+        let commandPid: number;
+        try {
+          commandPid = await waitForPidFile(pidPath, 3_000);
+        } catch (error) {
+          const failed = await result;
+          throw new Error(
+            `agent exec did not start the fake CLI: ${String(error)} exit=${String(failed.exitCode)} envelope=${JSON.stringify(failed.envelope)}`,
+            { cause: error },
+          );
+        }
+        expect(commandPid).toBeGreaterThan(0);
+        const finished = await result;
+        await waitForDead(commandPid, 5_000);
+        return finished;
+      },
+    );
+    expect(completed.exitCode).toBe(2);
+    expect(completed.envelope).toMatchObject({
+      ok: false,
+      status: "timeout",
+    });
+  });
+
   it("writes plain final text to stdout when diagnostics are routed to stderr", async () => {
     const source = `
       import { agentExecCommand } from "./src/commands/agent-exec.ts";

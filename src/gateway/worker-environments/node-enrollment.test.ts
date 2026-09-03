@@ -152,6 +152,39 @@ describe("worker node enrollment", () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
+  it.each([
+    "127.0.0.1",
+    "127.42.0.1",
+    "localhost",
+    "[::1]",
+    "169.254.10.2",
+    "0.0.0.0",
+    "[::]",
+    "[fe80::1]",
+    "[febf::1]",
+  ])("rejects unreachable cloud Gateway host %s before preparing artifacts", async (host) => {
+    const prepareArtifact = vi.fn(async () => artifact());
+    const manager = createManager({
+      getConfig: () => createConfig(`http://${host}:19821`),
+      prepareArtifact,
+    });
+
+    await expect(manager.prepare(createRequested())).rejects.toThrow(
+      new Error(
+        `Cloud node bootstrap resolved a Gateway address that a cloud worker cannot reach (ws://${host}:19821, from plugins.entries.device-pair.config.publicUrl). Set gateway.publicOrigin (or plugins.entries.device-pair.config.publicUrl) to a URL reachable from the worker, such as a Tailscale Funnel or a reverse-proxied public origin with gateway.trustedProxies, then redispatch.`,
+      ),
+    );
+    expect(prepareArtifact).not.toHaveBeenCalled();
+  });
+
+  it("prepares artifacts for a public cloud Gateway host", async () => {
+    const prepareArtifact = vi.fn(async () => artifact());
+    const manager = createManager({ prepareArtifact });
+
+    await expect(manager.prepare(createRequested())).resolves.toBeUndefined();
+    expect(prepareArtifact).toHaveBeenCalledOnce();
+  });
+
   it("releases requested-state preflight artifact custody without aborting its caller", async () => {
     const record = createRequested();
     const provider = await createArtifactProvider();
@@ -336,9 +369,8 @@ describe("worker node enrollment", () => {
       if (!address || typeof address === "string") {
         throw new Error("HTTP proof server did not bind");
       }
-      const publicOrigin = `http://127.0.0.1:${address.port}`;
+      const testOrigin = `http://127.0.0.1:${address.port}`;
       const manager = createManager({
-        getConfig: () => ({ gateway: { ...createConfig().gateway, publicOrigin } }),
         prepareArtifact: async () => ({
           ...artifact(),
           tarballSha256: createHash("sha256").update("x").digest("hex"),
@@ -356,7 +388,10 @@ describe("worker node enrollment", () => {
         status: number,
       ) => {
         for (const descriptor of [runtime.nodeBootstrap, runtime.workerBundle]) {
-          const response = await fetch(descriptor.url, {
+          // Route the advertised public URL to this test's local HTTP server.
+          const downloadUrl = new URL(descriptor.url);
+          expect(downloadUrl.origin).toBe(PUBLIC_ORIGIN);
+          const response = await fetch(new URL(downloadUrl.pathname, testOrigin), {
             headers: { authorization: `Bearer ${descriptor.token}` },
           });
           expect(response.status).toBe(status);

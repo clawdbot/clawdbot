@@ -87,6 +87,18 @@ default/latest release.
 
 See [Release channels](/install/development-channels) for channel semantics.
 
+### From chat
+
+The OpenClaw owner can say "update" (the agent uses the `gateway` action
+`update.run`) or send `/update`. The bot acknowledges, the Gateway restarts,
+and a completion or failure notice arrives in the same chat. If the update
+cannot start, the bot explains why and provides the manual command when available.
+
+The sender must be in [`commands.ownerAllowFrom`](/tools/slash-commands#configuration).
+`/update` also requires `commands.restart` (enabled by default).
+Agents must never run `npm install -g openclaw` or stop the Gateway service
+from a chat shell; use the update action so restart and notification stay coordinated.
+
 ## Retire update recovery data
 
 Once you have verified the update and your conversations, preview retained
@@ -301,6 +313,9 @@ This avoids npm overlaying a new package onto stale files from the old one. If
 the install command fails, OpenClaw retries once with `--omit=optional`, which
 helps hosts where native optional dependencies cannot compile.
 
+For local tarball targets on npm 12, the archive filename and every parent
+directory must be comma-free. See [Installer path requirements](/install/installer).
+
 OpenClaw-managed npm update and plugin-update commands also clear npm's
 `min-release-age` supply-chain quarantine (or the older `before` config key)
 for the child npm process. That policy exists for general protection, but an
@@ -447,6 +462,20 @@ LaunchAgent when possible. If the Gateway cannot make that handoff safely,
 `update.run` reports a safe shell command instead of running the package
 manager in-process.
 
+When `update.run` has a routable chat session, the Gateway sends an update
+acknowledgement before starting the handoff or in-process update. It waits up to
+10 seconds for delivery; a failed chat send does not block the update. The RPC
+response includes `ackDelivered` so clients can distinguish a delivered
+acknowledgement from an unavailable or failed route. A synchronous failure after
+a delivered acknowledgement sends a second notice when no restart is scheduled.
+
+The Control UI includes its active session in the update request. After restart,
+updates without an originating session send their notice to the system main
+session when it has an external route, otherwise to the most recently used
+eligible direct chat. If neither exists, recovery keeps the system-session wake
+without an outbound chat notice. Session-less recovery never resumes a supplied
+continuation as another chat's turn.
+
 The Control UI sidebar update card shows **Update Gateway** when it will start
 this `update.run` flow directly. This covers browser-hosted Control UI, remote
 Gateways, and manually managed local Gateways.
@@ -484,7 +513,7 @@ only when the connected remote Gateway is at least as new as the app.
 openclaw doctor
 ```
 
-Migrates config, audits DM policies, and checks gateway health. Details: [Doctor](/gateway/doctor)
+Migrates config, audits DM policies, and checks gateway health. Doctor also compares active official plugins with the OpenClaw package the managed service will load after restart. Resolve any plugin restart-readiness warning before continuing. Details: [Doctor](/gateway/doctor)
 
 If you use the unpacked Chrome extension, also run `openclaw browser doctor --browser-profile chrome`.
 For a version-mismatch warning, reload the extension from `chrome://extensions`;

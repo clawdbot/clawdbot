@@ -20,6 +20,7 @@ describe("GATEWAY_EVENTS", () => {
 
   it("advertises node topology updates", () => {
     expect(GATEWAY_EVENTS).toContain("node.presence");
+    expect(GATEWAY_EVENTS).toContain("node.hostStats");
     expect(GATEWAY_EVENTS).toContain("device.pair.setup.completed");
     expect(GATEWAY_EVENTS).toContain("device.pair.changed");
     expect(GATEWAY_EVENTS).toContain("node.runnerInventory.changed");
@@ -132,6 +133,13 @@ describe("listGatewayMethods", () => {
     "sessions.github.options",
     "sessions.github.status",
     "sessions.github.confirm",
+    "sessions.title.prepare",
+    "users.mentionable",
+    "mentions.list",
+    "mentions.dismiss",
+    "transcripts.list",
+    "transcripts.get",
+    "models.authOrderSet",
   ];
 
   it("advertises plugin surface refresh for capability rotation", () => {
@@ -245,6 +253,16 @@ describe("listGatewayMethods", () => {
     expect(methods).not.toContain("chat.inject");
     expect(methods).not.toContain("nativeHook.invoke");
     expect(methods).not.toContain("sessions.usage");
+  });
+
+  it("rate-limits speculative inference under operator write authority", () => {
+    const descriptors = createCoreGatewayMethodDescriptors(coreGatewayHandlers);
+    expect(
+      descriptors.find((descriptor) => descriptor.name === "sessions.title.prepare"),
+    ).toMatchObject({
+      scope: "operator.write",
+      controlPlaneWrite: true,
+    });
   });
 
   it("registers the hidden node protocol feature publication method", () => {

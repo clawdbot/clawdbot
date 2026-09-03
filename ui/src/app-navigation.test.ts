@@ -12,6 +12,8 @@ import {
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
+  activityPersonFromPath,
+  activityPersonLocation,
   inferBasePathFromPathname,
   normalizeBasePath,
   pathForRoute,
@@ -94,6 +96,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
+      meetings: "book",
       apps: "layoutGrid",
       portals: "monitor",
       approvals: "badgeCheck",
@@ -196,6 +199,7 @@ describe("titleForRoute", () => {
       chat: "Chat",
       custodian: "OpenClaw",
       activity: "Activity",
+      meetings: "Meetings",
       apps: "Apps",
       portals: "Portals",
       approvals: "Approvals",
@@ -248,6 +252,7 @@ describe("subtitleForRoute", () => {
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
       activity: "Recent sessions across people using this gateway.",
+      meetings: "Meeting notes and transcripts across this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
@@ -370,6 +375,91 @@ describe("routeIdFromPath", () => {
     expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
   });
 
+  it.each([
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "Josh Roberts",
+      segment: "josh-roberts-12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-ABCD-4EF0-8123-456789ABCDEF",
+      label: undefined,
+      segment: "12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "Ada",
+      segment: "ada-12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "李 明",
+      segment: "%E6%9D%8E-%E6%98%8E-12345678abcd",
+      reference: "12345678abcd",
+    },
+    { personId: "alice", label: "Alice", segment: "alice", reference: "alice" },
+    {
+      personId: "profile-deadbeef",
+      label: "Alice",
+      segment: "profile%2Ddeadbeef",
+      reference: "profile-deadbeef",
+    },
+    {
+      personId: "profile/a",
+      label: "Alice",
+      segment: "profile%2Fa",
+      reference: "profile/a",
+    },
+    {
+      personId: "release.js",
+      label: "Alice",
+      segment: "release%2Ejs",
+      reference: "release.js",
+    },
+  ])("round-trips Activity links for $personId", ({ personId, label, segment, reference }) => {
+    const pathname = `/ui/activity/${segment}`;
+    expect(activityPersonLocation(personId, "/ui", label)).toEqual({
+      pathname,
+      search: "",
+      href: pathname,
+    });
+    expect(activityPersonFromPath(pathname, "/ui")).toBe(reference);
+    expect(routeIdFromPath(pathname, "/ui")).toBe("activity");
+    expect(createApplicationRouter().routeIdFromPath(pathname, "/ui")).toBe("activity");
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
+  });
+
+  it("preserves full Activity UUIDs and accepts longer collision-disambiguating prefixes", () => {
+    const personId = "12345678-abcd-4ef0-8123-456789abcdef";
+    const uuidShapedName = activityPersonLocation(personId, "", "deadbeef-cafe-4dad-8bad");
+    expect(activityPersonFromPath(uuidShapedName.pathname)).toBe("12345678abcd");
+    expect(activityPersonFromPath(`/activity/${personId}`)).toBe(personId);
+    expect(activityPersonFromPath("/activity/josh-12345678abcd")).toBe("12345678abcd");
+    expect(activityPersonLocation(personId, "", "Josh", 16).pathname).toBe(
+      "/activity/josh-12345678abcd4ef0",
+    );
+    expect(activityPersonFromPath("/activity/renamed-josh-12345678/")).toBe("12345678");
+    expect(inferBasePathFromPathname("/activity/josh-12345678")).toBe("");
+    expect(inferBasePathFromPathname("/apps/openclaw/activity/josh-12345678")).toBe(
+      "/apps/openclaw",
+    );
+  });
+
+  it.each([
+    "/activity",
+    "/activity/",
+    "/activity/%",
+    "/activity/%20",
+    "/activity/%2E",
+    "/activity/%2E%2E",
+    "/activity/alice/extra",
+  ])("rejects an invalid Activity person path %s", (pathname) => {
+    expect(activityPersonFromPath(pathname)).toBeNull();
+  });
+
   it("round-trips session navigation through the lazy contract seam", () => {
     const pathname = sessionNavigationTarget({
       face: "chat",
@@ -400,6 +490,7 @@ describe("routeIdFromPath", () => {
 
   it("rejects route-shaped paths outside the configured base path", () => {
     expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
+    expect(routeIdFromPath("/xx/activity/josh-12345678", "/ui")).toBeNull();
     expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
   });
 
@@ -504,6 +595,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "tasks",
       "sessions",
       "activity",
+      "meetings",
       "plugins",
       "apps",
       "portals",

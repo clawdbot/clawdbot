@@ -10,6 +10,7 @@ import ai.openclaw.app.GatewayNodeApprovalState
 import ai.openclaw.app.GatewayNodesDevicesSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.GatewaySkillWorkshopSummary
+import ai.openclaw.app.GatewaySummaryState
 import ai.openclaw.app.HomeDestination
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.R
@@ -69,7 +70,6 @@ import androidx.compose.material.icons.filled.Cloud
 import androidx.compose.material.icons.filled.Favorite
 import androidx.compose.material.icons.filled.GraphicEq
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Mic
@@ -83,12 +83,10 @@ import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
-import androidx.compose.material.icons.outlined.Dashboard
 import androidx.compose.material.icons.outlined.DesktopWindows
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Inventory2
 import androidx.compose.material.icons.outlined.MicNone
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -119,19 +117,14 @@ import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
 import java.util.Locale
 
-internal enum class Tab(
-  val key: String,
-  val label: NativeText,
-  val icon: ImageVector,
-) {
-  Overview(key = "overview", label = nativeText("Home"), icon = Icons.Default.Home),
-  Chat(key = "chat", label = nativeText("Chat"), icon = Icons.Outlined.ChatBubbleOutline),
-  Voice(key = "voice", label = nativeText("Voice"), icon = Icons.Outlined.MicNone),
-  Sessions(key = "sessions", label = nativeText("Threads"), icon = Icons.Outlined.AccessTime),
-  Settings(key = "settings", label = nativeText("Settings"), icon = Icons.Outlined.Settings),
-  ProvidersModels(key = "providers-models", label = nativeText("Providers"), icon = Icons.Outlined.Inventory2),
-  Files(key = "files", label = nativeText("Files"), icon = Icons.Outlined.Folder),
-  Dashboard(key = "dashboard", label = nativeText("Dashboard"), icon = Icons.Outlined.Dashboard),
+internal enum class Tab {
+  Overview,
+  Chat,
+  Sessions,
+  Settings,
+  ProvidersModels,
+  Files,
+  Dashboard,
 }
 
 private val shellContentInsets: WindowInsets
@@ -316,15 +309,6 @@ fun ShellScreen(
             )
           }
 
-          Tab.Voice -> {
-            VoiceShellScreen(
-              viewModel = viewModel,
-              onOpenCommand = { commandOpen = true },
-              onOpenGatewaySettings = { nav.openSettingsRoute(SettingsRoute.Gateway) },
-              onOpenVoiceSettings = { nav.openSettingsRoute(SettingsRoute.Voice) },
-            )
-          }
-
           Tab.ProvidersModels -> {
             ProvidersModelsScreen(
               viewModel = viewModel,
@@ -437,7 +421,8 @@ private fun OverviewScreen(
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
   val agents by viewModel.gatewayAgents.collectAsState()
   val defaultAgentId by viewModel.gatewayDefaultAgentId.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
@@ -1199,11 +1184,9 @@ private val sessionSourceLabels =
     "workspace" to "Workspace",
   )
 
-internal fun sessionSourceLabel(sessionKey: String): String = sessionSourceLabel(sessionKey, GatewayChannelsSummary(channels = emptyList()))
-
 internal fun sessionSourceLabel(
   sessionKey: String,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary? = null,
 ): String {
   val normalized = sessionKey.trim()
   val scopedKey =
@@ -1215,8 +1198,9 @@ internal fun sessionSourceLabel(
   if (!scopedKey.contains(':') && !scopedKey.contains('#')) return nativeString("OpenClaw")
   val source = scopedKey.substringBefore(':').substringBefore('#').lowercase()
   val channelLabel =
-    channelsSummary.channels
-      .firstOrNull { channel ->
+    channelsSummary
+      ?.channels
+      ?.firstOrNull { channel ->
         channel.id.equals(source, ignoreCase = true)
       }?.label
       ?.takeIf { it.isNotBlank() }
@@ -1235,7 +1219,7 @@ internal data class HomeAttentionRow(
 internal fun homeAttentionRows(
   isConnected: Boolean,
   pendingApprovals: Int,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
   nodesDevicesSummary: GatewayNodesDevicesSummary,
   readyProviderCount: Int,
   unknownProviderCount: Int = 0,
@@ -1257,7 +1241,7 @@ internal fun homeAttentionRows(
     } else {
       null
     },
-    if (channelsSummary.channels.any { it.error != null }) {
+    if (channelsSummary?.channels?.any { it.error != null } == true) {
       HomeAttentionRow(nativeString("Channels"), channelsSummaryText(channelsSummary), Icons.Default.Notifications, Tab.Settings, SettingsRoute.Channels)
     } else {
       null
@@ -1369,7 +1353,7 @@ internal data class RecentSessionListItem(
 
 internal fun overviewRecentSessionRows(
   sessions: List<ChatSessionEntry>,
-  channelsSummary: GatewayChannelsSummary,
+  channelsSummary: GatewayChannelsSummary?,
 ): List<RecentSessionListItem> =
   sessions
     .take(overviewRecentSessionVisibleLimit)
@@ -1470,26 +1454,6 @@ private fun RecentSessionRowContent(
 }
 
 @Composable
-private fun VoiceShellScreen(
-  viewModel: MainViewModel,
-  onOpenCommand: () -> Unit,
-  onOpenGatewaySettings: () -> Unit,
-  onOpenVoiceSettings: () -> Unit,
-) {
-  ClawScaffold(
-    contentPadding = PaddingValues(start = 0.dp, top = 8.dp, end = 0.dp, bottom = 0.dp),
-    contentWindowInsets = shellContentInsets,
-  ) {
-    VoiceScreen(
-      viewModel = viewModel,
-      onOpenCommand = onOpenCommand,
-      onOpenGatewaySettings = onOpenGatewaySettings,
-      onOpenVoiceSettings = onOpenVoiceSettings,
-    )
-  }
-}
-
-@Composable
 private fun SettingsShellScreen(
   viewModel: MainViewModel,
   route: SettingsRoute,
@@ -1512,12 +1476,16 @@ private fun SettingsShellScreen(
   val execApprovals by viewModel.execApprovals.collectAsState()
   val pendingToolCalls by viewModel.chatPendingToolCalls.collectAsState()
   val cronStatus by viewModel.cronStatus.collectAsState()
-  val usageSummary by viewModel.usageSummary.collectAsState()
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
+  val usageState by viewModel.usageState.collectAsState()
+  val usageSummary = usageState.summary
+  val skillsState by viewModel.skillsState.collectAsState()
+  val skillsSummary = skillsState.summary
   val skillWorkshopSummary by viewModel.skillWorkshopSummary.collectAsState()
   val nodesDevicesSummary by viewModel.nodesDevicesSummary.collectAsState()
-  val channelsSummary by viewModel.channelsSummary.collectAsState()
-  val dreamingSummary by viewModel.dreamingSummary.collectAsState()
+  val channelsState by viewModel.channelsState.collectAsState()
+  val channelsSummary = channelsState.summary
+  val dreamingState by viewModel.dreamingState.collectAsState()
+  val dreamingSummary = dreamingState.summary
   val desktopObserveAvailable by viewModel.desktopObserveAvailable.collectAsState()
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
   val providerRows = providerRows(providers = providers, models = models)
@@ -1592,7 +1560,7 @@ private fun SettingsShellScreen(
             route = SettingsRoute.Gateway,
           ),
           SettingsRow(nativeText("Nodes & Devices"), verbatimText(nodesDevicesSummaryText(nodesDevicesSummary)), Icons.Default.Cloud, status = nodesDevicesStatus(nodesDevicesSummary), route = SettingsRoute.NodesDevices),
-          SettingsRow(nativeText("Channels"), verbatimText(channelsSummaryText(channelsSummary)), Icons.Default.Notifications, status = channelsStatus(channelsSummary), route = SettingsRoute.Channels),
+          SettingsRow(nativeText("Channels"), channelsState.summaryText(::channelsSummaryText), Icons.Default.Notifications, status = if (channelsState.errorText != null) false else channelsSummary?.let(::channelsStatus), route = SettingsRoute.Channels),
           SettingsRow(nativeText("Agents"), if (agents.isEmpty()) nativeText("Load from gateway") else nativeText("\${agents.size} available", agents.size), Icons.Default.Person, status = agents.isNotEmpty(), route = SettingsRoute.Agents),
           SettingsRow(
             nativeText("OpenClaw"),
@@ -1625,8 +1593,8 @@ private fun SettingsShellScreen(
           ),
           SettingsRow(nativeText("Approvals"), verbatimText(approvalsSummary(pendingApprovalsCount)), Icons.Default.Lock, status = approvalsStatus(pendingApprovalsCount), route = SettingsRoute.Approvals),
           SettingsRow(nativeText("Automations"), verbatimText(cronJobsSummary(cronStatus.jobs)), Icons.Outlined.AccessTime, status = if (cronStatus.jobs > 0) cronStatus.enabled else null, route = SettingsRoute.CronJobs),
-          SettingsRow(nativeText("Usage"), verbatimText(usageSummaryText(usageSummary.providers.size)), Icons.Default.Storage, status = if (usageSummary.providers.isNotEmpty()) true else null, route = SettingsRoute.Usage),
-          SettingsRow(nativeText("Skills"), verbatimText(skillsSummaryText(skillsSummary.skills)), Icons.Default.Settings, status = skillsStatus(skillsSummary.skills), route = SettingsRoute.Skills),
+          SettingsRow(nativeText("Usage"), usageState.summaryText { usageSummaryText(it.providers.size) }, Icons.Default.Storage, status = if (usageState.errorText != null) false else true.takeIf { usageSummary?.providers?.isNotEmpty() == true }, route = SettingsRoute.Usage),
+          SettingsRow(nativeText("Skills"), skillsState.summaryText { skillsSummaryText(it.skills) }, Icons.Default.Settings, status = if (skillsState.errorText != null) false else skillsSummary?.skills?.let(::skillsStatus), route = SettingsRoute.Skills),
           SettingsRow(
             nativeText("Skill Workshop"),
             verbatimText(skillWorkshopSummaryText(skillWorkshopSummary)),
@@ -1634,7 +1602,7 @@ private fun SettingsShellScreen(
             status = skillWorkshopStatus(skillWorkshopSummary),
             route = SettingsRoute.SkillWorkshop,
           ),
-          SettingsRow(nativeText("Dreaming"), verbatimText(dreamingSummaryText(dreamingSummary)), Icons.Default.Storage, status = dreamingStatus(dreamingSummary), route = SettingsRoute.Dreaming),
+          SettingsRow(nativeText("Dreaming"), dreamingState.summaryText(::dreamingSummaryText), Icons.Default.Storage, status = if (dreamingState.errorText != null) false else dreamingSummary?.let(::dreamingStatus), route = SettingsRoute.Dreaming),
           SettingsRow(nativeText("Terminal"), nativeText("Shell in the agent workspace"), Icons.Outlined.Terminal, status = isConnected, route = SettingsRoute.Terminal),
           if (desktopObserveAvailable) {
             SettingsRow(nativeText("Desktop"), nativeText("View a machine screen"), Icons.Outlined.DesktopWindows, status = isConnected, route = SettingsRoute.Desktop)
@@ -1725,7 +1693,10 @@ private fun cronJobsSummary(count: Int): String =
     else -> nativeString("\$count scheduled", count)
   }
 
-/** Summarizes provider usage buckets without exposing detailed billing data. */
+private fun <T> GatewaySummaryState<T>.summaryText(format: (T) -> String): NativeText =
+  errorText ?: summary?.let { verbatimText(format(it)) }
+    ?: if (refreshing) nativeText("Refreshing") else nativeText("Load from gateway")
+
 private fun usageSummaryText(count: Int): String =
   when (count) {
     0 -> nativeString("No provider usage")

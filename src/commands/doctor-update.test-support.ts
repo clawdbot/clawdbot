@@ -64,7 +64,7 @@ vi.mock("../cli/daemon-cli.js", () => ({
   runDaemonInstall: vi.fn(),
   runDaemonRestart: vi.fn(),
 }));
-vi.mock("../cli/update-cli/update-command-config.js", () => ({
+vi.mock("../cli/update-cli/update-command-config-snapshot.js", () => ({
   createUpdateConfigSnapshot: mocks.createUpdateConfigSnapshot,
 }));
 vi.mock("../cli/daemon-cli/restart-health.js", () => ({

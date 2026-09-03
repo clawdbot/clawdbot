@@ -1,5 +1,7 @@
 {
   "id": "clickclack",
+  "name": "ClickClack",
+  "description": "OpenClaw ClickClack channel plugin.",
   "doctorContract": {
     "configRepair": true
   },

@@ -108,7 +108,7 @@ describe("message-normalizer", () => {
     });
 
     it("normalizes mixed text, thinking, and tool content", () => {
-      const result = normalizeMessage({
+      const message = {
         role: "assistant",
         content: [
           { type: "text", text: "Here is the result" },
@@ -116,9 +116,11 @@ describe("message-normalizer", () => {
           { type: "thinking", thinking: "Checking the result." },
         ],
         timestamp: 2000,
-      });
+      };
+      const result = normalizeMessage(message);
 
       expect(result.role).toBe("toolResult");
+      expect(isStandaloneToolMessageForDisplay(message)).toBe(false);
       expect(result.content).toHaveLength(3);
       expect(result.content[0]).toEqual({
         type: "text",
@@ -566,6 +568,18 @@ describe("message-normalizer", () => {
               width: value,
               height: value,
             },
+            {
+              type: "attachment",
+              attachment: {
+                kind: "document",
+                url: "/media/document",
+                label: "Document",
+                sizeBytes: value,
+                durationMs: value,
+                width: value,
+                height: value,
+              },
+            },
           ],
         });
         expect(result.content).toEqual([
@@ -580,6 +594,10 @@ describe("message-normalizer", () => {
             rawText: null,
           },
           { type: "attachment", attachment: { kind: "video", url: "/media/clip", label: "Video" } },
+          {
+            type: "attachment",
+            attachment: { kind: "document", url: "/media/document", label: "Document" },
+          },
         ]);
       },
     );

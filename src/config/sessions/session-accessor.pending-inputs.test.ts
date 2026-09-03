@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -15,6 +16,7 @@ import {
   deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   readActiveTranscriptEntryAnchor,
+  readSessionSubmittedInput,
   replaceTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
@@ -79,12 +81,16 @@ describe("accepted input custody", () => {
 
   it("keeps accepted input outside the active transcript and applies its hook once across replay and promotion", async () => {
     await appendTranscriptMessage(scope(), { message: message("active", "First task") });
+    expect(readSessionSubmittedInput(scope(), "active:user")).toEqual(
+      message("active", "First task"),
+    );
     const before = await loadTranscriptEvents(scope());
     const prepare = vi.fn((input: PersistedUserTurnMessage) => ({
       ...input,
       content: typeof input.content === "string" ? `${input.content} (approved)` : input.content,
     }));
     const receipt = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
+    expect(readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
     await expect(
       stage("queued", {
         message: { ...message("queued"), timestamp: 200 },
@@ -117,6 +123,7 @@ describe("accepted input custody", () => {
       message: receipt.message,
     });
     expect(listSessionPendingInputs(scope())).toEqual({ total: 0, items: [] });
+    expect(readSessionSubmittedInput(scope(), "queued:user")).toEqual(receipt.message);
     const committedReplay = await stage("queued", { prepareMessageAfterIdempotencyCheck: prepare });
     expect(committedReplay.message).toEqual(receipt.message);
     expect(prepare).toHaveBeenCalledOnce();
@@ -183,6 +190,8 @@ describe("accepted input custody", () => {
     await replaceTranscriptEvents(scope(), []);
     rotateAgentEventLifecycleGeneration();
     closeOpenClawAgentDatabasesForTest();
+    expect(readSessionSubmittedInput(scope(), "collect-a:user")).toEqual(first.message);
+    expect(readSessionSubmittedInput(scope(), "collect-b:user")).toEqual(second.message);
     const duplicate = await stage("collect-a", {
       message: { ...message("collect-a", "First approved input"), timestamp: 200 },
     });
@@ -646,7 +655,90 @@ describe("accepted input custody", () => {
     expect(
       readSessionPendingInput({ ...scope(), sessionId: "other-session" }, first.inputId),
     ).toBeUndefined();
+    for (const idempotencyKey of ["first:user", "third:user"]) {
+      expect(
+        readSessionSubmittedInput({ ...scope(), sessionId: "other-session" }, idempotencyKey),
+      ).toBeUndefined();
+      expect(
+        readSessionSubmittedInput({ ...scope(), sessionKey: "agent:main:other" }, idempotencyKey),
+      ).toBeUndefined();
+    }
   });
+
+  it("does not create missing storage for a submitted-input lookup", () => {
+    const storePath = path.join(fixture.sessionsDir(), "missing-agent.sqlite");
+    expect(readSessionSubmittedInput({ ...scope(), storePath }, "missing:user")).toBeUndefined();
+    expect(fs.existsSync(storePath)).toBe(false);
+  });
+
+  it.each(["pending", "committed"] as const)(
+    "rejects malformed or oversized %s source bytes without changing storage",
+    async (source) => {
+      const receipt = await stage("invalid-source");
+      if (source === "committed") {
+        await promote(receipt);
+      }
+      const db = database().db;
+      const invalidMessages = [
+        "{",
+        JSON.stringify({ ...receipt.message, role: "assistant" }),
+        JSON.stringify({ ...receipt.message, idempotencyKey: "another:user" }),
+        JSON.stringify(message("invalid-source", "💥".repeat(MAX_PAYLOAD_BYTES / 4))),
+      ];
+      for (const messageJson of invalidMessages) {
+        if (source === "pending") {
+          db.prepare("UPDATE session_pending_inputs SET message_json = ? WHERE input_id = ?").run(
+            messageJson,
+            receipt.inputId,
+          );
+        } else {
+          db.prepare(
+            "UPDATE transcript_events SET event_json = ? WHERE session_id = ? AND seq = (SELECT seq FROM transcript_event_identities WHERE session_id = ? AND event_id = ?)",
+          ).run(`{"message":${messageJson}}`, sessionId, sessionId, receipt.inputId);
+        }
+        db.exec("PRAGMA query_only = ON");
+        try {
+          expect(readSessionSubmittedInput(scope(), "invalid-source:user")).toBeUndefined();
+        } finally {
+          db.exec("PRAGMA query_only = OFF");
+        }
+      }
+    },
+  );
+
+  it.each(["dirty", "missing", "lagging"] as const)(
+    "does not read or repair a %s transcript identity projection",
+    async (projection) => {
+      const receipt = await stage("stale-source");
+      await promote(receipt);
+      const db = database().db;
+      if (projection === "missing") {
+        db.prepare("DELETE FROM session_transcript_index_state WHERE session_id = ?").run(
+          sessionId,
+        );
+      } else {
+        const statement =
+          projection === "dirty"
+            ? "UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = ?"
+            : "UPDATE session_transcript_index_state SET indexed_seq = -1 WHERE session_id = ?";
+        db.prepare(statement).run(sessionId);
+      }
+      const before = db
+        .prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?")
+        .get(sessionId);
+      db.exec("PRAGMA query_only = ON");
+      try {
+        expect(readSessionSubmittedInput(scope(), "stale-source:user")).toBeUndefined();
+      } finally {
+        db.exec("PRAGMA query_only = OFF");
+      }
+      expect(
+        db
+          .prepare("SELECT * FROM session_transcript_index_state WHERE session_id = ?")
+          .get(sessionId),
+      ).toEqual(before);
+    },
+  );
 
   it("bounds materialized pending pages by bytes without truncating input or skipping its cursor", async () => {
     const content = "x".repeat(Math.floor(MAX_PAYLOAD_BYTES / 2));

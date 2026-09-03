@@ -349,10 +349,6 @@ export function getActivePluginGatewayCommandRegistry(): PluginRegistry | null {
   return asPluginRegistry(state.activeRegistry);
 }
 
-export function getActivePluginGatewayNodePolicyRegistry(): PluginRegistry | null {
-  return asPluginRegistry(state.activeRegistry);
-}
-
 export function requireActivePluginChannelRegistry(): PluginRegistry {
   const existing = getActivePluginChannelRegistry();
   if (existing) {

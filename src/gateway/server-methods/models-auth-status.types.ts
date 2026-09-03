@@ -24,14 +24,29 @@ export type ModelAuthStatusProfile = {
   expiry?: ModelAuthExpiry;
   /** True only for saved OAuth/token profiles this gateway can remove. */
   logoutSupported?: boolean;
+  /** Credential refresh is owned by an external CLI rather than OpenClaw. */
+  externallyManaged?: boolean;
+  /** Where the effective credential came from. */
+  source?: "config" | "external" | "inherited" | "saved";
+  displayName?: string;
+  email?: string;
+  lastUsedAt?: number;
 };
 
 export type ModelAuthStatusProvider = {
   provider: string;
+  /** Canonical credential owner used for profile ordering mutations. */
+  authProvider?: string;
   displayName: string;
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
+  /** Explicit stored/config priority. Omitted when selection is automatic. */
+  profileOrder?: string[];
+  /** True when the priority is a stored override that can be reset. */
+  profileOrderStored?: boolean;
+  /** Present when configuration, rather than the auth store, owns priority. */
+  profileOrderLocked?: "auth-config" | "provider-config";
   apiKey?: {
     source: "config" | "env";
     envVar?: string;
@@ -70,4 +85,9 @@ export type ModelAuthLogoutResult = {
   provider: string;
   removedProfiles: string[];
   abortedRunIds: string[];
+};
+
+export type ModelAuthOrderSetResult = {
+  provider: string;
+  profileIds: string[] | null;
 };

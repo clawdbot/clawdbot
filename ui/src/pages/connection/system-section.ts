@@ -22,6 +22,7 @@ type SystemStat = {
   detail?: string;
   /** Used share of the resource (0..1); renders the meter bar when present. */
   usedFraction?: number;
+  path?: string;
   title?: string;
 };
 
@@ -57,15 +58,20 @@ function renderSystemMeter(label: string, fraction: number) {
 }
 
 function renderSystemStat(stat: SystemStat) {
+  const label = stat.path ? `${stat.label} ${stat.path}` : stat.label;
   return html`
-    <div class="config-host__stat" title=${stat.title ?? ""}>
-      <div class="config-host__stat-label">${stat.label}</div>
+    <div class="config-host__stat" title=${stat.path ?? stat.title ?? ""}>
+      <div class="config-host__stat-label">
+        ${stat.label}${stat.path
+          ? html` <span class="config-host__stat-path">${stat.path}</span>`
+          : nothing}
+      </div>
       <div class="config-host__stat-value">
         ${stat.value}${stat.unit
           ? html` <span class="config-host__stat-unit">${stat.unit}</span>`
           : nothing}
       </div>
-      ${stat.usedFraction == null ? nothing : renderSystemMeter(stat.label, stat.usedFraction)}
+      ${stat.usedFraction == null ? nothing : renderSystemMeter(label, stat.usedFraction)}
       ${stat.detail ? html`<div class="config-host__stat-detail">${stat.detail}</div>` : nothing}
     </div>
   `;
@@ -123,19 +129,21 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
     usedFraction: memoryUsed,
   };
   const stats = [cpu, memory];
-  const diskUsed = usedFraction(info.diskTotalBytes, info.diskAvailableBytes);
-  // Disk info is optional in the protocol; skip the tile instead of showing an empty gauge.
-  if (diskUsed != null) {
+  for (const disk of info.disks ?? []) {
+    const diskUsed = usedFraction(disk.totalBytes, disk.availableBytes);
+    if (diskUsed == null) {
+      continue;
+    }
     stats.push({
       label: t("quickSettings.system.disk"),
       value: formatUsedPercent(diskUsed),
       unit: t("quickSettings.system.used"),
       detail: t("quickSettings.system.freeOf", {
-        free: formatBytes(info.diskAvailableBytes),
-        total: formatBytes(info.diskTotalBytes),
+        free: formatBytes(disk.availableBytes),
+        total: formatBytes(disk.totalBytes),
       }),
       usedFraction: diskUsed,
-      title: info.diskPath,
+      path: disk.path,
     });
   }
   return stats;

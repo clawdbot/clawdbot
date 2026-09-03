@@ -192,7 +192,9 @@ In groups and forum topics, an explicit mention of the configured bot handle (fo
 
     ### Finding your Telegram user ID
 
-    Safer (no third-party bot): DM your bot, run `openclaw logs --follow`, read `from.id`.
+    Safer (no third-party bot): with DM policy `pairing`, DM your bot and read `Your Telegram user id` in its pairing reply. You can also run `openclaw logs --follow` and read `senderUserId` in the `telegram pairing request` entry. Both come from the incoming message's `from.id`.
+
+    Use your numeric user ID for `allowFrom`, not a phone number, username, chat/group ID, or the bot's ID. Stop following once you have the ID and keep unrelated log content private. If your current policy prevents this flow, use an already verified ID; do not broaden access just to discover it.
 
     Official Bot API method:
 

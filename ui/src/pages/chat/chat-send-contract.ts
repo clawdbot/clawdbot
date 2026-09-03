@@ -8,6 +8,7 @@ import type {
   ChatAttachment,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import type { SessionCapability, SessionRefreshTarget } from "../../lib/sessions/index.ts";
@@ -39,6 +40,7 @@ export type ChatHost = ChatInputHistoryState &
     reconnectResumeSessionId?: string | null;
     chatLoading: boolean;
     chatMessage: string;
+    chatMentions?: readonly HumanMention[];
     /** Captured once at submit; queued delivery never re-reads the current page. */
     getWorkContext?: () => string | undefined;
     chatGoalDraftMode?: ChatGoalDraftMode | null;

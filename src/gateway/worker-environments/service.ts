@@ -1,5 +1,4 @@
 import type {
-  WorkerGitHubPublishParams,
   WorkerPortalParams,
   WorkerSessionsSendParams,
   WorkerSessionsSpawnParams,
@@ -121,12 +120,6 @@ type WorkerEnvironmentServiceOptions = WorkerProviderLifecycleInputOptions & {
           identity: WorkerConnectionIdentity;
           toolName: "sessions_send";
           request: WorkerSessionsSendParams;
-          signal?: AbortSignal;
-        }
-      | {
-          identity: WorkerConnectionIdentity;
-          toolName: "github_publish";
-          request: WorkerGitHubPublishParams;
           signal?: AbortSignal;
         }
       | {
@@ -657,8 +650,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
       );
     },
-    destroy: async (environmentId: string) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId)),
+    destroy: async (environmentId: string, reason?: "operator-abandon") =>
+      environmentAccess.project(await providerLifecycle.destroy(environmentId, { reason })),
     destroyUnattached: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),

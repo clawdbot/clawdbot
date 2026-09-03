@@ -307,13 +307,20 @@ describe("sessions.list single-flight", () => {
       expect(await listSessions({ client, context, request })).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
+      const mainRequest = { ...request, agentId: "main" };
+      const workRequest = { ...request, agentId: "work" };
+      const main = await listSessions({ client, context, request: mainRequest });
+      const work = await listSessions({ client, context, request: workRequest });
+      expect(await listSessions({ client, context, request: mainRequest })).toBe(main);
+      expect(await listSessions({ client, context, request: workRequest })).toBe(work);
+      expect(await listSessions({ client, context, request })).toBe(first);
       catalog = fullCatalog;
       const refreshed = await listSessions({ client, context, request });
       expect(refreshed).not.toBe(first);
       expect(
         refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
       ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
-      expect(loader.calls).toHaveBeenCalledTimes(2);
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 

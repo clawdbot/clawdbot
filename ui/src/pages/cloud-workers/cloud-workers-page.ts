@@ -219,6 +219,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : {
               options: {
                 raw: built.patch,
+                replacePaths: built.replacePaths,
                 note: `cloud workers: ${editingId ? "update" : "add"} ${profileId}`,
                 canDispatch: isCurrent,
               },
@@ -285,6 +286,7 @@ class CloudWorkersPage extends OpenClawLightDomElement {
           : {
               options: {
                 raw: built.patch,
+                replacePaths: built.replacePaths,
                 note: `cloud workers: delete ${profile.id}`,
                 canDispatch: isCurrent,
               },

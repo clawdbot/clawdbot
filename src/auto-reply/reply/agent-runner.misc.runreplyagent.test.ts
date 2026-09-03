@@ -12,6 +12,7 @@ import {
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -49,6 +50,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import type { FollowupRun } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -442,6 +444,64 @@ afterEach(() => {
   embeddedRunTesting.resetActiveEmbeddedRuns();
 });
 
+describe("runReplyAgent pending operator input", () => {
+  it("claims a direct CLI answer before active-run queueing", async () => {
+    const gatewayCall = vi.fn(async (_method, _opts, params) => ({
+      status: "answered",
+      answers: (params as { answers: { answers: Record<string, string[]> } }).answers,
+    }));
+    const reservation = registerPendingAgentQuestion({
+      questionId: "ask_direct_cli_answer",
+      sessionKey: "main",
+      questions: [
+        {
+          id: "color",
+          header: "Color",
+          question: "Which color?",
+          options: [{ label: "Blue" }, { label: "Green" }],
+        },
+      ],
+      gatewayCall,
+      answer: Promise.resolve({ status: "pending" }),
+    });
+    reservation.attachRegistration(Promise.resolve({ id: "ask_direct_cli_answer" }));
+    const replyOperationRunState = {};
+    const testRun = createBaseRun({
+      context: { agentText: "Green" },
+      followup: { transcriptPrompt: "Green" },
+      reply: {
+        commandBody: "Green",
+        transcriptCommandBody: "Green",
+        sessionKey: "main",
+        isActive: true,
+        shouldSteer: true,
+        opts: { [REPLY_OPERATION_RUN_STATE]: replyOperationRunState },
+      },
+    });
+
+    try {
+      await expect(testRun.run()).resolves.toBeUndefined();
+      expect(gatewayCall).toHaveBeenCalledWith(
+        "question.resolve",
+        {},
+        {
+          id: "ask_direct_cli_answer",
+          answers: { answers: { color: ["Green"] } },
+          resolvedBy: "plain-text",
+        },
+      );
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
+      expect(replyOperationRunState).toEqual({
+        admission: { status: "accepted", mode: "steer" },
+      });
+    } finally {
+      reservation.dispose();
+    }
+  });
+});
+
 describe("runReplyAgent auto-compaction token update", () => {
   async function seedSessionStore(params: {
     storePath: string;
@@ -461,6 +521,7 @@ describe("runReplyAgent auto-compaction token update", () => {
       agentEvents?: Array<{ stream: string; data: Record<string, unknown> }>;
       config?: OpenClawConfig;
       onBlockReply?: (payload: unknown) => Promise<void> | void;
+      onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
     },
   ) {
     const sessionKey = "main";
@@ -501,7 +562,10 @@ describe("runReplyAgent auto-compaction token update", () => {
         reasoningLevel: "on",
       },
       reply: {
-        opts: options?.onBlockReply ? { onBlockReply: options.onBlockReply } : undefined,
+        opts: {
+          onBlockReply: options?.onBlockReply,
+          onAgentRunTerminalOutcome: options?.onAgentRunTerminalOutcome,
+        },
         sessionEntry,
         sessionStore: { [sessionKey]: sessionEntry },
         sessionKey,
@@ -730,6 +794,11 @@ describe("runReplyAgent auto-compaction token update", () => {
 
   it.each([
     ["without side effects", { meta: { agentMeta: {} } }, true],
+    [
+      "with only a reply directive",
+      { payloads: [{ text: "[[reply_to_current]]" }], meta: { agentMeta: {} } },
+      true,
+    ],
     ["after hidden compaction", { meta: { agentMeta: { compactionCount: 1 } } }, true],
     [
       "after an intentional terminal tool batch",
@@ -739,7 +808,9 @@ describe("runReplyAgent auto-compaction token update", () => {
   ] satisfies Array<[string, Record<string, unknown>, boolean]>)(
     "accounts for empty interactive direct replies %s",
     async (_label, agentResult, fallback) => {
-      const result = await runEmptyDirectReply(agentResult);
+      const onAgentRunTerminalOutcome = vi.fn();
+      const result = await runEmptyDirectReply(agentResult, { onAgentRunTerminalOutcome });
+      expect(onAgentRunTerminalOutcome).toHaveBeenLastCalledWith(fallback ? "failed" : "completed");
       if (!fallback) {
         expect(result).toBeUndefined();
         return;

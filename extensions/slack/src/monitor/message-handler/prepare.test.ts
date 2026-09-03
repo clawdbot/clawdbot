@@ -3516,56 +3516,62 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     }
   });
 
-  it("skips loading thread history when thread session already exists in store (bloat fix)", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
-    const cfg = {
-      session: { store: storePath },
-      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
-    } as OpenClawConfig;
-    const route = resolveAgentRoute({
-      cfg,
-      channel: "slack",
-      accountId: "default",
-      teamId: "T1",
-      peer: { kind: "channel", id: "C123" },
-    });
-    const threadKeys = resolveThreadSessionKeys({
-      baseSessionKey: route.sessionKey,
-      threadId: "200.000",
-    });
-    const now = Date.now();
-    await seedSessionEntries(storePath, {
-      [threadKeys.sessionKey]: {
-        sessionId: "existing-thread-session",
-        updatedAt: now,
-        sessionStartedAt: now,
-        lastInteractionAt: now,
-      },
-    });
+  it.each([undefined, "Renamed in Slack"])(
+    "preserves fresh thread metadata with display name %s without reloading history",
+    async (displayName) => {
+      const { storePath } = storeFixture.makeTmpStorePath();
+      const threadTs = displayName ? "200.001" : "200.000";
+      const cfg = {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig;
+      const route = resolveAgentRoute({
+        cfg,
+        channel: "slack",
+        accountId: "default",
+        teamId: "T1",
+        peer: { kind: "channel", id: "C123" },
+      });
+      const threadKeys = resolveThreadSessionKeys({
+        baseSessionKey: route.sessionKey,
+        threadId: threadTs,
+      });
+      const now = Date.now();
+      await seedSessionEntries(storePath, {
+        [threadKeys.sessionKey]: {
+          sessionId: "existing-thread-session",
+          displayName,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+        },
+      });
 
-    const replies = vi.fn().mockResolvedValueOnce({
-      messages: [{ text: "starter", user: "U2", ts: "200.000" }],
-    });
-    const slackCtx = createThreadSlackCtx({ cfg, replies });
-    slackCtx.resolveUserName = async () => ({ name: "Alice" });
-    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+      const replies = vi.fn().mockResolvedValueOnce({
+        messages: [{ text: "starter", user: "U2", ts: threadTs }],
+      });
+      const slackCtx = createThreadSlackCtx({ cfg, replies });
+      slackCtx.resolveUserName = async () => ({ name: "Alice" });
+      slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
 
-    const prepared = await prepareThreadMessage(slackCtx, {
-      text: "reply in old thread",
-      ts: "201.000",
-      thread_ts: "200.000",
-    });
+      const prepared = await prepareThreadMessage(slackCtx, {
+        text: "reply in old thread",
+        ts: "201.000",
+        thread_ts: threadTs,
+      });
 
-    assertPrepared(prepared);
-    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
-    // Thread history should NOT be fetched for existing sessions (bloat fix)
-    expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
-    // Thread starter should also be skipped for existing sessions
-    expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
-    expect(prepared.ctxPayload.ThreadLabel).toContain("Slack thread");
-    // Replies API should only be called once (for thread starter lookup, not history)
-    expect(replies).toHaveBeenCalledTimes(1);
-  });
+      assertPrepared(prepared);
+      expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+      // Thread history should NOT be fetched for existing sessions (bloat fix)
+      expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+      // Thread starter should also be skipped for existing sessions
+      expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
+      expect(prepared.ctxPayload.ThreadLabel).toContain("Slack thread");
+      expect(prepared.sessionDisplayName).toBe(displayName);
+      // Replies API should only be called once (for thread starter lookup, not history)
+      expect(replies).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("preserves existing thread fallback when channel runtime is omitted", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
@@ -5097,7 +5103,7 @@ describe("prepareSlackMessage sender prefix", () => {
       isChannelAllowed: () => true,
       resolveChannelName: async () => ({ name: "general", type: "channel" }),
       resolveUserName: async () => ({ name: "Alice" }),
-      setSlackThreadStatus: async () => undefined,
+      setSlackSessionStatus: async () => undefined,
     } as unknown as SlackMonitorContext;
   }
 

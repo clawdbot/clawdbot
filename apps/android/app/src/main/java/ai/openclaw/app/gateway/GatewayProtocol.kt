@@ -894,6 +894,13 @@ enum class GatewayMethod(
   SessionsGithubOptions("sessions.github.options"),
   SessionsGithubStatus("sessions.github.status"),
   SessionsGithubConfirm("sessions.github.confirm"),
+  SessionsTitlePrepare("sessions.title.prepare"),
+  UsersMentionable("users.mentionable"),
+  MentionsList("mentions.list"),
+  MentionsDismiss("mentions.dismiss"),
+  TranscriptsList("transcripts.list"),
+  TranscriptsGet("transcripts.get"),
+  ModelsAuthOrderSet("models.authOrderSet"),
 }
 
 enum class GatewayEvent(
@@ -920,6 +927,7 @@ enum class GatewayEvent(
   TalkMode("talk.mode"),
   TalkEvent("talk.event"),
   Shutdown("shutdown"),
+  GatewaySuspension("gateway.suspension"),
   Health("health"),
   Heartbeat("heartbeat"),
   Cron("cron"),
@@ -928,6 +936,7 @@ enum class GatewayEvent(
   NodePairRequested("node.pair.requested"),
   NodePairResolved("node.pair.resolved"),
   NodePresence("node.presence"),
+  NodeHostStats("node.hostStats"),
   NodeRunnerInventoryChanged("node.runnerInventory.changed"),
   NodeInvokeCancel("node.invoke.cancel"),
   NodeInvokeInput("node.invoke.input"),
@@ -954,4 +963,5 @@ enum class GatewayEvent(
   UpdateAvailable("update.available"),
   PortalChanged("portal.changed"),
   ProgressCardChanged("progressCard.changed"),
+  MentionsChanged("mentions.changed"),
 }

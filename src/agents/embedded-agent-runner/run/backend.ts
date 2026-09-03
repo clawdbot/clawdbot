@@ -34,8 +34,9 @@ export function resolveRuntimeModelAttempt(
  */
 export async function runEmbeddedAttemptWithBackend(
   params: EmbeddedRunAttemptParams,
+  nativeSessionRuntime?: Parameters<typeof runAgentHarnessAttempt>[1],
 ): Promise<EmbeddedRunAttemptResult> {
-  const result = await runAgentHarnessAttempt(params);
+  const result = await runAgentHarnessAttempt(params, nativeSessionRuntime);
   if (
     result.agentHarnessId !== "openclaw" &&
     params.sessionKey &&
@@ -64,11 +65,20 @@ export async function runEmbeddedAttemptWithBackend(
       });
     }
   }
-  const { modelAttempt: _backendModelAttempt, ...attempt } = result;
+  const { modelAttempt: _backendModelAttempt, runtimeModelSelection, ...attempt } = result;
   const modelAttempt = resolveRuntimeModelAttempt(params.runtimePlan);
   return copyCoreTtsAttemptResultProvenance(result, {
     ...attempt,
     ...(modelAttempt ? { modelAttempt } : {}),
+    // Only private prepared ownership permits a runtime to select the session model.
+    ...(nativeSessionRuntime && runtimeModelSelection
+      ? {
+          runtimeModelSelection: {
+            provider: runtimeModelSelection.provider,
+            model: runtimeModelSelection.model,
+          },
+        }
+      : {}),
   });
 }
 

@@ -148,7 +148,7 @@ async function restoreArchivedDispatchSession(params: {
               commitGuard: assertCommitAllowed,
             });
           }
-          return { archivedAt: undefined, archivedBy: undefined };
+          return { archivedAt: undefined, archivedBy: undefined, archiveReason: undefined };
         },
         { assertCommitAllowed: () => assertCommitAllowed?.() },
       )) ?? undefined,
@@ -630,7 +630,9 @@ export function createDispatchReplyOperationCoordinator(params: {
   };
 
   const getQueuedFollowupAbortSignal = () =>
-    dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
+    params.replyOptions?.turnAdoptionLifecycle?.abortSignal ??
+    dispatchReplyOperation?.abortSignal ??
+    params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
   let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {

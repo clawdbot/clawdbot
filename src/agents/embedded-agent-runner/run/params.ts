@@ -275,7 +275,7 @@ export type RunEmbeddedAgentParams = {
   modelFallbackAvailability?: ModelFallbackAvailability;
   /** Session-pinned embedded harness id. Prevents runtime hot-switching. */
   agentHarnessId?: string;
-  /** True when the pinned non-default harness owns model selection for this session. */
+  /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   /** Explicit runtime override selected for this turn. Unlike agentHarnessId, this may force OpenClaw. */
   agentHarnessRuntimeOverride?: string;

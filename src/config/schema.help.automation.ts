@@ -116,11 +116,13 @@ export const AUTOMATION_FIELD_HELP: Record<string, string> = {
   "transcripts.enabled":
     "Enables durable automatic meeting notes, the transcripts agent tool, and configured auto-start sources. Default: true. Set false to disable persistence and the tool; explicit meeting transcribe mode retains its bounded live tail.",
   "transcripts.autoStart":
-    "Live transcript sources started automatically when the gateway starts. Each entry is enabled by being present; remove an entry to disable that source.",
+    "Live transcript sources managed automatically from gateway startup. Each entry is enabled by being present; remove an entry to disable that source. Sources capture continuously unless whenOccupied is enabled.",
   "transcripts.autoStart[].providerId":
     "Transcript source provider id, such as a Discord voice or future Slack huddle provider. Use the exact id exposed by the provider plugin.",
   "transcripts.autoStart[].sessionId":
-    "Optional fixed transcript session id for this auto-start source. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+    "Optional fixed transcript session id for this auto-start source. Ignored when whenOccupied is true. Leave unset for generated ids unless you need a stable daily selector and can avoid same-day collisions.",
+  "transcripts.autoStart[].whenOccupied":
+    "Start a fresh transcript session each time humans are present in the source and stop it (generating notes) after the last human leaves. Requires a provider that reports occupancy, such as discord-voice. Default: false (capture continuously from gateway start).",
   "transcripts.autoStart[].title":
     "Optional human-readable title stored with the transcript session and shown in transcript listings. Use concise meeting names that help operators identify the captured source.",
   "transcripts.autoStart[].accountId":

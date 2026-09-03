@@ -43,6 +43,7 @@ type PluginReleasePlanItem = PublishablePluginPackage & {
 
 type PluginReleasePlan = {
   all: PluginReleasePlanItem[];
+  warnings: string[];
   candidates: PluginReleasePlanItem[];
   bootstrapCandidates: PluginReleasePlanItem[];
   missingTrustedPublisher: PluginReleasePlanItem[];
@@ -557,7 +558,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
   if (explicitPublishSelection) {
     assertPluginReleaseVersionFloors(selectedPublishable, "Plugin ClawHub release plan");
   }
-  assertPluginReleaseDependencyFreshness(
+  const warnings = assertPluginReleaseDependencyFreshness(
     selectedPublishable,
     "Plugin ClawHub release plan",
     params?.resolveLatestVersion,
@@ -604,6 +605,7 @@ export async function collectPluginClawHubReleasePlan(params?: {
 
   return {
     all,
+    warnings,
     candidates: planned
       .filter(
         (plugin) => plugin.packageExists && plugin.hasTrustedPublisher && !plugin.alreadyPublished,

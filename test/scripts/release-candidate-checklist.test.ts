@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
@@ -60,15 +61,31 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
-  it("runs plugin planners from trusted tooling while retaining candidate inputs", () => {
+  it.each([
+    { warnings: [] },
+    {
+      warnings: [
+        '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".',
+      ],
+    },
+  ])("keeps plugin plan warnings advisory and visible: $warnings", ({ warnings }) => {
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const owner = source.match(/^function collectPluginPlan\([\s\S]*?^\}/mu)?.[0];
+    const summary = source.match(/^function formatPluginPlanSummary\([\s\S]*?^\}/mu)?.[0];
     expect(owner).toBeDefined();
-    const runPlanner = vi.fn((_command, args, options) => JSON.stringify({ args, options }));
+    expect(summary).toBeDefined();
+    const log = vi.fn();
+    const runPlanner = vi.fn((_command, args, options) =>
+      JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
+    );
     const result = runInNewContext(
-      stripTypeScriptTypes(`${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`),
+      stripTypeScriptTypes(
+        `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
+      ),
       {
         TOOLING_ROOT: "/trusted/tooling",
+        console: { log },
+        isRecord,
         join,
         pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
         run: runPlanner,
@@ -82,6 +99,14 @@ describe("release candidate checklist", () => {
       "all-publishable",
     ]);
     expect(result.options).not.toHaveProperty("cwd");
+    expect(result.warnings).toEqual(warnings);
+    expect(runPlanner).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      [
+        "- scripts/plugin-npm-release-plan.ts: 1 packages",
+        ...warnings.map((warning) => `- Warning: ${warning}`),
+      ].join("\n"),
+    );
   });
 
   it("routes a repaired publisher independently from immutable preflight evidence", () => {
@@ -628,19 +653,10 @@ describe("release candidate checklist", () => {
 
   it("infers validation profiles from candidate tags", () => {
     expect(parseArgs(["--tag", "v2026.5.14-beta.3"]).releaseProfile).toBe("beta");
-    expect(parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "v0.6.3"]).releaseProfile).toBe(
-      "stable",
+    expect(parseArgs(["--tag", "v2026.5.14"]).releaseProfile).toBe("stable");
+    expect(parseArgs(["--tag", "v2026.5.14", "--release-profile", "full"]).releaseProfile).toBe(
+      "full",
     );
-    expect(
-      parseArgs([
-        "--tag",
-        "v2026.5.14",
-        "--windows-node-tag",
-        "v0.6.3",
-        "--release-profile",
-        "full",
-      ]).releaseProfile,
-    ).toBe("full");
   });
 
   it("defaults beta and alpha Parallels to postpublish confidence", () => {
@@ -1306,10 +1322,17 @@ describe("release candidate checklist", () => {
     { profile: "beta", coveragePolicy: "npm-beta-v1", skipTelegram: true, expected: "skipped" },
     { profile: "beta", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
     { profile: "stable", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
+    {
+      profile: "stable",
+      coveragePolicy: "npm-stable-v1",
+      skipTelegram: false,
+      expected: "passed",
+      producerRunId: 444,
+    },
     { profile: "full", coveragePolicy: undefined, skipTelegram: false, expected: "passed" },
   ])(
     "records candidate Telegram $expected for $profile qualification ($coveragePolicy)",
-    async ({ profile, coveragePolicy, skipTelegram, expected }) => {
+    async ({ profile, coveragePolicy, skipTelegram, expected, producerRunId = 222 }) => {
       const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
       const telegramOwner = source.match(/^async function runTelegramIfNeeded\([\s\S]*?^\}/mu)?.[0];
       const telegramCall = source.match(
@@ -1345,7 +1368,7 @@ describe("release candidate checklist", () => {
             id: 9,
             name: "npm-package",
             digest: `sha256:${"a".repeat(64)}`,
-            workflowRunId: 222,
+            workflowRunId: producerRunId,
           },
           npmManifest: {
             tarballName: "openclaw.tgz",
@@ -1374,7 +1397,7 @@ describe("release candidate checklist", () => {
           options.workflowRef,
           expect.objectContaining({
             package_artifact_id: 9,
-            package_artifact_run_id: "222",
+            package_artifact_run_id: String(producerRunId),
             package_source_sha: "c".repeat(40),
           }),
         );
@@ -1483,10 +1506,26 @@ describe("release candidate checklist", () => {
     ).toThrow("8-character lowercase digest");
   });
 
-  it("requires and carries an exact Windows Node tag for stable release candidates", () => {
-    expect(() => parseArgs(["--tag", "v2026.5.14"])).toThrow(
-      "stable release candidates require --windows-node-tag",
-    );
+  it("prints a stable publish command without Windows promotion inputs", () => {
+    const options = parseArgs([
+      "--tag",
+      "v2026.5.14",
+      "--npm-dist-tag",
+      "latest",
+      "--full-release-run",
+      "111",
+      "--npm-preflight-run",
+      "222",
+    ]);
+    const command = buildPublishCommand({ ...options, fullReleaseRunAttempt: 1 });
+
+    expect(command).toContain("'tag=v2026.5.14'");
+    expect(command).toContain("'npm_dist_tag=latest'");
+    expect(command).toContain("'publish_openclaw_npm=true'");
+    expect(command).not.toContain("windows_node_");
+  });
+
+  it("carries the optional exact Windows Node tag and digests for stable candidates", () => {
     expect(() => parseArgs(["--tag", "v2026.5.14", "--windows-node-tag", "latest"])).toThrow(
       "--windows-node-tag must be an explicit version tag, not latest",
     );
@@ -1733,24 +1772,23 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
   });
 
   it("builds the complete immutable Telegram artifact identity tuple", () => {
-    expect(
-      buildTelegramArtifactInputs({
-        artifact: {
-          digest: `sha256:${"a".repeat(64)}`,
-          id: 123,
-          name: "openclaw-npm-preflight-v2026.7.2-beta.1",
-          workflowRunId: 456,
-        },
-        manifest: {
-          packageVersion: "2026.7.2-beta.1",
-          tarballName: "openclaw-2026.7.2-beta.1.tgz",
-          tarballSha256: "b".repeat(64),
-        },
-        runAttempt: 2,
-        runId: "456",
-        sourceSha: "c".repeat(40),
-      }),
-    ).toEqual({
+    const input = {
+      artifact: {
+        digest: `sha256:${"a".repeat(64)}`,
+        id: 123,
+        name: "openclaw-npm-preflight-v2026.7.2-beta.1",
+        workflowRunId: 456,
+      },
+      manifest: {
+        packageVersion: "2026.7.2-beta.1",
+        tarballName: "openclaw-2026.7.2-beta.1.tgz",
+        tarballSha256: "b".repeat(64),
+      },
+      runAttempt: 2,
+      runId: "456",
+      sourceSha: "c".repeat(40),
+    };
+    expect(buildTelegramArtifactInputs(input)).toEqual({
       package_artifact_digest: "a".repeat(64),
       package_artifact_id: 123,
       package_artifact_name: "openclaw-npm-preflight-v2026.7.2-beta.1",
@@ -1761,6 +1799,13 @@ ${declareIdentity ? "      trusted_workflow_json: {}\n" : ""}`;
       package_source_sha: "c".repeat(40),
       package_version: "2026.7.2-beta.1",
     });
+    expect(() =>
+      buildTelegramArtifactInputs({
+        ...input,
+        artifact: { ...input.artifact, workflowRunId: undefined },
+        runId: "undefined",
+      }),
+    ).toThrow("belongs to run");
   });
 
   it("bounds GitHub API requests with a timeout signal", async () => {

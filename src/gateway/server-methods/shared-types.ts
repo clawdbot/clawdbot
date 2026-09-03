@@ -8,7 +8,6 @@ import type {
 // contracts used by every gateway RPC method module.
 import type {
   ConnectParams,
-  ErrorShape,
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
@@ -32,6 +31,7 @@ import type { GatewayConfigRevisionProjector } from "../config-revision-token.js
 import type { ScopeUpgradeCoordinator } from "../device-scope-upgrade.js";
 import type { ExecApprovalManager, ExecApprovalRecord } from "../exec-approval-manager.js";
 import type { HealthSummary } from "../health/types.js";
+import type { MentionInbox } from "../mention-inbox.types.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import type { NodeRegistry } from "../node-registry.js";
 import type { PlacementStandingGrantRuntime } from "../operator-approval-placement-grants.js";
@@ -75,6 +75,7 @@ import type {
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
 import type { GatewayClient } from "./client-types.js";
+import type { RespondFn } from "./response-types.js";
 
 /**
  * Shared gateway request types used by every server-method module.
@@ -91,13 +92,7 @@ export type {
 /** Host-minted role authority; leaf contract re-exported for method handlers. */
 export type { GatewayOperatorRoleActor };
 
-/** Callback used by method handlers to emit one protocol response frame. */
-export type RespondFn = (
-  ok: boolean,
-  payload?: unknown,
-  error?: ErrorShape,
-  meta?: Record<string, unknown>,
-) => void;
+export type { RespondFn } from "./response-types.js";
 
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
@@ -141,6 +136,7 @@ export type GatewaySystemAgentSession = {
       question?: SystemAgentChatQuestion;
       step?: import("../../wizard/session.js").WizardStep;
     };
+    noteAssistantMessage: (text: string) => void;
     seedHistory: (turns: readonly SystemAgentHistoryTurn[]) => void;
     historyLength: () => number;
     historySince: (index: number) => SystemAgentHistoryTurn[];
@@ -149,6 +145,7 @@ export type GatewaySystemAgentSession = {
       decision: "allow-once" | "allow-always" | "deny" | null,
       proposalHash: string,
       beforePersistentApply?: () => void,
+      terminalStatus?: "expired" | "cancelled",
     ) => Promise<{
       text: string;
       action: "none" | "exit" | "open-tui" | "open-setup";
@@ -162,7 +159,15 @@ export type GatewaySystemAgentSession = {
   welcomeAuditSequence?: number;
   lastUsedAt: number;
   ownerKey: string;
-  pendingApproval?: { id: string; proposalHash: string };
+  pendingApproval?: {
+    id: string;
+    proposalHash: string;
+    completion: Promise<
+      NonNullable<
+        Awaited<ReturnType<GatewaySystemAgentSession["engine"]["resolveOperatorApproval"]>>
+      >
+    >;
+  };
 };
 
 /** Kernel-owned services and state that can be constructed without binding sockets. */
@@ -183,6 +188,8 @@ type GatewayKernelContext = {
   gatewayTlsFingerprint?: string;
   sessionCompanion?: import("../session-companion.js").SessionCompanionService;
   sessionObserver?: SessionObserverService;
+  /** Temporary profile-owned mentions for this exact Gateway lifetime. */
+  mentionInbox?: MentionInbox;
   resolveTerminalLaunchPolicy: (agentId?: string) => TerminalLaunchResolution;
   isTerminalEnabled: () => boolean;
   execApprovalManager?: ExecApprovalManager;

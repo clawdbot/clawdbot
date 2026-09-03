@@ -4,6 +4,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
+import { setUserPreferences } from "../../state/user-preferences.js";
 import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { pushHandlers } from "./push.js";
 
@@ -569,6 +570,7 @@ describe("push.web.subscribe handler", () => {
 
 describe("bound Web Push handlers", () => {
   beforeEach(() => {
+    vi.mocked(setUserPreferences).mockClear();
     vi.mocked(resolveUserProfileId).mockImplementation((profileId) => profileId);
     vi.mocked(clearBoundWebPushSubscription).mockReset();
     vi.mocked(clearBoundWebPushSubscription).mockResolvedValue(true);
@@ -632,7 +634,7 @@ describe("bound Web Push handlers", () => {
   );
 
   it("updates device preferences only while the subscription binding matches", async () => {
-    const preferences = { enabled: false, label: "phone" };
+    const preferences = { enabled: false, label: "phone", categories: { humanMentioned: true } };
     const { respond, invoke } = createBoundWebPushInvokeParams("push.web.preferences.set", {
       endpoint: "https://push.example.test/subscription",
       scope: "device",
@@ -649,6 +651,59 @@ describe("bound Web Push handlers", () => {
     });
     expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
   });
+
+  it.each([undefined, true, false])(
+    "saves human mention preference %s, defaulting older client payloads to off",
+    async (humanMentioned) => {
+      const subscription = expectDefined(
+        findBoundWebPushSubscriptionByEndpoint({
+          endpoint: "https://push.example.test/subscription",
+        }),
+        "bound subscription fixture",
+      );
+      vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+        ...subscription,
+        userProfileId: "profile-owner",
+      });
+      const preferences = {
+        categories: {
+          approvalRequested: true,
+          agentFinished: false,
+          agentQuestion: false,
+          scheduledTaskFailed: false,
+          backgroundTaskFailed: false,
+          ...(humanMentioned === undefined ? {} : { humanMentioned }),
+        },
+        detailLevel: "private",
+        quietHours: { enabled: false, startMinute: 1320, endMinute: 420, timeZone: "UTC" },
+        agentIds: [],
+      };
+      const { respond, invoke } = createBoundWebPushInvokeParams(
+        "push.web.preferences.set",
+        {
+          endpoint: subscription.endpoint,
+          scope: "user",
+          preferences,
+        },
+        { userProfileId: "profile-owner" },
+      );
+
+      await invoke();
+
+      const normalized = {
+        ...preferences,
+        categories: { ...preferences.categories, humanMentioned: humanMentioned ?? false },
+      };
+      expect(setUserPreferences).toHaveBeenCalledWith("profile-owner", {
+        "notifications.web.v1": normalized,
+      });
+      expect(firstRespondCall(respond)).toEqual([
+        true,
+        { scope: "user", preferences: normalized },
+        undefined,
+      ]);
+    },
+  );
 
   it("fails closed when the subscription binding changes during the update", async () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(false);

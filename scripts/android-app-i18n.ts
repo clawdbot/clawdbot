@@ -530,10 +530,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     new Set(["${endpoint.host}:${endpoint.port}"]),
   ],
   [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.takeUtf16Safe(87)}..."]),
-  ],
-  [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt",
     // Compose animation labels are tooling identifiers, not rendered copy.
     new Set(["sidebar-content-translation"]),

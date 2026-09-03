@@ -17,6 +17,7 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { codexForkTurn, forkResponse } from "./upstream-session-fork.test-support.js";
+import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 /** External transport/discovery is synthetic; clients, metadata, handshakes and leases are real. */
 export async function createCanonicalForkNativeFixture(
@@ -42,7 +43,7 @@ export async function createCanonicalForkNativeFixture(
   let ignoreCut = false;
   let competingSubscriber = false;
   let failUnsubscribe = false;
-  let forkFault: "model" | "catalog" | "lineage" | undefined;
+  let forkFault: "model" | "thread-model" | "null-thread-model" | "catalog" | "lineage" | undefined;
   let sequence = 0;
   let afterPolicyWrite: ((threadId: string) => Promise<void> | void) | undefined;
   let policyFault: "rpc" | "disconnect" | undefined;
@@ -81,6 +82,7 @@ export async function createCanonicalForkNativeFixture(
         path: path.join(sessionsRoot, `${id}.jsonl`),
         cwd,
         historyMode,
+        model: "gpt-5.6-luna",
         turns,
       },
       model: "gpt-5.6-luna",
@@ -150,7 +152,7 @@ export async function createCanonicalForkNativeFixture(
       }
       if (method === "initialize") {
         return {
-          userAgent: "codex-cli/0.151.0",
+          userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}`,
           codexHome: home,
         };
       }
@@ -203,6 +205,7 @@ export async function createCanonicalForkNativeFixture(
         const value = await create(`native-${sequence++}`, []);
         value.config = isJsonObject(params.config) ? params.config : undefined;
         value.model = typeof params.model === "string" ? params.model : "gpt-5.5";
+        value.thread.model = value.model;
         value.dynamicTools = Array.isArray(params.dynamicTools) ? params.dynamicTools : [];
         value.developerInstructions =
           typeof params.developerInstructions === "string"
@@ -286,8 +289,13 @@ export async function createCanonicalForkNativeFixture(
           typeof params.developerInstructions === "string"
             ? params.developerInstructions
             : value.developerInstructions;
+        child.thread.model = child.model;
         if (forkFault === "model") {
           child.model = "wrong-native-model";
+        } else if (forkFault === "thread-model") {
+          child.thread.model = "wrong-native-model";
+        } else if (forkFault === "null-thread-model") {
+          child.thread.model = null;
         }
         if (forkFault === "catalog") {
           child.dynamicTools = [];

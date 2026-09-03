@@ -106,7 +106,7 @@ describe("openclaw-router-outlet", () => {
 
     const navigation = router.navigate("next", context);
     await settleOutlet(outlet);
-    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined);
+    expect(renderOwnedRoute).toHaveBeenCalledWith(undefined, true);
     expect(outlet.querySelector("mcp-app-view")).toBe(appView);
     expect(outlet.querySelector('[data-testid="owned-route"]')?.textContent).toBe("page");
     expect(teardownView).not.toHaveBeenCalled();

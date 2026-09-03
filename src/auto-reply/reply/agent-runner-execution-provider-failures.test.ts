@@ -27,7 +27,7 @@ import {
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { buildKnownAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
@@ -771,7 +771,7 @@ describe("executeAgentTurn: provider failures", () => {
     expect(vi.mocked(agentEvents.emitAgentEvent)).toHaveBeenCalledWith(
       expect.objectContaining({
         stream: "lifecycle",
-        data: expect.objectContaining({ phase: "error", fallbackExhaustedFailure: true }),
+        data: expect.objectContaining({ phase: "error", executionSettled: true }),
       }),
     );
   });

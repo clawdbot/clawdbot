@@ -289,6 +289,8 @@ function requestModelsList(params: {
       agentDir,
       workspaceDir: agentDir,
       config,
+      observationConfig: config,
+      isCurrent: () => getRuntimeConfig() === config,
       authModes: params.preparedAuthModes ?? {},
       authStore:
         getPreparedRuntimeAuthProfileStoreSnapshot(agentDir) ??

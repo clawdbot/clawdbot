@@ -96,6 +96,7 @@ function loadSessionArchiveRuntime() {
 }
 
 export async function applySessionEntryReplacements<T>(params: {
+  assertCommitAllowed?: () => void;
   activeSessionKey?: string;
   agentId?: string;
   requireWriteSuccess?: boolean;

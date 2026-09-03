@@ -369,6 +369,7 @@ describe("chat transcript controller", () => {
     { behavior: "smooth", resizeBefore: false, deltaY: -100, observerLate: false },
     { behavior: "smooth", resizeBefore: true, deltaY: 100, observerLate: false },
     { behavior: "smooth", resizeBefore: true, deltaY: -100, observerLate: true },
+    { behavior: "smooth", resizeBefore: true, deltaY: -100_000, observerLate: "after-wheel" },
   ] as const)(
     "recovers $behavior measurements with resizeBeforeInterruption=$resizeBefore, wheel=$deltaY, and late offset=$observerLate",
     async ({ behavior, resizeBefore, deltaY, observerLate }) => {
@@ -422,12 +423,17 @@ describe("chat transcript controller", () => {
         if (resizeBefore) {
           resize();
         }
-        if (observerLate) {
+        if (observerLate === true) {
           // Native wheel movement can precede both input delivery and the
           // offset observer. Remeasurement must use this viewport, not 135.
           container.scrollTop = 0;
         }
         container.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+        if (observerLate === "after-wheel") {
+          // The wheel's native default action can land before its offset observer,
+          // but after the input callback queued skipped row measurements.
+          container.scrollTop = 0;
+        }
         if (!observerLate) {
           container.scrollTop = 0;
           container.dispatchEvent(new Event("scroll"));
@@ -438,7 +444,7 @@ describe("chat transcript controller", () => {
         flushFrames();
         renderRows(rows);
         expect(transcriptSize(container)).toBe(initialSize + 80);
-        expect(container.scrollTop).toBe(0);
+        expect.soft(container.scrollTop).toBe(0);
         if (observerLate) {
           container.dispatchEvent(new Event("scroll"));
           flushFrames();

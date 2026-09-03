@@ -15,6 +15,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.job
 import kotlinx.coroutines.joinAll
@@ -165,7 +166,7 @@ class AppearancePreferenceRuntimeTest {
           assertEquals(AppearanceThemeFamily.Tide, prefs.appearanceThemeFamily.value)
           assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
           assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
-          assertEquals(0xFF5A9BEFL, runtime.gatewayAccentArgb.value)
+          assertEquals(0xFF14B8A6L, runtime.gatewayAccentArgb.value)
         }
 
         setProfilePreferences("profile-b", """{"ui.theme":"rose","ui.themeMode":"light","ui.accent":"#E96CB7"}""")
@@ -180,6 +181,7 @@ class AppearancePreferenceRuntimeTest {
         assertEquals(AppearanceThemeFamily.Tide, prefs.appearanceThemeFamily.value)
         assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
         assertEquals(0xFF5A9BEFL, prefs.appearanceAccentArgb.value)
+        assertEquals(0xFF14B8A6L, runtime.gatewayAccentArgb.value)
         assertEquals(null, runtime.appearancePreferenceScopeForEdit())
       }
     }
@@ -278,6 +280,79 @@ class AppearancePreferenceRuntimeTest {
 
             assertEquals(null, runtime.appearancePreferenceScopeForEdit())
           }
+        }
+      }
+    }
+
+  @Test
+  fun configChangedRefreshesGatewayAccentAndPreservesProfilePrecedence() =
+    runBlocking {
+      for (profileOverride in listOf(false, true)) {
+        withAppearanceGateway {
+          val initialAccent = 0xFF14B8A6L
+          config = """{"ui":{"prefs":{"accent":"#14B8A6"}}}"""
+          if (profileOverride) {
+            setProfilePreferences("profile-a", """{"ui.accent":"#14B8A6"}""")
+          }
+          connect(scopes = listOf("operator.read"))
+          assertEquals(initialAccent, prefs.appearanceAccentArgb.value ?: runtime.gatewayAccentArgb.value)
+          val connection = requests.single { it.method == "config.get" }.connection
+
+          config = """{"ui":{"prefs":{"accent":"#5A9BEF"}}}"""
+          if (profileOverride) {
+            // A distinct profile value proves its read and publication completed.
+            setProfilePreferences("profile-a", """{"ui.accent":"#E96CB7"}""")
+          }
+          emitOperatorEvent("config.changed", """{"path":"/tmp/appearance.json","hash":"appearance-next","ts":1700000000124}""")
+
+          assertEquals(
+            if (profileOverride) 0xFFE96CB7L else 0xFF5A9BEFL,
+            withTimeout(2_000) {
+              combine(prefs.appearanceAccentArgb, runtime.gatewayAccentArgb) { appearance, gateway ->
+                appearance ?: gateway
+              }.first { it != initialAccent }
+            },
+          )
+          assertEquals(0xFF5A9BEFL, runtime.gatewayAccentArgb.value)
+          assertEquals(listOf(connection, connection), requests.filter { it.method == "config.get" }.map { it.connection })
+          assertTrue(writes.isEmpty())
+        }
+      }
+    }
+
+  @Test
+  fun readOnlyDefaultAccentImmediatelyRestoresGatewayFallback() =
+    runBlocking {
+      val configurations =
+        listOf(
+          """{"ui":{"prefs":{"accent":"#14B8A6"}}}""" to 0xFF14B8A6L,
+          """{"ui":{"seamColor":"#5A9BEF"}}""" to 0xFF5A9BEFL,
+          "{}" to null,
+        )
+      for ((gatewayConfig, expectedAccent) in configurations) {
+        withAppearanceGateway {
+          config = gatewayConfig
+          setProfilePreferences("profile-a", """{"ui.accent":"#E96CB7"}""")
+          connect(scopes = listOf("operator.read"))
+          val viewModel = viewModel()
+          assertEquals(0xFFE96CB7L, prefs.appearanceAccentArgb.value ?: runtime.gatewayAccentArgb.value)
+
+          viewModel.setAppearanceAccentArgb(null)
+
+          assertEquals(null, prefs.appearanceAccentArgb.value)
+          assertEquals(
+            "Default must reach the theme before any branding refresh",
+            expectedAccent,
+            prefs.appearanceAccentArgb.value ?: runtime.gatewayAccentArgb.value,
+          )
+          assertTrue(prefs.isAppearancePreferenceLocalOnly("ui.accent"))
+          refresh()
+          assertEquals(
+            "A refresh must not restore the cleared profile accent",
+            expectedAccent,
+            prefs.appearanceAccentArgb.value ?: runtime.gatewayAccentArgb.value,
+          )
+          assertTrue(writes.isEmpty())
         }
       }
     }
@@ -585,8 +660,10 @@ class AppearancePreferenceRuntimeTest {
               if (configReads.incrementAndGet() == 1) {
                 firstConfigStarted.complete(Unit)
                 releaseFirstConfig.await()
+                """{"config":{"ui":{"prefs":{"accent":"#FF5C5C"}}}}"""
+              } else {
+                """{"config":{"ui":{"prefs":{"accent":"#5CCFA5"}}}}"""
               }
-              null
             }
 
             "users.prefs.get" -> {
@@ -611,6 +688,7 @@ class AppearancePreferenceRuntimeTest {
 
           assertEquals(AppearanceThemeFamily.Dash, prefs.appearanceThemeFamily.value)
           assertEquals(AppearanceThemeMode.Dark, prefs.appearanceThemeMode.value)
+          assertEquals(0xFF5CCFA5L, runtime.gatewayAccentArgb.value)
         } finally {
           releaseFirstConfig.complete(Unit)
         }
@@ -757,7 +835,7 @@ private class AppearanceGatewayFixture(
     val scopes: List<String>,
     val methods: Set<String>?,
   ) {
-    val operatorHello = CompletableDeferred<Int>()
+    val operatorHello = CompletableDeferred<Pair<Int, WebSocket>>()
   }
 
   @Volatile private var nextConnection =
@@ -820,7 +898,7 @@ private class AppearanceGatewayFixture(
     }
     withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) {
       // Startup can open both role sockets; observe this operator hello instead of predicting the next upgrade.
-      val number = identity.operatorHello.await()
+      val (number, _) = identity.operatorHello.await()
       runtime.serverName.first { it == "appearance-$number" }
       if (waitForBranding) brandingFinished.first { it >= number }
     }
@@ -876,6 +954,14 @@ private class AppearanceGatewayFixture(
     entries: String,
   ) {
     profiles[profileId] = json.parseToJsonElement(entries).jsonObject
+  }
+
+  suspend fun emitOperatorEvent(
+    event: String,
+    payloadJson: String,
+  ) {
+    val (_, socket) = withTimeout(APPEARANCE_CONNECTION_TIMEOUT_MS) { nextConnection.operatorHello.await() }
+    check(socket.send("""{"type":"event","event":${JsonPrimitive(event)},"payload":$payloadJson}"""))
   }
 
   fun changeCurrentProfile(profileId: String?) {
@@ -935,7 +1021,7 @@ private class AppearanceGatewayFixture(
           val payload = respond(request) ?: response(request, identity)
           val sent = webSocket.send("""{"type":"res","id":$id,"ok":true,"payload":$payload}""")
           if (sent && request.method == "connect" && request.params["role"]?.jsonPrimitive?.content == "operator") {
-            identity.operatorHello.complete(number)
+            identity.operatorHello.complete(number to webSocket)
           }
         } catch (error: GatewayRequestRejected) {
           val code = JsonPrimitive(error.gatewayError.code)

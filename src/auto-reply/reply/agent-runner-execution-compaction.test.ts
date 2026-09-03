@@ -17,7 +17,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 async function executeTestTurn(
   params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
@@ -75,7 +75,7 @@ describe("executeAgentTurn: compaction events", () => {
 
     expect(result.kind).toBe("success");
     expect(onCompactionStart).toHaveBeenCalledTimes(1);
-    expect(onCompactionEnd).toHaveBeenCalledTimes(1);
+    expect(onCompactionEnd).toHaveBeenCalledWith({ completed: true });
     expect(onBlockReply).not.toHaveBeenCalled();
   });
 
@@ -432,6 +432,7 @@ describe("executeAgentTurn: compaction events", () => {
 
   it("emits an incomplete compaction notice when compaction ends without completing", async () => {
     const onBlockReply = vi.fn();
+    const onCompactionEnd = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
       await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
       await params.onAgentEvent?.({
@@ -442,11 +443,12 @@ describe("executeAgentTurn: compaction events", () => {
     });
 
     const result = await executeTestTurn(
-      { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
+      { followupRun: createNotifyUserRun(), opts: { onBlockReply, onCompactionEnd } },
       { commandBody: "hello" },
     );
 
     expect(result.kind).toBe("success");
+    expect(onCompactionEnd).toHaveBeenCalledWith({ completed: false });
     expectBlockReplyCall(onBlockReply, 0, {
       text: "🧹 Compacting context...",
       isCompactionNotice: true,

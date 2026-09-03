@@ -141,6 +141,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -180,6 +181,7 @@ import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -297,6 +299,7 @@ fun ChatScreen(
   val messages by viewModel.chatMessages.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
+  val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
@@ -698,7 +701,7 @@ fun ChatScreen(
   }
 
   val newChatEnabled =
-    !modelSelectionLocked &&
+    !sessionCreating && !modelSelectionLocked &&
       canStartNewChat(
         pendingRunCount = pendingRunCount,
         hasQueuedMessage = pendingAssistantAutoSend != null,
@@ -729,6 +732,7 @@ fun ChatScreen(
       onOpenSidebar = onOpenSidebar,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
+      sessionCreating = sessionCreating,
       newChatEnabled = newChatEnabled,
       workspaceGit = workspaceGit,
       branches = sessionBranches,
@@ -857,7 +861,7 @@ fun ChatScreen(
           adminAuthorized = canAdminSessionSettings,
           connected = gatewayConnectionDisplay.isConnected,
           gatewayAvailable = healthOk,
-          loading = historyLoading,
+          loading = historyLoading || sessionCreating,
           sending = sendInFlight,
           activeRun = pendingRunCount > 0,
           streaming = streamingAssistantText != null,
@@ -1099,6 +1103,7 @@ private fun ChatHeader(
   onOpenSidebar: () -> Unit,
   healthOk: Boolean,
   pendingRunCount: Int,
+  sessionCreating: Boolean,
   newChatEnabled: Boolean,
   workspaceGit: Boolean,
   branches: List<SessionBranch>,
@@ -1114,6 +1119,7 @@ private fun ChatHeader(
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   val statusLabel =
     when {
+      sessionCreating -> nativeString("Loading")
       pendingRunCount > 0 -> nativeString("Working")
       healthOk -> nativeString("Ready")
       else -> nativeString("Offline")
@@ -1209,7 +1215,11 @@ private fun ChatHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
           )
-          Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+          if (sessionCreating) {
+            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = ClawTheme.colors.textMuted)
+          } else {
+            Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+          }
         }
       }
     }
@@ -2253,7 +2263,7 @@ private fun ProgressCardPill(
       nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
     }
 
-  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("chat-progress-card")) {
     Surface(
       onClick = { expanded = !expanded },
       modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -2500,15 +2510,6 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    progressCard?.let { card ->
-      ProgressCardPill(
-        card = card,
-        hasActiveRun = pendingRunCount > 0,
-        // Keep the editor and run controls visible when progress expands above the keyboard.
-        modifier = Modifier.weight(1f, fill = false),
-      )
-    }
-
     if (shouldShowSlashCommandMenu(value)) {
       SlashCommandPanel(
         commands = slashCommands,
@@ -2516,6 +2517,12 @@ private fun ChatComposer(
         // Reserve the editor and run controls before measuring suggestions.
         modifier = Modifier.weight(1f, fill = false),
       )
+    }
+
+    if (voiceNoteState is VoiceNoteRecorderState.Recording || voiceNoteState is VoiceNoteRecorderState.Preparing) {
+      progressCard?.let { card ->
+        ProgressCardPill(card = card, hasActiveRun = pendingRunCount > 0, modifier = Modifier.weight(1f, fill = false))
+      }
     }
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2531,6 +2538,8 @@ private fun ChatComposer(
         VoiceNotePreparing(modifier = Modifier.weight(1f))
       } else {
         ChatInputPill(
+          progressCard = progressCard,
+          progressCardHasActiveRun = pendingRunCount > 0,
           value = value,
           onValueChange = onValueChange,
           onPickImages = onPickImages,
@@ -3089,6 +3098,8 @@ internal fun canSelectChatPermissionMode(
 
 @Composable
 private fun ChatInputPill(
+  progressCard: ChatProgressCard?,
+  progressCardHasActiveRun: Boolean,
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -3125,7 +3136,7 @@ private fun ChatInputPill(
   val draftStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
 
   Surface(
-    modifier = modifier,
+    modifier = modifier.testTag("chat-composer-surface"),
     shape = RoundedCornerShape(20.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
@@ -3133,6 +3144,9 @@ private fun ChatInputPill(
     shadowElevation = 1.dp,
   ) {
     Column {
+      progressCard?.let { card ->
+        ProgressCardPill(card = card, hasActiveRun = progressCardHasActiveRun, modifier = Modifier.weight(1f, fill = false))
+      }
       ChatTextFieldValueAdapter(
         value = value,
         onValueChange = onValueChange,
@@ -3144,7 +3158,7 @@ private fun ChatInputPill(
           textStyle = draftStyle.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
-          maxLines = 4,
+          maxLines = 6,
           modifier =
             Modifier
               .fillMaxWidth()

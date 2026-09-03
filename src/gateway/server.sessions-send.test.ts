@@ -23,6 +23,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { captureEnv } from "../test-utils/env.js";
 import { runDirectSessionAnnounceScenario } from "./server.sessions-send.direct-announce.test-support.js";
@@ -630,24 +631,43 @@ describe("sessions_send label lookup", () => {
 });
 
 describe("sessions_send agent targeting", () => {
-  it(
-    "starts configured agent main session by agentId before sending",
-    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+  // The announce/ping-pong flow is detached from the tool request and keeps
+  // running agent steps for agent:orion:main; drain it outside the row's own
+  // timeout budget so a slow tail neither fails the row nor pollutes the next.
+  afterEach(
     async () => {
+      await waitForGatewayActiveWork(SESSION_SEND_E2E_TIMEOUT_MS * 3);
+    },
+    SESSION_SEND_E2E_TIMEOUT_MS * 3 + 1_000,
+  );
+
+  it.each([
+    { name: "default cross-agent access", tools: undefined },
+    {
+      name: "explicit cross-agent access",
+      tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+    },
+    {
+      name: "disabled agent-to-agent access",
+      tools: { agentToAgent: { enabled: false } },
+      error: "Agent-to-agent messaging is disabled",
+    },
+    {
+      name: "restrictive allow list",
+      tools: { agentToAgent: { allow: ["main"] } },
+      error: "denied by tools.agentToAgent.allow",
+    },
+  ] satisfies Array<{ name: string; tools: OpenClawConfig["tools"]; error?: string }>)(
+    "enforces $name when targeting a configured agent main session by agentId",
+    { timeout: SESSION_SEND_E2E_TIMEOUT_MS },
+    async ({ tools, error }) => {
       const configPath = process.env.OPENCLAW_CONFIG_PATH;
       if (!configPath) {
         throw new Error("OPENCLAW_CONFIG_PATH missing in gateway test environment");
       }
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
       const config: OpenClawConfig = {
-        tools: {
-          sessions: {
-            visibility: "all",
-          },
-          agentToAgent: {
-            enabled: true,
-          },
-        },
+        ...(tools ? { tools } : {}),
         agents: {
           list: [{ id: "main", default: true }, { id: "orion" }],
         },
@@ -691,6 +711,22 @@ describe("sessions_send agent targeting", () => {
           message: "hello orion",
           timeoutSeconds: 5,
         });
+        if (error) {
+          expect(spy.mock.calls.map(([opts]) => opts)).not.toContainEqual(
+            expect.objectContaining({ sessionKey: "agent:orion:main" }),
+          );
+          expect(
+            loadSessionEntry({
+              sessionKey: "agent:orion:main",
+              storePath: testState.sessionStorePath,
+            }),
+          ).toBeUndefined();
+          expect(result.details).toMatchObject({
+            status: "forbidden",
+            error: expect.stringContaining(error),
+          });
+          return;
+        }
         expectSessionsSendDetails(result, {
           reply: "orion response",
           sessionKey: "agent:orion:main",

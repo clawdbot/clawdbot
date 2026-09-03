@@ -14,7 +14,7 @@ import {
   FailoverError,
   buildFailoverRemediationHint,
   describeFailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   isFailoverError,
   resolveModelFallbackError,
   type FallbackAttemptRecord,
@@ -289,7 +289,7 @@ export async function runFallbackAttempt<T>(params: {
   }
   // Thrown, captured-preflight and callback-returned stops share this exit.
   // Do not replay tool effects or replace the original wrapper with its cause.
-  if (findCliMaxTurnsError(attemptError)) {
+  if (findCliTerminalStopError(attemptError)) {
     throw attemptError;
   }
   if (!runResult.ok) {

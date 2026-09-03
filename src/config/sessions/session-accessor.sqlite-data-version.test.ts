@@ -20,7 +20,7 @@ import {
 import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
 
@@ -29,9 +29,13 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./session-accessor.sqlite-status.js")>();
   return {
     ...actual,
-    parseSessionEntryJson: (row: Parameters<typeof actual.parseSessionEntryJson>[0]) => {
-      parseSessionEntryCalls(row.entry_json);
-      return actual.parseSessionEntryJson(row);
+    parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
+      // Snapshot/publication rows omit the current-id column; exact writer CAS reads
+      // share this decoder but are outside the cache work measured here.
+      if (args[0].current_session_id === undefined) {
+        parseSessionEntryCalls(args[0].entry_json);
+      }
+      return actual.parseSessionEntryJson(...args);
     },
   };
 });
@@ -142,7 +146,7 @@ describe("SQLite session entry cache", () => {
     expect(snapshot.keys).toEqual([scope.sessionKey]);
     expect(snapshot.entries.size).toBe(readable ? 1 : 0);
     expect(readSessionEntryCount(database)).toBe(readable ? 1 : 0);
-    expect(readSessionEntryKeys(database)).toEqual(readable ? [scope.sessionKey] : []);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(readable ? [scope.sessionKey] : []);
     expect(snapshot.entries.get(scope.sessionKey)?.skillsSnapshot).toBeUndefined();
   });
 
@@ -734,7 +738,7 @@ describe("SQLite session entry cache", () => {
   it("bypasses the cache in a transaction and reuses the persisted snapshot after rollback", async () => {
     const scope = createSessionScope("transaction-rollback");
     await upsertSessionEntryCore(scope, { label: "before", sessionId: "rollback", updatedAt: 1 });
-    const borrowedBefore = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedBefore = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedBefore?.label).toBe("before");
     if (!borrowedBefore) {
       throw new Error("missing seeded rollback entry");
@@ -752,7 +756,7 @@ describe("SQLite session entry cache", () => {
     ).toThrow("roll back cache probe");
 
     parseSessionEntryCalls.mockClear();
-    const borrowedAfter = openSessionEntryReadView(scope).get(scope.sessionKey);
+    const borrowedAfter = listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
     expect(borrowedAfter).toStrictEqual(borrowedBefore);
     expect(borrowedAfter?.label).toBe("before");
     expect(parseSessionEntryCalls).not.toHaveBeenCalled();

@@ -17,17 +17,12 @@ type DuplicateSuffix = {
   label: string;
 };
 
+// Bound synchronous parsing so large JSON messages cannot freeze the render loop.
 const MAX_JSON_AUTOPARSE_CHARS = 20_000;
 
-/**
- * Detect whether a trimmed string is a JSON object or array.
- * Must start with `{`/`[` and end with `}`/`]` and parse successfully.
- * Size-capped to prevent render-loop DoS from large JSON messages.
- */
 export function detectJson(text: string): { parsed: unknown; text: string } | null {
   const trimmed = text.trim();
 
-  // Enforce size cap to prevent UI freeze from multi-MB JSON payloads
   if (trimmed.length > MAX_JSON_AUTOPARSE_CHARS) {
     return null;
   }
@@ -47,7 +42,6 @@ export function detectJson(text: string): { parsed: unknown; text: string } | nu
   return null;
 }
 
-/** Build a short summary label for collapsed JSON (type + key count or array length). */
 function jsonSummaryLabel(parsed: unknown): string {
   if (Array.isArray(parsed)) {
     return t(
@@ -93,24 +87,6 @@ export function resolveMessageDisplayMarkdown(
   return normalizeRoleForGrouping(normalizedMessage.role) === "assistant"
     ? stripThinkingTags(markdown).trim()
     : markdown.trim();
-}
-
-export function resolveMessageMarkdownRenderOptions(options: {
-  role: string;
-  isStreaming?: boolean;
-  interactiveImages?: boolean;
-  linkFavicons?: boolean;
-}): MarkdownRenderOptions {
-  return {
-    assistantTranscriptRoleHeaders: options.role === "assistant",
-    codeBlockChrome: options.role === "user" ? "none" : "copy",
-    codeBlockInteraction: options.role === "assistant" ? "interactive" : "static",
-    fileLinks: true,
-    interactiveImages: Boolean(options.interactiveImages),
-    sessionLinks: true,
-    tableInteractions: "enabled",
-    linkFavicons: Boolean(options.linkFavicons) && !options.isStreaming,
-  };
 }
 
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.

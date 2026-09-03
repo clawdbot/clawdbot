@@ -24,6 +24,8 @@ const mcpMocks = vi.hoisted(() => ({
   staticFacade: vi.fn(),
   threadConfigFacade: vi.fn(),
   requesterCalls: 0,
+  requesterCollisionTool: false,
+  requesterDispose: vi.fn(async () => undefined),
   requesterParams: [] as Array<Record<string, unknown>>,
   staticDiagnosticNotice: undefined as string | undefined,
   staticFailure: undefined as Error | undefined,
@@ -41,8 +43,24 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
       ...args: Parameters<typeof actual.materializeRequesterScopedMcpToolsForHarnessRun>
     ) => {
       mcpMocks.requesterCalls += 1;
-      mcpMocks.requesterParams.push(args[0] as Record<string, unknown>);
-      return undefined;
+      const params = args[0] as Record<string, unknown>;
+      mcpMocks.requesterParams.push(params);
+      if (!mcpMocks.requesterCollisionTool) {
+        return undefined;
+      }
+      const reserved = new Set(params.reservedToolNames as string[] | undefined);
+      const name = reserved.has("fake__show") ? "fake__show_2" : "fake__show";
+      const tool = {
+        name,
+        description: "Requester-scoped MCP collision fixture.",
+        parameters: { type: "object", properties: {} },
+        execute: vi.fn(async () => ({ content: [{ type: "text" as const, text: "scoped" }] })),
+      };
+      return {
+        tools: [tool],
+        advertisedTools: [tool],
+        dispose: mcpMocks.requesterDispose,
+      };
     },
     loadCodexBundleMcpThreadConfig: async (
       ...args: Parameters<typeof actual.loadCodexBundleMcpThreadConfig>
@@ -87,7 +105,7 @@ vi.mock("openclaw/plugin-sdk/codex-mcp-projection", async (importOriginal) => {
       mcpMocks.authorityResolvers.push(params.resolve);
       return actual.runWithCronCreatorAuthorityCapabilityResolver(params as never);
     },
-    materializeStaticMcpToolsForScheduledHarnessRun: async (params: Record<string, unknown>) => {
+    materializeStaticMcpToolsForHarnessRun: async (params: Record<string, unknown>) => {
       mcpMocks.staticCalls.push(params);
       mcpMocks.staticFacade(params);
       if (mcpMocks.staticFailure) {
@@ -178,12 +196,14 @@ beforeEach(() => {
   mcpMocks.staticCalls.length = 0;
   mcpMocks.staticToolExecutes.length = 0;
   mcpMocks.requesterCalls = 0;
+  mcpMocks.requesterCollisionTool = false;
   mcpMocks.requesterParams.length = 0;
   mcpMocks.threadConfigCalls.length = 0;
   mcpMocks.staticDiagnosticNotice = undefined;
   mcpMocks.staticFailure = undefined;
   mcpMocks.staticFailureGate = undefined;
   mcpMocks.dispose.mockClear();
+  mcpMocks.requesterDispose.mockClear();
   mcpMocks.captureFacade.mockClear();
   mcpMocks.staticFacade.mockClear();
   mcpMocks.threadConfigFacade.mockClear();
@@ -546,26 +566,86 @@ describe("runCodexAppServerAttempt configured MCP ownership", () => {
     },
   );
 
-  it("captures a restricted ordinary turn without inventing intentionally disabled native MCP", async () => {
+  it("keeps configured and requester MCP unique when the native surface is unavailable", async () => {
     const sessionFile = path.join(tempDir, "session-native-mcp-restricted.jsonl");
     const params = createParams(sessionFile, path.join(tempDir, "workspace-native-mcp-restricted"));
     configureFakeMcp(params);
+    params.config!.mcp!.servers!.fake!.codex = { defaultToolsApprovalMode: "auto" };
     params.toolsAllow = ["cron", "fake__show"];
+    mcpMocks.requesterCollisionTool = true;
+    const requestApproval = vi.fn(async (request: { isMcpToolApprovalActive?: () => boolean }) => {
+      expect(request.isMcpToolApprovalActive?.()).toBe(true);
+      return { id: "plugin:mcp-dynamic" };
+    });
+    const waitForApproval = vi.fn(async () => ({
+      decision: "allow-always" as const,
+      terminalReason: "user" as const,
+    }));
+    params.hostCapabilities = Object.freeze({
+      ...params.hostCapabilities,
+      requestApproval,
+      waitForApproval,
+    });
 
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
+    const threadStart = harness.requests.find((request) => request.method === "thread/start")
+      ?.params as { config?: Record<string, unknown>; dynamicTools?: unknown } | undefined;
+    const dynamicTools = JSON.stringify(threadStart?.dynamicTools ?? []);
+    expect(mcpMocks.staticCalls).toHaveLength(1);
+    expect(mcpMocks.staticCalls[0]).toMatchObject({
+      agentId: "main",
+      projectedMcpServers: expect.objectContaining({ fake: expect.any(Object) }),
+      requestInteractiveCodexApproval: expect.any(Function),
+    });
+    expect(threadStart?.config).not.toHaveProperty("mcp_servers");
+    expect(dynamicTools.match(/fake__show"/gu)).toHaveLength(1);
+    expect(dynamicTools.match(/fake__show_2"/gu)).toHaveLength(1);
+
+    const requestInteractiveCodexApproval = mcpMocks.staticCalls[0]!
+      .requestInteractiveCodexApproval as (params: {
+      safeToolName: string;
+      toolCallId: string;
+      serverName: string;
+      toolName: string;
+      mode: "auto";
+      isActive: () => boolean;
+    }) => Promise<void>;
+    await requestInteractiveCodexApproval({
+      safeToolName: "fake__show",
+      toolCallId: "call-fake-show",
+      serverName: "fake",
+      toolName: "show",
+      mode: "auto",
+      isActive: () => true,
+    });
+    expect(requestApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+        mcpTool: { server: "fake", tool: "show" },
+        toolCallId: "call-fake-show",
+      }),
+    );
+    expect(waitForApproval).toHaveBeenCalledOnce();
+
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toBeDefined();
 
     expect(harness.requests.map((request) => request.method)).not.toContain("mcpServerStatus/list");
-    expect(mcpMocks.staticCalls).toHaveLength(0);
     expect(mcpMocks.captureCalls).toHaveLength(1);
-    expect(mcpMocks.captureCalls[0]!.storedNames).not.toContain("fake__show");
+    expect(mcpMocks.captureCalls[0]!.storedNames).toEqual(
+      expect.arrayContaining(["fake__show", "fake__show_2"]),
+    );
+    expect(new Set(mcpMocks.captureCalls[0]!.storedNames).size).toBe(
+      mcpMocks.captureCalls[0]!.storedNames.length,
+    );
     expect(mcpMocks.captureCalls[0]!.provenance).toEqual({
       version: 1,
       source: "final-executable-surface",
     });
+    expect(mcpMocks.dispose).toHaveBeenCalledOnce();
+    expect(mcpMocks.requesterDispose).toHaveBeenCalledOnce();
   });
 
   it("withholds final provenance when a sender-attributed turn cannot snapshot native MCP", async () => {

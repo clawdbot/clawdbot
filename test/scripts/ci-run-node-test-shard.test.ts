@@ -10,9 +10,10 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import os, { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildChildEnv,
   clonePersistentCacheSlots,
@@ -23,6 +24,7 @@ import {
   runShardPlans,
 } from "../../scripts/ci-run-node-test-shard.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
+import { createDeferred } from "../helpers/promise.js";
 
 const scratchDirs: string[] = [];
 
@@ -33,6 +35,7 @@ function makeScratchDir(): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   for (const dir of scratchDirs.splice(0)) {
     rmSync(dir, { force: true, recursive: true });
   }
@@ -135,42 +138,124 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(bare.OPENCLAW_VITEST_INCLUDE_FILE).toBeUndefined();
   });
 
-  it("runs plans with bounded concurrency and distinct cache paths", async () => {
-    const scratchDir = makeScratchDir();
-    const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
-    let active = 0;
-    let peakActive = 0;
-    const exitCode = await runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-          { configs: ["a.config.ts"], shard_name: "a" },
-          { configs: ["b.config.ts"], shard_name: "b" },
-          { configs: ["c.config.ts"], shard_name: "c" },
-        ]),
-      }),
-      {
-        concurrency: 2,
-        env: {},
-        runChild: async (
-          args: string[],
-          childEnv: Record<string, string | undefined>,
-          label: string,
-        ) => {
-          active += 1;
-          peakActive = Math.max(peakActive, active);
-          await Promise.resolve();
-          seen.push({ args, cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, label });
-          active -= 1;
-          return 0;
+  it.each([
+    {
+      name: "local explicit concurrency",
+      cpus: 2,
+      gib: 16,
+      ci: undefined,
+      actions: undefined,
+      requested: 3,
+      expected: 3,
+    },
+    {
+      name: "CI capacity boundary",
+      cpus: 8,
+      gib: 24,
+      ci: "true",
+      actions: undefined,
+      requested: 2,
+      expected: 2,
+    },
+    {
+      name: "CPU-constrained CI",
+      cpus: 4,
+      gib: 32,
+      ci: "true",
+      actions: undefined,
+      requested: 2,
+      expected: 1,
+    },
+    {
+      name: "memory-constrained CI",
+      cpus: 8,
+      gib: 16,
+      ci: "true",
+      actions: undefined,
+      requested: 2,
+      expected: 1,
+    },
+    {
+      name: "unknown CI CPUs",
+      cpus: Number.NaN,
+      gib: 32,
+      ci: "true",
+      actions: undefined,
+      requested: 2,
+      expected: 1,
+    },
+    {
+      name: "unknown CI memory",
+      cpus: 8,
+      gib: Number.NaN,
+      ci: "true",
+      actions: undefined,
+      requested: 2,
+      expected: 1,
+    },
+    {
+      name: "CI two-plan ceiling",
+      cpus: 16,
+      gib: 64,
+      ci: "true",
+      actions: undefined,
+      requested: 3,
+      expected: 2,
+    },
+    {
+      name: "GitHub Actions capacity",
+      cpus: 4,
+      gib: 32,
+      ci: undefined,
+      actions: "true",
+      requested: 2,
+      expected: 1,
+    },
+  ])(
+    "runs plans with bounded concurrency and cache isolation for $name",
+    async ({ cpus, gib, ci, actions, requested, expected }) => {
+      vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
+      vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
+      const scratchDir = makeScratchDir();
+      const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
+      let active = 0;
+      let peakActive = 0;
+      const exitCode = await runShardPlans(
+        resolveShardPlans({
+          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+            { configs: ["a.config.ts"], shard_name: "a" },
+            { configs: ["b.config.ts"], shard_name: "b" },
+            { configs: ["c.config.ts"], shard_name: "c" },
+          ]),
+        }),
+        {
+          concurrency: ci || actions ? undefined : requested,
+          env: {
+            CI: ci,
+            GITHUB_ACTIONS: actions,
+            OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(requested),
+          },
+          runChild: async (
+            args: string[],
+            childEnv: Record<string, string | undefined>,
+            label: string,
+          ) => {
+            active += 1;
+            peakActive = Math.max(peakActive, active);
+            await Promise.resolve();
+            seen.push({ args, cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, label });
+            active -= 1;
+            return 0;
+          },
+          scratchDir,
         },
-        scratchDir,
-      },
-    );
-    expect(exitCode).toBe(0);
-    expect(peakActive).toBe(2);
-    expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
-    expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
-  });
+      );
+      expect(exitCode).toBe(0);
+      expect(peakActive).toBe(expected);
+      expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
+      expect(new Set(seen.map((run) => run.cache)).size).toBe(expected === 1 ? 1 : 3);
+    },
+  );
 
   it("keeps readable child output separate from membership timing spans", async () => {
     const timingKey =
@@ -459,35 +544,75 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     expect(existsSync(transform)).toBe(false);
   });
 
-  it("stops scheduling new plans after a failure and reports the first failing code", async () => {
-    const scratchDir = makeScratchDir();
-    const started: string[] = [];
-    const exitCode = await runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-          { configs: ["a.config.ts"], shard_name: "a" },
-          { configs: ["b.config.ts"], shard_name: "b" },
-          { configs: ["c.config.ts"], shard_name: "c" },
-          { configs: ["d.config.ts"], shard_name: "d" },
-        ]),
-      }),
-      {
-        concurrency: 1,
-        env: {},
-        runChild: async (
-          _args: string[],
-          _env: Record<string, string | undefined>,
-          label: string,
-        ) => {
-          started.push(label);
-          return label === "b" ? 7 : 0;
+  it.each(["exit", "rejection"] as const)(
+    "joins admitted plans and stops scheduling after a %s failure",
+    async (failure) => {
+      const started: string[] = [];
+      const held = createDeferred();
+      const failed = createDeferred();
+      const children: Promise<number>[] = [];
+      const error = new Error("second child rejected");
+      let settled = false;
+      const pending = runShardPlans(
+        resolveShardPlans({
+          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+            ["a", "b", "c", "d"].map((name) => ({
+              configs: [`${name}.config.ts`],
+              shard_name: name,
+            })),
+          ),
+        }),
+        {
+          concurrency: 2,
+          env: {},
+          scratchDir: makeScratchDir(),
+          runChild: (_args, _env, label) => {
+            const child = (async () => {
+              started.push(label);
+              if (label === "a") {
+                await held.promise;
+              }
+              if (label === "b") {
+                failed.resolve();
+                if (failure === "rejection") {
+                  throw error;
+                }
+                return 7;
+              }
+              return 0;
+            })();
+            children.push(child);
+            return child;
+          },
         },
-        scratchDir,
-      },
-    );
-    expect(exitCode).toBe(7);
-    expect(started).toEqual(["a", "b"]);
-  });
+      )
+        .then(
+          (exitCode) => ({ exitCode, error: undefined }),
+          (cause: unknown) => ({ exitCode: undefined, error: cause }),
+        )
+        .finally(() => {
+          settled = true;
+        });
+      try {
+        await failed.promise;
+        await nextTurn();
+        expect(settled).toBe(false);
+        expect(started).toEqual(["a", "b"]);
+      } finally {
+        held.resolve();
+        await nextTurn();
+        await Promise.allSettled(children);
+        await pending;
+      }
+      const outcome = await pending;
+      if (failure === "rejection") {
+        expect(outcome.error).toBe(error);
+      } else {
+        expect(outcome.exitCode).toBe(7);
+      }
+      expect(started).toEqual(["a", "b"]);
+    },
+  );
 
   it("continues through failed plans only when explicitly requested", async () => {
     const started: string[] = [];

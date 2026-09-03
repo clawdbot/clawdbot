@@ -338,6 +338,7 @@ jobs:
           fi
 
           cat .local/plugin-clawhub-release-plan.json
+          jq -r '.warnings[]? | "- Warning: \(.)"' .local/plugin-clawhub-release-plan.json >> "$GITHUB_STEP_SUMMARY"
 
           candidate_count="$(jq -r '.candidates | length' .local/plugin-clawhub-release-plan.json)"
           bootstrap_candidate_count="$(jq -r '.bootstrapCandidates | length' .local/plugin-clawhub-release-plan.json)"

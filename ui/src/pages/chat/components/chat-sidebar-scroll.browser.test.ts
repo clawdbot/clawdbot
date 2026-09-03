@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import "../../../styles.css";
-import "../../../styles/chat.css";
+import "../../../styles/chat.ts";
 import "../../../styles/chat/side-panel.css";
 import type { SidebarContent } from "./chat-sidebar.ts";
 import "./chat-sidebar.ts";

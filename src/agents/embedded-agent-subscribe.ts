@@ -70,12 +70,12 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
   const pendingMessagingTargets = state.pendingMessagingTargets;
   const replyDelivery = createReplyDelivery({ params, state, log });
   const {
-    clearDeferredAssistantEvents,
+    clearAssistantStream,
     clearDeferredBlockReplies,
     emitAssistantStreamData,
     emitBlockReply,
     finalizeAssistantTexts,
-    flushDeferredAssistantEvents,
+    flushAssistantStream,
     flushDeferredBlockReplies,
   } = replyDelivery;
 
@@ -266,6 +266,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     log,
     blockChunker,
     emitBlockReply: replyDelivery.emitBlockReply,
+    flushAssistantStream,
     pendingBlockReplyTasks: replyDelivery.pendingBlockReplyTasks,
     pushAssistantText: replyDelivery.pushAssistantText,
     shouldSkipAssistantText: replyDelivery.shouldSkipAssistantText,
@@ -327,7 +328,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     state.pendingToolMediaDeliveryFailed = false;
     state.visibleBlockReplyCount = 0;
     state.deferBlockReplyDelivery = typeof params.onBeforeTerminalDelivery === "function";
-    clearDeferredAssistantEvents();
+    clearAssistantStream();
     clearDeferredBlockReplies();
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
@@ -399,9 +400,9 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     flushBlockReplyBuffer,
     emitAssistantStreamData,
     emitBlockReply,
-    flushDeferredAssistantEvents,
+    flushAssistantStream,
     flushDeferredBlockReplies,
-    clearDeferredAssistantEvents,
+    clearAssistantStream,
     clearDeferredBlockReplies,
     emitReasoningStream,
     consumePartialReplyDirectives,
@@ -436,6 +437,7 @@ export function subscribeEmbeddedAgentSession(params: SubscribeEmbeddedAgentSess
     // Mark as unsubscribed FIRST to prevent waitForCompactionRetry from creating
     // new un-resolvable promises during teardown.
     state.unsubscribed = true;
+    clearAssistantStream();
     cleanupRunToolStartData(params.runId);
     state.liveEditDiffStateById.clear();
     // Reject pending compaction wait to unblock awaiting code.

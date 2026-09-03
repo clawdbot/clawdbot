@@ -24,7 +24,7 @@ import {
 } from "../daemon-cli/restart-health.js";
 import { runRestartScript } from "./restart-helper.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import { createUpdateConfigSnapshot } from "./update-command-config.js";
+import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import {
   DEFINITION_DENIAL,
   runUpdatedInstallGatewayCommand,
@@ -226,6 +226,7 @@ export async function maybeRestartService(params: {
         ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
         env: activation.serviceEnv,
         requireRunningService: opts.requireRunningService,
+        settle: { probes: 12 },
         supervisorKeepsAlive: await hasLoadedLaunchdKeepAliveSupervisor({
           service,
           env: activation.serviceEnv,
@@ -356,6 +357,7 @@ export async function maybeRestartService(params: {
               requireRunningService: true,
               attempts: POST_REFRESH_ALREADY_HEALTHY_ATTEMPTS,
               delayMs: POST_REFRESH_ALREADY_HEALTHY_DELAY_MS,
+              settle: { probes: 12 },
             });
             refreshedGatewayAlreadyHealthy = health.healthy;
             if (refreshedGatewayAlreadyHealthy && !activation.opts.json) {

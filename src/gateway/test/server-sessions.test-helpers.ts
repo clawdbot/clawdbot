@@ -360,9 +360,6 @@ function createGatewaySessionsTestHarness(startServer: boolean, setup?: GatewayS
   });
 
   const openClient = async (opts?: Parameters<typeof gatewayTestHelpers.connectOk>[1]) => {
-    // Case setup can pin config through real IO before the mocked Gateway reads it.
-    // Publish the current fixture roster so admitted agents have dispatch owners.
-    (await getGatewayConfigModule()).clearRuntimeConfigSnapshot();
     await gatewayTestHelpers.prepareGatewayReplyRuntimeForTest({ force: true });
     return await requireHarness().openClient(opts);
   };

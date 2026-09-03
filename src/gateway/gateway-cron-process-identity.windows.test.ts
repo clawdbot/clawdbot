@@ -2,6 +2,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
 describe.skipIf(process.platform !== "win32")("Windows cron process identity", () => {
@@ -19,7 +20,7 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
       });
       let jobId: string | undefined;
       let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
-      try {
+      const runCronProof = async () => {
         await instance.startGateway();
         client = await connectGatewayClient({
           url: instance.url,
@@ -74,7 +75,8 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           ownerStartTime: expect.any(Number),
           finishedAtMs: expect.any(Number),
         });
-      } finally {
+      };
+      await runQaGatewayFixture(runCronProof, async () => {
         if (jobId && client) {
           await client.request("cron.remove", { id: jobId }).catch(() => undefined);
         }
@@ -82,7 +84,7 @@ describe.skipIf(process.platform !== "win32")("Windows cron process identity", (
           await disconnectGatewayClient(client).catch(() => undefined);
         }
         await instance.cleanup();
-      }
+      });
     },
   );
 });

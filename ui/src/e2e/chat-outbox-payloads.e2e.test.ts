@@ -14,6 +14,7 @@ import {
   requireRecord,
   readOutboxPayloadAttachments,
 } from "./chat-flow.test-support.ts";
+import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const file = {
@@ -71,33 +72,6 @@ async function readPayloadBytes(page: Page, key: string): Promise<string[] | nul
   );
 }
 
-async function readComposerDraftContents(page: Page) {
-  return page.evaluate(async () => {
-    const result = <T>(request: IDBRequest<T>) =>
-      new Promise<T>((resolve, reject) => {
-        request.addEventListener("success", () => resolve(request.result), { once: true });
-        request.addEventListener(
-          "error",
-          () => reject(request.error ?? new Error("IndexedDB request failed")),
-          { once: true },
-        );
-      });
-    const database = await result(indexedDB.open("openclaw-control-ui"));
-    try {
-      const drafts = (await result(
-        database.transaction("composerDrafts").objectStore("composerDrafts").getAll(),
-      )) as Array<{ text: string; attachments: unknown[]; goalMode?: unknown }>;
-      return drafts.map((draft) => ({
-        text: draft.text,
-        attachmentCount: draft.attachments.length,
-        goalMode: draft.goalMode ?? null,
-      }));
-    } finally {
-      database.close();
-    }
-  });
-}
-
 async function stage(page: Page, message: string) {
   await composerFor(page).fill(message);
   await paneFor(page).locator(".agent-chat__file-input").setInputFiles(file);
@@ -112,6 +86,7 @@ suite.define(() => {
         { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
         async ({ page }) => {
           const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
+          const draftScope = `chat:v3:${destination}\u0000agent:main`;
           const gateway = await installMockGateway(page, {
             sessionKey: destination,
             sessions: [
@@ -134,6 +109,12 @@ suite.define(() => {
           await gateway.setOnline(false);
           await waitForControlUiGatewayReconnecting(page);
           await stage(page, "Mock Gateway: retained v3 Blob submission");
+          await waitForCommittedComposerDraft(
+            page,
+            draftScope,
+            "Mock Gateway: retained v3 Blob submission",
+            [file.name],
+          );
           await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
           await expect.poll(async () => (await readQueue(page)).length).toBe(1);
           const original = (await readQueue(page))[0]!;
@@ -142,11 +123,8 @@ suite.define(() => {
             reference,
             "Admission must own the complete Blob before seeding the legacy envelope",
           );
-          // Queue admission precedes durable composer clearing. Finish the fixture
-          // before navigation can abort that write and restore an occupied destination.
-          await expect
-            .poll(() => readComposerDraftContents(page))
-            .toEqual([{ text: "", attachmentCount: 0, goalMode: null }]);
+          // Finish the durable clear before deleting v4's revision fence for the legacy seed.
+          await waitForCommittedComposerDraft(page, draftScope, null, 0);
           await page.route("**/outbox-legacy-seed", (route) =>
             route.fulfill({ contentType: "text/html", body: "Synthetic v3 metadata seed" }),
           );

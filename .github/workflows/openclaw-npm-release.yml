@@ -398,94 +398,6 @@ jobs:
           persist-credentials: false
           sparse-checkout: scripts
 
-      - name: Verify preflight run metadata
-        id: preflight_run
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
-          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
-          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
-          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
-          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
-          RUN_KIND: preflight
-          WORKFLOW_REF: ${{ github.ref }}
-          WORKFLOW_SHA: ${{ github.workflow_sha }}
-        run: |
-          set -euo pipefail
-          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
-          export EXPECTED_RELEASE_SHA
-          preflight_run_path="repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}"
-          if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
-            [[ "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
-            preflight_run_path+="/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
-          fi
-          preflight_run_metadata="$(gh api "$preflight_run_path" --jq '{run_attempt,path}')"
-          PREFLIGHT_RUN_ATTEMPT="$(jq -r .run_attempt <<<"$preflight_run_metadata")"
-          RUN_WORKFLOW_PATH="$(jq -r .path <<<"$preflight_run_metadata")"
-          [[ "$PREFLIGHT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
-          export PREFLIGHT_RUN_ATTEMPT RUN_WORKFLOW_PATH
-          RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --attempt "$PREFLIGHT_RUN_ATTEMPT" --repo "$GITHUB_REPOSITORY" --json databaseId,attempt,workflowName,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
-          preflight_head_sha="$(jq -r .headSha <<<"$RUN_JSON")"
-          preflight_head_branch="$(jq -r .headBranch <<<"$RUN_JSON")"
-          full_release_preflight=false
-          if [[ "$(jq -r .workflowName <<<"$RUN_JSON")" == "Full Release Validation" ]]; then
-            # verify-run has bound the selected FRV run, attempt, path, and completion.
-            full_release_preflight=true
-          fi
-          extended_stable_preflight=false
-          if [[ "$full_release_preflight" != "true" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH" ]]; then
-            extended_stable_preflight=true
-          fi
-          active_branch_preflight=false
-          if [[ "$preflight_head_branch" != release-publish/* && "refs/heads/${preflight_head_branch}" == "$WORKFLOW_REF" ]]; then
-            active_branch_preflight=true
-          fi
-          protected_release_publish_preflight=false
-          if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
-            workflow_sha_prefix="${BASH_REMATCH[1]}"
-            [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
-              echo "Protected release-publish tag does not match the workflow SHA at the npm publish boundary." >&2
-              exit 1
-            }
-            workflow_tag="${WORKFLOW_REF#refs/tags/}"
-            # The npm-release environment can wait after request validation.
-            # Re-read the tag here so a later move cannot authorize publication.
-            remote_workflow_sha="$(
-              gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${workflow_tag}" \
-                --jq '.object | select(.type == "commit") | .sha | select(test("^[a-f0-9]{40}$"))'
-            )"
-            [[ "$remote_workflow_sha" == "$WORKFLOW_SHA" ]] || {
-              echo "Protected release-publish tag moved after npm-release approval." >&2
-              exit 1
-            }
-          fi
-          if [[ "$preflight_head_branch" == release-publish/* ]]; then
-            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
-              --repository "$GITHUB_REPOSITORY" \
-              --workflow-ref "$preflight_head_branch" \
-              --workflow-full-ref "refs/tags/${preflight_head_branch}" \
-              --workflow-sha "$preflight_head_sha" \
-              --publisher-sha "$WORKFLOW_SHA"
-            protected_release_publish_preflight=true
-          fi
-          if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" && "$full_release_preflight" != "true" ]]; then
-            echo "OpenClaw npm preflight must come from an admitted NPM Release producer or the exact selected Full Release Validation run." >&2
-            exit 1
-          fi
-          if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then
-            timeout --signal=TERM --kill-after=10s 120s git -C trusted-workflow fetch \
-              --no-tags --depth=1 origin "$preflight_head_sha"
-          fi
-          if [[ "$extended_stable_preflight" != "true" ]] && ! git -C trusted-workflow merge-base --is-ancestor "$preflight_head_sha" "$WORKFLOW_SHA"; then
-            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
-            exit 1
-          fi
-          echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
-          echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
-          echo "run_attempt=${PREFLIGHT_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
-          echo "workflow_path=${RUN_WORKFLOW_PATH%%@*}" >> "$GITHUB_OUTPUT"
-
       - name: Download full release validation manifest
         if: ${{ inputs.release_evidence_mode == 'full-release-validation' && inputs.full_release_validation_run_id != '' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -538,6 +450,101 @@ jobs:
             --json \
             --verifier-source-sha "$WORKFLOW_SHA" \
             --verifier-source-file "$STRICT_VALIDATOR_FILE" >/dev/null
+
+      - name: Verify preflight run metadata
+        id: preflight_run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
+          EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
+          RUN_KIND: preflight
+          WORKFLOW_REF: ${{ github.ref }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          set -euo pipefail
+          EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
+          export EXPECTED_RELEASE_SHA
+          full_release_preflight=false
+          if [[ "$PREFLIGHT_RUN_ID" == "$FULL_RELEASE_VALIDATION_RUN_ID" ]]; then
+            full_manifest="full-release-validation/full-release-validation-manifest.json"
+            resolution="$(node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --resolve-full-release-manifest "$full_manifest" \
+              --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$EXPECTED_RELEASE_SHA" \
+              --workflow-sha "$(jq -r .workflowSha "$full_manifest")")"
+            PREFLIGHT_RUN_ID="$(jq -r .producer.runId <<<"$resolution")"
+            PREFLIGHT_RUN_ATTEMPT="$(jq -r .producer.runAttempt <<<"$resolution")"
+            RUN_WORKFLOW_PATH="$(jq -r .run.path <<<"$resolution")"
+            preflight_head_sha="$(jq -r .run.head_sha <<<"$resolution")"
+            preflight_head_branch="$(jq -r .run.head_branch <<<"$resolution")"
+            full_release_preflight=true
+          else
+            preflight_run_metadata="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}" --jq '{run_attempt,path}')"
+            PREFLIGHT_RUN_ATTEMPT="$(jq -r .run_attempt <<<"$preflight_run_metadata")"
+            RUN_WORKFLOW_PATH="$(jq -r .path <<<"$preflight_run_metadata")"
+            [[ "$PREFLIGHT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || exit 1
+            export PREFLIGHT_RUN_ATTEMPT RUN_WORKFLOW_PATH
+            RUN_JSON="$(gh run view "$PREFLIGHT_RUN_ID" --attempt "$PREFLIGHT_RUN_ATTEMPT" --repo "$GITHUB_REPOSITORY" --json databaseId,attempt,workflowName,headBranch,headSha,event,status,conclusion,url)"
+            printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
+            preflight_head_sha="$(jq -r .headSha <<<"$RUN_JSON")"
+            preflight_head_branch="$(jq -r .headBranch <<<"$RUN_JSON")"
+          fi
+          extended_stable_preflight=false
+          if [[ "$full_release_preflight" != "true" && "$RELEASE_NPM_DIST_TAG" == "extended-stable" && "$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH" ]]; then
+            extended_stable_preflight=true
+          fi
+          active_branch_preflight=false
+          if [[ "$preflight_head_branch" != release-publish/* && "refs/heads/${preflight_head_branch}" == "$WORKFLOW_REF" ]]; then
+            active_branch_preflight=true
+          fi
+          protected_release_publish_preflight=false
+          if [[ "$WORKFLOW_REF" =~ ^refs/tags/release-publish/([a-f0-9]{12})-[1-9][0-9]*$ ]]; then
+            workflow_sha_prefix="${BASH_REMATCH[1]}"
+            [[ "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ && "${WORKFLOW_SHA:0:12}" == "$workflow_sha_prefix" ]] || {
+              echo "Protected release-publish tag does not match the workflow SHA at the npm publish boundary." >&2
+              exit 1
+            }
+            workflow_tag="${WORKFLOW_REF#refs/tags/}"
+            # The npm-release environment can wait after request validation.
+            # Re-read the tag here so a later move cannot authorize publication.
+            remote_workflow_sha="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${workflow_tag}" \
+                --jq '.object | select(.type == "commit") | .sha | select(test("^[a-f0-9]{40}$"))'
+            )"
+            [[ "$remote_workflow_sha" == "$WORKFLOW_SHA" ]] || {
+              echo "Protected release-publish tag moved after npm-release approval." >&2
+              exit 1
+            }
+          fi
+          if [[ "$preflight_head_branch" == release-publish/* ]]; then
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --repository "$GITHUB_REPOSITORY" \
+              --workflow-ref "$preflight_head_branch" \
+              --workflow-full-ref "refs/tags/${preflight_head_branch}" \
+              --workflow-sha "$preflight_head_sha" \
+              --publisher-sha "$WORKFLOW_SHA"
+            protected_release_publish_preflight=true
+          fi
+          if [[ "$preflight_head_branch" != "main" && "$active_branch_preflight" != "true" && "$extended_stable_preflight" != "true" && "$protected_release_publish_preflight" != "true" && "$full_release_preflight" != "true" ]]; then
+            echo "OpenClaw npm preflight must come from an admitted NPM Release producer or the exact selected Full Release Validation run." >&2
+            exit 1
+          fi
+          if ! git -C trusted-workflow cat-file -e "${preflight_head_sha}^{commit}" 2>/dev/null; then
+            timeout --signal=TERM --kill-after=10s 120s git -C trusted-workflow fetch \
+              --no-tags --depth=1 origin "$preflight_head_sha"
+          fi
+          if [[ "$extended_stable_preflight" != "true" ]] && ! git -C trusted-workflow merge-base --is-ancestor "$preflight_head_sha" "$WORKFLOW_SHA"; then
+            echo "OpenClaw npm preflight tooling is not on the trusted publish workflow lineage." >&2
+            exit 1
+          fi
+          echo "head_sha=${preflight_head_sha}" >> "$GITHUB_OUTPUT"
+          echo "head_branch=${preflight_head_branch}" >> "$GITHUB_OUTPUT"
+          echo "run_id=${PREFLIGHT_RUN_ID}" >> "$GITHUB_OUTPUT"
+          echo "run_attempt=${PREFLIGHT_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          echo "workflow_path=${RUN_WORKFLOW_PATH%%@*}" >> "$GITHUB_OUTPUT"
 
       - name: Download focused release evidence
         if: ${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' }}
@@ -593,16 +600,16 @@ jobs:
       - name: Download prepared npm tarball
         env:
           GH_TOKEN: ${{ github.token }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_run.outputs.run_id }}
           PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
           PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_run.outputs.workflow_path }}
+          PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           preferred_name="openclaw-npm-preflight-${RELEASE_TAG}"
-          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-            preferred_name="$(jq -er '.publicationArtifacts.npmPreflight.artifact.name | select(test("^openclaw-npm-preflight-[A-Za-z0-9_.-]+$"))' full-release-validation/full-release-validation-manifest.json)"
-          fi
           rm -rf preflight-tarball plugin-sdk-api-evidence
           mkdir -p preflight-tarball plugin-sdk-api-evidence
 
@@ -624,13 +631,15 @@ jobs:
             return 1
           }
 
-          if download_named_artifact "${preferred_name}" preflight-tarball; then
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+            node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
+              --resolve-full-release-manifest full-release-validation/full-release-validation-manifest.json \
+              --repository "$GITHUB_REPOSITORY" --run-id "$FULL_RELEASE_VALIDATION_RUN_ID" \
+              --run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT" --source-sha "$(git rev-parse HEAD)" \
+              --workflow-sha "$PREFLIGHT_WORKFLOW_SHA" --output-dir preflight-tarball >/dev/null
+          elif download_named_artifact "${preferred_name}" preflight-tarball; then
             echo "Downloaded ${preferred_name}."
           else
-            if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-              echo "The exact qualified npm artifact recorded by Full Release Validation is unavailable." >&2
-              exit 1
-            fi
             echo "::warning::${preferred_name} not found; checking run artifacts for a single compatible preflight artifact."
             mapfile -t matches < <(gh api -X GET "repos/${GITHUB_REPOSITORY}/actions/runs/${PREFLIGHT_RUN_ID}/artifacts" \
               --jq '.artifacts[] | select(.expired != true) | .name' |
@@ -675,8 +684,10 @@ jobs:
           PREFLIGHT_WORKFLOW_SHA: ${{ steps.preflight_run.outputs.head_sha }}
           PREFLIGHT_WORKFLOW_BRANCH: ${{ steps.preflight_run.outputs.head_branch }}
           PREFLIGHT_WORKFLOW_PATH: ${{ steps.preflight_run.outputs.workflow_path }}
-          PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
+          PREFLIGHT_RUN_ID: ${{ steps.preflight_run.outputs.run_id }}
           PREFLIGHT_RUN_ATTEMPT: ${{ steps.preflight_run.outputs.run_attempt }}
+          FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
+          FULL_RELEASE_VALIDATION_RUN_ATTEMPT: ${{ inputs.full_release_validation_run_attempt }}
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
@@ -691,8 +702,9 @@ jobs:
             producer_full_ref="refs/tags/${PREFLIGHT_WORKFLOW_BRANCH}"
           fi
           provenance_args=()
-          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" ]]; then
-            provenance_args+=(--full-release-manifest full-release-validation/full-release-validation-manifest.json)
+          if [[ "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-validation.yml" || "$PREFLIGHT_WORKFLOW_PATH" == ".github/workflows/full-release-artifacts.yml" ]]; then
+            provenance_args+=(--full-release-manifest full-release-validation/full-release-validation-manifest.json
+              --full-release-run-id "$FULL_RELEASE_VALIDATION_RUN_ID" --full-release-run-attempt "$FULL_RELEASE_VALIDATION_RUN_ATTEMPT")
           fi
           node trusted-workflow/scripts/npm-preflight-tooling-identity.mjs \
             --manifest "$MANIFEST_FILE" \

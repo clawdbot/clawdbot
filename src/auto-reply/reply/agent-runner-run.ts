@@ -1,4 +1,5 @@
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
+import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { hasRestartRecoverySourceClaim } from "../../config/sessions/restart-recovery-state.js";
 import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -203,6 +204,38 @@ export async function runReplyAgent(
           activeSessionStore[sessionKey] = retired;
         }
       }
+    }
+    releaseAdmissionTicket();
+    typing.cleanup();
+    return undefined;
+  }
+
+  const pendingQuestionText = (
+    transcriptCommandBody ??
+    followupRun.transcriptPrompt ??
+    commandBody
+  ).trim();
+  const isExternalUserInput =
+    followupRun.run.inputProvenance === undefined ||
+    followupRun.run.inputProvenance.kind === "external_user";
+  if (
+    !isHeartbeat &&
+    isExternalUserInput &&
+    pendingQuestionText &&
+    !followupRun.images?.length &&
+    !followupRun.media?.length &&
+    (await claimPendingAgentQuestionAnswer({
+      sessionKey,
+      text: pendingQuestionText,
+      persist: followupRun.userTurnTranscriptRecorder
+        ? async () => {
+            await followupRun.userTurnTranscriptRecorder?.persistApproved();
+          }
+        : undefined,
+    }))
+  ) {
+    if (replyOperationRunState) {
+      replyOperationRunState.admission = { status: "accepted", mode: "steer" };
     }
     releaseAdmissionTicket();
     typing.cleanup();

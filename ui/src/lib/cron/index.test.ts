@@ -8,7 +8,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { CronJob, CronJobsListResult, CronRunsResult } from "../../api/types.ts";
-import { parseCronEveryMs } from "../../lib/cron/decimal.ts";
+import { parseCronDurationMs } from "../../lib/cron/decimal.ts";
 import {
   addCronJob,
   cancelCronEdit,
@@ -1297,6 +1297,110 @@ describe("cron controller", () => {
     expect(requestPatch(await submit())).not.toHaveProperty("schedule");
   });
 
+  it("preserves configured duration precision when editing a staggered cron expression", async () => {
+    const job = createCronJob({
+      id: "job-exact-stagger",
+      name: "Exact stagger",
+      schedule: { kind: "cron", expr: "0 * * * *", staggerMs: 1_001 },
+    });
+    const { state, submit } = createCronEditHarness(job);
+    const displayedAmount = state.cronForm.staggerAmount;
+    state.cronForm.cronExpr = "*/5 * * * *";
+
+    const call = await submit();
+
+    expect({ displayedAmount, schedule: requestPatch(call).schedule }).toEqual({
+      displayedAmount: "1.001",
+      schedule: { kind: "cron", expr: "*/5 * * * *", staggerMs: 1_001 },
+    });
+    expect(validateCronUpdateParams(requestPayload(call))).toBe(true);
+  });
+
+  it.each([
+    { staggerAmount: "1.001", staggerUnit: "seconds", staggerMs: 1_001 },
+    { staggerAmount: "4.1", staggerUnit: "minutes", staggerMs: 246_000 },
+    { staggerAmount: "1e3", staggerUnit: "seconds", staggerMs: 1_000_000 },
+    { staggerAmount: "0x10", staggerUnit: "seconds", staggerMs: 16_000 },
+    { staggerAmount: "0b10", staggerUnit: "seconds", staggerMs: 2_000 },
+    { staggerAmount: "0o10", staggerUnit: "seconds", staggerMs: 8_000 },
+    { staggerAmount: "+1", staggerUnit: "seconds", staggerMs: 1_000 },
+  ] as const)(
+    "preserves configured duration precision for $staggerAmount $staggerUnit stagger",
+    async ({ staggerAmount, staggerUnit, staggerMs }) => {
+      const { submit } = createCronSubmitHarness("job-decimal-stagger", {
+        form: {
+          name: "Decimal stagger",
+          scheduleKind: "cron",
+          cronExpr: "0 * * * *",
+          staggerAmount,
+          staggerUnit,
+          payloadText: "run",
+        },
+      });
+
+      const { call, result } = await submit();
+
+      expect(result.saved).toBe(true);
+      expect(requestPayload(call).schedule).toEqual({ kind: "cron", expr: "0 * * * *", staggerMs });
+      expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    },
+  );
+
+  it("rejects stagger fractions below configured duration precision before the RPC", async () => {
+    const { state, request } = createCronSubmitHarness("job-submillisecond-stagger", {
+      form: {
+        name: "Submillisecond stagger",
+        scheduleKind: "cron",
+        staggerAmount: "0.0001",
+        staggerUnit: "seconds",
+        payloadText: "run",
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.staggerAmount).toBe("cron.errors.staggerAmountInvalid");
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { scheduleKind: "every", amount: "8640000000000", valid: true },
+    { scheduleKind: "every", amount: "8640000000000.001", valid: false },
+    { scheduleKind: "cron", amount: "8640000000000", valid: true },
+    { scheduleKind: "cron", amount: "8640000000000.001", valid: false },
+  ] as const)(
+    "bounds configured duration precision for $scheduleKind at $amount seconds",
+    async ({ scheduleKind, amount, valid }) => {
+      const { state, request } = createCronSubmitHarness("job-duration-boundary", {
+        form: {
+          name: "Duration boundary",
+          scheduleKind,
+          everyAmount: amount,
+          everyUnit: "seconds",
+          cronExpr: "0 * * * *",
+          staggerAmount: amount,
+          staggerUnit: "seconds",
+          payloadText: "run",
+        },
+      });
+
+      expect((await addCronJob(state)).saved).toBe(valid);
+      if (valid) {
+        const payload = requestPayload(findRequestCall(request.mock.calls, "cron.add"));
+        expect(payload.schedule).toEqual(
+          scheduleKind === "every"
+            ? { kind: "every", everyMs: 8_640_000_000_000_000 }
+            : { kind: "cron", expr: "0 * * * *", staggerMs: 8_640_000_000_000_000 },
+        );
+        expect(validateCronAddParams(payload)).toBe(true);
+      } else {
+        expect(state.cronFieldErrors).toHaveProperty(
+          scheduleKind === "every" ? "everyAmount" : "staggerAmount",
+        );
+        expect(request).not.toHaveBeenCalled();
+      }
+    },
+  );
+
   it("applies schedule edits when changing an on-exit job to a regular schedule", async () => {
     const job = createCronJob({
       id: "job-on-exit",
@@ -1550,6 +1654,7 @@ describe("cron controller", () => {
         payloadKind: "agentTurn",
         payloadText: "run it",
         failureAlertMode: "custom",
+        failureAlertDeliveryMode: "announce",
         failureAlertAfter: "3",
         failureAlertCooldownSeconds: "120",
         failureAlertChannel: "telegram",
@@ -1615,7 +1720,7 @@ describe("cron controller", () => {
     expectRecordFields(requireRecord(requestPatch(call).failureAlert, "failureAlert"), {
       after: 2,
       to: "123",
-      mode: "announce",
+      mode: undefined,
     });
     expect(
       (call[1] as { patch?: { failureAlert?: { channel?: string } } } | undefined)?.patch
@@ -1801,7 +1906,7 @@ describe("cron controller", () => {
     expect(state.cronForm.failureAlertCooldownSeconds).toBe("30");
     expect(state.cronForm.failureAlertChannel).toBe("telegram");
     expect(state.cronForm.failureAlertTo).toBe("999");
-    expect(state.cronForm.failureAlertDeliveryMode).toBe("announce");
+    expect(state.cronForm.failureAlertDeliveryMode).toBe("");
     expect(state.cronForm.failureAlertAccountId).toBe("");
   });
 
@@ -2922,7 +3027,7 @@ describe("cron every-interval lossless round-trip", () => {
 
   // Each everyMs the editable form must reproduce exactly: reading a job into the
   // form and rebuilding the schedule may never change the cadence. Legal everyMs
-  // spans 1ms..MAX_SAFE_INTEGER (gateway schema minimum 1, no sub-minute floor).
+  // spans 1ms through the Gateway's Date timestamp limit, with no sub-minute floor.
   const cases: ReadonlyArray<{ everyMs: number; amount: string; unit: string }> = [
     { everyMs: 1, amount: "0.001", unit: "seconds" },
     { everyMs: 450, amount: "0.45", unit: "seconds" },
@@ -2933,7 +3038,7 @@ describe("cron every-interval lossless round-trip", () => {
     { everyMs: 60_000, amount: "1", unit: "minutes" },
     { everyMs: 7_200_000, amount: "2", unit: "hours" },
     { everyMs: 86_400_000, amount: "1", unit: "days" },
-    { everyMs: Number.MAX_SAFE_INTEGER, amount: "9007199254740.991", unit: "seconds" },
+    { everyMs: 8_639_999_999_999_999, amount: "8639999999999.999", unit: "seconds" },
   ];
 
   it("reads every job back into the most natural exact unit", () => {
@@ -2943,12 +3048,14 @@ describe("cron every-interval lossless round-trip", () => {
       expect(state.cronForm.everyUnit).toBe(unit);
       expect(state.cronForm.everyAmount).toBe(amount);
       // The rebuilt millisecond value must equal the original, not a rounded one.
-      expect(parseCronEveryMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(everyMs);
+      expect(parseCronDurationMs(state.cronForm.everyAmount, state.cronForm.everyUnit)).toBe(
+        everyMs,
+      );
     }
   });
 
   it("keeps everyMs unchanged on a metadata-only edit", async () => {
-    for (const everyMs of [30_000, 90_000, 450, Number.MAX_SAFE_INTEGER]) {
+    for (const everyMs of [30_000, 90_000, 450, 8_639_999_999_999_999]) {
       const { request, state } = captureUpdateState(everyJob(everyMs));
       startCronEdit(state, state.cronJobs[0] as CronJob);
       state.cronForm.name = "Renamed only";
@@ -3055,3 +3162,270 @@ describe("loadCronScopeStats", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("failure alert form round trips", () => {
+  it.each([
+    { cooldownMs: 0, seconds: "0" },
+    { cooldownMs: 1, seconds: "0.001" },
+    { cooldownMs: 999, seconds: "0.999" },
+    { cooldownMs: 1_001, seconds: "1.001" },
+    { cooldownMs: 8_640_000_000_000_001, seconds: "8640000000000.001" },
+    { cooldownMs: Number.MAX_SAFE_INTEGER, seconds: "9007199254740.991" },
+    { cooldownMs: 1e20, seconds: "100000000000000000" },
+  ])(
+    "preserves a $cooldownMs ms cooldown when editing metadata",
+    async ({ cooldownMs, seconds }) => {
+      const job = createCronJob({
+        id: "cooldown-metadata",
+        name: "Stored cooldown",
+        failureAlert: {
+          after: 4,
+          cooldownMs,
+          mode: "webhook",
+          to: "https://alerts.example.test/cron",
+        },
+      });
+      const { state, submit } = createCronEditHarness(job);
+
+      expect(state.cronForm.failureAlertCooldownSeconds).toBe(seconds);
+      state.cronForm.description = "Only the description changed";
+      const call = await submit();
+
+      expect(validateCronUpdateParams(requestPayload(call))).toBe(true);
+      expectRecordFields(requireRecord(requestPatch(call).failureAlert, "failureAlert"), {
+        cooldownMs,
+      });
+    },
+  );
+
+  it.each([
+    { seconds: "1.001", cooldownMs: 1_001 },
+    { seconds: "1e-3", cooldownMs: 1 },
+    { seconds: "0", cooldownMs: 0 },
+    { seconds: "0.0009", cooldownMs: 0 },
+    { seconds: "8640000000000.001", cooldownMs: 8_640_000_000_000_001 },
+  ])("serializes explicit cooldown seconds $seconds", async ({ seconds, cooldownMs }) => {
+    const { submit } = createCronSubmitHarness("authored-cooldown", {
+      form: {
+        name: "Authored cooldown",
+        payloadText: "Run report",
+        failureAlertMode: "custom",
+        failureAlertCooldownSeconds: seconds,
+      },
+    });
+
+    const { call } = await submit();
+
+    expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {
+      cooldownMs,
+    });
+  });
+
+  it("preserves finite prefixed-number cooldown spellings accepted by the text field", async () => {
+    for (const [seconds, cooldownMs] of [
+      ["0x10", 16_000],
+      ["0b10", 2_000],
+      ["0o10", 8_000],
+    ] as const) {
+      const { submit } = createCronSubmitHarness("prefixed-cooldown", {
+        form: {
+          name: "Existing numeric spelling",
+          payloadText: "Run report",
+          failureAlertMode: "custom",
+          failureAlertCooldownSeconds: seconds,
+        },
+      });
+
+      const { call } = await submit();
+
+      expect(validateCronAddParams(requestPayload(call))).toBe(true);
+      expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {
+        cooldownMs,
+      });
+    }
+  });
+
+  it("keeps omitted policy fields inherited when editing metadata", async () => {
+    const job = createCronJob({
+      id: "inherited-alert-policy",
+      name: "Inherited per-field policy",
+      failureAlert: {},
+    });
+    const { state, submit } = createCronEditHarness(job);
+
+    expect(state.cronForm.failureAlertMode).toBe("custom");
+    expect(state.cronForm.failureAlertAfter).toBe("");
+    expect(state.cronForm.failureAlertCooldownSeconds).toBe("");
+    expect(state.cronForm.failureAlertDeliveryMode).toBe("");
+    state.cronForm.description = "Only metadata changed";
+    const call = await submit();
+
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- assert omitted fields on the websocket wire
+    expect(JSON.parse(JSON.stringify(requestPatch(call).failureAlert))).toEqual({});
+  });
+
+  it("creates an explicit policy without materializing inherited defaults", async () => {
+    const { submit } = createCronSubmitHarness("custom-inherited-policy", {
+      form: { name: "Use global policy", payloadText: "Run report", failureAlertMode: "custom" },
+    });
+
+    const { call } = await submit();
+
+    expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- assert omitted fields on the websocket wire
+    expect(JSON.parse(JSON.stringify(requestPayload(call).failureAlert))).toEqual({});
+  });
+
+  it("preserves an explicit policy, including skipped-run alerts, when cloning", async () => {
+    const job = createCronJob({
+      id: "clone-source-policy",
+      name: "Clone source",
+      failureAlert: {
+        after: 4,
+        cooldownMs: 1_001,
+        mode: "webhook",
+        to: "https://alerts.example.test/cron",
+        includeSkipped: true,
+      },
+    });
+    const request = createCronRequest("cloned-policy");
+    const state = createStateWithRequest(request);
+    startCronClone(state, job);
+
+    await addCronJob(state);
+
+    const call = findRequestCall(request.mock.calls, "cron.add");
+    expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- assert the clone's complete stored policy on the websocket wire
+    expect(JSON.parse(JSON.stringify(requestPayload(call).failureAlert))).toEqual(job.failureAlert);
+  });
+
+  it("preserves an explicit last channel and skipped-run override when cloning", async () => {
+    const job = createCronJob({
+      id: "clone-inherited-policy",
+      name: "Inherited clone",
+      failureAlert: { channel: "last", includeSkipped: false },
+    });
+    const request = createCronRequest("cloned-inherited-policy");
+    const state = createStateWithRequest(request);
+    startCronClone(state, job);
+
+    await addCronJob(state);
+
+    const call = findRequestCall(request.mock.calls, "cron.add");
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- distinguish an omitted override from false
+    expect(JSON.parse(JSON.stringify(requestPayload(call).failureAlert))).toEqual({
+      channel: "last",
+      includeSkipped: false,
+    });
+  });
+
+  it("keeps a disabled failure policy disabled when cloning", async () => {
+    const job = createCronJob({
+      id: "clone-disabled-policy",
+      name: "Disabled alerts",
+      failureAlert: false,
+    });
+    const request = createCronRequest("cloned-disabled-policy");
+    const state = createStateWithRequest(request);
+    startCronClone(state, job);
+
+    await addCronJob(state);
+
+    const call = findRequestCall(request.mock.calls, "cron.add");
+    expect(requestPayload(call).failureAlert).toBe(false);
+  });
+
+  it("clears mode, threshold, and cooldown overrides without disabling the policy", async () => {
+    const job = createCronJob({
+      id: "clear-policy-fields",
+      name: "Clear only overrides",
+      failureAlert: { after: 4, cooldownMs: 1_001, mode: "webhook", includeSkipped: true },
+    });
+    const { state, submit } = createCronEditHarness(job);
+    Object.assign(state.cronForm, {
+      failureAlertAfter: "",
+      failureAlertCooldownSeconds: "",
+      failureAlertDeliveryMode: "",
+    });
+
+    const call = await submit();
+
+    expect(validateCronUpdateParams(requestPayload(call))).toBe(true);
+    expectRecordFields(requireRecord(requestPatch(call).failureAlert, "failureAlert"), {
+      after: null,
+      cooldownMs: null,
+      mode: null,
+    });
+  });
+
+  it("preserves inherited alert fields while editing a command with hidden alert controls", async () => {
+    const job = createCronJob({
+      id: "command-inherited-policy",
+      name: "Command alert policy",
+      payload: { kind: "command", argv: ["node", "report.mjs"] },
+      failureAlert: {},
+    });
+    const { state, submit } = createCronEditHarness(job);
+    state.cronForm.description = "Only metadata changed";
+
+    const call = await submit();
+
+    expect(requestPatch(call)).not.toHaveProperty("payload");
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- hidden controls must not materialize defaults on the wire
+    expect(JSON.parse(JSON.stringify(requestPatch(call).failureAlert))).toEqual({});
+  });
+
+  it("rejects a positive alert threshold below one before RPC", async () => {
+    const request = createCronRequest("fractional-threshold");
+    const state = createStateWithRequest(request, {
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "Fractional threshold",
+        payloadText: "Run report",
+        failureAlertMode: "custom",
+        failureAlertAfter: ".5",
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.failureAlertAfter).toBeTruthy();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("keeps flooring a fractional alert threshold of at least one", async () => {
+    const { submit } = createCronSubmitHarness("valid-fractional-threshold", {
+      form: {
+        name: "Valid fractional threshold",
+        payloadText: "Run report",
+        failureAlertMode: "custom",
+        failureAlertAfter: "1.5",
+      },
+    });
+
+    const { call } = await submit();
+
+    expect(validateCronAddParams(requestPayload(call))).toBe(true);
+    expectRecordFields(requireRecord(requestPayload(call).failureAlert, "failureAlert"), {
+      after: 1,
+    });
+  });
+
+  it("rejects a seconds value whose millisecond conversion overflows before RPC", async () => {
+    const request = createCronRequest("overflow-policy");
+    const state = createStateWithRequest(request, {
+      cronForm: {
+        ...DEFAULT_CRON_FORM,
+        name: "Overflow policy",
+        payloadText: "Run report",
+        failureAlertMode: "custom",
+        failureAlertCooldownSeconds: "1e308",
+      },
+    });
+
+    expect(await addCronJob(state)).toEqual({ saved: false });
+    expect(state.cronFieldErrors.failureAlertCooldownSeconds).toBeTruthy();
+    expect(request).not.toHaveBeenCalled();
+  });
+});

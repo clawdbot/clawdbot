@@ -2,6 +2,7 @@ import * as auditActivity from "./audit-activity.js";
 import * as auditRun from "./audit-run.js";
 import * as audit from "./audit.js";
 import * as config from "./config.js";
+import * as humanMentions from "./human-mentions.js";
 import * as openclaw from "./openclaw.js";
 import * as taskSuggestions from "./task-suggestions.js";
 import * as tasks from "./tasks.js";
@@ -41,6 +42,15 @@ export const OperationsProtocolSchemas = {
   UsersGitHubDisconnectParams: users.UsersGitHubDisconnectParamsSchema,
   UsersGitHubDisconnectResult: users.UsersGitHubDisconnectResultSchema,
   UsersPrefsChangedEvent: users.UsersPrefsChangedEventSchema,
+  HumanMention: humanMentions.HumanMentionSchema,
+  MentionableUser: humanMentions.MentionableUserSchema,
+  UsersMentionableParams: humanMentions.UsersMentionableParamsSchema,
+  UsersMentionableResult: humanMentions.UsersMentionableResultSchema,
+  MentionInboxItem: humanMentions.MentionInboxItemSchema,
+  MentionsListParams: humanMentions.MentionsListParamsSchema,
+  MentionsDismissParams: humanMentions.MentionsDismissParamsSchema,
+  MentionsListResult: humanMentions.MentionsListResultSchema,
+  MentionsChangedEvent: humanMentions.MentionsChangedEventSchema,
   TaskSuggestion: taskSuggestions.TaskSuggestionSchema,
   TaskSuggestionEvent: taskSuggestions.TaskSuggestionEventSchema,
   TaskSuggestionResolution: taskSuggestions.TaskSuggestionResolutionSchema,

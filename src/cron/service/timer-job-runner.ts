@@ -27,6 +27,7 @@ import type { CronServiceState } from "./state.js";
 import { tryUpdateCronTaskRunSession } from "./task-runs.js";
 import { resolveCronJobTimeoutMs } from "./timeout-policy.js";
 import {
+  type ExecuteJobCoreOptions,
   type CronJobRunResult,
   type IsolatedAgentSetupTimeoutSignal,
   runsDetachedFromMainSession,
@@ -347,8 +348,9 @@ async function executeJobCoreWithTimeoutUnfinalized(
       watchdog.noteRunnerStarted(info);
       recordTaskExecutionStart(info);
     };
+    const resolveHeartbeatTimeoutMs = state.deps.resolveHeartbeatTimeoutMs;
     const progress: CronRunProgress = {};
-    const coreOptions = {
+    const coreOptions: ExecuteJobCoreOptions = {
       activeJobMarker: opts?.activeJobMarker,
       owningCronLaneTaskMarker: opts?.owningCronLaneTaskMarker,
       streamBatch: opts?.streamBatch,
@@ -357,11 +359,15 @@ async function executeJobCoreWithTimeoutUnfinalized(
       onExecutionStarted: deferTimeoutUntilExecutionStart ? noteRunnerStarted : undefined,
       onExecutionPhase: deferTimeoutUntilExecutionStart ? watchdog.notePhase : undefined,
       onLaneWait: deferTimeoutUntilExecutionStart ? noteLaneState : undefined,
+      // Trigger and preflight keep the cron deadline; the heartbeat gets its own.
+      onHeartbeatExecutionStarted: resolveHeartbeatTimeoutMs
+        ? (heartbeat) => watchdog.replaceTimeout(resolveHeartbeatTimeoutMs(heartbeat))
+        : undefined,
       assertRunCurrent,
       executionIdentity: opts?.executionIdentity,
     };
-    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     watchdog.start();
+    const corePromise = executeJobCore(state, job, runAbortController.signal, coreOptions);
     const runPromise = corePromise.then(async (result) => {
       progress.completedCoreResult = result;
       return await deliverPrimaryWebhook(

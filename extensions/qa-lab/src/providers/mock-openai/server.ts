@@ -79,6 +79,9 @@ import {
   QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE,
   QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER,
+  QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE,
+  QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE,
   QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE,
   QA_SUBAGENT_SELF_YIELD_WORKER_RE,
   QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE,
@@ -1314,13 +1317,15 @@ async function buildResponsesPayload(
         content: "empty terminal QA side effect completed\n",
       });
     }
-    return buildAssistantEvents(
-      [
-        "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
-        QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
-        "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
-      ].join("\n"),
-    );
+    return QA_SUBAGENT_EMPTY_WORKER_NO_OUTPUT_PROMPT_RE.test(allInputText)
+      ? buildAssistantEvents("")
+      : buildAssistantEvents(
+          [
+            "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",
+            QA_SUBAGENT_TERMINAL_METADATA_SENTINEL,
+            "<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+          ].join("\n"),
+        );
   }
   if (terminalWorkerCase === "fallback") {
     return buildAssistantEvents(
@@ -1337,8 +1342,13 @@ async function buildResponsesPayload(
   }
   if (terminalCompletionCase) {
     if (!hasCompletedToolOutput && canCallSessionsSpawn) {
+      const task =
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+          ? "Subagent terminal reply QA worker: empty. Return no assistant output after the write."
+          : `Subagent terminal reply QA worker: ${terminalCompletionCase}.`;
       return buildToolCallEventsWithArgs("sessions_spawn", {
-        task: `Subagent terminal reply QA worker: ${terminalCompletionCase}.`,
+        task,
         label: `qa-terminal-${terminalCompletionCase}`,
         thread: false,
         mode: "run",
@@ -1347,6 +1357,12 @@ async function buildResponsesPayload(
     if (hasCompletedToolOutput) {
       // End the requester turn before the delayed worker settles. The terminal
       // result must therefore use the runtime's direct channel fallback.
+      if (
+        terminalCompletionCase === "empty" &&
+        QA_SUBAGENT_EMPTY_PARENT_VISIBLE_PROMPT_RE.test(prompt)
+      ) {
+        return buildAssistantEvents(QA_SUBAGENT_EMPTY_PARENT_VISIBLE_MARKER);
+      }
       return buildAssistantEvents("NO_REPLY");
     }
   }
@@ -2751,10 +2767,12 @@ export async function startQaMockOpenAiServer(params?: {
       ...(QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE.test(allInputText)
         ? { previewPauseMs: finalOnlyMarkerPauseMs }
         : {}),
-      ...(repeatedRequestRecovery
+      // Stall one request; later failures let the normal retry budget settle the turn.
+      ...(repeatedRequestRecovery &&
+      scenarioState.repeatedRequestRecoveryAttempts <= QA_REPEATED_REQUEST_STALL_ATTEMPT
         ? {
             responsePauseMs:
-              scenarioState.repeatedRequestRecoveryAttempts >= QA_REPEATED_REQUEST_STALL_ATTEMPT
+              scenarioState.repeatedRequestRecoveryAttempts === QA_REPEATED_REQUEST_STALL_ATTEMPT
                 ? QA_REPEATED_REQUEST_STALLED_RESPONSE_PAUSE_MS
                 : QA_REPEATED_REQUEST_RESPONSE_PAUSE_MS,
           }

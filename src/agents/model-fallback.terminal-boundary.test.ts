@@ -3,12 +3,13 @@ import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
 import { AgentHarnessPreflightError, recordAgentHarnessPreflightOwner } from "./harness/errors.js";
 import {
+  type ModelFallbackStepHandler,
   runFallbackAttempt,
   shouldDiscardDeferredSessionSuspension,
 } from "./model-fallback-attempt.js";
@@ -93,6 +94,19 @@ it.each(wrappers)("does not replay a terminal $name failure", async ({ wrap }) =
   expect(providerHook).not.toHaveBeenCalled();
 });
 
+it("does not replay a CLI turn the backend already stopped", async () => {
+  const error = new FailoverError("recorded turn stop", {
+    reason: "unknown",
+    code: "cli_turn_stopped",
+  });
+  const run = vi.fn().mockRejectedValue(error);
+  const onError = vi.fn();
+  await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(onError).not.toHaveBeenCalled();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
 it("does not consult context policy for provider-looking text around a terminal stop", () => {
   const error = new Error("model maximum reached in wrapper", { cause: maxTurns() });
   expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(false);
@@ -169,6 +183,33 @@ it("honors cancellation in the failure callback before starting another candidat
   expect(onError).toHaveBeenCalledTimes(1);
   expect(providerHook).not.toHaveBeenCalled();
 });
+
+it.each(["throw", "reject"] as const)(
+  "preserves recovery when its fallback observer fails by %s",
+  async (observerFailure) => {
+    const observerError = new Error("fallback observer failed");
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new FailoverError("provider overloaded", { reason: "overloaded" }))
+      .mockResolvedValueOnce("recovered");
+    const onError = vi.fn();
+    const onFallbackStep = vi.fn<ModelFallbackStepHandler>(() => {
+      if (observerFailure === "throw") {
+        throw observerError;
+      }
+      return Promise.reject(observerError);
+    });
+    await expect(
+      runWithModelFallback({ ...fallbackOptions, run, onError, onFallbackStep }),
+    ).resolves.toMatchObject({ outcome: "completed", result: "recovered" });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(onError).toHaveBeenCalledOnce();
+    expect(onFallbackStep.mock.calls.map(([step]) => step.fallbackStepFinalOutcome)).toEqual([
+      "next_fallback",
+      "succeeded",
+    ]);
+  },
+);
 
 it("does not replay a terminal failure returned by result classification", async () => {
   const error = new AggregateError([maxTurns()], "wrapper");
@@ -273,7 +314,7 @@ it("preserves coordination precedence and suspension discard for mixed failures"
 });
 
 describe.each([
-  { name: "max turns", find: findCliMaxTurnsError, make: maxTurns },
+  { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
   {
     name: "CLI timeout",
     find: findCliTimeoutError,

@@ -103,8 +103,8 @@ channel is the communication surface.
 
 - The official `@openclaw/codex` plugin installed. Include `codex` in
   `plugins.allow` if your config uses an allowlist.
-- Managed Codex app-server `0.151.0`. The plugin ships and manages
-  `@openai/codex` `0.151.0` by default, so a `codex` command on `PATH` does not
+- Managed Codex app-server `0.153.0`. The plugin ships and manages
+  `@openai/codex` `0.153.0` by default, so a `codex` command on `PATH` does not
   affect normal startup. Explicit custom, remote, and macOS desktop-owned
   app-servers must report a parseable semantic version of `0.149.0` or newer.
   Newer versions continue with a compatibility warning and normal runtime
@@ -350,8 +350,9 @@ for agent-scoped connections and simply does not hand it to the native home. Use
 
 Owner turns gain the `codex_threads` tool: list, search, read, fork, rename,
 archive, and restore native threads. Fork a thread to continue it in
-OpenClaw; the fork attaches to the current OpenClaw session and stays
-visible to other native Codex clients. Archiving requires explicit
+OpenClaw; the fork attaches to the current OpenClaw session and remains readable
+by ID from other native Codex clients. It appears in native thread lists after
+its first user turn. Archiving requires explicit
 confirmation that the thread is closed elsewhere. When supervision is also
 enabled, transcript fields and mutations require the matching
 `supervision.allowRawTranscripts` or `supervision.allowWriteControls` opt-in.
@@ -457,8 +458,9 @@ for the current Codex rules.
 
 For an ordinary policy-restricted turn, OpenClaw disables Codex native Code
 Mode, removes environment selections, disables and verifies inherited and
-configured MCP servers, disables native hook relays, and filters OpenClaw
-dynamic tools through the effective policy. The bounded workspace `AGENTS.md`
+native configured MCP servers, and disables native hook relays. Static configured
+MCP tools that pass the effective policy move to OpenClaw's dynamic surface for
+that turn. Other OpenClaw dynamic tools use the same policy. The bounded workspace `AGENTS.md`
 snapshot still reaches the model as thread-level developer instructions because
 project instructions are context, not tool authority.
 
@@ -1051,10 +1053,11 @@ When `/codex resume` attaches a thread without an existing verified harness
 binding, its next turn checks the native thread's stored tool catalog and
 applies the current harness configuration before continuing. This first
 attachment requires the local stdio app-server and its per-agent Codex home.
-It also needs exclusive use of that app-server while applying configuration;
-if another turn or native child is active, wait for it to finish and retry.
-Use [Codex supervision](/plugins/codex-supervision) or native Codex to continue
-threads in a shared user home or on another app-server.
+The target native thread must be idle. OpenClaw coordinates attachment, resume,
+and release of that thread; unrelated chats and catalog reads can continue on
+the same app-server. If the target thread is active, wait for its turn to finish
+and retry. Use [Codex supervision](/plugins/codex-supervision) or native Codex to
+continue threads in a shared user home or on another app-server.
 
 Native child threads controlled by a parent cannot be attached with `/codex
 resume` or `/codex bind`. OpenClaw reports that restriction and keeps the current
@@ -1066,6 +1069,11 @@ or Codex cannot confirm that it applied the configuration, OpenClaw reports
 the problem and keeps the selected native thread intact. It does not silently
 start another thread. Use `/new` to start with the current harness tools, or
 continue the preserved thread in native Codex.
+
+If an ordinary OpenClaw-managed native thread was deleted, the next turn starts
+a fresh native thread while keeping the selected model and provider. This
+recovery preserves pending manual attachments and native-model-owned threads.
+It does not replay a turn whose native outcome is uncertain.
 
 ### Shared Fast mode and Codex fast mode
 
@@ -1178,6 +1186,31 @@ OpenClaw does not install unknown apps or let the model authorize new plugin
 installs. Owner-approved plugin installation refreshes the target runtime
 inventory. Missing inventory methods, authentication errors, transport
 failures, and connector refresh failures fail closed.
+
+### Scheduled app authority
+
+Automations inherit the creator turn's callable tools and app policy without an
+explicit `toolsAllow` list. With a prepared ChatGPT profile, scheduled app access
+remains bound to that exact profile and account. Without a prepared profile, an
+agent-scoped configured WebSocket app-server owns the schedule through its
+connection fingerprint. Reauthenticating that same endpoint to another account
+does not revoke the schedule: subsequent runs use the endpoint's current account,
+subject to the captured app ceiling and current app/tool policy. Scheduled
+authority does not store or replay authentication credentials.
+
+Removing or un-configuring the endpoint, changing its connection fingerprint, or
+changing its captured managed requirements rejects the run before app execution.
+The job remains inspectable, with an error in automation run history and its
+last-run state; normal failure backoff still applies. Restore the authorized
+connection or recreate the automation from a fresh authenticated owner turn.
+Account changes that remove access to a captured app also fail visibly.
+
+Before rolling back to a build without configured-endpoint authority and cron
+authority hydration, disable these jobs with `openclaw automations disable <id>`
+and verify them with `openclaw automations list --all`. Do not rely on an older
+binary to enforce the new authority envelope. Keep the jobs disabled until you
+return to a supporting build or recreate them under that build's supported auth
+path. See [Automations](/automation/cron-jobs) for run history and failure handling.
 
 ### Environment isolation
 
@@ -1382,6 +1415,20 @@ attempt: progress does not reset it, and `0` means unlimited execution.
 OpenClaw still bounds its own requests, dynamic tools, cancellation, and local
 settlement. See [Timeouts](/plugins/codex-harness-reference#timeouts) for those
 budgets, Stop and replay behavior, and Doctor migration of retired idle settings.
+
+### Parallel chats and thread ownership
+
+Independent chats can share a Codex app-server and run concurrently. Resuming
+an idle chat does not require unrelated chats, model discovery, or tool-catalog
+reads to finish. OpenClaw coordinates its own lifecycle operations for each
+native thread and preserves that thread's identity across ordinary resumes.
+A closed, replaced, or retired client still cannot complete a stale handoff.
+
+This coordination does not make native configuration replacement atomic against
+Codex-internal controllers. Native subagent reloads or another native controller
+can operate outside OpenClaw's thread queue. Avoid concurrently reconfiguring the
+same native thread through multiple controllers; observing native teardown alone
+does not reserve it against a subsequent native reload.
 
 ### Local testing env overrides
 

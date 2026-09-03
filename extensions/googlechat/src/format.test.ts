@@ -91,6 +91,13 @@ describe("formatGoogleChatText", () => {
     ).toBe("");
   });
 
+  it("keeps raw angle-link labels as inert text", () => {
+    expect(formatGoogleChatText("<https://example.com/a.pdf|User Manual>")).toBe("User Manual");
+    expect(formatGoogleChatText("<mailto:a/b@example.com|Contact Support>")).toBe(
+      "Contact Support",
+    );
+  });
+
   it("does not reinterpret a literal bullet as a Google Chat list", () => {
     expect(formatGoogleChatText("• literal bullet")).toBe("• literal bullet");
     expect(formatGoogleChatText("\\* not a list")).toBe("＊ not a list");

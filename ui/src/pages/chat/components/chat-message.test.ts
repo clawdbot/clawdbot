@@ -10,6 +10,7 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts"
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
@@ -287,11 +288,21 @@ function createMessageGroup(
   overrides: Partial<MessageGroup> = {},
 ): MessageGroup {
   const timestamp = overrides.timestamp ?? messageTimestamp(message);
+  const messages = overrides.messages ?? [{ key: `${role}:${timestamp}:message`, message }];
+  const groups = groupMessages(messages.map((entry) => ({ kind: "message", ...entry }))).filter(
+    (item) => item.kind === "group",
+  );
+  const visibleContent = groups.some((group) => group.visibleContent === "non-text")
+    ? "non-text"
+    : groups.some((group) => group.visibleContent === "text")
+      ? "text"
+      : "none";
   return {
     kind: "group",
     key: `${role}:${timestamp}`,
     role,
-    messages: [{ key: `${role}:${timestamp}:message`, message }],
+    messages,
+    visibleContent,
     timestamp,
     isStreaming: false,
     ...overrides,
@@ -2042,9 +2053,9 @@ describe("grouped chat rendering", () => {
     const peer = renderSender("profile-alice");
     const link = peer.querySelector<HTMLAnchorElement>("a.chat-sender-name");
     expect(link?.textContent).toBe("Alice Example");
-    expect(link?.getAttribute("href")).toBe("/activity?person=profile-alice");
+    expect(link?.getAttribute("href")).toBe("/activity/profile-alice");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-    expect(navigate).toHaveBeenCalledWith("profile-alice");
+    expect(navigate).toHaveBeenCalledWith("profile-alice", "Alice Example");
 
     const own = renderSender("me");
     expect(own.querySelector("a.chat-sender-name")).toBeNull();
@@ -4338,6 +4349,87 @@ describe("grouped chat rendering", () => {
       expect(container.querySelector(".chat-assistant-attachment-card__download")).toBeNull();
     },
   );
+
+  describe("omitted historical images", () => {
+    it("renders a non-interactive placeholder with the projected byte size", () => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        createUserMessage([{ type: "image", omitted: true, bytes: 12 * 1024 }]),
+        "user",
+      );
+
+      const card = expectElement(container, ".chat-assistant-attachment-card", HTMLDivElement);
+      expect(card.textContent).toContain("Image");
+      expect(card.textContent).toContain("History");
+      expect(card.textContent).toContain("Omitted from history");
+      expect(card.textContent).toContain("12 KB");
+      expect(card.querySelector("a, button, img, audio, video")).toBeNull();
+    });
+
+    it("renders a generic placeholder when projected byte metadata is invalid", () => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        createUserMessage([{ type: "image", omitted: true, bytes: -1 }]),
+        "user",
+      );
+
+      const card = expectElement(container, ".chat-assistant-attachment-card", HTMLDivElement);
+      expect(card.textContent).toContain("Omitted from history");
+      expect(card.textContent).not.toContain("undefined");
+      expect(card.textContent).not.toContain("NaN");
+    });
+
+    it("does not render an image control for an omitted image with a blank URL", () => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        createUserMessage([{ type: "image", omitted: true, bytes: 12 * 1024, url: "   " }]),
+        "user",
+      );
+
+      expect(container.querySelectorAll(".chat-assistant-attachment-card")).toHaveLength(1);
+      expect(container.textContent).toContain("Omitted from history");
+      expect(container.querySelector(".chat-message-image-button, img")).toBeNull();
+    });
+
+    it("renders omitted media beside surviving message text", () => {
+      const container = document.createElement("div");
+      renderGroupedMessage(
+        container,
+        createUserMessage([
+          { type: "text", text: "Earlier screenshot:" },
+          { type: "image", omitted: true, bytes: 512 },
+        ]),
+        "user",
+      );
+
+      expect(container.textContent).toContain("Earlier screenshot:");
+      expect(container.textContent).toContain("Omitted from history");
+      expect(container.textContent).toContain("512 B");
+    });
+
+    it("keeps omitted media visible beside a standalone tool result", () => {
+      const container = document.createElement("div");
+      renderAssistantMessage(
+        container,
+        createToolResultMessage("call-history-image", "read_file", [
+          {
+            type: "tool_result",
+            name: "read_file",
+            text: "Read completed",
+          },
+          { type: "image", omitted: true, bytes: 2048 },
+        ]),
+        { isToolMessageExpanded: () => false },
+      );
+
+      expect(container.querySelector(".chat-tool-msg-summary")).not.toBeNull();
+      expect(container.textContent).toContain("Omitted from history");
+      expect(container.textContent).toContain("2.0 KB");
+    });
+  });
 
   it.each([
     ["audio", "recording.mp3", "audio/mpeg", "openclaw-chat-audio-player"],

@@ -26,6 +26,7 @@ import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identi
 import { recordSessionCreated } from "../sessions/session-state-events.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../shared/store-writer-queue.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../state/user-profiles.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import type { GatewayOperatorRoleActor } from "./server-methods/shared-types.js";
 import { buildDashboardSessionKey } from "./session-create-service.js";
@@ -271,10 +272,15 @@ export async function recoverGatewaySession(params: {
           const successorEntry = buildRestartRecoverySuccessorEntry({
             sessionId: successorSessionId,
             source: currentSource,
-            // Authenticated recovery creates a new person's session; actorless recovery
-            // continues the source's immutable isolation instead of dropping it.
+            // Owner attribution keeps the source isolation inherited by actorless recovery.
             creation: params.actor
-              ? { actor: params.actor, sandbox: resolveCreatorSandbox(params.cfg, params) }
+              ? {
+                  actor: params.actor,
+                  sandbox:
+                    params.actor.id === GATEWAY_OWNER_PROFILE_ID
+                      ? currentSource.sandbox
+                      : resolveCreatorSandbox(params.cfg, params),
+                }
               : inheritSessionCreationPolicy(currentSource),
           });
 
