@@ -155,6 +155,7 @@ describePosix("native hosted merge handoff", () => {
   );
 
   it("dispatches once with the exact prepared head and ordinary server enforcement", () => {
+    const before = f.events().length;
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const mergeCalls = f
@@ -163,6 +164,16 @@ describePosix("native hosted merge handoff", () => {
         (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
       );
     expect(mergeCalls).toHaveLength(1);
+    const events = f.events().slice(before);
+    const reviewReads = events
+      .map((event, index) => ({ event, index }))
+      .filter(({ event }) => event.kind === "review-comments");
+    expect(reviewReads).toHaveLength(2);
+    expect(reviewReads[1]?.index).toBeLessThan(
+      events.findIndex(
+        (event) => event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge",
+      ),
+    );
     expect(mergeCalls[0]?.args).toEqual([
       "pr",
       "merge",
@@ -176,5 +187,17 @@ describePosix("native hosted merge handoff", () => {
     expect(
       JSON.parse(f.git(f.canonical, "show", "refs/openclaw/pr-merge-outcomes/42:outcome.json")),
     ).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
+    expect(
+      f
+        .events()
+        .slice(before)
+        .some(
+          (event) =>
+            event.kind === "gh" &&
+            event.args?.some(
+              (arg) => arg.includes("/collaborators/") && arg.endsWith("/permission"),
+            ),
+        ),
+    ).toBe(false);
   });
 });

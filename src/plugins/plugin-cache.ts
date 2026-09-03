@@ -101,6 +101,11 @@ export function resetPluginCache(): void {
 
 export function getPluginCacheRoot(rootDir: string): PluginRootCacheRecord {
   const cache = getPluginCache();
+  // Alias binding can replace the canonical record while older lexical records remain.
+  const cached = cache.roots.get(cache.rootAliases.get(rootDir) ?? rootDir);
+  if (cached) {
+    return cached;
+  }
   const lexical = path.resolve(rootDir);
   const key = cache.rootAliases.get(lexical) ?? lexical;
   let root = cache.roots.get(key);

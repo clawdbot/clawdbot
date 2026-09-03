@@ -7,7 +7,7 @@ import {
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
-import { userTurnSendIdentity } from "./chat-thread-items.ts";
+import { userTurnRunId } from "./chat-thread-items.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 
 export type StreamCausalBoundaryState = {
@@ -40,9 +40,9 @@ export function persistedSteerTargetRunId(message: unknown): string | null {
 
 function turnRunId(messages: unknown[]): string | null {
   for (const message of messages) {
-    const identity = userTurnSendIdentity(message);
-    if (identity?.startsWith("send:")) {
-      return identity.slice("send:".length);
+    const runId = userTurnRunId(message);
+    if (runId) {
+      return runId;
     }
   }
   return null;
@@ -111,9 +111,9 @@ export function latestPersistedSteerBoundary(
     ) {
       continue;
     }
-    const identity = userTurnSendIdentity(messages[index]);
-    if (identity?.startsWith("send:")) {
-      return { index, runId: identity.slice("send:".length) };
+    const runId = userTurnRunId(messages[index]);
+    if (runId) {
+      return { index, runId };
     }
   }
   return null;
@@ -134,13 +134,11 @@ export function streamCausalInterval(
   messages: unknown[],
   part: { afterBoundaryRunId?: string; boundaryRunId?: string; runId?: string },
 ): { start: number; end: number } {
-  const afterBoundaryIdentity = part.afterBoundaryRunId ? `send:${part.afterBoundaryRunId}` : null;
-  const afterBoundaryIndex = afterBoundaryIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === afterBoundaryIdentity)
+  const afterBoundaryIndex = part.afterBoundaryRunId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.afterBoundaryRunId)
     : -1;
-  const boundaryIdentity = part.boundaryRunId ? `send:${part.boundaryRunId}` : null;
-  const boundaryIndex = boundaryIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === boundaryIdentity)
+  const boundaryIndex = part.boundaryRunId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.boundaryRunId)
     : -1;
   if (boundaryIndex >= 0) {
     return {
@@ -158,9 +156,8 @@ export function streamCausalInterval(
     );
     return { start: afterBoundaryIndex + 1, end: end >= 0 ? end : messages.length };
   }
-  const runIdentity = part.runId ? `send:${part.runId}` : null;
-  const runUserIndex = runIdentity
-    ? messages.findIndex((message) => userTurnSendIdentity(message) === runIdentity)
+  const runUserIndex = part.runId
+    ? messages.findIndex((message) => userTurnRunId(message) === part.runId)
     : -1;
   if (runUserIndex >= 0) {
     const end = messages.findIndex(
@@ -351,6 +348,7 @@ type TerminalStreamBoundaryReconciliation =
   | {
       kind: "split";
       afterBoundaryRunId: string;
+      afterSequence: number | null;
       replacedSegmentIndexes: number[];
       tailMessage: Record<string, unknown> | null;
     };
@@ -409,6 +407,12 @@ export function reconcileTerminalStreamBoundary(
   return {
     kind: "split",
     afterBoundaryRunId: selectedBoundary.boundaryRunId,
+    afterSequence:
+      readSessionMessageIdentity(
+        state.chatMessages?.find(
+          (entry) => userTurnRunId(entry) === selectedBoundary.boundaryRunId,
+        ),
+      )?.sequence ?? null,
     replacedSegmentIndexes:
       selectedBoundary === persistedBoundary && liveBoundary ? liveBoundary.segmentIndexes : [],
     tailMessage: tail ? replaceTerminalText(message, tail) : null,
@@ -428,12 +432,10 @@ function interveningUserBoundaryRunId(params: {
     return undefined;
   }
   const boundaryIndex = messages.findIndex(
-    (message) => userTurnSendIdentity(message) === `send:${params.boundaryRunId}`,
+    (message) => userTurnRunId(message) === params.boundaryRunId,
   );
   const floorRunId = params.afterBoundaryRunId ?? params.runId;
-  const floorIndex = messages.findIndex(
-    (message) => userTurnSendIdentity(message) === `send:${floorRunId}`,
-  );
+  const floorIndex = messages.findIndex((message) => userTurnRunId(message) === floorRunId);
   if (floorIndex < 0 || boundaryIndex <= floorIndex) {
     return undefined;
   }
@@ -441,9 +443,9 @@ function interveningUserBoundaryRunId(params: {
     if (readSessionMessageIdentity(messages[index])?.role !== "user") {
       continue;
     }
-    const identity = userTurnSendIdentity(messages[index]);
-    if (identity?.startsWith("send:")) {
-      return identity.slice("send:".length);
+    const runId = userTurnRunId(messages[index]);
+    if (runId) {
+      return runId;
     }
   }
   return undefined;

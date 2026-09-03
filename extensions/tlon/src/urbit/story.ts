@@ -645,17 +645,14 @@ export function markdownToStory(markdown: string): Story {
     // preserve the whole block in the existing plain paragraph path.
     let preserveListText = preservesLooseList || MARKDOWN_LIST_ITEM_PATTERN.test(line);
 
-    // Regular paragraph - collect consecutive non-empty lines
+    // Only interrupt for blocks consumed above; plain hashtags must advance the cursor.
     const paragraphLines: string[] = [];
     while (true) {
       const paragraphLine = lines.at(i);
       if (
         paragraphLine === undefined ||
         paragraphLine.trim() === "" ||
-        paragraphLine.startsWith("#") ||
-        paragraphLine.startsWith("```") ||
-        paragraphLine.startsWith("> ") ||
-        /^(-{3,}|\*{3,})$/.test(paragraphLine.trim())
+        startsTopLevelStoryBlock(paragraphLine)
       ) {
         break;
       }

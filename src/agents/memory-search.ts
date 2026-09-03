@@ -176,17 +176,49 @@ function getConfiguredMemoryEmbeddingProvider(
   return getMemoryEmbeddingProvider(providerId, cfg);
 }
 
+/** Resolves indexing eligibility without loading an embedding provider runtime. */
+export function resolveMemorySearchIndexConfig(cfg: OpenClawConfig, agentId: string) {
+  const defaults = cfg.memory?.search;
+  const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
+  const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
+  if (!enabled) {
+    return null;
+  }
+  assertSecretOwnerAvailable("capability", runtimeMemorySecretOwnerId(agentId));
+  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
+  const configuredSessionMemory =
+    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
+  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
+  const configuredSources = overrides?.sources ?? defaults?.sources;
+  const searchSources = normalizeSources(
+    configuredSources,
+    configuredSessionMemory ||
+      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
+  );
+  const sources = normalizeSources(
+    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
+    sessionMemory,
+  );
+  return {
+    enabled,
+    rememberAcrossConversations,
+    sources,
+    searchSources,
+    experimental: { sessionMemory },
+    sync: resolveSyncConfig(),
+  };
+}
+
 function mergeConfig(
   cfg: OpenClawConfig,
   defaults: MemorySearchConfig | undefined,
   overrides: MemorySearchConfig | undefined,
   agentId: string,
-): ResolvedMemorySearchConfig {
-  const enabled = overrides?.enabled ?? defaults?.enabled ?? true;
-  const rememberAcrossConversations = resolveRememberAcrossConversations(cfg, agentId);
-  const configuredSessionMemory =
-    overrides?.experimental?.sessionMemory ?? defaults?.experimental?.sessionMemory ?? false;
-  const sessionMemory = rememberAcrossConversations || configuredSessionMemory;
+): ResolvedMemorySearchConfig | null {
+  const indexConfig = resolveMemorySearchIndexConfig(cfg, agentId);
+  if (!indexConfig) {
+    return null;
+  }
   const rawProvider = overrides?.provider ?? defaults?.provider;
   const provider =
     rawProvider?.trim() === "auto"
@@ -239,16 +271,6 @@ function mergeConfig(
   const local = {
     modelPath: overrides?.local?.modelPath ?? defaults?.local?.modelPath,
   };
-  const configuredSources = overrides?.sources ?? defaults?.sources;
-  const searchSources = normalizeSources(
-    configuredSources,
-    configuredSessionMemory ||
-      (rememberAcrossConversations && configuredSources?.includes("sessions") === true),
-  );
-  const sources = normalizeSources(
-    rememberAcrossConversations ? [...searchSources, "sessions"] : configuredSources,
-    sessionMemory,
-  );
   const extraPaths = normalizeConfiguredMemoryExtraPaths([
     ...(defaults?.extraPaths ?? []),
     ...(overrides?.extraPaths ?? []),
@@ -276,7 +298,6 @@ function mergeConfig(
     tokens: DEFAULT_CHUNK_TOKENS,
     overlap: DEFAULT_CHUNK_OVERLAP,
   };
-  const sync = resolveSyncConfig();
   const query = {
     maxResults: overrides?.query?.maxResults ?? defaults?.query?.maxResults ?? DEFAULT_MAX_RESULTS,
     minScore: overrides?.query?.minScore ?? defaults?.query?.minScore ?? DEFAULT_MIN_SCORE,
@@ -302,17 +323,11 @@ function mergeConfig(
 
   const minScore = clampNumber(query.minScore, 0, 1);
   return {
-    enabled,
-    rememberAcrossConversations,
-    sources,
-    searchSources,
+    ...indexConfig,
     extraPaths,
     multimodal,
     provider,
     remote,
-    experimental: {
-      sessionMemory,
-    },
     fallback,
     model,
     inputType,
@@ -322,7 +337,6 @@ function mergeConfig(
     local,
     store,
     chunking,
-    sync,
     query: {
       ...query,
       minScore,
@@ -355,10 +369,9 @@ export function resolveMemorySearchConfig(
   const defaults = cfg.memory?.search;
   const overrides = resolveAgentConfig(cfg, agentId)?.memory?.search;
   const resolved = mergeConfig(cfg, defaults, overrides, agentId);
-  if (!resolved.enabled) {
+  if (!resolved) {
     return null;
   }
-  assertSecretOwnerAvailable("capability", runtimeMemorySecretOwnerId(agentId));
   const isFtsOnly = normalizeProviderId(resolved.provider) === "none";
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider = isFtsOnly

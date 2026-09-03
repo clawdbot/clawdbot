@@ -40,7 +40,6 @@ import {
   assertIrreversibleReloadPlanHasRecoveryOwner,
   restoreCanonicalSecretRefs,
 } from "./server-reload-utils.js";
-import { startGatewayChannelHealthMonitor } from "./server-runtime-services.js";
 import {
   captureSharedGatewaySessionGenerationOwnership,
   disconnectStaleSharedGatewayAuthClients,
@@ -56,8 +55,15 @@ function canAdvancePreparedModelRuntimeConfigInPlace(plan: GatewayReloadPlan): b
 export function startManagedGatewayConfigReloader(
   params: ManagedGatewayConfigReloaderParams,
 ): ManagedGatewayConfigReloaderHandle {
+  let stopped = false;
   if (params.minimalTestGateway) {
-    return { stop: async () => {}, notifyPluginMetadataChanged: () => {} };
+    return {
+      stop: async () => {
+        stopped = true;
+      },
+      notifyPluginMetadataChanged: () => {},
+      isConfigReloadSettled: () => !stopped,
+    };
   }
 
   const prepareRuntimeCandidate = (
@@ -80,7 +86,6 @@ export function startManagedGatewayConfigReloader(
   const restartRecoveryAvailable =
     params.restartRecoveryAvailable !== false && params.requestRecoveryRestart !== undefined;
 
-  let stopped = false;
   const tryPrepareRuntimeSecrets = async (
     config: OpenClawConfig,
     transactionOwnership: GatewayConfigReloadTransactionOwnership,
@@ -134,6 +139,7 @@ export function startManagedGatewayConfigReloader(
     acceptRestartConfig,
     beginGatewayRestartLifecycle,
     hasOutstandingGatewayRestart,
+    hasConfigCandidatePending,
     pauseGatewayRestartForConfigCandidate,
     publishAppliedConfigHash,
     publishAcceptedRestartTarget,
@@ -177,8 +183,6 @@ export function startManagedGatewayConfigReloader(
         assertOpenClawDatabasesReady({ env: process.env, operation: "gateway-restart" }),
       ),
     restartRecoveryAvailable,
-    createHealthMonitor: () =>
-      startGatewayChannelHealthMonitor({ channelManager: params.channelManager }),
   });
   const runManagedRestart = async (
     plan: GatewayReloadPlan,
@@ -257,7 +261,7 @@ export function startManagedGatewayConfigReloader(
     let requiredOwnership: SharedGatewaySessionGenerationOwnership | null = null;
     try {
       assertCurrent();
-      params.reconcileTerminalSessions(plan, preparedRuntimeConfig);
+      await params.reconcileRuntimePolicy(preparedRuntimeConfig, "restart");
       assertCurrent();
       await beforeRestartRequest?.();
       assertCurrent();
@@ -364,6 +368,7 @@ export function startManagedGatewayConfigReloader(
       // object from the source-derived candidate. Record the committed one so a
       // rebuild below stamps owners with the identity readers actually supply.
       lastCommittedRuntimeConfig = committedRuntimeConfig;
+      params.resolveGatewayContext?.()?.mentionInbox?.invalidate();
       if (canAdvancePreparedModelRuntimeConfigInPlace(plan)) {
         advancePreparedModelRuntimeConfig(committedRuntimeConfig);
       }
@@ -372,7 +377,7 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     initialInternalWriteHash: params.initialInternalWriteHash,
-    runTransaction: runWithGatewayIndependentRootWorkAdmission,
+    runTransaction: (run) => runWithGatewayIndependentRootWorkAdmission(run, "reload:config"),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,
@@ -530,5 +535,8 @@ export function startManagedGatewayConfigReloader(
     },
     hotReloadStatus: configReloader.hotReloadStatus,
     notifyPluginMetadataChanged: configReloader.notifyPluginMetadataChanged,
+    // Equal config revisions can still owe a plugin/runtime restart.
+    isConfigReloadSettled: () =>
+      !stopped && !hasConfigCandidatePending() && !hasOutstandingGatewayRestart(),
   };
 }

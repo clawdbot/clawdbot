@@ -11,7 +11,6 @@ import {
   type RealtimeTalkAudioFrame,
 } from "./realtime-talk-audio.ts";
 import type { DelayedToolResult, GatewayRelayEvent } from "./realtime-talk-gateway-relay-types.ts";
-import { openRealtimeTalkInput } from "./realtime-talk-input.ts";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME,
@@ -44,14 +43,13 @@ function estimateRelayEventBytes(event: GatewayRelayEvent): number {
 }
 
 export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport {
-  private media: MediaStream | null = null;
+  private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;
   private outputContext: AudioContext | null = null;
   private inputMeter: RealtimeTalkMediaStreamMeter | null = null;
   private readonly inputPump = new RealtimeTalkPcmInputPump();
   private unsubscribe: (() => void) | null = null;
   private closed = false;
-  private mediaSetupController: AbortController | null = null;
   private audioAppendAbortController: AbortController | null = null;
   private readonly pendingAudioAppends = new Set<Promise<unknown>>();
   private readonly outputQueue = new RealtimeTalkPcmOutputQueue();
@@ -77,9 +75,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   ) {}
 
   async start(): Promise<RealtimeTalkTransportStartResult> {
-    if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error("Realtime Talk requires browser microphone access");
-    }
     if (
       this.session.audio.inputEncoding !== "pcm16" ||
       this.session.audio.outputEncoding !== "pcm16"
@@ -91,57 +86,37 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.pendingActivationEvents = [];
     this.pendingActivationEventBytes = 0;
     this.startupError = null;
-    this.mediaSetupController?.abort();
-    const mediaSetupController = new AbortController();
-    this.mediaSetupController = mediaSetupController;
     this.unsubscribe = this.ctx.client.addEventListener((evt) => {
       if (evt.event !== "talk.event") {
         return;
       }
       this.handleIncomingRelayEvent(evt.payload as GatewayRelayEvent);
     });
-    let media: MediaStream;
-    try {
-      media = await openRealtimeTalkInput(this.ctx.inputDeviceId, {
-        signal: mediaSetupController.signal,
-      });
-    } catch (error) {
-      const startupError = this.currentStartupError();
-      if (startupError) {
-        throw startupError;
-      }
-      if (this.closed) {
-        return "cancelled";
-      }
-      throw error;
-    } finally {
-      if (this.mediaSetupController === mediaSetupController) {
-        this.mediaSetupController = null;
-      }
-    }
+    const media = this.input.adopt((detail) => this.failAudioAppend(detail));
     const startupError = this.currentStartupError();
     if (startupError) {
-      media.getTracks().forEach((track) => track.stop());
+      this.input.stop();
       throw startupError;
     }
     if (this.closed) {
-      media.getTracks().forEach((track) => track.stop());
       return "cancelled";
     }
-    this.media = media;
     this.inputContext = new AudioContext({ sampleRate: this.session.audio.inputSampleRateHz });
     this.outputContext = new AudioContext({ sampleRate: this.session.audio.outputSampleRateHz });
     this.abortPendingAudioAppends();
     this.audioAppendAbortController = new AbortController();
     if (this.ctx.callbacks.onInputLevel) {
       this.inputMeter = new RealtimeTalkMediaStreamMeter(this.ctx.callbacks.onInputLevel);
-      this.inputMeter.start(this.media, this.inputContext);
+      this.inputMeter.start(media, this.inputContext);
     }
     this.startMicrophonePump();
     return "ready";
   }
 
   activate(): void {
+    if (this.startupError) {
+      throw this.startupError;
+    }
     if (this.closed || this.activated) {
       return;
     }
@@ -180,8 +155,7 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
 
   private stopLocal(): void {
     this.closed = true;
-    this.mediaSetupController?.abort();
-    this.mediaSetupController = null;
+    this.input.stop();
     this.activated = false;
     this.pendingActivationEvents = [];
     this.pendingActivationEventBytes = 0;
@@ -196,8 +170,6 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     this.markAckTimers.clear();
     this.discardDelayedToolResults();
     this.abortConsults();
-    this.media?.getTracks().forEach((track) => track.stop());
-    this.media = null;
     this.playbackOverflowed = false;
     this.activeOutputTurnId = null;
     this.stopOutput();
@@ -208,10 +180,10 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
   }
 
   private startMicrophonePump(): void {
-    if (!this.media || !this.inputContext) {
+    if (!this.input.stream || !this.inputContext) {
       return;
     }
-    this.inputPump.start(this.media, this.inputContext, (samples) => {
+    this.inputPump.start(this.input.stream, this.inputContext, (samples) => {
       if (this.closed) {
         return;
       }
@@ -260,8 +232,11 @@ export class GatewayRelayRealtimeTalkTransport implements RealtimeTalkTransport 
     if (this.closed) {
       return;
     }
-    this.ctx.callbacks.onStatus?.("error", formatUiError(error));
-    this.stop();
+    try {
+      this.ctx.callbacks.onStatus?.("error", formatUiError(error));
+    } finally {
+      this.stop();
+    }
   }
 
   private currentStartupError(): Error | null {

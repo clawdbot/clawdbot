@@ -3,6 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -148,6 +150,128 @@ describe("sessionsTailCommand", () => {
     expect(output).not.toContain("SECRET");
   });
 
+  it.each<[string, TrajectoryEvent["data"], string]>([
+    ["provider failure", { stopReason: "error", aborted: false, timedOut: false }, "error"],
+    [
+      "tool turn without delivery",
+      { stopReason: "toolUse", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    [
+      "empty terminal reply",
+      { stopReason: "stop", terminalError: "non_deliverable_terminal_turn" },
+      "error",
+    ],
+    ["assistant interruption", { stopReason: "aborted", aborted: false }, "aborted"],
+    ["prompt failure", { promptError: "sensitive failure detail" }, "error"],
+    [
+      "timeout with abort and failure",
+      { timedOut: true, aborted: true, promptError: "sensitive failure detail" },
+      "timeout",
+    ],
+    ["abort with failure", { aborted: true, promptError: "sensitive failure detail" }, "aborted"],
+    ["normal stop", { stopReason: "stop" }, "done"],
+    ["normal end turn", { stopReason: "end_turn" }, "done"],
+    ["delivered partial reply", { stopReason: "length" }, "done"],
+    ["unspecified completion", undefined, "done"],
+  ])("renders the recorded terminal outcome for %s", async (_name, data, expected) => {
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([
+      makeEvent({
+        type: "model.completed",
+        ts: "2026-05-18T12:04:29.000Z",
+        provider: "openai",
+        modelId: "gpt-5.2",
+        data,
+      }),
+    ]);
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey }, runtime);
+
+    expect(runtimeOutput(runtime)).toContain(`openai/gpt-5.2 ${expected}`);
+    expect(runtimeOutput(runtime)).not.toContain("sensitive failure detail");
+  });
+
+  it.each([
+    ["ASCII", "incident", "incident"],
+    ["CJK", "中文", "中文"],
+    ["combining accent", "e\u0301", "e\u0301"],
+    ["joined emoji", "👩🏽‍💻", "👩🏽‍💻"],
+    ["truncated emoji", `${"a".repeat(17)}👩🏽‍💻-incident`, `${"a".repeat(17)}…`],
+  ])("keeps progress columns aligned with %s session keys", async (_name, suffix, displayed) => {
+    const runtime = makeRuntime();
+    const key = `agent:main:${suffix}`;
+    await writeSessionEntry(key);
+    await appendEvents(
+      [
+        makeEvent({
+          type: "tool.result",
+          ts: "2026-05-18T12:04:21.000Z",
+          data: { name: "proof", success: true },
+        }),
+      ],
+      { key },
+    );
+
+    await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+    const line = runtimeOutput(runtime);
+    expect(line.split("\n")).toHaveLength(1);
+    expect(line).toContain(` agent:main:${displayed} `);
+    expect(line).toContain("tool.result");
+    expect(line.endsWith("proof ok")).toBe(true);
+    const previewOffset = line.indexOf("proof ok");
+    expect(visibleWidth(line.slice(0, previewOffset))).toBe(57);
+  });
+
+  it.each([
+    ["CSI inside", "a\u001b[31mb", "custom\u001b[31m", "ab", "custom"],
+    [
+      "OSC inside",
+      "a\u001b]8;;https://example.invalid/\u0007b",
+      "custom\u001b]8;;https://example.invalid/\u0007",
+      "ab",
+      "custom",
+    ],
+    [
+      "CSI beyond cutoff",
+      `${"a".repeat(30)}\u001b[31m`,
+      "custom.progress-long\u001b[31m",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+    [
+      "OSC beyond cutoff",
+      `${"a".repeat(30)}\u001b]8;;https://example.invalid/\u0007`,
+      "custom.progress-long\u001b]8;;https://example.invalid/\u0007",
+      `${"a".repeat(18)}…`,
+      "custom.progress…",
+    ],
+  ])(
+    "renders %s as plain progress labels",
+    async (_name, suffix, type, displayed, displayedType) => {
+      const runtime = makeRuntime();
+      const key = `agent:main:${suffix}`;
+      await writeSessionEntry(key);
+      await appendEvents(
+        [makeEvent({ type, ts: "2026-05-18T12:04:21.000Z", data: { name: "proof" } })],
+        { key },
+      );
+
+      await sessionsTailCommand({ agent: "main", store: storePath, sessionKey: key }, runtime);
+
+      const line = runtimeOutput(runtime);
+      expect(line.split("\n")).toHaveLength(1);
+      expect(line).not.toContain("\u001b");
+      expect(line).not.toContain("\u0007");
+      expect(line).toContain(` ${displayedType} `);
+      expect(line).toContain(` agent:main:${displayed} `);
+      expect(line.endsWith(" proof")).toBe(true);
+      expect(visibleWidth(line.slice(0, line.lastIndexOf(" proof") + 1))).toBe(57);
+    },
+  );
+
   it("honors the tail count before rendering existing trajectory events", async () => {
     const runtime = makeRuntime();
     await writeSessionEntry();
@@ -282,6 +406,48 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("sqlite ok");
+  });
+
+  it("exits unsuccessfully when the followed trajectory store becomes unreadable", async () => {
+    vi.useFakeTimers();
+    const runtime = makeRuntime();
+    await writeSessionEntry();
+    await appendEvents([makeEvent({ type: "session.started", ts: "2026-05-18T12:04:17.000Z" })]);
+
+    const run = sessionsTailCommand(
+      { agent: "main", store: storePath, sessionKey, tail: "0", follow: true },
+      runtime,
+    );
+    closeOpenClawAgentDatabasesForTest();
+    fs.writeFileSync(storePath, "not a SQLite database");
+    try {
+      await vi.advanceTimersByTimeAsync(1_000);
+    } finally {
+      process.emit("SIGTERM", "SIGTERM");
+      await run;
+    }
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { agent: "" },
+    { agent: "   " },
+    { agent: "", sessionKey },
+    { agent: "   ", sessionKey },
+  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    const runtime = makeRuntime();
+    const result = sessionsTailCommand(opts, runtime);
+
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {

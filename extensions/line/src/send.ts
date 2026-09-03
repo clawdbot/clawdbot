@@ -14,7 +14,7 @@ import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { fetchWithRuntimeDispatcherOrMockedGlobal } from "openclaw/plugin-sdk/runtime-fetch";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveLineAccount } from "./accounts.js";
-import { messageAction, normalizeLineMessageActions } from "./actions.js";
+import { messageAction, normalizeLineMessage } from "./actions.js";
 import { resolveLineChannelAccessToken } from "./channel-access-token.js";
 import { buildLineMediaMessage } from "./outbound-media.js";
 import { recordLineSentMessages } from "./outbound-message-log.js";
@@ -381,7 +381,7 @@ async function pushLineMessages(
   }
 
   const { account, token, chatId } = createLinePushContext(to, opts);
-  const normalizedMessages = messages.map(normalizeLineMessageActions);
+  const normalizedMessages = messages.map(normalizeLineMessage);
   // One retry key per logical push: every attempt reuses it so LINE deduplicates
   // an attempt that was accepted before its outcome reached us. A durable intent
   // id keeps that key stable across processes so recovery can replay this exact
@@ -441,7 +441,7 @@ async function replyLineMessages(
   opts: LinePushOpts,
 ): Promise<{ messageId: string; messageIds: string[]; accountId: string }> {
   const { account, token } = resolveLineMessagingAccount(opts);
-  const normalizedMessages = messages.map(normalizeLineMessageActions);
+  const normalizedMessages = messages.map(normalizeLineMessage);
 
   const response = await sendLineProviderMessages("reply", token, {
     replyToken,

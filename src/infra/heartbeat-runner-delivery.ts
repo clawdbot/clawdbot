@@ -14,7 +14,7 @@ import {
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import { mergeSessionEntry, type SessionEntry } from "../config/sessions/types.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { formatErrorMessage } from "./errors.js";
 import {
@@ -287,8 +287,11 @@ export async function finalizeHeartbeatOutcome(params: {
   outboundIdentity: ReturnType<typeof resolveAgentOutboundIdentity>;
 }): Promise<HeartbeatRunResult> {
   const { cfg, agentId, scheduledTasks, startedAt, wakeSource } = params.wake;
-  const { delivery, entry, previousUpdatedAt } = params.prepared;
+  const { delivery, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
+  // Delivery markers belong to the policy session, not a rotating isolated run or recipient.
+  const stateKey = params.prepared.outboundPolicySessionKey ?? sessionKey;
+  const stateEntry = loadExactSessionEntryReadOnly({ storePath, sessionKey: stateKey })?.entry;
   const outcome = params.outcome;
   const recordOutcome = (response: HeartbeatToolResponse) =>
     persistHeartbeatOutcome({
@@ -430,10 +433,8 @@ export async function finalizeHeartbeatOutcome(params: {
   const { hasStructuredReplyContent, mediaUrls, normalized, replyPayload } = outcome;
   // Suppress duplicate heartbeats (same payload) within a short window.
   // This prevents "nagging" when nothing changed but the model repeats the same items.
-  const prevHeartbeatText =
-    typeof entry?.lastHeartbeatText === "string" ? entry.lastHeartbeatText : "";
-  const prevHeartbeatAt =
-    typeof entry?.lastHeartbeatSentAt === "number" ? entry.lastHeartbeatSentAt : undefined;
+  const prevHeartbeatText = stateEntry?.lastHeartbeatText ?? "";
+  const prevHeartbeatAt = stateEntry?.lastHeartbeatSentAt;
   const isDuplicateMain =
     !mediaUrls.length &&
     !hasStructuredReplyContent &&
@@ -565,12 +566,10 @@ export async function finalizeHeartbeatOutcome(params: {
   const visibleSendSucceeded = send.status === "sent";
   if (visibleSendSucceeded) {
     const hasHeartbeatText = Boolean(deliveryText.trim());
+    const fallbackEntry = mergeSessionEntry(undefined, { updatedAt: startedAt });
     await patchSessionEntryCore(
-      { storePath, sessionKey },
-      (current, context) => {
-        if (!context.existingEntry) {
-          return null;
-        }
+      { storePath, sessionKey: stateKey },
+      (current) => {
         // Visible structured-only sends satisfy their own pending final too;
         // preserve old text dedupe markers and another run's recovery state.
         const ownsPendingFinalDelivery = heartbeatRunOwnsPendingFinalDelivery(current, startedAt);
@@ -584,7 +583,7 @@ export async function finalizeHeartbeatOutcome(params: {
           ...(ownsPendingFinalDelivery ? CLEARED_PENDING_FINAL_DELIVERY_FIELDS : {}),
         };
       },
-      { preserveActivity: true },
+      { fallbackEntry, preserveActivity: true },
     );
   }
 

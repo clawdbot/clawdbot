@@ -13,18 +13,19 @@ type SessionGlyphContent = TemplateResult | typeof nothing;
 export function renderSessionGlyph(options: {
   content: SessionGlyphContent;
   running: boolean;
+  queued?: boolean;
   circular?: boolean;
   badge?: SessionGlyphContent;
 }): TemplateResult {
-  const { content, running, circular = false, badge = nothing } = options;
+  const { content, running, queued = false, circular = false, badge = nothing } = options;
   const modifiers = `${circular ? " session-glyph--circular" : ""}${running ? " session-glyph--running" : ""}`;
   return html`<span class="session-glyph${modifiers}">
     <span class="session-glyph__content">${content}</span>
     ${running
       ? html`<span
-          class="session-glyph__ring"
+          class="session-glyph__ring${queued ? " session-glyph__ring--queued" : ""}"
           role="img"
-          aria-label=${t("sessionsView.activeRun")}
+          aria-label=${t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")}
         ></span>`
       : nothing}
     ${badge}

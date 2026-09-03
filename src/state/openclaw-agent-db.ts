@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
@@ -619,6 +620,68 @@ export function closeOpenClawAgentDatabaseByPath(pathname: string): boolean {
   return true;
 }
 
+export type OpenClawAgentDatabaseWorkerCloseResult = {
+  errors: Error[];
+  settled: boolean;
+};
+
+/**
+ * Converge a terminating worker's cached handle and durable lease without
+ * turning an already committed worker result into an operation failure.
+ * Callers own a bounded retry policy and must surface an unsettled result.
+ */
+export function settleOpenClawAgentDatabaseWorkerClose(
+  pathname: string,
+): OpenClawAgentDatabaseWorkerCloseResult {
+  const resolvedPath = path.resolve(pathname);
+  const errors: Error[] = [];
+  const database = cachedDatabases.get(resolvedPath);
+  if (database) {
+    try {
+      database.walMaintenance.close();
+    } catch (error) {
+      errors.push(error instanceof Error ? error : new Error(String(error)));
+    }
+    if (database.db.isOpen) {
+      try {
+        database.db.close();
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+    if (!database.db.isOpen) {
+      const incognito = incognitoDatabases.has(database);
+      cachedDatabases.delete(resolvedPath);
+      cachedDatabaseOpenFailures.delete(resolvedPath);
+      if (incognito) {
+        incognitoDatabaseGeneration += 1;
+      }
+      if (cachedDatabases.size === 0) {
+        unregisterExitClose?.();
+        unregisterExitClose = null;
+      }
+    }
+  }
+
+  if (!cachedDatabases.get(resolvedPath)?.db.isOpen) {
+    const lease = cachedDatabaseLeases.get(resolvedPath);
+    if (lease) {
+      try {
+        releaseOpenClawAgentDatabaseLease(lease.leaseId, { env: lease.env });
+        cachedDatabaseLeases.delete(resolvedPath);
+      } catch (error) {
+        errors.push(error instanceof Error ? error : new Error(String(error)));
+      }
+    }
+  }
+
+  return {
+    errors,
+    settled:
+      !cachedDatabases.get(resolvedPath)?.db.isOpen && !cachedDatabaseLeases.has(resolvedPath),
+  };
+}
+
 /** Close and unregister one unambiguous transient agent database by filesystem identity. */
 export function disposeOpenClawAgentDatabaseByPath(
   pathname: string,
@@ -654,20 +717,12 @@ export function disposeOpenClawAgentDatabaseByPath(
   return true;
 }
 
-/** Close all cached agent database handles. */
-export function closeOpenClawAgentDatabases(): void {
-  unregisterExitClose?.();
-  unregisterExitClose = null;
-  const removedIncognito = [...cachedDatabases.values()].some(
-    (database) => database.db.isOpen && incognitoDatabases.has(database),
-  );
-  for (const database of cachedDatabases.values()) {
-    closeCachedOpenClawAgentDatabase(database);
-  }
-  cachedDatabases.clear();
-  cachedDatabaseOpenFailures.clear();
-  if (removedIncognito) {
-    incognitoDatabaseGeneration += 1;
+/** Close cached agent handles, optionally restricted to one runtime root. */
+export function closeOpenClawAgentDatabases(rootPath?: string): void {
+  for (const pathname of cachedDatabases.keys()) {
+    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+      closeOpenClawAgentDatabaseByPath(pathname);
+    }
   }
 }
 
@@ -682,6 +737,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       database: { scope: "shared", options },
       leaseMs: 60_000,
       waitMs: 5_000,
+      heartbeat: "worker",
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",
     },

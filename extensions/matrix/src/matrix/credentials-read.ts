@@ -2,7 +2,6 @@
 // shapes/normalizers live in credentials-state.ts; this module owns the
 // heavy sync plugin-state store access.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-store-runtime";
 import { getOptionalMatrixRuntime } from "../runtime.js";
 import {
@@ -16,9 +15,7 @@ import {
 
 export { resolveMatrixCredentialsDir, resolveMatrixCredentialsPath } from "../storage-paths.js";
 
-export function openMatrixCredentialsStore(
-  env: NodeJS.ProcessEnv = process.env,
-): PluginStateSyncKeyedStore<MatrixCredentialStateRecord> {
+export function openMatrixCredentialsStore(env: NodeJS.ProcessEnv = process.env) {
   const runtime = getOptionalMatrixRuntime();
   const resolvedEnv =
     env.OPENCLAW_STATE_DIR?.trim() || !runtime

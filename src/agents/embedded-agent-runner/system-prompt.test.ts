@@ -36,6 +36,7 @@ describe("buildEmbeddedSystemPrompt", () => {
   it("forwards provider prompt contributions into the embedded prompt", () => {
     const prompt = buildEmbeddedSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      runtimeCwd: "/tmp/task-repo",
       reasoningTagHint: false,
       runtimeInfo: {
         host: "local",
@@ -55,6 +56,8 @@ describe("buildEmbeddedSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Embedded Stable\n\nStable provider guidance.");
+    expect(prompt).toContain("Working directory: /tmp/task-repo (tools and deliverables).");
+    expect(prompt).toContain("Agent workspace: /tmp/openclaw");
   });
 
   it("keeps post-compaction curated context scoped to the prepared project", () => {

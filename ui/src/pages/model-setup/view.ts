@@ -38,7 +38,7 @@ type ModelSetupViewProps = {
   activation: ModelSetupActivationState;
   verify: ModelSetupVerifyState;
   wizard: ModelSetupWizardState;
-  wizardMode: "auth" | "prepare";
+  wizardMode: "auth" | "prepare" | "activate";
   wizardValue: unknown;
   canAdmin: boolean;
   canVerify: boolean;

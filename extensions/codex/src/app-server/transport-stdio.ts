@@ -10,6 +10,7 @@ import {
 import type { CodexAppServerStartOptions } from "./config.js";
 import { normalizeCodexAppServerArgs } from "./launch-args.js";
 import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import { closeCodexAppServerTransportAndWait } from "./transport.js";
 
 const UNSAFE_ENVIRONMENT_KEYS = new Set(["__proto__", "constructor", "prototype"]);
 const RUNTIME_INJECTION_ENVIRONMENT_KEYS = new Set([
@@ -157,7 +158,8 @@ export async function createStdioTransport(
     assertCurrent?.();
     return child;
   } catch (error) {
-    child.kill("SIGKILL");
+    await closeCodexAppServerTransportAndWait(child, { drainStdio: true });
+    assertCurrent?.();
     throw error;
   }
 }

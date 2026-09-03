@@ -1,4 +1,3 @@
-import { createServer } from "node:net";
 import type { MatrixVerificationBootstrapResult } from "@openclaw/matrix/test-api.js";
 import type { MatrixQaScenarioContext } from "./scenario-runtime-shared.js";
 
@@ -22,16 +21,6 @@ export function createMatrixQaE2eeTestContext(
     topology: { defaultRoomId: "!room:matrix-qa.test", defaultRoomKey: "main", rooms: [] },
     ...overrides,
   };
-}
-
-export async function assertMatrixQaTestPortClosed(baseUrl: string) {
-  const probe = createServer();
-  await new Promise<void>((resolve, reject) => {
-    probe.once("error", reject);
-    probe.listen(Number(new URL(baseUrl).port), "127.0.0.1", () => {
-      probe.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
 }
 
 export function createMatrixQaBootstrapFailure(): MatrixVerificationBootstrapResult {

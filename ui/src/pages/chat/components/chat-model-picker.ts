@@ -28,12 +28,14 @@ import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-p
 export type { ChatModelCatalogState } from "./chat-model-catalog-state.ts";
 
 type ChatModelPickerParams = {
+  accountControl?: unknown;
   contextWindow?: ChatContextWindowControlParams;
   defaultModelLabel: string;
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ChatModelCatalogState;
   modelSelectionLocked: boolean;
+  selectionScopeDescription?: string;
   modelOptions: ChatModelPickerOption[];
   open?: boolean;
   targetGroups?: readonly ChatModelPickerTargetGroup[];
@@ -76,17 +78,19 @@ function selectableModelRows(root: HTMLElement): HTMLButtonElement[] {
 function ensureModelPickerIds(menu: HTMLElement): void {
   const details = menu.closest<HTMLDetailsElement>(".chat-controls__model-picker");
   const input = menu.querySelector<HTMLInputElement>("[data-chat-model-search]");
-  const listbox = menu.querySelector<HTMLElement>("[data-chat-model-list]");
-  if (!details || !input || !listbox) {
+  const listboxes = [...menu.querySelectorAll<HTMLElement>("[data-chat-model-list]")];
+  if (!details || !input || listboxes.length === 0) {
     return;
   }
   const prefix = details.dataset.chatModelPickerId ?? `chat-model-picker-${crypto.randomUUID()}`;
   details.dataset.chatModelPickerId = prefix;
-  listbox.id = `${prefix}-listbox`;
+  listboxes.forEach((listbox, index) => {
+    listbox.id = `${prefix}-listbox-${index}`;
+  });
   menu.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]").forEach((row, index) => {
     row.id = `${prefix}-option-${index}`;
   });
-  input.setAttribute("aria-controls", listbox.id);
+  input.setAttribute("aria-controls", listboxes.map((listbox) => listbox.id).join(" "));
   input.setAttribute("aria-expanded", details.open ? "true" : "false");
 }
 
@@ -103,11 +107,12 @@ function highlightModelRow(menu: HTMLElement, row: HTMLButtonElement | undefined
 }
 
 // Numbers follow the filtered order because digit selection reads that same row list.
-// A focused search input owns the digits instead (handleModelPickerKeydown bails on input
-// targets), and the :focus-within rule in styles/chat/layout.css withdraws these keycaps there.
+// Search inputs and nested dropdowns own digits instead. The :focus-within rule
+// in styles/chat/composer.css hides these keycaps while the search input has focus.
 function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElement[]): void {
   menu.querySelectorAll<HTMLElement>("[data-chat-model-shortcut]").forEach((shortcut) => {
     shortcut.hidden = true;
+    shortcut.removeAttribute("data-shortcut");
     shortcut.removeAttribute("data-chat-model-shortcut-number");
   });
   rows.slice(0, 9).forEach((row, index) => {
@@ -116,6 +121,7 @@ function updateModelShortcuts(menu: HTMLElement, rows: readonly HTMLButtonElemen
       return;
     }
     shortcut.hidden = false;
+    shortcut.setAttribute("data-shortcut", String(index + 1));
     shortcut.setAttribute("data-chat-model-shortcut-number", String(index + 1));
   });
 }
@@ -235,7 +241,14 @@ function handleModelSearchKeydown(event: KeyboardEvent): void {
 
 function handleModelPickerKeydown(event: KeyboardEvent): void {
   const details = event.currentTarget as HTMLDetailsElement;
-  if (!details.open || event.target instanceof HTMLInputElement || !/^[1-9]$/u.test(event.key)) {
+  if (
+    !details.open ||
+    event.target instanceof HTMLInputElement ||
+    event
+      .composedPath()
+      .some((target) => target instanceof HTMLElement && target.localName === "wa-dropdown") ||
+    !/^[1-9]$/u.test(event.key)
+  ) {
     return;
   }
   const row = selectableModelRows(details)[Number(event.key) - 1];
@@ -352,6 +365,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
   return html`
     <details
       class="chat-controls__inline-select chat-controls__model-picker"
+      data-chat-autotype-shortcuts
       ?open=${params.open === true}
       @keydown=${handleModelPickerKeydown}
       @toggle=${(event: Event) => {
@@ -380,10 +394,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
         data-chat-model-locked=${params.modelSelectionLocked ? "true" : "false"}
         data-chat-select-value=${params.selectedModelValue}
         data-chat-model-tools=${modelToolsUnavailable ? "unavailable" : "available"}
-        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}`}
+        aria-label=${`${t("chat.selectors.model")}: ${triggerTitle}${
+          params.selectionScopeDescription ? `. ${params.selectionScopeDescription}` : ""
+        }`}
         aria-busy=${params.triggerLoading ? "true" : "false"}
         aria-disabled=${params.disabled ? "true" : "false"}
-        title=${params.disabledReason ?? triggerTitle}
+        title=${params.disabledReason?.trim() || params.selectionScopeDescription || triggerTitle}
         @click=${(event: MouseEvent) => {
           if (params.disabled) {
             event.preventDefault();
@@ -476,12 +492,7 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                 )}
                 ${hasOptions
                   ? html`
-                      <div
-                        class="chat-controls__model-options"
-                        data-chat-model-list="true"
-                        role="listbox"
-                        aria-label=${t("chat.selectors.model")}
-                      >
+                      <div class="chat-controls__model-options">
                         ${repeat(
                           orderedProviderGroups,
                           ([provider]) => provider,
@@ -498,22 +509,47 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 data-chat-model-provider=${provider}
                               >
                                 ${renderChatModelProviderIcon(provider)}
-                                <span>${providerDisplayLabel(provider)}</span>
+                                <span class="chat-controls__provider-label"
+                                  >${providerDisplayLabel(provider)}</span
+                                >
+                                ${params.onModelSetup
+                                  ? html`<button
+                                      class="chat-controls__provider-settings"
+                                      data-chat-model-provider-settings
+                                      type="button"
+                                      aria-label=${t("chat.modelControls.configureModels")}
+                                      @click=${(event: MouseEvent) => {
+                                        event.stopPropagation();
+                                        params.onModelSetup?.();
+                                      }}
+                                    >
+                                      ${icons.settings}
+                                    </button>`
+                                  : nothing}
                               </div>
-                              ${repeat(
-                                options,
-                                (entry) => entry.value,
-                                (entry) =>
-                                  renderChatModelPickerOption({
-                                    disabled: params.disabled,
-                                    entry,
-                                    index: optionIndex.get(entry.value) ?? 0,
-                                    selectedModelValue: params.selectedModelValue,
-                                    onHighlight: highlightOption,
-                                    onSelect: selectModel,
-                                    onModelSetup: params.onModelSetup,
-                                  }),
-                              )}
+                              <div
+                                class="chat-controls__provider-model-list"
+                                data-chat-model-list="true"
+                                role="listbox"
+                                aria-label=${t("chat.modelControls.providerModels", {
+                                  provider: providerDisplayLabel(provider),
+                                })}
+                              >
+                                ${repeat(
+                                  options,
+                                  (entry) => entry.value,
+                                  (entry) =>
+                                    renderChatModelPickerOption({
+                                      disabled: params.disabled,
+                                      entry,
+                                      index: optionIndex.get(entry.value) ?? 0,
+                                      selectedModelValue: params.selectedModelValue,
+                                      onHighlight: highlightOption,
+                                      onSelect: selectModel,
+                                      onModelSetup: params.onModelSetup,
+                                    }),
+                                )}
+                              </div>
                             </section>
                           `,
                         )}
@@ -550,20 +586,27 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                         }
                                       : undefined,
                                   )}
-                              ${repeat(
-                                group.options,
-                                (entry) => entry.value,
-                                (entry, targetIndex) =>
-                                  renderChatModelPickerTargetOption({
-                                    disabled: params.disabled,
-                                    entry,
-                                    groupId: group.id,
-                                    groupLabel: group.label,
-                                    index: orderedOptions.length + targetIndex,
-                                    onHighlight: highlightOption,
-                                    onSelect: selectTarget,
-                                  }),
-                              )}
+                              <div
+                                class="chat-controls__provider-model-list"
+                                data-chat-model-list="true"
+                                role="listbox"
+                                aria-label=${group.label}
+                              >
+                                ${repeat(
+                                  group.options,
+                                  (entry) => entry.value,
+                                  (entry, targetIndex) =>
+                                    renderChatModelPickerTargetOption({
+                                      disabled: params.disabled,
+                                      entry,
+                                      groupId: group.id,
+                                      groupLabel: group.label,
+                                      index: orderedOptions.length + targetIndex,
+                                      onHighlight: highlightOption,
+                                      onSelect: selectTarget,
+                                    }),
+                                )}
+                              </div>
                             </section>
                           `,
                         )}
@@ -580,11 +623,13 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                         : nothing}
                       ${params.sessionModelPinned && params.modelOptions.length > 0
                         ? html`<footer class="chat-controls__model-provenance">
-                            <span>${t("chat.modelControls.onlyForSession")}</span>
                             <button
-                              class="chat-controls__model-reset"
+                              class="btn btn--ghost btn--xs chat-controls__model-reset"
                               data-chat-model-reset="true"
                               type="button"
+                              title=${t("chat.modelControls.useDefaultModel", {
+                                model: params.defaultModelLabel,
+                              })}
                               ?disabled=${params.disabled}
                               @click=${(event: MouseEvent) => {
                                 event.stopPropagation();
@@ -608,15 +653,14 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
                                 }
                               }}
                             >
-                              ${t("chat.modelControls.useDefaultModel", {
-                                model: params.defaultModelLabel,
-                              })}
+                              ${t("chat.modelControls.resetSessionModel")}
                             </button>
                           </footer>`
                         : nothing}
                     `
                   : nothing}
               `}
+          ${params.accountControl ?? nothing}
         </div>
       </wa-popup>
     </details>

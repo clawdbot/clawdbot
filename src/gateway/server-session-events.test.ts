@@ -470,12 +470,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
-  it("projects queued status into transcript snapshots before execution starts", async () => {
+  it("projects running status into ordinary startup transcript snapshots", async () => {
     await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
-      status: "queued",
+      status: "running",
       hasActiveRun: true,
-      session: { key: "agent:main:main", status: "queued", hasActiveRun: true },
+      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
     });
   });
 

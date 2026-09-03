@@ -35,7 +35,7 @@ import {
 
 let truncateToolResultMessage: typeof import("./tool-result-truncation.js").truncateToolResultMessage;
 let truncateOversizedToolResultsInMessages: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInMessages;
-let truncateOversizedToolResultsInActiveTarget: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInActiveTarget;
+let truncateOversizedToolResultsInSessionManager: typeof import("./tool-result-truncation.js").truncateOversizedToolResultsInSessionManager;
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
@@ -50,7 +50,7 @@ async function loadFreshToolResultTruncationModuleForTest() {
   ({
     truncateToolResultMessage,
     truncateOversizedToolResultsInMessages,
-    truncateOversizedToolResultsInActiveTarget,
+    truncateOversizedToolResultsInSessionManager,
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -68,6 +68,7 @@ function createPromptProjectionStateForTest(): ToolResultPromptProjectionState {
     replacements: new Map(),
     frozen: new Set(),
     ambiguousBaseKeys: new Set(),
+    restoredCacheTtl: new Map(),
     sourceTextByKey: new Map(),
   };
 }
@@ -1678,8 +1679,9 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     const listener = vi.fn();
     const cleanup = onInternalSessionTranscriptUpdate(listener);
-    const result = await truncateOversizedToolResultsInActiveTarget({
-      scope: { ...scope, sessionFile },
+    const result = truncateOversizedToolResultsInSessionManager({
+      sessionManager: SessionManager.open(scope),
+      ...scope,
       contextWindowTokens: 100,
     });
     cleanup();
@@ -1766,9 +1768,11 @@ describe("truncateOversizedToolResultsInSession", () => {
       48_000,
       projectionState,
     ).messages[0];
+    const staleProjectionState = cloneToolResultPromptProjectionState(projectionState);
 
-    const result = await truncateOversizedToolResultsInActiveTarget({
-      scope: { ...scope, sessionFile },
+    const result = truncateOversizedToolResultsInSessionManager({
+      sessionManager: SessionManager.open(scope),
+      ...scope,
       contextWindowTokens: 128_000,
       maxCharsOverride: 12_000,
       aggregateMaxCharsOverride: 48_000,
@@ -1776,6 +1780,17 @@ describe("truncateOversizedToolResultsInSession", () => {
     });
 
     expect(result.truncated).toBe(true);
+    expect(projectionState.sourceTextByKey.size).toBe(0);
+    expect(projectionState.replacements.size).toBe(0);
+    expect(projectionState.frozen.size).toBe(0);
+    preparePromptProjectionStateForTest({
+      sessionId,
+      messages: SessionManager.open(scope).buildSessionContext().messages,
+      state: staleProjectionState,
+    });
+    expect(staleProjectionState.sourceTextByKey.size).toBe(0);
+    expect(staleProjectionState.replacements.size).toBe(0);
+    expect(staleProjectionState.frozen.size).toBe(0);
     const activeToolResult = SessionManager.open(scope)
       .getBranch()
       .find((entry) => entry.type === "message" && entry.message.role === "toolResult");
@@ -1825,8 +1840,9 @@ describe("truncateOversizedToolResultsInSession", () => {
 
     // A provider context failure then demands recovery under a tighter budget:
     // frozen history is the only reducible mass and must still shrink.
-    const result = await truncateOversizedToolResultsInActiveTarget({
-      scope: { ...scope, sessionFile },
+    const result = truncateOversizedToolResultsInSessionManager({
+      sessionManager: SessionManager.open(scope),
+      ...scope,
       contextWindowTokens: 128_000,
       maxCharsOverride: 8_000,
       aggregateMaxCharsOverride: 6_000,
@@ -1901,8 +1917,9 @@ describe("truncateOversizedToolResultsInSession", () => {
       },
     ]);
 
-    const result = await truncateOversizedToolResultsInActiveTarget({
-      scope: { ...scope, sessionFile },
+    const result = truncateOversizedToolResultsInSessionManager({
+      sessionManager: SessionManager.open(scope),
+      ...scope,
       contextWindowTokens: 100,
     });
 

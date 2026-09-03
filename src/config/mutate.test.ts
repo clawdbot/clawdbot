@@ -2471,42 +2471,62 @@ describe("config mutate helpers", () => {
     expect(persistedPlugins.entries).toEqual({ old: { enabled: true } });
   });
 
-  it("falls back to the root writer when a plugins include write is not isolated", async () => {
-    const snapshot = createSnapshot({
-      hash: "hash-multi",
-      path: "/tmp/openclaw.json",
-      parsed: { plugins: { $include: "./config/plugins.json5" }, gateway: { mode: "local" } },
-      sourceConfig: {
+  it.each(["value edit", "roster format migration"] as const)(
+    "uses the root writer for an include change with a root %s",
+    async (rootChange) => {
+      const home = await suiteRootTracker.make("include-root-write");
+      const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+      const persistCanonicalAgentRoster = rootChange === "roster format migration";
+      const parsed = {
+        plugins: { $include: "./config/plugins.json5" },
+        gateway: { mode: "local" },
+        ...(persistCanonicalAgentRoster ? { agents: { list: [{ id: "main" }] } } : {}),
+      };
+      const sourceConfig: OpenClawConfig = {
         gateway: { mode: "local" },
         plugins: { entries: {} },
-      },
-    });
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-    });
-
-    await replaceConfigFile({
-      snapshot,
-      writeOptions: { expectedConfigPath: snapshot.path },
-      nextConfig: {
-        gateway: { mode: "local", port: 18789 },
+        ...(persistCanonicalAgentRoster ? { agents: { entries: { main: {} } } } : {}),
+      };
+      const snapshot = createSnapshot({
+        hash: "hash-multi",
+        path: configPath,
+        parsed,
+        sourceConfig,
+      });
+      const rootRaw = `${JSON.stringify(parsed, null, 2)}\n`;
+      const pluginsRaw = `${JSON.stringify(sourceConfig.plugins, null, 2)}\n`;
+      await fs.writeFile(configPath, rootRaw, "utf-8");
+      await fs.writeFile(pluginsPath, pluginsRaw, "utf-8");
+      ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
+        snapshot,
+        writeOptions: { expectedConfigPath: snapshot.path },
+      });
+      const nextConfig: OpenClawConfig = {
+        ...sourceConfig,
+        gateway: { mode: "local", ...(persistCanonicalAgentRoster ? {} : { port: 18789 }) },
         plugins: { entries: { demo: { enabled: true } } },
-      },
-    });
-
-    expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(
-      {
-        gateway: { mode: "local", port: 18789 },
-        plugins: { entries: { demo: { enabled: true } } },
-      },
-      {
-        baseSnapshot: snapshot,
+      };
+      const writeOptions: ConfigWriteOptions = {
         expectedConfigPath: snapshot.path,
+        assertConfigPathForWrite: allowConfigPathWrite,
+        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        ...(persistCanonicalAgentRoster ? { persistCanonicalAgentRoster: true } : {}),
+      };
+      const refusal = new Error("Root writer refused the combined config mutation");
+      ioMocks.writeConfigFile.mockRejectedValueOnce(refusal);
+
+      await expect(replaceConfigFile({ snapshot, writeOptions, nextConfig })).rejects.toBe(refusal);
+
+      expect(ioMocks.writeConfigFile).toHaveBeenCalledOnce();
+      expect(ioMocks.writeConfigFile).toHaveBeenCalledWith(nextConfig, {
+        baseSnapshot: snapshot,
+        ...writeOptions,
         afterWrite: { mode: "auto" },
-      },
-    );
-  });
+      });
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(rootRaw);
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(pluginsRaw);
+    },
+  );
 
   it("preflights injected root writers before persisting", async () => {
     const home = await suiteRootTracker.make("injected-root-runtime-preflight");

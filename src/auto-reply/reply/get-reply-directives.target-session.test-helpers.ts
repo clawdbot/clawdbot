@@ -24,7 +24,6 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
       elevatedLevel: undefined,
       rawElevatedLevel: undefined,
       rawModelDirective: modelDirective,
-      execSecurity: undefined,
     };
   }
   if (normalized === "/reasoning stream") {
@@ -51,7 +50,6 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
       elevatedLevel: undefined,
       rawElevatedLevel: undefined,
       rawModelDirective: undefined,
-      execSecurity: undefined,
     };
   }
   if (normalized === "/trace on") {
@@ -77,7 +75,6 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
       elevatedLevel: undefined,
       rawElevatedLevel: undefined,
       rawModelDirective: undefined,
-      execSecurity: undefined,
     };
   }
   return {
@@ -102,6 +99,5 @@ export function parseInlineDirectivesForTargetSessionTest(body: string) {
     elevatedLevel: undefined,
     rawElevatedLevel: undefined,
     rawModelDirective: undefined,
-    execSecurity: undefined,
   };
 }

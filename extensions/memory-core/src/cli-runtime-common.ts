@@ -11,6 +11,7 @@ import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultRuntime,
   formatErrorMessage,
+  getMemoryEmbeddingCommandSecretTargetIds,
   getMemorySearchManager,
   getRuntimeConfig,
   resolveCommandSecretRefsViaGateway,
@@ -27,9 +28,6 @@ export type MemoryManager = NonNullable<
   Awaited<ReturnType<typeof getMemorySearchManager>>["manager"]
 >;
 type MemoryManagerPurpose = Parameters<typeof getMemorySearchManager>[0]["purpose"];
-function getMemoryCommandSecretTargetIds(): Set<string> {
-  return new Set(["memory.search.remote.apiKey", "agents.entries.*.memory.search.remote.apiKey"]);
-}
 function isMemorySecretOwnerFailure(error: unknown, message: string): boolean {
   const candidate = error && typeof error === "object" ? (error as Record<string, unknown>) : {};
   if (
@@ -60,7 +58,7 @@ async function loadMemoryCommandConfig(
     const { resolvedConfig, diagnostics } = await resolveCommandSecretRefsViaGateway({
       config,
       commandName,
-      targetIds: getMemoryCommandSecretTargetIds(),
+      targetIds: getMemoryEmbeddingCommandSecretTargetIds(),
       ...(mode ? { mode } : {}),
     });
     return { config: resolvedConfig, diagnostics };
@@ -143,7 +141,7 @@ export function buildCliMemorySearchSessionKey(agentId: string): string {
     dmScope: "per-channel-peer",
   });
 }
-function resolveAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
+export function resolveMemoryAgentIds(cfg: OpenClawConfig, agent?: string): string[] {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
@@ -212,7 +210,7 @@ export async function withMemoryCommand(params: {
   );
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
-    ? resolveAgentIds(cfg, params.agent)
+    ? resolveMemoryAgentIds(cfg, params.agent)
     : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({

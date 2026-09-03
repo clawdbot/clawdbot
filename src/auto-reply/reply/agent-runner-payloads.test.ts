@@ -2,8 +2,13 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
+import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  sanitizeAssistantVisibleText,
+  stripAssistantInternalScaffolding,
+} from "../../shared/text/assistant-visible-text.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -16,6 +21,7 @@ import {
 import type { ReplyPayload } from "../types.js";
 import { buildReplyPayloads } from "./agent-runner-payloads.js";
 import { createBlockReplyContentKey, createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import { normalizeReplyPayload } from "./normalize-reply.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
@@ -1180,6 +1186,38 @@ describe("buildReplyPayloads media filter integration", () => {
       isError: true,
     });
   });
+
+  it.each(["exec", "bash"])(
+    "delivers the real %s failure warning after a silent answer",
+    async (toolName) => {
+      const payloads = buildEmbeddedRunPayloads({
+        assistantTexts: ["NO_REPLY"],
+        lastAssistant: undefined,
+        lastToolError: { toolName, error: "Command not found" },
+        sessionKey: "agent:main:warning",
+      });
+      const { replyPayloads } = await buildTestReplyPayloads({ payloads });
+      const delivered = replyPayloads
+        .map((payload) => normalizeReplyPayload(payload))
+        .filter(Boolean);
+
+      expect(delivered).toEqual([
+        expect.objectContaining({
+          text: `⚠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ]);
+      // Both channel text cleanup and Control UI display must retain the warning.
+      expect(sanitizeAssistantVisibleText(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(stripAssistantInternalScaffolding(delivered[0]?.text ?? "")).toBe(delivered[0]?.text);
+      expect(
+        normalizeReplyPayload({
+          text: `⚠️ 🛠️ ${toolName === "exec" ? "Exec" : "Bash"} failed`,
+          isError: true,
+        }),
+      ).toBeNull();
+    },
+  );
 
   it("keeps voice media payloads during silent turns", async () => {
     const { replyPayloads } = await buildTestReplyPayloads({

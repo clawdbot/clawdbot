@@ -19,7 +19,6 @@ import {
   resolveSessionStorePathCore,
   runSessionsCleanup,
   serializeSessionCleanupResult,
-  type SessionEntry,
 } from "../../config/sessions.js";
 import { listSessionEntriesReadOnly } from "../../config/sessions/session-accessor.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
@@ -61,8 +60,8 @@ import {
   listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGatewayCore,
   resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
+  resolveSessionsListDefaultsAgentId,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -74,10 +73,12 @@ import {
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveGatewayModelSelectionPolicy } from "./session-model-selection-policy.js";
 import {
   createSessionPlacementBatchProjector,
   readSessionPlacementFields,
 } from "./session-placement-read-projection.js";
+import { listFilter } from "./sessions-board-inventory.js";
 import { respondWithCachedSessionList } from "./sessions-list-cache.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
@@ -212,6 +213,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const cfg = context.getRuntimeConfig();
     const configuredAgentsOnly = p.configuredAgentsOnly === true;
     const identityId = gatewayClientSessionCreator(client)?.id;
+    const defaultsAgentId = resolveSessionsListDefaultsAgentId(cfg, p.agentId);
+    const modelSelectionTarget = resolveGatewayModelSelectionPolicy({
+      agentId: defaultsAgentId,
+      callerScopes: client?.connect?.scopes ?? [],
+      cfg,
+    }).target;
     const preparedModelCatalogByAgent = await measureDiagnosticsTimelineSpan(
       "gateway.sessions.list.model_catalog",
       async () => {
@@ -276,12 +283,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             loaded = { ...loadedStore, modelCatalogByAgent: preparedModelCatalogByAgent };
           }
           const { durableStorePath, durableTargets, modelCatalogByAgent, storePath } = loaded;
-          const visibilityFilter = prepareSessionSharing({ client, cfg }).entryFilter;
-          const entryFilter =
-            visibilityFilter || options.excludedKeys?.size
-              ? (key: string, entry: SessionEntry) =>
-                  !options.excludedKeys?.has(key) && (visibilityFilter?.(key, entry) ?? true)
-              : undefined;
+          const entryFilter = listFilter({ p, loaded, defaultsAgentId, client, cfg, options });
           const result = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.rows",
             () =>
@@ -301,6 +303,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               phase: "sessions.list",
             },
           );
+          result.defaults = { ...result.defaults, modelSelectionTarget };
           const { sharingTargets, membershipKeys } = await measureDiagnosticsTimelineSpan(
             "gateway.sessions.list.sharing",
             () => {
@@ -319,7 +322,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
               const resolvedSharingTargets = result.sessions.map((session) =>
                 resolveSessionSharingTarget({
                   cfg,
-                  projection: "list",
                   sessionKey: session.key,
                   storeCache: sharingStoreCache,
                   targetDiscoveryCache,
@@ -385,12 +387,12 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           const projectPlacement = createSessionPlacementBatchProjector(context, result.sessions);
           const trackedActiveRuns = collectTrackedActiveSessionRuns(context);
           const projectedAgentRunIndex = buildProjectedAgentRunIndex();
-          // Row building and sharing resolution yielded; publication owns fresh caller facts.
+          // These rows are unpublished; decorate them with fresh caller facts after the yields.
           const sharing = prepareSessionSharing({ client, cfg });
-          const sessions = measureDiagnosticsTimelineSpanSync(
+          measureDiagnosticsTimelineSpanSync(
             "gateway.sessions.list.active_run_flags",
-            () => {
-              return result.sessions.map((session, index) => {
+            () =>
+              result.sessions.forEach((session, index) => {
                 const sharingTarget = sharingTargets[index];
                 const visibility = sharingTarget
                   ? resolveSessionVisibility(sharingTarget.entry)
@@ -405,7 +407,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                   trackedActiveRuns,
                   projectedAgentRunIndex,
                 });
-                return Object.assign({}, session, {
+                Object.assign(session, {
                   visibility,
                   ...(sharingTarget
                     ? {
@@ -426,8 +428,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
                     ? { activeRunIds: activeRunState.runIds }
                     : {}),
                 });
-              });
-            },
+              }),
             {
               config: cfg,
               phase: "sessions.list",
@@ -440,15 +441,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           // visibility, ownership, membership, and operator roles may all drift.
           const currentVisibilityFilter = sharing.entryFilter;
           const visibleSessions = currentVisibilityFilter
-            ? sessions.filter((_, index) => {
+            ? result.sessions.filter((_, index) => {
                 const target = sharingTargets[index];
                 return target ? currentVisibilityFilter(target.storeKey, target.entry) : false;
               })
-            : sessions;
-          if (visibleSessions.length !== sessions.length) {
+            : result.sessions;
+          if (visibleSessions.length !== result.sessions.length) {
             const visibleKeys = new Set(visibleSessions.map((session) => session.key));
             const excludedKeys = new Set(options.excludedKeys);
-            for (const session of sessions) {
+            for (const session of result.sessions) {
               if (!visibleKeys.has(session.key)) {
                 excludedKeys.add(session.key);
               }
@@ -496,7 +497,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const { mode, appliedSummaries } = await runSessionsCleanup({
+      const { mode, appliedSummaries, failure } = await runSessionsCleanup({
         cfg: context.getRuntimeConfig(),
         opts: {
           agent: params.agent,
@@ -511,8 +512,17 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         mode,
         dryRun: false,
         summaries: appliedSummaries,
+        failure,
       });
-      respond(true, result, undefined);
+      if (failure) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, failure.message, { details: result }),
+        );
+      } else {
+        respond(true, result, undefined);
+      }
       for (const summary of appliedSummaries) {
         emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
         if (summary.wouldMutate) {
@@ -520,6 +530,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             `sessions.cleanup applied ${summary.storePath}: ${summary.beforeCount} -> ${summary.afterCount}`,
           );
         }
+      }
+      if (failure?.lifecycleCommitted) {
+        emitSessionsChanged(context, { reason: "cleanup", sessionKey: undefined });
       }
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
@@ -545,7 +558,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
     const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
       ? createSessionListEntryFilter({ client, cfg })
       : undefined;
-    const storeCache = new Map<string, Record<string, SessionEntry>>();
     const previews: SessionsPreviewEntry[] = [];
 
     for (const key of keys) {
@@ -558,23 +570,15 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         return;
       }
       try {
-        const cachedStoreTarget = resolveGatewaySessionStoreTargetWithStore({
+        // Each preview resumes after a yield; read its canonical row from the current store.
+        const target = resolveGatewaySessionStoreTargetWithStore({
           cfg,
           key,
           agentId: requestedAgent.agentId,
+          exactRead: true,
+          readOnly: true,
         });
-        // Fixed stores share a legacy path but resolve to owner-specific SQLite databases. Keep
-        // synthetic misses from poisoning another agent's real store entry in this batch.
-        const storeCacheKey = `${cachedStoreTarget.agentId}\u0000${cachedStoreTarget.storePath}`;
-        const store = storeCache.get(storeCacheKey) ?? cachedStoreTarget.store;
-        storeCache.set(storeCacheKey, store);
-        const target = resolveGatewaySessionStoreTarget({
-          cfg,
-          key,
-          agentId: requestedAgent.agentId,
-          store,
-        });
-        const entry = resolveCanonicalSessionEntryFromStoreKeys(store, target.storeKeys);
+        const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
         if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
           previews.push({ key, status: "missing", items: [] });
           continue;
@@ -627,11 +631,13 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       store,
       key: target.canonicalKey,
       entry,
+      agentId: target.agentId,
       includeDerivedTitles: params.includeDerivedTitles,
       includeLastMessage: params.includeLastMessage,
       transcriptUsageMaxBytes: 64 * 1024,
     });
-    respond(true, { session: { ...row, ...readSessionPlacementFields(context, row.sessionId) } });
+    Object.assign(row, readSessionPlacementFields(context, row.sessionId));
+    respond(true, { session: row });
   },
   "sessions.resolve": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {

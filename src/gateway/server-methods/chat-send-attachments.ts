@@ -93,6 +93,7 @@ async function prestageMediaPathOffloads(params: {
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
+      agentId: params.agentId,
       sessionKey: params.sessionKey,
       workspaceDir,
     });
@@ -124,6 +125,7 @@ async function prestageMediaPathOffloads(params: {
         ctx: stagingCtx,
         sessionCtx: stagingCtx as TemplateContext,
         cfg: params.cfg,
+        agentId: params.agentId,
         sessionKey: params.sessionKey,
         workspaceDir,
       });
@@ -276,7 +278,7 @@ export async function prepareChatSendAttachments(params: {
         finishAbortedChatSend();
         return { ok: false as const };
       }
-      cleanupAdmittedRun({ force: true });
+      cleanupAdmittedRun();
       clearAgentRunContext(clientRunId, lifecycleGeneration);
       logAttachmentFailure(context.logGateway, "chat.send attachment parse/stage failed", err);
       respond(

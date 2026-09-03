@@ -164,7 +164,7 @@ export type CommandsConfig = {
   plugins?: boolean;
   /** Allow /debug command (default: false). */
   debug?: boolean;
-  /** Allow restart commands/tools (default: true). */
+  /** Allow restart commands/tools and /update (default: true). */
   restart?: boolean;
   /** Explicit owner allowlist for owner-scoped commands (channel-native IDs). */
   ownerAllowFrom?: Array<string | number>;

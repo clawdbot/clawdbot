@@ -20,6 +20,8 @@ import {
   readSkillReviewOutcomes,
   recordSkillExperienceReviewOutcome,
 } from "./collection-review-state.js";
+import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
+import { observeExperienceReview } from "./experience-review-observation.test-support.js";
 import { runSkillExperienceReview, type ExperienceReviewCandidate } from "./experience-review.js";
 import {
   createExperienceReviewCandidate,
@@ -191,38 +193,46 @@ describeLive("skill experience review live OpenAI eval", () => {
     });
   }, 600_000);
 
-  it("proposes a recovered preflight procedure but ignores routine one-off work", async () => {
-    const positiveCandidate = await candidate("live-positive", positiveMessages());
-    await runSkillExperienceReview(positiveCandidate, {
-      getCurrentConfig: () => positiveCandidate.config ?? {},
-    });
-    const afterPositive = await listSkillProposals({ workspaceDir });
-    expect(afterPositive.proposals).toHaveLength(1);
-    expect(afterPositive.proposals[0]).toMatchObject({ status: "pending" });
-
-    const negativeCandidate = await candidate("live-negative", negativeMessages());
-    await runSkillExperienceReview(negativeCandidate, {
-      getCurrentConfig: () => negativeCandidate.config ?? {},
-    });
-    const afterNegative = await listSkillProposals({ workspaceDir });
-    expect(afterNegative.proposals).toEqual(afterPositive.proposals);
-
-    const interruptedCandidate = await candidate("live-interrupted", interruptedMessages(), {
-      turnAborted: true,
-    });
-    await runSkillExperienceReview(interruptedCandidate, {
-      getCurrentConfig: () => interruptedCandidate.config ?? {},
-    });
-    const afterInterrupted = await listSkillProposals({ workspaceDir });
-    // Capturing the recovery may revise a pending proposal instead of adding one.
-    const interruptedProgress = await getSkillProposalRunProgress({
-      workspaceDir,
-      runId: "live-interrupted",
-    });
-    expect(interruptedProgress.mutationCount).toBe(1);
-    expect(interruptedProgress.proposalIds).toHaveLength(1);
-    expect(afterInterrupted.proposals).toContainEqual(
-      expect.objectContaining({ id: interruptedProgress.proposalIds[0], status: "pending" }),
-    );
+  it("completes real reviews with proposal receipts or explicit abstention", async () => {
+    for (const [name, build, turnAborted] of [
+      ["positive", positiveMessages, false],
+      ["negative", negativeMessages, false],
+      ["interrupted", interruptedMessages, true],
+    ] as const) {
+      const runId = `live-${name}`;
+      const messages = build();
+      const reviewCandidate = await candidate(runId, messages, { turnAborted });
+      const before = await listSkillProposals({ workspaceDir });
+      const startedAt = Date.now();
+      const observation = await observeExperienceReview(() =>
+        runSkillExperienceReview(reviewCandidate, {
+          getCurrentConfig: () => reviewCandidate.config ?? {},
+        }),
+      );
+      const { proposals } = await listSkillProposals({ workspaceDir });
+      const progress = await getSkillProposalRunProgress({ workspaceDir, runId });
+      const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
+      expect(outcomes).toHaveLength(1);
+      const decision = assertExperienceReviewDecision({
+        observation,
+        // Responses replay adds an explicit aborted result for the interrupted
+        // fixture's unfinished call; retain every original body in exact order.
+        messages: sanitizeToolUseResultPairingForModel(messages, true),
+        progress,
+        proposals,
+        outcome: outcomes[0],
+        startedAt,
+      });
+      if (decision === "abstained") {
+        expect(proposals).toEqual(before.proposals);
+      }
+      if (name === "negative") {
+        expect(decision).toBe("abstained");
+      }
+      console.log(
+        "WORKSHOP_LIVE_DECISION",
+        JSON.stringify({ case: name, decision, mutationCount: progress.mutationCount }),
+      );
+    }
   }, 300_000);
 });

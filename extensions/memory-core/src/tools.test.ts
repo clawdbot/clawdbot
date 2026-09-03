@@ -12,7 +12,7 @@ import {
   resetMemoryToolMockState,
   setMemoryCloseImpl,
   setMemoryCustomStatus,
-  setMemoryPendingSyncSources,
+  setMemoryLastSyncError,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
   setMemorySourceCounts,
@@ -585,7 +585,7 @@ describe("memory_search unavailable payloads", () => {
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
-  it("qualifies empty results when the manager reports a dirty index", async () => {
+  it("does not qualify routine pending index work as a search failure", async () => {
     setMemoryStatusDirty(true);
     setMemorySearchImpl(async () => []);
     const tool = createMemorySearchToolOrThrow({
@@ -597,18 +597,16 @@ describe("memory_search unavailable payloads", () => {
 
     const result = await tool.execute("dirty-index", { query: "hidden codeword" });
 
-    expect(result.details).toMatchObject({
-      results: [],
-      stale: true,
-      warning: "Memory index is dirty. Search results may be incomplete.",
-      action: "Run: openclaw memory status --index --agent main",
-    });
+    expect(result.details).toMatchObject({ results: [] });
+    expect(result.details).not.toHaveProperty("stale");
+    expect(result.details).not.toHaveProperty("warning");
+    expect(result.details).not.toHaveProperty("action");
     expect(getMemorySyncMockCalls()).toBe(0);
   });
 
-  it("does not qualify results while session-only catch-up is in progress", async () => {
+  it("qualifies results after automatic indexing fails", async () => {
     setMemoryStatusDirty(true);
-    setMemoryPendingSyncSources(["sessions"]);
+    setMemoryLastSyncError("embedding request timed out");
     setMemorySearchImpl(async () => []);
     const tool = createMemorySearchToolOrThrow({
       config: {
@@ -617,12 +615,16 @@ describe("memory_search unavailable payloads", () => {
       },
     });
 
-    const result = await tool.execute("session-catch-up", { query: "hidden codeword" });
+    const result = await tool.execute("failed-index", { query: "hidden codeword" });
 
-    expect(result.details).toMatchObject({ results: [] });
-    expect(result.details).not.toHaveProperty("stale");
-    expect(result.details).not.toHaveProperty("warning");
-    expect(result.details).not.toHaveProperty("action");
+    expect(result.details).toMatchObject({
+      results: [],
+      stale: true,
+      warning:
+        "Memory index is stale: embedding request timed out. Search results may be incomplete.",
+      action:
+        "Run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
+    });
   });
 
   it("surfaces embedding bootstrap degradation when keyword search has no hits", async () => {
@@ -677,6 +679,8 @@ describe("memory_search unavailable payloads", () => {
       indexIdentity: {
         status: "mismatched",
         reason,
+        code: "provider",
+        owner: "configuration",
       },
     });
 
@@ -690,10 +694,9 @@ describe("memory_search unavailable payloads", () => {
 
     expectUnavailableMemorySearchDetails(result.details, {
       error: reason,
-      warning:
-        "Tell the user: memory search is paused because the memory index was built with a different embedding provider/model/settings.",
+      warning: `Tell the user: memory search is paused because the current memory configuration no longer matches the index (${reason}).`,
       action:
-        "Tell the user to run: openclaw memory status --index or openclaw memory index --force.",
+        "Tell the user to run: openclaw memory status --index --agent main. Rebuilding may call the configured embedding provider and can incur provider cost.",
     });
     expect(searchCalls).toBe(1);
     expect(getMemorySyncMockCalls()).toBe(0);

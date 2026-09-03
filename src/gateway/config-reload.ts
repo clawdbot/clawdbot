@@ -39,6 +39,7 @@ import { diffConfigPaths, diffGatewayReloadPaths } from "./config-diff.js";
 import {
   buildGatewayReloadPlan,
   isNoopGatewayReloadPlan,
+  listConfigReloadRefinementPrefixes,
   listPluginInstallTimestampMetadataPaths,
   listPluginInstallWholeRecordPaths,
   type GatewayReloadPlan,
@@ -537,7 +538,11 @@ export function startGatewayConfigReloader(opts: {
         appliedRevision.defer(plan, nextConfigRevisionHash);
       },
     };
-    const configChangedPaths = diffGatewayReloadPaths(currentCompareConfig, nextCompareConfig);
+    const configChangedPaths = diffGatewayReloadPaths(
+      currentCompareConfig,
+      nextCompareConfig,
+      listConfigReloadRefinementPrefixes(),
+    );
     const configPluginInstallTimestampNoopPaths = listPluginInstallTimestampMetadataPaths(
       currentCompareConfig,
       nextCompareConfig,
@@ -725,6 +730,7 @@ export function startGatewayConfigReloader(opts: {
       noopPaths: pluginInstallTimestampNoopPaths,
       forceChangedPaths: pluginInstallWholeRecordPaths,
       candidateConfig: nextConfig,
+      previousConfig: currentConfig,
     });
     if (forcePluginMetadataReload && !plan.restartGateway) {
       plan.restartGateway = true;
@@ -769,7 +775,7 @@ export function startGatewayConfigReloader(opts: {
       await commitReloadBaseline();
       // The accepted restart owns snapshot republication at next startup.
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
     if (plan.restartGateway) {
@@ -777,7 +783,7 @@ export function startGatewayConfigReloader(opts: {
       await prepareRestart(plan, nextConfig, ownership, nextSourceConfig);
       await commitReloadBaseline();
       markPluginMetadataRefreshApplied();
-      application?.settle("failed");
+      application?.settle("restart-pending");
       return;
     }
 

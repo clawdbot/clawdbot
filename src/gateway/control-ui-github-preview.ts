@@ -1,19 +1,21 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
+import {
+  GitHubIdentityError,
+  type prepareGitHubReadIdentity,
+} from "../agents/github-tool-identity.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { ControlUiGitHubPreview } from "./control-ui-contract.js";
-// Same-origin GitHub metadata adapter for Control UI link previews.
 import {
   ControlUiGitHubError,
   discardResponse,
   fetchGitHubApi,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
-  isRecord,
-  optionalNumber,
-  readOptionalGitHubString,
   readBoundedResponse,
   readGitHubJsonResponse,
   resolveGitHubApiCredentialScope,
-  requiredString,
   withOptionalGitHubAuth,
 } from "./control-ui-github-api.js";
 
@@ -41,6 +43,8 @@ export type ControlUiGitHubPreviewTarget = {
   owner: string;
   repo: string;
 };
+
+export type ControlUiGitHubPreviewIdentity = Awaited<ReturnType<typeof prepareGitHubReadIdentity>>;
 
 type CacheEntry<T> = {
   expiresAt: number;
@@ -78,6 +82,7 @@ export function parseControlUiGitHubPreviewTarget(
   const number = value.number;
   if (
     (kind !== "issue" && kind !== "pull") ||
+    (value.agentId !== undefined && (typeof value.agentId !== "string" || !value.agentId.trim())) ||
     !isValidOwner(owner) ||
     !isValidRepo(repo) ||
     typeof number !== "number" ||
@@ -90,38 +95,12 @@ export function parseControlUiGitHubPreviewTarget(
   return { kind, number, owner, repo };
 }
 
-function commitsApiUrl(target: ControlUiGitHubPreviewTarget): string {
-  const owner = encodeURIComponent(target.owner);
-  const repo = encodeURIComponent(target.repo);
-  return `${GITHUB_API_ORIGIN}/repos/${owner}/${repo}/pulls/${target.number}/commits?per_page=${GITHUB_COMMITS_PAGE_SIZE}`;
-}
-
-function previewApiUrl(target: ControlUiGitHubPreviewTarget): string {
-  const collection = target.kind === "pull" ? "pulls" : "issues";
-  const owner = encodeURIComponent(target.owner);
-  const repo = encodeURIComponent(target.repo);
-  return `${GITHUB_API_ORIGIN}/repos/${owner}/${repo}/${collection}/${target.number}`;
-}
-
-function repositoryApiUrl(target: ControlUiGitHubPreviewTarget): string {
-  const owner = encodeURIComponent(target.owner);
-  const repo = encodeURIComponent(target.repo);
-  return `${GITHUB_API_ORIGIN}/repos/${owner}/${repo}`;
-}
-
-async function assertPublicRepositoryUrl(
-  repositoryUrl: string,
-  fetchImpl: typeof fetch,
-  token: string,
-): Promise<void> {
-  // Private and missing repositories stop at this same request boundary before
-  // any item fetch, so operator.read callers cannot probe private item numbers.
-  const parsed = await readGitHubJsonResponse(
-    await fetchGitHubApi(repositoryUrl, fetchImpl, token),
-  );
-  if (!isRecord(parsed) || parsed.private !== false) {
-    throw new ControlUiGitHubError(404, "GitHub repository is not public");
+function requiredString(record: Record<string, unknown>, key: string): string {
+  const value = readNonBlankString(record[key]);
+  if (value === undefined) {
+    throw new ControlUiGitHubError(502, `GitHub response omitted ${key}`);
   }
+  return value;
 }
 
 function redirectedRepositoryApiUrl(target: ControlUiGitHubPreviewTarget, url: URL): string | null {
@@ -165,30 +144,27 @@ function previewRepositoryApiUrl(
 
 function parseGitHubResponse(
   target: ControlUiGitHubPreviewTarget,
-  value: unknown,
+  value: Record<string, unknown>,
 ): { preview: ControlUiGitHubPreview; avatarUrl?: string } {
-  if (!isRecord(value)) {
-    throw new ControlUiGitHubError(502, "GitHub response was not an object");
-  }
   const user = isRecord(value.user) ? value.user : {};
   return {
     preview: {
       ...target,
-      additions: optionalNumber(value, "additions"),
-      changedFiles: optionalNumber(value, "changed_files"),
-      closedAt: readOptionalGitHubString(value, "closed_at"),
-      comments: optionalNumber(value, "comments"),
+      additions: asFiniteNumber(value.additions),
+      changedFiles: asFiniteNumber(value.changed_files),
+      closedAt: readNonBlankString(value.closed_at),
+      comments: asFiniteNumber(value.comments),
       createdAt: requiredString(value, "created_at"),
-      deletions: optionalNumber(value, "deletions"),
+      deletions: asFiniteNumber(value.deletions),
       draft: typeof value.draft === "boolean" ? value.draft : undefined,
-      login: readOptionalGitHubString(user, "login") ?? "ghost",
-      mergedAt: readOptionalGitHubString(value, "merged_at"),
+      login: readNonBlankString(user.login) ?? "ghost",
+      mergedAt: readNonBlankString(value.merged_at),
       state: requiredString(value, "state"),
-      stateReason: readOptionalGitHubString(value, "state_reason"),
+      stateReason: readNonBlankString(value.state_reason),
       title: requiredString(value, "title"),
       updatedAt: requiredString(value, "updated_at"),
     },
-    avatarUrl: readOptionalGitHubString(user, "avatar_url"),
+    avatarUrl: readNonBlankString(user.avatar_url),
   };
 }
 
@@ -222,29 +198,15 @@ function safeAvatarUrl(raw: string | undefined): URL | null {
   }
 }
 
-/**
- * Distinct co-author logins from a PR's commit trailers, author excluded, in
- * first-seen order. Returns the true total alongside the bounded face list so
- * the card can render "+N" without another request.
- */
 async function fetchCoAuthors(
-  target: ControlUiGitHubPreviewTarget,
   authorLogin: string,
+  loadCommits: () => Promise<unknown>,
   fetchImpl: typeof fetch,
-  token: string | undefined,
-  beforeRedirect: ((url: URL) => Promise<void>) | undefined,
 ): Promise<{ coAuthors: { login: string; avatarDataUrl?: string }[]; coAuthorCount: number }> {
   const empty = { coAuthors: [], coAuthorCount: 0 };
   let commits: unknown;
   try {
-    const response = await fetchGitHubApi(commitsApiUrl(target), fetchImpl, token, beforeRedirect);
-    if (!response.ok) {
-      await discardResponse(response);
-      return empty;
-    }
-    commits = JSON.parse(
-      (await readBoundedResponse(response, GITHUB_COMMITS_MAX_BYTES)).toString("utf8"),
-    );
+    commits = await loadCommits();
   } catch {
     // Co-authors are decoration on an already-useful card, so a failed or
     // oversized commits page degrades to no faces instead of failing the card.
@@ -256,7 +218,7 @@ async function fetchCoAuthors(
   const byLogin = new Map<string, { login: string; accountId: string }>();
   for (const entry of commits) {
     const commit = isRecord(entry) && isRecord(entry.commit) ? entry.commit : undefined;
-    const message = commit ? readOptionalGitHubString(commit, "message") : undefined;
+    const message = readNonBlankString(commit?.message);
     if (!message) {
       continue;
     }
@@ -319,29 +281,42 @@ async function fetchPreview(
   target: ControlUiGitHubPreviewTarget,
   fetchImpl: typeof fetch,
   token?: string,
+  identity?: ControlUiGitHubPreviewIdentity,
 ): Promise<ControlUiGitHubPreview> {
+  const request = (url: string, beforeRedirect?: (url: URL) => Promise<void>) =>
+    fetchGitHubApi(url, fetchImpl, token, beforeRedirect, identity);
+  const assertPublicRepository = async (url: string) => {
+    // Private and missing repositories stop before any item fetch, so
+    // operator.read callers cannot probe private item numbers.
+    const repository = await readGitHubJsonResponse(await request(url));
+    if (!isRecord(repository) || repository.private !== false) {
+      throw new ControlUiGitHubError(404, "GitHub repository is not public");
+    }
+  };
+  const repositoryUrl = `${GITHUB_API_ORIGIN}/repos/${encodeURIComponent(target.owner)}/${encodeURIComponent(target.repo)}`;
+  const itemUrl = `${repositoryUrl}/${target.kind === "pull" ? "pulls" : "issues"}/${target.number}`;
   if (token) {
-    await assertPublicRepositoryUrl(repositoryApiUrl(target), fetchImpl, token);
+    await assertPublicRepository(repositoryUrl);
   }
   // Every credentialed fetch below shares this guard: a rename or transfer can
   // redirect into a repository the token can read but the viewer may not see.
   const beforeRedirect = token
     ? async (url: URL) => {
-        const repositoryUrl = redirectedRepositoryApiUrl(target, url);
-        if (!repositoryUrl) {
+        const redirectedRepositoryUrl = redirectedRepositoryApiUrl(target, url);
+        if (!redirectedRepositoryUrl) {
           throw new ControlUiGitHubError(502, "GitHub item returned an unsafe redirect");
         }
-        await assertPublicRepositoryUrl(repositoryUrl, fetchImpl, token);
+        await assertPublicRepository(redirectedRepositoryUrl);
       }
     : undefined;
-  const parsed = await readGitHubJsonResponse(
-    await fetchGitHubApi(previewApiUrl(target), fetchImpl, token, beforeRedirect),
-  );
+  const readItem = async (url: string, maxBytes?: number) =>
+    readGitHubJsonResponse(await request(url, beforeRedirect), maxBytes);
+  const parsed = await readItem(itemUrl);
   if (!isRecord(parsed)) {
     throw new ControlUiGitHubError(502, "GitHub response was not an object");
   }
   if (token) {
-    await assertPublicRepositoryUrl(previewRepositoryApiUrl(target, parsed), fetchImpl, token);
+    await assertPublicRepository(previewRepositoryApiUrl(target, parsed));
   }
   const { preview, avatarUrl } = parseGitHubResponse(target, parsed);
   // Both extra fetches run only after the public-repository assertions above,
@@ -349,7 +324,15 @@ async function fetchPreview(
   const [avatarDataUrl, coAuthorFacts] = await Promise.all([
     fetchAvatarDataUrl(avatarUrl, fetchImpl),
     target.kind === "pull"
-      ? fetchCoAuthors(target, preview.login, fetchImpl, token, beforeRedirect)
+      ? fetchCoAuthors(
+          preview.login,
+          () =>
+            readItem(
+              `${itemUrl}/commits?per_page=${GITHUB_COMMITS_PAGE_SIZE}`,
+              GITHUB_COMMITS_MAX_BYTES,
+            ),
+          fetchImpl,
+        )
       : Promise.resolve({ coAuthors: [], coAuthorCount: 0 }),
   ]);
   return {
@@ -365,36 +348,67 @@ function cacheKey(target: ControlUiGitHubPreviewTarget, credentialScope: string)
   return `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}\0${credentialScope}`;
 }
 
-export function loadControlUiGitHubPreview(
-  target: ControlUiGitHubPreviewTarget,
-  fetchImpl: typeof fetch = fetch,
-): Promise<ControlUiGitHubPreview> {
-  const { token, cacheScope } = resolveGitHubApiCredentialScope();
-  const key = cacheKey(target, cacheScope);
-  const now = Date.now();
-  const cached = previewCache.get(key);
-  if (cached && cached.expiresAt > now) {
-    previewCache.delete(key);
-    previewCache.set(key, cached);
-    return cached.promise;
-  }
-  if (cached) {
-    previewCache.delete(key);
-  }
-
-  const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
-  const entry: CacheEntry<ControlUiGitHubPreview> = {
-    expiresAt: now + successCacheMs,
-    promise: withOptionalGitHubAuth(token, (requestToken) =>
-      fetchPreview(target, fetchImpl, requestToken),
-    ).catch((error: unknown) => {
-      // Short failure caching protects the anonymous GitHub quota when a user
-      // repeatedly crosses a private, missing, or rate-limited link.
-      entry.expiresAt = Date.now() + FAILURE_CACHE_MS;
-      throw error;
-    }),
-  };
+function cachePreview(key: string, entry: CacheEntry<ControlUiGitHubPreview>): void {
   previewCache.set(key, entry);
   pruneMapToMaxSize(previewCache, CACHE_LIMIT);
-  return entry.promise;
+}
+
+export async function loadControlUiGitHubPreview(
+  target: ControlUiGitHubPreviewTarget,
+  identity?: ControlUiGitHubPreviewIdentity,
+  fetchImpl: typeof fetch = fetch,
+): Promise<ControlUiGitHubPreview> {
+  await identity?.revalidate();
+  identity?.assertSelected();
+  const { token, cacheScope } = identity ?? resolveGitHubApiCredentialScope();
+  const key = cacheKey(target, cacheScope);
+  const now = Date.now();
+  let entry = previewCache.get(key);
+  if (entry && entry.expiresAt <= now) {
+    previewCache.delete(key);
+    entry = undefined;
+  }
+  if (entry) {
+    previewCache.delete(key);
+    previewCache.set(key, entry);
+  } else {
+    const successCacheMs = token ? AUTHENTICATED_SUCCESS_CACHE_MS : ANONYMOUS_SUCCESS_CACHE_MS;
+    const request = identity
+      ? fetchPreview(target, fetchImpl, token, identity)
+      : withOptionalGitHubAuth(token, (requestToken) =>
+          fetchPreview(target, fetchImpl, requestToken),
+        );
+    const pending: CacheEntry<ControlUiGitHubPreview> = {
+      expiresAt: now + successCacheMs,
+      promise: request.then(
+        (preview) => {
+          if (identity) {
+            cachePreview(key, pending);
+          }
+          return preview;
+        },
+        (error: unknown) => {
+          // Lifecycle failures belong to this caller; only upstream failures
+          // may suppress later requests from other readers of the credential.
+          if (!(error instanceof GitHubIdentityError)) {
+            pending.expiresAt = Date.now() + FAILURE_CACHE_MS;
+            cachePreview(key, pending);
+          }
+          throw error;
+        },
+      ),
+    };
+    entry = pending;
+    // A managed in-flight request carries its caller's live identity closure.
+    // Share its settled result, never its transport with another connection.
+    if (!identity) {
+      cachePreview(key, entry);
+    }
+  }
+  const preview = await entry.promise;
+  // Transport is credential-scoped, but every reader must still hold its
+  // current identity before cached or newly fetched metadata is delivered.
+  await identity?.revalidate();
+  identity?.assertSelected();
+  return preview;
 }

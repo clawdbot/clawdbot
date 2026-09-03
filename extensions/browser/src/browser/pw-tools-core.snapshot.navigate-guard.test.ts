@@ -374,7 +374,7 @@ describe("pw-tools-core.snapshot navigate guard", () => {
       };
       const result = await mod.navigateViaPlaywright(navigation);
 
-      expect(reconnect).toHaveBeenCalledWith("http://127.0.0.1:18792", undefined);
+      expect(reconnect).toHaveBeenCalledWith("http://127.0.0.1:18792", undefined, undefined);
       expect(session.getPageForTargetId).toHaveBeenLastCalledWith(
         expect.objectContaining({ targetId: "replacement-target" }),
       );

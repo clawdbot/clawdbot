@@ -28,6 +28,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
+import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -83,7 +84,9 @@ type UserMessagePersistedCallback = (
   message: UserAgentMessage,
   context: {
     anchor?: TranscriptEntryAnchor;
+    appended: boolean;
     entryId: string;
+    persistedMessage: UserAgentMessage;
     sessionTarget?: ReturnType<SessionManager["getSessionTarget"]>;
   },
 ) => void | Promise<void>;
@@ -704,6 +707,7 @@ export function installSessionToolResultGuard(
     acknowledgementSource: AgentMessage = message,
   ): {
     anchor?: TranscriptEntryAnchor;
+    appended: boolean;
     entryId: string;
     message: AgentMessage;
     messageSeq?: number;
@@ -712,18 +716,19 @@ export function installSessionToolResultGuard(
     const runOwnedMessage = attachSessionTranscriptRunId(message, transcriptRunId);
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
-    const appendParentEntryId = sessionManager.getAppendParentId();
-    const { entryId, anchor } = originalAppendWithTranscriptAnchor(
-      runOwnedMessage as never,
-      sourceAppend
-        ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
-        : options,
+    const {
+      entryId,
+      anchor,
+      appended,
+      message: persistedMessage,
+    } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
+      originalAppendWithTranscriptAnchor(
+        runOwnedMessage as never,
+        sourceAppend
+          ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
+          : options,
+      ),
     );
-    const entry = sessionManager.getEntry(entryId);
-    if (entry?.type !== "message") {
-      throw new Error(`Appended transcript message is unavailable: ${entryId}`);
-    }
-    const persistedMessage = entry.message;
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
@@ -733,16 +738,17 @@ export function installSessionToolResultGuard(
       pendingState.delete(persistedId);
     }
     pendingState.trackToolCalls(extractPendingAssistantToolCalls(persistedMessage));
-    if (sessionManager.getAppendParentId() === appendParentEntryId) {
-      return { entryId, message: persistedMessage, ...(anchor ? { anchor } : {}) };
+    if (!appended) {
+      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     void opts?.onMessagePersisted?.(persistedMessage);
     const sessionTarget = sessionManager.getSessionTarget();
     if (!sessionTarget) {
-      return { entryId, message: persistedMessage, ...(anchor ? { anchor } : {}) };
+      return { entryId, message: persistedMessage, appended, ...(anchor ? { anchor } : {}) };
     }
     return {
       entryId,
+      appended,
       message: persistedMessage,
       ...(anchor ? { anchor } : {}),
       sessionTarget,
@@ -758,6 +764,8 @@ export function installSessionToolResultGuard(
   const guardedAppendCompaction = ((
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
+    // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
+    args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
     return opts?.withCompactionPersistence
       ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
@@ -966,6 +974,7 @@ export function installSessionToolResultGuard(
     }
     const {
       anchor,
+      appended,
       entryId: result,
       message: persistedMessage,
       messageSeq,
@@ -977,6 +986,7 @@ export function installSessionToolResultGuard(
           callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       sourceAppend,
+      message,
     );
     if (sessionTarget) {
       const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);
@@ -988,10 +998,12 @@ export function installSessionToolResultGuard(
       });
     }
 
-    if (isUserAgentMessage(finalMessage)) {
+    if (isUserAgentMessage(finalMessage) && isUserAgentMessage(persistedMessage)) {
       void opts?.onUserMessagePersisted?.(finalMessage, {
         ...(anchor ? { anchor } : {}),
+        appended,
         entryId: result,
+        persistedMessage,
         ...(sessionTarget ? { sessionTarget } : {}),
       });
     }

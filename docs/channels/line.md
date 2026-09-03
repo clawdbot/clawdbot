@@ -43,8 +43,10 @@ https://gateway-host/line/webhook
 ```
 
 The Gateway answers LINE's signed webhook verification request: a `POST` with an
-empty `events` list. For signed inbound events, it writes each event to the durable
-ingress queue before returning `200`; agent processing continues asynchronously.
+empty `events` list. Signed events in LINE's `standby` mode are acknowledged without
+queueing or replying, because another channel holds chat control. Other signed
+inbound events enter the durable ingress queue before `200`; agent processing
+continues asynchronously.
 Failed delivery is retried from the queue, including after a Gateway restart, and
 poison events become failed queue records after bounded retries. If durable
 persistence fails, the request returns
@@ -66,7 +68,8 @@ Security notes:
 
 The [Setup](#setup) webhook contract acknowledges an event only after it is durably
 queued. The durable `200` carries `x-openclaw-delivery-accepted: durable`; signed
-verification pings (empty event lists) and error responses omit the marker, so
+verification pings (empty event lists), standby-only batches, and error responses
+omit the marker, so
 reverse proxies can require it to distinguish durable acceptance from a generic
 `200`. From there, delivery runs through the core channel-ingress drain with
 LINE-specific settings:
@@ -223,7 +226,9 @@ Allowlists and policies:
 - `channels.line.groupAllowFrom`: allowlisted LINE user IDs for groups; DM `allowFrom` entries do not admit group senders
 - Per-group overrides: `channels.line.groups.<groupId>.allowFrom` (plus `enabled`, `requireMention`, `systemPrompt`, `skills`). With
   `groupPolicy: "allowlist"`, set `groupAllowFrom` or the per-group `allowFrom`; an empty group allowlist blocks group messages even when DMs are open.
-- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. LINE does not read the `implicitMentions` flags, so this always counts; see [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
+- `channels.line.groups."*"` is the defaults entry for every group and room, not a fallback that a named entry replaces. A named entry overrides `"*"` field by field, so each field the named entry omits is taken from `"*"`. This matches how `requireMention` already resolves through the shared group scope tree; see [Groups](/channels/groups).
+- Upgrade check: if you set `enabled` or `allowFrom` only on `channels.line.groups."*"` while also listing a named group or room, those wildcard values now apply to that named entry as well. Earlier releases returned the named entry alone, so wildcard-only fields never reached it. Before upgrading, review any `"*"` entry that sets `enabled: false` or narrows `allowFrom`, and repeat the value on a named entry that should keep its current access.
+- Quoting one of the bot's own messages counts as addressing it, so a group reply made with LINE's quote gesture reaches the agent without an explicit mention. Set `channels.defaults.implicitMentions.quotedBot: false` to stop it from bypassing the mention requirement; LINE reads that shared default and has no channel-scoped `implicitMentions` block of its own. See [Groups](/channels/groups). The bot recognizes a quote of its own message from the most recent ones it remembers sending (a few hundred per account), so quoting an older message, or one sent before the last Gateway restart, still needs a mention.
 - Static sender access groups can be referenced from `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` with `accessGroup:<name>`; see [Access groups](/channels/access-groups).
 - Runtime note: if `channels.line` is completely missing, runtime falls back to `groupPolicy="allowlist"` for group checks (even if `channels.defaults.groupPolicy` is set).
 
@@ -232,6 +237,18 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - User: `U` + 32 hex chars
 - Group: `C` + 32 hex chars
 - Room: `R` + 32 hex chars
+
+## Directory
+
+`openclaw directory peers list --channel line` lists user IDs from the selected
+account's `allowFrom`, `groupAllowFrom`, and per-group `allowFrom` entries.
+`openclaw directory groups list --channel line` lists configured group and room
+IDs. Prefixes normalize to sendable IDs, duplicates appear once, and `*` and
+`accessGroup:<name>` entries are omitted. Use `--account`, `--query`, `--limit`,
+and `--json` as described in [Directory](/cli/directory).
+
+These lists read configuration; they do not fetch a live LINE contact roster or
+include approvals stored through pairing.
 
 ## Group join introductions
 
@@ -253,8 +270,10 @@ as untrusted.
 - Text is chunked at 5000 characters.
 - Markdown formatting is stripped; code blocks and tables are converted into Flex
   cards when possible.
-- Streaming responses are buffered; LINE receives full chunks with a loading
-  animation while the agent works.
+- Streaming responses are buffered; LINE receives full chunks. The loading
+  animation runs only in one-to-one chats — LINE's loading API accepts a user id
+  and rejects group and room ids — so a group reply arrives without one. Heartbeat
+  turns also show the loading animation while the reply is generated.
 - Media downloads are capped by `channels.line.mediaMaxMb` (default 10).
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.
@@ -264,12 +283,24 @@ as untrusted.
   member who has not added the bot as a friend. If either lookup fails the raw
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
+- LINE describes inline emoji with metadata and alternative text. Empty `()`
+  alternatives reach the agent as `[emoji]`; meaningful alternatives such as
+  `(hello)` and parentheses typed by the sender are preserved.
 
 ## Structured rich messages
 
 Use the shared message presentation fields for portable choices. LINE renders
 `buttons` blocks as Flex controls and `select` blocks as quick replies. A two-button
 block is the portable confirm-style form.
+
+A `buttons` block renders a Flex card that carries the presentation's title and
+text. A presentation whose only control is a `select` renders no card, because
+quick replies attach to the reply's own text message; its title and text blocks
+are appended to that text instead. LINE draws at most 13 quick replies on one
+message, counted across every `select` block in the reply rather than per block.
+Each select keeps its prompt and any overflow options together in that text.
+Prompts and overflow option names remain complete; only native quick-reply button
+labels are shortened to LINE's 20-character limit.
 
 ```json5
 {
@@ -345,6 +376,14 @@ The LINE plugin also ships a `/card` command for Flex message presets:
 /card info "Welcome" "Thanks for joining!"
 ```
 
+Card images and icons must use HTTPS. OpenClaw removes images with malformed or
+non-HTTPS URLs and adds an "Image unavailable" note when it fits within LINE's
+30 KB bubble and 50 KB carousel limits. Video
+heroes keep their required alternative content: an unusable video or preview URL
+falls back to that content, and an unusable alternative image becomes a text box.
+Invalid template thumbnails are removed; carousel thumbnails are removed together
+so every column keeps the same image layout. Text and action buttons stay intact.
+
 ## ACP support
 
 LINE supports ACP (Agent Communication Protocol) conversation bindings:
@@ -379,6 +418,14 @@ link-local, and private-network targets.
   and that the gateway is reachable from LINE.
 - **Media download errors:** raise `channels.line.mediaMaxMb` if media exceeds the
   default limit.
+- **Pushes refused with HTTP 429:** Run
+  `openclaw channels status --channel line --probe --json`. For a limited allowance,
+  the account’s `quota` contains `used` and `limit`. Missing quota is unknown, not unlimited.
+  A healthy bot identity can coexist with an exhausted push allowance. Check the
+  account allowance or plan in LINE Official Account Manager before retrying;
+  429 can also reflect rate limits or temporary message reservations. Ordinary
+  reply-token messages do not consume this monthly allowance, unlike pushes.
+  See [LINE message pricing](https://developers.line.biz/en/docs/messaging-api/pricing/).
 - **Bot silently skips messages (events dead-lettered):** `openclaw logs` shows
   `line: spooled update <id> ... dead-lettered` lines with the failure reason.
   Inspect with `openclaw channels dead-letters list --channel line --account default`

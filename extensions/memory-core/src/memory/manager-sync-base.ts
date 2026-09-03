@@ -29,7 +29,11 @@ import {
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
 import { MemoryManagerDatabaseContext } from "./manager-database-context.js";
-import { openMemoryDatabaseAtPath } from "./manager-db.js";
+import {
+  isMemoryDatabaseReadOnly,
+  openMemoryDatabaseAtPath,
+  openMemoryDatabaseReadOnlyAtPath,
+} from "./manager-db.js";
 import {
   resolveMemoryPrimaryProviderRequest,
   type MemoryProviderLifecycleState,
@@ -43,6 +47,7 @@ import {
   type MemoryIndexMeta,
   type MemoryIndexProviderIdentity,
 } from "./manager-reindex-state.js";
+import { MemorySyncOutcomeLedger } from "./manager-sync-outcome.js";
 import {
   markMemoryVectorRebuildRequired,
   memoryTableExists,
@@ -83,7 +88,7 @@ export type MemorySourceSyncPlan = {
   finalize: () => Promise<void> | void;
 };
 
-type MemoryReindexRetryState = {
+export type MemoryReindexRetryState = {
   dirty: boolean;
   memoryFullRetryDirty: boolean;
   sessionsDirty: boolean;
@@ -97,7 +102,9 @@ const META_KEY = MEMORY_INDEX_META_KEY;
 const VECTOR_TABLE = MEMORY_INDEX_VECTOR_TABLE;
 const LEGACY_VECTOR_TABLE = "chunks_vec";
 const EMBEDDING_CACHE_TABLE = MEMORY_EMBEDDING_CACHE_TABLE;
-const EMBEDDING_CACHE_SEED_BATCH_SIZE = 1_000;
+// Production embeddings measured ~28 KB/row; 1,000-row synchronous commits
+// blocked the event loop for seconds. Keep each commit small between yields.
+const EMBEDDING_CACHE_SEED_BATCH_SIZE = 100;
 const VECTOR_LOAD_TIMEOUT_MS = 30_000;
 const log = createSubsystemLogger("memory");
 
@@ -134,6 +141,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
   protected memoryWatchPressureStartupTimer: NodeJS.Timeout | null = null;
   protected closed = false;
   protected dirty = false;
+  // A success clears only the failure visible when it started. This keeps a
+  // concurrent failure visible even when older or no-op work settles later.
+  protected readonly syncOutcomes = new MemorySyncOutcomeLedger();
   protected memorySourceProvenanceRepairPending = false;
   // Failed full memory reindexes must retry as full rebuilds, not incremental
   // dirty syncs that can skip unchanged files against the still-live index.
@@ -179,6 +189,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<MemorySourceSyncPlan>;
+
   protected async indexFiles(items: MemoryIndexWorkItem[]): Promise<void> {
     for (const item of items) {
       await this.indexFile(item.entry, { source: item.source });
@@ -198,6 +209,15 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
       sessionsReconcileDirty: this.sessionsReconcileDirty,
       sessionsDirtyFiles: new Set(this.sessionsDirtyFiles),
     };
+  }
+
+  protected takeReindexRetryStateForMaintenance(): MemoryReindexRetryState {
+    const snapshot = this.snapshotReindexRetryState();
+    // The detached generation owns only the state observed here. New watcher or
+    // session events remain dirty on this manager and trigger a later generation.
+    this.clearMemoryRetryState();
+    this.clearSessionRetryState();
+    return snapshot;
   }
 
   protected restoreReindexRetryState(snapshot: MemoryReindexRetryState): void {
@@ -499,7 +519,7 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
         this.markConfiguredSourcesForFullReindex();
         return false;
       }
-      if (this.dropLegacyVectorTable()) {
+      if (!isMemoryDatabaseReadOnly(this.db) && this.dropLegacyVectorTable()) {
         // A broad dirty sync can skip unchanged files whose source hashes were
         // migrated. Force the next sync to republish the derived vector rows.
         this.dirty = true;
@@ -610,9 +630,12 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
     return buildMemorySourceFilter(alias, sources);
   }
 
-  protected openDatabase(): DatabaseSync {
+  protected openDatabase(readOnly = false): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
+    const vectorEnabled = this.settings.store.vector.enabled;
+    return readOnly
+      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
+      : openMemoryDatabaseAtPath(dbPath, vectorEnabled, this.agentId);
   }
 
   protected async seedEmbeddingCache(sourceDb: DatabaseSync): Promise<void> {

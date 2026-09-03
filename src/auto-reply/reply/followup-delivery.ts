@@ -86,10 +86,7 @@ export function resolveFollowupDeliveryDecision(params: {
   ) {
     return { kind: "suppress", reason: "room-event" };
   }
-  if (
-    execution.outcome.kind === "aborted" ||
-    (execution.outcome.kind === "settled" && execution.outcome.abortReason)
-  ) {
+  if (execution.outcome.kind === "aborted") {
     return { kind: "suppress", reason: "aborted" };
   }
   const postCompactionModelFailure = execution.outcome.postCompactionModelFailure;
@@ -402,6 +399,7 @@ async function sendFollowupPayloads(params: {
         payload,
         channel: originatingChannel,
         to: originatingTo,
+        agentId: turn.queued.run.agentId,
         sessionKey: turn.queued.run.sessionKey,
         accountId: turn.queued.originatingAccountId,
         requesterSenderId: turn.queued.run.senderId,

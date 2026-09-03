@@ -1,11 +1,13 @@
 // Line plugin module implements push retry policy behavior.
 import { createHash, randomUUID } from "node:crypto";
 import { HTTPFetchError } from "@line/bot-sdk";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { collectErrorGraphCandidates, extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   classifyTransientNetworkErrorCode,
   createChannelApiRetryRunner,
 } from "openclaw/plugin-sdk/retry-runtime";
+import { readLineAccountMessageQuota } from "./probe.js";
 
 /** LINE keeps a retry key for 24 hours; past that a replay delivers a second copy. */
 export const LINE_RETRY_KEY_TTL_MS = 24 * 60 * 60 * 1000;
@@ -130,3 +132,24 @@ export const runLinePushWithRetries: typeof runLinePushAttempts = (fn, label) =>
     throw error;
   });
 };
+
+export async function explainLineRefusal(params: {
+  error: unknown;
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): Promise<{ retryable: boolean | undefined; reason: string }> {
+  const retryable = resolveLineNonDispatchRetryable(params.error);
+  const quota =
+    retryable === true && findLineHttpError(params.error)?.status === 429
+      ? await readLineAccountMessageQuota(params)
+      : undefined;
+  const exhausted = quota?.kind === "limited" && quota.used >= quota.limit;
+  return {
+    retryable: exhausted ? false : retryable,
+    reason: exhausted
+      ? `LINE refused the push: ${quota.used}/${quota.limit} monthly messages used. Check the account allowance or plan before retrying.`
+      : params.error instanceof Error
+        ? params.error.message
+        : "LINE rejected the message",
+  };
+}

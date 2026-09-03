@@ -140,27 +140,71 @@ describe("cron service store seam coverage", () => {
   it("quarantines malformed SQLite rows atomically without creating JSON state", async () => {
     const { storePath } = await makeStorePath();
     const malformed = createReloadCronJob({ id: "malformed-sqlite-row" });
+    const legacyValid = createReloadCronJob({ id: "legacy-valid" });
+    const legacyValidTrigger = createReloadCronJob({ id: "legacy-valid-trigger" });
+    const legacyInvalidTrigger = createReloadCronJob({ id: "legacy-invalid-trigger" });
+    const legacyMissingPayload = createReloadCronJob({ id: "legacy-missing-payload" });
     const surviving = createReloadCronJob({
       id: "surviving-sqlite-row",
       state: { nextRunAtMs: STORE_TEST_NOW + 60_000 },
     });
-    await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
-    openOpenClawStateDatabase()
-      .db.prepare(
-        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.kind', ?) WHERE job_id = ?",
-      )
-      .run("unsupported", malformed.id);
+    await saveCronStore(storePath, {
+      version: 1,
+      jobs: [
+        malformed,
+        legacyValid,
+        legacyValidTrigger,
+        legacyInvalidTrigger,
+        legacyMissingPayload,
+        surviving,
+      ],
+    });
+    const db = openOpenClawStateDatabase().db;
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.kind', ?) WHERE job_id = ?",
+    ).run("unsupported", malformed.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule', ?) WHERE job_id IN (?, ?, ?, ?)",
+    ).run(
+      "*/5 * * * *",
+      legacyValid.id,
+      legacyValidTrigger.id,
+      legacyInvalidTrigger.id,
+      legacyMissingPayload.id,
+    );
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.trigger', json(?)) WHERE job_id = ?",
+    ).run(JSON.stringify({ script: "true" }), legacyValidTrigger.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.trigger', json(?)) WHERE job_id = ?",
+    ).run(JSON.stringify({}), legacyInvalidTrigger.id);
+    db.prepare(
+      "UPDATE cron_jobs SET job_json = json_remove(job_json, '$.payload') WHERE job_id = ?",
+    ).run(legacyMissingPayload.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state, { skipRecompute: true });
 
-    expect(state.store?.jobs.map((job) => job.id)).toEqual([surviving.id]);
-    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([surviving.id]);
+    const expectedActiveJobIds = [legacyValid.id, legacyValidTrigger.id, surviving.id];
+    expect(state.store?.jobs.map((job) => job.id)).toEqual(expectedActiveJobIds);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(
+      expectedActiveJobIds,
+    );
     expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
         reason: "invalid-schedule",
         job: expect.objectContaining({ id: malformed.id }),
+      }),
+      expect.objectContaining({
+        sourceIndex: 3,
+        reason: "invalid-trigger",
+        job: expect.objectContaining({ id: legacyInvalidTrigger.id }),
+      }),
+      expect.objectContaining({
+        sourceIndex: 4,
+        reason: "missing-payload",
+        job: expect.objectContaining({ id: legacyMissingPayload.id }),
       }),
     ]);
     await expectPathMissing(storePath.replace(/\.json$/, "-quarantine.json"));
@@ -240,15 +284,18 @@ describe("cron service store seam coverage", () => {
       ],
     });
     const db = openOpenClawStateDatabase().db;
+    // Number bindings become SQLite FLOATs; JSON formatting can round max + 1
+    // back into the valid Date domain. Inject exact numeric JSON instead.
+    const invalidTimestampJson = JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1);
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.everyMs', ?) WHERE job_id = ?",
-    ).run(MAX_DATE_TIMESTAMP_MS + 1, invalidInterval.id);
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.everyMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidInterval.id);
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.anchorMs', ?) WHERE job_id = ?",
-    ).run(MAX_DATE_TIMESTAMP_MS + 1, invalidAnchor.id);
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.anchorMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidAnchor.id);
     db.prepare(
-      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.staggerMs', ?) WHERE job_id = ?",
-    ).run(MAX_DATE_TIMESTAMP_MS + 1, invalidStagger.id);
+      "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.staggerMs', json(?)) WHERE job_id = ?",
+    ).run(invalidTimestampJson, invalidStagger.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state, { skipRecompute: true });
@@ -261,11 +308,19 @@ describe("cron service store seam coverage", () => {
     expect(cronStoreModule.loadCronQuarantinedJobs(storePath)).toEqual([
       expect.objectContaining({
         sourceIndex: 0,
-        job: expect.objectContaining({ id: invalidInterval.id }),
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidInterval.id,
+          schedule: expect.objectContaining({ everyMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
       }),
       expect.objectContaining({
         sourceIndex: 1,
-        job: expect.objectContaining({ id: invalidAnchor.id }),
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidAnchor.id,
+          schedule: expect.objectContaining({ anchorMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
       }),
       expect.objectContaining({
         sourceIndex: 2,
@@ -274,7 +329,11 @@ describe("cron service store seam coverage", () => {
       }),
       expect.objectContaining({
         sourceIndex: 4,
-        job: expect.objectContaining({ id: invalidStagger.id }),
+        reason: "invalid-schedule",
+        job: expect.objectContaining({
+          id: invalidStagger.id,
+          schedule: expect.objectContaining({ staggerMs: MAX_DATE_TIMESTAMP_MS + 1 }),
+        }),
       }),
     ]);
   });
@@ -286,9 +345,9 @@ describe("cron service store seam coverage", () => {
     await saveCronStore(storePath, { version: 1, jobs: [invalidState, surviving] });
     openOpenClawStateDatabase()
       .db.prepare(
-        "UPDATE cron_jobs SET state_json = json_set(state_json, '$.lastRunAtMs', ?) WHERE job_id = ?",
+        "UPDATE cron_jobs SET state_json = json_set(state_json, '$.lastRunAtMs', json(?)) WHERE job_id = ?",
       )
-      .run(MAX_DATE_TIMESTAMP_MS + 1, invalidState.id);
+      .run(JSON.stringify(MAX_DATE_TIMESTAMP_MS + 1), invalidState.id);
     const state = createStoreTestState(storePath);
 
     await ensureLoaded(state, { skipRecompute: true });

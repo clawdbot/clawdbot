@@ -82,6 +82,7 @@ function isServiceManagedRuntime(): boolean {
 }
 
 type ChildAdapterInput = {
+  assertCurrent?: () => void;
   /** Own a separately signalable tree whose private IPC channel gates worker startup. */
   ownedWorker?: true;
   /** Preserve the supplied environment exactly by skipping environment-mutating spawn wrappers. */
@@ -89,10 +90,12 @@ type ChildAdapterInput = {
   onWorkerMessage?: (message: unknown) => void;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
+  argv0?: string;
   windowsVerbatimArguments?: boolean;
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  abortSignal?: AbortSignal;
 } & (
   | { argv: string[]; anchoredShellCommand?: never }
   | { argv?: never; anchoredShellCommand: string }
@@ -101,6 +104,7 @@ type ChildAdapterInput = {
 export async function createChildAdapter(params: ChildAdapterInput): Promise<WorkerChildAdapter> {
   if (params.anchoredShellCommand !== undefined) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: process.platform === "win32" ? params.anchoredShellCommand : "/bin/sh",
       args: process.platform === "win32" ? [] : ["-c", params.anchoredShellCommand],
       windowsShellCommand: process.platform === "win32" ? params.anchoredShellCommand : undefined,
@@ -108,6 +112,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       env: params.env,
       stdinMode: "pipe-closed",
       oomScoreWrapperSelected: false,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -117,9 +122,10 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     env: baseEnv,
     windowsVerbatimArguments: params.windowsVerbatimArguments,
   });
+  const argv0 = invocation.command === params.argv[0] ? params.argv0 : undefined;
   const preparedSpawn = params.exactEnv
-    ? { command: invocation.command, args: invocation.args, env: baseEnv, wrapped: false }
-    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv });
+    ? { command: invocation.command, args: invocation.args, argv0, env: baseEnv, wrapped: false }
+    : prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, { env: baseEnv, argv0 });
 
   const stdinMode = params.stdinMode ?? (params.input !== undefined ? "pipe-closed" : "inherit");
 
@@ -129,14 +135,17 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     isServiceManagedRuntime()
   ) {
     return await createServiceChildRelayAdapter({
+      assertCurrent: params.assertCurrent,
       command: preparedSpawn.command,
       args: preparedSpawn.args,
+      argv0: preparedSpawn.argv0,
       cwd: params.cwd,
       env: preparedSpawn.env,
       stdinMode,
       input: params.input,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -155,6 +164,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   const options: SpawnOptions = {
     cwd: params.cwd,
     env: preparedSpawn.env,
+    argv0: preparedSpawn.argv0,
     stdio,
     detached: useDetached,
     windowsHide: true,
@@ -162,6 +172,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   };
 
   const spawned = await spawnWithFallback({
+    assertCurrent: params.assertCurrent,
     argv: [preparedSpawn.command, ...preparedSpawn.args],
     options,
     fallbacks:
@@ -176,9 +187,15 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+  try {
+    // Startup acknowledgement may outlive the caller; withhold all private input if it did.
+    params.assertCurrent?.();
+    if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+      throw new Error("worker lifecycle IPC channel was not created");
+    }
+  } catch (error) {
     spawned.child.kill("SIGKILL");
-    throw new Error("worker lifecycle IPC channel was not created");
+    throw error;
   }
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
@@ -215,11 +232,14 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     stdin?.end();
   }
 
-  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) =>
-    onDecodedOutput(child.stdout, listener, onRaw);
+  const outputUnsubscribers: Array<() => void> = [];
+  const onStdout: ChildAdapter["onStdout"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stdout, listener, onRaw));
+  };
 
-  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) =>
-    onDecodedOutput(child.stderr, listener, onRaw);
+  const onStderr: ChildAdapter["onStderr"] = (listener, onRaw) => {
+    outputUnsubscribers.push(onDecodedOutput(child.stderr, listener, onRaw));
+  };
 
   const completion = createDeferredCore<{ code: number | null; signal: NodeJS.Signals | null }>();
   // Worker errors can precede wait(), including while secret delivery is still pending.
@@ -383,7 +403,8 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   if (params.secretInput) {
     try {
-      await secretDelivery?.deliverTo(spawned.child);
+      params.assertCurrent?.();
+      await secretDelivery?.deliverTo(spawned.child, { abortSignal: params.abortSignal });
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;
@@ -456,6 +477,12 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     if (params.ownedWorker !== undefined) {
       disconnectWorkerIpc();
     }
+    for (const unsubscribe of outputUnsubscribers.splice(0)) {
+      unsubscribe();
+    }
+    // Error handling and Node's child-close bookkeeping must remain attached during destroy.
+    child.stdout.destroy();
+    child.stderr.destroy();
     child.removeAllListeners();
   };
 
@@ -492,6 +519,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
     pid: child.pid ?? undefined,
     stdin,
     oomScoreWrapperSelected: preparedSpawn.wrapped,
+    supportsRawOutput: true,
     onStdout,
     onStderr,
     wait,

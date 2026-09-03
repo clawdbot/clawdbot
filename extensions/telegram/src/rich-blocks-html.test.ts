@@ -168,8 +168,8 @@ describe("block HTML islands", () => {
     if (block.type !== "table") {
       return;
     }
-    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
-    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span", align: "left", valign: "middle" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
   it.each([

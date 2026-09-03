@@ -287,10 +287,6 @@ export const icons = {
     <path d="M4 5v4" />
     <path d="M6 7H2" />
     <path d="M9 2v2" />`),
-  hourglass: strokeIcon(svg` <path d="M5 22h14" />
-    <path d="M5 2h14" />
-    <path d="M17 22v-4.2a4 4 0 0 0-1.2-2.8L12 11l-3.8 4A4 4 0 0 0 7 17.8V22" />
-    <path d="M7 2v4.2A4 4 0 0 0 8.2 9l3.8 4 3.8-4A4 4 0 0 0 17 6.2V2" />`),
   layoutComfortable: strokeIcon(svg` <rect width="16" height="5" x="4" y="4" rx="1.5" />
     <rect width="16" height="5" x="4" y="15" rx="1.5" />
     <line x1="7" x2="16" y1="7" y2="7" />

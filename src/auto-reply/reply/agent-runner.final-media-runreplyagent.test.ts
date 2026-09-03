@@ -102,9 +102,12 @@ vi.mock("./queue.js", async () => {
   };
 });
 
-vi.mock("./session-run-accounting.js", () => ({
-  incrementRunCompactionCount: async () => undefined,
-  persistRunSessionUsage: async () => undefined,
+vi.mock("./session-updates.js", () => ({
+  incrementCompactionCount: async () => undefined,
+}));
+
+vi.mock("./session-usage.js", () => ({
+  persistSessionUsageUpdate: async () => undefined,
 }));
 
 const { runReplyAgent } = await import("./agent-runner.js");

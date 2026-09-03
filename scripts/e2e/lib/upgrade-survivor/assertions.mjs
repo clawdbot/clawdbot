@@ -5,8 +5,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { validatePrepublishPluginRegistryArtifact } from "../../../prepublish-plugin-registry-artifact.mjs";
 import { readPluginInstallIndex } from "../plugin-index-sqlite.mjs";
 import { readPostCoreSnapshot } from "./diagnostics.mjs";
+import {
+  assertExecApprovalPolicySurvived,
+  seedLegacyExecApprovalPolicy,
+} from "./exec-approval-fixture.mjs";
 import { assertUpgradeVolumeMigrated, seedUpgradeVolume } from "./sqlite-volume.mjs";
 
 const command = process.argv[2];
@@ -26,7 +31,9 @@ const SCENARIOS = new Set([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -158,11 +165,13 @@ function assert(condition, message) {
   }
 }
 
-function seedLegacySessionMetadata(stateDir) {
-  const legacySessionsDir = path.join(stateDir, "sessions");
+function seedLegacySessionMetadata(stateDir, perAgent) {
+  const legacySessionsDir = perAgent
+    ? path.join(stateDir, "agents", "main", "sessions")
+    : path.join(stateDir, "sessions");
   const baseUpdatedAt = Date.now() - 24 * 60 * 60 * 1000;
   writeJson(path.join(legacySessionsDir, "sessions.json"), {
-    main: {
+    [perAgent ? "agent:main:main" : "main"]: {
       sessionId: LEGACY_SESSION_MAIN_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_MAIN_ID}.jsonl`),
       provider: "openai",
@@ -178,14 +187,14 @@ function seedLegacySessionMetadata(stateDir) {
         ],
       },
     },
-    "+15551234567": {
+    [perAgent ? "agent:main:+15551234567" : "+15551234567"]: {
       sessionId: LEGACY_SESSION_DIRECT_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_DIRECT_ID}.jsonl`),
       provider: "openai",
       model: "gpt-5.5",
       updatedAt: baseUpdatedAt + 100,
     },
-    "slack:channel:CUPGRADE": {
+    [perAgent ? "agent:main:slack:channel:cupgrade" : "slack:channel:CUPGRADE"]: {
       sessionId: LEGACY_SESSION_GROUP_ID,
       sessionFile: path.join(legacySessionsDir, `${LEGACY_SESSION_GROUP_ID}.jsonl`),
       provider: "openai",
@@ -363,12 +372,19 @@ function seedState() {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
+  // The watch row proves only direct-node identity/auth survival. Unrelated
+  // migration specimens can prevent the shipped baseline Gateway from starting.
+  if (scenario === "watchos-direct-node") {
+    return;
+  }
   writeJson(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
     id: "legacy-session",
     agentId: "main",
     title: "Existing user session",
   });
-  seedLegacySessionMetadata(stateDir);
+  // Volume imports start in per-agent JSON; other scenarios cover the older shared-store move.
+  seedLegacySessionMetadata(stateDir, scenario === "sqlite-volume");
+  seedLegacyExecApprovalPolicy(stateDir);
   if (scenario === "meeting-transcripts-sqlite") {
     seedLegacyMeetingTranscripts(stateDir);
   }
@@ -629,6 +645,9 @@ function assertStateSurvived() {
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
+  if (scenario === "watchos-direct-node") {
+    return;
+  }
   assert(
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
     "legacy session file missing",
@@ -693,54 +712,74 @@ function assertStateSurvived() {
 
 function assertAuthProfileMigrationSurvived(stateDir, stage) {
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const sources = [
-    path.join(agentDir, "auth-profiles.json"),
-    path.join(agentDir, "auth-state.json"),
-    path.join(agentDir, "auth.json"),
-    path.join(stateDir, "credentials", "oauth.json"),
-  ];
+  const fixture = readJson(
+    "scripts/e2e/lib/upgrade-survivor/fixtures/auth-profile-v2026.7.2-beta.5.json",
+  );
+  const sources = new Map([
+    [path.join(agentDir, "auth-profiles.json"), fixture.authProfiles],
+    [path.join(agentDir, "auth-state.json"), fixture.authState],
+    [path.join(agentDir, "auth.json"), fixture.legacyAuth],
+    [path.join(stateDir, "credentials", "oauth.json"), fixture.legacyOAuth],
+  ]);
   if (stage === "baseline") {
     assert(
-      sources.every((source) => fs.existsSync(source)),
+      [...sources.keys()].every((source) => fs.existsSync(source)),
       "auth profile fixture source missing",
     );
     return;
   }
-  for (const source of sources) {
+  for (const [source, contents] of sources) {
     assert(!fs.existsSync(source), `legacy auth source remained active: ${source}`);
     const prefix = `${path.basename(source)}.migrated-`;
     const archives = fs
       .readdirSync(path.dirname(source))
       .filter((entry) => entry.startsWith(prefix));
     assert(archives.length === 1, `expected one legacy auth archive for ${source}`);
-  }
-  const agentDatabase = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    const row = agentDatabase
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = 'primary'")
-      .get();
-    const store = JSON.parse(row?.store_json ?? "null");
-    assert(
-      store?.profiles?.["openai:default"]?.key === "fake-upgrade-openai-key",
-      "openai credential did not migrate",
+    assertStrict.equal(
+      fs.readFileSync(path.join(path.dirname(source), archives[0]), "utf8"),
+      `${JSON.stringify(contents, null, 2)}\n`,
+      `auth archive changed for ${source}`,
     );
-    assert(
-      store?.profiles?.["xai:default"]?.key === "fake-upgrade-xai-key",
-      "legacy xai credential did not migrate",
-    );
-    assert(
-      store?.profiles?.["anthropic:default"]?.refresh === "fake-upgrade-refresh-token",
-      "shared OAuth credential did not migrate",
-    );
-  } finally {
-    agentDatabase.close();
   }
   const stateDatabase = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
+    // Main's legacy files feed the shared owner; current runtime reads these
+    // canonical state cells after Doctor retires the old agent-local rows.
+    const read = stateDatabase.prepare(
+      "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+    );
+    const store = JSON.parse(read.get("authProfiles.store")?.value_json ?? "null");
+    const expectedProfiles = {
+      ...fixture.authProfiles.profiles,
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          credential,
+        ]),
+      ),
+      ...Object.fromEntries(
+        Object.entries(fixture.legacyOAuth).map(([provider, credential]) => [
+          `${provider}:default`,
+          { type: "oauth", provider, ...credential },
+        ]),
+      ),
+    };
+    for (const [profileId, credential] of Object.entries(expectedProfiles)) {
+      assertStrict.deepEqual(
+        store?.profiles?.[profileId],
+        credential,
+        `auth profile changed: ${profileId}`,
+      );
+    }
+    const state = JSON.parse(read.get("authProfiles.state")?.value_json ?? "null");
+    assertStrict.deepEqual(state?.order, fixture.authState.order, "auth state order changed");
+    assertStrict.deepEqual(
+      state?.lastGood,
+      fixture.authState.lastGood,
+      "auth state lastGood changed",
+    );
     const receipt = stateDatabase
       .prepare(
         "SELECT COUNT(*) AS count FROM migration_sources WHERE migration_kind = ? AND status = 'completed' AND removed_source = 1",
@@ -1101,6 +1140,15 @@ function acceptedSurfaceHash(surface) {
   return createHash("sha256").update(JSON.stringify(canonical)).digest("hex");
 }
 
+function hasCompanionPluginConsent(record) {
+  return [
+    record.acceptedSurface,
+    record.acceptedSurfaceHash,
+    record.acceptedSurfaceAt,
+    record.acceptedSurfaceIntegrity,
+  ].some((value) => value !== undefined);
+}
+
 function assertCompanionPluginConsent(record, pluginId, integrity) {
   assert(
     record.acceptedSurface && typeof record.acceptedSurface === "object",
@@ -1125,6 +1173,61 @@ function assertCompanionPluginConsent(record, pluginId, integrity) {
       Number.isFinite(Date.parse(record.acceptedSurfaceAt)),
     `${pluginId} plugin consent timestamp missing`,
   );
+}
+
+function assertNpmPluginInstall([
+  pluginId,
+  packageName,
+  expectedVersion,
+  capabilityConsentSupported,
+  pendingUpdateFile,
+  observationRoot,
+  baselineVersion,
+]) {
+  assert(
+    pluginId && packageName && expectedVersion,
+    "npm plugin assertion requires identity and version",
+  );
+  assert(
+    capabilityConsentSupported === "0" || capabilityConsentSupported === "1",
+    "npm plugin assertion requires candidate capability-consent support",
+  );
+  if (
+    pendingUpdateFile &&
+    assertRecoverableUpdateJson([
+      pendingUpdateFile,
+      expectedVersion,
+      observationRoot,
+      baselineVersion,
+    ]).has(pluginId)
+  ) {
+    // Only this plugin's recorded denial defers its artifact check until repair.
+    process.stdout.write(`Plugin "${pluginId}" is awaiting fixture capability consent.\n`);
+    return;
+  }
+  const records = readInstalledPluginIndex().installRecords ?? {};
+  const packageJson = assertExternalPluginInstall(records, pluginId, packageName);
+  const record = records[pluginId];
+  assert(record.source === "npm", `${pluginId} plugin must be installed from npm`);
+  assertPluginArtifactConsent(
+    record,
+    pluginId,
+    packageJson,
+    expectedVersion,
+    capabilityConsentSupported,
+  );
+  const artifactDir = requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR");
+  const { manifest } = validatePrepublishPluginRegistryArtifact({
+    artifactDir,
+    expectedSourceSha: requireEnv("OPENCLAW_DOCKER_E2E_SELECTED_SHA"),
+    expectedCandidateVersion: expectedVersion,
+    expectedManifestSha256: requireEnv("OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256"),
+    requiredPackages: [packageName],
+  });
+  const artifact = manifest.packages.find((entry) => entry.name === packageName);
+  const archive = fs.readFileSync(path.join(artifactDir, artifact.tarball));
+  const integrity = `sha512-${createHash("sha512").update(archive).digest("base64")}`;
+  assert(record.integrity === integrity, `${pluginId} plugin registry artifact integrity changed`);
 }
 
 function assertCompanionPluginInstalls([expectedVersion, capabilityConsentSupported]) {
@@ -1174,6 +1277,37 @@ function assertPluginArtifactConsent(
     `${pluginId} plugin integrity missing`,
   );
   if (capabilityConsentSupported === "1") {
+    const inspection = JSON.parse(
+      execFileSync("openclaw", ["plugins", "inspect", pluginId, "--json"], {
+        encoding: "utf8",
+        timeout: 120_000,
+      }),
+    );
+    assert(inspection.plugin?.id === pluginId, `${pluginId} inspected plugin id changed`);
+    assert(
+      inspection.plugin.packageName === packageJson.name,
+      `${pluginId} inspected package name changed`,
+    );
+    assert(
+      typeof inspection.plugin.rootDir === "string" &&
+        fs.realpathSync(inspection.plugin.rootDir) ===
+          fs.realpathSync(resolveHomePath(record.installPath)),
+      `${pluginId} inspected install path changed`,
+    );
+    assertStrict.deepEqual(
+      inspection.install,
+      record,
+      `${pluginId} inspected install record changed`,
+    );
+    // Official provenance is not operator acceptance. Use the metadata owner's
+    // decision for this exact record, but validate any recorded acceptance so a
+    // partial or stale artifact claim cannot pass the upgrade proof.
+    if (inspection.plugin.trustedOfficialInstall === true && !hasCompanionPluginConsent(record)) {
+      process.stdout.write(
+        `Plugin "${pluginId}" has verified official capability-consent exemption.\n`,
+      );
+      return;
+    }
     assertCompanionPluginConsent(record, pluginId, integrity);
   }
 }
@@ -1261,10 +1395,6 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
   }
   const plugins = result.postUpdate?.plugins;
   assertStrict.equal(plugins?.status, result.status === "error" ? "error" : "warning");
-  assertStrict.equal(
-    plugins?.reason,
-    result.status === "error" ? "post-plugin-doctor-invalid-config" : undefined,
-  );
   assertStrict.deepEqual(plugins.integrityDrifts, []);
   // These are the reviewed packages in the base and scenario recipes.
   // Any other plugin or failure needs investigation before accepting it.
@@ -1281,6 +1411,15 @@ function assertRecoverableUpdateJson([file, expectedVersion, observationRoot, ba
       assertStrict.equal(outcome.nextVersion, expectedVersion);
     }
   }
+  // Typed consent errors survive post-plugin validation without a Doctor reason.
+  // Check before warnings contribute IDs; prose alone cannot admit this shape.
+  const typedConsentOnly = plugins.reason === undefined && denied.size > 0;
+  assertStrict.equal(
+    plugins.reason,
+    result.status === "error" && !typedConsentOnly
+      ? "post-plugin-doctor-invalid-config"
+      : undefined,
+  );
   assertStrict.ok(Array.isArray(plugins.sync?.errors));
   assertStrict.ok(Array.isArray(plugins.warnings));
   for (const warning of [
@@ -1509,6 +1648,13 @@ if (command === "list-scenarios") {
   process.stdout.write(`${JSON.stringify([...SCENARIOS])}\n`);
 } else if (command === "seed") {
   seedState();
+} else if (command === "assert-exec-approvals") {
+  if (getScenario() !== "watchos-direct-node") {
+    assertExecApprovalPolicySurvived(
+      requireEnv("OPENCLAW_STATE_DIR"),
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    );
+  }
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");
@@ -1524,6 +1670,8 @@ if (command === "list-scenarios") {
     "transcript export requires the meeting scenario",
   );
   assertMeetingTranscriptExport(requireEnv("OPENCLAW_STATE_DIR"));
+} else if (command === "assert-npm-plugin-install") {
+  assertNpmPluginInstall(process.argv.slice(3));
 } else if (command === "assert-companion-installs") {
   assertCompanionPluginInstalls(process.argv.slice(3));
 } else if (command === "assert-recovered-plugin-installs") {

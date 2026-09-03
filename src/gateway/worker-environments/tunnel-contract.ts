@@ -45,7 +45,10 @@ export type WorkerTunnelRequest = {
 };
 
 /** Provider teardown fences local work first; only its confirmed result releases physical ownership. */
-export type WorkerTunnelStopReason = "provider-destroying" | "provider-destroyed";
+export type WorkerTunnelStopReason =
+  | "provider-destroying"
+  | "provider-destroyed"
+  | "operator-abandon";
 
 export type WorkerWorkspaceCommand = {
   argv: readonly string[];
@@ -65,6 +68,8 @@ export type WorkerWorkspaceSyncRequest = {
   sessionId: string;
   generation: number;
   gitAuthor?: { name?: string; email?: string };
+  /** Immutable project identity from the owning environment's provisioning snapshot. */
+  projectKey?: string;
 };
 
 export type WorkerWorkspaceSyncResult = {

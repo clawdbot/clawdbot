@@ -7,6 +7,13 @@ repo_root() {
   # the same from main checkout or any linked worktree.
   local base_dir
   local common_git_dir
+  # Anchor-exec handoff (see scripts/pr): the wrapper runs from materialized
+  # temp-dir bytes with no git context of its own; the handoff env carries the
+  # repository the run addresses.
+  if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
+    (cd "$OPENCLAW_PR_ANCHOR_REPO_ROOT" && pwd)
+    return
+  fi
   base_dir="${script_parent_dir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
   if common_git_dir=$(git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
@@ -19,18 +26,11 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # gh auth status fetches token scopes through REST and misreports quota
-  # failures as invalid credentials. GraphQL verifies the active local token
-  # without sending maintainers through a login that cannot restore quota.
-  if gh_plain api graphql -f 'query=query { viewer { login } }' --jq .data.viewer.login >/dev/null 2>&1; then
-    return 0
-  fi
-
-  cat >&2 <<'EOF'
-GitHub CLI auth is not usable for non-interactive API calls.
-Run `gh auth login -h github.com` (or refresh the current token) and retry.
-EOF
-  return 1
+  # Diagnose only this viewer request's budget. A pooled REST probe can describe
+  # a different credential; raw response/error text must never reach diagnostics.
+  local response exit_code=0
+  response=$(gh_plain api graphql -f 'query=query { viewer { login } }' --include 2>/dev/null) || exit_code=$?
+  printf '%s' "$response" | node "$(dirname "${BASH_SOURCE[0]}")/gh-api-preflight.mjs" "$exit_code"
 }
 
 ensure_full_pr_worktree_checkout() {
@@ -52,48 +52,49 @@ refuse_review_transition() {
   return 1
 }
 
+# Foreground pipelines join Git readers and propagate failures through pipefail;
+# process substitutions can outlive a successful guard and discard reader failures.
 require_no_foreign_untracked() {
   local pr="$1"
-  local foreign=()
   local file
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*) ;;
-      *) foreign+=("$file") ;;
-    esac
-  done < <(git ls-files --others --exclude-standard -z)
-  [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+  git ls-files --others --exclude-standard -z |
+    while IFS= read -r -d '' file; do
+      case "$file" in .local|.local/*) continue ;; esac
+      refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+      return 1
+    done
 }
 
 require_no_ignored_transition_paths() {
   local pr="$1"
   local source="$2"
   local target="$3"
-  local file ignored
-  while IFS= read -r -d '' file; do
-    case "$file" in
-      .local|.local/*)
-        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
-        return 1
-        ;;
-    esac
-  done < <(git diff --name-only --no-renames -z "$source" "$target")
-
-  # Ask Git about every transition path at once. Per-path ignored-file scans
-  # become prohibitively slow when a PR is far behind main.
-  if IFS= read -r -d '' ignored < <(
-    git check-ignore -z --stdin < <(git diff --name-only --no-renames -z "$source" "$target") |
-      while IFS= read -r -d '' candidate; do
-        # check-ignore also reports matching paths that do not exist. Only an
-        # existing ignored entry can be overwritten by the transition.
-        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
-          printf '%s\0' "$candidate"
+  local file
+  # Keep ls-files' literal subtree matching: check-ignore on a directory misses
+  # ignored descendants that restore would delete. Bound argv; skip empty diffs.
+  git diff --name-only --no-renames -z "$source" "$target" |
+    while IFS= read -r -d '' file; do
+      case "$file" in
+        .local|.local/*)
+          refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+          return 1
+          ;;
+      esac
+      printf ':(literal)%s\0' "$file"
+      # A file or symlink ancestor would also be replaced; ordinary directories
+      # may contain unrelated ignored data and must not widen the query.
+      while [[ "$file" == */* ]]; do
+        file=${file%/*}
+        if [ -L "$file" ] || { [ -e "$file" ] && [ ! -d "$file" ]; }; then
+          printf ':(literal)%s\0' "$file"
         fi
       done
-  ); then
-    refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
-    return 1
-  fi
+    done |
+    xargs -0 -r -s 32768 git ls-files --others --ignored --exclude-standard -z -- |
+    while IFS= read -r -d '' file; do
+      refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
+      return 1
+    done
 }
 
 validate_review_transition_state() {
@@ -113,12 +114,13 @@ validate_review_transition_state() {
 
   # A path changed from source is owned only when its index mode and blob match target.
   local file
-  while IFS= read -r -d '' file; do
-    if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
-      refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
-      return 1
-    fi
-  done < <(git diff --cached --name-only --no-renames -z "$source")
+  git diff --cached --name-only --no-renames -z "$source" |
+    while IFS= read -r -d '' file; do
+      if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
+        refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
+        return 1
+      fi
+    done
 }
 
 write_review_transition_journal() {
@@ -159,8 +161,8 @@ recover_review_transition() {
     return 1
   }
   IFS=$'\t' read -r source target mode branch <<<"$fields"
-  if ! git cat-file -e "$source^{commit}" 2>/dev/null ||
-    ! git cat-file -e "$target^{commit}" 2>/dev/null ||
+  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$target^{commit}" 2>/dev/null ||
     { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
@@ -220,13 +222,18 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_main() {
-  local root source git_dir
+  local root source git_dir refspec=refs/heads/main
+  local options=(--no-tags --refmap=)
+  if [ -n "${1:-}" ]; then
+    refspec="+$refspec:$1"
+    options+=(--no-write-fetch-head)
+  fi
   root=$(repo_root) || return 1
   source=$(git -C "$root" remote get-url origin) || return 1
   git_dir=$(git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
-  git -C "$root" --git-dir="$git_dir" fetch --no-tags --refmap= "$source" \
-    +refs/heads/main:refs/remotes/origin/main
+  # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
+  git -C "$root" --git-dir="$git_dir" fetch "${options[@]}" "$source" "$refspec"
 }
 
 refresh_main_snapshot() {
@@ -278,10 +285,10 @@ enter_worktree() {
     fi
     # Cold bootstrap needs one extra fetch before private FETCH_HEAD exists.
     # Initialize fully before the next network wait so interruption is retryable.
-    # This shared main ref is only a seed, never the operation's snapshot.
+    # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
     PR_MAIN_SHA=""
-    fetch_canonical_main || return 1
-    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" refs/remotes/origin/main || return 1
+    fetch_canonical_main "refs/heads/temp/pr-$pr" || return 1
+    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" "refs/heads/temp/pr-$pr" || return 1
     resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
     resolved_dir="$resolved_parent/pr-$pr"
     initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1
@@ -354,9 +361,12 @@ pr_meta_json() {
 
   actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
   if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    local repo_nwo
+    repo_nwo=$(gh_plain repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+    # Pin the base repository and revalidate every page before the final head check.
     if ! files=$(
       set -o pipefail
-      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+      gh_plain api --paginate "repos/$repo_nwo/pulls/$pr/files?per_page=100" -H 'Cache-Control: max-age=0' |
         jq -cs '
           add
           | map({

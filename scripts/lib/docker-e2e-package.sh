@@ -210,6 +210,46 @@ docker_e2e_prepare_package_context() {
     rm -rf "$context_dir"
     return "$copy_status"
   fi
+  # The root package keeps its published dependency declarations. Carry the
+  # verified candidate registry into BuildKit so unpublished core packages resolve.
+  if ! node --input-type=module - \
+    "$DOCKER_E2E_PACKAGE_LIB_DIR/../prepublish-plugin-registry-artifact.mjs" \
+    "$context_dir" <<'NODE'
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [, , artifactScript, contextDir] = process.argv;
+const registryDir = process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR;
+const target = path.join(contextDir, "prepublish-plugin-registry");
+fs.mkdirSync(target);
+let identity = {};
+if (registryDir) {
+  const { PREPUBLISH_PLUGIN_REGISTRY_MANIFEST, validatePrepublishPluginRegistryArtifact } =
+    await import(pathToFileURL(artifactScript).href);
+  const bytes = fs.readFileSync(path.join(registryDir, PREPUBLISH_PLUGIN_REGISTRY_MANIFEST));
+  const manifest = JSON.parse(bytes);
+  identity = {
+    sourceSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA || manifest.sourceSha,
+    candidateVersion: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION || manifest.candidateVersion,
+    manifestSha256: process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 || createHash("sha256").update(bytes).digest("hex"),
+  };
+  validatePrepublishPluginRegistryArtifact({
+    artifactDir: registryDir,
+    expectedSourceSha: identity.sourceSha,
+    expectedCandidateVersion: identity.candidateVersion,
+    expectedManifestSha256: identity.manifestSha256,
+    requiredPackages: [],
+  });
+  fs.cpSync(registryDir, target, { recursive: true });
+}
+fs.writeFileSync(path.join(contextDir, "registry-identity.json"), `${JSON.stringify(identity)}\n`);
+NODE
+  then
+    rm -rf "$context_dir"
+    return 1
+  fi
   printf '%s\n' "$context_dir"
 }
 
@@ -217,6 +257,13 @@ docker_e2e_package_mount_args() {
   local package_tgz="$1"
   local target="${2:-/tmp/openclaw-current.tgz}"
   DOCKER_E2E_PACKAGE_ARGS=(-v "$package_tgz:$target:ro" -e "OPENCLAW_CURRENT_PACKAGE_TGZ=$target")
+  if [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    source "$DOCKER_E2E_PACKAGE_LIB_DIR/../e2e/lib/prepublish-plugin-registry.sh"
+    openclaw_prepublish_plugin_registry_configure_docker_args "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR"
+    DOCKER_E2E_PACKAGE_ARGS+=(
+      "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DOCKER_ARGS[@]}"
+    )
+  fi
   if [ -n "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-}" ]; then
     DOCKER_E2E_PACKAGE_ARGS+=(-e "OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$OPENCLAW_E2E_NPM_INSTALL_TIMEOUT")
   fi

@@ -393,7 +393,10 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       try {
         // Remote-exec runtimes own their processes separately; this is only the embedded
         // worker's environment lifetime, not a new requirement on the workspace transport.
-        if (entry.executionMode === "worker-turn" && reason === undefined) {
+        if (
+          entry.executionMode === "worker-turn" &&
+          (reason === undefined || reason === "operator-abandon")
+        ) {
           const signal = AbortSignal.timeout(DEFAULT_COMMAND_TIMEOUT_MS);
           const { transport, node } = await findNode(entry, signal);
           if (node.workerHost.environmentSession !== NODE_WORKER_ENVIRONMENT_SESSION_VERSION) {
@@ -418,11 +421,22 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           });
           const result = await raceNodeWorkerOperation(operation, signal);
           if (!result.ok) {
-            throw new Error(
-              `node worker environment stop failed (${result.error?.code ?? "UNAVAILABLE"})`,
-            );
+            const code = result.error?.code ?? "UNAVAILABLE";
+            const message = `node worker environment stop failed (${code})`;
+            throw RETRYABLE_TRANSPORT_CODES.has(code)
+              ? new WorkerTunnelOwnerDisconnectedError(message)
+              : new Error(message);
           }
         }
+      } catch (error) {
+        if (
+          reason !== "operator-abandon" ||
+          !(error instanceof WorkerTunnelOwnerDisconnectedError)
+        ) {
+          throw error;
+        }
+        // Forced abandonment already fenced the placement; draining rotates its owner epoch.
+        // An offline node keeps the stale epoch and cannot publish results after reconnecting.
       } finally {
         stopping = false;
         await options.workspaceTransfer.close(entry.environmentId);
@@ -431,8 +445,8 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
         retiredEntries.delete(entry);
       }
     })().finally(() => {
-      // Failed or unconfirmed provider teardown keeps the exact owner retryable. Only
-      // physical-stop proof may release it and make subsequent stops idempotent.
+      // Failed teardown keeps the exact owner retryable; confirmed stop or explicit
+      // abandonment releases it and makes subsequent stops idempotent.
       if (retiredEntries.has(entry)) {
         entry.stopPromise = undefined;
       }
@@ -459,7 +473,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       // source of the retired scope; bundle metadata is not cleanup authority.
       const record = options.getEnvironment(environmentId);
       if (record?.nodeDeviceId && (ownerEpoch === undefined || record.ownerEpoch === ownerEpoch)) {
-        if (reason) {
+        if (reason === "provider-destroying" || reason === "provider-destroyed") {
           // Provider teardown owns the whole dedicated machine. No remote session tuple is
           // needed for local transfer cleanup; durable ownership remains until its proof.
           operations.push(options.workspaceTransfer.close(environmentId));
@@ -470,16 +484,19 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
           const sessionId = record.attachedSessionIds[0];
           if (sessionId) {
             operations.push(
-              stopEnvironmentOwner({
-                deviceId: record.nodeDeviceId,
-                environmentId,
-                ownerEpoch: record.ownerEpoch,
-                sessionId,
-                executionMode:
-                  record.profileSnapshot.executionMode === "remote-exec"
-                    ? "remote-exec"
-                    : "worker-turn",
-              }),
+              stopEnvironmentOwner(
+                {
+                  deviceId: record.nodeDeviceId,
+                  environmentId,
+                  ownerEpoch: record.ownerEpoch,
+                  sessionId,
+                  executionMode:
+                    record.profileSnapshot.executionMode === "remote-exec"
+                      ? "remote-exec"
+                      : "worker-turn",
+                },
+                reason,
+              ),
             );
           }
         }

@@ -50,6 +50,10 @@ export const THEME_TYPEFACES = {
   tide: { ui: "ibm-plex-sans", chat: "ibm-plex-sans" },
   beacon: { ui: "atkinson-hyperlegible", chat: "atkinson-hyperlegible" },
   phosphor: { ui: "jetbrains-mono", chat: "jetbrains-mono" },
+  crt: { ui: "jetbrains-mono", chat: "jetbrains-mono" },
+  manuscript: { ui: "lora", chat: "lora" },
+  rose: { ui: "dm-sans", chat: "dm-sans" },
+  miami: { ui: "space-grotesk", chat: "space-grotesk" },
   custom: { ui: "system", chat: "system" },
 } satisfies Record<ThemeName, TypefacePair>;
 

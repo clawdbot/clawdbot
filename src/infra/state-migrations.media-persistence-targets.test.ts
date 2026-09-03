@@ -191,7 +191,14 @@ describe("media persistence migration targets", () => {
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const databasePath = path.join(
       foreignStateDir,
-      "agents",
+      `agents\n${String.fromCharCode(0x1b)}[31mforged`,
+      "main",
+      "agent",
+      "openclaw-agent.sqlite",
+    );
+    const sanitizedDatabasePath = path.join(
+      foreignStateDir,
+      "agentsforged",
       "main",
       "agent",
       "openclaw-agent.sqlite",
@@ -203,8 +210,9 @@ describe("media persistence migration targets", () => {
     const result = await migrateLegacyMediaPersistence({ env });
 
     expect(result.warnings).toContain(
-      `Skipped foreign agent database ${databasePath}; it is outside the active state directory and is not a configured session store.`,
+      `Skipped foreign agent database ${sanitizedDatabasePath}; it is outside the active state directory and is not a configured session store.`,
     );
+    expect(result.warnings.join("\n")).not.toContain(databasePath);
     expect(
       listOpenClawRegisteredAgentDatabases({
         env,

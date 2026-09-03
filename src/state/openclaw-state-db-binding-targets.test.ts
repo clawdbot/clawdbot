@@ -1,7 +1,9 @@
+import { spawn, type ChildProcess } from "node:child_process";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { VERSION } from "../version.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -65,7 +67,7 @@ function createVersion14Bindings() {
       CREATE INDEX idx_current_conversation_bindings_target
         ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
       PRAGMA user_version = 14;
-      UPDATE schema_meta SET schema_version = 14 WHERE meta_key = 'primary';
+      UPDATE schema_meta SET schema_version = 14, app_version = NULL WHERE meta_key = 'primary';
     `);
     const insert = legacy.prepare(`
       INSERT INTO current_conversation_bindings (
@@ -117,10 +119,90 @@ function createVersion14Bindings() {
   }
 }
 
+async function holdGatewayLifecycle(databasePath: string): Promise<{
+  child: ChildProcess;
+  release: () => Promise<void>;
+}> {
+  const coordinatorUrl = new URL("../infra/state-database-coordinator.ts", import.meta.url).href;
+  const source = `
+    import { acquireGatewayLifecycleCoordinator } from ${JSON.stringify(coordinatorUrl)};
+    const coordinator = acquireGatewayLifecycleCoordinator({ databasePath: ${JSON.stringify(databasePath)}, busyTimeoutMs: 0 });
+    process.stdout.write("ready\\n");
+    process.stdin.resume();
+    process.stdin.once("end", () => coordinator.release());
+  `;
+  const child = spawn(
+    process.execPath,
+    ["--import", "tsx", "--input-type=module", "--eval", source],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("Gateway lifecycle holder timed out")),
+        5_000,
+      );
+      let stdout = "";
+      child.stdout?.on("data", (chunk: Buffer) => {
+        stdout += chunk.toString("utf8");
+        if (!stdout.includes("ready\n")) {
+          return;
+        }
+        clearTimeout(timeout);
+        resolve();
+      });
+      child.once("exit", (code, signal) => {
+        clearTimeout(timeout);
+        reject(new Error(`Gateway lifecycle holder exited early: code=${code} signal=${signal}`));
+      });
+    });
+  } catch (error) {
+    child.kill("SIGTERM");
+    throw error;
+  }
+  return {
+    child,
+    release: async () => {
+      child.stdin?.end();
+      if (child.exitCode === null && child.signalCode === null) {
+        await new Promise<void>((resolve) => {
+          child.once("exit", () => resolve());
+        });
+      }
+    },
+  };
+}
+
 describe("conversation binding target migration", () => {
+  it("refuses runtime and doctor schema mutation while another Gateway owns the state", async () => {
+    const { options, databasePath } = createVersion14Bindings();
+    const holder = await holdGatewayLifecycle(databasePath);
+    try {
+      for (const migrate of [
+        () => openOpenClawStateDatabase(options),
+        () => repairOpenClawStateDatabaseSchema(options),
+      ]) {
+        expect(migrate).toThrow(
+          expect.objectContaining({
+            name: "StateSchemaMutationConflictError",
+            message: expect.stringContaining("another Gateway owns that state directory"),
+          }),
+        );
+      }
+      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+      try {
+        expect(preserved.prepare("PRAGMA user_version").get()).toEqual({ user_version: 14 });
+      } finally {
+        preserved.close();
+      }
+    } finally {
+      await holder.release();
+    }
+  });
+
   it.each(migrationPaths)(
-    "preserves bindings and additive data through %s and reopen",
-    (migrationPath) => {
+    "preserves bindings and additive data through %s and cold reopen under a Gateway",
+    async (migrationPath) => {
       const { options, databasePath, before } = createVersion14Bindings();
       if (migrationPath === "doctor repair") {
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
@@ -140,9 +222,9 @@ describe("conversation binding target migration", () => {
       });
       expect(
         migrated.db
-          .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
+          .prepare("SELECT schema_version, app_version FROM schema_meta WHERE meta_key = 'primary'")
           .get(),
-      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
+      ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION, app_version: VERSION });
       expect(
         migrated.db
           .prepare(
@@ -170,8 +252,13 @@ describe("conversation binding target migration", () => {
 
       const after = readMigrationSnapshot(migrated.db);
       closeOpenClawStateDatabaseForTest();
-      expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      closeOpenClawStateDatabaseForTest();
+      const holder = await holdGatewayLifecycle(databasePath);
+      try {
+        expect(readMigrationSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
+      } finally {
+        closeOpenClawStateDatabaseForTest();
+        await holder.release();
+      }
       expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       const repaired = openNodeSqliteDatabase(databasePath, { readOnly: true });
       try {

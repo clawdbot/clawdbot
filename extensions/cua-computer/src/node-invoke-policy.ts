@@ -29,6 +29,7 @@ const OBSERVATION_ACTIONS = new Set<ComputerActParams["action"]>([
   "get_accessibility_tree",
   "get_cursor_position",
   "get_window_state",
+  "zoom",
   "get_browser_state",
   "get_recording_state",
 ]);

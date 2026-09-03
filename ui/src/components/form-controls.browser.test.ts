@@ -31,6 +31,8 @@ function readUiCss(): string {
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
     "ui/src/styles/plugins.css",
@@ -635,7 +637,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
 
       expect(metrics).toEqual({
         chatSelection: "text",
-        chromeSelection: "none",
+        chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",
         inputSelection: "text",

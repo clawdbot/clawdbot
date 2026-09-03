@@ -42,10 +42,13 @@ The install writes a small `# OpenClaw Completion` block into your shell profile
 
 Profile changes are staged beside the destination and atomically replace it only after a complete durable write. A failed install leaves an existing profile unchanged.
 
+Installed source lines preserve literal cache paths, including spaces, quotes, dollar signs, and backslashes. Reinstalling replaces OpenClaw's previous source line after the state directory changes.
+
 ## Notes
 
 - Without `--install` or `--write-state`, the command prints the script to stdout.
 - Completion generation eagerly loads the full command tree, including plugin CLI commands, so nested subcommands are included.
+- Bash completion supports both `--flag value` and `--flag=value`, including named profiles before nested commands.
 - `openclaw update` refreshes the completion cache automatically after a successful update; `openclaw doctor` can repair missing or stale completion setups.
 
 ## Related

@@ -224,6 +224,12 @@ While a probe is running, the node client is told to keep retrying
 fails, the next attempt falls back to the normal prompt flow. Failed targets
 get a short cooldown (5 minutes after a key mismatch).
 
+Pairing settings hot-apply without restarting the Gateway. Automatic approvals
+recheck the current policy immediately before granting access, even if an SSH
+probe or store lock was already pending when the policy changed. Changes to SSH
+verification settings use a fresh probe and do not inherit the previous policy’s
+cooldown. Already paired devices remain paired.
+
 Approved devices record `approvedVia: "ssh-verified"` and their first declared
 capability surface is approved in the same step — the key match already proves
 the node runs under the operator's account on a machine they own, which is the

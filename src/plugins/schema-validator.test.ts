@@ -1,7 +1,7 @@
 /** Covers plugin schema validation for manifests and exported config schemas. */
 import { Format } from "typebox/format";
 import { describe, expect, it, vi } from "vitest";
-import { validateJsonSchemaValue } from "./schema-validator.js";
+import { parseJsonSchemaIssuePath, validateJsonSchemaValue } from "./schema-validator.js";
 
 // Config validation is a CLI startup dependency; codecs and value transforms are not.
 vi.mock("typebox/compile", () => {
@@ -79,6 +79,14 @@ function expectUriValidationCase(params: {
 }
 
 describe("schema validator", () => {
+  it.each([
+    ["<root>", []],
+    ["items.0.enabled", ["items", 0, "enabled"]],
+    ["items.100001.enabled", ["items", "100001", "enabled"]],
+  ])("parses JSON Schema issue path %s", (path, expected) => {
+    expect(parseJsonSchemaIssuePath(path)).toEqual(expected);
+  });
+
   it("can apply JSON Schema defaults while validating", () => {
     const value = {};
     const result = validateJsonSchemaValue({

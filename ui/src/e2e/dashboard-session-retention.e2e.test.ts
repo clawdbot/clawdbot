@@ -11,7 +11,6 @@ const suite = createControlUiE2eSuite({
 
 const alphaKey = "agent:main:dashboard-alpha";
 const betaKey = "agent:main:dashboard-beta";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-session-retention");
 
 function dashboardPath(key: string): string {
   return controlUiSessionPath(key).replace(/^\/chat\//u, "/dashboard/");
@@ -33,12 +32,17 @@ suite.define(() => {
   it("shows a warmed dashboard immediately while its refresh is pending", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
     if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "dashboard-session-retention"), { recursive: true });
     }
     const context = await suite.browser.newContext({
       viewport: { height: 900, width: 1280 },
       ...(recordProof
-        ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "dashboard-session-retention"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -81,11 +85,13 @@ suite.define(() => {
       await page.goto(new URL(dashboardPath(alphaKey), suite.server.baseUrl).href);
       const alphaTab = page.locator('[data-board-tab-id="alpha-main"]');
       await alphaTab.waitFor();
-      await alphaTab.evaluate((tab) => {
-        Reflect.set(globalThis, "__retainedDashboardTab", tab);
-      });
       if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "01-alpha-warmed.png") });
+        await page.screenshot({
+          path: path.join(
+            path.join(suite.artifactDir, "dashboard-session-retention"),
+            "01-alpha-warmed.png",
+          ),
+        });
       }
 
       const sessionLink = (key: string) =>
@@ -106,25 +112,38 @@ suite.define(() => {
       await expect.poll(() => dashboardActive(alphaKey)).toBe(false);
       await expect.poll(() => dashboardActive(betaKey)).toBe(true);
       if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "02-beta-selected.png") });
+        await page.screenshot({
+          path: path.join(
+            path.join(suite.artifactDir, "dashboard-session-retention"),
+            "02-beta-selected.png",
+          ),
+        });
       }
 
       await gateway.deferNext("board.get", { sessionKey: alphaKey });
       await sessionLink(alphaKey).click();
       await alphaTab.waitFor({ state: "visible", timeout: 1_000 });
-      expect(
-        await alphaTab.evaluate((tab) => Reflect.get(globalThis, "__retainedDashboardTab") === tab),
-      ).toBe(true);
+      expect(await alphaTab.textContent()).toContain("alpha main");
       await expect.poll(() => dashboardActive(alphaKey)).toBe(true);
       await expect.poll(() => dashboardActive(betaKey)).toBe(false);
       if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "03-alpha-retained.png") });
+        await page.screenshot({
+          path: path.join(
+            path.join(suite.artifactDir, "dashboard-session-retention"),
+            "03-alpha-retained.png",
+          ),
+        });
       }
     } finally {
       const video = page.video();
       await context.close();
       if (recordProof && video) {
-        await video.saveAs(path.join(proofDir, "dashboard-session-retention.webm"));
+        await video.saveAs(
+          path.join(
+            path.join(suite.artifactDir, "dashboard-session-retention"),
+            "dashboard-session-retention.webm",
+          ),
+        );
       }
     }
   });

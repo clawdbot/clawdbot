@@ -283,6 +283,7 @@ final class ChannelsStore {
 
     var whatsappLoginMessage: String?
     var whatsappLoginQrDataUrl: String?
+    var whatsappLoginSessionKey: String?
     var whatsappLoginConnected: Bool?
     var whatsappBusy = false
     var telegramBusy = false
@@ -373,6 +374,9 @@ final class ChannelsStore {
     func applyWhatsAppLoginWaitResult(_ result: WhatsAppLoginWaitResult) {
         self.whatsappLoginMessage = result.message
         self.whatsappLoginConnected = result.connected
+        if result.connected {
+            self.whatsappLoginSessionKey = nil
+        }
         if let qrDataUrl = result.qrDataUrl {
             self.whatsappLoginQrDataUrl = qrDataUrl
         } else if result.connected {

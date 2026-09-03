@@ -5,11 +5,15 @@ import {
   type WorkerDispatchPlacementStore,
 } from "./placement-dispatch-failure.js";
 import {
-  FORCED_WORKER_ABANDONMENT_ERROR,
   forceAbandonWorkerEnvironment,
+  reportWorkerAbandonmentCleanupError,
 } from "./placement-force-abandon.js";
 import type { WorkerPlacementMoveIntent } from "./placement-move-intent.js";
 import type { WorkerPlacementRunnerAvailabilityReader } from "./placement-projector.js";
+import {
+  FORCED_WORKER_ABANDONMENT_ERROR,
+  isForceAbandonedWorkerPlacement,
+} from "./placement-record.js";
 import type {
   WorkerPlacementAuthorization,
   WorkerPlacementMoveRequest,
@@ -42,17 +46,13 @@ export function createWorkerPlacementMoveAbandonment(options: {
         onCleanupError,
       });
       try {
-        return await environments.destroy(environmentId);
+        return await environments.destroy(environmentId, "operator-abandon");
       } catch (error) {
         const current = environments.get(environmentId);
         if (!current || !isUnavailableEnvironment(current)) {
           throw error;
         }
-        try {
-          onCleanupError?.(error);
-        } catch {
-          // Reporting cannot overturn the durable placement/environment fences.
-        }
+        reportWorkerAbandonmentCleanupError(onCleanupError, error);
         return current;
       }
     });
@@ -60,12 +60,15 @@ export function createWorkerPlacementMoveAbandonment(options: {
   const validateAbandonSource = (request: WorkerPlacementMoveRequest): void => {
     const current = placements.get(request.sessionId);
     if (
-      current?.state !== "active" ||
+      (current?.state !== "active" && !isForceAbandonedWorkerPlacement(current)) ||
       current.generation !== request.source.generation ||
       current.environmentId !== request.source.environmentId ||
       current.activeOwnerEpoch !== request.source.ownerEpoch
     ) {
       throw new Error(`Cannot abandon stale worker placement for session ${request.sessionKey}`);
+    }
+    if (isForceAbandonedWorkerPlacement(current)) {
+      return;
     }
     const runner = options.runnerAvailability.read(current);
     if (!runner) {

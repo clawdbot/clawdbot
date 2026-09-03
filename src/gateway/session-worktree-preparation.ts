@@ -7,8 +7,46 @@ import { slugifyWorktreeTitle } from "../agents/worktrees/name.js";
 import { managedWorktrees, WorktreeRepositoryError } from "../agents/worktrees/service.js";
 import type { CreateManagedWorktreeParams } from "../agents/worktrees/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import type { prepareWorktreeSessionTitle } from "./dashboard-session-title.js";
 import type { PrepareGatewaySessionLifecycle } from "./session-lifecycle-preparation.js";
+import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
+
+export function resolveSpawnParentWorktreeSource(
+  parentSessionKey: string,
+  agentId: string,
+  assertCallerCurrent: (() => void) | undefined,
+) {
+  const parent = loadGatewaySessionEntryReadOnly(parentSessionKey, { agentId });
+  if (!parent.entry?.worktree) {
+    return undefined;
+  }
+  const worktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+  if (
+    !worktree ||
+    worktree.id !== parent.entry.worktree.id ||
+    parent.entry.archivedAt !== undefined
+  ) {
+    throw new Error("Spawn parent managed worktree changed; retry from its current session");
+  }
+  const parentSessionId = parent.entry.sessionId;
+  // Validate the inherited source through the child creation commit. After that,
+  // persisted workspace intent belongs to the child and uses its admitted run.
+  const assertCurrent = () => {
+    assertCallerCurrent?.();
+    const current = loadGatewaySessionEntryReadOnly(parent.canonicalKey, { agentId });
+    const currentWorktree = managedWorktrees.findLiveByOwner("session", parent.canonicalKey);
+    if (
+      current.entry?.sessionId !== parentSessionId ||
+      current.entry.archivedAt !== undefined ||
+      current.entry.worktree?.id !== worktree.id ||
+      currentWorktree?.id !== worktree.id ||
+      currentWorktree.repoRoot !== worktree.repoRoot ||
+      currentWorktree.path !== worktree.path
+    ) {
+      throw new Error("Spawn parent managed worktree changed; retry from its current session");
+    }
+  };
+  return { workspace: worktree.repoRoot, assertCurrent };
+}
 
 /** One worktree preparation owner for synchronous creation and admitted first turns. */
 export async function prepareSessionWorktree(params: {
@@ -17,13 +55,12 @@ export async function prepareSessionWorktree(params: {
   name?: string;
   baseRef?: string;
   label?: string;
-  title?: ReturnType<typeof prepareWorktreeSessionTitle>;
   runSetupScript: boolean;
   signal?: AbortSignal;
   commitGuard?: () => void;
   onProgress?: CreateManagedWorktreeParams["onProgress"];
 }): ReturnType<PrepareGatewaySessionLifecycle> {
-  const { target, workspace, title, commitGuard } = params;
+  const { target, workspace, commitGuard } = params;
   try {
     const repository = await managedWorktrees.resolveRepositoryPaths(workspace);
     commitGuard?.();
@@ -61,14 +98,13 @@ export async function prepareSessionWorktree(params: {
         );
       }
     }
-    const generatedTitle = existingDirectory ? undefined : await title?.generated;
     commitGuard?.();
     const worktree = await managedWorktrees.create({
       repoRoot: workspace,
       ownerKind: "session",
       ownerId: target.key,
       name: params.name,
-      suggestedName: slugifyWorktreeTitle(params.label ?? generatedTitle ?? title?.source ?? ""),
+      suggestedName: slugifyWorktreeTitle(params.label ?? ""),
       baseRef: params.baseRef,
       runSetupScript: params.runSetupScript,
       signal: params.signal,

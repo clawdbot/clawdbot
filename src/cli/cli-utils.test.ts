@@ -1,7 +1,7 @@
 // CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
-import { defaultRuntime } from "../runtime.js";
+import { defaultRuntime, ExitError } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import {
@@ -40,6 +40,33 @@ describe("waitForever", () => {
 });
 
 describe("runCommandWithRuntime", () => {
+  it.each(
+    [0, 1, 2].flatMap((code) =>
+      [false, true].map((customErrorHandler) => ({ code, customErrorHandler })),
+    ),
+  )(
+    "preserves completed exit $code with custom error handler $customErrorHandler",
+    async ({ code, customErrorHandler }) => {
+      const runtime = { error: vi.fn(), exit: vi.fn() };
+      const onError = vi.fn();
+      const outcome = new ExitError(code);
+
+      await expect(
+        runCommandWithRuntime(
+          runtime,
+          async () => {
+            throw outcome;
+          },
+          customErrorHandler ? onError : undefined,
+        ),
+      ).rejects.toBe(outcome);
+
+      expect(runtime.error).not.toHaveBeenCalled();
+      expect(runtime.exit).not.toHaveBeenCalled();
+      expect(onError).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps cause chains and error codes behind debug intent", async () => {
     const messages: string[] = [];
     const exits: number[] = [];

@@ -9,7 +9,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
 import { IDLE_GC_MS, ManagedWorktreeService, SNAPSHOT_RETENTION_MS } from "./service.js";
 import {
-  initializeManagedWorktreeTestRepository,
+  useManagedWorktreeTestRepository,
   materializeManagedWorktreeFixture,
 } from "./service.test-support.js";
 
@@ -28,6 +28,7 @@ async function initializeNestedRepository(root: string, name: string): Promise<s
 }
 
 describe("ManagedWorktreeService garbage collection", () => {
+  const initializeRepository = useManagedWorktreeTestRepository();
   let root: string;
   let repo: string;
   let stateDir: string;
@@ -62,7 +63,7 @@ describe("ManagedWorktreeService garbage collection", () => {
 
   beforeEach(async () => {
     root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-worktree-gc-"));
-    repo = await initializeManagedWorktreeTestRepository(root);
+    repo = await initializeRepository(root);
     stateDir = path.join(root, "state");
     env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
     now = 1_700_000_000_000;
@@ -234,7 +235,7 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   it("continues garbage collection when one repository control path is missing", async () => {
-    const otherRepo = await initializeManagedWorktreeTestRepository(path.join(root, "other"));
+    const otherRepo = await initializeRepository(path.join(root, "other"));
     const removable = await materializeDownstreamFixture("other-removable", {
       repoRoot: otherRepo,
       ownerKind: "session",
@@ -408,8 +409,8 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
   });
 
-  it("enforces thirty live checkouts by default without evicting manual work", async () => {
-    for (let index = 0; index < 29; index += 1) {
+  it("enforces one hundred live checkouts by default without evicting manual work", async () => {
+    for (let index = 0; index < 99; index += 1) {
       await materializeDownstreamFixture(`manual-${index}`);
     }
     const oldest = await materializeRunOwnedFixture("default-oldest", "session");
@@ -418,7 +419,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     expect((await service.gc()).removed).toEqual([oldest.id]);
     expect(
       service.listRegistryRecords().filter((record) => record.removedAt === undefined),
-    ).toHaveLength(30);
+    ).toHaveLength(100);
     expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
   });
 

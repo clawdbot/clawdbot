@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createServer as createHttpServer } from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   buildProductionControlUiE2e,
   canRunPlaywrightChromium,
@@ -17,7 +18,12 @@ import {
 } from "../test-helpers/control-ui-e2e.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const artifactDir = path.resolve(".artifacts/control-ui-e2e/service-worker-update");
+let artifactDir: string;
+beforeEach(() => {
+  if (captureUiProof) {
+    artifactDir = createControlUiE2eArtifactDir("service-worker-update");
+  }
+});
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 const buildA = "service-worker-build-a";
@@ -274,9 +280,6 @@ describe("Control UI service-worker production update E2E", () => {
   });
 
   it("refreshes a same-version build on reconnect before restoring an owned terminal", async () => {
-    if (captureUiProof) {
-      await mkdir(artifactDir, { recursive: true });
-    }
     const context = await browser.newContext({
       locale: "en-US",
       serviceWorkers: "allow",

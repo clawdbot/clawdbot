@@ -1,7 +1,11 @@
 import type { IncomingHttpHeaders } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
+import { createLazyPromise } from "../shared/lazy-promise.js";
 import { resolveCachedGitHubIdentity } from "../state/user-profile-github-identity.js";
 import { classifyTailscaleLogin } from "../state/user-profiles-tailscale-login.js";
 import { syncGitHubIdentity } from "../state/user-profiles.js";
@@ -13,9 +17,10 @@ import {
   fetchGitHubJson,
   GITHUB_API_ORIGIN,
   GITHUB_REQUEST_TIMEOUT_MS,
+  githubApiToken,
   readBoundedResponse,
   readGitHubJsonResponse,
-  readOptionalGitHubString,
+  withOptionalGitHubAuth,
 } from "./control-ui-github-api.js";
 
 const CLOUDFLARE_ACCESS_USER_HEADER = "cf-access-authenticated-user-email";
@@ -119,12 +124,13 @@ async function resolveGitHubUserIdentityByLogin(
   if (!requestedLogin) {
     throw new TypeError("GitHub username is invalid");
   }
+  const token = githubApiToken();
   let payload: unknown;
   try {
     payload = await fetchGitHubJson(
       `${GITHUB_API_ORIGIN}/users/${encodeURIComponent(requestedLogin)}`,
       fetch,
-      undefined,
+      token,
     );
   } catch (error) {
     if (error instanceof ControlUiGitHubError) {
@@ -150,36 +156,7 @@ function parseGitHubUserIdentity(accountId: number, payload: unknown): ResolvedG
   if (!login) {
     throw new ControlUiGitHubError(502, "GitHub response omitted a valid login");
   }
-  return { accountId, login, name: readOptionalGitHubString(payload, "name") };
-}
-
-function retryableConnectionSync(
-  sync: () => Promise<AuthenticatedGitHubIdentitySyncResult>,
-): AuthenticatedGitHubIdentitySync {
-  let inFlight: Promise<AuthenticatedGitHubIdentitySyncResult> | undefined;
-  let completed: AuthenticatedGitHubIdentitySyncResult | undefined;
-  return () => {
-    if (completed) {
-      return Promise.resolve(completed);
-    }
-    if (inFlight) {
-      return inFlight;
-    }
-    const current = sync().then((result) => {
-      completed = result;
-      return result;
-    });
-    inFlight = current;
-    void current.then(
-      () => {
-        inFlight = undefined;
-      },
-      () => {
-        inFlight = undefined;
-      },
-    );
-    return current;
-  };
+  return { accountId, login, name: readNonBlankString(payload.name) };
 }
 
 function cloudflareAccessAssertion(params: {
@@ -210,12 +187,14 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   authResult: GatewayAuthResult;
   authConfig?: GatewayAuthConfig;
   requestHeaders?: IncomingHttpHeaders;
+  /** Reuse an exact verified Access account/email binding before refreshing GitHub metadata. */
+  preferCachedIdentity?: boolean;
 }): AuthenticatedGitHubIdentitySync | undefined {
   const tailscaleLogin = params.authResult.tailscaleIdentity
     ? classifyTailscaleLogin(params.authResult.tailscaleIdentity.login)
     : undefined;
   if (tailscaleLogin?.kind === "provider" && tailscaleLogin.provider === "github") {
-    return retryableConnectionSync(async () => {
+    return createLazyPromise(async () => {
       const identity = await resolveGitHubUserIdentityByLogin(tailscaleLogin.subject);
       const profile = syncGitHubIdentity({
         identity,
@@ -230,19 +209,35 @@ export function createAuthenticatedGitHubIdentitySync(params: {
   if (!access) {
     return undefined;
   }
-  return retryableConnectionSync(async () => {
+  return createLazyPromise(async () => {
     const accessIdentity = await resolveCloudflareAccessIdentity(
       access.assertion,
       access.principal,
     );
+    // Service auth raises public-data quota; Access still owns the signed-in account id.
+    const token = githubApiToken();
+    if (params.preferCachedIdentity) {
+      const cached = resolveCachedGitHubIdentity({
+        accountId: accessIdentity.accountId,
+        email: access.principal,
+      });
+      if (cached) {
+        return cached;
+      }
+    }
     let response: Response | undefined;
     let payload: unknown;
     try {
-      response = await fetchGitHubApi(
-        `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
-        fetch,
-      );
-      payload = await readGitHubJsonResponse(response);
+      payload = await withOptionalGitHubAuth(token, async (requestToken) => {
+        // A failed anonymous retry must not inherit the authenticated response's status.
+        response = undefined;
+        response = await fetchGitHubApi(
+          `${GITHUB_API_ORIGIN}/user/${accessIdentity.accountId}`,
+          fetch,
+          requestToken,
+        );
+        return readGitHubJsonResponse(response);
+      });
     } catch (error) {
       const retryable = response
         ? response.status === 429 ||

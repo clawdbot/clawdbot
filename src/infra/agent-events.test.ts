@@ -7,6 +7,7 @@ import {
   emitAgentEvent,
   emitAgentEventForOwner,
   emitAgentEventIfCurrent,
+  emitAgentRunOutputTokens,
   getAgentEventLifecycleGeneration,
   onAgentAuditEvent,
   onAgentEvent,
@@ -28,7 +29,6 @@ import {
   sweepStaleRunContexts,
 } from "./agent-run-registry.js";
 import { emitAgentRunStatusEvent } from "./agent-run-status-events.js";
-import { recordAgentRunOutputTokens } from "./agent-run-usage.js";
 
 type AgentEventsModule = {
   events: typeof import("./agent-events.js");
@@ -133,30 +133,29 @@ describe("agent-events sequencing", () => {
         seen.push(event.data.outputTokens as number);
       }
     });
-    const emitUsage = (outputTokens: number) => {
-      recordAgentRunOutputTokens({
+    const emitUsage = (outputTokens: number, generation = lifecycleGeneration) =>
+      emitAgentRunOutputTokens({
         runId: "usage-run",
-        lifecycleGeneration,
+        lifecycleGeneration: generation,
         outputTokens,
-        emit: (data) =>
-          emitAgentEventIfCurrent({
-            runId: "usage-run",
-            lifecycleGeneration,
-            stream: "usage",
-            data,
-          }),
       });
-    };
 
-    emitUsage(12);
+    expect(emitUsage(12)).toEqual({ outputTokens: 12 });
     registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
     emitUsage(8);
     clearAgentRunContext("usage-run", lifecycleGeneration);
     registerAgentRunContext("usage-run", { sessionKey: "main", lifecycleGeneration });
     emitUsage(3);
+    const nextGeneration = rotateAgentEventLifecycleGeneration();
+    claimAgentRunContext("usage-run", {
+      sessionKey: "main",
+      lifecycleGeneration: nextGeneration,
+    });
+    expect(emitUsage(100)).toBeUndefined();
+    emitUsage(4, nextGeneration);
     stop();
 
-    expect(seen).toEqual([12, 20, 3]);
+    expect(seen).toEqual([12, 20, 3, 4]);
   });
 
   test("clears sequence state when guarded cleanup finds no run context", () => {

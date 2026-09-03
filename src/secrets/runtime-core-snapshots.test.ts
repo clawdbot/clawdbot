@@ -39,7 +39,7 @@ vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
 }));
 
-vi.mock("../plugins/provider-runtime.js", () => ({
+vi.mock("../plugins/provider-external-auth.js", () => ({
   resolveExternalAuthProfilesWithPlugins: resolveExternalAuthProfilesWithPluginsMock,
 }));
 

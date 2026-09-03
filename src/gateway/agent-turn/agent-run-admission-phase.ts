@@ -30,6 +30,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import { claimAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
@@ -227,6 +228,7 @@ export async function prepareAgentRunDispatch(params: {
     ? loadSessionEntry(params.resolvedSessionKey, {
         ...(params.activeSessionAgentId ? { agentId: params.activeSessionAgentId } : {}),
         clone: false,
+        projection: "list",
       }).storePath
     : `agent:${params.activeSessionAgentId}`;
   let operationalRunInstance: OperationalRunInstanceRef | undefined;
@@ -284,7 +286,7 @@ export async function prepareAgentRunDispatch(params: {
   }
   const activeRunAbort = params.getAdmittedRunAbort();
   if (!activeRunAbort || !operationalRunInstance) {
-    activeRunAbort?.cleanup({ force: true });
+    activeRunAbort?.cleanup();
     activeGatewayWorkAdmission.release();
     params.io.emitAcceptance([
       false,
@@ -343,7 +345,7 @@ export async function prepareAgentRunDispatch(params: {
   const cleanupPreaccept = (admissionReleased = false) => {
     preparedModelRuntimeLease?.release();
     preparedModelRuntimeLease = undefined;
-    activeRunAbort.cleanup({ force: true });
+    activeRunAbort.cleanup();
     if (!admissionReleased) {
       activeGatewayWorkAdmission.release();
     }
@@ -395,6 +397,13 @@ export async function prepareAgentRunDispatch(params: {
         agentDir: replyDispatchRuntime.agentDir,
         allowGatewaySubagentBinding: true,
         workspaceDir: workspaceOverride ?? replyDispatchRuntime.workspaceDir,
+        runtimePluginSelections: [
+          {
+            provider: resolvedRuntime.provider,
+            modelId: resolvedRuntime.model,
+            runtime: resolvedRuntime.harness,
+          },
+        ],
       },
       {
         catalogMode: "static",
@@ -405,6 +414,10 @@ export async function prepareAgentRunDispatch(params: {
     if (!revalidateAdmission()) {
       return undefined;
     }
+    replyDispatchRuntime = Object.freeze({
+      ...replyDispatchRuntime,
+      pluginGeneration: preparedModelRuntimeLease.pluginGeneration,
+    });
   } catch (err) {
     if (!revalidateAdmission()) {
       return undefined;
@@ -543,6 +556,19 @@ export async function prepareAgentRunDispatch(params: {
   let userTurn: PreparedAgentRunUserTurn;
   try {
     userTurn = await prepareAgentRunUserTurn({
+      assertCurrent: () => {
+        assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+        activeRunAbort.controller.signal.throwIfAborted();
+        const entry = params.context.chatAbortControllers.get(params.runId);
+        if (
+          !entry ||
+          entry !== activeRunAbort.entry ||
+          entry.operationalRunInstance !== operationalRunInstance ||
+          entry.registrationCleanupRequested
+        ) {
+          throw new Error("agent input admission no longer owns this run");
+        }
+      },
       request: params.request,
       cfg: params.cfg,
       cfgForAgent: params.cfgForAgent,
@@ -567,8 +593,8 @@ export async function prepareAgentRunDispatch(params: {
       context: params.context,
     });
     if (userTurn.recorder) {
-      // The recorder already persisted the media references, so later admission
-      // rejection must preserve the files now owned by durable history.
+      // Accepted input owns these media references before it enters the transcript.
+      // Later admission rejection must preserve the files retained by that custody.
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {

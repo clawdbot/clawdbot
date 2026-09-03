@@ -144,7 +144,7 @@ describe("plugin conversation bindings through SQLite", () => {
       expect(service.listBySession(record.targetSessionKey)).toEqual([record]);
       expect(service.listBySession(workRecord.targetSessionKey)).toEqual([workRecord]);
       const touchedAt = record.boundAt + 1_000;
-      service.touch(record.bindingId, touchedAt);
+      service.touch(record.bindingId, touchedAt, record.conversation);
       closeOpenClawStateDatabaseForTest();
       expect(service.resolveByConversation(conversation)?.metadata).toMatchObject({
         ...record.metadata,

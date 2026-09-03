@@ -166,10 +166,19 @@ export async function resolveExistingAttemptTranscriptState(params: {
   agentId: string;
   config?: OpenClawConfig;
   sessionFile: string;
+  sessionManager?: EmbeddedRunAttemptParams["sessionManager"];
   sessionId: string;
   sessionKey?: string;
   sessionTarget?: EmbeddedRunAttemptParams["sessionTarget"];
 }): Promise<ExistingAttemptTranscriptState> {
+  // The supplied manager owns this transcript; a borrowed durable identity is not its history.
+  if (params.sessionManager) {
+    return {
+      hasBootstrapTranscriptState: params.sessionManager
+        .getEntries()
+        .some(isTranscriptMessageEvent),
+    };
+  }
   const agentId = normalizeOptionalString(params.sessionTarget?.agentId) ?? params.agentId;
   const storePath =
     normalizeOptionalString(params.sessionTarget?.storePath) ??

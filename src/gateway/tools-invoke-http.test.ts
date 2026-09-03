@@ -3,6 +3,7 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { expectDefined } from "@openclaw/normalization-core";
+import { Type } from "typebox";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -13,7 +14,7 @@ import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
-import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
@@ -25,10 +26,6 @@ import {
 type RunBeforeToolCallHook = typeof runBeforeToolCallHookType;
 type RunBeforeToolCallHookArgs = Parameters<RunBeforeToolCallHook>[0];
 type RunBeforeToolCallHookResult = Awaited<ReturnType<RunBeforeToolCallHook>>;
-
-const pluginToolMetaState = vi.hoisted(
-  () => new Map<string, { pluginId: string; optional: boolean }>(),
-);
 
 const hookMocks = vi.hoisted(() => ({
   resolveToolLoopDetectionConfig: vi.fn(() => ({ warnAt: 3 })),
@@ -102,16 +99,11 @@ vi.mock("../plugins/config-state.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../plugins/tools.js", () => ({
-  copyPluginToolMeta: () => {},
-  getPluginToolMeta: (tool: { name?: string }) =>
-    typeof tool?.name === "string" ? pluginToolMetaState.get(tool.name) : undefined,
-}));
-
 // Perf: the real tool factory instantiates many tools per request; for these HTTP
 // routing/policy tests we only need a small set of tool names.
 vi.mock("../agents/openclaw-tools.js", async () => {
   const { createTerminalTool } = await import("../agents/tools/terminal-tool.js");
+  const { setPluginToolMeta } = await import("../plugins/tool-metadata.js");
   const toolInputError = (message: string) => {
     const err = new Error(message);
     err.name = "ToolInputError";
@@ -124,6 +116,14 @@ vi.mock("../agents/openclaw-tools.js", async () => {
     return err;
   };
 
+  const pluginDoctor = {
+    name: "plugin_doctor",
+    label: "Plugin doctor",
+    description: "Fixture plugin permission flow",
+    parameters: Type.Object({}),
+    execute: async () => ({ content: [], details: {}, ok: true, permissionFlow: true }),
+  };
+  setPluginToolMeta(pluginDoctor, { pluginId: "test-plugin", optional: true });
   const tools = [
     {
       name: "session_status",
@@ -184,11 +184,7 @@ vi.mock("../agents/openclaw-tools.js", async () => {
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "browser" }),
     },
-    {
-      name: "plugin_doctor",
-      parameters: { type: "object", properties: {} },
-      execute: async () => ({ ok: true, permissionFlow: true }),
-    },
+    pluginDoctor,
     {
       name: "write_scoped_test",
       parameters: { type: "object", properties: {} },
@@ -329,9 +325,7 @@ beforeEach(() => {
   pluginHttpHandlers = [];
   cfg = {};
   lastCreateOpenClawToolsContext = undefined;
-  pluginToolMetaState.clear();
   sessionEntries.clear();
-  pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -574,49 +568,61 @@ describe("POST /tools/invoke", () => {
     });
   });
 
-  it("preserves host-minted system authority for a shared-secret caller under roles", async () => {
-    await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
-      const owner = ensureProfileForEmail("sysauth-owner@example.test");
-      const sessionKey = "agent:main:sysauth-primary";
-      const entry = {
-        sessionId: "sysauth-primary-session",
-        updatedAt: 1,
-        visibility: "shared" as const,
-        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
-      };
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-      sessionEntries.set(sessionKey, entry);
-      cfg = {
-        agents: { list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }] },
-        gateway: {
-          roles: {
-            default: "guest",
-            definitions: {
-              guest: {
-                sessions: { others: "view" },
-                agents: ["guest-agent"],
-                scopes: ["operator.write"],
+  it.each([
+    { toolName: "agents_list", withProfile: false },
+    { toolName: "agents_list", withProfile: true },
+    { toolName: "sessions_spawn", withProfile: true },
+  ])(
+    "preserves system authority for $toolName with owner profile: $withProfile",
+    async ({ toolName, withProfile }) => {
+      await withOpenClawTestState({ label: "tools-invoke-system-authority" }, async () => {
+        const owner = ensureGatewayOwnerProfile("Gateway Owner");
+        const sessionKey = "agent:main:sysauth-primary";
+        const entry = {
+          sessionId: "sysauth-primary-session",
+          updatedAt: 1,
+          visibility: "shared" as const,
+          createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+        };
+        await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+        sessionEntries.set(sessionKey, entry);
+        cfg = {
+          agents: { list: [{ id: "main", default: true, tools: { allow: [toolName] } }] },
+          gateway: {
+            tools: { allow: [toolName] },
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: {
+                  sessions: { others: "view" },
+                  agents: ["guest-agent"],
+                  scopes: ["operator.write"],
+                },
               },
             },
           },
-        },
-      };
+        };
 
-      // Shared-secret operator owners have no durable profile; connect mints system
-      // authority on the connection. Dispatch must carry that fact forward instead of
-      // re-deriving ownership from scopes, or the caller is denied its own agent.
-      const call = await invokeToolsRpc(
-        { name: "agents_list", args: {}, sessionKey },
-        ["operator.write"],
-        undefined,
-        undefined,
-        undefined,
-        { operatorRoleActor: { kind: "system" } },
-      );
+        const call = await invokeToolsRpc(
+          { name: toolName, args: { agentId: "restricted-agent" }, sessionKey },
+          ["operator.write"],
+          undefined,
+          undefined,
+          withProfile
+            ? {
+                profileId: owner.id,
+                displayName: owner.displayName,
+                hasAvatar: false,
+                updatedAt: owner.updatedAt,
+              }
+            : undefined,
+          { operatorRoleActor: { kind: "system" } },
+        );
 
-      expect(call?.[1]).toMatchObject({ ok: true, toolName: "agents_list" });
-    });
-  });
+        expect(call?.[1]).toMatchObject({ ok: true, toolName });
+      });
+    },
+  );
 
   it("rejects a nested sessions_send target that the operator cannot mutate", async () => {
     await withOpenClawTestState({ label: "tools-invoke-foreign-session" }, async () => {

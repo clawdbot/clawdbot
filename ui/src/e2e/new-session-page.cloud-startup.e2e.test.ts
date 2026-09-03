@@ -97,7 +97,7 @@ suite.define(() => {
         .click();
       await page.getByRole("heading", { name: "Local" }).waitFor();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBeNull();
-      await expect.poll(() => page.locator("#new-session-detail-trigger").count()).toBe(0);
+      await expect.poll(() => page.locator("#new-session-checkout-trigger").count()).toBe(0);
     } finally {
       await context.close();
     }
@@ -277,9 +277,14 @@ suite.define(() => {
 
       const historyCount = (await gateway.getRequests("chat.history")).length;
       await checkDelivery.click();
-      expect(await gateway.waitForRequest("chat.history", { after: historyCount })).toMatchObject({
-        params: { sessionKey, limit: 1000 },
-      });
+      // Background history loads may arrive before this action's request.
+      await expect
+        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
+        .toContainEqual(
+          expect.objectContaining({
+            params: { sessionKey, limit: 1000, inputRunIds: [messageId] },
+          }),
+        );
       await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
       await retainedTurn
         .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)

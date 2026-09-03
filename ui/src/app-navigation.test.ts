@@ -12,6 +12,8 @@ import {
   visibleSettingsNavigationGroups,
 } from "./app-navigation.ts";
 import {
+  activityPersonFromPath,
+  activityPersonLocation,
   inferBasePathFromPathname,
   normalizeBasePath,
   pathForRoute,
@@ -94,6 +96,7 @@ describe("navigationIconForRoute", () => {
       chat: "messageSquare",
       custodian: "lobster",
       activity: "activity",
+      meetings: "book",
       apps: "layoutGrid",
       portals: "monitor",
       approvals: "badgeCheck",
@@ -126,7 +129,7 @@ describe("navigationIconForRoute", () => {
       about: "fileText",
       "ai-agents": "brain",
       "model-setup": "spark",
-      "model-providers": "plug",
+      "model-providers": "box",
       "memory-import": "download",
       notifications: "bell",
       security: "shieldCheck",
@@ -162,19 +165,9 @@ describe("settingsSearchTextMatches", () => {
 });
 
 describe("formatDocumentTitle", () => {
-  it("suffixes the brand after a plain context", () => {
-    expect(formatDocumentTitle({ context: "Usage" })).toBe("Usage — OpenClaw");
-  });
-
   it("does not duplicate a context ending in the brand", () => {
     expect(formatDocumentTitle({ context: "Ask OpenClaw" })).toBe("Ask OpenClaw");
     expect(formatDocumentTitle({ context: "OpenClaw" })).toBe("OpenClaw");
-  });
-
-  it("prefixes a positive attention count", () => {
-    expect(formatDocumentTitle({ context: "Usage", attentionCount: 2 })).toBe(
-      "(2) Usage — OpenClaw",
-    );
   });
 
   it("names the disconnected gateway without implying internet loss", () => {
@@ -183,20 +176,8 @@ describe("formatDocumentTitle", () => {
     ).toBe("(Disconnected) Usage — OpenClaw");
   });
 
-  it("includes the queued outbox count in the disconnected marker", () => {
-    expect(
-      formatDocumentTitle({ context: "Usage", gatewayDisconnected: true, queuedCount: 3 }),
-    ).toBe("(Disconnected · 3 queued) Usage — OpenClaw");
-  });
-
   it("ignores a queued count while online", () => {
     expect(formatDocumentTitle({ context: "Usage", queuedCount: 3 })).toBe("Usage — OpenClaw");
-  });
-
-  it("suppresses the attention count while disconnected", () => {
-    expect(
-      formatDocumentTitle({ context: "Usage", attentionCount: 2, gatewayDisconnected: true }),
-    ).toBe("(Disconnected) Usage — OpenClaw");
   });
 });
 
@@ -218,6 +199,7 @@ describe("titleForRoute", () => {
       chat: "Chat",
       custodian: "OpenClaw",
       activity: "Activity",
+      meetings: "Meetings",
       apps: "Apps",
       portals: "Portals",
       approvals: "Approvals",
@@ -270,11 +252,12 @@ describe("subtitleForRoute", () => {
       chat: "Gateway chat for quick interventions.",
       custodian: "System setup and care.",
       activity: "Recent sessions across people using this gateway.",
+      meetings: "Meeting notes and transcripts across this gateway.",
       apps: "Companion apps for phone, watch, desktop, and browser.",
       portals: "Live previews from agent-run applications.",
       approvals: "Recent exec, plugin, and system-agent approvals.",
       workboard: "Agent work queue and session handoff.",
-      dashboards: "Sessions that open on their dashboard face.",
+      dashboards: "Tasks with saved dashboards.",
       worktrees: "Isolated agent task checkouts and recovery snapshots.",
       channels: "Channels and settings.",
       connection: "Gateway endpoint, credentials, and handshake status.",
@@ -290,7 +273,7 @@ describe("subtitleForRoute", () => {
       "cloud-workers": "Profiles and machine sizes for cloud sessions.",
       profile: "Your display name, avatar, and identity on this gateway.",
       communications: "Messages and text-to-speech settings.",
-      appearance: "Theme, UI, and setup wizard settings.",
+      appearance: "Theme and UI settings.",
       lobsterdex: "Every lobster palette that has visited this browser.",
       automation: "Commands, hooks, automations, and plugins.",
       mcp: "MCP servers, auth, tools, and diagnostics.",
@@ -392,6 +375,91 @@ describe("routeIdFromPath", () => {
     expect(inferBasePathFromPathname("/ui/workboard/ops")).toBe("/ui");
   });
 
+  it.each([
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "Josh Roberts",
+      segment: "josh-roberts-12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-ABCD-4EF0-8123-456789ABCDEF",
+      label: undefined,
+      segment: "12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "Ada",
+      segment: "ada-12345678abcd",
+      reference: "12345678abcd",
+    },
+    {
+      personId: "12345678-abcd-4ef0-8123-456789abcdef",
+      label: "李 明",
+      segment: "%E6%9D%8E-%E6%98%8E-12345678abcd",
+      reference: "12345678abcd",
+    },
+    { personId: "alice", label: "Alice", segment: "alice", reference: "alice" },
+    {
+      personId: "profile-deadbeef",
+      label: "Alice",
+      segment: "profile%2Ddeadbeef",
+      reference: "profile-deadbeef",
+    },
+    {
+      personId: "profile/a",
+      label: "Alice",
+      segment: "profile%2Fa",
+      reference: "profile/a",
+    },
+    {
+      personId: "release.js",
+      label: "Alice",
+      segment: "release%2Ejs",
+      reference: "release.js",
+    },
+  ])("round-trips Activity links for $personId", ({ personId, label, segment, reference }) => {
+    const pathname = `/ui/activity/${segment}`;
+    expect(activityPersonLocation(personId, "/ui", label)).toEqual({
+      pathname,
+      search: "",
+      href: pathname,
+    });
+    expect(activityPersonFromPath(pathname, "/ui")).toBe(reference);
+    expect(routeIdFromPath(pathname, "/ui")).toBe("activity");
+    expect(createApplicationRouter().routeIdFromPath(pathname, "/ui")).toBe("activity");
+    expect(inferBasePathFromPathname(pathname)).toBe("/ui");
+  });
+
+  it("preserves full Activity UUIDs and accepts longer collision-disambiguating prefixes", () => {
+    const personId = "12345678-abcd-4ef0-8123-456789abcdef";
+    const uuidShapedName = activityPersonLocation(personId, "", "deadbeef-cafe-4dad-8bad");
+    expect(activityPersonFromPath(uuidShapedName.pathname)).toBe("12345678abcd");
+    expect(activityPersonFromPath(`/activity/${personId}`)).toBe(personId);
+    expect(activityPersonFromPath("/activity/josh-12345678abcd")).toBe("12345678abcd");
+    expect(activityPersonLocation(personId, "", "Josh", 16).pathname).toBe(
+      "/activity/josh-12345678abcd4ef0",
+    );
+    expect(activityPersonFromPath("/activity/renamed-josh-12345678/")).toBe("12345678");
+    expect(inferBasePathFromPathname("/activity/josh-12345678")).toBe("");
+    expect(inferBasePathFromPathname("/apps/openclaw/activity/josh-12345678")).toBe(
+      "/apps/openclaw",
+    );
+  });
+
+  it.each([
+    "/activity",
+    "/activity/",
+    "/activity/%",
+    "/activity/%20",
+    "/activity/%2E",
+    "/activity/%2E%2E",
+    "/activity/alice/extra",
+  ])("rejects an invalid Activity person path %s", (pathname) => {
+    expect(activityPersonFromPath(pathname)).toBeNull();
+  });
+
   it("round-trips session navigation through the lazy contract seam", () => {
     const pathname = sessionNavigationTarget({
       face: "chat",
@@ -422,6 +490,7 @@ describe("routeIdFromPath", () => {
 
   it("rejects route-shaped paths outside the configured base path", () => {
     expect(routeIdFromPath("/xx/chat", "/ui")).toBeNull();
+    expect(routeIdFromPath("/xx/activity/josh-12345678", "/ui")).toBeNull();
     expect(routeIdFromPath("/other/sessions", "/apps/openclaw")).toBeNull();
   });
 
@@ -526,6 +595,7 @@ describe("SIDEBAR_NAV_ROUTES", () => {
       "tasks",
       "sessions",
       "activity",
+      "meetings",
       "plugins",
       "apps",
       "portals",

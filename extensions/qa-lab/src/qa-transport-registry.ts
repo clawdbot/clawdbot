@@ -11,6 +11,7 @@ import {
 } from "./qa-channel-transport.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
 import { createQaStateBackedTransportAdapter } from "./qa-transport.js";
+import type { QaScenarioExecutionCell } from "./scenario-lane.js";
 
 export type QaTransportId = "qa-channel";
 export type QaTransportDriver = QaTransportId | "crabline" | "live";
@@ -34,7 +35,46 @@ export type QaTransportAdapterFactoryResult<
   cleanupWithoutGateway: () => Promise<void>;
 };
 
-export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]>;
+export type QaTransportAdapterFactory = NonNullable<QaRunnerCliRegistration["adapterFactory"]> & {
+  prepareSelectedScenarios?: (scenarioIds: readonly string[]) => Promise<void>;
+};
+
+export async function prepareQaTransportAdapterFactories(params: {
+  factories: readonly QaTransportAdapterFactory[] | undefined;
+  driver: QaTransportDriver | undefined;
+  cells: readonly QaScenarioExecutionCell[];
+}): Promise<readonly QaTransportAdapterFactory[] | undefined> {
+  const { factories, driver, cells } = params;
+  if (!factories || driver !== "live") {
+    return factories;
+  }
+  return await Promise.all(
+    factories.map(async (factory) => {
+      if (!factory.prepareSelectedScenarios) {
+        return factory;
+      }
+      const scenarioIds = [
+        ...new Set(
+          cells.flatMap(({ channel, scenarioId }) =>
+            channel &&
+            factories.find((candidate) => candidate.matches({ channelId: channel, driver })) ===
+              factory
+              ? [scenarioId]
+              : [],
+          ),
+        ),
+      ];
+      if (scenarioIds.length === 0) {
+        return factory;
+      }
+      await factory.prepareSelectedScenarios(scenarioIds);
+      // Child partitions carry ready factories, so cold preparation cannot reenter their timers.
+      const ready = Object.assign({}, factory);
+      delete ready.prepareSelectedScenarios;
+      return ready;
+    }),
+  );
+}
 
 type QaTransportAdapterFactoryRegistry = {
   create: (context: QaTransportFactoryContext) => Promise<QaTransportAdapterFactoryResult>;

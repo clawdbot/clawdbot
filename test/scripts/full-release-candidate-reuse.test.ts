@@ -719,48 +719,51 @@ describe("candidate archive deadline", () => {
 });
 
 describe("full release candidate loading", () => {
-  it("binds the exact archive, producer attempt, and producer job", async () => {
-    const { archive, manifest, metadata } = await fixture();
-    const selected = await selectTrustedFullReleaseCandidate({
-      artifacts: [metadata],
-      now: NOW,
-      readWorkflowRun: async () => workflowRun(77, { run_attempt: 2 }),
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-    });
-    const binding = await loadSelectedFullReleaseCandidate({
-      downloadArchive: async ({ expected }) => {
-        expect(expected).toMatchObject({
-          artifactId: 301,
-          artifactName: metadata.name,
-          runId: 77,
-          workflowSha: manifest.request.toolingSha,
-        });
-        return { archiveBytes: archive, artifactMetadata: metadata };
-      },
-      now: NOW,
-      readArtifact: constituentArtifactReader(manifest),
-      readRunAttempt: async (runId, runAttempt) => {
-        expect([runId, runAttempt]).toEqual(["77", "1"]);
-        return workflowRun(77, { run_attempt: 1 });
-      },
-      readWorkflowJobs: async () => workflowJobs(manifest),
-      request: manifest.request,
-      selected: selected!,
-      token: "test-token",
-    });
-    expect(binding).toMatchObject({
-      evidenceArtifact: {
-        digest: sha256(archive),
-        id: "301",
-        runAttempt: "1",
-        runId: "77",
-      },
-      producer: manifest.producer,
-      publisher: manifest.publisher,
-      request: manifest.request,
-    });
-  });
+  it.each([WORKFLOW_PATH, ".github/workflows/full-release-artifacts.yml"])(
+    "binds exact candidate artifacts from %s",
+    async (path) => {
+      const { archive, manifest, metadata } = await fixture();
+      const selected = await selectTrustedFullReleaseCandidate({
+        artifacts: [metadata],
+        now: NOW,
+        readWorkflowRun: async () => workflowRun(77, { run_attempt: 2, path }),
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+      });
+      const binding = await loadSelectedFullReleaseCandidate({
+        downloadArchive: async ({ expected }) => {
+          expect(expected).toMatchObject({
+            artifactId: 301,
+            artifactName: metadata.name,
+            runId: 77,
+            workflowSha: manifest.request.toolingSha,
+          });
+          return { archiveBytes: archive, artifactMetadata: metadata };
+        },
+        now: NOW,
+        readArtifact: constituentArtifactReader(manifest),
+        readRunAttempt: async (runId, runAttempt) => {
+          expect([runId, runAttempt]).toEqual(["77", "1"]);
+          return workflowRun(77, { run_attempt: 1, path });
+        },
+        readWorkflowJobs: async () => workflowJobs(manifest),
+        request: manifest.request,
+        selected: selected!,
+        token: "test-token",
+      });
+      expect(binding).toMatchObject({
+        evidenceArtifact: {
+          digest: sha256(archive),
+          id: "301",
+          runAttempt: "1",
+          runId: "77",
+        },
+        producer: manifest.producer,
+        publisher: manifest.publisher,
+        request: manifest.request,
+      });
+    },
+  );
 
   it("accepts an active producer run after the exact producer jobs complete", async () => {
     const { archive, manifest, metadata } = await fixture();
@@ -1004,6 +1007,26 @@ describe("full release candidate binding authority", () => {
     expect(fresh).toEqual(binding);
     expect(reused).toEqual(binding);
     expect(candidateArtifactJsonFromBinding(fresh)).toBe(candidateArtifactJsonFromBinding(reused));
+  });
+
+  it("preserves published package provenance across fresh and reused evidence", () => {
+    const binding = fullReleaseCandidateBindingFixture({ packagePublished: true });
+    const fresh = resolveCandidateBinding({
+      freshBinding: binding,
+      now: NOW,
+      request: binding.request,
+      required: true,
+    });
+    const reused = resolveCandidateBinding({
+      now: NOW,
+      request: binding.request,
+      required: true,
+      reusedBinding: binding,
+    });
+    const freshArtifact = candidateArtifactJsonFromBinding(fresh);
+
+    expect(freshArtifact).toBe(candidateArtifactJsonFromBinding(reused));
+    expect(JSON.parse(freshArtifact)).toMatchObject({ packagePublished: true });
   });
 
   it("rejects missing, ambiguous, expired, and wrong-request evidence", () => {

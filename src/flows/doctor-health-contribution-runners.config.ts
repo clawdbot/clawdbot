@@ -52,7 +52,7 @@ export async function runWriteConfigHealth(
     return;
   }
   const { applyWizardMetadata } = await import("../commands/onboard-helpers.js");
-  const { replaceConfigFile } = await import("../config/config.js");
+  const { transformConfigFile } = await import("../config/config.js");
   const { logConfigUpdated } = await import("../config/logging.js");
   const { shortenHomePath } = await import("../utils.js");
   const configResultWritePending =
@@ -73,9 +73,14 @@ export async function runWriteConfigHealth(
     }
     const legacyParentVersionOverride =
       resolveLegacyParentVersionOverride(ctx).lastTouchedVersionOverride;
+    const { restoreDoctorConfigEnvRefs } =
+      await import("../commands/doctor/shared/config-flow-steps.js");
     try {
-      await replaceConfigFile({
-        nextConfig: ctx.cfg,
+      await transformConfigFile({
+        transform: (_current, { snapshot }, { envSnapshotForRestore }) => {
+          const nextConfig = restoreDoctorConfigEnvRefs(ctx.cfg, snapshot, envSnapshotForRestore);
+          return { nextConfig };
+        },
         afterWrite: { mode: "auto" },
         writeOptions: {
           auditOrigin: "doctor",
@@ -85,6 +90,9 @@ export async function runWriteConfigHealth(
           ...(ctx.configResult.explicitSetPaths
             ? { explicitSetPaths: ctx.configResult.explicitSetPaths }
             : {}),
+          persistCanonicalAgentRoster: configResultWritePending
+            ? ctx.configResult.persistCanonicalAgentRoster
+            : undefined,
           preservedLegacyRootKeys: ctx.configResult.preservedLegacyRootKeys,
           ...(legacyParentVersionOverride
             ? { lastTouchedVersionOverride: legacyParentVersionOverride }

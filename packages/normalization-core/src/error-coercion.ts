@@ -212,3 +212,92 @@ export function stringifyNonErrorCause(value: unknown): string {
     return Object.prototype.toString.call(value);
   }
 }
+
+export function extractErrorCode(err: unknown): string | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard admits SDK error wrappers with optional code fields.
+  const code = (err as { code?: unknown }).code;
+  if (typeof code === "string") {
+    return code;
+  }
+  if (typeof code === "number") {
+    return String(code);
+  }
+  return undefined;
+}
+
+export function readErrorName(err: unknown): string {
+  if (!err || typeof err !== "object") {
+    return "";
+  }
+  // SAFETY: Object-shaped error wrappers may omit name or supply a non-string value.
+  const name = (err as { name?: unknown }).name;
+  return typeof name === "string" ? name : "";
+}
+
+export function collectErrorGraphCandidates(
+  err: unknown,
+  resolveNested?: (current: Record<string, unknown>) => Iterable<unknown>,
+): unknown[] {
+  const queue: unknown[] = [err];
+  const seen = new Set<unknown>();
+  const candidates: unknown[] = [];
+
+  while (queue.length > 0) {
+    const current = queue.shift();
+    if (current == null || seen.has(current)) {
+      continue;
+    }
+    seen.add(current);
+    candidates.push(current);
+
+    if (!current || typeof current !== "object" || !resolveNested) {
+      continue;
+    }
+    // SAFETY: Non-object nodes were excluded before the callback reads optional graph links.
+    for (const nested of resolveNested(current as Record<string, unknown>)) {
+      if (nested != null && !seen.has(nested)) {
+        queue.push(nested);
+      }
+    }
+  }
+
+  return candidates;
+}
+
+export function extractErrorCodeOrErrno(err: unknown): string | undefined {
+  const code = extractErrorCode(err);
+  if (code) {
+    return code.trim().toUpperCase();
+  }
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  // SAFETY: The object guard permits the optional errno field used by SDK wrappers.
+  const errno = (err as { errno?: unknown }).errno;
+  if (typeof errno === "string" && errno.trim()) {
+    return errno.trim().toUpperCase();
+  }
+  if (typeof errno === "number" && Number.isFinite(errno)) {
+    return String(errno);
+  }
+  return undefined;
+}
+
+export function collectNestedErrorCandidates(err: unknown): unknown[] {
+  return collectErrorGraphCandidates(err, (current) => {
+    const nested: unknown[] = [
+      current.cause,
+      current.reason,
+      current.original,
+      current.error,
+      current.data,
+    ];
+    if (Array.isArray(current.errors)) {
+      nested.push(...current.errors);
+    }
+    return nested;
+  });
+}

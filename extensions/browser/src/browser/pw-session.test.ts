@@ -148,14 +148,14 @@ describe("pw-session refLocator", () => {
     expect(mocks.locator).toHaveBeenCalledWith("aria-ref=e1");
   });
 
-  it("uses backend-marked DOM locators for ax refs", () => {
+  it.each(["e1", "ax12"])("uses backend-marked DOM locators for %s refs", (ref) => {
     const { page, mocks } = fakePage();
     const state = ensurePageState(page);
-    state.roleRefs = { ax12: { role: "button", name: "OK", domMarker: true } };
+    state.roleRefs = { [ref]: { role: "button", name: "OK", domMarker: true } };
 
-    refLocator(page, "ax12");
+    refLocator(page, ref);
 
-    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="ax12"]`);
+    expect(mocks.locator).toHaveBeenCalledWith(`[${BROWSER_REF_MARKER_ATTRIBUTE}="${ref}"]`);
   });
 
   it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
@@ -309,11 +309,10 @@ describe("pw-session ensurePageState", () => {
     expect(savedPathB).not.toBe(managedPathB);
     for (const savedPath of [savedPathA, savedPathB]) {
       expect(savedPath.length).toBeGreaterThan(0);
-      const savedParentName = path.basename(path.dirname(savedPath));
-      expect(
-        savedParentName.includes("fs-safe-output") ||
-          savedParentName === path.basename(DEFAULT_DOWNLOAD_DIR),
-      ).toBe(true);
+      const relativeStagedPath = path.relative(await fs.realpath(DEFAULT_DOWNLOAD_DIR), savedPath);
+      expect(relativeStagedPath.startsWith(`..${path.sep}`)).toBe(false);
+      expect(path.isAbsolute(relativeStagedPath)).toBe(false);
+      await expect(fs.access(path.dirname(savedPath))).rejects.toMatchObject({ code: "ENOENT" });
     }
     await expect(fs.readFile(managedPathA ?? "", "utf8")).resolves.toBe("download-a");
     await expect(fs.readFile(managedPathB ?? "", "utf8")).resolves.toBe("download-b");
@@ -799,7 +798,7 @@ describe("pw-session ensurePageState", () => {
 
     const consoleEntry = state.console.at(-1);
     const errorEntry = state.errors.at(-1);
-    const request = state.requests.at(-1);
+    const request = [...state.requests.values()].at(-1);
     for (const value of [
       consoleEntry?.type,
       consoleEntry?.text,
@@ -829,7 +828,7 @@ describe("pw-session ensurePageState", () => {
     expect(state2).not.toBe(state1);
     expect(state2.console).toStrictEqual([]);
     expect(state2.errors).toStrictEqual([]);
-    expect(state2.requests).toStrictEqual([]);
+    expect(state2.requests).toStrictEqual(new Map());
   });
 
   it.each([

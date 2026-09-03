@@ -13,14 +13,26 @@ const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "versioned-runtime-deps",
   "cron-scheduled-authority",
   "sqlite-volume",
+  "recovery-cleanup",
+  "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
 
-// Registry proof needs its own artifact contract, so broad aliases omit it.
+// Registry proof needs its artifact contract; versioned auth fixtures exercise
+// legacy import rather than native state from every baseline in a broad sweep.
 const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
-  (scenario) => scenario !== "prerelease-plugin-registry",
+  (scenario) =>
+    scenario !== "prerelease-plugin-registry" &&
+    scenario !== "auth-profile-v2026-7-2-beta-5" &&
+    scenario !== "recovery-cleanup",
 );
 const scenarioAliases = new Map([
-  ["reported-issues", aggregateScenarios.filter((scenario) => scenario !== "sqlite-volume")],
+  [
+    "reported-issues",
+    aggregateScenarios.filter(
+      (scenario) => scenario !== "sqlite-volume" && scenario !== "watchos-direct-node",
+    ),
+  ],
   ["far-reaching", aggregateScenarios],
 ]);
 
@@ -128,11 +140,23 @@ function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
+function supportsUpgradeSurvivorWatchDirectNode(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 8, patch: 1 }) >= 0;
+}
+
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   return (
     (scenario !== "plugin-deps-cleanup" ||
       supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
     (scenario !== "acpx-openclaw-tools-bridge" ||
-      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec))
+      supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)) &&
+    (scenario !== "watchos-direct-node" || supportsUpgradeSurvivorWatchDirectNode(baselineSpec))
   );
 }

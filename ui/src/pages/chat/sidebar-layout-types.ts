@@ -1,7 +1,7 @@
 export type SidebarSlotId =
   | "browser"
-  | "chat"
   | "companion"
+  | "dashboard"
   | "desktop"
   | "detail"
   | "discussion"

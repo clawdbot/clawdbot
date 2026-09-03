@@ -476,7 +476,7 @@ function Expand-PortableNodeArchive {
     $tarCommand = Get-Command tar -ErrorAction SilentlyContinue
     if ($tarCommand -and $tarCommand.Source) {
         New-Item -ItemType Directory -Force -Path $DestinationPath | Out-Null
-        & $tarCommand.Source -xf $ZipPath -C $DestinationPath --strip-components 1
+        Invoke-CommandFromWindowsSafeDirectory -CommandPath $tarCommand.Source -Arguments @("-xf", $ZipPath, "-C", $DestinationPath, "--strip-components", "1")
         if ($LASTEXITCODE -eq 0) {
             return
         }
@@ -847,7 +847,7 @@ function Install-PortableGit {
     try {
         Write-Host "  Downloading $($download.Tag)..." -ForegroundColor Gray
         $downloadTimeouts = Get-WebRequestTimeoutParameters -CommandName "Invoke-WebRequest" -LegacyTimeoutSec 600
-        Invoke-WebRequest -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
+        Invoke-WebRequest -UseBasicParsing -Uri $download.Url -OutFile $tmpZip @downloadTimeouts
         Expand-Archive -Path $tmpZip -DestinationPath $tmpExtract -Force
         New-Item -ItemType Directory -Force -Path $portableRoot | Out-Null
         Move-Item -Path (Join-Path $tmpExtract "*") -Destination $portableRoot -Force
@@ -999,13 +999,17 @@ function Invoke-CommandFromWindowsSafeDirectory {
 
     $safeDir = if ([string]::IsNullOrWhiteSpace($WorkingDirectory)) { Get-WindowsCommandSafeDirectory } else { $WorkingDirectory }
     $pushedLocation = $false
+    $previousErrorActionPreference = $ErrorActionPreference
     try {
         if (-not [string]::IsNullOrWhiteSpace($safeDir)) {
             Push-Location -LiteralPath $safeDir
             $pushedLocation = $true
         }
+        # Windows PowerShell 5.1 treats native stderr warnings as PowerShell errors.
+        $ErrorActionPreference = "Continue"
         & $CommandPath @Arguments
     } finally {
+        $ErrorActionPreference = $previousErrorActionPreference
         if ($pushedLocation) {
             Pop-Location
         }
@@ -1477,11 +1481,32 @@ const normalized = spec.trim();
 const unaliased = normalized.toLowerCase().startsWith("openclaw@") ? normalized.slice(9).trim() : normalized;
 const explicit = (value) => /\.(?:tgz|tar\.gz)$/i.test(value) || value.includes("://") || value.includes("#") || /^(?:file|github|git\+(?:ssh|https|http|file)|npm):/i.test(value);
 let identity = !normalized || explicit(normalized) || explicit(unaliased) || /^\.{1,2}(?:[\\/]|$)/.test(unaliased) || path.isAbsolute(normalized) || path.isAbsolute(unaliased) ? unaliased : "openclaw";
-if (/^npm:/i.test(identity)) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
-const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
-if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+const alias = /^npm:/i.test(identity);
+if (alias) identity = /^npm:(@[^/]+\/[^@]+|[^@]+?)(?:@.*)?$/i.exec(identity)?.[1] ?? "";
+const filePrefix = /^file:/i.test(identity) ? "file:" : "";
+const archivePath = identity.slice(filePrefix.length);
+const gitShorthand = !/^~[\\/]/.test(identity) && /^[^./@\s:#][^/\s:@#]*\/[^/\s:@#]+(?:#[\s\S]*)?$/.test(identity);
+const localArchive = !alias && !gitShorthand && /\.(?:tgz|tar\.gz|tar)$/i.test(archivePath) && (filePrefix || path.isAbsolute(archivePath) || !/^[a-z][a-z0-9+.-]*:/i.test(archivePath));
+let absoluteArchive = "";
+if (localArchive) {
+  const npmPath = process.platform === "win32" ? archivePath.replaceAll("\\", "/") : archivePath;
+  // Escape raw paths before URL normalization so literal %, #, and ? retain their identity.
+  let fileUrl = `file:${encodeURI(npmPath).replace(/[?#]/g, encodeURIComponent)}`;
+  fileUrl = fileUrl.replace(/^file:\/\/(?=[^/])/, "file:/").replace(/^file:\/{1,3}(?=\.\.?(?:\/|$))/, "file:");
+  const specPath = decodeURIComponent(new URL(fileUrl).pathname);
+  let resolvedPath = decodeURIComponent(new URL(fileUrl, `${require("node:url").pathToFileURL(path.resolve(cwd || process.cwd())).href}/`).pathname);
+  if (process.platform === "win32") resolvedPath = resolvedPath.replace(/^\/+([a-z]:\/)/i, "$1");
+  absoluteArchive = /^\/~(?:\/|$)/.test(specPath) ? path.resolve(require("node:os").homedir(), specPath.slice(3)) : path.resolve(cwd || process.cwd(), resolvedPath);
+}
+// Tarballs match the absolute npm resolved identity; directory links accept relative paths.
+// Keep the npm 11 comma-path identity: its advisory/strict decision stays npm-owned.
+if (absoluteArchive && (+parsed[1] >= 12 || !absoluteArchive.includes(","))) identity = `${filePrefix}${absoluteArchive}`;
+else {
+  const relative = cwd && path.isAbsolute(identity) ? path.relative(cwd, identity) || "." : "";
+  if (relative) identity = path.isAbsolute(relative) || relative === "." || relative === ".." || relative.startsWith(`..${path.sep}`) ? relative : `.${path.sep}${relative}`;
+}
 if (exactIdentity) identity = exactIdentity;
-if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'.`);
+if (!identity || identity.includes(",")) fail(`npm cannot allow lifecycle scripts for install target '${spec}'; use a package URL or local path without commas.`);
 process.stdout.write(`--allow-scripts=${identity}\n`);
 '@
     $kernelOutput = @($kernel | & $nodeCommand - $versionOutput[-1].ToString() $InstallSpec $NpmCwd $ExactIdentity 2>&1)
@@ -1508,8 +1533,9 @@ function Test-NpmLifecycleCompleted {
         return $false
     }
     $entryPath = Join-Path $npmRoot "openclaw\dist\entry.js"
-    $guardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
-    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $guardPath)
+    $pendingPath = Join-Path $npmRoot "openclaw\.openclaw-lifecycle-pending"
+    $legacyGuardPath = Join-Path $npmRoot "openclaw\dist\openclaw-install-guard"
+    return (Test-Path -LiteralPath $entryPath -PathType Leaf) -and -not (Test-Path -LiteralPath $pendingPath) -and -not (Test-Path -LiteralPath $legacyGuardPath)
 }
 
 function Format-OpenClawGitWrapper {

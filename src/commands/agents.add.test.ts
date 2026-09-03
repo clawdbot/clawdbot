@@ -385,11 +385,7 @@ describe("agents add command", () => {
   });
 
   it("rejects an unrepresentable positional name before targeting an existing agent", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { main: {} } } },
-      sourceConfig: { agents: { entries: { main: {} } } },
-    });
+    setConfigSnapshot({ agents: { entries: { main: {} } } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn(),
@@ -485,11 +481,7 @@ describe("agents add command", () => {
   );
 
   it("uses the explicit agent target and skips catalog validation", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { list: [{ id: "main", default: true }] } },
-      sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-    });
+    setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
@@ -527,11 +519,7 @@ describe("agents add command", () => {
   it("keeps guided JSON stdout isolated while wizard logs and UI use stderr", async () => {
     const config = { agents: { entries: { work: { id: "work" } } } };
     setConfigSnapshot(config);
-    const wizard = createQueuedWizardPrompter({
-      textValues: ["/tmp/workspace-work"],
-      confirmValues: [true, false],
-    });
-    wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+    useExistingAgentWizard();
     onboardChannelsMocks.setupChannels.mockImplementationOnce(
       async (nextConfig, wizardRuntime, _prompter, options) => {
         wizardRuntime.log("channel log");
@@ -569,11 +557,7 @@ describe("agents add command", () => {
   });
 
   it("surfaces the canonical main gate before guided auth or workspace side effects", async () => {
-    readConfigFileSnapshotMock.mockResolvedValue({
-      ...baseConfigSnapshot,
-      config: { agents: { entries: { robby: { id: "robby" } } } },
-      sourceConfig: { agents: { entries: { robby: { id: "robby" } } } },
-    });
+    setConfigSnapshot({ agents: { entries: { robby: { id: "robby" } } } });
     const prompter = {
       intro: vi.fn(),
       text: vi.fn(),
@@ -644,6 +628,47 @@ describe("agents add command", () => {
     },
   );
 
+  it.each([
+    { source: "__skip__", copy: false, systemAgent: undefined },
+    { source: "ops", copy: true, systemAgent: { agentId: "main" } },
+    { source: "ops", copy: false, systemAgent: undefined },
+  ])("adds to an explicit fleet with optional auth copy: %j", async (testCase) => {
+    await withAgentsAddStateRoot("openclaw-agents-add-explicit-", async (root) => {
+      const workspaceDir = path.join(root, "workspace-work");
+      const sourceAgentDir = await seedAgentAuthStore(root, "ops", {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          "openai:portable": { type: "api_key", provider: "openai", key: "fixture-only-key" },
+        },
+      });
+      setConfigSnapshot({
+        agents: {
+          ownership: "explicit",
+          defaults: { systemAgent: testCase.systemAgent },
+          entries: { main: {}, ops: { agentDir: sourceAgentDir } },
+        },
+      });
+      const wizard = createQueuedWizardPrompter({
+        textValues: ["work", workspaceDir],
+        selectValues: [testCase.source],
+        confirmValues: testCase.source === "__skip__" ? [false] : [testCase.copy, false],
+      });
+      wizardMocks.createClackPrompter.mockReturnValue(wizard.prompter);
+
+      await agentsAddCommand({}, runtime);
+
+      expect(wizard.outro).toHaveBeenCalledWith('Agent "work" ready.');
+      const copied = loadPersistedAuthProfileStore(path.join(root, "agents", "work", "agent"));
+      expect(copied?.profiles["openai:portable"] !== undefined).toBe(testCase.copy);
+      expect(onboardChannelsMocks.setupChannels).toHaveBeenCalledWith(
+        expect.any(Object),
+        runtime,
+        wizard.prompter,
+        expect.objectContaining({ workspaceDir, deferStatusUntilSelection: true }),
+      );
+    });
+  });
+
   it("fails before config mutation when the source auth store is unreadable", async () => {
     await withAgentsAddStateRoot("openclaw-agents-add-auth-unreadable-", async (root) => {
       const sourceAgentDir = path.join(root, "agents", "main", "agent");
@@ -654,26 +679,15 @@ describe("agents add command", () => {
         "CREATE VIEW auth_profile_store AS SELECT 'primary' AS store_key, '{}' AS store_json;",
       );
       database.close();
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
-      const prompter = {
-        intro: vi.fn(),
-        text: vi.fn().mockResolvedValueOnce("work").mockResolvedValueOnce(workspaceDir),
-        confirm: vi.fn().mockResolvedValue(false),
-        note: vi.fn(),
-        outro: vi.fn(),
-      };
-      wizardMocks.createClackPrompter.mockReturnValue(prompter);
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
+      const wizard = useFreshAgentWizard({ workspaceDir });
 
       await expect(agentsAddCommand({}, runtime)).rejects.toThrow(
         /auth profile store .* is unreadable; run .*doctor --fix/i,
       );
 
       expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(prompter.outro).not.toHaveBeenCalled();
+      expect(wizard.outro).not.toHaveBeenCalled();
     });
   });
 
@@ -993,11 +1007,7 @@ describe("agents add command", () => {
 
   describe("non-interactive config mutation", () => {
     it("creates with explicit non-interactive inputs without a usable terminal", async () => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       terminalMocks.isTerminalInteractive.mockReturnValue(false);
 
       await agentsAddCommand(
@@ -1039,11 +1049,7 @@ describe("agents add command", () => {
         message: 'Invalid binding "telegram:". Account id is empty.',
       },
     ])("reports $name through the root failure owner", async (testCase) => {
-      readConfigFileSnapshotMock.mockResolvedValue({
-        ...baseConfigSnapshot,
-        config: { agents: { list: [{ id: "main", default: true }] } },
-        sourceConfig: { agents: { list: [{ id: "main", default: true }] } },
-      });
+      setConfigSnapshot({ agents: { list: [{ id: "main", default: true }] } });
       createAgentMock.mockResolvedValueOnce(testCase.result);
 
       await expect(

@@ -63,6 +63,7 @@ export class SearchableSelectList implements Component, Focusable {
     this.maxVisible = maxVisible;
     this.theme = theme;
     this.searchInput = new Input();
+    this.searchInput.onEscape = () => this.onCancel?.();
   }
 
   get focused(): boolean {
@@ -371,13 +372,6 @@ export class SearchableSelectList implements Component, Focusable {
       const item = this.filteredItems[this.selectedIndex];
       if (item && this.onSelect) {
         this.onSelect(item);
-      }
-      return;
-    }
-
-    if (matchesKey(keyData, "escape") || keyData === "\u0003") {
-      if (this.onCancel) {
-        this.onCancel();
       }
       return;
     }

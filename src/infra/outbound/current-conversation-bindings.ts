@@ -21,12 +21,16 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../kysely-sync.js";
-import { normalizeConversationRef } from "./session-binding-normalization.js";
+import {
+  buildChannelAccountKey,
+  normalizeConversationRef,
+} from "./session-binding-normalization.js";
 import type {
   ConversationRef,
   SessionBindingBindInput,
   SessionBindingCapabilities,
   SessionBindingRecord,
+  SessionBindingScope,
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
@@ -237,6 +241,7 @@ function listCurrentConversationBindingRowsBySession(
   db: DatabaseSync,
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
+  genericOnly = !scope,
 ): CurrentConversationBindingRow[] {
   const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
   let query = bindingDb
@@ -251,7 +256,8 @@ function listCurrentConversationBindingRowsBySession(
     query = query
       .where("channel", "=", normalized.channel)
       .where("account_id", "=", normalized.accountId);
-  } else {
+  }
+  if (genericOnly) {
     // Generic lookups must not load or decode rows belonging to account-owned adapters.
     query = query.where("binding_id", "like", `${CURRENT_BINDINGS_ID_PREFIX}%`);
   }
@@ -292,13 +298,19 @@ export function listCurrentConversationBindingRecordsBySession(
 export function deleteCurrentConversationBindingRecordsBySession(
   targetSessionKey: string,
   scope?: CurrentConversationBindingScope,
+  genericOnly = !scope,
 ): SessionBindingRecord[] {
   return runOpenClawStateWriteTransaction(({ db }) => {
-    const rows = listCurrentConversationBindingRowsBySession(db, targetSessionKey, scope);
+    const rows = listCurrentConversationBindingRowsBySession(
+      db,
+      targetSessionKey,
+      scope,
+      genericOnly,
+    );
     const removed: SessionBindingRecord[] = [];
     for (const row of rows) {
       const record = bindingRowsToRecords([row])[0];
-      if (!scope && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
+      if (genericOnly && !record?.bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
         continue;
       }
       deleteCurrentConversationBindingRow(db, row.binding_key);
@@ -377,7 +389,7 @@ function supportsGenericCurrentConversationBinding(ref: {
   });
 }
 
-function bindingRefFromId(bindingId: string): ConversationRef | null {
+function bindingRefFromId(bindingId: string, scope?: SessionBindingScope): ConversationRef | null {
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
     return null;
   }
@@ -385,6 +397,9 @@ function bindingRefFromId(bindingId: string): ConversationRef | null {
     .slice(CURRENT_BINDINGS_ID_PREFIX.length)
     .split("\u241f");
   if (!channel || !accountId || !conversationId) {
+    return null;
+  }
+  if (scope && buildChannelAccountKey({ channel, accountId }) !== buildChannelAccountKey(scope)) {
     return null;
   }
   return {
@@ -452,7 +467,10 @@ export async function bindGenericCurrentConversation(
     boundAt: now,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     metadata: {
-      ...existing?.metadata,
+      ...(existing?.targetSessionKey === targetSessionKey &&
+      existing.targetKind === input.targetKind
+        ? existing.metadata
+        : undefined),
       ...input.metadata,
       lastActivityAt: now,
     },
@@ -482,8 +500,12 @@ export function listGenericCurrentConversationBindingsBySession(
 }
 
 /** Persists last-activity metadata for an existing generic current-conversation binding. */
-export function touchGenericCurrentConversationBinding(bindingId: string, at = Date.now()): void {
-  const conversation = bindingRefFromId(bindingId);
+export function touchGenericCurrentConversationBinding(
+  bindingId: string,
+  at = Date.now(),
+  scope?: SessionBindingScope,
+): void {
+  const conversation = bindingRefFromId(bindingId, scope);
   if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
     return;
   }
@@ -500,8 +522,11 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
   );
 }
 
-function unbindCurrentConversationBindingById(bindingId: string): SessionBindingRecord[] {
-  const conversation = bindingRefFromId(bindingId);
+function unbindCurrentConversationBindingById(
+  bindingId: string,
+  scope?: SessionBindingScope,
+): SessionBindingRecord[] {
+  const conversation = bindingRefFromId(bindingId, scope);
   if (!conversation || !supportsGenericCurrentConversationBinding(conversation)) {
     return [];
   }
@@ -517,11 +542,15 @@ export async function unbindGenericCurrentConversationBindings(
 ): Promise<SessionBindingRecord[]> {
   const normalizedBindingId = input.bindingId?.trim();
   if (normalizedBindingId?.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
-    return unbindCurrentConversationBindingById(normalizedBindingId);
+    return unbindCurrentConversationBindingById(normalizedBindingId, input.scope);
   }
   const normalizedTargetSessionKey = input.targetSessionKey?.trim();
   return normalizedTargetSessionKey
-    ? deleteCurrentConversationBindingRecordsBySession(normalizedTargetSessionKey)
+    ? deleteCurrentConversationBindingRecordsBySession(
+        normalizedTargetSessionKey,
+        input.scope,
+        true,
+      )
     : [];
 }
 

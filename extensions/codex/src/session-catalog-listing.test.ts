@@ -528,7 +528,7 @@ describe("Codex supervision catalog", () => {
       async () => new Map<string, ReadonlySet<string>>([["home-a", new Set(["thread-managed"])]]),
     );
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
-      managedThreads: { mark: vi.fn(), snapshot },
+      managedThreads: { has: vi.fn(async () => false), mark: vi.fn(), snapshot },
     });
     const listPage = vi.fn(async (params?: { cursor?: string; limit?: number }) =>
       params?.cursor === "next"
@@ -612,6 +612,7 @@ describe("Codex supervision catalog", () => {
     const mark = vi.fn(async () => true);
     const bindingStore = Object.assign(createCodexTestBindingStore(), {
       managedThreads: {
+        has: vi.fn(async () => false),
         mark,
         snapshot: vi.fn(async () => new Map<string, ReadonlySet<string>>()),
       },

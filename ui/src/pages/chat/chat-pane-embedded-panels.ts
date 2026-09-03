@@ -39,8 +39,7 @@ type SidebarPanelDefinitionParams = {
   desktopRefreshOnPresentation: boolean;
   desktopAvailable: boolean;
   desktopSource: string | null;
-  hasBoard: boolean;
-  chat: TemplateResult;
+  dashboard: TemplateResult | typeof nothing;
   workspace: TemplateResult | typeof nothing;
   tasks: TemplateResult | typeof nothing;
   detailOpen: boolean;
@@ -57,6 +56,8 @@ type SidebarPanelDefinitionParams = {
   connected: boolean;
   pendingQuestion: string | null;
   onClearCompanion: () => void;
+  onRefreshTasks: () => void;
+  tasksLoading: boolean;
   discussion: SessionDiscussionPanelConfig | null;
   discussionAvailable: boolean;
   discussionOpenUrl: string | null;
@@ -64,9 +65,9 @@ type SidebarPanelDefinitionParams = {
 };
 
 type SidebarPanelTextKey =
-  | "boardChat"
   | "browser"
   | "companion"
+  | "dashboard"
   | "desktop"
   | "discussion"
   | "files"
@@ -76,8 +77,8 @@ type SidebarPanelTextKey =
 
 const SIDEBAR_PANEL_LOADING_VARIANTS = {
   browser: "browser",
-  chat: "chat",
   companion: "chat",
+  dashboard: "review",
   desktop: "desktop",
   detail: "review",
   discussion: "discussion",
@@ -220,36 +221,37 @@ export function sidebarPanelDefinitions(
       companion,
       params
         ? {
-            headerAction: html`<wa-dropdown
-              class="chat-session-rail__menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                if (event.detail.item.value === "clear") {
-                  params.onClearCompanion();
-                }
-              }}
-            >
+            headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
-                slot="trigger"
-                class="rail-header__action"
+                class="rail-header__action chat-session-rail__clear"
                 type="button"
-                aria-label=${t("chat.rail.moreActions")}
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                ${icons.moreHorizontal}
-              </button>
-              <wa-dropdown-item
-                value="clear"
+                aria-label=${t("chat.rail.clear")}
                 ?disabled=${!params.connected || params.pendingQuestion !== null}
+                @click=${params.onClearCompanion}
               >
-                ${t("chat.rail.clear")}
-              </wa-dropdown-item>
-            </wa-dropdown>`,
+                ${icons.trash}
+              </button>
+            </openclaw-tooltip>`,
           }
         : undefined,
     ),
-    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null),
+    definePanel("tasks", "tasks", icons.listChecks, params?.tasks ?? null, {
+      headerAction: params
+        ? html`<openclaw-tooltip .content=${t("chat.backgroundTasks.refresh")}>
+            <button
+              class="rail-header__action chat-tasks-rail__refresh"
+              type="button"
+              aria-label=${t("chat.backgroundTasks.refresh")}
+              ?disabled=${!params.connected || params.tasksLoading}
+              @click=${params.onRefreshTasks}
+            >
+              ${params.tasksLoading
+                ? html`<span class="btn__spinner" aria-hidden="true"></span>`
+                : icons.refresh}
+            </button>
+          </openclaw-tooltip>`
+        : undefined,
+    }),
     definePanel("desktop", "desktop", icons.monitor, desktop, {
       available: desktopAvailable,
       ...(desktopFocusHref
@@ -282,8 +284,8 @@ export function sidebarPanelDefinitions(
           }
         : {}),
     }),
-    definePanel("chat", "boardChat", icons.messageSquare, params?.chat ?? null, {
-      available: params?.hasBoard === true,
+    definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
+      available: params?.dashboard !== nothing,
     }),
   ];
 }

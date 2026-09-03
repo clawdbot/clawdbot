@@ -15,6 +15,7 @@ import { inspectDiscordAccount } from "./account-inspect.js";
 import { createDiscordActionGate, listDiscordAccountIds } from "./accounts.js";
 import { coerceDiscordComponentParam, readDiscordComponentSpec } from "./components.js";
 import { withDiscordInboundEventDeliveryMetadata } from "./inbound-event-delivery.js";
+import { normalizeDiscordMessagingTarget } from "./normalize.js";
 import { isTrustedRequesterGuildAdminAction } from "./trusted-requester-actions.js";
 
 const localExecutionActions = new Set<ChannelMessageActionName>([
@@ -30,6 +31,47 @@ const localExecutionActions = new Set<ChannelMessageActionName>([
 
 function resolveDiscordActionExecutionMode({ action }: { action: ChannelMessageActionName }) {
   return localExecutionActions.has(action) ? "local" : "gateway";
+}
+
+function resolveDiscordThreadReplyDeliveryAlias(args: Record<string, unknown>): string | undefined {
+  if (
+    normalizeOptionalString(args.target) ||
+    normalizeOptionalString(args.to) ||
+    normalizeOptionalString(args.channelId)
+  ) {
+    return undefined;
+  }
+  const threadId = normalizeOptionalString(args.threadId);
+  return threadId ? normalizeDiscordMessagingTarget(`channel:${threadId}`) : undefined;
+}
+
+function resolveDiscordThreadReplyTarget(args: Record<string, unknown>): string | undefined {
+  const threadId = normalizeOptionalString(args.threadId);
+  const target =
+    threadId !== undefined
+      ? `channel:${threadId}`
+      : (normalizeOptionalString(args.channelId) ??
+        normalizeOptionalString(args.to) ??
+        normalizeOptionalString(args.target));
+  return target ? normalizeDiscordMessagingTarget(target) : undefined;
+}
+
+function matchesCurrentDiscordThread(params: {
+  args: Record<string, unknown>;
+  toolContext: {
+    currentChannelId?: string;
+    currentMessagingTarget?: string;
+  };
+}): boolean {
+  const requestedTarget = resolveDiscordThreadReplyTarget(params.args);
+  if (!requestedTarget) {
+    return false;
+  }
+  return [params.toolContext.currentChannelId, params.toolContext.currentMessagingTarget].some(
+    (currentTarget) =>
+      currentTarget !== undefined &&
+      normalizeDiscordMessagingTarget(currentTarget) === requestedTarget,
+  );
 }
 
 const loadDiscordChannelActionsRuntime = createLazyRuntimeModule(
@@ -233,6 +275,15 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
   resolveExecutionMode: resolveDiscordActionExecutionMode,
   describeMessageTool: describeDiscordMessageTool,
   supportsAction: ({ action }) => action !== "poll",
+  messageActionTargetAliases: {
+    "thread-reply": {
+      aliases: ["threadId"],
+      deliveryTargetAliases: ["threadId"],
+      resolveDeliveryTarget: ({ args }) => resolveDiscordThreadReplyDeliveryAlias(args),
+      matchesCurrentConversation: ({ args, toolContext }) =>
+        matchesCurrentDiscordThread({ args, toolContext }),
+    },
+  },
   requiresTrustedRequesterSender: ({ action, toolContext }) =>
     Boolean(toolContext) && isTrustedRequesterGuildAdminAction(action),
   extractToolSend: ({ args }) => {

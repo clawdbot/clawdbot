@@ -13,7 +13,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import { PROFILE_OPTIONS } from "../../lib/agents/display.ts";
+import { PROFILE_OPTIONS } from "../../lib/agents/tool-catalog.ts";
 
 export type SecurityOverview = {
   gatewayAuth: string;

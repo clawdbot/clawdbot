@@ -4,7 +4,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { requestChatSessionSnapshot } from "./chat-history.ts";
+import { requestChatSessionSnapshot } from "./chat-history-request.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,

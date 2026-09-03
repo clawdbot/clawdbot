@@ -51,6 +51,8 @@ import {
 } from "./runtime-write-application.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
+export { createConfigIO };
+
 export function clearConfigCache(): void {
   // Compat shim: runtime snapshot is the only in-process cache now.
 }
@@ -301,6 +303,7 @@ export async function writeConfigFile(
     explicitSetValueSource: options.explicitSetPaths
       ? (options.explicitSetValueSource ?? cfg)
       : undefined,
+    persistCanonicalAgentRoster: options.persistCanonicalAgentRoster,
     allowedAgentRosterRemovals: options.allowedAgentRosterRemovals,
     allowIncludeAncestorExplicitSetPaths: options.allowIncludeAncestorExplicitSetPaths,
     afterWrite: options.afterWrite,
