@@ -495,7 +495,7 @@ export async function getMatrixVerificationStatus(
   const readiness = opts.readiness ?? "prepared";
   return await withResolvedActionClient(
     { ...opts, readiness: "none" },
-    async (client) => {
+    async (client, abortSignal) => {
       const preflight = await readMatrixVerificationStatus(client, opts);
       if (readiness === "none" || preflight.serverDeviceKnown === false) {
         return preflight;
@@ -505,6 +505,7 @@ export async function getMatrixVerificationStatus(
       } else {
         await client.prepareForOneOff();
       }
+      await client.refreshOwnDeviceKeys(abortSignal);
       return await readMatrixVerificationStatus(client, opts);
     },
     "discard",

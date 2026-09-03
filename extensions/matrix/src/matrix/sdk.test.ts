@@ -7,12 +7,16 @@ import path from "node:path";
 import { CryptoEvent } from "matrix-js-sdk/lib/crypto-api/CryptoEvent.js";
 import type { DecryptionFailureCode as DecryptionFailureCodeValue } from "matrix-js-sdk/lib/crypto-api/index.js";
 import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
-import { type MatrixEvent, MsgType } from "matrix-js-sdk/lib/matrix.js";
+import {
+  type MatrixClient as MatrixSdkClient,
+  type MatrixEvent,
+  MsgType,
+} from "matrix-js-sdk/lib/matrix.js";
 import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import { SyncApi, SyncState } from "matrix-js-sdk/lib/sync.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { useAutoCleanupTempDirTracker, withServer } from "openclaw/plugin-sdk/test-env";
 // Matrix tests cover sdk plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -297,7 +301,7 @@ type MatrixJsClientStub = {
   on: (eventName: string | symbol, listener: (...args: unknown[]) => void) => MatrixJsClientStub;
   startClient: ReturnType<typeof vi.fn>;
   stopClient: ReturnType<typeof vi.fn>;
-  initRustCrypto: ReturnType<typeof vi.fn>;
+  initRustCrypto: ReturnType<typeof vi.fn<MatrixSdkClient["initRustCrypto"]>>;
   getUserId: ReturnType<typeof vi.fn>;
   getDeviceId: ReturnType<typeof vi.fn>;
   getJoinedRooms: ReturnType<typeof vi.fn>;
@@ -345,7 +349,7 @@ function createMatrixJsClientStub(): MatrixJsClientStub {
     });
   });
   client.stopClient = vi.fn();
-  client.initRustCrypto = vi.fn(async () => {});
+  client.initRustCrypto = vi.fn<MatrixSdkClient["initRustCrypto"]>(async () => {});
   client.getUserId = vi.fn(() => "@bot:example.org");
   client.getDeviceId = vi.fn(() => "DEVICE123");
   client.getJoinedRooms = vi.fn(async () => ({ joined_rooms: [] }));
@@ -496,6 +500,388 @@ describe("MatrixClient request hardening", () => {
     clearTestUndiciRuntimeDepsOverride();
     resetPluginStateStoreForTests();
   });
+
+  it.each(["request", "body-stall", "retry", "response", "pre-aborted", "without-signal"] as const)(
+    "settles the real SDK verification query with isolated lease cancellation (%s)",
+    async (boundary) => {
+      const { OlmMachine } = await import("@matrix-org/matrix-sdk-crypto-wasm");
+      const actualSdk = await vi.importActual<typeof import("matrix-js-sdk/lib/matrix.js")>(
+        "matrix-js-sdk/lib/matrix.js",
+      );
+      const { getMatrixVerificationStatus } = await import("./actions/verification.js");
+      const { acquireSharedMatrixClient, stopSharedClientForAccount } =
+        await import("./client/shared.js");
+      const { resolveMatrixAuth } = await import("./client/config.js");
+      const accountId = `verification-cancellation-${boundary}`;
+      const account = {
+        homeserver: "http://127.0.0.1:8008",
+        userId: "@bot:example.org",
+        accessToken: "token",
+        deviceId: "DEVICE123",
+        encryption: true,
+      };
+      const cfg = {
+        channels: {
+          matrix: {
+            defaultAccount: accountId,
+            accounts: {
+              [accountId]: account,
+            },
+          },
+        },
+      } satisfies CoreConfig;
+      const loopback = boundary === "request" || boundary === "body-stall";
+      let loopbackQuery: import("node:http").ServerResponse | undefined;
+      let loopbackProfile: import("node:http").ServerResponse | undefined;
+      const loopbackQueryClosed = createDeferred<void>();
+      const wireSettled = createDeferred<void>();
+      const events: string[] = [];
+      const unexpectedPaths: string[] = [];
+      const queryEntered = createDeferred<void>();
+      const bodyReadStarted = createDeferred<{ bodyUsed: boolean; bodyLocked: boolean }>();
+      const preparedCancellation = createDeferred<void>();
+      const responseRead = createDeferred<void>();
+      const resumeResponse = createDeferred<void>();
+      const allowWireSettlement = createDeferred<void>();
+      const unrelatedEntered = createDeferred<void>();
+      const unrelatedResponse = createDeferred<Response>();
+      let querySignal: AbortSignal | undefined;
+      let unrelatedSignal: AbortSignal | undefined;
+      let queryCount = 0;
+      let cleaning = false;
+      const queryBodies: unknown[] = [];
+      const queryReply = () => Response.json({ device_keys: {}, master_keys: {} });
+      const profileReply = () => Response.json({ displayname: "Unaffected request" });
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const pathname = new URL(requestUrl(input)).pathname;
+        if (pathname.endsWith("/room_keys/version")) {
+          return Response.json({ errcode: "M_NOT_FOUND" }, { status: 404 });
+        }
+        if (pathname.includes("/profile/")) {
+          unrelatedSignal = init?.signal ?? undefined;
+          unrelatedEntered.resolve();
+          return await unrelatedResponse.promise;
+        }
+        if (pathname.endsWith("/keys/query")) {
+          queryCount++;
+          queryBodies.push(await new Response(init?.body).json());
+          if (cleaning) {
+            throw new DOMException("fixture cleanup", "AbortError");
+          }
+          const signal = init?.signal ?? undefined;
+          querySignal = signal;
+          queryEntered.resolve();
+          if ((boundary === "retry" || boundary === "without-signal") && queryCount === 1) {
+            return Response.json(
+              { errcode: "M_LIMIT_EXCEEDED" },
+              { status: 429, headers: { "Retry-After": "30" } },
+            );
+          }
+          return queryReply();
+        }
+        unexpectedPaths.push(pathname);
+        throw new DOMException(`Unexpected fixture request: ${pathname}`, "AbortError");
+      });
+      const run = async (homeserver: string) => {
+        account.homeserver = homeserver;
+        const auth = await resolveMatrixAuth({ cfg, accountId });
+        if (!loopback) {
+          stubRuntimeFetch(fetchMock);
+        }
+        clearMatrixSyncApiForNeverStartedClient();
+        const client = new MatrixClient(auth.homeserver, auth.accessToken, {
+          userId: auth.userId,
+          deviceId: auth.deviceId,
+          encryption: true,
+          autoBootstrapCrypto: false,
+          ssrfPolicy: { allowPrivateNetwork: true },
+        });
+        const guardedFetch = lastCreateClientOpts?.fetchFn as typeof fetch;
+        const nativeClient = actualSdk.createClient({
+          baseUrl: auth.homeserver,
+          accessToken: auth.accessToken,
+          userId: auth.userId,
+          deviceId: auth.deviceId,
+          localTimeoutMs: 60_000,
+          fetchFn: (async (resource: RequestInfo | URL, init?: RequestInit) => {
+            const isHeldQuery =
+              loopback && new URL(requestUrl(resource)).pathname.endsWith("/keys/query");
+            const signal = init?.signal ?? undefined;
+            const onAbort = () => {
+              events.push("wire-aborted");
+            };
+            if (isHeldQuery) {
+              querySignal = signal;
+              signal?.addEventListener("abort", onAbort, { once: true });
+            }
+            try {
+              return await guardedFetch(resource, init);
+            } finally {
+              if (isHeldQuery) {
+                signal?.removeEventListener("abort", onAbort);
+                events.push("wire-settled");
+                wireSettled.resolve();
+                await allowWireSettlement.promise;
+              }
+            }
+          }) as typeof fetch,
+        });
+        let monitor: Awaited<ReturnType<typeof acquireSharedMatrixClient>> | undefined;
+        let retirement: Promise<void> | undefined;
+        let status: ReturnType<typeof getMatrixVerificationStatus> | undefined;
+        let unrelated: ReturnType<typeof nativeClient.getProfileInfo> | undefined;
+        let statusOutcome: { value?: unknown; error?: unknown } | undefined;
+        let retirementOutcome: unknown;
+        if (!loopback) {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+        }
+        const timers = vi.spyOn(globalThis, "setTimeout");
+        const retire = () => {
+          retirement = monitor!.release({ mode: "discard" });
+          void retirement.then(
+            () => {
+              retirementOutcome = "closed";
+            },
+            (error: unknown) => {
+              retirementOutcome = error;
+            },
+          );
+        };
+        try {
+          if (boundary === "body-stall") {
+            const responseReader = await import("./sdk/read-response-with-limit.js");
+            const read = responseReader.readResponseWithLimit;
+            vi.spyOn(responseReader, "readResponseWithLimit").mockImplementation(
+              (response, ...args) => {
+                const pending = read(response, ...args);
+                if (response.url.endsWith("/keys/query")) {
+                  bodyReadStarted.resolve({
+                    bodyUsed: response.bodyUsed,
+                    bodyLocked: response.body?.locked ?? false,
+                  });
+                }
+                return pending;
+              },
+            );
+          }
+          await nativeClient.initRustCrypto({ useIndexedDB: false });
+          const crypto = nativeClient.getCrypto()!;
+          const nativeQuery = crypto.userHasCrossSigningKeys.bind(crypto);
+          vi.spyOn(crypto, "userHasCrossSigningKeys").mockImplementation((...args) =>
+            nativeQuery(...args).finally(() => {
+              events.push("query-settled");
+            }),
+          );
+          const ingestion = vi.spyOn(OlmMachine.prototype, "markRequestAsSent");
+          const nativeHttp = nativeClient.http.authedRequest.bind(nativeClient.http);
+          vi.spyOn(nativeClient.http, "authedRequest").mockImplementation(async (...args) => {
+            const result = await nativeHttp(...args);
+            if (boundary === "response" && args[1].endsWith("/keys/query")) {
+              responseRead.resolve();
+              await resumeResponse.promise;
+            }
+            return result;
+          });
+          matrixJsClient.getCrypto.mockReturnValue(crypto);
+          matrixJsClient.stopClient.mockImplementation(() => {
+            events.push("sdk-stopped");
+            nativeClient.stopClient();
+          });
+          vi.spyOn(client, "getRoomKeyBackupStatus").mockResolvedValue({
+            serverVersion: null,
+            activeVersion: null,
+            trusted: null,
+            matchesDecryptionKey: null,
+            decryptionKeyCached: null,
+            keyLoadAttempted: false,
+            keyLoadError: null,
+          });
+          vi.spyOn(client, "listOwnDevices").mockResolvedValue([
+            {
+              deviceId: "DEVICE123",
+              displayName: null,
+              lastSeenIp: null,
+              lastSeenTs: null,
+              current: true,
+            },
+          ]);
+          createSharedMatrixClientMock.mockReset().mockResolvedValue(client);
+          monitor = await acquireSharedMatrixClient({ auth, role: "monitor", startClient: false });
+          if (boundary === "pre-aborted") {
+            const prepare = client.prepareForOneOff.bind(client);
+            vi.spyOn(client, "prepareForOneOff").mockImplementation(async () => {
+              await prepare();
+              retire();
+              preparedCancellation.resolve();
+            });
+          }
+          status = getMatrixVerificationStatus(
+            boundary === "without-signal" ? { client } : { cfg, accountId },
+          );
+          void status.then(
+            (value) => {
+              statusOutcome = { value };
+            },
+            (error: unknown) => {
+              statusOutcome = { error };
+            },
+          );
+          if (boundary === "pre-aborted") {
+            await preparedCancellation.promise;
+          } else {
+            await queryEntered.promise;
+            if (boundary === "body-stall") {
+              // Observe the client's live body read, not merely the server flushing its headers.
+              expect(await bodyReadStarted.promise).toEqual({ bodyUsed: true, bodyLocked: true });
+              expect(events).not.toContain("wire-settled");
+            }
+            if (!loopback) {
+              await vi.advanceTimersByTimeAsync(0);
+            }
+            if (boundary === "retry" || boundary === "without-signal") {
+              // Observe the actual server-directed retry timer before cancelling an already-sleeping query.
+              expect(timers.mock.calls.some(([, delay]) => delay === 30_000)).toBe(true);
+            } else if (boundary === "response") {
+              await responseRead.promise;
+            }
+            expect(queryBodies[0]).toMatchObject({ device_keys: { "@bot:example.org": [] } });
+            unrelated = nativeClient.getProfileInfo("@unrelated:example.org");
+            void unrelated.catch(() => undefined);
+            await unrelatedEntered.promise;
+            if (boundary !== "without-signal") {
+              retire();
+            }
+          }
+          if (loopback) {
+            expect(querySignal?.aborted).toBe(true);
+            expect(events).toContain("wire-aborted");
+            await Promise.all([wireSettled.promise, loopbackQueryClosed.promise]);
+            expect(statusOutcome).toBeUndefined();
+            expect(events).not.toContain("query-settled");
+            expect(events).not.toContain("sdk-stopped");
+            allowWireSettlement.resolve();
+          } else if (boundary === "response") {
+            expect(ingestion).not.toHaveBeenCalled();
+            resumeResponse.resolve();
+          }
+          if (boundary === "without-signal") {
+            expect(statusOutcome).toBeUndefined();
+            await vi.advanceTimersByTimeAsync(30_001);
+            // Rust's identity getter may still own its documented one-second pending-query wait.
+            await vi.advanceTimersByTimeAsync(1_001);
+            await expect(status).resolves.toMatchObject({
+              verified: false,
+              crossSigningVerified: false,
+            });
+            expect(queryCount).toBe(2);
+            expect(ingestion).toHaveBeenCalledTimes(1);
+            retire();
+          } else {
+            if (loopback) {
+              await status.catch(() => undefined);
+              await retirement;
+            } else {
+              await vi.advanceTimersByTimeAsync(0);
+            }
+            expect(statusOutcome).toMatchObject({ error: { name: "AbortError" } });
+            expect(retirementOutcome).toBe("closed");
+            expect(queryCount).toBe(boundary === "pre-aborted" ? 0 : 1);
+            expect(ingestion).not.toHaveBeenCalled();
+            if (!loopback) {
+              await vi.advanceTimersByTimeAsync(30_001);
+            }
+            expect(queryCount).toBe(boundary === "pre-aborted" ? 0 : 1);
+            expect(ingestion).not.toHaveBeenCalled();
+          }
+          if (unrelated) {
+            if (loopback) {
+              expect(loopbackProfile?.destroyed).toBe(false);
+              loopbackProfile?.end(JSON.stringify({ displayname: "Unaffected request" }));
+            } else {
+              expect(unrelatedSignal?.aborted).toBe(false);
+              unrelatedResponse.resolve(profileReply());
+            }
+            await expect(unrelated).resolves.toEqual({ displayname: "Unaffected request" });
+          }
+          await retirement;
+          expect(events).toContain("sdk-stopped");
+          if (boundary !== "pre-aborted") {
+            expect(events).toContain("query-settled");
+            expect(events.indexOf("query-settled")).toBeLessThan(events.indexOf("sdk-stopped"));
+          }
+          expect(unexpectedPaths).toEqual([]);
+        } finally {
+          cleaning = true;
+          allowWireSettlement.resolve();
+          resumeResponse.resolve();
+          unrelatedResponse.resolve(profileReply());
+          if (loopbackQuery && !loopbackQuery.destroyed) {
+            if (boundary === "body-stall") {
+              loopbackQuery.end(JSON.stringify({ device_keys: {}, master_keys: {} }));
+            } else {
+              loopbackQuery.writeHead(401, { "content-type": "application/json" });
+              loopbackQuery.end(JSON.stringify({ errcode: "M_FORBIDDEN" }));
+            }
+          }
+          loopbackProfile?.end(JSON.stringify({ displayname: "Unaffected request" }));
+          if (monitor && !retirement) {
+            retire();
+          }
+          // The pre-fix retry still owns its original timer; let it settle before freeing the real crypto client.
+          if (!loopback) {
+            await vi.advanceTimersByTimeAsync(30_001);
+          }
+          await Promise.allSettled(
+            [status, retirement, unrelated].filter((entry) => entry !== undefined),
+          );
+          nativeClient.stopClient();
+          await stopSharedClientForAccount(auth);
+          createSharedMatrixClientMock.mockReset();
+          vi.restoreAllMocks();
+          if (!loopback) {
+            vi.clearAllTimers();
+            vi.useRealTimers();
+          }
+        }
+      };
+      if (loopback) {
+        await withServer((request, response) => {
+          const pathname = new URL(request.url ?? "/", "http://localhost").pathname;
+          if (pathname.endsWith("/room_keys/version")) {
+            response.writeHead(404, { "content-type": "application/json" });
+            response.end(JSON.stringify({ errcode: "M_NOT_FOUND" }));
+          } else if (pathname.includes("/profile/")) {
+            loopbackProfile = response;
+            response.writeHead(200, { "content-type": "application/json" });
+            unrelatedEntered.resolve();
+          } else if (pathname.endsWith("/keys/query")) {
+            loopbackQuery = response;
+            response.once("close", () => loopbackQueryClosed.resolve());
+            let body = "";
+            request.setEncoding("utf8");
+            request.on("data", (chunk: string) => {
+              body += chunk;
+            });
+            request.on("end", () => {
+              queryCount++;
+              queryBodies.push(JSON.parse(body));
+              if (boundary === "body-stall") {
+                response.writeHead(200, { "content-type": "application/json" });
+                response.write(" ");
+              }
+              queryEntered.resolve();
+            });
+          } else {
+            unexpectedPaths.push(pathname);
+            response.writeHead(401, { "content-type": "application/json" });
+            response.end(JSON.stringify({ errcode: "M_FORBIDDEN" }));
+          }
+        }, run);
+      } else {
+        await run("http://127.0.0.1:8008");
+      }
+    },
+  );
 
   it("reads account data through the server-aware SDK path before initial sync", async () => {
     matrixJsClient.getAccountDataFromServer.mockResolvedValue({
@@ -2654,6 +3040,84 @@ describe("MatrixClient crypto bootstrapping", () => {
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
+
+  it.each([true, false])(
+    "waits for refreshed own-device trust without bootstrapping (trusted: %s)",
+    async (trustedAfterQuery) => {
+      const { getMatrixVerificationStatus } = await import("./actions/verification.js");
+      const queryStarted = createDeferred<void>();
+      const queryResponse = createDeferred<void>();
+      let queried = false;
+      let initialized = false;
+      const userHasCrossSigningKeys = vi.fn(async () => {
+        queryStarted.resolve();
+        await queryResponse.promise;
+        queried = true;
+        return true;
+      });
+      const crypto = makeCryptoApi({
+        userHasCrossSigningKeys,
+        getDeviceVerificationStatus: vi.fn(async () =>
+          makeDeviceVerificationStatus({
+            crossSigningVerified: queried && trustedAfterQuery,
+            signedByOwner: queried,
+          }),
+        ),
+      });
+      matrixJsClient.initRustCrypto.mockImplementation(async () => {
+        initialized = true;
+      });
+      matrixJsClient.getCrypto.mockImplementation(() => (initialized ? crypto : undefined));
+      clearMatrixSyncApiForNeverStartedClient();
+      const client = new MatrixClient("https://matrix.example.org", "token", { encryption: true });
+      vi.spyOn(client, "getJoinedRooms").mockResolvedValue([]);
+      vi.spyOn(client, "getRoomKeyBackupStatus").mockResolvedValue({
+        serverVersion: null,
+        activeVersion: null,
+        trusted: null,
+        matchesDecryptionKey: null,
+        decryptionKeyCached: null,
+        keyLoadAttempted: false,
+        keyLoadError: null,
+      });
+      vi.spyOn(client, "listOwnDevices").mockResolvedValue([
+        {
+          deviceId: "DEVICE123",
+          displayName: null,
+          lastSeenIp: null,
+          lastSeenTs: null,
+          current: true,
+        },
+      ]);
+      let status: ReturnType<typeof getMatrixVerificationStatus> | undefined;
+      try {
+        await client.prepareForOneOff();
+        expect(userHasCrossSigningKeys).not.toHaveBeenCalled();
+        status = getMatrixVerificationStatus({ client });
+        expect(
+          await Promise.race([
+            queryStarted.promise.then(() => "query-pending"),
+            status.then(() => "status-returned"),
+          ]),
+        ).toBe("query-pending");
+        queryResponse.resolve();
+        expect(await status).toMatchObject({
+          verified: trustedAfterQuery,
+          crossSigningVerified: trustedAfterQuery,
+          signedByOwner: true,
+          serverDeviceKnown: true,
+        });
+        expect(userHasCrossSigningKeys).toHaveBeenCalledWith("@bot:example.org", true, undefined);
+        expect(matrixJsClient.startClient).not.toHaveBeenCalled();
+        expect(crypto.bootstrapCrossSigning).not.toHaveBeenCalled();
+        expect(crypto.bootstrapSecretStorage).not.toHaveBeenCalled();
+      } finally {
+        queryResponse.resolve();
+        await status?.catch(() => undefined);
+        await client.stopWithoutPersist();
+      }
+    },
+  );
 
   it("passes cryptoDatabasePrefix into initRustCrypto", async () => {
     matrixJsClient.getCrypto = vi.fn(() => undefined);

@@ -93,10 +93,8 @@ describe("shared Matrix client generations", () => {
       accessToken: "shared-token",
       encryption: true,
     } satisfies MatrixAuth;
-    const firstCrypto = { prepare: vi.fn(async () => undefined) };
-    const secondCrypto = { prepare: vi.fn(async () => undefined) };
-    const firstClient = { ...createMockClient("first"), crypto: firstCrypto };
-    const secondClient = { ...createMockClient("second"), crypto: secondCrypto };
+    const firstClient = createMockClient("first");
+    const secondClient = createMockClient("second");
 
     createMatrixClientMock.mockResolvedValueOnce(firstClient).mockResolvedValueOnce(secondClient);
 
@@ -108,8 +106,8 @@ describe("shared Matrix client generations", () => {
     expect(repeatedFirstLease.client).toBe(firstClient);
     expect(secondLease.client).toBe(secondClient);
     expect(createMatrixClientMock).toHaveBeenCalledTimes(2);
-    expect(firstCrypto.prepare).toHaveBeenCalledTimes(1);
-    expect(secondCrypto.prepare).toHaveBeenCalledTimes(1);
+    expect(firstClient.start).toHaveBeenCalledTimes(1);
+    expect(secondClient.start).toHaveBeenCalledTimes(1);
 
     await firstLease.release();
     expect(firstClient.stopAndPersist).not.toHaveBeenCalled();

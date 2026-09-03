@@ -16,14 +16,6 @@ type MatrixCryptoFacadeClient = {
 };
 
 export type MatrixCryptoFacade = {
-  prepare: (joinedRooms: string[]) => Promise<void>;
-  updateSyncData: (
-    toDeviceMessages: unknown,
-    otkCounts: unknown,
-    unusedFallbackKeyAlgs: unknown,
-    changedDeviceLists: unknown,
-    leftDeviceLists: unknown,
-  ) => Promise<void>;
   isRoomEncrypted: (roomId: string) => Promise<boolean>;
   requestOwnUserVerification: () => Promise<MatrixVerificationSummary | null>;
   encryptMedia: (buffer: Buffer) => Promise<{ buffer: Buffer; file: Omit<EncryptedFile, "url"> }>;
@@ -112,18 +104,6 @@ export function createMatrixCryptoFacade(deps: {
   ) => Promise<Buffer>;
 }): MatrixCryptoFacade {
   return {
-    prepare: async (_joinedRooms: string[]) => {
-      // matrix-js-sdk performs crypto prep during startup; no extra work required here.
-    },
-    updateSyncData: async (
-      _toDeviceMessages: unknown,
-      _otkCounts: unknown,
-      _unusedFallbackKeyAlgs: unknown,
-      _changedDeviceLists: unknown,
-      _leftDeviceLists: unknown,
-    ) => {
-      // compatibility no-op
-    },
     isRoomEncrypted: deps.isRoomEncrypted,
     requestOwnUserVerification: async () => {
       const crypto = deps.client.getCrypto() as MatrixVerificationCryptoApi | undefined;

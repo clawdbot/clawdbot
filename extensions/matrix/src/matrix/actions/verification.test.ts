@@ -245,6 +245,7 @@ describe("matrix verification actions", () => {
     withResolvedActionClientMock.mockImplementation(async (_opts, run) => {
       return await run({
         prepareForOneOff,
+        refreshOwnDeviceKeys: vi.fn(async () => undefined),
         crypto: {
           listVerifications: vi.fn(async () => []),
           getRecoveryKey: vi.fn(async () => ({

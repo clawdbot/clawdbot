@@ -29,11 +29,42 @@ vi.mock("./client.js", () => ({
 
 let resolveRuntimeMatrixClientWithReadiness: typeof import("./client-bootstrap.js").resolveRuntimeMatrixClientWithReadiness;
 let withResolvedRuntimeMatrixClient: typeof import("./client-bootstrap.js").withResolvedRuntimeMatrixClient;
+let getMatrixVerificationStatus: typeof import("./actions/verification.js").getMatrixVerificationStatus;
+
+function createVerificationStatusClient(serverDeviceKnown = true) {
+  return Object.assign(createMockMatrixClient(), {
+    refreshOwnDeviceKeys: vi.fn(async () => undefined),
+    getOwnDeviceVerificationStatus: vi.fn(async () => ({
+      encryptionEnabled: true,
+      userId: "@bot:example.org",
+      deviceId: "DEVICE123",
+      verified: false,
+      localVerified: true,
+      crossSigningVerified: false,
+      signedByOwner: false,
+      recoveryKeyStored: false,
+      recoveryKeyCreatedAt: null,
+      recoveryKeyId: null,
+      backupVersion: null,
+      backup: {
+        serverVersion: null,
+        activeVersion: null,
+        trusted: null,
+        matchesDecryptionKey: null,
+        decryptionKeyCached: null,
+        keyLoadAttempted: false,
+        keyLoadError: null,
+      },
+      serverDeviceKnown,
+    })),
+  });
+}
 
 describe("client bootstrap", () => {
   beforeAll(async () => {
     ({ resolveRuntimeMatrixClientWithReadiness, withResolvedRuntimeMatrixClient } =
       await import("./client-bootstrap.js"));
+    ({ getMatrixVerificationStatus } = await import("./actions/verification.js"));
   });
 
   beforeEach(() => {
@@ -43,6 +74,44 @@ describe("client bootstrap", () => {
   afterEach(() => {
     vi.unstubAllEnvs();
   });
+
+  it.each(["none", "deleted"] as const)(
+    "keeps verification preflight free of key queries for %s",
+    async (boundary) => {
+      const client = createVerificationStatusClient(boundary !== "deleted");
+      const prepareForOneOff = vi.spyOn(client, "prepareForOneOff");
+      setAcquiredMatrixClient(client);
+
+      const result = await getMatrixVerificationStatus({
+        cfg: TEST_CFG,
+        ...(boundary === "none" ? { readiness: "none" as const } : {}),
+      });
+
+      expect(result.verified).toBe(false);
+      expect(result.serverDeviceKnown).toBe(boundary !== "deleted");
+      expect(prepareForOneOff).not.toHaveBeenCalled();
+      expect(client.refreshOwnDeviceKeys).not.toHaveBeenCalled();
+      expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "discard" });
+    },
+  );
+
+  it.each(["Error", "AbortError"])(
+    "preserves key-query %s and releases the verification-status lease",
+    async (name) => {
+      const client = createVerificationStatusClient();
+      const start = vi.spyOn(client, "start");
+      const error = Object.assign(new Error("key query failed"), { name });
+      client.refreshOwnDeviceKeys.mockRejectedValue(error);
+      setAcquiredMatrixClient(client);
+
+      await expect(getMatrixVerificationStatus({ cfg: TEST_CFG })).rejects.toBe(error);
+
+      expect(client.getOwnDeviceVerificationStatus).toHaveBeenCalledTimes(1);
+      expect(start).not.toHaveBeenCalled();
+      expect(sharedLeaseReleaseMock).toHaveBeenCalledTimes(1);
+      expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "discard" });
+    },
+  );
 
   it("releases leased shared clients when readiness setup fails", async () => {
     const prepareForOneOff = vi.fn(async () => undefined);

@@ -136,6 +136,14 @@ export abstract class MatrixClientVerification extends MatrixClientCore {
     };
   }
 
+  async refreshOwnDeviceKeys(abortSignal?: AbortSignal): Promise<void> {
+    const crypto = this.client.getCrypto();
+    if (crypto) {
+      // Rust initialization restores local state without refreshing device signatures.
+      await crypto.userHasCrossSigningKeys(await this.getUserId(), true, abortSignal);
+    }
+  }
+
   async getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus> {
     const recoveryKey = this.recoveryKeyStore.getRecoveryKeySummary();
     const userId = this.client.getUserId() ?? this.selfUserId ?? null;

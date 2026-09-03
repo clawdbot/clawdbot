@@ -94,7 +94,6 @@ export const loadMatrixCryptoRuntime = createLazyRuntimeModule(() =>
 
 export abstract class MatrixClientBase {
   abstract getUserId(): Promise<string>;
-  abstract getJoinedRooms(): Promise<string[]>;
   abstract listOwnDevices(): Promise<MatrixOwnDeviceInfo[]>;
   abstract getOwnDeviceVerificationStatus(): Promise<MatrixOwnDeviceVerificationStatus>;
   abstract getRoomStateEvent(
@@ -523,15 +522,6 @@ export abstract class MatrixClientBase {
     }
     await this.ensureCryptoSupportInitialized();
     await this.initializeCryptoIfNeeded();
-    if (!this.crypto) {
-      return;
-    }
-    try {
-      const joinedRooms = await this.getJoinedRooms();
-      await this.crypto.prepare(joinedRooms);
-    } catch {
-      // One-off commands should continue even if crypto room prep is incomplete.
-    }
   }
 
   hasPersistedSyncState(): boolean {
