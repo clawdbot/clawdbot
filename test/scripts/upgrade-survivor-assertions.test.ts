@@ -1220,22 +1220,26 @@ process.stdout.write(sessionDir + "\\n");
           stdio: "pipe",
         },
       );
+    const finalEvidenceFile = files[2];
+    if (!finalEvidenceFile) {
+      throw new Error("final mobile pairing evidence fixture missing");
+    }
 
     try {
       expect(verify).not.toThrow();
-      const stale = JSON.parse(readFileSync(files[2], "utf8"));
+      const stale = JSON.parse(readFileSync(finalEvidenceFile, "utf8"));
       stale.credentials.node.usedTokenHash = hashes[0];
-      writeJson(files[2], stale);
+      writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/newest stored token/);
       stale.credentials.node.usedTokenHash = hashes[2];
       stale.nodeSurfaceCommandAdditions = ["watch.status", "system.run"];
-      writeJson(files[2], stale);
+      writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/known command-surface reapproval/);
       stale.nodeSurfaceCommandAdditions = [];
       stale.pendingPairingCount = 0;
       stale.pendingNodePairingCount = 0;
       stale.nodeSurfaceReapprovalRequired = false;
-      writeJson(files[2], stale);
+      writeJson(finalEvidenceFile, stale);
       expect(verify).toThrow(/known command-surface reapproval/);
     } finally {
       rmSync(root, { force: true, recursive: true });

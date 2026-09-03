@@ -231,7 +231,7 @@ export function parseConnectChallengePayload(value: unknown): {
   return { nonce, issuedAtMs };
 }
 
-export function protocolRangeForClient(
+function protocolRangeForClient(
   role: ConnectRole,
   mode: ConnectMode,
 ): { minProtocol: number; maxProtocol: number } {
@@ -244,7 +244,7 @@ export function protocolRangeForClient(
   };
 }
 
-export function publicKeyRawBase64Url(publicKeyPem: string): string {
+function publicKeyRawBase64Url(publicKeyPem: string): string {
   const der = createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
   return Buffer.from(der.subarray(-32)).toString("base64url");
 }
@@ -260,7 +260,7 @@ export function createMobilePairingIdentity(): MobilePairingIdentity {
   };
 }
 
-export function signDeviceAuthPayload(privateKeyPem: string, payload: string): string {
+function signDeviceAuthPayload(privateKeyPem: string, payload: string): string {
   return sign(null, Buffer.from(payload), createPrivateKey(privateKeyPem)).toString("base64url");
 }
 
