@@ -43,7 +43,7 @@ import {
   globalAfterAll1,
 } from "./loader.test-harness.js";
 import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
-import { registerMemoryCapability, resolveMemoryCapabilityRegistration } from "./memory-state.js";
+import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
 afterAll(globalAfterAll1);
@@ -532,14 +532,12 @@ describe("loadOpenClawPlugins", () => {
 
   it("routes direct-facade indexing I/O to the configured memory slot owner", async () => {
     const traceKey = "openclaw.test.memory-slot-runtime-owner";
-    const facadeKey = "openclaw.test.register-memory-capability";
     const trace: string[] = [];
     (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)] = trace;
-    (globalThis as Record<PropertyKey, unknown>)[Symbol.for(facadeKey)] = registerMemoryCapability;
     const runtimePluginBody = (id: string, includeRecall: boolean, direct: boolean) => `
       const trace = globalThis[Symbol.for(${JSON.stringify(traceKey)})];
       const id = ${JSON.stringify(id)};
-      ${direct ? `const registerMemoryCapability = globalThis[Symbol.for(${JSON.stringify(facadeKey)})];` : ""}
+      ${direct ? 'const { registerMemoryCapability } = require("openclaw/plugin-sdk/memory-host-core");' : ""}
       module.exports = {
         id,
         kind: "memory",
@@ -613,7 +611,6 @@ describe("loadOpenClawPlugins", () => {
       expect(trace).toEqual(["memory-lancedb:manager", "memory-lancedb:sync:post-compaction"]);
     } finally {
       delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)];
-      delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(facadeKey)];
     }
   });
 
