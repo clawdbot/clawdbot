@@ -30,7 +30,7 @@ export type GatewayServerMutableState = {
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   heartbeatRunner: HeartbeatRunner;
-  stopOutboundDeliveryRecovery: () => Promise<void>;
+  stopDeliveryRecovery: () => Promise<void>;
   stopGatewayUpdateCheck: () => void;
   tailscaleCleanup: (() => Promise<void>) | null;
   postReadySidecars: GatewayPostReadySidecarHandle[];
@@ -54,7 +54,7 @@ export function createGatewayServerMutableState(): GatewayServerMutableState {
     maintenance: null,
     stopMediaCleanup: () => waitForMediaCleanupDrains({ timeoutMs: MEDIA_CLEANUP_STOP_TIMEOUT_MS }),
     heartbeatRunner: createNoopHeartbeatRunner(),
-    stopOutboundDeliveryRecovery: async () => {},
+    stopDeliveryRecovery: async () => {},
     stopGatewayUpdateCheck: () => {},
     tailscaleCleanup: null as (() => Promise<void>) | null,
     postReadySidecars: [],
