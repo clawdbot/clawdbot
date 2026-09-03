@@ -1,5 +1,11 @@
 import { vi } from "vitest";
+import {
+  GatewayProtocolRequestError,
+  retainGatewayResponsePayload,
+} from "../../../packages/gateway-client/src/protocol-request.js";
 import type { GatewayService } from "../../daemon/service.js";
+import type { CallGatewayOptions } from "../../gateway/call.js";
+import { buildMinimalGatewayHelloOkPayload } from "../../gateway/minimal-gateway.test-helpers.js";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { PortUsage } from "../../infra/ports-types.js";
 
@@ -16,7 +22,36 @@ export const sleep = vi.fn(async (ms: number) => {
 export const classifyPortListener = vi.fn<(_listener: unknown, _port: number) => PortListenerKind>(
   () => "gateway",
 );
-export const probeGateway = vi.fn();
+export const callGateway = vi.fn<(opts: CallGatewayOptions) => Promise<unknown>>();
+
+export function gatewayHealthResponse(
+  params: {
+    server?: Partial<Parameters<NonNullable<CallGatewayOptions["onHelloOk"]>>[0]["server"]>;
+    health?: unknown;
+    error?: Error;
+  } = {},
+) {
+  return async (opts: CallGatewayOptions): Promise<unknown> => {
+    const hello = buildMinimalGatewayHelloOkPayload();
+    opts.onHelloOk?.({
+      ...hello,
+      type: "hello-ok",
+      server: { ...hello.server, ...params.server },
+      auth: { role: "operator", scopes: ["operator.read"] },
+      snapshot: { presence: [], health: {}, stateVersion: { presence: 0, health: 0 }, uptimeMs: 0 },
+    });
+    if (params.error) {
+      throw params.error;
+    }
+    return params.health ?? { ok: true };
+  };
+}
+
+export function gatewayResponseError(message: string): GatewayProtocolRequestError {
+  const error = new GatewayProtocolRequestError({ code: "UNAVAILABLE", message });
+  retainGatewayResponsePayload(error, undefined);
+  return error;
+}
 export const createConfigIO = vi.fn();
 export const readBestEffortConfig = vi.fn(async () => ({}));
 export const resolveGatewayProbeAuthSafeWithSecretInputs = vi.fn<
@@ -42,8 +77,9 @@ vi.mock("../../infra/ports-probe.js", () => ({
   LOOPBACK_PORT_PROBE_HOSTS: ["127.0.0.1"],
 }));
 
-vi.mock("../../gateway/probe.js", () => ({
-  probeGateway: (opts: unknown) => probeGateway(opts),
+vi.mock("../../gateway/call.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../gateway/call.js")>()),
+  callGateway: (opts: CallGatewayOptions) => callGateway(opts),
 }));
 
 vi.mock("../../config/io.js", () => ({
@@ -162,11 +198,13 @@ export async function inspectUnknownListenerFallback(params: {
   });
 }
 
-export async function inspectAmbiguousOwnershipWithProbe(
-  probeResult: Awaited<ReturnType<typeof probeGateway>>,
-) {
+export async function inspectAmbiguousOwnershipWithProbe(error?: Error) {
   classifyPortListener.mockReturnValue("unknown");
-  probeGateway.mockResolvedValue(probeResult);
+  if (error) {
+    callGateway.mockRejectedValue(error);
+  } else {
+    callGateway.mockImplementation(gatewayHealthResponse());
+  }
   return inspectGatewayRestartWithSnapshot({
     runtime: { status: "running", pid: 8000 },
     portUsage: {
@@ -226,11 +264,8 @@ export function resetRestartHealthMocks() {
   });
   classifyPortListener.mockReset();
   classifyPortListener.mockReturnValue("gateway");
-  probeGateway.mockReset();
-  probeGateway.mockResolvedValue({
-    ok: false,
-    close: null,
-  });
+  callGateway.mockReset();
+  callGateway.mockRejectedValue(new Error("connect ECONNREFUSED"));
   hasActiveStartupMigrationLease.mockReset();
   hasActiveStartupMigrationLease.mockReturnValue(false);
   readActiveGatewayLockIdentity.mockReset();
