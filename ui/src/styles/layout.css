@@ -2661,6 +2661,11 @@ wa-dropdown-item.session-menu__item {
   gap: 0;
 }
 
+.session-menu__item::part(submenu) {
+  max-height: calc(100dvh - 16px);
+  overflow: auto;
+}
+
 /* The icon slot wrapper is a block-level flex item, so its inline child sits on
    the row's text baseline ~2px above the label's optical centre. */
 wa-dropdown-item.session-menu__item::part(icon) {

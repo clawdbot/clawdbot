@@ -30,7 +30,7 @@ Gateway profile display names and avatars are resolved from the current profile 
 In the Control UI, the session context menu (kebab or right-click on a sidebar row, and the same menu on the chat header) offers:
 
 - **Assign to me**: take responsibility for the session yourself.
-- **Assign to…**: pick from a submenu of known people and configured agents.
+- **Assign to…**: pick any registered person or configured agent, including offline teammates and people who have not owned a session. Choices refresh when you open the menu and do not depend on session filters or archive status.
 
 Agents can reassign ownership with the [`sessions` tool](/concepts/session-tool#managing-session-settings-and-groups) using `action: "assign_owner"` with `ownerType` (`"human"` or `"agent"`) and `ownerId`, targeting the current session by default or another visible session via `sessionKey`.
 
