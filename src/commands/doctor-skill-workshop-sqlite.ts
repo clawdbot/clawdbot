@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { listAgentIds } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
@@ -178,6 +179,7 @@ type WorkshopRelocationPlan = {
   entry: LegacyWorkshopProposal;
   source: string;
   ownerAgentId?: string;
+  unconfiguredOwnerAgentId?: string;
   moveKey?: string;
   staleReason?: string;
 };
@@ -204,27 +206,42 @@ async function planWorkshopRelocation(
       return [];
     }
     const source = path.resolve(entry.record.target.skillDir);
+    const owner = inferOwnerAgentId({
+      config,
+      env,
+      record: entry.record,
+      workspaceDir: path.dirname(path.dirname(source)),
+      rowOwnerAgentId: entry.ownerAgentId,
+    });
     if (
+      owner.ownerAgentId &&
       entry.ownerAgentId &&
-      isPathInside(path.resolve(resolveWorkshopSkillsDir(config, entry.ownerAgentId, env)), source)
+      isPathInside(path.resolve(resolveWorkshopSkillsDir(config, owner.ownerAgentId, env)), source)
     ) {
       return [];
     }
-    return [{ entry, source }];
+    return [
+      {
+        entry,
+        source,
+        ...(owner.ownerAgentId ? { ownerAgentId: owner.ownerAgentId } : {}),
+        ...(owner.unconfiguredOwnerAgentId
+          ? { unconfiguredOwnerAgentId: owner.unconfiguredOwnerAgentId }
+          : {}),
+        ...(owner.unconfiguredOwnerAgentId
+          ? {
+              staleReason: `Skill Workshop could not use unconfigured owning agent "${owner.unconfiguredOwnerAgentId}"; the legacy path stays in place and the proposal is stale.`,
+            }
+          : {}),
+      },
+    ];
   });
   const movesByKey = new Map<string, WorkshopMove>();
   for (const plan of external) {
     const { entry } = plan;
     const record = entry.record;
-    plan.ownerAgentId = inferOwnerAgentId({
-      config,
-      env,
-      record,
-      workspaceDir: path.dirname(path.dirname(plan.source)),
-      rowOwnerAgentId: entry.ownerAgentId,
-    });
     if (!plan.ownerAgentId) {
-      plan.staleReason =
+      plan.staleReason ??=
         "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.";
       continue;
     }
@@ -383,7 +400,7 @@ async function planWorkshopRelocation(
       updates.length +
       [...movesByKey.values()].reduce((count, move) => count + move.updates.length, 0),
     externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, plan) => {
-      const ownerAgentId = plan.ownerAgentId ?? "unknown";
+      const ownerAgentId = plan.ownerAgentId ?? plan.unconfiguredOwnerAgentId ?? "unknown";
       counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
       return counts;
     }, {}),
@@ -436,26 +453,36 @@ async function relocateLegacyWorkshopTargets(
   };
 }
 
+type OwnerAgentInference = {
+  ownerAgentId?: string;
+  unconfiguredOwnerAgentId?: string;
+};
+
 function inferOwnerAgentId(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   record: SkillProposalRecord;
   workspaceDir: string;
   rowOwnerAgentId?: string | null;
-}): string | undefined {
+}): OwnerAgentInference {
+  let ownerAgentId: string | undefined;
   if (params.rowOwnerAgentId) {
-    return normalizeAgentId(params.rowOwnerAgentId);
-  }
-  if (params.record.origin?.agentId) {
-    return normalizeAgentId(params.record.origin.agentId);
-  }
-  if (params.record.origin?.sessionKey) {
+    ownerAgentId = normalizeAgentId(params.rowOwnerAgentId);
+  } else if (params.record.origin?.agentId) {
+    ownerAgentId = normalizeAgentId(params.record.origin.agentId);
+  } else if (params.record.origin?.sessionKey) {
     const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
     if (sessionAgentId) {
-      return normalizeAgentId(sessionAgentId);
+      ownerAgentId = normalizeAgentId(sessionAgentId);
     }
   }
-  return inferWorkspaceOwnerAgentId(params.config, params.env, params.workspaceDir);
+  ownerAgentId ??= inferWorkspaceOwnerAgentId(params.config, params.env, params.workspaceDir);
+  if (!ownerAgentId) {
+    return {};
+  }
+  return listAgentIds(params.config).includes(ownerAgentId)
+    ? { ownerAgentId }
+    : { unconfiguredOwnerAgentId: ownerAgentId };
 }
 
 async function readLegacyRollback(
@@ -527,21 +554,23 @@ async function migrateProposal(params: {
     throw new Error("proposal draft hash does not match proposal metadata");
   }
   const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
-  const ownerAgentId = inferOwnerAgentId({
+  const owner = inferOwnerAgentId({
     config: params.config,
     env: params.env,
     record: record.value,
     workspaceDir: path.dirname(path.dirname(path.resolve(record.value.target.skillDir))),
   });
-  if (!ownerAgentId) {
+  if (!owner.ownerAgentId) {
     throw new Error(
-      "owning agent could not be inferred; legacy metadata was retained for manual recovery",
+      owner.unconfiguredOwnerAgentId
+        ? `owning agent "${owner.unconfiguredOwnerAgentId}" is not configured; legacy metadata was retained for manual recovery`
+        : "owning agent could not be inferred; legacy metadata was retained for manual recovery",
     );
   }
   const result = importLegacySkillProposal({
     record: record.value,
     rollback,
-    ownerAgentId,
+    ownerAgentId: owner.ownerAgentId,
     store: { env: params.env },
   });
   await verifyImportedProposal(params.config, params.env, record.value, rollback);

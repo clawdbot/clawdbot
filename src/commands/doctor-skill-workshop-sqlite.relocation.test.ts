@@ -402,6 +402,73 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     });
   });
 
+  it("leaves an applied skill in place when its row owner is not configured", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-retired-owner-workspace-"),
+    );
+    const legacySkillDir = path.join(workspaceDir, "skills", "retired-owner-workshop");
+    const skillContent =
+      "---\nname: retired-owner-workshop\ndescription: Retired owner procedure\n---\n\n# Retired\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const record: SkillProposalRecord & { appliedAt: string } = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: "retired-owner-workshop-20260901-1234567890",
+      kind: "create",
+      status: "applied",
+      title: "Create Retired Owner Workshop",
+      description: "Retired owner procedure",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(skillContent),
+      target: {
+        skillName: "retired-owner-workshop",
+        skillKey: "retired-owner-workshop",
+        skillDir: legacySkillDir,
+        skillFile: path.join(legacySkillDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      appliedAt: now,
+    };
+    await fs.mkdir(legacySkillDir, { recursive: true });
+    await fs.writeFile(record.target.skillFile, skillContent, "utf8");
+    seedLegacyV15ProposalRows(testState.env, [
+      { record, workspaceDir, claimReleasedTime: null, ownerAgentId: "retired" },
+    ]);
+
+    const config = {
+      agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+    };
+    await expect(
+      inspectLegacySkillWorkshopMigration({ config, env: testState.env }),
+    ).resolves.toEqual({
+      externalProposalCount: 1,
+      externalProposalCountsByAgent: { retired: 1 },
+      legacyBackupRootCount: 0,
+    });
+    const result = await migrateLegacySkillWorkshopProposals({ config, env: testState.env });
+
+    expect(result.changes.join("\n")).toContain("marked 1 stale");
+    await expect(fs.readFile(record.target.skillFile, "utf8")).resolves.toBe(skillContent);
+    await expect(fs.access(legacySkillDir)).resolves.toBeUndefined();
+    await expect(
+      fs.access(resolveWorkshopSkillsDir(config, "retired", testState.env)),
+    ).rejects.toThrow();
+    await expect(readSkillProposalRecord(record.id, { env: testState.env })).resolves.toMatchObject(
+      {
+        status: "stale",
+        statusReason: expect.stringContaining("retired"),
+        target: {
+          skillDir: legacySkillDir,
+          skillFile: record.target.skillFile,
+        },
+      },
+    );
+  });
+
   it("persists each relocation before continuing after a later move fails", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-relocation-failure-workspace-"),
