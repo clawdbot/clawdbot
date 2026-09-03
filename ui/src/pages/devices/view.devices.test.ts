@@ -484,6 +484,29 @@ describe("devices inventory rendering", () => {
     },
   );
 
+  it("copies the device ID through execCommand when the Clipboard API is absent", async () => {
+    // Plain-HTTP/LAN origins expose no navigator.clipboard; jsdom has no execCommand either.
+    vi.stubGlobal("navigator", {});
+    const execCommand = vi.fn(() => true);
+    (document as unknown as { execCommand: unknown }).execCommand = execCommand;
+    try {
+      const container = renderDevicesContainer({
+        canManagePairing: false,
+        devicesList: {
+          pending: [],
+          paired: [{ deviceId: "copy-device-id", displayName: "Copy device", roles: ["operator"] }],
+        },
+      });
+      selectMenuItem(getSettingsRow(container, "Copy device"), "copy");
+      await vi.waitFor(() =>
+        expect(showToast).toHaveBeenCalledWith({ message: "Device ID copied" }),
+      );
+      expect(execCommand).toHaveBeenCalledExactlyOnceWith("copy");
+    } finally {
+      delete (document as unknown as { execCommand?: unknown }).execCommand;
+    }
+  });
+
   it("renders approve and reject actions for pending node approvals", () => {
     const approvals: string[] = [];
     const rejections: string[] = [];

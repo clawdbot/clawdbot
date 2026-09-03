@@ -3,6 +3,7 @@ import { openDesktopFocus } from "../../components/desktop/desktop-focus-window.
 import { icons } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { copyToClipboard } from "../../lib/clipboard.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -13,12 +14,8 @@ export function deviceDesktopEnvironment(props: DevicesProps, environmentId: str
 }
 
 async function copyDeviceId(id: string) {
-  try {
-    await navigator.clipboard.writeText(id);
-    showToast({ message: t("devices.inventory.deviceIdCopied") });
-  } catch {
-    showToast({ message: t("common.copyFailed") });
-  }
+  const copied = await copyToClipboard(id);
+  showToast({ message: copied ? t("devices.inventory.deviceIdCopied") : t("common.copyFailed") });
 }
 
 export function renderDeviceEntryMenu(
