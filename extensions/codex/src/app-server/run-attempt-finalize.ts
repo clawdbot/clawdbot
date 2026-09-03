@@ -349,7 +349,6 @@ export async function finalizeCodexAttempt(
         : undefined) ?? Object.freeze({ source: "unavailable" as const }))
     : undefined;
   if (settledTurnFinalizationContext?.source === "unavailable") {
-    // Unavailability must not revoke the completed turn's host-owned fallback.
     embeddedAgentLog.warn("codex settled-turn finalization context is unavailable", {
       runId: params.runId,
       threadId: resourceState.thread.threadId,

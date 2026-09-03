@@ -87,34 +87,26 @@ function createSettledAttempt(
     authProfileId: "openai:captured",
   },
 ): EmbeddedRunAttemptResult {
+  const messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"] = [
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call-1", name: "message", arguments: {} }],
+    } as never,
+    {
+      role: "toolResult",
+      toolCallId: "call-1",
+      toolName: "message",
+      content: [{ type: "text", text: "Message sent." }],
+    } as never,
+  ];
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
-    messagesSnapshot: [
-      {
-        role: "assistant",
-        content: [{ type: "toolCall", id: "call-1", name: "message", arguments: {} }],
-      } as never,
-      {
-        role: "toolResult",
-        toolCallId: "call-1",
-        toolName: "message",
-        content: [{ type: "text", text: "Message sent." }],
-      } as never,
-    ],
+    messagesSnapshot,
     settledTurnFinalizationContext: new CodexSettledTurnContext(
       projectSettledCodexMessages([
         { role: "user", content: "Send the update to Alice." } as never,
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call-1", name: "message", arguments: {} }],
-        } as never,
-        {
-          role: "toolResult",
-          toolCallId: "call-1",
-          toolName: "message",
-          content: [{ type: "text", text: "Message sent." }],
-        } as never,
+        ...messagesSnapshot,
       ]),
       selection,
     ),

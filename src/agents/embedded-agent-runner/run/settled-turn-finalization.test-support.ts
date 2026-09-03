@@ -12,18 +12,18 @@ export function createSettledFinalizationTestInput(
   attempt: EmbeddedRunAttemptWithReceiptEvidence,
   admittedRunContext: AdmittedRunContext,
 ) {
+  const runParams = {
+    admittedRunContext,
+    sessionId: "session-settled",
+    runId: "run-settled",
+    workspaceDir: "/tmp/openclaw-test",
+    prompt: "finish the task",
+    timeoutMs: 60_000,
+  };
   let lifecycleGeneration = getAgentEventLifecycleGeneration();
   const laneController = createEmbeddedRunLaneController({
     getLifecycleGeneration: () => lifecycleGeneration,
-    getParams: () => ({
-      admittedRunContext,
-      sessionFile: "/tmp/session-settled.jsonl",
-      sessionId: "session-settled",
-      runId: "run-settled",
-      workspaceDir: "/tmp/openclaw-test",
-      prompt: "finish the task",
-      timeoutMs: 60_000,
-    }),
+    getParams: () => ({ ...runParams, sessionFile: "/tmp/session-settled.jsonl" }),
     globalLane: "settled-finalization-global",
     sessionLane: "settled-finalization-session",
     initialQueuedLifecycleGeneration: lifecycleGeneration,
@@ -50,14 +50,9 @@ export function createSettledFinalizationTestInput(
     },
     terminalBase: {
       runParams: {
-        admittedRunContext,
-        sessionId: "session-settled",
-        runId: "run-settled",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "finish the task",
+        ...runParams,
         trigger: "cron",
         terminalReplyExpectation: "required",
-        timeoutMs: 60_000,
         sourceReplyDeliveryMode: "message_tool_only",
       },
       provider: "openai",
@@ -71,14 +66,7 @@ export function createSettledFinalizationTestInput(
     },
     lastRunPromptUsage: undefined,
     finalization: {
-      preparedAttempt: {
-        admittedRunContext,
-        runId: "run-settled",
-        sessionId: "session-settled",
-        workspaceDir: "/tmp/openclaw-test",
-        prompt: "finish the task",
-        timeoutMs: 60_000,
-      },
+      preparedAttempt: { ...runParams },
       harness: {
         id: "test-harness",
         label: "Test harness",
