@@ -169,3 +169,17 @@ export function buildAgentHookContextIdentityFields(params: {
     ...(channelContext ? { channelContext } : {}),
   };
 }
+
+/** Preserve a channel-authenticated self-sender fact for downstream hooks. */
+export function withAgentHookSenderSelf(params: {
+  channelContext?: PluginHookChannelContext;
+  senderIsSelf?: boolean;
+}): PluginHookChannelContext | undefined {
+  if (params.senderIsSelf !== true) {
+    return params.channelContext;
+  }
+  return {
+    ...params.channelContext,
+    sender: { ...params.channelContext?.sender, isSelf: true },
+  };
+}

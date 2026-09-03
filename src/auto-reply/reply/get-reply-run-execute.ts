@@ -21,6 +21,7 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { conversationIdentityFromMsgContext } from "../../config/sessions/conversation-identity.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
+import { withAgentHookSenderSelf } from "../../plugins/hook-agent-context.js";
 import { MEDIA_ONLY_USER_TEXT } from "../../sessions/user-turn-media.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -424,7 +425,10 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       // Parent lineage authenticates inherited group policy for queued CLI/MCP runs.
       spawnedBy: normalizeOptionalString(preparedSessionState.sessionEntry?.spawnedBy),
       senderId: normalizeOptionalString(sessionCtx.SenderId),
-      channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
+      channelContext: withAgentHookSenderSelf({
+        channelContext: ctx.ChannelContext ?? sessionCtx.ChannelContext,
+        senderIsSelf: sessionCtx.SenderIsSelf === true,
+      }),
       senderName: normalizeOptionalString(sessionCtx.SenderName),
       senderUsername: normalizeOptionalString(sessionCtx.SenderUsername),
       senderE164: normalizeOptionalString(sessionCtx.SenderE164),
