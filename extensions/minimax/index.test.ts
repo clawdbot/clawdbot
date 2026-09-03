@@ -6,6 +6,7 @@ import type { Context, Model } from "openclaw/plugin-sdk/llm";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
+  runProviderCatalog,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { MINIMAX_OAUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -98,6 +99,44 @@ describe("minimax provider hooks", () => {
 
     const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
     expect(provider?.apiKey).toBe("explicit-key");
+  });
+
+  it("keeps API-key profile precedence through the shared catalog wrapper", async () => {
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ data: [{ id: "MiniMax-M3", object: "model" }] })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const { providers } = await registerProviderPlugin({
+      plugin: minimaxProviderPlugin,
+      id: "minimax",
+      name: "MiniMax Provider",
+    });
+    const portalProvider = requireRegisteredProvider(providers, "minimax-portal");
+
+    const result = await runProviderCatalog({
+      provider: portalProvider,
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({
+        apiKey: "api-profile-key",
+        discoveryApiKey: "api-profile-key",
+        profileId: "minimax-portal:api",
+      }),
+      resolveProviderAuth: () => ({
+        apiKey: MINIMAX_OAUTH_MARKER,
+        discoveryApiKey: "oauth-profile-token",
+        mode: "oauth",
+        profileId: "minimax-portal:oauth",
+        source: "profile",
+      }),
+    });
+
+    const provider = result && "provider" in result ? result.provider : undefined;
+    expect(provider?.apiKey).toBe("api-profile-key");
+    const headers = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+    expect(headers.get("x-api-key")).toBe("api-profile-key");
+    expect(headers.get("authorization")).toBeNull();
   });
 
   it("uses Bearer discovery auth for MINIMAX_OAUTH_TOKEN", async () => {

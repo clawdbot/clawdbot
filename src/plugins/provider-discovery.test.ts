@@ -1,5 +1,5 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import type { ProviderCatalogOutcome } from "./provider-catalog.types.js";
 import {
@@ -237,45 +237,6 @@ describe("runProviderCatalog", () => {
       }),
     ).rejects.toThrow("did not match the selected authentication profile");
     expect(outcomes).toEqual([]);
-  });
-
-  it("rejects changing the selected profile within one catalog run", async () => {
-    const provider: ProviderPlugin = {
-      id: "openai",
-      label: "OpenAI",
-      auth: [],
-      catalog: {
-        run: async (ctx) => {
-          ctx.resolveProviderAuth("openai");
-          ctx.resolveProviderAuth("openai");
-          return { providers: {} };
-        },
-      },
-    };
-    const resolveProviderAuth = vi
-      .fn()
-      .mockReturnValueOnce({
-        apiKey: "first-key",
-        mode: "api_key",
-        profileId: "openai:profile-a",
-        source: "profile",
-      })
-      .mockReturnValueOnce({
-        apiKey: "second-key",
-        mode: "api_key",
-        profileId: "openai:profile-b",
-        source: "profile",
-      });
-
-    await expect(
-      runProviderCatalog({
-        provider,
-        config: {},
-        env: {},
-        resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth,
-      }),
-    ).rejects.toThrow("changed the selected authentication profile");
   });
 
   it.each([

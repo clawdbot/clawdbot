@@ -184,9 +184,9 @@ export async function runProviderCatalog(params: {
   if (!hook) {
     return undefined;
   }
-  // Hooks may resolve auth internally, but once a callback selects a profile,
-  // profile-scoped outcomes for that provider must retain that exact identity.
-  const selectedProfiles = new Map<string, string>();
+  // Hooks may compare credentials before choosing one, so retain every profile
+  // they inspect and reject outcomes attributed outside that selected set.
+  const selectedProfiles = new Map<string, Set<string>>();
   const captureSelectedProfile = <T extends { profileId?: string }>(
     providerId: string | undefined,
     auth: T,
@@ -200,13 +200,9 @@ export async function runProviderCatalog(params: {
       providerId,
       resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
     })) {
-      const selectedProfileId = selectedProfiles.get(providerKey);
-      if (selectedProfileId && selectedProfileId !== profileId) {
-        throw new Error(
-          `Provider catalog changed the selected authentication profile (${providerKey})`,
-        );
-      }
-      selectedProfiles.set(providerKey, profileId);
+      const profiles = selectedProfiles.get(providerKey) ?? new Set<string>();
+      profiles.add(profileId);
+      selectedProfiles.set(providerKey, profiles);
     }
     return auth;
   };
@@ -227,10 +223,8 @@ export async function runProviderCatalog(params: {
         provider: params.provider,
         providerId: outcome.provider,
         resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
-      })
-        .map((providerKey) => selectedProfiles.get(providerKey))
-        .find((profileId): profileId is string => Boolean(profileId));
-      if (!selected || outcome.profileId !== selected) {
+      }).some((providerKey) => selectedProfiles.get(providerKey)?.has(outcome.profileId ?? ""));
+      if (!selected) {
         throw new Error(
           `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
         );
