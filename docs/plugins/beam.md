@@ -115,7 +115,7 @@ Uploading the same `beamId` updates the existing catalog row. A completed upload
 
 Select a Beam in the Control UI and write a message in its composer. On the first send, OpenClaw creates a normal session for the selected Team agent, copies the bounded sanitized Beam history into it, and sends your message there. The original Beam stays unchanged, and later source uploads do not alter the copied session.
 
-OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. The copied transcript starts with a notice naming the choice and explaining that it cannot access the source machine or its tools.
+OpenClaw uses `sourceModel` when that exact model is available to the Team agent. Otherwise it uses the agent's configured model. Each copied transcript item is marked as untrusted external content. The copied session also includes a notice that the old content is reference material rather than operator instructions, names the model choice, and explains that the session cannot access the source machine or its tools.
 
 Continuation is a copy, not remote resume or two-way synchronization. Each operator may create an independent continuation from the same Beam.
 
