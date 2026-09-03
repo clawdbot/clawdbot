@@ -714,19 +714,19 @@ function mergeJsonObjects(left: JsonObject, right: JsonObject): JsonObject {
 }
 
 function fingerprintJson(value: JsonValue): string {
-  return crypto.createHash("sha256").update(stableStringify(value)).digest("hex");
+  return crypto.createHash("sha256").update(stringifyCodexPluginPolicy(value)).digest("hex");
 }
 
-function stableStringify(value: JsonValue | undefined): string {
+export function stringifyCodexPluginPolicy(value: unknown): string {
   // Fingerprints must be process-stable across object insertion order so prompt
   // cache and thread-binding comparisons do not churn between runs.
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableStringify(item)).join(",")}]`;
+    return `[${value.map((item) => stringifyCodexPluginPolicy(item)).join(",")}]`;
   }
   if (value && typeof value === "object") {
     return `{${Object.entries(value)
       .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`)
+      .map(([key, item]) => `${JSON.stringify(key)}:${stringifyCodexPluginPolicy(item)}`)
       .join(",")}}`;
   }
   return JSON.stringify(value);
