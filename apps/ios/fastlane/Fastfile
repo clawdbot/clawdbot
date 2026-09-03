@@ -1612,23 +1612,31 @@ def mobile_release_intent_context!(gateway_version:)
   }
 end
 
-def configured_ci_testflight_internal_group_identity!
+def configured_ci_testflight_internal_group_id!
+  group_id = ENV.fetch("TESTFLIGHT_INTERNAL_GROUP", "").strip
   UI.user_error!(
-    "Protected iOS beta CI is blocked until an approved internal TestFlight group identity is configured."
-  )
+    "TESTFLIGHT_INTERNAL_GROUP must be a nonblank App Store Connect beta-group ID."
+  ) if group_id.empty?
+  group_id
 end
 
-def select_ci_testflight_internal_group!(groups:, identity:)
-  matches = groups.select { |group| group.name == identity || group.id == identity }
-  UI.user_error!("Expected exactly one TestFlight group matching the approved identity.") unless matches.length == 1
+def select_ci_testflight_internal_group_by_id!(groups:, group_id:)
+  matches = groups.select { |group| group.id == group_id }
+  unless matches.length == 1
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP must match exactly one App Store Connect beta-group ID.")
+  end
+  name_collision = groups.any? { |group| group.id != group_id && group.name == group_id }
+  if name_collision
+    UI.user_error!("TESTFLIGHT_INTERNAL_GROUP collides with another TestFlight group name.")
+  end
 
   group = matches.first
-  UI.user_error!("The approved TestFlight group must be internal.") unless group.is_internal_group == true
+  UI.user_error!("The configured TestFlight beta group must be internal.") unless group.is_internal_group == true
   group
 end
 
-def resolve_ci_testflight_internal_group!
-  identity = configured_ci_testflight_internal_group_identity!
+def resolve_ci_testflight_internal_group_id!
+  group_id = configured_ci_testflight_internal_group_id!
   app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
   app_id = ENV["APP_STORE_CONNECT_APP_ID"]
   app_identifier = nil unless env_present?(app_identifier)
@@ -1637,24 +1645,47 @@ def resolve_ci_testflight_internal_group!
     app_identifier: app_identifier,
     app_id: app_id
   )
-  group = select_ci_testflight_internal_group!(groups: app.get_beta_groups, identity: identity)
-  { app: app, group: group }
+  group = select_ci_testflight_internal_group_by_id!(groups: app.get_beta_groups, group_id: group_id)
+  group.id
 end
 
-def verify_ci_testflight_internal_assignment!(app:, group:, app_store_version:, build_number:)
-  build = app.get_builds(
+def assign_and_verify_ci_testflight_internal_group!(group_id:, app_store_version:, build_number:)
+  app_identifier = ENV["APP_STORE_CONNECT_APP_IDENTIFIER"]
+  app_id = ENV["APP_STORE_CONNECT_APP_ID"]
+  app_identifier = nil unless env_present?(app_identifier)
+  app_id = nil unless env_present?(app_id)
+  app = resolve_app_store_connect_app(
+    app_identifier: app_identifier,
+    app_id: app_id
+  )
+  group = select_ci_testflight_internal_group_by_id!(
+    groups: app.get_beta_groups,
+    group_id: group_id
+  )
+  builds = app.get_builds(
     filter: {
       "preReleaseVersion.version" => app_store_version,
       version: build_number.to_s
     },
     includes: "preReleaseVersion"
-  ).find do |candidate|
-    candidate.app_version == app_store_version && candidate.version == build_number.to_s
+  ).select do |candidate|
+    candidate.app_version == app_store_version &&
+      candidate.version == build_number.to_s &&
+      candidate.platform == Spaceship::ConnectAPI::Platform::IOS
   end
-  UI.user_error!("Uploaded TestFlight build could not be resolved after processing.") unless build
+  unless builds.length == 1
+    UI.user_error!("Uploaded TestFlight build could not be resolved after processing.")
+  end
+  build = builds.first
 
+  # Fastlane's groups option matches both names and IDs. Assign the freshly
+  # resolved group directly so a concurrent display-name collision cannot widen access.
+  build.add_beta_groups(beta_groups: [group])
   assigned = group.fetch_builds.any? { |candidate| candidate.id == build.id }
-  UI.user_error!("Uploaded TestFlight build is not assigned to the approved internal group.") unless assigned
+  unless assigned
+    UI.user_error!("Uploaded TestFlight build is not assigned to the configured internal group.")
+  end
+  { group: group }
 end
 
 def finalize_mobile_release_ref!(platform:, gateway_version:, app_store_version:, build_number:, internal_group:, intent_context:, sha:)
@@ -2138,7 +2169,7 @@ platform :ios do
     )
     release_sha = context[:git_commit]
     intent_context = mobile_release_intent_context!(gateway_version: context[:version])
-    internal_group = intent_context ? resolve_ci_testflight_internal_group! : nil
+    internal_group_id = intent_context ? resolve_ci_testflight_internal_group_id! : nil
     preflight_app_store_version!(short_version: context[:short_version])
     ensure_mobile_release_ref_available!(
       platform: "ios",
@@ -2180,10 +2211,9 @@ platform :ios do
       wait_processing_timeout_duration: APP_STORE_BUILD_PROCESSING_TIMEOUT_SECONDS,
       uses_non_exempt_encryption: false
     }
-    if internal_group
+    if internal_group_id
       upload_options.merge!(
         distribute_external: false,
-        groups: [internal_group.fetch(:group).id],
         skip_submission: false,
         submit_beta_review: false
       )
@@ -2191,10 +2221,10 @@ platform :ios do
       upload_options[:skip_submission] = true
     end
     upload_to_testflight(**upload_options)
-    if internal_group
-      verify_ci_testflight_internal_assignment!(
-        app: internal_group.fetch(:app),
-        group: internal_group.fetch(:group),
+    internal_group = nil
+    if internal_group_id
+      internal_group = assign_and_verify_ci_testflight_internal_group!(
+        group_id: internal_group_id,
         app_store_version: build[:short_version],
         build_number: build[:build_number]
       )

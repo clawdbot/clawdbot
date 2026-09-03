@@ -257,6 +257,7 @@ jobs:
           OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
           OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
           OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
         run: |
           set -euo pipefail
           rm -rf "$RUNNER_TEMP/mobile-release-intent-ios"

@@ -957,4 +957,45 @@ describe("mobile release authority", () => {
       expect(source).toContain("release/YYYY.M.PATCH-mobile");
     }
   });
+
+  it("passes the protected TestFlight group variable only to the iOS upload step", () => {
+    const source = fs.readFileSync(".github/workflows/ios-beta-release.yml", "utf8");
+    const workflow = parse(source) as {
+      jobs: Record<
+        string,
+        {
+          environment?: string;
+          steps: Array<{
+            env?: Record<string, string>;
+            name: string;
+            run?: string;
+          }>;
+        }
+      >;
+    };
+    const placements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+      job.steps.flatMap((step) =>
+        Object.entries(step.env ?? {})
+          .filter(([, value]) => value.includes("TESTFLIGHT_INTERNAL_GROUP"))
+          .map(([envName, value]) => ({
+            envName,
+            jobName,
+            runsUpload: step.run?.includes("pnpm ios:release:upload") ?? false,
+            value,
+          })),
+      ),
+    );
+
+    expect(source).not.toContain("secrets.TESTFLIGHT_INTERNAL_GROUP");
+    expect(source.match(/\$\{\{ vars\.TESTFLIGHT_INTERNAL_GROUP \}\}/gu)).toHaveLength(1);
+    expect(workflow.jobs.release?.environment).toBe("ios-beta-release");
+    expect(placements).toEqual([
+      {
+        envName: "TESTFLIGHT_INTERNAL_GROUP",
+        jobName: "release",
+        runsUpload: true,
+        value: "${{ vars.TESTFLIGHT_INTERNAL_GROUP }}",
+      },
+    ]);
+  });
 });

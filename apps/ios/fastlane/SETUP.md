@@ -160,11 +160,17 @@ Repository/environment secrets required by name:
 - `APP_STORE_CONNECT_KEY_ID`
 - `APP_STORE_CONNECT_KEY_CONTENT`
 
+Protected `ios-beta-release` environment variable required:
+
+- `TESTFLIGHT_INTERNAL_GROUP`: immutable App Store Connect beta-group ID
+
 The CI lane must distribute the processed build to one pre-approved internal
-TestFlight group. External distribution and Beta App Review submission remain
-disabled. The group identity configuration is not yet approved, so the CI lane
-currently fails closed before upload rather than silently performing an
-upload-only App Store Connect operation.
+TestFlight group. The value is ID-only and is never matched as a display name.
+The lane fails before upload when the ID is blank, unknown, external, duplicated,
+or collides with another group's display name. After processing, it freshly
+resolves the exact group and uploaded build, then requires that build ID to be
+assigned to the group. External distribution and Beta App Review submission
+remain disabled.
 
 After verified internal distribution, the workflow writes a bounded signed
 intent and records `refs/openclaw/mobile-releases/ios/<app-store-version>-<build>`
