@@ -469,7 +469,7 @@ describe("LINE webhook spool image sets", () => {
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { timeout: 20_000 });
         expect(deliver.mock.calls[0]?.[0]).toHaveLength(2);
         expect(errors.join("\n")).toContain(
-          "image set set-short delivered 2 parts, 1 still missing from the send",
+          "image set set-short delivered 2 of the send's parts, 1 still missing",
         );
       } finally {
         await spool.stop();
