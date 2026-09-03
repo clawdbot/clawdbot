@@ -20,21 +20,15 @@ extension CronSettings {
             self.store.stop(.settings)
             self.channelsStore.stop()
         }
-        .sheet(isPresented: self.$showEditor) {
+        .sheet(item: self.$editor) { editor in
+            @Bindable var editor = editor
             CronJobEditor(
-                job: self.editingJob,
-                isSaving: self.$isSaving,
-                error: self.$editorError,
+                job: editor.job,
+                isSaving: $editor.isSaving,
+                error: $editor.error,
                 channelsStore: self.channelsStore,
-                onCancel: {
-                    self.showEditor = false
-                    self.editingJob = nil
-                },
-                onSave: { payload in
-                    Task {
-                        await self.save(payload: payload)
-                    }
-                })
+                onCancel: { self.editor = nil },
+                onSave: { payload in self.save(payload: payload, editor: editor) })
         }
         .alert("Delete cron job?", isPresented: Binding(
             get: { self.confirmDelete != nil },
@@ -44,13 +38,13 @@ extension CronSettings {
                 Button("Cancel", role: .cancel) { self.confirmDelete = nil }
                 Button("Delete", role: .destructive) {
                     if let job = self.confirmDelete {
-                        Task { await self.store.removeJob(id: job.id) }
+                        Task { await self.store.removeJob(job) }
                     }
                     self.confirmDelete = nil
                 }
         } message: {
             if let job = self.confirmDelete {
-                Text(job.displayName)
+                Text(job.job.displayName)
             }
         }
     }
@@ -122,9 +116,7 @@ extension CronSettings {
                 .disabled(self.store.isLoadingJobs)
 
                 Button {
-                    self.editorError = nil
-                    self.editingJob = nil
-                    self.showEditor = true
+                    self.editor = self.store.newEditor()
                 } label: {
                     Label("New Job", systemImage: "plus")
                 }
@@ -148,20 +140,20 @@ extension CronSettings {
 
                 ScrollView(.vertical) {
                     LazyVStack(alignment: .leading, spacing: 4) {
-                        ForEach(self.store.jobs) { job in
+                        ForEach(self.store.snapshot?.rows ?? []) { context in
                             Button {
-                                self.store.selectJob(job.id)
+                                self.store.selectJob(context)
                             } label: {
-                                self.jobRow(job)
+                                self.jobRow(context.job)
                                     .frame(maxWidth: .infinity, alignment: .leading)
                                     .padding(.horizontal, 8)
                                     .background(
-                                        self.store.selectedJobId == job.id
+                                        self.store.selectedJob?.id == context.id
                                             ? Color.accentColor.opacity(0.18) : .clear)
                                     .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                             }
                             .buttonStyle(.plain)
-                            .contextMenu { self.jobContextMenu(job) }
+                            .contextMenu { self.jobContextMenu(context) }
                         }
 
                         if self.store.jobs.isEmpty {
@@ -186,11 +178,11 @@ extension CronSettings {
 
     @ViewBuilder
     var detail: some View {
-        if let selected = self.selectedJob {
+        if let selected = self.store.selectedJob {
             ScrollView(.vertical) {
                 VStack(alignment: .leading, spacing: 12) {
                     self.detailHeader(selected)
-                    self.detailCard(selected)
+                    self.detailCard(selected.job)
                     self.runHistoryCard(selected)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

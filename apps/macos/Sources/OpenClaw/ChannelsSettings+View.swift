@@ -19,10 +19,12 @@ extension ChannelsSettings {
         .onChange(of: channels) { _, newValue in
             self.ensureSelection(in: newValue)
         }
-        .onDisappear { self.store.stop() }
+        .onDisappear { self.updateActiveWork(active: false) }
     }
 
     private func updateActiveWork(active: Bool) {
+        guard self.activeWork != active else { return }
+        self.activeWork = active
         if active {
             self.store.start()
         } else {
@@ -54,7 +56,14 @@ extension ChannelsSettings {
     }
 
     private var detail: some View {
-        Group {
+        VStack(alignment: .leading, spacing: 0) {
+            if let error = self.store.lastError {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, SettingsLayout.detailHorizontalPadding)
+                    .padding(.top, SettingsLayout.detailVerticalPadding)
+            }
             if let channel = self.selectedChannel {
                 self.channelDetail(channel)
             } else {
