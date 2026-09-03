@@ -3096,7 +3096,7 @@
   border-radius: 5px;
   background: transparent;
   color: var(--muted);
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-controls__provider-settings:hover,
