@@ -36,7 +36,9 @@ async function withHuggingFaceMetadataFixture(
     setPadding: (target: "manifest" | "file" | "tree", padding: string) => void;
     pathInfoBodies: unknown[];
     requestedUrls: string[];
+    source: string;
   }) => Promise<void>,
+  source = "hf:owner/repo",
 ): Promise<void> {
   const cacheDir = tempDirs.make(`llama-cpp-hf-${endpoint}-`);
   await fs.writeFile(path.join(cacheDir, "hf_owner_repo_model.gguf"), "GGUF");
@@ -107,6 +109,7 @@ async function withHuggingFaceMetadataFixture(
       },
       pathInfoBodies,
       requestedUrls,
+      source,
     });
   } finally {
     vi.unstubAllGlobals();
@@ -360,18 +363,32 @@ describe("managed llama-server", () => {
   it("resolves a cached GGUF when unrelated repository tree metadata is oversized", async () => {
     await withHuggingFaceMetadataFixture(
       "tree",
-      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls }) => {
+      async ({ cacheDir, setPadding, pathInfoBodies, requestedUrls, source }) => {
         setPadding("tree", "x".repeat(16 * 1024 * 1024 + 1));
         await expect(
           ensureLlamaCppModel({
-            source: "hf:owner/repo",
+            source,
             cacheDir,
             download: false,
           }),
         ).resolves.toBe(path.join(cacheDir, "hf_owner_repo_model.gguf"));
         expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
-        expect(requestedUrls).not.toContain(expect.stringContaining("/tree/"));
+        expect(requestedUrls.some((url) => url.includes("/tree/"))).toBe(false);
       },
+    );
+  });
+
+  it("resolves an explicit Hugging Face GGUF file without a manifest request", async () => {
+    await withHuggingFaceMetadataFixture(
+      "file",
+      async ({ cacheDir, pathInfoBodies, requestedUrls, source }) => {
+        await expect(ensureLlamaCppModel({ source, cacheDir, download: false })).resolves.toBe(
+          path.join(cacheDir, "hf_owner_repo_model.gguf"),
+        );
+        expect(pathInfoBodies).toEqual([{ paths: ["model.gguf"], expand: false }]);
+        expect(requestedUrls).not.toContain("/v2/owner/repo/manifests/latest");
+      },
+      "hf:owner/repo/model.gguf",
     );
   });
 
