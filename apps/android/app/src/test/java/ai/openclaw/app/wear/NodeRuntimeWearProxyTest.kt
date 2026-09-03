@@ -38,9 +38,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import java.net.InetAddress
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
-import java.util.concurrent.atomic.AtomicReference
 
 private const val WEAR_GATEWAY_READY_TIMEOUT_MS = 15_000L
 private const val WEAR_SESSIONS_SEARCH = "wear-runtime-proof"
@@ -51,7 +49,7 @@ class NodeRuntimeWearProxyTest {
   @Test
   fun wearRequestsRecoverOnlyAfterThePhoneOperatorSessionIsReady() =
     runBlocking {
-      val app = RuntimeEnvironment.getApplication<android.app.Application>()
+      val app = RuntimeEnvironment.getApplication()
       val gateway = NodeRuntimeWearGateway()
       val prefs =
         SecurePrefs(
@@ -81,7 +79,7 @@ class NodeRuntimeWearProxyTest {
         awaitOperatorReady(runtime, gateway.endpoint)
         assertTrue(runtime.handleWearProxyRequest("watch-1", sessionsRequest()).ok)
 
-        gateway.holdNextOperatorHello()
+        gateway.holdOperatorHellos()
         val disconnected = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.GatewayDisconnect))
         assertFalse(checkNotNull(disconnected.result).jsonObject.getValue("connected").jsonPrimitive.content.toBoolean())
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
@@ -91,7 +89,7 @@ class NodeRuntimeWearProxyTest {
         gateway.awaitHeldOperatorHello()
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
 
-        gateway.releaseOperatorHello()
+        gateway.releaseOperatorHellos()
         awaitOperatorReady(runtime, gateway.endpoint)
         val recovered = runtime.handleWearProxyRequest("watch-1", sessionsRequest())
 
@@ -105,7 +103,7 @@ class NodeRuntimeWearProxyTest {
         )
         assertEquals(2, gateway.wearSessionsRequests.get())
       } finally {
-        gateway.releaseOperatorHello()
+        gateway.releaseOperatorHellos()
         closeNodeRuntimeTestFixture(runtime)
         gateway.close()
       }
@@ -150,8 +148,9 @@ class NodeRuntimeWearProxyTest {
 private class NodeRuntimeWearGateway : AutoCloseable {
   private val json = Json { ignoreUnknownKeys = true }
   private val server = MockWebServer()
-  private val holdOperatorHello = AtomicBoolean()
-  private val heldOperatorHello = AtomicReference<Pair<WebSocket, String>?>()
+  private val operatorHelloGateLock = Any()
+  private var operatorHellosHeld = false
+  private val heldOperatorHellos = mutableListOf<Pair<WebSocket, String>>()
   private val heldOperatorHelloObserved = CompletableDeferred<Unit>()
   val wearSessionsRequests = AtomicInteger()
   val endpoint: GatewayEndpoint
@@ -170,8 +169,10 @@ private class NodeRuntimeWearGateway : AutoCloseable {
     endpoint = GatewayEndpoint.manual("127.0.0.1", server.port)
   }
 
-  fun holdNextOperatorHello() {
-    holdOperatorHello.set(true)
+  fun holdOperatorHellos() {
+    synchronized(operatorHelloGateLock) {
+      operatorHellosHeld = true
+    }
   }
 
   suspend fun awaitHeldOperatorHello() {
@@ -180,11 +181,27 @@ private class NodeRuntimeWearGateway : AutoCloseable {
     }
   }
 
-  fun releaseOperatorHello() {
-    heldOperatorHello.getAndSet(null)?.let { (socket, id) ->
+  fun releaseOperatorHellos() {
+    val pending =
+      synchronized(operatorHelloGateLock) {
+        operatorHellosHeld = false
+        heldOperatorHellos.toList().also { heldOperatorHellos.clear() }
+      }
+    pending.forEach { (socket, id) ->
       sendHello(socket, id, role = "operator")
     }
   }
+
+  private fun holdOperatorHello(
+    webSocket: WebSocket,
+    id: String,
+  ): Boolean =
+    synchronized(operatorHelloGateLock) {
+      if (!operatorHellosHeld) return@synchronized false
+      heldOperatorHellos += webSocket to id
+      heldOperatorHelloObserved.complete(Unit)
+      true
+    }
 
   private fun listener() =
     object : WebSocketListener() {
@@ -208,12 +225,8 @@ private class NodeRuntimeWearGateway : AutoCloseable {
         val params = frame["params"] as? JsonObject ?: JsonObject(emptyMap())
         if (method == "connect") {
           val role = checkNotNull(params["role"]?.jsonPrimitive?.content)
-          if (role == "operator" && holdOperatorHello.compareAndSet(true, false)) {
-            heldOperatorHello.set(webSocket to id)
-            heldOperatorHelloObserved.complete(Unit)
-          } else {
-            sendHello(webSocket, id, role)
-          }
+          if (role == "operator" && holdOperatorHello(webSocket, id)) return
+          sendHello(webSocket, id, role)
           return
         }
         val payload =
