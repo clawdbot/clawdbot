@@ -453,7 +453,9 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
         // Each host resize can trigger another content report; allow repeated
         // layout cycles so a missing border cannot silently shrink the frame.
         for (let index = 0; index < 12; index += 1) {
-          await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => resolve());
+          });
         }
         expect(frame.getBoundingClientRect().height).toBeCloseTo(initialHeight, 0);
         expect(reports.every((height) => height === initialHeight)).toBe(true);
