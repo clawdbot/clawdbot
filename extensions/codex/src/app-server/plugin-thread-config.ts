@@ -305,7 +305,10 @@ export async function buildCodexPluginThreadConfig(
     policy.allowAllPlugins
       ? await readCodexThreadAdmissibleAccountApps(params, appCache)
       : { apps: [] };
-  const admissionConfig = await requireCodexConfigForAppAdmission(params);
+  // A deny-all thread needs no native settings; read them only before admitting an app.
+  let appAdmissionConfig: Promise<CodexPluginThreadAppAdmissionConfig> | undefined;
+  const getAdmissionConfig = () =>
+    (appAdmissionConfig ??= requireCodexConfigForAppAdmission(params));
 
   const diagnostics: CodexPluginThreadConfigDiagnostic[] = [
     ...inventory.diagnostics,
@@ -369,8 +372,9 @@ export async function buildCodexPluginThreadConfig(
     pluginAppIds[record.policy.configKey] = [...record.ownedAppIds].toSorted();
     for (const app of resolveCodexThreadConfigAppsForRecord({ record, inventory })) {
       const admission = resolveCodexPluginAppThreadAdmission(app, inventory);
+      const admissionConfig = admission === "blocked" ? undefined : await getAdmissionConfig();
       if (
-        admission === "blocked" ||
+        !admissionConfig ||
         resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false
       ) {
         diagnostics.push({
@@ -414,6 +418,7 @@ export async function buildCodexPluginThreadConfig(
     if (pluginOwnedAppIds.has(app.id)) {
       continue;
     }
+    const admissionConfig = await getAdmissionConfig();
     if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
       continue;
     }
@@ -444,7 +449,10 @@ export async function buildCodexPluginThreadConfig(
     };
   }
 
-  const configPatch = disableUnlistedCodexApps({ apps }, admissionConfig.config);
+  const configPatch =
+    Object.keys(policyApps).length === 0
+      ? buildDisabledAppsConfigPatch()
+      : disableUnlistedCodexApps({ apps }, (await getAdmissionConfig()).config);
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
   return {
     enabled: true,

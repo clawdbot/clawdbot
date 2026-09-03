@@ -1672,6 +1672,11 @@ describe("canonical descendant lifecycle through real owners", () => {
     ["catalog mismatch", /native tool catalog is missing, corrupt, or changed/],
     ["child catalog", /did not preserve the actual native tool catalog/],
     ["child model", /did not preserve the exact canonical source and selected native model/],
+    ["child thread model", /did not preserve the exact canonical source and selected native model/],
+    [
+      "null child thread model",
+      /did not preserve the exact canonical source and selected native model/,
+    ],
     ["child lineage", /unsafe native thread identity/],
     ["unsubscribe failure", /unsubscribe|subscription|guarded rollback/i],
   ])(
@@ -1736,6 +1741,12 @@ describe("canonical descendant lifecycle through real owners", () => {
           }
           if (failure === "child model") {
             fixture.native.setForkFault("model");
+          }
+          if (failure === "child thread model") {
+            fixture.native.setForkFault("thread-model");
+          }
+          if (failure === "null child thread model") {
+            fixture.native.setForkFault("null-thread-model");
           }
           if (failure === "child lineage") {
             fixture.native.setForkFault("lineage");

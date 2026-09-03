@@ -83,6 +83,77 @@ describe("Codex plugin thread config", () => {
     });
   });
 
+  it.each([
+    { name: "empty plugin selection", plugin: false, account: false, app: false },
+    { name: "plugin without apps", plugin: true, account: false, app: false },
+    { name: "blocked plugin app", plugin: true, account: false, app: true },
+    { name: "empty account inventory", plugin: false, account: true, app: false },
+  ])("starts with apps disabled for $name when native config is unavailable", async (testCase) => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async (method, params) =>
+        codexAppInventoryResponse(
+          method,
+          testCase.app ? [appInfo("google-calendar-app", true)] : [],
+          params,
+          { callableByAppId: { "google-calendar-app": false } },
+        ),
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/installed") {
+        return pluginInstalled([
+          pluginSummary("google-calendar", { installed: true, enabled: true }),
+        ]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          testCase.app ? [appSummary("google-calendar-app")] : [],
+        );
+      }
+      if (method === "config/read") {
+        throw new Error("config unavailable");
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_all_plugins: testCase.account,
+          allow_destructive_actions: "ask",
+          ...(testCase.plugin
+            ? {
+                plugins: {
+                  "google-calendar": {
+                    marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+                    pluginName: "google-calendar",
+                  },
+                },
+              }
+            : {}),
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      "features.apps": false,
+      apps: {
+        _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+      },
+    });
+    expect(config.policyContext.apps).toEqual({});
+    expect(config.provisionalAppIds).toBeUndefined();
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("config/read");
+  });
+
   it("defaults destructive app access on for accessible migrated plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
@@ -422,10 +493,13 @@ describe("Codex plugin thread config", () => {
       },
     });
 
-    expect(methods).toEqual(["plugin/installed", "plugin/read", "config/read"]);
+    expect(methods).toEqual(["plugin/installed", "plugin/read"]);
     expect(methods).not.toContain("plugin/install");
-    expect(config.configPatch?.apps).toEqual({
-      _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+    expect(config.configPatch).toEqual({
+      "features.apps": false,
+      apps: {
+        _default: { enabled: false, destructive_enabled: false, open_world_enabled: false },
+      },
     });
     expect(config.diagnostics).toContainEqual(
       expect.objectContaining({
@@ -978,8 +1052,8 @@ describe("Codex plugin thread config", () => {
       });
 
       expect(config.configPatch).toEqual({
+        "features.apps": false,
         apps: {
-          "google-calendar-app": { enabled: false },
           _default: {
             enabled: false,
             destructive_enabled: false,
@@ -1076,8 +1150,8 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
-        "google-calendar-app": { enabled: false },
         _default: {
           enabled: false,
           destructive_enabled: false,
@@ -1162,8 +1236,8 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
-        "google-calendar-app": { enabled: false },
         _default: {
           enabled: false,
           destructive_enabled: false,
@@ -1337,6 +1411,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -1844,8 +1919,8 @@ describe("Codex plugin thread config", () => {
       });
 
       expect(config.configPatch).toEqual({
+        "features.apps": false,
         apps: {
-          "chatgpt-meetings": { enabled: false },
           _default: {
             enabled: false,
             destructive_enabled: false,
@@ -2026,8 +2101,8 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
-        "chatgpt-meetings": { enabled: false },
         _default: {
           enabled: false,
           destructive_enabled: false,
@@ -2540,6 +2615,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2602,6 +2678,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -2990,6 +3067,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -3140,6 +3218,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,
@@ -3200,6 +3279,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      "features.apps": false,
       apps: {
         _default: {
           enabled: false,

@@ -43,7 +43,7 @@ export async function createCanonicalForkNativeFixture(
   let ignoreCut = false;
   let competingSubscriber = false;
   let failUnsubscribe = false;
-  let forkFault: "model" | "catalog" | "lineage" | undefined;
+  let forkFault: "model" | "thread-model" | "null-thread-model" | "catalog" | "lineage" | undefined;
   let sequence = 0;
   let afterPolicyWrite: ((threadId: string) => Promise<void> | void) | undefined;
   let policyFault: "rpc" | "disconnect" | undefined;
@@ -289,10 +289,14 @@ export async function createCanonicalForkNativeFixture(
           typeof params.developerInstructions === "string"
             ? params.developerInstructions
             : value.developerInstructions;
+        child.thread.model = child.model;
         if (forkFault === "model") {
           child.model = "wrong-native-model";
+        } else if (forkFault === "thread-model") {
+          child.thread.model = "wrong-native-model";
+        } else if (forkFault === "null-thread-model") {
+          child.thread.model = null;
         }
-        child.thread.model = child.model;
         if (forkFault === "catalog") {
           child.dynamicTools = [];
         }

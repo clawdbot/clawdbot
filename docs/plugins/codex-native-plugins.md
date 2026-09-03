@@ -446,8 +446,9 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
 
 Apps outside the admitted policy stay disabled even if native Codex settings
 enable them. Native settings must be verified before an enabled policy can admit
-app tools. Disabling plugin apps disables Codex's app tool surface without
-fetching app inventory.
+app tools. When no app can be admitted, Codex's app tool surface is disabled
+without reading native app settings. Disabling plugin apps also skips app
+inventory discovery.
 
 ## Troubleshooting
 

@@ -221,8 +221,10 @@ export async function forkCanonicalCodexSession(params: {
             throw new Error("Codex fork subscription ownership could not be acquired");
           }
           assertCurrent();
+          // The initial selection and the child's current live settings must both match.
           if (
             response.model !== model ||
+            response.thread.model !== model ||
             response.modelProvider !== modelProvider ||
             response.thread.modelProvider !== modelProvider
           ) {
