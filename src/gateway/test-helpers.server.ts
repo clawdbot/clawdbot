@@ -362,6 +362,7 @@ function resetGatewayLifecycleTestState(options: { preserveRuntimeBindings: bool
 function resetGatewayMutableTestFixtures(): void {
   testTailnetIPv4.value = undefined;
   testTailscaleWhois.value = null;
+  testTailscaleWhois.calls.length = 0;
   agentDiscoveryMock.enabled = false;
   agentDiscoveryMock.discoverCalls = 0;
   agentDiscoveryMock.models = [];
