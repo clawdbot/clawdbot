@@ -109,6 +109,17 @@ describe("sessionNavigationTarget", () => {
     });
   });
 
+  it("opens a gallery dashboard through its owning chat session", () => {
+    const target = sessionNavigationTarget({
+      face: "chat",
+      sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(`/chat/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`);
+  });
+
   it("marks an uncached preference-derived face for in-app navigation but keeps href shareable", () => {
     const target = sessionNavigationTarget({
       face: "chat",

@@ -278,6 +278,19 @@ describe("loadChatRoute", () => {
       face: "dashboard",
       dashboardExpanded: true,
     });
+    await expect(
+      loadChatRoute(
+        context,
+        { pathname: "/chat/work", search: "?dashboard=expanded", hash: "" },
+        "chat",
+        new AbortController().signal,
+      ),
+    ).resolves.toMatchObject({
+      kind: "session",
+      sessionKey: "agent:work:main",
+      face: "chat",
+      dashboardExpanded: true,
+    });
   });
 
   it("waits for configured session defaults before resolving an agent main route", async () => {

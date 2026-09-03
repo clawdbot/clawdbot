@@ -25,6 +25,16 @@ function result(sessionRow: GatewaySessionRow): SessionsListResult {
   };
 }
 
+function results(sessionRows: GatewaySessionRow[]): SessionsListResult {
+  return {
+    ts: 1,
+    path: "(multiple)",
+    count: sessionRows.length,
+    defaults: { modelProvider: null, model: null, contextTokens: null },
+    sessions: sessionRows,
+  };
+}
+
 function row(key: string, displayName: string): GatewaySessionRow {
   return {
     key,
@@ -163,5 +173,70 @@ describe("DashboardsPage", () => {
     });
     await element.updateComplete;
     expect(element.textContent).not.toContain("Detached refresh failed");
+  });
+
+  it("filters by search and author and sorts visible cards by title", async () => {
+    const element = document.createElement("openclaw-dashboards-page") as DashboardsPageElement;
+    element.routeData = {
+      result: results([
+        {
+          ...row("agent:main:dashboard:zulu", "Zulu monitor"),
+          updatedAt: 30,
+          createdActor: { type: "human", id: "peter", label: "Peter" },
+        },
+        {
+          ...row("agent:main:dashboard:alpha", "Alpha signals"),
+          updatedAt: 10,
+          createdActor: { type: "human", id: "mira", label: "Mira" },
+        },
+        {
+          ...row("agent:main:dashboard:bravo", "Bravo health"),
+          updatedAt: 20,
+          createdActor: { type: "human", id: "peter", label: "Peter" },
+        },
+      ]),
+      error: null,
+      basePath: "",
+      fallbackAgentId: "main",
+      mainKey: "main",
+    };
+    document.body.append(element);
+    await element.updateComplete;
+
+    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(3);
+
+    const search = element.querySelector<HTMLInputElement>('input[type="search"]');
+    expect(search).not.toBeNull();
+    if (!search) {
+      return;
+    }
+    search.value = "signals";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await element.updateComplete;
+    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
+    expect(element.textContent).toContain("Alpha signals");
+
+    search.value = "";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await element.updateComplete;
+    const selects = element.querySelectorAll<HTMLSelectElement>("select");
+    const authorSelect = selects.item(0);
+    const sortSelect = selects.item(1);
+    authorSelect.value = "mira";
+    authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await element.updateComplete;
+    expect(element.querySelectorAll("[data-dashboard-session]")).toHaveLength(1);
+    expect(element.textContent).toContain("By Mira");
+
+    authorSelect.value = "";
+    authorSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    sortSelect.value = "title";
+    sortSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    await element.updateComplete;
+    expect(
+      Array.from(element.querySelectorAll(".dashboard-card__heading h2"), (heading) =>
+        heading.textContent?.trim(),
+      ),
+    ).toEqual(["Alpha signals", "Bravo health", "Zulu monitor"]);
   });
 });

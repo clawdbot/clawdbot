@@ -175,7 +175,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
   if (params.focusComposer) {
     navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
-  if (params.dashboardExpanded && params.face === "dashboard") {
+  if (params.dashboardExpanded) {
     navigationParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
   }
   const navigationKey = params.navigationKey?.trim() || row?.key;
@@ -189,7 +189,7 @@ export function sessionNavigationTarget<TRouteId extends string>(
     ? { pathname, search: `?${serializedNavigation}` }
     : { pathname };
   const hrefParams = new URLSearchParams(search ?? "");
-  if (params.dashboardExpanded && params.face === "dashboard") {
+  if (params.dashboardExpanded) {
     hrefParams.set(SESSION_DASHBOARD_EXPANDED_PARAM, "expanded");
   }
   const hrefSearch = hrefParams.toString();

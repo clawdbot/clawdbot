@@ -1,17 +1,27 @@
 import { consume } from "@lit/context";
 import type { PropertyValues } from "lit";
-import { property } from "lit/decorators.js";
+import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { dashboardSessionListQuery, dashboardsRouteData } from "./route.ts";
-import { renderDashboards, type DashboardsRouteData } from "./view.ts";
+import {
+  renderDashboards,
+  type DashboardGalleryFilters,
+  type DashboardsRouteData,
+} from "./view.ts";
 
 class DashboardsPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context?: ApplicationContext;
 
   @property({ attribute: false }) routeData?: DashboardsRouteData;
+
+  @state() private filters: DashboardGalleryFilters = {
+    query: "",
+    ownerId: "",
+    sort: "updated",
+  };
 
   private observedSessions?: ApplicationContext["sessions"];
   private observedScopeId?: string | null;
@@ -76,12 +86,27 @@ class DashboardsPage extends OpenClawLightDomElement {
   }
 
   override render() {
-    return renderDashboards(this.data, () => {
-      const context = this.context;
-      if (context?.gateway.snapshot.phase === "connected") {
-        void context.sessions.refreshList({ ...dashboardSessionListQuery(context), force: true });
-      }
-    });
+    return renderDashboards(
+      this.data,
+      () => {
+        const context = this.context;
+        if (context?.gateway.snapshot.phase === "connected") {
+          void context.sessions.refreshList({ ...dashboardSessionListQuery(context), force: true });
+        }
+      },
+      this.filters,
+      {
+        onQueryChange: (query) => {
+          this.filters = { ...this.filters, query };
+        },
+        onOwnerChange: (ownerId) => {
+          this.filters = { ...this.filters, ownerId };
+        },
+        onSortChange: (sort) => {
+          this.filters = { ...this.filters, sort };
+        },
+      },
+    );
   }
 }
 
