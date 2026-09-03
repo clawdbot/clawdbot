@@ -78,7 +78,8 @@ export function handleNavDrawerKeydown(
   } else if (
     isCommandPaletteShortcut(event) ||
     isTerminalPanelShortcut(event) ||
-    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event) ||
+    matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.sideChat, event)
   ) {
     event.preventDefault();
     event.stopImmediatePropagation();
