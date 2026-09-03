@@ -1,9 +1,7 @@
 /** Runtime decoding for durable update-generation transaction records. */
 import { z } from "zod";
-import {
-  assertUpdateGenerationBrokerReceiptIsValid,
-  type UpdateGenerationBrokerReceipt,
-} from "./update-generation-confined-filesystem.js";
+import { decodeUpdateGenerationBrokerReceipt } from "./update-generation-broker-decoder.js";
+import type { UpdateGenerationBrokerReceipt } from "./update-generation-confined-filesystem.js";
 const generationIdSchema = z.string().regex(/^[a-f0-9]{32}$/u);
 const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
 const nonEmptyStringSchema = z.string().min(1);
@@ -58,14 +56,19 @@ const deferredCleanupSchema = z
   .object({ generationId: generationIdSchema, reason: nonEmptyStringSchema })
   .strict();
 
-const brokerReceiptSchema = z.custom<UpdateGenerationBrokerReceipt>((value) => {
-  try {
-    assertUpdateGenerationBrokerReceiptIsValid(value);
-    return true;
-  } catch {
-    return false;
-  }
-}, "Invalid authenticated update broker receipt envelope");
+const brokerReceiptSchema = z
+  .unknown()
+  .transform((value, context): UpdateGenerationBrokerReceipt => {
+    try {
+      return decodeUpdateGenerationBrokerReceipt(value);
+    } catch {
+      context.addIssue({
+        code: "custom",
+        message: "Invalid authenticated update broker receipt envelope",
+      });
+      return z.NEVER;
+    }
+  });
 
 function brokerReceiptOf<Kind extends UpdateGenerationBrokerReceipt["kind"]>(kind: Kind) {
   return brokerReceiptSchema.refine(

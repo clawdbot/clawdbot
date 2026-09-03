@@ -969,13 +969,39 @@ describe("durable update generation transaction contract", () => {
     expect(() => append(selected.record, replayed)).toThrow("Broker operation id was replayed");
   });
 
+  it("rejects broker operation replay within one evidence bundle", () => {
+    const selected = candidateSelectedRecord({ managed: true, running: true, enabled: true });
+    const candidateSelected = selected.record.receipts.at(-1);
+    if (!candidateSelected || candidateSelected.kind !== "candidate-selected") {
+      throw new Error("expected candidate selection receipt");
+    }
+    const forged = structuredClone(candidateSelected);
+    const selectorSwitch = forged.evidence.selectorSwitch;
+    const parentSync = forged.evidence.parentDirectorySync;
+    parentSync.operationId = selectorSwitch.operationId;
+    parentSync.requestSha256 = digestUpdateGenerationBrokerRequest({
+      formatVersion: 1,
+      kind: "sync-parent-directory",
+      brokerId: parentSync.brokerId,
+      namespaceKey: parentSync.namespaceKey,
+      transactionId: parentSync.transactionId,
+      operationId: parentSync.operationId,
+      expectedRevision: parentSync.previousRevision,
+      parent: parentSync.parent,
+      afterOperationId: parentSync.afterOperationId,
+    });
+    parentSync.signature.signedPayloadSha256 =
+      digestUpdateGenerationBrokerReceiptPayload(parentSync);
+    const beforeSelection = {
+      ...selected.record,
+      receipts: selected.record.receipts.slice(0, -1),
+    };
+
+    expect(() => append(beforeSelection, forged)).toThrow("Broker operation id was replayed");
+  });
+
   it("rejects corrupt durable records before adjudication", () => {
     const record = append(null, intent(selection("a"), true));
-    const legacyPathRecord = structuredClone(record) as Record<string, unknown>;
-    legacyPathRecord.formatVersion = 1;
-    expect(() => parseUpdateGenerationTransactionRecord(legacyPathRecord)).toThrow(
-      "Legacy path-backed update generation records cannot be promoted to broker evidence",
-    );
     expect(() =>
       append(null, { ...intent(selection("a"), true), brokerRevision: "   " }),
     ).toThrow();

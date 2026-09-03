@@ -299,7 +299,6 @@ function assertReceiptTransition(
   record: UpdateGenerationTransactionRecord | null,
   receipt: UpdateGenerationTransactionReceipt,
 ): void {
-  updateGenerationTransactionReceiptSchema.parse(receipt);
   assertReceiptIdentity(receipt);
   if (!record) {
     if (receipt.kind !== "intent" || receipt.sequence !== 0) {
@@ -617,21 +616,22 @@ export function appendUpdateGenerationReceipt(
   record: UpdateGenerationTransactionRecord | null,
   receipt: UpdateGenerationTransactionReceipt,
 ): UpdateGenerationTransactionRecord {
-  assertReceiptTransition(record, receipt);
+  const decoded = updateGenerationTransactionReceiptSchema.parse(receipt);
+  assertReceiptTransition(record, decoded);
   if (!record) {
-    if (receipt.kind !== "intent") {
+    if (decoded.kind !== "intent") {
       throw new Error("Unreachable update generation receipt state");
     }
     return {
       formatVersion: 2,
-      transactionId: receipt.transactionId,
-      namespaceKey: receipt.namespaceKey,
-      receipts: [structuredClone(receipt)],
+      transactionId: decoded.transactionId,
+      namespaceKey: decoded.namespaceKey,
+      receipts: [structuredClone(decoded)],
     };
   }
   return {
     ...record,
-    receipts: [...record.receipts, structuredClone(receipt)],
+    receipts: [...record.receipts, structuredClone(decoded)],
   };
 }
 

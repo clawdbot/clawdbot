@@ -6,6 +6,10 @@
  * broker and must authenticate every operation and receipt.
  */
 import { createHash } from "node:crypto";
+import {
+  decodeUpdateGenerationBrokerReceipt,
+  decodeUpdateGenerationBrokerRequest,
+} from "./update-generation-broker-decoder.js";
 import type {
   UpdateGenerationDescriptor,
   UpdateGenerationManifest,
@@ -181,10 +185,21 @@ function sha256(value: unknown): string {
 export function digestUpdateGenerationBrokerRequest(
   request: UpdateGenerationBrokerRequest,
 ): string {
-  return sha256(request);
+  const decoded = decodeUpdateGenerationBrokerRequest(request);
+  assertRequest(decoded);
+  return digestDecodedRequest(decoded);
 }
 
 export function digestUpdateGenerationBrokerReceiptPayload(receipt: object): string {
+  const decoded = decodeUpdateGenerationBrokerReceipt(receipt);
+  return digestDecodedReceiptPayload(decoded);
+}
+
+function digestDecodedRequest(request: UpdateGenerationBrokerRequest): string {
+  return sha256(request);
+}
+
+function digestDecodedReceiptPayload(receipt: UpdateGenerationBrokerReceipt): string {
   const unsigned = Object.fromEntries(
     Object.entries(receipt).filter(([key]) => key !== "signature"),
   );
@@ -391,12 +406,12 @@ function requestFromReceipt(receipt: UpdateGenerationBrokerReceipt): UpdateGener
 export function assertUpdateGenerationBrokerReceiptIsValid(
   value: unknown,
 ): asserts value is UpdateGenerationBrokerReceipt {
-  if (!value || typeof value !== "object" || !("kind" in value)) {
-    throw new TypeError("Invalid update broker receipt");
-  }
-  // SAFETY: The exhaustive request and receipt validators below run before this value escapes.
-  const receipt = value as UpdateGenerationBrokerReceipt;
-  const request = requestFromReceipt(receipt);
+  const receipt = decodeUpdateGenerationBrokerReceipt(value);
+  assertDecodedReceiptIsValid(receipt);
+}
+
+function assertDecodedReceiptIsValid(receipt: UpdateGenerationBrokerReceipt): void {
+  const request = decodeUpdateGenerationBrokerRequest(requestFromReceipt(receipt));
   assertRequest(request);
   assertReceiptMatchesRequest(request, receipt);
 }
@@ -404,6 +419,7 @@ export function assertUpdateGenerationBrokerReceiptIsValid(
 function assertReceiptMatchesRequest(
   request: UpdateGenerationBrokerRequest,
   receipt: UpdateGenerationBrokerReceipt,
+  requestSha256 = digestDecodedRequest(request),
 ): void {
   if (
     receipt.formatVersion !== 1 ||
@@ -413,7 +429,7 @@ function assertReceiptMatchesRequest(
     receipt.transactionId !== request.transactionId ||
     receipt.operationId !== request.operationId ||
     receipt.previousRevision !== request.expectedRevision ||
-    receipt.requestSha256 !== digestUpdateGenerationBrokerRequest(request)
+    receipt.requestSha256 !== requestSha256
   ) {
     throw new Error("Broker receipt identity differs from its operation request");
   }
@@ -438,7 +454,7 @@ function assertReceiptMatchesRequest(
     !SHA256.test(signature.signedPayloadSha256) ||
     !BASE64.test(signature.valueBase64) ||
     Buffer.from(signature.valueBase64, "base64").byteLength !== 64 ||
-    signature.signedPayloadSha256 !== digestUpdateGenerationBrokerReceiptPayload(receipt)
+    signature.signedPayloadSha256 !== digestDecodedReceiptPayload(receipt)
   ) {
     throw new Error("Broker receipt signature envelope is invalid");
   }
@@ -570,27 +586,48 @@ export abstract class UpdateGenerationConfinedFilesystem {
     request: Extract<UpdateGenerationBrokerRequest, { kind: Kind }>,
   ): Promise<UpdateGenerationAuthenticatedBrokerReceiptOf<Kind>> {
     void this.#opaqueConfinedFilesystemCapability;
-    assertRequest(request);
-    if (request.brokerId !== this.brokerId || request.namespaceKey !== this.namespaceKey) {
+    // SAFETY: Recursive decoding preserves the request's already-typed Kind discriminant.
+    const decodedRequest = decodeUpdateGenerationBrokerRequest(request) as Extract<
+      UpdateGenerationBrokerRequest,
+      { kind: Kind }
+    >;
+    assertRequest(decodedRequest);
+    if (
+      decodedRequest.brokerId !== this.brokerId ||
+      decodedRequest.namespaceKey !== this.namespaceKey
+    ) {
       throw new Error("Broker operation is outside the confined provider scope");
     }
-    const receipt = await this.invokeBroker(request);
-    assertReceiptMatchesRequest(request, receipt);
+    const requestSha256 = digestDecodedRequest(decodedRequest);
+    const receipt = decodeUpdateGenerationBrokerReceipt(
+      await this.invokeBroker(decodedRequest),
+    ) as UpdateGenerationBrokerReceiptOf<Kind>; // SAFETY: Matching below proves Kind equality.
+    assertDecodedReceiptIsValid(receipt);
+    assertReceiptMatchesRequest(decodedRequest, receipt, requestSha256);
     // SAFETY: Receipt matching proves the broker response has the request's Kind discriminant.
-    return await this.authenticate(receipt as UpdateGenerationBrokerReceiptOf<Kind>);
+    return await this.authenticateDecoded(receipt);
   }
 
   async authenticate<Kind extends UpdateGenerationBrokerOperationKind>(
     receipt: UpdateGenerationBrokerReceiptOf<Kind>,
   ): Promise<UpdateGenerationAuthenticatedBrokerReceiptOf<Kind>> {
-    assertUpdateGenerationBrokerReceiptIsValid(receipt);
+    const decoded = decodeUpdateGenerationBrokerReceipt(
+      receipt,
+    ) as UpdateGenerationBrokerReceiptOf<Kind>; // SAFETY: Decoding preserves the typed Kind.
+    assertDecodedReceiptIsValid(decoded);
+    return await this.authenticateDecoded(decoded);
+  }
+
+  private async authenticateDecoded<Kind extends UpdateGenerationBrokerOperationKind>(
+    receipt: UpdateGenerationBrokerReceiptOf<Kind>,
+  ): Promise<UpdateGenerationAuthenticatedBrokerReceiptOf<Kind>> {
     if (receipt.brokerId !== this.brokerId || receipt.namespaceKey !== this.namespaceKey) {
       throw new Error("Broker receipt is outside the confined provider scope");
     }
     if (!(await this.verifyBrokerSignature(receipt))) {
       throw new Error("Update broker receipt signature was not authenticated");
     }
-    // SAFETY: The envelope, provider scope, and signature are verified before adding the marker.
+    // SAFETY: The immutable envelope, provider scope, and signature are verified before branding.
     return receipt as UpdateGenerationAuthenticatedBrokerReceiptOf<Kind>;
   }
 }

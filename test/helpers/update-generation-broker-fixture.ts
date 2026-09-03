@@ -52,10 +52,19 @@ function retainedPair(
   rollback: UpdateGenerationSelection,
 ): UpdateGenerationRetainedPair {
   return {
-    selected,
-    rollback,
+    selected: selectionOnly(selected),
+    rollback: selectionOnly(rollback),
     selectedManifestVerified: true,
     rollbackManifestVerified: true,
+  };
+}
+
+function selectionOnly(selection: UpdateGenerationSelection): UpdateGenerationSelection {
+  return {
+    formatVersion: selection.formatVersion,
+    generationId: selection.generationId,
+    manifestSha256: selection.manifestSha256,
+    entrypointRelativePath: selection.entrypointRelativePath,
   };
 }
 
@@ -63,7 +72,10 @@ class TestConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
   readonly brokerId: string;
   readonly namespaceKey: string;
 
-  constructor(private readonly receipt: UpdateGenerationBrokerReceipt | null = null) {
+  constructor(
+    private readonly receipt: UpdateGenerationBrokerReceipt | null = null,
+    private readonly signatureValid = true,
+  ) {
     super();
     this.brokerId = receipt?.brokerId ?? "test-broker";
     this.namespaceKey = receipt?.namespaceKey ?? "openclaw-global-owner";
@@ -77,12 +89,14 @@ class TestConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
   }
 
   protected async verifyBrokerSignature(): Promise<boolean> {
-    return true;
+    return this.signatureValid;
   }
 }
 
-export function createTestConfinedFilesystemForAuthentication(): UpdateGenerationConfinedFilesystem {
-  return new TestConfinedFilesystem();
+export function createTestConfinedFilesystemForAuthentication(
+  signatureValid = true,
+): UpdateGenerationConfinedFilesystem {
+  return new TestConfinedFilesystem(null, signatureValid);
 }
 
 class TestReplayableConfinedFilesystem extends UpdateGenerationConfinedFilesystem {
@@ -223,7 +237,7 @@ export async function authenticateTestRecoveryObservation(params: {
   };
   const baseline = state.baselineSelection ?? state.intent.previousSelection;
   const candidate = state.candidateSelection ?? state.generations.candidate;
-  const selected = params.physical.selector;
+  const selected = params.physical.selector ? selectionOnly(params.physical.selector) : null;
   const rollback =
     selected && candidate && selected.generationId === candidate.generationId
       ? baseline
@@ -257,7 +271,7 @@ export async function authenticateTestRecoveryObservation(params: {
     previousRevision: request.expectedRevision,
     revision: request.expectedRevision,
     recordedAtMs: 1_788_300_900_000 + recoveryOperationSequence,
-    selector: params.physical.selector,
+    selector: selected,
     selectorDurable: params.physical.selectorDurable,
     generations: params.physical.generations.map((generation) => ({
       ...generation,
@@ -376,11 +390,17 @@ export function attachTestBrokerEvidence(
     selected: UpdateGenerationSelection,
     rollback: UpdateGenerationSelection,
   ) => {
-    const pair = retainedPair(selected, rollback);
+    const selectedSelection = selectionOnly(selected);
+    const rollbackSelection = selectionOnly(rollback);
+    const pair = retainedPair(selectedSelection, rollbackSelection);
     const retained = perform<
       Extract<UpdateGenerationBrokerRequest, { kind: "verify-retained-pair" }>
     >(
-      { kind: "verify-retained-pair", selected, rollback },
+      {
+        kind: "verify-retained-pair",
+        selected: selectedSelection,
+        rollback: rollbackSelection,
+      },
       { kind: "verify-retained-pair", retainedPair: pair },
     );
     const recoveryObservation = perform<
@@ -389,9 +409,9 @@ export function attachTestBrokerEvidence(
       { kind: "observe-recovery" },
       {
         kind: "observe-recovery",
-        selector: selected,
+        selector: selectedSelection,
         selectorDurable: true,
-        generations: [selected, rollback].map((selection) => ({
+        generations: [selectedSelection, rollbackSelection].map((selection) => ({
           generationId: selection.generationId,
           manifestSha256: selection.manifestSha256,
           parentDirectoryDurable: true,

@@ -69,6 +69,7 @@ export function assertBrokerEvidenceChain(
 ): void {
   const receipts = brokerReceiptsInEvidence(evidence);
   let expectedRevision = projection.brokerRevision;
+  const operationIds = new Set(projection.brokerOperationIds);
   for (const brokerReceipt of receipts) {
     assertUpdateGenerationBrokerReceiptIsValid(brokerReceipt);
     if (
@@ -78,9 +79,10 @@ export function assertBrokerEvidenceChain(
     ) {
       throw new Error("Broker evidence belongs to a different generation transaction");
     }
-    if (projection.brokerOperationIds.has(brokerReceipt.operationId)) {
+    if (operationIds.has(brokerReceipt.operationId)) {
       throw new Error("Broker operation id was replayed in this generation transaction");
     }
+    operationIds.add(brokerReceipt.operationId);
     if (brokerReceipt.previousRevision !== expectedRevision) {
       throw new Error("Broker evidence does not continue the namespace revision chain");
     }

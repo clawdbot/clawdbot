@@ -1,6 +1,7 @@
 /** Injected persistence boundary for the authoritative update transaction ledger. */
 import { isDeepStrictEqual } from "node:util";
 import type { UpdateGenerationConfinedFilesystem } from "./update-generation-confined-filesystem.js";
+import { parseAuthenticatedUpdateGenerationTransactionRecord } from "./update-generation-contract-parser.js";
 import {
   appendUpdateGenerationReceipt,
   projectUpdateGenerationTransaction,
@@ -44,39 +45,19 @@ export type UpdateGenerationLedgerHook = {
   }): Promise<UpdateGenerationLedgerCompareAndSwapResult>;
 };
 
-function assertUpdateGenerationTransactionRecordIsValid(
-  record: UpdateGenerationTransactionRecord,
-): void {
-  let rebuilt: UpdateGenerationTransactionRecord | null = null;
-  for (const receipt of record.receipts) {
-    rebuilt = appendUpdateGenerationReceipt(rebuilt, receipt);
-  }
-  if (
-    !rebuilt ||
-    rebuilt.formatVersion !== record.formatVersion ||
-    rebuilt.transactionId !== record.transactionId ||
-    rebuilt.namespaceKey !== record.namespaceKey
-  ) {
-    throw new TypeError("Update generation transaction snapshot is invalid");
-  }
-}
-
 export async function authenticateUpdateGenerationTransactionRecord(
   filesystem: UpdateGenerationConfinedFilesystem,
   record: UpdateGenerationTransactionRecord,
 ): Promise<void> {
-  assertUpdateGenerationTransactionRecordIsValid(record);
-  const intent = projectUpdateGenerationTransaction(record).intent;
+  const authenticated = await parseAuthenticatedUpdateGenerationTransactionRecord(
+    record,
+    async (brokerReceipt) => {
+      await filesystem.authenticate(brokerReceipt);
+    },
+  );
+  const intent = projectUpdateGenerationTransaction(authenticated).intent;
   if (intent.brokerId !== filesystem.brokerId || intent.namespaceKey !== filesystem.namespaceKey) {
     throw new Error("Generation transaction is outside the confined provider scope");
-  }
-  for (const receipt of record.receipts) {
-    if (!("evidence" in receipt)) {
-      continue;
-    }
-    for (const brokerReceipt of brokerReceiptsInEvidence(receipt.evidence)) {
-      await filesystem.authenticate(brokerReceipt);
-    }
   }
 }
 
@@ -90,7 +71,6 @@ export async function persistUpdateGenerationReceipt(params: {
     throw new Error("Generation state machine requires a confined filesystem provider");
   }
   if (params.snapshot) {
-    assertUpdateGenerationTransactionRecordIsValid(params.snapshot.record);
     await authenticateUpdateGenerationTransactionRecord(params.filesystem, params.snapshot.record);
   }
   if ("evidence" in params.receipt) {

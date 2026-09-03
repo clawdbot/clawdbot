@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -99,8 +100,33 @@ function signedMaterializationReceipt(
 }
 
 function signReceipt<Receipt extends UpdateGenerationBrokerReceipt>(receipt: Receipt): Receipt {
-  receipt.signature.signedPayloadSha256 = digestUpdateGenerationBrokerReceiptPayload(receipt);
+  const unsigned = Object.fromEntries(
+    Object.entries(receipt).filter(([key]) => key !== "signature"),
+  );
+  receipt.signature.signedPayloadSha256 = createHash("sha256")
+    .update(testCanonicalJson(unsigned), "utf8")
+    .digest("hex");
   return receipt;
+}
+
+function testCanonicalJson(value: unknown): string {
+  if (value === null || typeof value === "boolean" || typeof value === "string") {
+    return JSON.stringify(value);
+  }
+  if (typeof value === "number") {
+    return JSON.stringify(value);
+  }
+  if (Array.isArray(value)) {
+    return `[${value.map(testCanonicalJson).join(",")}]`;
+  }
+  if (typeof value === "object") {
+    return `{${Object.keys(value)
+      .toSorted()
+      .filter((key) => Reflect.get(value, key) !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${testCanonicalJson(Reflect.get(value, key))}`)
+      .join(",")}}`;
+  }
+  throw new TypeError("Unsupported test payload");
 }
 
 function testSignature() {
@@ -257,6 +283,7 @@ describe("confined update-generation filesystem contract", () => {
       )
       .toSorted();
     expect(productionOwnerFiles).toEqual([
+      "update-generation-broker-decoder.ts",
       "update-generation-confined-filesystem.ts",
       "update-generation-contract-parser.ts",
       "update-generation-contract-schema.ts",
@@ -350,9 +377,7 @@ describe("confined update-generation filesystem contract", () => {
     } satisfies Extract<UpdateGenerationBrokerRequest, { kind: "switch-selector" }>;
     Reflect.set(selector, "expected", 0);
     const selectorProvider = new FixtureConfinedFilesystem(signedRecoveryObservation());
-    await expect(selectorProvider.perform(selector)).rejects.toThrow(
-      "Invalid generation selection",
-    );
+    await expect(selectorProvider.perform(selector)).rejects.toThrow("must be an object");
     expect(selectorProvider.invokeCount).toBe(0);
   });
 
@@ -365,7 +390,7 @@ describe("confined update-generation filesystem contract", () => {
       expect(
         () => assertUpdateGenerationBrokerReceiptIsValid(receipt),
         `revision: ${typeof invalid}`,
-      ).toThrow("must advance the namespace revision");
+      ).toThrow();
     }
   });
 

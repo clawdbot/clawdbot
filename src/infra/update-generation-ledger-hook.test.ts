@@ -4,6 +4,7 @@ import {
   createTestConfinedFilesystemForAuthentication,
 } from "../../test/helpers/update-generation-broker-fixture.js";
 import { TestUpdateGenerationMemoryLedger as MemoryLedger } from "../../test/helpers/update-generation-memory-ledger.js";
+import { parseUpdateGenerationTransactionRecord } from "./update-generation-contract-parser.js";
 import {
   appendUpdateGenerationReceipt,
   buildUpdateGenerationReceiptId,
@@ -18,6 +19,7 @@ import { persistUpdateGenerationReceipt } from "./update-generation-ledger-hook.
 const TRANSACTION_ID = "update-transaction-1";
 const NAMESPACE_KEY = "openclaw-global-owner";
 const AUTHENTICATION_FILESYSTEM = createTestConfinedFilesystemForAuthentication();
+const REJECTING_AUTHENTICATION_FILESYSTEM = createTestConfinedFilesystemForAuthentication(false);
 
 type ReceiptKind = UpdateGenerationTransactionReceipt["kind"];
 type ReceiptOf<Kind extends ReceiptKind> = Extract<
@@ -89,6 +91,58 @@ function append(
 }
 
 describe("update generation ledger hook", () => {
+  it("rejects legacy path records instead of promoting them to broker evidence", () => {
+    const legacy = structuredClone(append(null, intent(selection("a"), true))) as Record<
+      string,
+      unknown
+    >;
+    legacy.formatVersion = 1;
+    expect(() => parseUpdateGenerationTransactionRecord(legacy)).toThrow(
+      "Legacy path-backed update generation records cannot be promoted to broker evidence",
+    );
+  });
+
+  it("authenticates embedded broker receipts before rebuilding transitions", async () => {
+    const candidate = selection("b");
+    let record = append(null, intent(selection("a"), true));
+    record = append(
+      record,
+      receipt("generation-materialization-intent", 1, {
+        role: "candidate",
+        sourceArtifactId: "manager:stage",
+        generationId: candidate.generationId,
+        manifest: manifest("b"),
+        packageVersion: "2.0.0",
+        entrypointRelativePath: candidate.entrypointRelativePath,
+      }),
+    );
+    record = append(
+      record,
+      receipt("generation-materialized", 2, {
+        role: "candidate",
+        generation: { ...candidate, packageVersion: "2.0.0" },
+      }),
+    );
+    const corrupt = structuredClone(record);
+    const materialized = corrupt.receipts.at(-1);
+    if (!materialized || materialized.kind !== "generation-materialized") {
+      throw new Error("expected materialized receipt");
+    }
+    materialized.sequence = 9;
+
+    await expect(
+      persistUpdateGenerationReceipt({
+        filesystem: REJECTING_AUTHENTICATION_FILESYSTEM,
+        ledger: new MemoryLedger(),
+        snapshot: { revision: "ledger-1", record: corrupt },
+        receipt: receipt("candidate-selection-intent", 3, {
+          from: selection("a"),
+          to: candidate,
+        }),
+      }),
+    ).rejects.toThrow("signature was not authenticated");
+  });
+
   it("requires CAS and makes receipt replay idempotent", async () => {
     const ledger = new MemoryLedger();
     const firstReceipt = intent(selection("a"), true);
