@@ -297,7 +297,10 @@ as untrusted.
   images - waits behind it, so replies keep the order the chat was sent in; in a
   group that queue is the whole room, because LINE conversations are ordered per
   chat rather than per member. A model without native vision reads only the
-  first image unless `tools.media.image.attachments` raises the limit.
+  first image unless `tools.media.image.attachments` sets `mode: "all"`;
+  raising `maxAttachments` alone leaves the limit at one. A set whose parts do
+  not announce a total is delivered with whatever arrived and says nothing
+  about the rest, because nothing states how many there were.
 
 ## Structured rich messages
 
