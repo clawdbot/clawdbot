@@ -378,7 +378,7 @@ proposal-only permissions, and troubleshooting.
 </ParamField>
 
 <ParamField path="skills.workshop.maxPending" type="number" default="50">
-  Maximum pending and quarantined proposals retained globally (allowed
+  Maximum pending and quarantined proposals retained per agent (allowed
   range: 1-200).
 </ParamField>
 
@@ -415,9 +415,9 @@ is accepted after realpath resolution. `extraDirs` scans the sibling repo
 directly; `allowSymlinkTargets` preserves the symlinked path for existing
 layouts.
 
-Skill Workshop uses its own `<config-dir>/workshop-skills` containment boundary.
-It does not use `allowSymlinkTargets`, and it rejects symlinked skills that
-resolve outside that directory.
+Skill Workshop uses each agent's `<state-dir>/agents/<agentId>/workshop-skills`
+containment boundary. It does not use `allowSymlinkTargets`, and it rejects
+symlinked skills that resolve outside that directory.
 
 Managed `~/.openclaw/skills` and personal `~/.agents/skills` directories
 already accept skill-directory symlinks unconditionally (per-skill

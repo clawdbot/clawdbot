@@ -380,22 +380,25 @@ Normal admission remains bounded at 32 identities. Same-store alias repair sums 
 | 13      | State consolidation: cron jobs and subagent runs become JSON-canonical (113 projection columns, five unused indexes removed); installed_plugin_index and shared auth-profile singletons fold into config_machine_state; workspace_attestations merges into workspace_setup_state; gateway origin device tokens become canonical | Unreleased          |
 | 14      | Source-qualified cron creator capture; historical human job creators remain unknown                                                                                                                                                                                                                                             | Unreleased          |
 | 15      | Conversation bindings use exact target keys; redundant agent/session projections removed                                                                                                                                                                                                                                        | Unreleased          |
-| 16      | Skill Workshop ownership moves from workspace/provenance columns to global directory containment                                                                                                                                                                                                                                | Unreleased          |
+| 16      | Skill Workshop ownership moves from workspace/provenance columns to per-agent directory containment                                                                                                                                                                                                                             | Unreleased          |
 
 ### State schema 16
 
 Schema 16 removes `workspace_dir` and `claim_released_time` from
 `skill_workshop_proposals`. It also removes `workspace_dir` and
 `idx_skill_workshop_collection_reviews_workspace_time` from collection review
-history. Proposal and review rows remain intact. A proposal whose claim a
+history and adds `owner_agent_id` plus its owner/time index. Proposal and review rows remain intact. A proposal whose claim a
 collection review had released becomes `stale` with a status reason, so the
 skill path it once created stays user-owned and Doctor never relocates it.
 
 Skill Workshop ownership is now the physical
-`<config-dir>/workshop-skills` directory. Startup and `openclaw doctor --fix`
+`<state-dir>/agents/<agentId>/workshop-skills` directory. Startup and `openclaw doctor --fix`
 drop the retired columns and index in the shared schema transaction. Doctor
-then relocates applied legacy Workshop creates and rewrites their stored target
-paths. Conflicts become stale proposals and leave both directories unchanged.
+then relocates applied legacy Workshop creates to the inferred owner agent and
+rewrites their stored target paths. Conflicts and ambiguous ownership become
+stale proposals and leave the legacy directories unchanged. Review history rows
+map to a unique owner agent when possible; otherwise Doctor deletes them as
+cache-class state.
 
 ### State schema 15
 

@@ -14,16 +14,17 @@ generated skills. Through this path, agents and operators create a **proposal** 
 draft with content, target binding, scanner state, hashes, and rollback
 metadata) that becomes a live skill only when applied.
 
-Skill Workshop writes only under `<config-dir>/workshop-skills`. Operators edit
+Skill Workshop writes only under the active agent's
+`<state-dir>/agents/<agentId>/workshop-skills`. Operators edit
 bundled, plugin, ClawHub, extra-root, managed, personal-agent, project, and
 workspace skills through their owning tools or files. The same authoring tool
 also supports [personal library skills](/tools/skills#personal-skills-on-a-shared-gateway)
 when the Gateway supplies an authorized library target; those operations publish
 managed revisions rather than Workshop proposals.
 
-This is the same config directory that holds managed `<config-dir>/skills`.
-`OPENCLAW_STATE_DIR` overrides it; otherwise `OPENCLAW_CONFIG_PATH` selects its
-parent, and `~/.openclaw` is the default.
+Workshop storage is installation-managed and separate from the session
+workspace and managed skill library. `OPENCLAW_STATE_DIR` selects the state
+directory; `~/.openclaw` is the default.
 
 ## Personal library authoring
 
@@ -71,8 +72,8 @@ The following lifecycle applies to workspace proposals:
 - **Apply is the only live write:** create, update, and revise never change
   active skills.
 - **Directory-owned updates:** creates and updates stay inside
-  `<config-dir>/workshop-skills`. A skill is Workshop-owned exactly when it is
-  contained in that directory.
+  `<state-dir>/agents/<agentId>/workshop-skills`. A skill is Workshop-owned
+  exactly when it is contained in that agent's directory.
 - **No clobber:** create fails if the target skill already exists.
 - **Hash bound:** update proposals bind to the current target hash and go
   `stale` if the live skill changes before apply.
@@ -103,9 +104,9 @@ Only a `pending` proposal can be revised, applied, rejected, or quarantined.
 
 ## Collection review
 
-In `auto` mode, the Gateway runs one system-owned cron job each week. The job
-appears in `openclaw cron list` and runs every
-7 days. Cron owns the cadence; the job is enabled only when
+In `auto` mode, the Gateway runs one system-owned cron job per agent each week.
+Each job appears in `openclaw cron list` and runs every 7 days. Cron owns the
+cadence; the job is enabled only when
 `skills.workshop.autonomous.mode` is `auto`. The review can only read skills
 and submit one atomic collection reconciliation listing only changes. It keeps distinct useful skills,
 rewrites weak ones, consolidates overlap, and drops junk or stale fragments.
@@ -113,7 +114,8 @@ Choosing `auto` intentionally authorizes those rewrites and drops without a
 second approval **for Workshop-owned paths only**; `propose` and `off` do not
 run collection review.
 
-The reviewer reads each skill it intends to change. Unlisted skills stay
+Each reviewer reads only its agent's Workshop directory. It reads each skill it
+intends to change. Unlisted skills stay
 untouched. Every skill in the Workshop directory may receive `write` or `drop`.
 Collection review records its changes in review history and the backup manifest;
 it does not create proposal rows.
@@ -123,22 +125,23 @@ age-based lifecycle: heavy use favors preserving a skill's procedure, while no
 recorded use alone never justifies removing it.
 
 OpenClaw validates and scans every write before changing the Workshop directory,
-serializes collection edits with one global lease, and retains one backup
-under the state directory. The changed collection appears in new agent runs;
+serializes each agent's collection edits with an agent-scoped lease, and retains
+one backup under that agent directory. The changed collection appears in new
+agent runs;
 running sessions keep their existing skill snapshot.
 
 To undo the last completed cleanup, ask the agent to restore the skill
 collection. It uses `skill_workshop` action `restore_collection` under the same
-global lock. Restore refuses if any affected skill changed after cleanup.
+agent-scoped lock. Restore refuses if any affected skill changed after cleanup.
 
-Each attempt is persisted under the global `workshop` review key before the
-model starts. Review is admitted only for collections of at most
+Each attempt is persisted under the agent id review key before the model starts.
+Review is admitted only for collections of at most
 200 skills and 240,000 total `SKILL.md` bytes. Larger collections stay unchanged.
 The reconciled result must stay inside the same byte limit.
 
 Every completed review records its kept, written, and dropped skill names in
 the shared state database, including the reason for each drop. OpenClaw retains
-the latest 90 global outcomes.
+the latest 90 outcomes per agent.
 
 Collection rewrites and merges produce `SKILL.md` files at or below 10,000
 characters. A skill already above the cap can only become shorter.
@@ -244,9 +247,9 @@ openclaw skills workshop reject <proposal-id> --reason "Duplicate"
 openclaw skills workshop quarantine <proposal-id> --reason "Needs security review"
 ```
 
-Every subcommand takes `--agent <id>` (session context only; defaults to
+Every subcommand takes `--agent <id>` (agent context; defaults to
 cwd-inferred, then the default agent) and `--json` (structured output).
-Proposals and generated skill targets are global.
+Proposals and generated skill targets are scoped to the selected agent.
 `propose-create`, `propose-update`, and `revise` also take `--goal <text>` and
 `--evidence <text>` to record proposal context alongside `--proposal`.
 `evaluate` runs through the live Gateway plugin registry, snapshots the current
@@ -451,7 +454,7 @@ the proposal threshold, and troubleshooting.
 | ----------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `autonomous.mode` | `"auto"` | `"off"` disables autonomous capture, `"propose"` creates pending captures, and `"auto"` applies captures and runs weekly cleanup that can rewrite or drop Workshop-owned skills. |
 | `approvalPolicy`  | `"auto"` | `"auto"` skips an additional prompt for agent-initiated `apply`, `reject`, or `quarantine` (the agent still has to call the action). `"pending"` requires approval.              |
-| `maxPending`      | `50`     | Caps global pending and quarantined proposals (1-200).                                                                                                                           |
+| `maxPending`      | `50`     | Caps pending and quarantined proposals per agent (1-200).                                                                                                                        |
 | `maxSkillBytes`   | `40000`  | Caps manual and foreground proposal body size in bytes (1024-200000). Autonomous results have a 10,000-character cap.                                                            |
 
 In `propose` and `auto` modes, an isolated run of the selected model decides whether the
@@ -493,7 +496,7 @@ Proposal descriptions are always capped at 160 bytes, independent of
 | `skills.curator.restore`           | `operator.admin` |
 
 `skills.curator.status` reports live skill usage recorded from trusted
-`skill.used` events, plus the latest global collection review and per-workspace
+`skill.used` events, plus the latest collection review for each agent and per-workspace
 experience review outcomes. Age-based skill lifecycle curation is retired.
 `skills.curator.pin`, `skills.curator.unpin`, and `skills.curator.restore` remain
 registered for existing clients, but always return an error explaining that the
@@ -511,16 +514,16 @@ proposals.
 ## Storage
 
 ```text
-<config-dir>/
-  workshop-skills/<skill-name>/
-    SKILL.md
-    assets/
-    examples/
-    references/
-    scripts/
-    templates/
 <state-dir>/
   state/openclaw.sqlite
+  agents/<agentId>/
+    workshop-skills/<skill-name>/
+      SKILL.md
+      assets/
+      examples/
+      references/
+      scripts/
+      templates/
   skill-workshop/proposals/<proposal-id>/
     generations/<generation-id>/
       PROPOSAL.md
@@ -531,7 +534,7 @@ proposals.
       templates/
 ```
 
-Unless overridden, both `<config-dir>` and `<state-dir>` are `~/.openclaw`.
+Unless overridden, `<state-dir>` is `~/.openclaw`.
 
 - `state/openclaw.sqlite`: canonical proposal records and provenance, the active
   generation reference, proposal status, recorded skill usage, collection and
@@ -556,6 +559,8 @@ retires the previous bundle.
 `rollback.json` metadata into SQLite after verifying each proposal, then removes
 the migrated JSON files. It also moves applied legacy Workshop creates into
 `workshop-skills`, retargets eligible pending creates, and marks outside updates
+stale. Doctor infers each legacy proposal's owner from its row, origin metadata,
+or a unique workspace owner. Ambiguous ownership stays in place and becomes
 stale.
 Skills that were symlinked into a workspace stay where they are as workspace
 skills; Doctor marks their proposals stale instead of moving them.
@@ -569,7 +574,7 @@ skills; Doctor marks their proposals stale instead of moving them.
 | Autonomous `SKILL.md`           | 10,000 characters, or strictly shorter when already over the cap             |
 | Support files                   | 64 per proposal                                                              |
 | Support file size               | 256 KiB each, 2 MiB total                                                    |
-| Pending + quarantined proposals | `skills.workshop.maxPending` globally (default 50)                           |
+| Pending + quarantined proposals | `skills.workshop.maxPending` per agent (default 50)                          |
 
 ## Troubleshooting
 

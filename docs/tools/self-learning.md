@@ -81,7 +81,7 @@ the foreground session's sandbox policy, including during compaction.
 
 The reviewer is detached and biased toward small, well-evidenced captures. It
 receives an authoritative receipt of the skills the foreground run actually
-read or command-invoked, plus a bounded list of skills in the global Workshop
+read or command-invoked, plus a bounded list of skills in the active agent's Workshop
 directory. It prefers a used Workshop-generated skill when that skill governs
 the learning, then another Workshop-generated skill, and creates a new skill
 only when none covers the class. The operator edits all other skills directly.
@@ -163,7 +163,7 @@ Every learned skill receives these controls:
 - **Security scan at apply:** Workshop reruns the scanner immediately before the
   live write. A critical finding quarantines the proposal instead of applying it.
 - **Workshop-owned writes:** creates and updates stay inside
-  `<config-dir>/workshop-skills`. Bundled, plugin, managed, system, personal,
+  `<state-dir>/agents/<agentId>/workshop-skills`. Bundled, plugin, managed, system, personal,
   project, workspace, and extra-root skills remain outside Workshop ownership.
 - **Hash binding:** update proposals bind to the current live skill and go stale
   if that target changes before apply.
@@ -172,7 +172,7 @@ Every learned skill receives these controls:
 - **Rollback metadata:** apply records the prior skill and support-file contents
   before the live write.
 - **Collection review:** once a week in `auto` mode, one isolated model session
-  reads the Workshop-generated skills it intends to change. Collection changes
+  per agent reads only that agent's Workshop-generated skills. Collection changes
   are recorded in review history and the backup manifest, without proposal rows.
 - **Collection backup:** review validates and scans every rewrite before changing
   the Workshop directory, keeps one recoverable collection backup, and restores it if a
@@ -225,15 +225,15 @@ The reviewer reuses the foreground provider, model, and available auth identity,
 with model fallbacks disabled. Provider pricing and data-handling terms apply to
 the additional run.
 
-Weekly collection review also uses the configured agent model. It receives the
+Weekly collection review runs once per agent and uses that agent's configured model. It receives the
 names, descriptions, and available usage counts and last-used recency of
 Workshop-generated skills, then reads each skill it intends to change
 before one atomic call listing only changes. Usage is supporting evidence: heavy
 use favors preserving a skill's procedure, while no recorded use alone never
 justifies dropping it. It has no message tool or general agent tools. Skill
-bodies are treated as untrusted evidence, not as instructions. One persisted global
-attempt time prevents Gateway restarts from repeating a failed or successful review
-within 7 days. The foreground agent can restore the one retained collection backup
+bodies are treated as untrusted evidence, not as instructions. Each agent has a
+persisted attempt time and review key, which prevents Gateway restarts from repeating
+a failed or successful review within 7 days. The foreground agent can restore that agent's retained collection backup
 when asked to undo the cleanup, unless an affected skill changed afterward.
 
 Manual history scan uses a separate bounded path. It reviews up to 20 substantial
@@ -287,7 +287,7 @@ result pending regardless of autonomous mode.
 | --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
 | `skills.workshop.autonomous.mode` | `"auto"` | Chooses capture behavior; `auto` also enables weekly collection review.                                           |
 | `skills.workshop.approvalPolicy`  | `"auto"` | Controls prompts for normal agent-initiated lifecycle calls. It never expands the isolated reviewer tool surface. |
-| `skills.workshop.maxPending`      | `50`     | Caps pending and quarantined proposals globally.                                                                  |
+| `skills.workshop.maxPending`      | `50`     | Caps pending and quarantined proposals per agent.                                                                 |
 | `skills.workshop.maxSkillBytes`   | `40000`  | Caps proposal body size in bytes.                                                                                 |
 
 See [Skills config](/tools/skills-config#workshop-skills-workshop) for ranges and
