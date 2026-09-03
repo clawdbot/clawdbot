@@ -38,6 +38,7 @@ describe("memory-wiki corpus supplement", () => {
     );
     const getAppConfig = vi.fn(() => appConfig);
     const supplement = createWikiCorpusSupplement({ resolveConfig, getAppConfig });
+    const controller = new AbortController();
 
     await supplement.search({
       query: "support handbook",
@@ -45,6 +46,7 @@ describe("memory-wiki corpus supplement", () => {
       agentId: "support",
       agentSessionKey: "agent:support:main",
       sandboxed: true,
+      signal: controller.signal,
     });
     await supplement.get({
       lookup: "marketing-plan",
@@ -53,6 +55,7 @@ describe("memory-wiki corpus supplement", () => {
       agentId: "marketing",
       agentSessionKey: "agent:marketing:main",
       sandboxed: false,
+      signal: controller.signal,
     });
 
     expect(resolveConfig).toHaveBeenNthCalledWith(1, "support", appConfig);
@@ -72,6 +75,7 @@ describe("memory-wiki corpus supplement", () => {
       maxResults: 4,
       searchBackend: "local",
       searchCorpus: "wiki",
+      signal: controller.signal,
     });
     expect(queryMocks.getMemoryWikiPage).toHaveBeenCalledWith({
       config: expect.objectContaining({
@@ -89,6 +93,7 @@ describe("memory-wiki corpus supplement", () => {
       lineCount: 8,
       searchBackend: "local",
       searchCorpus: "wiki",
+      signal: controller.signal,
     });
   });
 

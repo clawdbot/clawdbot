@@ -300,6 +300,7 @@ describe("memory_get corpus outcomes", () => {
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:main",
         sandboxed: true,
+        signal: expect.any(AbortSignal),
       });
     },
   );

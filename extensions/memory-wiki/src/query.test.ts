@@ -5,6 +5,7 @@ import path from "node:path";
 import { filterMemorySearchHitsBySessionVisibility } from "@openclaw/memory-core/api.js";
 import type { MemoryReadResult } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import YAML from "yaml";
 import type { OpenClawConfig } from "../api.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { MemoryWikiPluginConfig } from "./config.js";
@@ -240,6 +241,104 @@ describe("searchMemoryWiki", () => {
     expect(results[0]?.corpus).toBe("wiki");
     expect(results[0]?.path).toBe("sources/alpha.md");
     expect(getActiveMemorySearchManagerMock).not.toHaveBeenCalled();
+  });
+
+  it("bounds full-vault parsing to raw query candidates (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    await Promise.all(
+      Array.from({ length: 64 }, (_, index) =>
+        fs.writeFile(
+          path.join(rootDir, "sources", `padding-${String(index).padStart(2, "0")}.md`),
+          renderWikiMarkdown({
+            frontmatter: {
+              pageType: "source",
+              id: `source.padding-${index}`,
+              title: `Padding ${index}`,
+            },
+            body: `# Padding ${index}\n\nUnrelated body ${index}.\n`,
+          }),
+          "utf8",
+        ),
+      ),
+    );
+    await fs.writeFile(
+      path.join(rootDir, "sources", "late-hit.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.late-hit",
+          title: "Late Hit",
+        },
+        body: "# Late Hit\n\ncombined-timeout-needle-104719\n",
+      }),
+      "utf8",
+    );
+    // The full-vault fallback may read raw bytes, but unrelated pages must not
+    // enter the YAML/Markdown parser that pushed combined recall past 15 seconds.
+    const parse = vi.spyOn(YAML, "parse");
+
+    try {
+      const results = await searchMemoryWiki({
+        config,
+        query: "combined-timeout-needle-104719",
+        maxResults: 10,
+      });
+
+      expect(collectWikiResultPaths(results)).toEqual(["sources/late-hit.md"]);
+      expect(parse.mock.calls.length).toBeLessThanOrEqual(4);
+    } finally {
+      parse.mockRestore();
+    }
+  });
+
+  it("stops starting page reads after the caller deadline (#104719)", async () => {
+    const { rootDir, config } = await createQueryVault({ initialize: true });
+    const pageCount = 160;
+    await Promise.all(
+      Array.from({ length: pageCount }, (_, index) =>
+        fs.writeFile(
+          path.join(rootDir, "sources", `deadline-pad-${String(index).padStart(3, "0")}.md`),
+          renderWikiMarkdown({
+            frontmatter: {
+              pageType: "source",
+              id: `source.deadline-pad-${index}`,
+              title: `Deadline Pad ${index}`,
+            },
+            body: `# Deadline Pad ${index}\n\nUnrelated deadline body ${index}.\n`,
+          }),
+          "utf8",
+        ),
+      ),
+    );
+    const controller = new AbortController();
+    const deadlineError = new Error("test wiki deadline");
+    const originalReadFile = fs.readFile.bind(fs);
+    let pageReads = 0;
+    const readFile = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const target = typeof args[0] === "string" ? path.basename(args[0]) : "";
+        if (target.startsWith("deadline-pad-")) {
+          pageReads += 1;
+          if (pageReads === 16) {
+            controller.abort(deadlineError);
+          }
+        }
+        return await originalReadFile(...args);
+      });
+
+    try {
+      await expect(
+        searchMemoryWiki({
+          config,
+          query: "absent-deadline-needle-104719",
+          signal: controller.signal,
+        }),
+      ).rejects.toBe(deadlineError);
+      expect(pageReads).toBeLessThan(pageCount);
+    } finally {
+      readFile.mockRestore();
+    }
   });
 
   it("skips malformed pages while searching the rest of the vault (#96125)", async () => {

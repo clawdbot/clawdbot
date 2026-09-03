@@ -214,10 +214,9 @@ export async function searchMemoryCorpusSupplements(params: {
   sandboxed?: boolean;
   signal: AbortSignal;
 }): Promise<MemoryCorpusAttempt<MemoryCorpusSearchResult[]>> {
-  const { signal, ...query } = params;
   return await settleMemorySupplements({
-    signal,
-    run: async ({ supplement }) => await supplement.search(query),
+    signal: params.signal,
+    run: async ({ supplement }) => await supplement.search(params),
     merge: (results) =>
       results
         .flat()
@@ -235,11 +234,10 @@ export async function readMemoryCorpusSupplements(params: {
   sandboxed?: boolean;
   signal: AbortSignal;
 }): Promise<MemoryCorpusAttempt<MemorySupplementReadResult | null>> {
-  const { signal, ...query } = params;
   return await settleMemorySupplements({
-    signal,
+    signal: params.signal,
     run: async ({ supplement }) => {
-      const result = await supplement.get(query);
+      const result = await supplement.get(params);
       if (!result) {
         return null;
       }

@@ -193,6 +193,45 @@ describe("Memory Wiki compiled cache lifecycle", () => {
     blobStoreEnv = {};
   });
 
+  it("stops source-generation reads after the caller deadline (#104719)", async () => {
+    const { rootDir } = await createPersistentVault({ initialize: true });
+    const pageCount = 64;
+    await Promise.all(
+      Array.from({ length: pageCount }, (_, index) =>
+        fs.writeFile(
+          path.join(rootDir, "sources", `generation-pad-${String(index).padStart(2, "0")}.md`),
+          `# Generation Pad ${index}\n`,
+          "utf8",
+        ),
+      ),
+    );
+    const controller = new AbortController();
+    const deadlineError = new Error("test source-generation deadline");
+    const originalReadFile = fs.readFile.bind(fs);
+    let sourceReads = 0;
+    const readFile = vi
+      .spyOn(fs, "readFile")
+      .mockImplementation(async (...args: Parameters<typeof fs.readFile>) => {
+        const target = typeof args[0] === "string" ? path.basename(args[0]) : "";
+        if (target.startsWith("generation-pad-")) {
+          sourceReads += 1;
+          if (sourceReads === 8) {
+            controller.abort(deadlineError);
+          }
+        }
+        return await originalReadFile(...args);
+      });
+
+    try {
+      await expect(resolveMemoryWikiVaultSourceGeneration(rootDir, controller.signal)).rejects.toBe(
+        deadlineError,
+      );
+      expect(sourceReads).toBeLessThan(pageCount);
+    } finally {
+      readFile.mockRestore();
+    }
+  });
+
   it("round-trips compile through async preparation and claim query after restart", async () => {
     const { rootDir, config } = await createPersistentVault({
       initialize: true,

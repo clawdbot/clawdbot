@@ -178,6 +178,7 @@ export function createWikiSearchTool(
         ...(params.backend ? { searchBackend: params.backend } : {}),
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
         ...(params.mode ? { mode: params.mode } : {}),
+        ...(memoryContext.signal ? { signal: memoryContext.signal } : {}),
       });
       const text =
         results.length === 0
@@ -301,6 +302,7 @@ export function createWikiGetTool(
         lineCount: params.lineCount,
         ...(params.backend ? { searchBackend: params.backend } : {}),
         ...(params.corpus ? { searchCorpus: params.corpus } : {}),
+        ...(memoryContext.signal ? { signal: memoryContext.signal } : {}),
       });
       if (!result) {
         return textResult(`Wiki page not found: ${lookup}`, { found: false });

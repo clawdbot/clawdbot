@@ -14,6 +14,7 @@ export function createWikiCorpusSupplement(params: {
       agentId?: string;
       agentSessionKey?: string;
       sandboxed?: boolean;
+      signal?: AbortSignal;
     }) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
@@ -27,6 +28,7 @@ export function createWikiCorpusSupplement(params: {
         maxResults: input.maxResults,
         searchBackend: "local",
         searchCorpus: "wiki",
+        ...(input.signal ? { signal: input.signal } : {}),
       });
     },
     get: async (input: {
@@ -36,6 +38,7 @@ export function createWikiCorpusSupplement(params: {
       agentId?: string;
       agentSessionKey?: string;
       sandboxed?: boolean;
+      signal?: AbortSignal;
     }) => {
       const appConfig = params.getAppConfig();
       const config = params.resolveConfig(input.agentId, appConfig);
@@ -50,6 +53,7 @@ export function createWikiCorpusSupplement(params: {
         lineCount: input.lineCount,
         searchBackend: "local",
         searchCorpus: "wiki",
+        ...(input.signal ? { signal: input.signal } : {}),
       });
     },
   };
