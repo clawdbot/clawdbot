@@ -218,6 +218,36 @@ describe("/models browse catalog recovery", () => {
     expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(3);
   });
 
+  it("keeps explicit full-catalog recovery unbounded across late supersession", async () => {
+    vi.useFakeTimers();
+    catalogMocks.loadSnapshot
+      .mockImplementationOnce(
+        () =>
+          new Promise<never>((_resolve, reject) => {
+            setTimeout(
+              () => reject(new PreparedModelRuntimePublicationSupersededError("late supersession")),
+              1_000,
+            );
+          }),
+      )
+      .mockResolvedValueOnce({
+        entries: [{ provider: "openai", id: "gpt-5.6-luna", name: "Current Luna" }],
+        routeVariants: [],
+      });
+    catalogMocks.loadPublishedOwner.mockResolvedValueOnce({ config: replacementCfg });
+
+    const resultPromise = buildPreparedModelsProviderData(staleCfg, undefined, { view: "all" });
+    const result = expect(resultPromise).resolves.toMatchObject({
+      resolvedDefault: { provider: "openai", model: "gpt-5.6-luna" },
+      providers: ["openai"],
+    });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await result;
+
+    expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledOnce();
+    expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(2);
+  });
+
   it("bounds current-owner reacquisition by the original browse deadline", async () => {
     vi.useFakeTimers();
     const fallbackCfg = {

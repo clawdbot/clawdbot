@@ -174,10 +174,11 @@ export async function buildPreparedModelsProviderData(
   agentId?: string,
   options: ModelsBrowseOptions = {},
 ): Promise<PreparedModelsProviderData> {
-  const deadlineMs = Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
+  const deadlineMs =
+    options.view === "all" ? undefined : Date.now() + MODEL_CATALOG_BROWSE_TIMEOUT_MS;
   let currentConfig = cfg;
   for (;;) {
-    if (Date.now() >= deadlineMs) {
+    if (deadlineMs !== undefined && Date.now() >= deadlineMs) {
       return buildPreparedDataForConfig(currentConfig, agentId, options, {
         catalogFallback: true,
         deadlineMs,
@@ -190,7 +191,7 @@ export async function buildPreparedModelsProviderData(
         throw error;
       }
     }
-    const owner = await loadPublishedModelsOwnerBeforeDeadline({
+    const owner = await loadPublishedModelsOwner({
       agentId,
       deadlineMs,
       workspaceDir: options.workspaceDir,
@@ -212,9 +213,9 @@ function isPreparedModelCatalogOwnerReplacement(error: unknown): boolean {
   );
 }
 
-async function loadPublishedModelsOwnerBeforeDeadline(params: {
+async function loadPublishedModelsOwner(params: {
   agentId?: string;
-  deadlineMs: number;
+  deadlineMs?: number;
   workspaceDir?: string;
 }): Promise<PreparedModelRuntimeSnapshot | undefined> {
   for (;;) {
@@ -244,7 +245,7 @@ async function buildPreparedDataForConfig(
   cfg: OpenClawConfig,
   agentId: string | undefined,
   options: ModelsBrowseOptions,
-  control: { catalogFallback?: boolean; deadlineMs: number },
+  control: { catalogFallback?: boolean; deadlineMs?: number },
 ): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
@@ -261,9 +262,9 @@ async function buildPreparedDataForConfig(
   );
 
   let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
-  const timeoutMs = control.deadlineMs - Date.now();
+  const timeoutMs = control.deadlineMs === undefined ? undefined : control.deadlineMs - Date.now();
   const snapshot =
-    control.catalogFallback || timeoutMs <= 0
+    control.catalogFallback || (timeoutMs !== undefined && timeoutMs <= 0)
       ? { entries: [], routeVariants: [] }
       : await loadPreparedModelCatalogSnapshotForBrowse({
           cfg,
@@ -279,7 +280,7 @@ async function buildPreparedDataForConfig(
             });
             return loadedOwner.modelCatalog;
           },
-          timeoutMs,
+          ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
   // A timed-out read can complete later. Only pair auth with the catalog actually returned.
   const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
