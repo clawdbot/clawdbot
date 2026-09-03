@@ -15370,45 +15370,58 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(smokeProfileJob.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.qa_smoke_ci_matrix) }}",
     );
-    const qaMatrices = Object.fromEntries(
-      (["blacksmith", "github", "hybrid"] as const).map((runnerBackend) => {
-        const manifest = runCiManifestFixture({
-          bundledPlanner: true,
-          eventName: "push",
-          historicalCompatibility: false,
-          runnerBackend,
-        });
-        expect(manifest.status, manifest.output).toBe(0);
-        return [
-          runnerBackend,
-          JSON.parse(
-            expectDefined(manifest.outputs.qa_smoke_ci_matrix, `${runnerBackend} QA smoke matrix`),
-          ).include,
-        ];
-      }),
-    ) as Record<
-      "blacksmith" | "github" | "hybrid",
-      Array<{ docker_cache?: boolean; slug: string }>
-    >;
-    expect(qaMatrices.blacksmith.map((entry) => entry.slug)).toEqual([
-      "profile-1-of-4",
-      "profile-2-of-4",
-      "profile-3-of-4",
-      "profile-4-of-4",
-    ]);
-    expect(qaMatrices.github.map((entry) => entry.slug)).toEqual([
-      "profile-1-of-6",
-      "profile-2-of-6",
-      "profile-3-of-6",
-      "profile-4-of-6",
-      "profile-5-of-6",
-      "profile-6-of-6",
-    ]);
-    expect(qaMatrices.hybrid).toEqual(qaMatrices.github);
-    // The smoke set has no docker-lane scenarios; no part requests a Docker
-    // layer cache in any backend shape.
-    expect(qaMatrices.blacksmith.filter((entry) => entry.docker_cache)).toEqual([]);
-    expect(qaMatrices.github.filter((entry) => entry.docker_cache)).toEqual([]);
+    for (const [label, options, partCount] of [
+      ["Blacksmith push", { runnerBackend: "blacksmith" }, 4],
+      ["GitHub push", { runnerBackend: "github" }, 6],
+      ["hybrid push", { runnerBackend: "hybrid" }, 4],
+      ["hybrid PR", { runnerBackend: "hybrid", eventName: "pull_request" }, 4],
+      ["hybrid retry", { runnerBackend: "hybrid", scopeEnv: { GITHUB_RUN_ATTEMPT: "2" } }, 6],
+      ["missing attempt", { runnerBackend: "hybrid", scopeEnv: { GITHUB_RUN_ATTEMPT: "" } }, 6],
+      ["other repository", { runnerBackend: "hybrid", repository: "example/openclaw" }, 6],
+      [
+        "current hybrid dispatch",
+        {
+          runnerBackend: "hybrid",
+          eventName: "workflow_dispatch",
+          scopeEnv: { OPENCLAW_CI_CHECKOUT_REVISION: "b".repeat(40) },
+        },
+        6,
+      ],
+      [
+        "frozen hybrid dispatch",
+        { runnerBackend: "hybrid", eventName: "workflow_dispatch", historicalCompatibility: true },
+        6,
+      ],
+      [
+        "frozen Blacksmith dispatch",
+        {
+          runnerBackend: "blacksmith",
+          eventName: "workflow_dispatch",
+          historicalCompatibility: true,
+        },
+        4,
+      ],
+    ] as const) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: [".github/workflows/ci.yml"],
+        eventName: "push",
+        historicalCompatibility: false,
+        ...options,
+      });
+      expect(manifest.status, `${label}: ${manifest.output}`).toBe(0);
+      const matrix = JSON.parse(
+        expectDefined(manifest.outputs.qa_smoke_ci_matrix, `${label} QA smoke matrix`),
+      );
+      expect(matrix.include, label).toEqual(
+        Array.from({ length: partCount }, (_, index) => ({
+          name: `profile ${index + 1}/${partCount}`,
+          lane: `profile-${index + 1}`,
+          slug: `profile-${index + 1}-of-${partCount}`,
+          part_count: partCount,
+        })),
+      );
+    }
     for (const [runnerBackend, expected] of [
       ["blacksmith", 4],
       ["github", 6],

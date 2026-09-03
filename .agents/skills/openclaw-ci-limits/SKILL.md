@@ -288,6 +288,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
   native timing proof and does not refresh stale timing weights.
 - `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- Normal canonical hybrid first attempts use the existing four-part QA smoke
+  plan, removing two repeated checkouts, setups and private runtime builds.
+  Blacksmith profiles retain four parts; GitHub profiles and fresh hybrid
+  retry/manual plans retain six. Failed-job-only retries retain their original
+  matrix. Keep the complete scenario inventory, separate Matrix run, worker
+  limits, stagger, cleanup and deadlines. Measure the four-part jobs natively;
+  summed build intervals are not a wall-time saving estimate.
 - GitHub/hybrid test types use three jobs: two paired core rows run the original
   stripes 1+2 and 3+4 sequentially; the central row runs stripe 5 before the
   extensions/scripts/root tail. Keep all 16 core graphs, at most two compiler
