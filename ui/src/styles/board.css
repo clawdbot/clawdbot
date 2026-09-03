@@ -271,7 +271,8 @@ openclaw-board-widget-cell {
   padding: 5px 9px;
 }
 
-.board-widget__preset {
+.board-widget__preset,
+.board-widget__menu-danger {
   font-size: 11px;
 }
 
@@ -282,6 +283,12 @@ openclaw-board-widget-cell {
 
 .board-widget__menu-danger {
   color: var(--danger);
+}
+
+.board-widget__menu-icon,
+.board-widget__menu-icon svg {
+  height: 14px;
+  width: 14px;
 }
 
 .board-widget__body {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { clearCliSessionInStore } from "../../agents/cli-session-store.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError } from "../../agents/failover-error.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
@@ -14,7 +15,6 @@ import {
   resetAgentEventsForTest,
 } from "../../infra/agent-events.js";
 import {
-  clearCliSessionBindingForRun,
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle as runCliAgentWithLifecycleProduction,
@@ -673,39 +673,62 @@ describe("keepCliSessionBindingOnlyWhenReused", () => {
   });
 });
 
-describe("clearCliSessionBindingForRun", () => {
-  it("clears the expected binding from active and stored session entries", async () => {
-    const activeEntry = {
-      sessionId: "openclaw-active",
-      updatedAt: 1,
-      cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
-      cliSessionIds: { "claude-cli": "stale-session" },
-      claudeCliSessionId: "stale-session",
-    };
-    const storedEntry = structuredClone(activeEntry);
-    const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
-    await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
+describe("clearCliSessionInStore", () => {
+  it.each(["current", "closed"])(
+    "clears active and stored entries only for a %s owner",
+    async (owner) => {
+      const activeEntry = {
+        sessionId: "openclaw-active",
+        updatedAt: 1,
+        cliSessionBindings: { "claude-cli": { sessionId: "stale-session" } },
+        cliSessionIds: { "claude-cli": "stale-session" },
+        claudeCliSessionId: "stale-session",
+      };
+      const storedEntry = structuredClone(activeEntry);
+      const storePath = path.join(tempDirs.make("cli-session-cleanup-"), "sessions.json");
+      await replaceSessionEntry({ storePath, sessionKey: "main" }, structuredClone(activeEntry));
 
-    await clearCliSessionBindingForRun({
-      provider: "claude-cli",
-      expectedSessionId: "stale-session",
-      sessionKey: "main",
-      sessionStore: { main: storedEntry },
-      storePath,
-      activeSessionEntry: activeEntry,
-    });
+      let open = true;
+      const clear = clearCliSessionInStore({
+        provider: "claude-cli",
+        expectedCliSessionId: "stale-session",
+        expectedSessionId: activeEntry.sessionId,
+        sessionKey: "main",
+        sessionStore: { main: storedEntry },
+        storePath,
+        activeSessionEntry: activeEntry,
+        assertCommitAllowed: () => {
+          if (!open) {
+            throw new Error("owner closed");
+          }
+        },
+      });
+      if (owner === "closed") {
+        open = false;
+        await expect(clear).rejects.toThrow("owner closed");
+        for (const entry of [
+          activeEntry,
+          storedEntry,
+          loadSessionEntry({ storePath, sessionKey: "main" }),
+        ]) {
+          expect(entry?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe("stale-session");
+        }
+        return;
+      }
+      await clear;
 
-    for (const entry of [activeEntry, storedEntry]) {
-      expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-      expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(entry.claudeCliSessionId).toBeUndefined();
-      expect(entry.updatedAt).toBeGreaterThan(1);
-    }
-    const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
-    expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(persisted?.claudeCliSessionId).toBeUndefined();
-  });
+      for (const entry of [activeEntry, storedEntry]) {
+        expect(entry.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+        expect(entry.cliSessionIds?.["claude-cli"]).toBeUndefined();
+        expect(entry.claudeCliSessionId).toBeUndefined();
+        expect(entry.updatedAt).toBeGreaterThan(1);
+      }
+      const persisted = loadSessionEntry({ storePath, sessionKey: "main" });
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.claudeCliSessionId).toBeUndefined();
+    },
+  );
 
   it("does not clear a replacement binding adopted by another turn", async () => {
     const entry = {
@@ -716,9 +739,9 @@ describe("clearCliSessionBindingForRun", () => {
       claudeCliSessionId: "replacement-session",
     };
 
-    await clearCliSessionBindingForRun({
+    await clearCliSessionInStore({
       provider: "claude-cli",
-      expectedSessionId: "stale-session",
+      expectedCliSessionId: "stale-session",
       activeSessionEntry: entry,
     });
 

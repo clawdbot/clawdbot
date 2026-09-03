@@ -1,9 +1,18 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import {
+  restoreStateDirEnv,
+  setStateDirEnv,
+  snapshotStateDirEnv,
+} from "../test-helpers/state-dir-env.js";
 import { auditDocsConfigExamples } from "./docs-config-examples.js";
+import { resolveRepoBundledPluginEnv } from "./repo-bundled-plugin-env.js";
 
 type SkipStat = "skippedFragment" | "skippedNonObject" | "skippedOptOut" | "skippedParseFailure";
 
@@ -124,6 +133,34 @@ describe("docs config examples", () => {
     }
     if (issuePath !== undefined) {
       expect(audit.findings[0]?.issuePath).toBe(issuePath);
+    }
+  });
+
+  it("validates plugin-owned keys without opening the operator state database", () => {
+    const poisonedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-config-poison-"));
+    const databasePath = resolveOpenClawStateSqlitePath({
+      ...process.env,
+      OPENCLAW_STATE_DIR: poisonedRoot,
+    });
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    const database = new DatabaseSync(databasePath);
+    try {
+      database.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    } finally {
+      database.close();
+    }
+    const envSnapshot = snapshotStateDirEnv();
+    setStateDirEnv(poisonedRoot);
+    try {
+      const audit = auditMarkdown(
+        '```json5\n{ plugins: { entries: { openai: { config: { personalityy: "friendly" } } } } }\n```',
+      );
+      expect(audit.findings).toHaveLength(1);
+      expect(audit.findings[0]?.issuePath).toBe("plugins.entries.openai.config");
+      expect(fs.existsSync(resolveRepoBundledPluginEnv("unused").OPENCLAW_STATE_DIR!)).toBe(false);
+    } finally {
+      restoreStateDirEnv(envSnapshot);
+      fs.rmSync(poisonedRoot, { recursive: true, force: true });
     }
   });
 

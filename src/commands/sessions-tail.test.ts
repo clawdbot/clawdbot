@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../packages/terminal-core/src/ansi.js";
+import { ExpectedCliError } from "../cli/failure-output.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -430,6 +431,23 @@ describe("sessionsTailCommand", () => {
       expect.stringContaining(`Failed to read trajectory progress for ${sessionKey}`),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it.each([
+    { agent: "" },
+    { agent: "   " },
+    { agent: "", sessionKey },
+    { agent: "   ", sessionKey },
+  ])("rejects an explicit blank agent without inferring a store: %j", async (opts) => {
+    mocks.getRuntimeConfig.mockReturnValue({});
+    const runtime = makeRuntime();
+    const result = sessionsTailCommand(opts, runtime);
+
+    await expect(result).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(result).rejects.toMatchObject({ message: "--agent must not be blank" });
+    expect(runtime.log).not.toHaveBeenCalled();
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
   });
 
   it("resolves the target store from a fully qualified non-default agent session key", async () => {

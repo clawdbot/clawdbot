@@ -141,6 +141,7 @@ import androidx.compose.material.icons.filled.Star
 import androidx.compose.material.icons.filled.StarBorder
 import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -288,6 +289,7 @@ fun ChatScreen(
   val messages by viewModel.chatMessages.collectAsState()
   val transcriptAnchor by viewModel.chatTranscriptAnchor.collectAsState()
   val historyLoading by viewModel.chatHistoryLoading.collectAsState()
+  val sessionCreating by viewModel.chatSessionCreating.collectAsState()
   val errorText by viewModel.chatError.collectAsState()
   val pendingRunCount by viewModel.pendingRunCount.collectAsState()
   val selectedActiveRun by viewModel.chatSelectedActiveRunPresentation.collectAsState()
@@ -689,7 +691,7 @@ fun ChatScreen(
   }
 
   val newChatEnabled =
-    !modelSelectionLocked &&
+    !sessionCreating && !modelSelectionLocked &&
       canStartNewChat(
         pendingRunCount = pendingRunCount,
         hasQueuedMessage = pendingAssistantAutoSend != null,
@@ -800,6 +802,7 @@ fun ChatScreen(
           onJumpToLatest = onJumpToLatest,
           healthOk = healthOk,
           pendingRunCount = pendingRunCount,
+          sessionCreating = sessionCreating,
           newChatEnabled = newChatEnabled,
           workspaceGit = workspaceGit,
           branches = sessionBranches,
@@ -850,7 +853,7 @@ fun ChatScreen(
           adminAuthorized = canAdminSessionSettings,
           connected = gatewayConnectionDisplay.isConnected,
           gatewayAvailable = healthOk,
-          loading = historyLoading,
+          loading = historyLoading || sessionCreating,
           sending = sendInFlight,
           activeRun = pendingRunCount > 0,
           streaming = streamingAssistantText != null,
@@ -1093,6 +1096,7 @@ private fun ChatHeader(
   onJumpToLatest: (() -> Unit)?,
   healthOk: Boolean,
   pendingRunCount: Int,
+  sessionCreating: Boolean,
   newChatEnabled: Boolean,
   workspaceGit: Boolean,
   branches: List<SessionBranch>,
@@ -1108,6 +1112,7 @@ private fun ChatHeader(
   val newChatInWorktreeLabel = stringResource(R.string.new_chat_in_worktree)
   val statusLabel =
     when {
+      sessionCreating -> nativeString("Loading")
       pendingRunCount > 0 -> nativeString("Working")
       healthOk -> nativeString("Ready")
       else -> nativeString("Offline")
@@ -1203,7 +1208,11 @@ private fun ChatHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
           )
-          Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+          if (sessionCreating) {
+            CircularProgressIndicator(modifier = Modifier.size(12.dp), strokeWidth = 1.5.dp, color = ClawTheme.colors.textMuted)
+          } else {
+            Box(modifier = Modifier.size(6.dp).background(statusColor, CircleShape))
+          }
         }
       }
     }
@@ -3115,7 +3124,7 @@ private fun ChatInputPill(
           textStyle = draftStyle.copy(color = ClawTheme.colors.text),
           cursorBrush = SolidColor(ClawTheme.colors.primary),
           minLines = 1,
-          maxLines = 4,
+          maxLines = 6,
           modifier =
             Modifier
               .fillMaxWidth()

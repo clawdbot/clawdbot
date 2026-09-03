@@ -287,19 +287,20 @@ export class ShellChromeOwner {
       return;
     }
     const routeId = routeIdFromPath(path);
-    if (!routeId || !this.host.context) {
+    const context = this.host.context;
+    if (!routeId || !context) {
       // Unhandled native routes remain eligible for the host's URL fallback.
       return;
     }
     event.preventDefault();
-    // Native callers may request route chrome via a query (e.g. the macOS
-    // onboarding handoff lands on /custodian?onboarding=1).
+    // Native paths are relative to the Gateway mount. A route ID alone loses
+    // the destination and can reopen the current session instead.
+    const options: ApplicationNavigationOptions = { pathname: `${context.basePath}${path}` };
     const search = detail?.search;
     if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
-      this.host.navigate(routeId, { search });
-      return;
+      options.search = search;
     }
-    this.host.navigate(routeId);
+    this.host.navigate(routeId, options);
   };
 
   readonly handleNativeHistoryState = (event: Event): void => {

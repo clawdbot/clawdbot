@@ -306,7 +306,7 @@ describe("session menu", () => {
     await menu.updateComplete;
     selectMenuValue(menu, "compact:open-group");
     await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group…"]);
+    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group"]);
     expect(menu.querySelector("[slot='submenu']")).toBeNull();
   });
 
@@ -500,7 +500,7 @@ describe("session menu", () => {
     expect(menuItemLabels(submenu)).toContain("Projects");
     const research = menuItem(submenu, "Research");
     const remove = menuItem(submenu, "Remove from group");
-    const create = menuItem(submenu, "New group…");
+    const create = menuItem(submenu, "New group");
     await Promise.all([research.updateComplete, remove.updateComplete, create.updateComplete]);
     await Promise.resolve();
     expect(research.getAttribute("role")).toBe("menuitemradio");
@@ -514,7 +514,7 @@ describe("session menu", () => {
     menuItem(menu, "Remove from group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
 
-    menuItem(menu, "New group…").click();
+    menuItem(menu, "New group").click();
     expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
@@ -776,7 +776,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: [] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["New group"]);
     expect(submenu.querySelector("wa-dropdown-item")?.getAttribute("slot")).toBe("submenu");
   });
 
@@ -784,7 +784,7 @@ describe("session menu", () => {
     const menu = await mountMenu({ groups: ["Research"] });
 
     const submenu = menuItem(menu, "Move to group");
-    expect(menuItemLabels(submenu)).toEqual(["Research", "New group…"]);
+    expect(menuItemLabels(submenu)).toEqual(["Research", "New group"]);
   });
 
   it("numbers group submenu entries and dispatches them from digit keys", async () => {
@@ -805,7 +805,7 @@ describe("session menu", () => {
       "Research",
       "Projects",
       "Remove from group",
-      "New group…",
+      "New group",
     ]);
     const shortcuts = Array.from(
       submenu.querySelectorAll<HTMLElement>("wa-dropdown-item[slot='submenu']"),

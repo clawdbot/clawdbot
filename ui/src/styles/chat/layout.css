@@ -1479,11 +1479,10 @@ button.chat-reply-preview--message:disabled {
   outline: none;
 }
 
-/* Fade the transcript across its whole column before the highest stack surface
-   covers it. The solid tail sits behind rounded corners, so card silhouettes
-   cannot expose unfaded text; its chat-surface color is invisible when there
-   is no transcript behind it. */
-.chat-main__conversation > .agent-chat__composer-shell::before {
+/* Bare composers need this fade to cover transcript underlap. A progress card owns
+   that boundary itself; painting behind it exposes a veil above the card. */
+.chat-main__conversation
+  > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
   position: absolute;
   inset: calc(0px - var(--chat-transcript-fade-height, 20px)) 0 auto;
   height: calc(
@@ -2814,7 +2813,8 @@ button.chat-pr__diff {
     width: calc(100% - 8px);
   }
 
-  .chat-main__conversation > .agent-chat__composer-shell::before {
+  .chat-main__conversation
+    > .agent-chat__composer-shell:not(:has(> .agent-chat__progress-float))::before {
     inset-inline: calc(var(--chat-thread-gutter) - var(--chat-mobile-edge-inset, 4px));
   }
 

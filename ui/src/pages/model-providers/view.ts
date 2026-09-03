@@ -599,7 +599,7 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
           >
             <button
               type="button"
-              class="btn btn--icon btn--sm model-providers__refresh-button"
+              class="btn btn--icon btn--ghost btn--xs model-providers__refresh-button"
               aria-label=${props.refreshing ? t("modelProviders.refreshing") : t("common.refresh")}
               ?disabled=${props.refreshing}
               @click=${() => props.onRefresh()}

@@ -85,7 +85,7 @@ separately tracked so supported upgrade paths can still repair old config.
 
 The remaining dated compatibility areas are:
 
-- the September SDK subpath window listed in the migration guide
+- the renewed October 1 SDK subpath window listed in the migration guide
 - the beta.5 session-store bridge
 - the shipped agent-harness SDK aliases, whose removal is pending a new
   externally documented migration decision

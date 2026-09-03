@@ -11,6 +11,7 @@ import {
 } from "node:fs";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveNpmJsonEntries } from "../../scripts/lib/npm-json-output.mts";
 import {
   assertCanonicalNpmPackageName,
   assertCompleteScannerSummary,
@@ -100,7 +101,9 @@ function writePluginArtifact(params: {
     ["pack", "--json", "--ignore-scripts", "--pack-destination", artifactDir],
     { cwd: packageRoot, encoding: "utf8" },
   );
-  const packEntries = JSON.parse(packOutput) as Array<{ filename?: unknown }>;
+  const packEntries = resolveNpmJsonEntries(JSON.parse(packOutput)) as Array<{
+    filename?: unknown;
+  }>;
   const tarballName = packEntries[0]?.filename;
   if (typeof tarballName !== "string") {
     throw new Error("npm pack fixture did not return a tarball filename");
@@ -221,6 +224,9 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     ];
 
     expect(resolveReviewedSourceLayout(current)?.id).toBe("current");
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.1")?.id).toBe("current");
+    expect(resolveReviewedSourceLayout(frozenLegacy, "release/2026.9.1")).toBeUndefined();
+    expect(resolveReviewedSourceLayout(current, "release/2026.9.2")).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy)).toBeUndefined();
     expect(resolveReviewedSourceLayout(frozenLegacy, "extended-stable/2026.6.33")?.id).toBe(
       "extended-stable-2026.6.33",

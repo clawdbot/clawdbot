@@ -170,6 +170,66 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun tallLatestRowOffersJumpWhenItsTailIsBelowTheViewport() {
+    val head = "Latest reply starts here."
+    val tail = "Latest reply ends here."
+    val reply = (listOf(head) + List(40) { "Reader paragraph ${it + 1}." } + tail).joinToString("\n\n")
+    withReaderHistory(assistantCount = 1, assistantText = { reply }) {
+      val transcript = readerTranscript()
+      val viewport = transcript.getUnclippedBoundsInRoot()
+      val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+      assertTrue(
+        "Fixture precondition: the transcript viewport must be fully visible: $viewport within $root",
+        viewport.left >= root.left && viewport.right <= root.right && viewport.top >= root.top && viewport.bottom <= root.bottom,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+
+      val replyNode = composeRule.onNode(hasContentDescription(nativeString("OpenClaw")) and hasText(tail))
+      val atLatest = replyNode.getUnclippedBoundsInRoot()
+      assertTrue(
+        "Fixture precondition: one actual latest row must exceed the viewport: $atLatest versus $viewport",
+        atLatest.bottom - atLatest.top > viewport.bottom - viewport.top,
+      )
+      val beginning = readerMarkerBounds(head)
+      assertTrue(
+        "Fixture precondition: the tall reply's beginning must be above the viewport at latest: $beginning versus $viewport",
+        beginning.bottom < viewport.top,
+      )
+
+      fun assertTailVisible() {
+        val ending = readerMarkerBounds(tail)
+        assertTrue(
+          "The actual ending glyphs must be fully inside the transcript: $ending within $viewport",
+          ending.left >= viewport.left && ending.right <= viewport.right && ending.top >= viewport.top && ending.bottom <= viewport.bottom,
+        )
+      }
+      assertTailVisible()
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+
+      transcript.performTouchInput { swipeDown(startY = height * 0.25f, endY = height * 0.75f, durationMillis = 1_000) }
+      composeRule.waitForIdle()
+      val whileReading = replyNode.getUnclippedBoundsInRoot()
+      val hiddenEnding = readerMarkerBounds(tail)
+      assertTrue(
+        "Fixture precondition: the same latest row must still intersect the viewport: $whileReading versus $viewport",
+        whileReading.top < viewport.bottom && whileReading.bottom > viewport.top,
+      )
+      assertTrue(
+        "Fixture precondition: the ending must now be below the viewport: $hiddenEnding versus $viewport",
+        hiddenEnding.top > viewport.bottom,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+      assertTailVisible()
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+      assertEquals("Reading and Jump keep the same transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
+    }
+  }
+
+  @Test
   fun growingViewportHidesJumpWhenTheSameLoadedHistoryFits() {
     val assistantCount = 6
     val viewportHeight = mutableStateOf(400.dp)
@@ -449,6 +509,25 @@ class ChatComposerLayoutTest {
     editor.performTextReplacement(draft)
     editor.assertTextEquals(draft)
     assertComposerControlsVisible(talkActive = true)
+  }
+
+  @Test
+  fun multilineDraftGrowsThroughSixLinesAndStopsGrowingAtTheSeventh() {
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
+    val editor = composeRule.onNode(hasSetTextAction())
+    val heights =
+      (1..7).map { lineCount ->
+        val draft = (1..lineCount).joinToString("\n") { line -> "Line $line" }
+        editor.performTextReplacement(draft)
+        editor.assertTextEquals(draft)
+        editor.getUnclippedBoundsInRoot().let { bounds -> bounds.bottom - bounds.top }
+      }
+
+    heights.take(6).zipWithNext().forEachIndexed { index, (current, next) ->
+      assertTrue("The editor must grow from ${index + 1} to ${index + 2} visible lines", next > current)
+    }
+    assertEquals("The seventh line must scroll inside the six-line editor", heights[5], heights[6])
+    assertComposerControlsVisible()
   }
 
   @Test
@@ -834,6 +913,7 @@ class ChatComposerLayoutTest {
 
   private fun withReaderHistory(
     assistantCount: Int,
+    assistantText: (Int) -> String = { "Reader answer ${it + 1}" },
     viewportHeight: () -> Dp = { 640.dp },
     viewportWidth: Dp = 360.dp,
     fontScale: () -> Float = { 1f },
@@ -841,7 +921,7 @@ class ChatComposerLayoutTest {
     assertions: () -> Unit,
   ) {
     val sessionKey = "agent:main:reader-history"
-    val texts = listOf("Reader prompt") + List(assistantCount) { "Reader answer ${it + 1}" }
+    val texts = listOf("Reader prompt") + List(assistantCount, assistantText)
     val history =
       buildJsonObject {
         put("sessionId", JsonPrimitive("reader-history"))
@@ -896,6 +976,27 @@ class ChatComposerLayoutTest {
       assertions()
     } finally {
       requestField.set(controller, originalRequest)
+    }
+  }
+
+  private fun readerMarkerBounds(marker: String): DpRect {
+    val target =
+      composeRule.onNode(
+        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString("OpenClaw"))),
+        useUnmergedTree = true,
+      )
+    val layouts = mutableListOf<TextLayoutResult>()
+    target.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    val layout = layouts.single()
+    assertEquals("The rendered marker must remain intact", marker, layout.layoutInput.text.text)
+    val position = target.fetchSemanticsNode().positionInRoot
+    val glyphs = marker.indices.filterNot { marker[it].isWhitespace() }.map { layout.getBoundingBox(it).translate(position) }
+    assertTrue(
+      "Marker glyphs need finite positive geometry: $glyphs",
+      glyphs.isNotEmpty() && glyphs.all { it.left.isFinite() && it.top.isFinite() && it.right.isFinite() && it.bottom.isFinite() && it.width > 0 && it.height > 0 },
+    )
+    return with(composeRule.density) {
+      DpRect(glyphs.minOf { it.left }.toDp(), glyphs.minOf { it.top }.toDp(), glyphs.maxOf { it.right }.toDp(), glyphs.maxOf { it.bottom }.toDp())
     }
   }
 

@@ -102,3 +102,83 @@ describe("Web Push preference saves", () => {
     expect(preferenceGroup.hasAttribute("inert")).toBe(true);
   });
 });
+
+type DevicePreferencesListener = NonNullable<
+  Parameters<typeof renderNotificationsSection>[0]["onWebPushSetDevicePreferences"]
+>;
+
+describe("Web Push preference controls", () => {
+  function renderPreferences(options: { onDevice?: DevicePreferencesListener } = {}) {
+    const container = document.createElement("div");
+    const user = {
+      ...userPreferences,
+      quietHours: { ...userPreferences.quietHours, enabled: true },
+    };
+    const device = { enabled: true, label: "phone", agentIds: ["main"] };
+    render(
+      renderNotificationsSection({
+        connected: true,
+        onWebPushSetDevicePreferences: options.onDevice,
+        webPush: {
+          supported: true,
+          permission: "granted",
+          subscription: "registered",
+          loading: false,
+          preferences: {
+            durableIdentity: true,
+            user,
+            device,
+            effective: { ...user, ...device },
+          },
+        },
+      }),
+      container,
+    );
+    return container;
+  }
+
+  it("renders every preference control through the shared settings control set", () => {
+    const container = renderPreferences();
+
+    // Native checkboxes bypass the settings toggle; booleans are wa-switch rows.
+    expect(container.querySelectorAll('input[type="checkbox"]')).toHaveLength(0);
+    expect(container.querySelectorAll("wa-switch.settings-toggle")).toHaveLength(7);
+
+    const unstyled = Array.from(container.querySelectorAll<HTMLElement>("select, input"))
+      .filter((control) => {
+        const expectedClass = control.tagName === "SELECT" ? "settings-select" : "settings-input";
+        return !control.classList.contains(expectedClass) || !control.getAttribute("aria-label");
+      })
+      .map((control) => control.outerHTML.slice(0, 60));
+    expect(container.querySelectorAll("select")).toHaveLength(9);
+    expect(container.querySelectorAll('input[type="time"]')).toHaveLength(2);
+    expect(unstyled).toEqual([]);
+  });
+
+  it("patches device preferences from the toggle row and select row", () => {
+    const onDevice = vi.fn<DevicePreferencesListener>();
+    const container = renderPreferences({ onDevice });
+    const deviceGroup = expectDefined(
+      container.querySelectorAll(".settings-page .settings-page .settings-group")[1],
+      "device preference group",
+    );
+
+    const toggle = expectDefined(
+      deviceGroup.querySelector<HTMLElement & { checked: boolean }>("wa-switch"),
+      "deliver toggle",
+    );
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change"));
+    expect(onDevice).toHaveBeenLastCalledWith(
+      expect.objectContaining({ enabled: false, label: "phone", agentIds: ["main"] }),
+    );
+
+    const detail = expectDefined(
+      deviceGroup.querySelector<HTMLSelectElement>('select[aria-label="Lock-screen detail"]'),
+      "device lock-screen detail select",
+    );
+    detail.value = "detailed";
+    detail.dispatchEvent(new Event("change"));
+    expect(onDevice).toHaveBeenLastCalledWith(expect.objectContaining({ detailLevel: "detailed" }));
+  });
+});

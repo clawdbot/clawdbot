@@ -15,18 +15,11 @@ import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-m
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
-import {
-  clearAllCliSessions,
-  clearCliSession,
-  getCliSessionBinding,
-  setCliSessionBinding,
-  setCliSessionId,
-} from "../cli-session.js";
+import { clearAllCliSessions, setCliSessionBinding } from "../cli-session.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import type { CompactionAccountingFact } from "../embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentCompactResult } from "../embedded-agent-runner/types.js";
 import { clearMainSessionRecoveryAfterAgentRun } from "../main-session-recovery/main-session-recovery-clear.js";
-import { isCliProvider } from "../model-selection.js";
 import { deriveSessionTotalTokens, hasBillableUsage, hasNonzeroUsage } from "../usage.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../embedded-agent.js"))["runEmbeddedAgent"]>>;
@@ -41,7 +34,7 @@ export function normalizeSessionTokenCount(value: number | undefined): number | 
   return Math.floor(value);
 }
 
-/** Applies run result metadata, usage, and CLI bindings to a session entry. */
+/** Applies run result metadata and usage to a session entry. */
 export async function updateSessionStoreAfterAgentRun(params: {
   cfg: OpenClawConfig;
   agentDir: string;
@@ -165,19 +158,6 @@ export async function updateSessionStoreAfterAgentRun(params: {
     if (!preserveRuntimeModel) {
       next.agentHarnessId = agentHarnessId;
     }
-    if (!preserveRuntimeModel && isCliProvider(providerUsed, cfg)) {
-      const cliSessionBinding = result.meta.agentMeta?.cliSessionBinding;
-      if (result.meta.agentMeta?.clearCliSessionBinding === true) {
-        clearCliSession(next, providerUsed);
-      } else if (cliSessionBinding?.sessionId?.trim()) {
-        setCliSessionBinding(next, providerUsed, cliSessionBinding);
-      } else {
-        const cliSessionId = result.meta.agentMeta?.sessionId?.trim();
-        if (cliSessionId) {
-          setCliSessionId(next, providerUsed, cliSessionId);
-        }
-      }
-    }
     next.abortedLastRun = result.meta.aborted ?? false;
     clearMainSessionRecoveryAfterAgentRun(next, params.clearRestartRecoveryForceSafeTools);
     if (result.meta.systemPromptReport) {
@@ -276,62 +256,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
   );
 }
 
-/** Clears a stored CLI session binding after a failed or invalidated run. */
-export async function clearCliSessionInStore(params: {
-  provider: string;
-  sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
-  storePath: string;
-  expectedSessionId?: string;
-  expectedCliSessionId?: string;
-}): Promise<SessionEntry | undefined> {
-  const { provider, sessionKey, sessionStore, storePath, expectedSessionId, expectedCliSessionId } =
-    params;
-  const entry = sessionStore[sessionKey];
-  if (!entry) {
-    return undefined;
-  }
-
-  let didClear = false;
-  const persisted = await patchSessionEntryCore(
-    {
-      storePath,
-      sessionKey,
-    },
-    (currentEntry, context) => {
-      if (
-        expectedSessionId &&
-        (!context.existingEntry || currentEntry.sessionId !== expectedSessionId)
-      ) {
-        return null;
-      }
-      if (
-        expectedCliSessionId &&
-        getCliSessionBinding(currentEntry, provider)?.sessionId !== expectedCliSessionId
-      ) {
-        return null;
-      }
-      const next = { ...currentEntry };
-      clearCliSession(next, provider);
-      next.updatedAt = Date.now();
-      didClear = true;
-      return next;
-    },
-    { fallbackEntry: entry },
-  );
-  if (persisted && didClear) {
-    sessionStore[sessionKey] = persisted;
-    return persisted;
-  }
-  return undefined;
-}
-
 type CliSessionForkStoreParams = {
   provider: string;
   sessionKey: string;
   sessionStore: Record<string, SessionEntry>;
   storePath: string;
   expectedCliSessionId: string;
+  assertCommitAllowed?: () => void;
 };
 
 function isSameSessionLifecycleOwner(
@@ -375,6 +306,7 @@ async function patchCliSessionForkBinding(
       return next;
     },
     {
+      assertCommitAllowed: params.assertCommitAllowed,
       onCommitted: (current) => {
         // Only the commit edge proves this transition and owns cache publication.
         committed = current;

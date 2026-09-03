@@ -104,24 +104,6 @@ describe("DraftSubmissionFlow", () => {
     expect(flow.submitting).toBe(false);
   });
 
-  it("stops a direct background watch when the exact run is unobservable", async () => {
-    vi.useFakeTimers();
-    const { context, flow, request } = createDraftFixture({
-      request: async (method) => (method === "agent.wait" ? { status: "timeout" } : {}),
-    });
-    vi.mocked(context.sessions.createResult).mockResolvedValue({
-      key: "agent:main:dashboard:unobservable",
-      initialRun: { status: "started", runId: "run-unobservable" },
-    });
-    flow.setMessage("start this in the background");
-
-    await flow.submit(undefined, true);
-    await Promise.resolve();
-    await vi.advanceTimersByTimeAsync(5_000);
-
-    expect(request.mock.calls.filter(([method]) => method === "agent.wait")).toHaveLength(1);
-  });
-
   it("replays a frozen direct create without inheriting refreshed placement or mutable submit gates", async () => {
     const { context, flow, place } = createDraftFixture({
       methods: ["sessions.create", "sessions.dispatch"],
@@ -663,6 +645,7 @@ describe("DraftSubmissionFlow", () => {
       context.gateway.snapshot.sessionKey = sessionKey;
     });
     const selectAgent = vi.fn();
+    let startupPending = background;
     let backgroundWaitAttempts = 0;
     const client = {
       recoveryScope: "principal-a",
@@ -678,6 +661,8 @@ describe("DraftSubmissionFlow", () => {
             throw new Error("gateway closed");
           }
           if (background && backgroundWaitAttempts === 2) {
+            // Placement custody retires when sending is accepted, before the run finishes.
+            startupPending = false;
             return { status: "timeout" };
           }
           if (background && backgroundWaitAttempts === 3) {
@@ -723,7 +708,7 @@ describe("DraftSubmissionFlow", () => {
       placementStartup: {
         start,
         get: vi.fn(() => undefined),
-        hasPendingTurn: vi.fn(() => background),
+        hasPendingTurn: vi.fn(() => startupPending),
       },
       config: { current: {} },
       navigateAndWait,

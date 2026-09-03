@@ -36,7 +36,6 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
-import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -82,7 +81,7 @@ function waitForFast<T>(
 }
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
-  await sessionCostUsageTestApi.usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+  await refreshCostUsageCacheForAgent({
     agentId: "main",
     sessionFiles: [sessionFile],
   });

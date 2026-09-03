@@ -30,6 +30,7 @@ type GatewayRequest = Omit<CallGatewayOptions, "params"> & {
     sessionKey?: string;
     inputProvenance?: { sourceSessionKey?: string };
     idempotencyKey?: string;
+    message?: string;
   };
 };
 
@@ -252,7 +253,12 @@ describe("requester settle wake product flow", () => {
     expect(result).toMatchObject({ status: "accepted", runId: params.runId });
   };
 
-  const emitCompleted = (runId: string, childSessionKey: string, text: string) => {
+  const emitCompleted = (
+    runId: string,
+    childSessionKey: string,
+    text: string,
+    modelRouteChange?: string,
+  ) => {
     chatHistoryBySessionKey.set(childSessionKey, [{ role: "assistant", content: text }]);
     lifecycleHandler?.({
       stream: "lifecycle",
@@ -261,7 +267,11 @@ describe("requester settle wake product flow", () => {
       data: {
         phase: "end",
         endedAt: Date.now(),
-        terminalReply: { disposition: "visible", text },
+        terminalReply: {
+          disposition: "visible",
+          text,
+          ...(modelRouteChange ? { modelRouteChange } : {}),
+        },
       },
     });
   };
@@ -293,7 +303,8 @@ describe("requester settle wake product flow", () => {
     );
     emitCompleted(alpha.runId, alpha.childSessionKey, "alpha complete");
     await waitForAgentCallCount(1);
-    emitCompleted(beta.runId, beta.childSessionKey, "beta complete");
+    const modelRouteChange = "Model route changed: requested/model → actual/model.";
+    emitCompleted(beta.runId, beta.childSessionKey, "beta complete", modelRouteChange);
     await waitForAgentCallCount(2);
 
     const betaBeforeYield = registry.getSubagentRunByRunId(beta.runId);
@@ -347,6 +358,13 @@ describe("requester settle wake product flow", () => {
 
     await waitForAgentCallCount(rejectRequesterWake ? 2 : 3);
     expect(getRequesterWakeCalls()).toHaveLength(rejectRequesterWake ? 0 : 1);
+    if (!rejectRequesterWake) {
+      const wakeMessage = getRequesterWakeCalls()[0]?.params?.message;
+      expect(wakeMessage).toContain(modelRouteChange);
+      expect(wakeMessage).toContain(
+        "Keep this runtime-authored model-route change notice internal on this shared surface.",
+      );
+    }
     for (const child of [alpha, beta]) {
       expect(registry.getSubagentRunByRunId(child.runId)).toMatchObject({
         delivery: { status: "delivered" },

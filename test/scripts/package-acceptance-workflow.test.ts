@@ -3925,6 +3925,74 @@ NODE
     }
   });
 
+  it("runs trusted npm preflight pnpm commands from the tooling checkout", () => {
+    const root = tempDirs.make("npm-preflight-tooling-pnpm-");
+    const toolingDir = join(root, ".artifacts/plugin-sdk-release-tooling");
+    const binDir = join(root, "bin");
+    const logPath = join(root, "pnpm-cwds.log");
+    mkdirSync(toolingDir, { recursive: true });
+    mkdirSync(binDir);
+    writeFileSync(
+      join(root, "package.json"),
+      JSON.stringify({ private: true, packageManager: "pnpm@11.2.2" }),
+    );
+    writeFileSync(
+      join(toolingDir, "package.json"),
+      JSON.stringify({ private: true, packageManager: "pnpm@12.1.0" }),
+    );
+    const pnpmPath = join(binDir, "pnpm");
+    writeFileSync(
+      pnpmPath,
+      `#!/bin/sh
+set -eu
+package_manager="$(node -p 'require("./package.json").packageManager')"
+printf '%s\\t%s\\n' "$PWD" "$package_manager" >> "$PNPM_CWD_LOG"
+test "$package_manager" = "pnpm@12.1.0"
+`,
+    );
+    chmodSync(pnpmPath, 0o755);
+
+    const sdkStep = workflowStep(
+      workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, "check_sdk_npm"),
+      "Verify Plugin SDK API changes",
+    );
+    const sdkCommandBlock = (sdkStep.run ?? "").match(
+      /\(\n\s+cd "\$tooling_dir"\n\s+pnpm install --frozen-lockfile --ignore-scripts --filter openclaw\n\s+pnpm run plugin-sdk:api:diff -- "\$\{diff_args\[@\]\}"\n\s*\)/u,
+    )?.[0];
+    expect(sdkCommandBlock).toBeDefined();
+    const installSteps = ["check_dependencies_npm", "check_contents_npm"].map((jobName) =>
+      workflowStep(
+        workflowJob(OPENCLAW_NPM_PREFLIGHT_WORKFLOW, jobName),
+        "Install trusted qualification dependencies",
+      ),
+    );
+
+    for (const { trustedPnpmCommand, cwd } of [
+      { trustedPnpmCommand: sdkCommandBlock ?? "", cwd: root },
+      ...installSteps.map((step) => ({
+        trustedPnpmCommand: step.run ?? "",
+        cwd: resolve(root, step["working-directory"] ?? "."),
+      })),
+    ]) {
+      const result = spawnSync("bash", ["-c", trustedPnpmCommand], {
+        cwd,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          GITHUB_WORKSPACE: root,
+          PATH: `${binDir}:${process.env.PATH ?? ""}`,
+          PNPM_CWD_LOG: logPath,
+          tooling_dir: toolingDir,
+        },
+      });
+      expect(result.status, result.stderr).toBe(0);
+    }
+
+    expect(readFileSync(logPath, "utf8").trim().split("\n")).toEqual(
+      Array.from({ length: 4 }, () => `${toolingDir}\tpnpm@12.1.0`),
+    );
+  });
+
   it("keeps Crabbox hydration compatible with local Actions replay", () => {
     const crabboxConfig = parse(readFileSync(CRABBOX_CONFIG, "utf8")) as {
       actions?: { job?: string };
@@ -7427,6 +7495,8 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       prepublish_plugin_registry_json:
         "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.prepublish_plugin_registry_json || '' }}",
       suite_profile: "custom",
+      published_upgrade_survivor_baseline:
+        "${{ needs.resolve_target.outputs.frozen_upgrade_baseline && format('openclaw@{0}', needs.resolve_target.outputs.frozen_upgrade_baseline) || 'openclaw@latest' }}",
     });
     expect(packageAcceptanceJob.with?.candidate_artifact_json).toBe(
       "${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.candidate_artifact_json || '' }}",

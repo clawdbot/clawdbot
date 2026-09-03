@@ -14,6 +14,7 @@ type AgentWaitResult = {
   status?: "error" | "ok" | "pending" | "timeout";
   endedAt?: number;
   error?: string;
+  pendingError?: boolean;
   providerStarted?: boolean;
   stopReason?: string;
 };
@@ -49,16 +50,16 @@ async function notifyWhenBackgroundSessionEnds(params: {
         !observed.error &&
         !observed.stopReason &&
         observed.providerStarted !== true;
-      if (observed.status === "pending") {
+      if (observed.status === "pending" || observed.pendingError === true) {
         await delayRetry();
       } else if (observationalTimeout) {
-        const placement = params.context.placementStartup.get(params.key);
-        if (placement?.phase === "failed") {
-          result = { status: "error", error: placement.error };
-        } else if (params.context.placementStartup.hasPendingTurn(params.key)) {
-          await delayRetry();
+        // Startup display errors can mean unconfirmed delivery, not a failed run.
+        const initialTurn = params.context.placementStartup.get(params.key)?.initialTurn;
+        if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === params.runId) {
+          result = { status: "error", error: initialTurn.sendError };
         } else {
-          result = observed;
+          // A wait deadline is not a run outcome, even after startup custody retires.
+          await delayRetry();
         }
       } else {
         result = observed;
@@ -97,6 +98,17 @@ async function notifyWhenBackgroundSessionEnds(params: {
         : result.stopReason === "rpc"
           ? t("sessionsView.statusKilled")
           : t("sessionsView.statusFailed");
+  const nativeTarget = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: params.key,
+    fallbackAgentId: params.agentId,
+    exactKey: true,
+  });
+  params.context.nativeNotifications?.backgroundSessionCompleted({
+    runId: params.runId,
+    path: nativeTarget.options.pathname,
+    ...(nativeTarget.options.search ? { search: nativeTarget.options.search } : {}),
+  });
   showToast({
     fifo: true,
     message: `${resolveSessionDisplayName(params.key, row)}: ${status}`,
