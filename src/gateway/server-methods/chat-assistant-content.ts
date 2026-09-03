@@ -7,6 +7,7 @@ import {
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
 import { createOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
+import { stripInternalRuntimeScaffolding } from "../../infra/outbound/protocol-scaffolding.js";
 import { renderQrPngDataUrl } from "../../media/qr-image.js";
 import { renderQrTerminal } from "../../media/qr-terminal.js";
 import { stripInlineDirectiveTagsForDelivery } from "../../utils/directive-tags.js";
@@ -94,7 +95,13 @@ export function sanitizeAssistantDisplayText(
     return undefined;
   }
   const withoutEnvelope = stripEnvelopeFromMessage(value);
-  const normalized = typeof withoutEnvelope === "string" ? withoutEnvelope : value;
+  // stripEnvelopeFromMessage returns string input unchanged, so envelope-only
+  // runtime scaffolding would otherwise survive here and leak back into the
+  // transcript via the finalizer fallback chain. Strip it at this shared
+  // projection input so display and transcript stay consistent.
+  const normalized = stripInternalRuntimeScaffolding(
+    typeof withoutEnvelope === "string" ? withoutEnvelope : value,
+  );
   const stripped = stripInlineDirectiveTagsForDelivery(normalized);
   const visible = stripped.text.trim();
   return visible
