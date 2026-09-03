@@ -18,6 +18,7 @@ import {
   type GatewayInstance,
   connectNode,
   connectGatewayStatusClient,
+  connectGatewayClient,
   postJson,
   spawnGatewayInstance,
   stopGatewayInstance,
