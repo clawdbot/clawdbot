@@ -812,6 +812,7 @@ export class MediaStreamHandler {
    * Clear TTS queue and interrupt current playback (barge-in).
    */
   clearTtsQueue(streamSid: string, _reason = "unspecified"): void {
+    console.warn(`[MediaStream] clearTtsQueue stream=${streamSid} reason=${_reason}`);
     const queue = this.ttsQueues.get(streamSid);
     if (queue) {
       this.resolveQueuedTtsEntries(queue);
@@ -902,6 +903,7 @@ export class MediaStreamHandler {
 
       const entry = queue.shift()!;
       this.ttsActiveControllers.set(streamSid, entry.controller);
+      console.log(`[MediaStream] TTS slot start stream=${streamSid} remaining=${queue.length}`);
       const session = this.sessions.get(streamSid);
       let playbackTurnId: string | undefined;
 
@@ -948,6 +950,9 @@ export class MediaStreamHandler {
         if (this.ttsActiveControllers.get(streamSid) === entry.controller) {
           this.ttsActiveControllers.delete(streamSid);
         }
+        console.log(
+          `[MediaStream] TTS slot done stream=${streamSid} aborted=${entry.controller.signal.aborted}`,
+        );
       }
     }
   }
@@ -996,6 +1001,9 @@ export class MediaStreamHandler {
 
   private resolveQueuedTtsEntries(queue: TtsQueueEntry[]): void {
     const pending = queue.splice(0);
+    if (pending.length > 0) {
+      console.warn(`[MediaStream] aborting ${pending.length} queued TTS entries (never played)`);
+    }
     for (const entry of pending) {
       entry.controller.abort();
       entry.resolve();
