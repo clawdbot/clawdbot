@@ -20,7 +20,7 @@ export type NativeMemoryWatchPair = {
   treeWatchers?: Map<string, LinuxMemoryDirectoryWatcher>;
 };
 
-export type LinuxMemoryDirectoryWatcher = {
+type LinuxMemoryDirectoryWatcher = {
   watcher: fsSync.FSWatcher;
   ino: number;
 };
@@ -225,7 +225,7 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
   return "attached";
 }
 
-export function attachLinuxMemoryDirectoryTreeSubtree(
+function attachLinuxMemoryDirectoryTreeSubtree(
   ctx: MemoryWatchAttachContext,
   root: string,
   attachDirectory: (dir: string) => fsSync.FSWatcher | null,

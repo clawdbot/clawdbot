@@ -13,6 +13,8 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 const {
   capacityCode: capacityOverride,
   createdChokidarWatchers,
+  createdNativeWatchers,
+  makeDefaultNativeWatcher: makeNativeWatcherFor,
   memoryLoggerWarn,
   nativeWatchMock: nativeWatchFactoryMock,
 } = vi.hoisted(() => {
@@ -33,13 +35,10 @@ const {
   // EMFILE from inotify_init1 / watch-instance exhaustion: Node surfaces it as
   // an Error whose `code` is the errno name, thrown synchronously by fs.watch.
   const capacityCode = { current: null as string | null };
-  const nativeWatchMock = vi.fn((dir: string) => {
-    if (capacityCode.current) {
-      throw Object.assign(new Error(`simulated watch failure on ${dir}`), {
-        code: capacityCode.current,
-      });
-    }
+  type NativeListener = (eventType: string, filename: string | null) => void;
+  function makeDefaultNativeWatcher(dir: string) {
     const errorHandlers: Array<(err: Error) => void> = [];
+    const listenerRef: { current: NativeListener | null } = { current: null };
     const watcher = {
       dir,
       on: vi.fn((event: "error", callback: (err: Error) => void) => {
@@ -49,11 +48,38 @@ const {
         return watcher;
       }),
       close: vi.fn(() => undefined),
+      emit: (eventType: string, filename: string | null) => {
+        listenerRef.current?.(eventType, filename);
+      },
+      emitError: (err: Error) => {
+        for (const handler of errorHandlers) {
+          handler(err);
+        }
+      },
+      rememberListener: (listener: NativeListener) => {
+        listenerRef.current = listener;
+      },
     };
+    return watcher;
+  }
+  const nativeWatchers: Array<ReturnType<typeof makeDefaultNativeWatcher>> = [];
+  const nativeWatchMock = vi.fn((dir: string, _options: unknown, listener?: NativeListener) => {
+    if (capacityCode.current) {
+      throw Object.assign(new Error(`simulated watch failure on ${dir}`), {
+        code: capacityCode.current,
+      });
+    }
+    const watcher = makeNativeWatcherFor(dir);
+    if (listener) {
+      watcher.rememberListener(listener);
+    }
+    nativeWatchers.push(watcher);
     return watcher;
   });
   const result = {
     createdChokidarWatchers: chokidarWatchers,
+    createdNativeWatchers: nativeWatchers,
+    makeDefaultNativeWatcher,
     memoryLoggerWarn: vi.fn(),
     watchMock,
     nativeWatchMock,
@@ -66,6 +92,7 @@ const {
 
 const CHOKIDAR_FACTORY_KEY = Symbol.for("openclaw.test.memoryWatchFactory");
 const NATIVE_FACTORY_KEY = Symbol.for("openclaw.test.memoryNativeWatchFactory");
+const EVIDENCE_NEWLINE = String.fromCharCode(10);
 const originalWatcherStateDir = process.env.OPENCLAW_STATE_DIR;
 
 function setWatcherStateDir(stateDir: string): void {
@@ -112,6 +139,7 @@ vi.mock("./embeddings.js", () => ({
 }));
 
 import { clearEmbeddingProviders as clearRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { configureMemoryCoreDreamingStateForTests } from "../test-helpers.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
 import type { MemoryIndexManager } from "./manager.js";
 import { isolateMemoryManagerTestConfig } from "./test-config-helpers.js";
@@ -135,6 +163,8 @@ describe("memory watcher kernel capacity degrade", () => {
 
   afterEach(async () => {
     Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
+    nativeWatchFactoryMock.mockReset();
+    createdNativeWatchers.length = 0;
     if (manager) {
       await manager.close();
       manager = null;
@@ -260,5 +290,148 @@ describe("memory watcher kernel capacity degrade", () => {
 
     await vi.advanceTimersByTimeAsync(5 * 60_000);
     expect(readDirty(active)).toBe(true);
+  });
+
+  // The full index pipeline needs the plugin state store; its sqlite temp-dir
+  // handling does not work on local Windows (same class as the doctor suites),
+  // so CI Linux is authoritative for the real-index proof.
+  const itLinux = process.platform === "win32" ? it.skip : it;
+  itLinux("indexes a post-startup memory edit through degraded polling only", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    capacityOverride.current = "EMFILE";
+    const trace: string[] = [
+      `t0 platform=linux capacity=EMFILE workspace=${workspaceDir}`,
+      "t1 startup: root fs.watch throws EMFILE -> degrade (no directory chokidar watcher)",
+    ];
+    await configureMemoryCoreDreamingStateForTests();
+
+    const active = await createManager(createWatchConfig());
+    await vi.waitFor(() => expect(readIntervalTimer(active)).toBeTruthy());
+    expect(createdChokidarWatchers).toHaveLength(0);
+
+    function readIndexedPaths(m: MemoryIndexManager): string[] {
+      // SAFETY: test-only read of the protected sqlite handle to inspect indexed sources.
+      const db = (
+        m as unknown as { db: { prepare: (q: string) => { all: () => Array<{ path?: unknown }> } } }
+      ).db;
+      return db
+        .prepare("SELECT path FROM memory_index_sources")
+        .all()
+        .flatMap((row) => (typeof row.path === "string" ? [row.path] : []));
+    }
+    function forceDegradedTick(m: MemoryIndexManager): void {
+      // SAFETY: test-only write forcing the dirty flag exactly as the degraded interval tick does.
+      (m as unknown as { dirty: boolean }).dirty = true;
+    }
+
+    // First degraded rescan (what every interval tick now forces) indexes the
+    // baseline note. Real manager, real sqlite index, real files on disk.
+    forceDegradedTick(active);
+    await active.sync({ reason: "interval" });
+    await vi.waitFor(() => expect(readIndexedPaths(active)).toHaveLength(1));
+    trace.push(`t2 degraded rescan #1: indexed=${JSON.stringify(readIndexedPaths(active))}`);
+
+    // Post-startup edit: a brand-new memory note, with no watcher to observe it.
+    await fs.writeFile(path.join(workspaceDir, "memory", "late-note.md"), "late capacity note");
+    // SAFETY: test-only write simulating the settle after the previous sync.
+    (active as unknown as { dirty: boolean }).dirty = false;
+
+    // The next forced-rescan tick must pick the new file into the index.
+    forceDegradedTick(active);
+    await active.sync({ reason: "interval" });
+    await vi.waitFor(() =>
+      expect(readIndexedPaths(active).some((indexed) => indexed.includes("late-note"))).toBe(true),
+    );
+    trace.push(`t3 degraded rescan #2: indexed=${JSON.stringify(readIndexedPaths(active))}`);
+    trace.push(
+      "t4 proof: the memory index learned the post-startup edit via degraded polling alone",
+    );
+    expect(createdChokidarWatchers).toHaveLength(0);
+
+    const evidenceDir = process.env.OPENCLAW_EVIDENCE_OUT;
+    if (evidenceDir) {
+      await fs.mkdir(evidenceDir, { recursive: true });
+      const traceText = trace.join(EVIDENCE_NEWLINE);
+      await fs.writeFile(
+        path.join(evidenceDir, "137200-capacity-degrade-trace.md"),
+        `${traceText}${EVIDENCE_NEWLINE}`,
+      );
+    }
+  });
+
+  it("root reattachment under capacity degrades instead of dropping coverage", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+
+    const active = await createManager(createWatchConfig());
+    await vi.waitFor(() =>
+      expect(nativeWatchFactoryMock.mock.calls.some((call) => String(call[0]) === memoryDir)).toBe(
+        true,
+      ),
+    );
+    const parentWatcher = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir);
+    // Startup file watchers (MEMORY.md/USER.md) form the expected baseline.
+    const chokidarBaseline = createdChokidarWatchers.length;
+    // Replace the watched root so the parent watcher sees a fresh inode.
+    await fs.rm(memoryDir, { recursive: true });
+    await fs.mkdir(memoryDir, { recursive: true });
+    await fs.writeFile(path.join(memoryDir, "note.md"), "hello");
+    // Every new fs.watch now fails with EMFILE.
+    capacityOverride.current = "EMFILE";
+    parentWatcher?.emit("rename", "memory");
+
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    // The startup file watchers (MEMORY.md/USER.md) are the expected baseline;
+    // the capacity reattach must not add any further chokidar watcher.
+    expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
+    expect(readIntervalTimer(active)).toBeTruthy();
+  });
+
+  it("linux child-directory capacity failure degrades the whole tree", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+    const childDir = path.join(memoryDir, "child");
+    await fs.mkdir(childDir, { recursive: true });
+    await fs.writeFile(path.join(childDir, "nested.md"), "nested");
+    // Root attaches fine; the child directory exhausts capacity.
+    capacityOverride.current = null;
+    nativeWatchFactoryMock.mockImplementation(
+      (
+        dir: string,
+        options: unknown,
+        listener?: (eventType: string, filename: string | null) => void,
+      ) => {
+        if (String(dir) === childDir) {
+          throw Object.assign(new Error(`simulated watch failure on ${dir}`), { code: "EMFILE" });
+        }
+        const watcher = makeNativeWatcherFor(dir);
+        if (listener) {
+          watcher.rememberListener(listener);
+        }
+        createdNativeWatchers.push(watcher);
+        return watcher;
+      },
+    );
+
+    const active = await createManager(createWatchConfig());
+
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    // Whole-tree degrade: neither the child nor the startup file paths may
+    // reach chokidar, because the same kernel limit would defeat them all.
+    expect(createdChokidarWatchers).toHaveLength(0);
+    expect(readIntervalTimer(active)).toBeTruthy();
   });
 });
