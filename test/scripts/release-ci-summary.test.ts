@@ -24,6 +24,7 @@ import {
   githubRestArgs,
   manifestChildEntries,
   readManifestArtifactArchive,
+  releaseAdvisoryJobEvidence,
   requiredChildKeysForRerunGroup,
   resolveManifestChildOriginAttempt,
   runReleaseCiGh,
@@ -70,14 +71,97 @@ describe("GitHub API commands", () => {
     expect(() => artifactDownloadTimeoutMs(0)).toThrow("artifact download size is invalid");
   });
 
-  it.skipIf(!hasUnzip)("uses cached gh for evidence reads and plain gh only for ZIP bytes", () => {
+  it.skipIf(!hasUnzip)("renders phased advisories with cached GitHub reads", () => {
     const root = mkdtempSync(join(tmpdir(), "release-ci-gh-routing-"));
     const workflowSha = "0".repeat(40);
     const targetSha = "8".repeat(40);
     const verifierSha = "c".repeat(40);
-    const fixture = trustedMainPackageFixture({ targetSha, workflowSha });
+    const fixture = trustedMainPackageFixture({ manifestVersion: 3, targetSha, workflowSha });
     const runId = fixture.runId;
     const childRunId = String(fixture.childRun.id);
+    const candidateChild = expectDefined(
+      expectedChildDispatches(runId, 1, "main", 3).find(
+        (child) => child.manifestKey === "releaseChecksCandidate",
+      ),
+      "candidate child",
+    );
+    fixture.parentJob.name = candidateChild.parentJobName;
+    fixture.childRun.display_title = candidateChild.displayTitle;
+    fixture.childRun.conclusion = "failure";
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: [
+            {
+              name: "cross_os_release_checks / Windows / packaged fresh",
+              status: "completed",
+              conclusion: "failure",
+            },
+            {
+              name: "cross_os_release_checks / macOS / packaged fresh",
+              status: "completed",
+              conclusion: "success",
+            },
+            {
+              name: "cross_os_release_checks / Linux / packaged fresh",
+              status: "completed",
+              conclusion: "success",
+            },
+          ],
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    const childEvidence = {
+      releaseChecksCandidate: {
+        compositeJobsSha256: composite.sha256,
+        dispatchActor: "github-actions[bot]",
+        effectiveRunAttempt: 1,
+        jobs: composite.jobs,
+        observedRunAttempts: [1],
+        plannedRunAttempt: 1,
+        repository: "openclaw/openclaw",
+        runId: childRunId,
+        triggeringActor: "github-actions[bot]",
+      },
+    };
+    Object.assign(fixture.manifest, {
+      advisoryJobs: releaseAdvisoryJobEvidence(childEvidence, "full", "main"),
+      childEvidence,
+      childRuns: {
+        releaseChecksCandidate: childRunId,
+        normalCi: "",
+        npmTelegram: "",
+        pluginPrereleaseIndependent: "",
+        pluginPrereleaseCandidate: "",
+        releaseChecksIndependent: "",
+      },
+      version: 4,
+    });
+    const advisoryJobs = releaseAdvisoryJobEvidence(childEvidence, "full", "main");
+    const firstAdvisory = expectDefined(advisoryJobs[0], "first advisory job");
+    for (const advisoryClaim of [
+      [
+        { ...firstAdvisory, job: "cross_os_release_checks / Linux / packaged fresh" },
+        ...advisoryJobs.slice(1),
+      ],
+      [
+        {
+          ...firstAdvisory,
+          conclusion: firstAdvisory.conclusion === "success" ? "failure" : "success",
+        },
+        ...advisoryJobs.slice(1),
+      ],
+      advisoryJobs.slice(1),
+    ]) {
+      expect(() =>
+        validateParentManifest(
+          { ...fixture.manifest, advisoryJobs: advisoryClaim },
+          { runAttempt: 1, runId, workflowRef: "main", workflowSha },
+        ),
+      ).toThrow("release validation advisory jobs differ from canonical policy evidence");
+    }
     const artifactId = fixture.artifact.id;
     const archive = makeStoredZip({
       [MANIFEST_ARTIFACT_ENTRY]: JSON.stringify(fixture.manifest),
@@ -183,7 +267,16 @@ process.stdout.write(readFileSync(process.env.ARCHIVE));
       expect(result.stderr).toBe("");
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(
-        `child: ${childRunId} OpenClaw Release Checks completed/success`,
+        `child: ${childRunId} OpenClaw Release Checks completed/failure`,
+      );
+      expect(result.stdout).toContain(
+        "advisory: releaseChecksCandidate completed/failure cross_os_release_checks / Windows / packaged fresh",
+      );
+      expect(result.stdout).toContain(
+        "advisory: releaseChecksCandidate completed/success cross_os_release_checks / macOS / packaged fresh",
+      );
+      expect(result.stdout).not.toContain(
+        "advisory: releaseChecksCandidate completed/success cross_os_release_checks / Linux",
       );
       const shimCalls = readFileSync(shimLog, "utf8");
       const plainCalls = readFileSync(plainLog, "utf8");
@@ -1992,6 +2085,8 @@ describe("release CI summary child correlation", () => {
     ...["beta", "stable", "full"].flatMap((profile) => [
       [profile, "Run QA Lab live Telegram lane"],
       [profile, "Run package acceptance / Telegram package acceptance / Run Telegram package E2E"],
+      [profile, "cross_os_release_checks / Windows / packaged fresh"],
+      [profile, "cross_os_release_checks / macOS / packaged upgrade"],
     ]),
   ])(
     "accepts %s advisory %s failures through canonical policy",
@@ -2039,6 +2134,15 @@ describe("release CI summary child correlation", () => {
         allRequiredSucceeded: true,
         children: { releaseChecks: "failure" },
       });
+      expect(evidence.children[0]?.advisoryJobs).toEqual([
+        {
+          child: "releaseChecks",
+          job: jobName,
+          status: "completed",
+          conclusion: "failure",
+          policy: "advisory",
+        },
+      ]);
     },
   );
 

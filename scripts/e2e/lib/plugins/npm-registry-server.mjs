@@ -32,7 +32,8 @@ function normalizeUpstreamRegistry(raw) {
 const upstreamRegistry = normalizeUpstreamRegistry(
   process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM || process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL,
 );
-const mergeUpstream = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM === "1";
+const upstreamMergeMode = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
+const mergeUpstream = upstreamMergeMode === "1" || upstreamMergeMode === "versions";
 const distTagOverrides = new Map(
   (process.env.OPENCLAW_NPM_REGISTRY_DIST_TAGS ?? "")
     .split(",")
@@ -65,8 +66,11 @@ const packages = new Map();
 
 function readPackageManifest(tarballPath, packageName) {
   try {
+    // GNU tar treats Windows drive letters as remote archive hosts. Keep the
+    // archive argument local, as in the prerelease artifact validator.
     const packageJson = JSON.parse(
-      execFileSync("tar", ["-xOf", tarballPath, "package/package.json"], {
+      execFileSync("tar", ["-xOf", path.basename(tarballPath), "package/package.json"], {
+        cwd: path.dirname(tarballPath),
         encoding: "utf8",
         stdio: ["ignore", "pipe", "ignore"],
       }),
@@ -203,12 +207,17 @@ async function metadataWithPublishedVersions(entry, baseUrl) {
     );
   }
   const published = metadataForProxy(await upstreamMetadata.get(entry.packageName), baseUrl);
+  // Baseline installs keep published tags; candidate installs select each local
+  // package's release while retaining published versions for older dependencies.
+  const distTags =
+    upstreamMergeMode === "versions"
+      ? { ...published["dist-tags"], ...local["dist-tags"] }
+      : { ...local["dist-tags"], ...published["dist-tags"] };
   return {
     ...published,
     ...local,
     "dist-tags": {
-      ...local["dist-tags"],
-      ...published["dist-tags"],
+      ...distTags,
       ...Object.fromEntries(distTagOverrides),
     },
     versions: { ...published.versions, ...local.versions },

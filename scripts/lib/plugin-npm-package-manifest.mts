@@ -170,11 +170,14 @@ export function resolvePluginRuntimeChannelMetadata(
   const packagedChannel: JsonRecord = { ...channel };
   for (const metadataKey of ["configuredState", "persistedAuthState"]) {
     const metadata = channel[metadataKey];
+    // Incomplete pairs may be env-backed; only module-backed probes need outputs.
     if (
       !Object.hasOwn(channel, metadataKey) ||
       !isRecord(metadata) ||
       typeof metadata.specifier !== "string" ||
-      !metadata.specifier.trim()
+      !metadata.specifier.trim() ||
+      typeof metadata.exportName !== "string" ||
+      !metadata.exportName.trim()
     ) {
       continue;
     }

@@ -702,6 +702,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
+          "OPENCLAW_QA_ALLOW_UPDATE_FIRST_HOP=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-first-hop-compat",
+        imageKind: "bare",
+        live: false,
+        name: "update-first-hop-compat",
+        resources: ["docker", "npm", "service"],
+        stateScenario: "upgrade-survivor",
+        timeoutMs: 1_500_000,
+        weight: 3,
+      },
+      {
+        command:
           "OPENCLAW_QA_ALLOW_UPDATE_RUN_SELF=1 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:update-run-package-self-upgrade",
         imageKind: "bare",
         live: false,
@@ -842,8 +853,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ].map((releaseChunk) => planFor({ ...options, releaseChunk }));
       const lanes = partitions.flatMap((partition) => partition.lanes);
 
-      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 2]);
-      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(9);
+      expect(partitions.map((partition) => partition.lanes.length)).toEqual([5, 2, 3]);
+      expect(new Set(lanes.map((lane) => lane.name)).size).toBe(10);
       expect(lanes.map(summarizeLane)).toEqual(aggregate.lanes.map(summarizeLane));
       const complete = planFor({ ...options, planReleaseAll: true });
       const packageNames = new Set(lanes.map((lane) => lane.name));
@@ -888,6 +899,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "update-channel-switch",
       "published-upgrade-survivor",
       "upgrade-survivor",
+      "update-first-hop-compat",
       "update-run-package-self-upgrade",
     ]);
     expect(pluginsRuntime.lanes.map((lane) => lane.name)).toEqual([

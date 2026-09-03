@@ -320,7 +320,11 @@ suite.define(() => {
               const messages: unknown[] = [];
               const appWindow = window as Window & {
                 openclawNativeLinkMessages?: unknown[];
-                webkit?: unknown;
+                webkit?: {
+                  messageHandlers?: {
+                    openclawLink?: { postMessage: (message: unknown) => void };
+                  };
+                };
               };
               appWindow.openclawNativeLinkMessages = messages;
               appWindow.webkit = {

@@ -15,6 +15,7 @@ import {
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
 import { BUILD_STAMP_FILE } from "../../scripts/lib/local-build-metadata-paths.mts";
 import { resolveBuildRequirement } from "../../scripts/run-node.mts";
+import { hasChannelPackageState } from "../../src/channels/plugins/package-state-probes.js";
 import { resetPluginCache } from "../../src/plugins/plugin-cache.js";
 import { resolvePluginRuntimeArtifact } from "../../src/plugins/plugin-runtime-artifact-resolution.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
@@ -165,19 +166,58 @@ describe("external plugin local dist build", () => {
       const sourceText = fs.readFileSync(sourcePackagePath, "utf8");
       const sourcePackage = JSON.parse(sourceText);
       expect(sourcePackage.openclaw.channel).toEqual({ id, label: id, ...channelStateFixtures });
-      // Env-only declarations have no module to rewrite; invalid module declarations fail the build.
-      sourcePackage.openclaw.channel.configuredState = { env: { anyOf: ["DEMO_TOKEN"] } };
-      fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
-      copyBundledPluginMetadata({ repoRoot, env: {} });
-      expect(
-        JSON.parse(fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8")).openclaw.channel
-          .configuredState,
-      ).toEqual(sourcePackage.openclaw.channel.configuredState);
-      sourcePackage.openclaw.channel.persistedAuthState.specifier = "./missing-state";
-      fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
-      expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow(
-        `channel persistedAuthState specifier './missing-state' has no runtime output for ${id}`,
-      );
+      // Reuse the built graphs: partial pairs must retain env semantics, not require a sidecar.
+      for (const metadataKey of ["configuredState", "persistedAuthState"] as const) {
+        for (const partial of [
+          {},
+          { specifier: "./absent-probe" },
+          { specifier: "./absent-probe", exportName: " \t" },
+          { exportName: "hasState" },
+          { specifier: " \t", exportName: "hasState" },
+        ]) {
+          for (const env of [undefined, { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] }]) {
+            const declaration = { ...partial, ...(env ? { env } : {}) };
+            sourcePackage.openclaw.channel = {
+              id,
+              label: id,
+              ...channelStateFixtures,
+              [metadataKey]: declaration,
+            };
+            fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
+            copyBundledPluginMetadata({ repoRoot, env: {} });
+            const channel = JSON.parse(
+              fs.readFileSync(path.join(pluginRoot, "package.json"), "utf8"),
+            ).openclaw.channel;
+            expect(channel).toEqual({ ...metadata.openclaw.channel, [metadataKey]: declaration });
+            const stateProbe = {
+              entry: { channel, pluginId: id, rootDir: pluginRoot, origin: "bundled" as const },
+              metadataKey,
+              cfg: {},
+            };
+            expect(hasChannelPackageState({ ...stateProbe, env: {} })).toBe(false);
+            expect(
+              hasChannelPackageState({
+                ...stateProbe,
+                env: { SYNTHETIC_PLUGIN_TOKEN: "synthetic-test-value" },
+              }),
+            ).toBe(Boolean(env));
+          }
+        }
+        sourcePackage.openclaw.channel = {
+          id,
+          label: id,
+          ...channelStateFixtures,
+          [metadataKey]: {
+            env: { anyOf: ["SYNTHETIC_PLUGIN_TOKEN"] },
+            specifier: "./missing-state",
+            exportName: "hasState",
+          },
+        };
+        fs.writeFileSync(sourcePackagePath, JSON.stringify(sourcePackage));
+        expect(() => copyBundledPluginMetadata({ repoRoot, env: {} })).toThrow(
+          `channel ${metadataKey} specifier './missing-state' has no runtime output for ${id}`,
+        );
+      }
       fs.writeFileSync(sourcePackagePath, sourceText);
       copyBundledPluginMetadata({ repoRoot, env: {} });
     }

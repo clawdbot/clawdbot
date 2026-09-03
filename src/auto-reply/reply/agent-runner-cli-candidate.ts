@@ -221,6 +221,8 @@ export async function runCliFallbackCandidate(
           onReasoningProgress: async (payload) => {
             await turn.opts?.onReasoningProgress?.(payload);
           },
+          onCompactionStart: turn.opts?.onCompactionStart,
+          onCompactionEnd: turn.opts?.onCompactionEnd,
           onToolEvent: async (payload) => {
             if (!params.preserveProgressCallbackStartOrder) {
               const commandBearing = await cliToolSummaryTracker.noteToolEvent(payload);

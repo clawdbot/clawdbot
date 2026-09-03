@@ -117,11 +117,47 @@ describe("Telegram QA transport adapter", () => {
     });
     mocks.userbotStart.mockResolvedValue({
       assertHealthy: mocks.userbotAssertHealthy,
+      chatId: -100123,
       close: mocks.userbotClose,
       send: mocks.userbotSend,
     });
     mocks.proxyDrainUpdates.mockResolvedValue(undefined);
     mocks.shouldRetainQaGatewayCredentialLease.mockResolvedValue(false);
+  });
+
+  it("targets the SUT DM for direct-message-only scenarios", async () => {
+    mocks.userbotStart.mockResolvedValueOnce({
+      assertHealthy: mocks.userbotAssertHealthy,
+      chatId: 200,
+      close: mocks.userbotClose,
+      send: mocks.userbotSend,
+    });
+    const adapter = await createTelegramQaTransportAdapter({
+      adapterOptions: { transportPolicy: { directMessageOnly: true } },
+      messages: {},
+    } as never);
+
+    expect(mocks.userbotStart).toHaveBeenCalledWith(
+      expect.objectContaining({ chatId: "@sut_bot" }),
+    );
+    expect(adapter.createGatewayConfig?.({ baseUrl: "http://127.0.0.1:1234" })).toMatchObject({
+      channels: {
+        telegram: {
+          accounts: {
+            sut: { allowFrom: ["100"], dmPolicy: "allowlist" },
+          },
+        },
+      },
+    });
+    expect(adapter.buildAgentDelivery({ target: "dm:qa-operator" })).toEqual({
+      channel: "telegram",
+      to: "100",
+      replyChannel: "telegram",
+      replyTo: "100",
+    });
+
+    await adapter.cleanup?.();
+    await adapter.cleanupAfterGatewayStop?.();
   });
 
   it("leases a Test Server userbot and isolates its shared group by default", async () => {
@@ -162,6 +198,12 @@ describe("Telegram QA transport adapter", () => {
         },
       },
     });
+    expect(adapter.buildAgentDelivery({ target: "group:qa-channel" })).toEqual({
+      channel: "telegram",
+      to: "-100123",
+      replyChannel: "telegram",
+      replyTo: "-100123",
+    });
 
     await adapter.cleanup?.();
     await adapter.cleanupAfterGatewayStop?.();
@@ -190,6 +232,7 @@ describe("Telegram QA transport adapter", () => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
+        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };
@@ -289,6 +332,7 @@ describe("Telegram QA transport adapter", () => {
       onUpdate = params.onUpdate;
       return {
         assertHealthy: mocks.userbotAssertHealthy,
+        chatId: -100123,
         close: mocks.userbotClose,
         send: mocks.userbotSend,
       };

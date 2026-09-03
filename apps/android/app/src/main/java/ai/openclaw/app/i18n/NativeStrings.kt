@@ -91,7 +91,7 @@ internal fun notifyNativeLocaleChanged() {
 }
 
 @OptIn(ExperimentalForInheritanceCoroutinesApi::class)
-private class LocaleResolvingStateFlow<T, R>(
+internal class LocaleResolvingStateFlow<T, R>(
   private val source: StateFlow<T>,
   private val transform: (T) -> R,
 ) : StateFlow<R> {
