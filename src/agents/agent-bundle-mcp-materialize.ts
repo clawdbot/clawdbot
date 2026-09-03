@@ -11,6 +11,7 @@ import {
   setPluginToolMeta,
   type PluginToolMcpMeta,
 } from "../plugins/tool-metadata.js";
+import { isCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
@@ -23,6 +24,7 @@ import type {
   McpCatalogTool,
   McpToolCatalog,
   SessionMcpRuntime,
+  SessionMcpVolatileHeaderTurn,
 } from "./agent-bundle-mcp-types.js";
 import {
   projectMcpCallToolResult,
@@ -36,6 +38,31 @@ import { toToolSearchJsonSafe } from "./tool-search-json.js";
 import type { AnyAgentTool } from "./tools/common.js";
 function isAppOnlyTool(tool: McpCatalogTool): boolean {
   return tool.uiVisibility !== undefined && !tool.uiVisibility.includes("model");
+}
+
+function captureVolatileHeadersForTurn(
+  runtime: SessionMcpRuntime,
+): SessionMcpVolatileHeaderTurn | undefined {
+  const captured = runtime.captureVolatileHeadersForTurn?.();
+  if (captured || !isCombinedSessionMcpRuntime(runtime)) {
+    return captured;
+  }
+  const partContexts = runtime.managedParts.flatMap((part) => {
+    const context = captureVolatileHeadersForTurn(part);
+    return context ? [context] : [];
+  });
+  if (partContexts.length === 0) {
+    return undefined;
+  }
+  return {
+    run<T>(task: () => T): T {
+      const nested = partContexts.reduceRight<() => T>(
+        (next, context) => () => context.run(next),
+        task,
+      );
+      return nested();
+    },
+  };
 }
 
 async function releaseRuntimeLease(params: {
@@ -451,13 +478,20 @@ export async function materializeBundleMcpToolsForRun(params: {
   disposeRuntime?: () => Promise<void>;
 }): Promise<BundleMcpToolRuntime> {
   const runtime = params.runtime;
+  // Capture before the first await: a concurrent turn may refresh the reused
+  // runtime while this turn is still listing or materializing its tools.
+  const volatileHeadersForTurn = captureVolatileHeadersForTurn(runtime);
+  const runWithTurnContext = <T>(signal: AbortSignal | undefined, task: () => T): T =>
+    runWithSessionMcpRequestSignal(signal, () =>
+      volatileHeadersForTurn ? volatileHeadersForTurn.run(task) : task(),
+    );
   let disposed = false;
   let allowedAppToolsByServer: Map<string, Set<string>> | undefined;
   const releaseLease = runtime.acquireLease?.();
   runtime.markUsed();
   let catalog;
   try {
-    catalog = await runtime.getCatalog();
+    catalog = await runWithTurnContext(undefined, () => runtime.getCatalog());
   } catch (error) {
     await releaseRuntimeLease({ runtime, releaseLease });
     throw error;
@@ -470,7 +504,7 @@ export async function materializeBundleMcpToolsForRun(params: {
     catalog: materializedCatalog,
     reservedToolNames,
     createExecute: (tool) => (toolCallId: string, input: unknown, signal?: AbortSignal) =>
-      runWithSessionMcpRequestSignal(signal, async () => {
+      runWithTurnContext(signal, async () => {
         if (!Object.hasOwn(catalog.servers, tool.serverName)) {
           const connect = runtime.requesterConnect?.createExecute(tool.serverName);
           if (connect) {
@@ -517,7 +551,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       }),
     createResourceListExecute: runtime.listResources
       ? (serverName) => (_toolCallId, _input, signal) =>
-          runWithSessionMcpRequestSignal(signal, async () => {
+          runWithTurnContext(signal, async () => {
             runtime.markUsed();
             return toJsonAgentToolResult({
               serverName,
@@ -528,7 +562,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createResourceReadExecute: runtime.readResource
       ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
-          runWithSessionMcpRequestSignal(signal, async () => {
+          runWithTurnContext(signal, async () => {
             const uri = requireStringArg(input, "uri");
             runtime.markUsed();
             return toJsonAgentToolResult({
@@ -540,7 +574,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createPromptListExecute: runtime.listPrompts
       ? (serverName) => (_toolCallId, _input, signal) =>
-          runWithSessionMcpRequestSignal(signal, async () => {
+          runWithTurnContext(signal, async () => {
             runtime.markUsed();
             return toJsonAgentToolResult({
               serverName,
@@ -551,7 +585,7 @@ export async function materializeBundleMcpToolsForRun(params: {
       : undefined,
     createPromptGetExecute: runtime.getPrompt
       ? (serverName) => (_toolCallId: string, input: unknown, signal?: AbortSignal) =>
-          runWithSessionMcpRequestSignal(signal, async () => {
+          runWithTurnContext(signal, async () => {
             runtime.markUsed();
             return toJsonAgentToolResult({
               serverName,

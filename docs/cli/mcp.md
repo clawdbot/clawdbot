@@ -738,6 +738,7 @@ Connects to a remote MCP server over HTTP Server-Sent Events.
 | --------------------------- | ---------------------------------------------------------------- |
 | `url`                       | HTTP or HTTPS URL of the remote server (required)                |
 | `headers`                   | Optional key-value map of HTTP headers (for example auth tokens) |
+| `volatileHeaders`           | Per-turn headers for the embedded session runtime                |
 | `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                   |
 | `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                   |
 | `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`          |
@@ -765,6 +766,8 @@ Example:
 ```
 
 Sensitive values in `url` (userinfo) and `headers` are redacted in logs and status output. `openclaw mcp doctor` warns when sensitive-looking `headers` or `env` entries contain literal values, so operators can move those values out of committed config.
+
+`volatileHeaders` is embedded-session-runtime-only. It is excluded from catalog/cache identity, re-read from config for each turn, and bound to that turn's MCP requests. External CLI runners and node hosts ignore it. Do not use it for managed authorization: OAuth and auth-profile modes own the `Authorization` header.
 
 ### OAuth workflow
 
@@ -878,6 +881,7 @@ If the provider rotates tokens or the authorization state gets stuck, run `openc
 | `url`                       | HTTP or HTTPS URL of the remote server (required)                                      |
 | `transport`                 | Set to `"streamable-http"` to select this transport; when omitted, OpenClaw uses `sse` |
 | `headers`                   | Optional key-value map of HTTP headers (for example auth tokens)                       |
+| `volatileHeaders`           | Per-turn headers for the embedded session runtime                                      |
 | `connectionTimeoutMs`       | Per-server connection timeout in ms (optional)                                         |
 | `requestTimeoutMs`          | Per-server MCP request timeout in milliseconds                                         |
 | `auth: "oauth"`             | Use MCP OAuth credentials saved by `openclaw mcp login`                                |

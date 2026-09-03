@@ -708,6 +708,7 @@ export const FIELD_LABELS: Record<string, string> = {
   mcp: "MCP",
   "mcp.servers": "MCP Servers",
   "mcp.servers.*.enabled": "MCP Server Enabled",
+  "mcp.servers.*.volatileHeaders": "Embedded MCP Volatile Headers",
   "mcp.servers.*.auth": "MCP Server Auth",
   "mcp.servers.*.oauth": "MCP OAuth",
   "mcp.servers.*.oauth.identity": "MCP OAuth Identity",

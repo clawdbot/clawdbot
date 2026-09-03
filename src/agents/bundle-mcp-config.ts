@@ -66,6 +66,9 @@ export function toCliBundleMcpServerConfig(server: BundleMcpServerConfig): Bundl
   const next = { ...server } as Record<string, unknown>;
   const rawTransport = next.transport;
   delete next.transport;
+  // Volatile headers are refreshed only by the embedded session runtime.
+  // External runners must not receive a field they would freeze or reject.
+  delete next.volatileHeaders;
   if (typeof next.type === "string") {
     return next as BundleMcpServerConfig;
   }

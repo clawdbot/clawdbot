@@ -6,12 +6,14 @@ import {
   clampPositiveTimerTimeoutMs,
   resolvePositiveTimerTimeoutMs,
 } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
 import { createDedupeCache } from "../infra/dedupe.js";
 import { logWarn } from "../logger.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
+import { toMcpStringRecord } from "./mcp-config-shared.js";
 import {
   describeHttpMcpServerLaunchConfig,
   resolveHttpMcpServerLaunchConfig,
@@ -52,6 +54,7 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
   transportType: HttpMcpTransportType;
   url: string;
   headers?: Record<string, string>;
+  volatileHeaders?: Record<string, string>;
   auth?: "oauth";
   oauth?: ResolvedMcpOAuthConfig;
   sslVerify?: boolean;
@@ -80,6 +83,25 @@ function warnDroppedStdioEnvOnce(serverName: string, key: string): void {
   logWarn(
     `bundle-mcp: server "${logServerName}": env "${logKey}" is blocked for stdio startup safety and was ignored.`,
   );
+}
+
+export function resolveMcpVolatileHeaders(
+  rawServer: unknown,
+  options?: {
+    onDroppedHeader?: (key: string, value: unknown) => void;
+    onMalformedHeaders?: (value: unknown) => void;
+  },
+): Record<string, string> | undefined {
+  if (!isRecord(rawServer) || rawServer.volatileHeaders === undefined) {
+    return undefined;
+  }
+  if (!isRecord(rawServer.volatileHeaders)) {
+    options?.onMalformedHeaders?.(rawServer.volatileHeaders);
+    return undefined;
+  }
+  return toMcpStringRecord(rawServer.volatileHeaders, {
+    onDroppedEntry: options?.onDroppedHeader,
+  });
 }
 
 function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
@@ -185,11 +207,29 @@ function resolveHttpTransportConfig(
   if (!launch.ok) {
     return null;
   }
+  const volatileHeaders = resolveMcpVolatileHeaders(
+    rawServer,
+    logWarnings
+      ? {
+          onDroppedHeader: (key: string) => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": volatile header "${key}" has an unsupported value type and was ignored.`,
+            );
+          },
+          onMalformedHeaders: () => {
+            logWarn(
+              `bundle-mcp: server "${serverName}": "volatileHeaders" must be a JSON object; the value was ignored.`,
+            );
+          },
+        }
+      : undefined,
+  );
   return {
     kind: "http",
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
+    ...(volatileHeaders ? { volatileHeaders } : {}),
     ...(rawServer &&
     typeof rawServer === "object" &&
     (rawServer as { auth?: unknown }).auth === "oauth"

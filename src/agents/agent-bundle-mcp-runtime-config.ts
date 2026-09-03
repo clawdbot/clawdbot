@@ -1,5 +1,6 @@
 /** Session MCP config loading, filtering, and catalog fingerprints. */
 import crypto from "node:crypto";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionToolOverrides } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
@@ -51,6 +52,21 @@ function createCatalogFingerprint(params: {
   // Algorithm changes can cause one cache miss, but no persisted state migration.
   // Per-user url/headers never enter this hash (see redactMcpServersForFingerprint).
   return crypto.createHash("sha256").update(JSON.stringify(params)).digest("hex");
+}
+
+function omitVolatileHeadersFromFingerprint(
+  mcpServers: Record<string, unknown>,
+): Record<string, unknown> {
+  return Object.fromEntries(
+    Object.entries(mcpServers).map(([serverName, rawServer]) => {
+      if (!isRecord(rawServer) || !Object.hasOwn(rawServer, "volatileHeaders")) {
+        return [serverName, rawServer];
+      }
+      const stableServer = { ...rawServer };
+      delete stableServer.volatileHeaders;
+      return [serverName, stableServer];
+    }),
+  );
 }
 
 function filterMcpServers<T>(
@@ -118,9 +134,11 @@ export function loadSessionMcpConfig(params: {
       Object.hasOwn(mcpServers, serverName),
     ),
   );
-  const fingerprintServers = params.redactConnectionServerNames?.size
-    ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
-    : mcpServers;
+  const fingerprintServers = omitVolatileHeadersFromFingerprint(
+    params.redactConnectionServerNames?.size
+      ? redactMcpServersForFingerprint(mcpServers, params.redactConnectionServerNames)
+      : mcpServers,
+  );
   const result = {
     loaded: {
       ...loaded,

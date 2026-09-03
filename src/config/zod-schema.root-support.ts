@@ -1,4 +1,5 @@
 import { isHttpsUrl, isHttpUrl } from "@openclaw/net-policy/url-protocol";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { findEdgeAuthIssue } from "../shared/gateway-edge-auth-headers.js";
@@ -255,7 +256,7 @@ export const TalkSchema = z
     }
   });
 
-const McpServerSchema = z
+const McpServerObjectSchema = z
   .object({
     enabled: z.boolean().optional(),
     command: z.string().optional(),
@@ -272,6 +273,12 @@ const McpServerSchema = z
       .union([z.literal("stdio"), z.literal("sse"), z.literal("streamable-http")])
       .optional(),
     headers: z
+      .record(
+        z.string(),
+        z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
+      )
+      .optional(),
+    volatileHeaders: z
       .record(
         z.string(),
         z.union([z.string().register(sensitive), z.number(), z.boolean()]).register(sensitive),
@@ -314,92 +321,100 @@ const McpServerSchema = z
       })
       .optional(),
   })
-  .superRefine((data, ctx) => {
-    // This schema is .catchall(z.unknown()) (open-world server options), so
-    // unknown keys survive into this refine; retired aliases are rejected here.
-    for (const key of [
-      "connectTimeout",
-      "connect_timeout",
-      "timeout",
-      "workingDirectory",
-      "supports_parallel_tool_calls",
-      "ssl_verify",
-      "client_cert",
-      "client_key",
-    ] as const) {
-      if (Object.hasOwn(data, key)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: `Unrecognized key: "${key}"`,
-        });
-      }
-    }
-    const codex = data.codex;
-    if (codex && Object.hasOwn(codex, "default_tools_approval_mode")) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["codex", "default_tools_approval_mode"],
-        message: 'Unrecognized key: "default_tools_approval_mode"',
-      });
-    }
-    if (Object.hasOwn(data, "disabled")) {
-      const disabled = Reflect.get(data, "disabled") as unknown;
-      const replacement =
-        typeof disabled === "boolean"
-          ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
-          : 'the canonical "enabled" boolean instead';
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: `unsupported key "disabled"; use ${replacement}`,
-        path: ["disabled"],
-      });
-    }
-    if (data.oauth?.identity === "per-requester") {
-      if (data.auth !== "oauth") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'oauth.identity "per-requester" requires auth: "oauth"',
-          path: ["oauth", "identity"],
-        });
-      }
-      if (data.oauth.authProfileId) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'oauth.authProfileId cannot be used with oauth.identity "per-requester"',
-          path: ["oauth", "authProfileId"],
-        });
-      }
-      if (!data.url) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message: 'oauth.identity "per-requester" requires an HTTP server URL',
-          path: ["oauth", "identity"],
-        });
-      }
-      // Command precedence would resolve stdio and strand the server: partitioned
-      // out of the static runtime with no requester sign-in path.
-      if (data.command !== undefined || data.transport === "stdio") {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            'oauth.identity "per-requester" cannot be combined with a command or "stdio" transport',
-          path: ["oauth", "identity"],
-        });
-      }
-    }
-    // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
-    if (
-      data.transport === "stdio" &&
-      (typeof data.command !== "string" || data.command.trim().length === 0)
-    ) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message: '"stdio" transport requires a non-empty command',
-        path: ["transport"],
-      });
-    }
-  })
   .catchall(z.unknown());
+
+type McpServerSchemaValue = z.infer<typeof McpServerObjectSchema>;
+
+function refineMcpServer(data: McpServerSchemaValue, ctx: z.RefinementCtx): void {
+  // This schema is .catchall(z.unknown()) (open-world server options), so
+  // unknown keys survive into this refine; retired aliases are rejected here.
+  for (const key of [
+    "connectTimeout",
+    "connect_timeout",
+    "timeout",
+    "workingDirectory",
+    "supports_parallel_tool_calls",
+    "ssl_verify",
+    "client_cert",
+    "client_key",
+  ] as const) {
+    if (Object.hasOwn(data, key)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `Unrecognized key: "${key}"`,
+      });
+    }
+  }
+  const codex = data.codex;
+  if (codex && Object.hasOwn(codex, "default_tools_approval_mode")) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["codex", "default_tools_approval_mode"],
+      message: 'Unrecognized key: "default_tools_approval_mode"',
+    });
+  }
+  if (Object.hasOwn(data, "disabled")) {
+    const disabled = Reflect.get(data, "disabled") as unknown;
+    const replacement =
+      typeof disabled === "boolean"
+        ? `"enabled: ${!disabled}" instead, then run "openclaw doctor --fix" to migrate existing config`
+        : 'the canonical "enabled" boolean instead';
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: `unsupported key "disabled"; use ${replacement}`,
+      path: ["disabled"],
+    });
+  }
+  if (data.oauth?.identity === "per-requester") {
+    if (data.auth !== "oauth") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'oauth.identity "per-requester" requires auth: "oauth"',
+        path: ["oauth", "identity"],
+      });
+    }
+    if (data.oauth.authProfileId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'oauth.authProfileId cannot be used with oauth.identity "per-requester"',
+        path: ["oauth", "authProfileId"],
+      });
+    }
+    if (!data.url) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'oauth.identity "per-requester" requires an HTTP server URL',
+        path: ["oauth", "identity"],
+      });
+    }
+    // Command precedence would resolve stdio and strand the server: partitioned
+    // out of the static runtime with no requester sign-in path.
+    if (data.command !== undefined || data.transport === "stdio") {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'oauth.identity "per-requester" cannot be combined with a command or "stdio" transport',
+        path: ["oauth", "identity"],
+      });
+    }
+  }
+  // transport "stdio" requires a non-empty command — URL-only servers must use "sse" or "streamable-http"
+  if (
+    data.transport === "stdio" &&
+    (typeof data.command !== "string" || data.command.trim().length === 0)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: '"stdio" transport requires a non-empty command',
+      path: ["transport"],
+    });
+  }
+}
+
+const McpServerSchema = McpServerObjectSchema.superRefine(refineMcpServer);
+const NodeHostMcpServerSchema = McpServerObjectSchema.omit({
+  volatileHeaders: true,
+}).superRefine(refineMcpServer);
 
 const RESERVED_MCP_SERVER_NAME = "__proto__";
 const RESERVED_MCP_SERVER_NAME_ERROR = 'MCP server name "__proto__" is reserved; rename the server';
@@ -413,17 +428,16 @@ export const NodeHostMcpServerNameSchema = McpServerNameSchema.refine(
   "MCP server name must be non-empty and must not have surrounding whitespace",
 );
 
-function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
+function createMcpServersSchema<T extends z.ZodType>(
+  serverNameSchema: z.ZodType<string>,
+  serverSchema: T,
+  options?: { stripVolatileHeaders?: boolean },
+) {
   return z.preprocess(
     (value, ctx) => {
       // Plain assignment treats "__proto__" as a setter, so one unhardened map builder
       // can silently drop the server. Reject the name at the config boundary instead.
-      if (
-        value !== null &&
-        typeof value === "object" &&
-        !Array.isArray(value) &&
-        Object.hasOwn(value, RESERVED_MCP_SERVER_NAME)
-      ) {
+      if (isRecord(value) && Object.hasOwn(value, RESERVED_MCP_SERVER_NAME)) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
           path: [RESERVED_MCP_SERVER_NAME],
@@ -431,9 +445,21 @@ function createMcpServersSchema(serverNameSchema: z.ZodType<string>) {
         });
         return z.NEVER;
       }
-      return value;
+      if (!options?.stripVolatileHeaders || !isRecord(value)) {
+        return value;
+      }
+      return Object.fromEntries(
+        Object.entries(value).map(([serverName, server]) => {
+          if (!isRecord(server) || !Object.hasOwn(server, "volatileHeaders")) {
+            return [serverName, server];
+          }
+          const projected = { ...server };
+          delete projected.volatileHeaders;
+          return [serverName, projected];
+        }),
+      );
     },
-    z.record(serverNameSchema, McpServerSchema),
+    z.record(serverNameSchema, serverSchema),
   );
 }
 
@@ -455,7 +481,7 @@ export function validateHttpOrigin(value: string): boolean {
 
 export const McpConfigSchema = z
   .strictObject({
-    servers: createMcpServersSchema(McpServerNameSchema).optional(),
+    servers: createMcpServersSchema(McpServerNameSchema, McpServerSchema).optional(),
     apps: z
       .strictObject({
         enabled: z.boolean().optional(),
@@ -485,7 +511,9 @@ export const NodeHostSchema = z
       .optional(),
     mcp: z
       .strictObject({
-        servers: createMcpServersSchema(NodeHostMcpServerNameSchema).optional(),
+        servers: createMcpServersSchema(NodeHostMcpServerNameSchema, NodeHostMcpServerSchema, {
+          stripVolatileHeaders: true,
+        }).optional(),
       })
       .optional(),
     skills: z
