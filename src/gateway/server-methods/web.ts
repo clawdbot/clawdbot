@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 // Web login methods delegate QR-login start/wait requests to the active channel
 // plugin that owns web login gateway methods.
 import {
@@ -8,19 +9,43 @@ import {
   validateWebLoginWaitParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins, normalizeChannelId } from "../../channels/plugins/index.js";
+import { listLoadedChannelPluginsForRegistry } from "../../channels/plugins/registry-loaded.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
+import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const WEB_LOGIN_METHODS = new Set(["web.login.start", "web.login.wait"]);
 
+function resolveWebLoginChannelId(
+  raw: string,
+  plugins: ReturnType<typeof listLoadedChannelPluginsForRegistry>,
+) {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return null;
+  }
+  return (
+    plugins.find(
+      (plugin) =>
+        normalizeOptionalLowercaseString(plugin.id) === normalized ||
+        plugin.meta?.aliases?.some(
+          (alias) => normalizeOptionalLowercaseString(alias) === normalized,
+        ),
+    )?.id ?? null
+  );
+}
+
 /** Resolves the channel plugin that currently owns web QR-login methods. */
 const resolveWebLoginProvider = (channelId?: string) => {
-  const plugins = listChannelPlugins();
+  const registry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+  const plugins = registry ? listLoadedChannelPluginsForRegistry(registry) : listChannelPlugins();
   if (channelId) {
-    const normalizedChannelId = normalizeChannelId(channelId);
+    const normalizedChannelId = registry
+      ? resolveWebLoginChannelId(channelId, plugins)
+      : normalizeChannelId(channelId);
     return normalizedChannelId
       ? (plugins.find((plugin) => plugin.id === normalizedChannelId) ?? null)
       : null;
