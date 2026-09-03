@@ -1,6 +1,7 @@
 import AudioToolbox
 @preconcurrency import AVFoundation
 import Foundation
+import OpenClawKit
 import OSLog
 import Speech
 
