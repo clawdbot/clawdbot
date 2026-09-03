@@ -131,14 +131,18 @@ type HttpContinuationEntry =
   | {
       kind: "ready";
       sessionId: string;
-      generation: number;
       state: ResponsesContinuationState;
       idleTimer: ReturnType<typeof setTimeout>;
     }
-  | { kind: "claimed"; sessionId: string; generation: number };
+  | { kind: "claimed"; sessionId: string };
 
 const httpContinuationEntries = new Map<string, HttpContinuationEntry>();
-let nextHttpContinuationGeneration = 1;
+
+function deleteHttpContinuationIfOwned(key: string, entry: HttpContinuationEntry): void {
+  if (httpContinuationEntries.get(key) === entry) {
+    httpContinuationEntries.delete(key);
+  }
+}
 
 type HttpContinuationIdentity = {
   apiKey: string;
@@ -175,44 +179,41 @@ export function claimOpenAIResponsesHttpContinuation(
   if (previous?.kind === "ready") {
     clearTimeout(previous.idleTimer);
   }
-  const generation = nextHttpContinuationGeneration++;
-  const claimed = { kind: "claimed", sessionId: params.sessionId, generation } as const;
+  const claimed = { kind: "claimed", sessionId: params.sessionId } as const;
   httpContinuationEntries.set(key, claimed);
-  const wireRequest = resolveResponsesContinuationRequest(
-    previous?.kind === "ready" ? previous.state : undefined,
-    params.request,
-  ).request;
-  return {
-    request: wireRequest,
-    commit: (effectiveRequest: ResponsesContinuationRequest, response: ContinuationResponse) => {
-      if (httpContinuationEntries.get(key) !== claimed) {
-        return;
-      }
-      const idleTimer = setTimeout(() => {
-        const current = httpContinuationEntries.get(key);
-        if (current?.kind === "ready" && current.generation === generation) {
-          httpContinuationEntries.delete(key);
+  try {
+    return {
+      request: resolveResponsesContinuationRequest(
+        previous?.kind === "ready" ? previous.state : undefined,
+        params.request,
+      ).request,
+      commit: (effectiveRequest: ResponsesContinuationRequest, response: ContinuationResponse) => {
+        if (httpContinuationEntries.get(key) !== claimed) {
+          return;
         }
-      }, HTTP_CONTINUATION_IDLE_TTL_MS);
-      idleTimer.unref?.();
-      const ready = {
-        ...claimed,
-        kind: "ready",
-        state: {
-          lastRequest: effectiveRequest,
-          lastResponseId: response.id,
-          lastResponseItems: response.output,
-        },
-        idleTimer,
-      } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
-      httpContinuationEntries.set(key, ready);
-    },
-    release: () => {
-      if (httpContinuationEntries.get(key) === claimed) {
-        httpContinuationEntries.delete(key);
-      }
-    },
-  };
+        const ready = {
+          ...claimed,
+          kind: "ready",
+          state: {
+            lastRequest: effectiveRequest,
+            lastResponseId: response.id,
+            lastResponseItems: response.output,
+          },
+          idleTimer: setTimeout(
+            () => deleteHttpContinuationIfOwned(key, ready),
+            HTTP_CONTINUATION_IDLE_TTL_MS,
+          ),
+        } satisfies Extract<HttpContinuationEntry, { kind: "ready" }>;
+        ready.idleTimer.unref?.();
+        httpContinuationEntries.set(key, ready);
+      },
+      release: () => deleteHttpContinuationIfOwned(key, claimed),
+    };
+  } catch (error) {
+    // Preparation failed before the caller received a handle that could release this claim.
+    deleteHttpContinuationIfOwned(key, claimed);
+    throw error;
+  }
 }
 
 registerSessionResourceCleanup((sessionId) => {
