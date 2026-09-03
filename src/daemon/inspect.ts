@@ -416,6 +416,18 @@ type ScheduledTaskInfo = {
   taskToRun?: string;
 };
 
+const SCHTASKS_TASK_NAME_KEYS = new Set([
+  "taskname",
+  "task name",
+  "nombre de tarea",
+  "aufgabenname",
+]);
+const SCHTASKS_TASK_TO_RUN_KEYS = new Set([
+  "task to run",
+  "tarea que se ejecutará",
+  "auszuführende aufgabe",
+]);
+
 function parseSchtasksList(output: string): ScheduledTaskInfo[] {
   const tasks: ScheduledTaskInfo[] = [];
   let current: ScheduledTaskInfo | null = null;
@@ -438,7 +450,7 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
     if (!value) {
       continue;
     }
-    if (key === "taskname") {
+    if (SCHTASKS_TASK_NAME_KEYS.has(key)) {
       if (current) {
         tasks.push(current);
       }
@@ -448,7 +460,7 @@ function parseSchtasksList(output: string): ScheduledTaskInfo[] {
     if (!current) {
       continue;
     }
-    if (key === "task to run") {
+    if (SCHTASKS_TASK_TO_RUN_KEYS.has(key)) {
       current.taskToRun = value;
     }
   }

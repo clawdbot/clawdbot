@@ -9,6 +9,10 @@ import {
   findExtraGatewayServices,
   renderGatewayServiceCleanupHints,
 } from "./inspect.js";
+import {
+  SCHTASKS_GERMAN_READY_LIST,
+  SCHTASKS_SPANISH_READY_LIST,
+} from "./test-helpers/schtasks-fixtures.js";
 
 const { execSchtasksMock } = vi.hoisted(() => ({
   execSchtasksMock: vi.fn(),
@@ -533,6 +537,48 @@ describe("findExtraGatewayServices (win32)", () => {
     const result = await findExtraGatewayServices({}, { deep: true });
     // The \OpenClaw Gateway task is the live launcher — it must be skipped.
     // Only the unrelated clawdbot task should be flagged.
+    expect(result).toEqual([
+      {
+        platform: "win32",
+        label: "Clawdbot Legacy",
+        detail: "task: Clawdbot Legacy, run: C:\\clawdbot\\clawdbot.exe run",
+        scope: "system",
+        marker: "clawdbot",
+        legacy: true,
+      },
+    ]);
+  });
+
+  it.each([
+    {
+      locale: "Spanish",
+      stdout: [
+        SCHTASKS_SPANISH_READY_LIST,
+        "",
+        "Nombre de tarea: Clawdbot Legacy",
+        "Tarea que se ejecutará: C:\\clawdbot\\clawdbot.exe run",
+        "",
+      ].join("\r\n"),
+    },
+    {
+      locale: "German",
+      stdout: [
+        SCHTASKS_GERMAN_READY_LIST,
+        "Auszuführende Aufgabe: C:\\Program Files\\OpenClaw\\openclaw.exe gateway run",
+        "",
+        "Aufgabenname: Clawdbot Legacy",
+        "Auszuführende Aufgabe: C:\\clawdbot\\clawdbot.exe run",
+        "",
+      ].join("\r\n"),
+    },
+  ])("collects localized $locale schtasks LIST tasks", async ({ stdout }) => {
+    execSchtasksMock.mockResolvedValueOnce({
+      code: 0,
+      stdout,
+      stderr: "",
+    });
+
+    const result = await findExtraGatewayServices({}, { deep: true });
     expect(result).toEqual([
       {
         platform: "win32",
