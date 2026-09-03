@@ -1,6 +1,7 @@
 import type { ServerResponse } from "node:http";
 import type { Dispatcher } from "undici";
 import { describe, expect, it } from "vitest";
+import { responseWithRelease } from "../../plugin-sdk/fetch-runtime.js";
 import { createBoundedProviderBinaryStream } from "../../plugin-sdk/provider-binary-stream.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { captureHttpExchange } from "../../proxy-capture/runtime.js";
@@ -27,7 +28,7 @@ async function withinDeadline<T>(operation: Promise<T>): Promise<T> {
 }
 
 describe("guarded request release", () => {
-  it.each(["unread", "prefix", "overflow", "wrapped", "binary"] as const)(
+  it.each(["unread", "prefix", "overflow", "wrapped", "response", "binary"] as const)(
     "ends only the %s request while a captured sibling keeps its pooled transport",
     async (readerKind) => {
       const abandonedClosed = createDeferredCore();
@@ -111,11 +112,17 @@ describe("guarded request release", () => {
 
             abandonedOperation = (async () => {
               const reason = new Error("body limit reached");
-              if (readerKind === "wrapped") {
-                const wrapped = wrapGuardedBodyStream({
-                  body: abandoned.response.body!,
-                  cleanup: abandoned.release,
-                });
+              if (readerKind === "wrapped" || readerKind === "response") {
+                const wrapped =
+                  readerKind === "response"
+                    ? responseWithRelease(abandoned.response, {
+                        kind: "transport",
+                        release: abandoned.release,
+                      }).body!
+                    : wrapGuardedBodyStream({
+                        body: abandoned.response.body!,
+                        cleanup: abandoned.release,
+                      });
                 const reader = wrapped.getReader();
                 try {
                   expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);

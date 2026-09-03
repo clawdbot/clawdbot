@@ -669,7 +669,7 @@ async function safeFetch(params: {
       auditContext: "msteams.attachment",
       timeoutMs: params.timeoutMs ?? MSTEAMS_REQUEST_TIMEOUT_MS,
     });
-    return responseWithRelease(guarded.response, guarded.release);
+    return responseWithRelease(guarded.response, { kind: "transport", release: guarded.release });
   }
 
   try {

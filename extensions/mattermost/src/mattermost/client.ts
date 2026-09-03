@@ -200,7 +200,7 @@ export function createMattermostClient(params: {
       signal: requestInit.signal ?? undefined,
       timeoutMs,
     });
-    return responseWithRelease(response, release);
+    return responseWithRelease(response, { kind: "transport", release });
   };
 
   const timedExternalFetchImpl:
@@ -225,7 +225,7 @@ export function createMattermostClient(params: {
           const response = await externalFetchImpl(input, { ...requestInit, signal });
           // Match guarded production fetches: retain cancellation and the
           // request deadline until the custom response body is consumed.
-          return responseWithRelease(response, async () => cleanup());
+          return responseWithRelease(response, { kind: "after-body", release: cleanup });
         } catch (error) {
           cleanup();
           throw error;

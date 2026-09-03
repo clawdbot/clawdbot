@@ -81,7 +81,7 @@ async function requestGraph(params: {
       );
     }
     releaseInFinally = false;
-    return responseWithRelease(response, release);
+    return responseWithRelease(response, { kind: "transport", release });
   } finally {
     if (releaseInFinally) {
       await release();

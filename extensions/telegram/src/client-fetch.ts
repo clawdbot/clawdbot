@@ -213,7 +213,7 @@ export function createTelegramClientFetch(params: {
         }
         // grammY consumes JSON after fetch resolves; keep its deadline and
         // cancellation linked until the response body settles.
-        return responseWithRelease(response, releaseRequest);
+        return responseWithRelease(response, { kind: "after-body", release: releaseRequest });
       } catch (err) {
         await releaseRequest();
         if (requestTimedOut && timeoutError) {

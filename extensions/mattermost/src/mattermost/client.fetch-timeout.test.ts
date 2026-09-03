@@ -1,6 +1,8 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Mattermost tests cover real REST client timeout behavior.
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createMattermostClient,
   createMattermostDirectChannelWithRetry,
@@ -69,6 +71,85 @@ async function withHangingMattermostServer(
 }
 
 describe("Mattermost REST client fetch timeout", () => {
+  it("closes an abandoned guarded response before its request deadline", async () => {
+    const closed = createDeferred<void>();
+    const parent = new AbortController();
+    let cancellation: Promise<void> | undefined;
+    try {
+      await withServer(
+        (request, response) => {
+          request.socket.once("close", () => closed.resolve());
+          response.write("unfinished");
+        },
+        async (baseUrl) => {
+          const client = createMattermostClient({
+            baseUrl,
+            botToken: "bot-token",
+            allowPrivateNetwork: true,
+            timeoutMs: 5_000,
+          });
+          const response = await client.fetchImpl(`${client.apiBaseUrl}/users/me`, {
+            signal: parent.signal,
+          });
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error("expected response body");
+          }
+          try {
+            expect((await reader.read()).value?.byteLength).toBeGreaterThan(0);
+            cancellation = reader.cancel(new Error("consumer stopped"));
+            expect(await settleWithin(Promise.all([cancellation, closed.promise]), 1_000)).toEqual({
+              status: "resolved",
+            });
+            expect(parent.signal.aborted).toBe(false);
+          } finally {
+            reader.releaseLock();
+          }
+        },
+      );
+    } finally {
+      await cancellation;
+    }
+  });
+
+  it.each(["timeout", "caller"] as const)(
+    "keeps custom-fetch %s active during held cancellation",
+    async (source) => {
+      vi.useFakeTimers();
+      const cancelGate = createDeferred<void>();
+      const parent = new AbortController();
+      let observedSignal: AbortSignal | undefined;
+      const client = createMattermostClient({
+        baseUrl: "https://mattermost.example",
+        botToken: "bot-token",
+        timeoutMs: 50,
+        fetchImpl: async (_input, init) => {
+          observedSignal = init?.signal ?? undefined;
+          return new Response(new ReadableStream({ cancel: () => cancelGate.promise }));
+        },
+      });
+      const response = await client.fetchImpl(`${client.apiBaseUrl}/users/me`, {
+        signal: parent.signal,
+      });
+      const cancellation = response.body?.cancel();
+      try {
+        await nextTurn();
+        expect(observedSignal?.aborted).toBe(false);
+        if (source === "timeout") {
+          await vi.advanceTimersByTimeAsync(50);
+        } else {
+          parent.abort(new Error("caller stopped"));
+        }
+        expect(observedSignal?.aborted).toBe(true);
+      } finally {
+        cancelGate.resolve();
+        await cancellation;
+        expect(vi.getTimerCount()).toBe(0);
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it("rejects a hanging real loopback request at the configured client timeout", async () => {
     await withHangingMattermostServer(async (server) => {
       const client = createMattermostClient({

@@ -1,4 +1,5 @@
 // Msteams tests cover graph plugin behavior.
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
@@ -432,31 +433,56 @@ describe("msteams graph helpers", () => {
     );
   });
 
-  it("releases a successful bodyful DELETE response", async () => {
-    const upstreamCancel = vi.fn();
-    const release = vi.fn(async () => undefined);
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode("deleted"));
-        },
-        cancel: upstreamCancel,
-      }),
-    );
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response,
-      finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
-      release,
-    });
+  it.each([false, true])(
+    "releases a successful bodyful DELETE response (capture=%s)",
+    async (capture) => {
+      const upstreamCancel = vi.fn();
+      let stopSource = () => {};
+      const release = vi.fn(async () => {
+        stopSource();
+        return undefined;
+      });
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("deleted"));
+            stopSource = () => controller.error(new Error("request released"));
+          },
+          cancel: upstreamCancel,
+        }),
+      );
+      const captured = capture
+        ? response
+            .clone()
+            .arrayBuffer()
+            .catch(() => undefined)
+        : undefined;
+      fetchWithSsrFGuardMock.mockResolvedValueOnce({
+        response,
+        finalUrl: "https://graph.microsoft.com/v1.0/chats/chat-1/messages/msg-1",
+        release,
+      });
 
-    await deleteGraphRequest({
-      token: graphToken,
-      path: "/chats/chat-1/messages/msg-1",
-    });
+      const deletion = deleteGraphRequest({
+        token: graphToken,
+        path: "/chats/chat-1/messages/msg-1",
+      });
 
-    expect(upstreamCancel).toHaveBeenCalledTimes(1);
-    expect(release).toHaveBeenCalledTimes(1);
-  });
+      try {
+        await nextTurn();
+        expect(release).toHaveBeenCalledTimes(1);
+        await deletion;
+        expect(response.body?.locked).toBe(false);
+        if (!capture) {
+          expect(upstreamCancel).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        stopSource();
+        await deletion;
+        await captured;
+      }
+    },
+  );
 
   it("resolves Graph tokens through the SDK auth provider", async () => {
     const { getAccessToken } = mockGraphTokenResolution();

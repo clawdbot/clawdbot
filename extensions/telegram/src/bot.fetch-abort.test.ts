@@ -1,5 +1,7 @@
 // Telegram tests cover bot.fetch abort plugin behavior.
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { isTelegramPollingNetworkError, TelegramRequestNotStartedError } from "./network-errors.js";
 
@@ -73,51 +75,73 @@ describe("createTelegramBot fetch abort", () => {
     expect(observedSignal.aborted).toBe(true);
   });
 
-  it("keeps the getChat deadline active until its response body settles", async () => {
-    vi.useFakeTimers();
-    let observedSignal: AbortSignal | undefined;
-    let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
-    const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      observedSignal = init?.signal ?? undefined;
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            bodyController = controller;
-            observedSignal?.addEventListener(
-              "abort",
-              () => controller.error(observedSignal?.reason),
-              { once: true },
-            );
-          },
-        }),
-        { headers: { "content-type": "application/json" }, status: 200 },
-      );
-    });
-    const { clientFetch } = createWrappedTelegramClientFetch(fetchSpy as typeof fetch);
+  it.each(["read", "cancel"] as const)(
+    "keeps the getChat deadline active during body %s",
+    async (phase) => {
+      vi.useFakeTimers();
+      const cancelGate = createDeferred<void>();
+      let observedSignal: AbortSignal | undefined;
+      let bodyController: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        observedSignal = init?.signal ?? undefined;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              bodyController = controller;
+              observedSignal?.addEventListener(
+                "abort",
+                () => controller.error(observedSignal?.reason),
+                { once: true },
+              );
+            },
+            cancel: () => cancelGate.promise,
+          }),
+          { headers: { "content-type": "application/json" }, status: 200 },
+        );
+      });
+      const { clientFetch } = createWrappedTelegramClientFetch(fetchSpy as typeof fetch);
 
-    const response = (await clientFetch(
-      "https://api.telegram.org/bot123456:ABC/getChat",
-    )) as Response;
-    const body = response.json();
-    void body.catch(() => undefined);
+      const response = (await clientFetch(
+        "https://api.telegram.org/bot123456:ABC/getChat",
+      )) as Response;
+      let settled = false;
+      const body = (phase === "read" ? response.json() : response.body!.cancel()).finally(() => {
+        settled = true;
+      });
+      void body.catch(() => undefined);
 
-    try {
-      await vi.advanceTimersByTimeAsync(15_000);
+      try {
+        await nextTurn();
+        await vi.advanceTimersByTimeAsync(15_000);
 
-      expect(observedSignal?.aborted).toBe(true);
-      await expect(body).rejects.toThrow("Telegram getchat timed out after 15000ms");
-    } finally {
-      if (!observedSignal?.aborted) {
-        bodyController?.error(new Error("test cleanup"));
+        expect(observedSignal?.aborted).toBe(true);
+        expect(observedSignal?.reason).toEqual(
+          new Error("Telegram getchat timed out after 15000ms"),
+        );
+        if (phase === "read") {
+          await expect(body).rejects.toThrow("Telegram getchat timed out after 15000ms");
+        } else {
+          expect(settled).toBe(false);
+        }
+      } finally {
+        if (!observedSignal?.aborted) {
+          bodyController?.error(new Error("test cleanup"));
+        }
+        cancelGate.resolve();
+        await body.catch(() => undefined);
+        vi.useRealTimers();
       }
-      await body.catch(() => undefined);
-      vi.useRealTimers();
-    }
-  });
+    },
+  );
 
-  it.each(["shutdown", "request"] as const)(
-    "keeps %s cancellation attached while a response body is being read",
-    async (cancellationSource) => {
+  it.each(
+    (["shutdown", "request"] as const).flatMap((cancellationSource) =>
+      (["read", "cancel"] as const).map((phase) => ({ cancellationSource, phase })),
+    ),
+  )(
+    "keeps $cancellationSource attached during body $phase",
+    async ({ cancellationSource, phase }) => {
+      const cancelGate = createDeferred<void>();
       let observedSignal: AbortSignal | undefined;
       const fetchSpy = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
         observedSignal = init?.signal ?? undefined;
@@ -130,6 +154,7 @@ describe("createTelegramBot fetch abort", () => {
                 { once: true },
               );
             },
+            cancel: () => cancelGate.promise,
           }),
         );
       });
@@ -138,14 +163,29 @@ describe("createTelegramBot fetch abort", () => {
       const response = (await clientFetch("https://api.telegram.org/bot123456:ABC/getChat", {
         signal: request.signal,
       })) as Response;
-      const body = response.text();
+      let settled = false;
+      const body = (phase === "read" ? response.text() : response.body!.cancel()).finally(() => {
+        settled = true;
+      });
       void body.catch(() => undefined);
 
-      const cancellation = cancellationSource === "shutdown" ? shutdown : request;
-      cancellation.abort(new Error(`${cancellationSource} cancelled`));
+      try {
+        await nextTurn();
+        const cancellation = cancellationSource === "shutdown" ? shutdown : request;
+        const reason = new Error(`${cancellationSource} cancelled`);
+        cancellation.abort(reason);
 
-      expect(observedSignal?.aborted).toBe(true);
-      await expect(body).rejects.toThrow(`${cancellationSource} cancelled`);
+        expect(observedSignal?.reason).toBe(reason);
+        if (phase === "read") {
+          await expect(body).rejects.toBe(reason);
+        } else {
+          expect(settled).toBe(false);
+        }
+      } finally {
+        cancelGate.resolve();
+        shutdown.abort();
+        await body.catch(() => undefined);
+      }
     },
   );
 
