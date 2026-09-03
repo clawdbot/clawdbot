@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { createTestConfinedFilesystemForAuthentication } from "../../test/helpers/update-generation-broker-fixture.js";
+import {
+  attachTestBrokerEvidence,
+  createTestConfinedFilesystemForAuthentication,
+} from "../../test/helpers/update-generation-broker-fixture.js";
 import { TestUpdateGenerationMemoryLedger as MemoryLedger } from "../../test/helpers/update-generation-memory-ledger.js";
 import {
   appendUpdateGenerationReceipt,
@@ -21,7 +24,13 @@ type ReceiptOf<Kind extends ReceiptKind> = Extract<
 >;
 type ReceiptFields<Kind extends ReceiptKind> = Omit<
   ReceiptOf<Kind>,
-  "formatVersion" | "transactionId" | "sequence" | "receiptId" | "recordedAtMs" | "kind"
+  | "formatVersion"
+  | "transactionId"
+  | "sequence"
+  | "receiptId"
+  | "recordedAtMs"
+  | "kind"
+  | "evidence"
 >;
 
 function receipt<Kind extends ReceiptKind>(
@@ -128,8 +137,27 @@ describe("update generation durable admission", () => {
       }),
     );
     expect(() => appendUpdateGenerationReceipt(failed, candidateIntent(undefined, 2))).toThrow(
-      "Unresolved update generation failure requires explicit adjudication",
+      "Unresolved update generation failure requires durable adjudication",
     );
-    expect(failed.receipts).toHaveLength(2);
+    const adjudication = receipt("failure-adjudicated", 2, {
+      failedReceiptId: failed.receipts[1]!.receiptId,
+      resumeFromReceiptId: failed.receipts[0]!.receiptId,
+    });
+    expect(() =>
+      appendUpdateGenerationReceipt(
+        failed,
+        attachTestBrokerEvidence(failed, {
+          ...adjudication,
+          resumeFromReceiptId: "wrong-transition",
+        }),
+      ),
+    ).toThrow("does not match the unresolved transition");
+    const adjudicated = appendUpdateGenerationReceipt(
+      failed,
+      attachTestBrokerEvidence(failed, adjudication),
+    );
+    expect(() =>
+      appendUpdateGenerationReceipt(adjudicated, candidateIntent(undefined, 3)),
+    ).not.toThrow();
   });
 });

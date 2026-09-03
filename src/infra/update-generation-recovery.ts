@@ -294,7 +294,10 @@ export async function adjudicateUpdateGenerationTransaction(
     serviceState: runtimeObservation.serviceState,
   };
   const pendingFailure = state.latest.kind === "failure" ? state.latest : null;
-  const latest = pendingFailure ? state.latestTransition : state.latest;
+  const latest =
+    pendingFailure || state.latest.kind === "failure-adjudicated"
+      ? state.latestTransition
+      : state.latest;
   if (pendingFailure) {
     return { action: "adjudicate-failure", reason: pendingFailure.reason };
   }

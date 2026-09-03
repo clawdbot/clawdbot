@@ -1,7 +1,12 @@
 /** Durable transaction vocabulary for generation-addressed package updates. */
 import { isDeepStrictEqual } from "node:util";
-import type { UpdateGenerationBrokerReceiptOf } from "./update-generation-confined-filesystem.js";
 import { updateGenerationTransactionReceiptSchema } from "./update-generation-contract-schema.js";
+import type {
+  UpdateGenerationProjection,
+  UpdateGenerationSelection,
+  UpdateGenerationTransactionReceipt,
+  UpdateGenerationTransactionRecord,
+} from "./update-generation-contract-types.js";
 import {
   assertBrokerEvidenceChain,
   assertBrokerEvidenceOperationIds,
@@ -9,190 +14,7 @@ import {
   assertRetainedPairEvidence,
   brokerReceiptsInEvidence,
 } from "./update-generation-evidence.js";
-
-export type UpdateGenerationRole = "previous" | "candidate";
-
-export type UpdateGenerationManifest = {
-  algorithm: "sha256";
-  digest: string;
-  entryCount: number;
-  totalBytes: number;
-};
-
-export type UpdateGenerationSelection = {
-  formatVersion: 1;
-  generationId: string;
-  manifestSha256: string;
-  entrypointRelativePath: string;
-};
-
-export type UpdateGenerationDescriptor = UpdateGenerationSelection & {
-  packageVersion: string;
-};
-
-export type UpdateGenerationServiceIntent = {
-  managed: boolean;
-  running: boolean;
-  enabled?: boolean;
-};
-
-type UpdateGenerationBinding = {
-  kind: "launcher" | "service";
-  identity: string;
-  priorFingerprint: string | null;
-};
-
-export type UpdateGenerationMaterializationEvidence = {
-  materialization: UpdateGenerationBrokerReceiptOf<"materialize-generation">;
-  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
-};
-
-export type UpdateGenerationSelectionEvidence = {
-  selectorSwitch: UpdateGenerationBrokerReceiptOf<"switch-selector">;
-  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
-};
-
-export type UpdateGenerationRetainedPairEvidence = {
-  retainedPair: UpdateGenerationBrokerReceiptOf<"verify-retained-pair">;
-  recoveryObservation: UpdateGenerationBrokerReceiptOf<"observe-recovery">;
-};
-
-export type UpdateGenerationCleanupEvidence = {
-  cleanup: UpdateGenerationBrokerReceiptOf<"cleanup-generations">;
-  parentDirectorySync: UpdateGenerationBrokerReceiptOf<"sync-parent-directory">;
-  retainedPair: UpdateGenerationBrokerReceiptOf<"verify-retained-pair">;
-  recoveryObservation: UpdateGenerationBrokerReceiptOf<"observe-recovery">;
-};
-
-type UpdateGenerationReceiptBase = {
-  formatVersion: 2;
-  transactionId: string;
-  sequence: number;
-  receiptId: string;
-  recordedAtMs: number;
-};
-
-export type UpdateGenerationTransactionReceipt =
-  | (UpdateGenerationReceiptBase & {
-      kind: "intent";
-      namespaceKey: string;
-      serviceBefore: UpdateGenerationServiceIntent;
-      previousSelection: UpdateGenerationSelection | null;
-      previousPackageVersion: string | null;
-      stableBindingAlreadyVerified: boolean;
-      brokerId: string;
-      brokerRevision: string | null;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "generation-materialization-intent";
-      role: UpdateGenerationRole;
-      sourceArtifactId: string;
-      generationId: string;
-      manifest: UpdateGenerationManifest;
-      packageVersion: string;
-      entrypointRelativePath: string;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "generation-materialized";
-      role: UpdateGenerationRole;
-      generation: UpdateGenerationDescriptor;
-      evidence: UpdateGenerationMaterializationEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "baseline-selection-intent";
-      selection: UpdateGenerationSelection;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "baseline-selected";
-      selection: UpdateGenerationSelection;
-      evidence: UpdateGenerationSelectionEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "binding-intent";
-      bindings: UpdateGenerationBinding[];
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "binding-completed";
-      bindings: Array<UpdateGenerationBinding & { fingerprint: string }>;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "candidate-selection-intent";
-      from: UpdateGenerationSelection;
-      to: UpdateGenerationSelection;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "candidate-selected";
-      selection: UpdateGenerationSelection;
-      evidence: UpdateGenerationSelectionEvidence & UpdateGenerationRetainedPairEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "completion";
-      packageVersion: string;
-      launcherVersion: string;
-      serviceRunning: boolean;
-      serviceEnabled?: boolean;
-      evidence: UpdateGenerationRetainedPairEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "rollback-intent";
-      from: UpdateGenerationSelection;
-      to: UpdateGenerationSelection;
-      reason: string;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "rolled-back";
-      selection: UpdateGenerationSelection;
-      launcherVersion: string;
-      serviceRunning: boolean;
-      serviceEnabled?: boolean;
-      evidence: UpdateGenerationSelectionEvidence & UpdateGenerationRetainedPairEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "cleanup-intent";
-      generationIds: string[];
-      protectedGenerationIds: string[];
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "cleanup-completed";
-      removedGenerationIds: string[];
-      deferred: Array<{ generationId: string; reason: string }>;
-      evidence: UpdateGenerationCleanupEvidence;
-    })
-  | (UpdateGenerationReceiptBase & {
-      kind: "failure";
-      operation: string;
-      reason: string;
-      serviceRestored: boolean;
-    });
-
-export type UpdateGenerationTransactionRecord = {
-  formatVersion: 2;
-  transactionId: string;
-  namespaceKey: string;
-  receipts: UpdateGenerationTransactionReceipt[];
-};
-
-export type UpdateGenerationProjection = {
-  intent: Extract<UpdateGenerationTransactionReceipt, { kind: "intent" }>;
-  latest: UpdateGenerationTransactionReceipt;
-  latestTransition: Exclude<UpdateGenerationTransactionReceipt, { kind: "failure" }>;
-  materializationIntents: Partial<
-    Record<
-      UpdateGenerationRole,
-      Extract<UpdateGenerationTransactionReceipt, { kind: "generation-materialization-intent" }>
-    >
-  >;
-  generations: Partial<Record<UpdateGenerationRole, UpdateGenerationDescriptor>>;
-  baselineSelection: UpdateGenerationSelection | null;
-  bindingCompleted: boolean;
-  candidateSelection: UpdateGenerationSelection | null;
-  completed: boolean;
-  rolledBack: boolean;
-  cleanupCompleted: boolean;
-  terminalServiceState: { running: boolean; enabled?: boolean } | null;
-  brokerOperationIds: Set<string>;
-  brokerRevision: string | null;
-};
+export type * from "./update-generation-contract-types.js";
 
 const RECEIPT_ID_SAFE = /^[A-Za-z0-9._:@/-]+$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
@@ -261,11 +83,18 @@ function assertReceiptFollowsLatest(
   }
   if (projection.latest.kind === "failure") {
     if (
-      projection.latestTransition.kind !== "candidate-selected" ||
-      receipt.kind !== "rollback-intent"
+      projection.latestTransition.kind === "candidate-selected" &&
+      receipt.kind === "rollback-intent"
     ) {
-      throw new Error("Unresolved update generation failure requires explicit adjudication");
+      return;
     }
+    if (receipt.kind !== "failure-adjudicated") {
+      throw new Error("Unresolved update generation failure requires durable adjudication");
+    }
+    return;
+  }
+  if (receipt.kind === "failure-adjudicated") {
+    throw new Error("Failure adjudication requires an unresolved failure receipt");
   }
   const latest = projection.latestTransition;
   const follows =
@@ -340,6 +169,16 @@ function assertReceiptTransition(
   assertReceiptFollowsLatest(projection, receipt);
   if (projection.cleanupCompleted) {
     throw new Error("Cannot append to a cleaned update generation transaction");
+  }
+  if (receipt.kind === "failure-adjudicated") {
+    if (
+      receipt.failedReceiptId !== projection.latest.receiptId ||
+      receipt.resumeFromReceiptId !== projection.latestTransition.receiptId
+    ) {
+      throw new Error("Failure adjudication does not match the unresolved transition");
+    }
+    assertBrokerEvidenceChain(projection, receipt.evidence);
+    assertBrokerEvidenceOperationIds(receipt.evidence, projection.latest.receiptId);
   }
   if (receipt.kind === "generation-materialization-intent" && receipt.role === "candidate") {
     const retained = projection.baselineSelection ?? projection.intent.previousSelection;
@@ -687,7 +526,7 @@ export function projectUpdateGenerationTransaction(
   };
   for (const receipt of record.receipts.slice(1)) {
     projection.latest = receipt;
-    if (receipt.kind !== "failure") {
+    if (receipt.kind !== "failure" && receipt.kind !== "failure-adjudicated") {
       projection.latestTransition = receipt;
     }
     if (receipt.kind === "generation-materialization-intent") {

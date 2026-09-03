@@ -625,8 +625,7 @@ describe("update generation recovery transition matrix", () => {
   });
 
   it("never resumes a durable pre-activation failure implicitly", async () => {
-    const previous = selection("a");
-    const candidate = selection("b");
+    const [previous, candidate] = [selection("a"), selection("b")] as const;
     let materialization = append(
       null,
       receipt("intent", 0, {
@@ -666,6 +665,22 @@ describe("update generation recovery transition matrix", () => {
         bindingConverged: true,
       }),
       action: "adjudicate-failure",
+    });
+    const materializationAdjudicated = append(
+      materialization,
+      receipt("failure-adjudicated", 3, {
+        failedReceiptId: materialization.receipts[2]!.receiptId,
+        resumeFromReceiptId: materialization.receipts[1]!.receiptId,
+      }),
+    );
+    await expectRecovery({
+      record: materializationAdjudicated,
+      physical: physical({
+        selector: previous,
+        generations: [previous, candidate],
+        bindingConverged: true,
+      }),
+      action: "record-materialized",
     });
 
     let beforeSelectionReceipt = append(

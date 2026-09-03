@@ -7,6 +7,7 @@ import {
 } from "./update-generation-confined-filesystem.js";
 import type {
   UpdateGenerationCleanupEvidence,
+  UpdateGenerationFailureAdjudicationEvidence,
   UpdateGenerationMaterializationEvidence,
   UpdateGenerationProjection,
   UpdateGenerationRetainedPairEvidence,
@@ -18,7 +19,8 @@ type BrokerEvidence =
   | UpdateGenerationMaterializationEvidence
   | UpdateGenerationSelectionEvidence
   | UpdateGenerationRetainedPairEvidence
-  | UpdateGenerationCleanupEvidence;
+  | UpdateGenerationCleanupEvidence
+  | UpdateGenerationFailureAdjudicationEvidence;
 
 function selectionsEqual(
   left: UpdateGenerationSelection | null,
@@ -39,6 +41,9 @@ function hasRetainedPairEvidence(
 }
 
 export function brokerReceiptsInEvidence(evidence: BrokerEvidence) {
+  if (!("retainedPair" in evidence) && "recoveryObservation" in evidence) {
+    return [evidence.recoveryObservation];
+  }
   if ("cleanup" in evidence) {
     return [
       evidence.cleanup,

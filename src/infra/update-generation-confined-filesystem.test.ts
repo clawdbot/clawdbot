@@ -287,6 +287,7 @@ describe("confined update-generation filesystem contract", () => {
       "update-generation-confined-filesystem.ts",
       "update-generation-contract-parser.ts",
       "update-generation-contract-schema.ts",
+      "update-generation-contract-types.ts",
       "update-generation-contract.ts",
       "update-generation-evidence.ts",
       "update-generation-ledger-hook.ts",

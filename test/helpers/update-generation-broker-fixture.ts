@@ -318,6 +318,9 @@ export function attachTestBrokerEvidence(
     ) {
       return state.latestTransition.receiptId;
     }
+    if (receipt.kind === "failure-adjudicated" && state.latest.kind === "failure") {
+      return state.latest.receiptId;
+    }
     return receipt.receiptId;
   })();
   const perform = <Request extends UpdateGenerationBrokerRequest>(
@@ -421,6 +424,22 @@ export function attachTestBrokerEvidence(
     );
     return { retainedPair: retained, recoveryObservation };
   };
+
+  if (receipt.kind === "failure-adjudicated") {
+    const recoveryObservation = perform<
+      Extract<UpdateGenerationBrokerRequest, { kind: "observe-recovery" }>
+    >(
+      { kind: "observe-recovery" },
+      {
+        kind: "observe-recovery",
+        selector: null,
+        selectorDurable: false,
+        generations: [],
+        retainedPair: null,
+      },
+    );
+    return { ...receipt, evidence: { recoveryObservation } };
+  }
 
   if (receipt.kind === "generation-materialized") {
     const planned = state.materializationIntents[receipt.role];

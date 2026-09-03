@@ -96,6 +96,9 @@ const retainedPairEvidenceSchema = z
     recoveryObservation: brokerReceiptOf("observe-recovery"),
   })
   .strict();
+const failureAdjudicationEvidenceSchema = z
+  .object({ recoveryObservation: brokerReceiptOf("observe-recovery") })
+  .strict();
 const selectedEvidenceSchema = selectionEvidenceSchema
   .extend(retainedPairEvidenceSchema.shape)
   .strict();
@@ -251,6 +254,15 @@ const updateGenerationTransactionReceiptUnion = z.discriminatedUnion("kind", [
       operation: nonEmptyStringSchema,
       reason: nonEmptyStringSchema,
       serviceRestored: z.boolean(),
+    })
+    .strict(),
+  z
+    .object({
+      ...receiptBase,
+      kind: z.literal("failure-adjudicated"),
+      failedReceiptId: nonEmptyStringSchema,
+      resumeFromReceiptId: nonEmptyStringSchema,
+      evidence: failureAdjudicationEvidenceSchema,
     })
     .strict(),
 ]);
