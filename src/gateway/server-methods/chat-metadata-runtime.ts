@@ -1,19 +1,14 @@
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
   getRuntimeAuthProfileStoreSnapshotRevision,
   type AuthProfileStore,
 } from "../../agents/auth-profiles.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import {
   getPublishedPreparedModelCatalogOwnerSnapshot,
   type GetPublishedPreparedModelCatalogOwnerParams,
 } from "../../agents/prepared-model-catalog.js";
-import {
-  getPreparedModelFullCatalogAuth,
-  getPreparedModelRuntimeAuthMaterializations,
-} from "../../agents/prepared-model-runtime-auth.js";
+import { getPreparedModelFullCatalogAuth } from "../../agents/prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import { resolveSwarmConfig } from "../../agents/subagents/swarm/swarm-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
@@ -32,20 +27,20 @@ import type {
   ChatMetadataResult,
   ChatMetadataSessionEntry,
 } from "./chat-metadata-contract.js";
-import { projectChatSessionMetadata } from "./chat-metadata-session-projection.js";
+import {
+  prepareChatMetadataModelProjection,
+  projectChatSessionMetadata,
+  type ChatMetadataProjectionFacts,
+  type PreparedAgentProjection,
+} from "./chat-metadata-session-projection.js";
 import type {
   ChatStartupProjectionReadParams,
   ChatStartupProjectionResult,
 } from "./chat-startup-projection-contract.js";
 import type { GatewayRequestContext } from "./types.js";
 
-type PreparedAgentFacts = {
-  agentId: string;
-  owner: PreparedModelRuntimeSnapshot;
-  authStore: AuthProfileStore;
-  authModes: PreparedAgentCredentialModes;
+type PreparedAgentFacts = ChatMetadataProjectionFacts & {
   authStoreRevision: string;
-  modelCatalog: ModelCatalogSnapshot;
   skillsVersion: number;
 };
 
@@ -61,9 +56,6 @@ type PreparedAgentMetadata = PreparedAgentFacts & {
   swarmEnabled: boolean;
 };
 
-type PreparedAgentProjection<T = ChatMetadataResult> = PreparedProjection<T> & {
-  modelCatalog: ModelCatalogEntry[];
-};
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
 type AgentProjectionEntry =
@@ -101,14 +93,7 @@ type ChatMetadataRuntimeDeps = {
     cfg: OpenClawConfig;
     agentId: string;
   }) => Promise<{ commands?: unknown[] }>;
-  buildProjection: (params: {
-    context: GatewayRequestContext;
-    facts: PreparedAgentFacts;
-    requesterProfileId?: string;
-    preferredProfileId?: string;
-    lockedProfileId?: string;
-    assertCurrent?: () => void;
-  }) => Promise<PreparedAgentProjection<{ models?: unknown[] }>>;
+  buildProjection: typeof prepareChatMetadataModelProjection;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
@@ -232,58 +217,6 @@ async function defaultBuildCommands(params: {
   });
 }
 
-async function defaultBuildProjection(params: {
-  context: GatewayRequestContext;
-  facts: PreparedAgentFacts;
-  requesterProfileId?: string;
-  preferredProfileId?: string;
-  lockedProfileId?: string;
-  assertCurrent?: () => void;
-}): Promise<PreparedAgentProjection<{ models?: unknown[] }>> {
-  const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
-    await import("./models-list-result.js");
-  // A draft has no persisted session grant: recheck its live human before hydrating private auth.
-  params.assertCurrent?.();
-  // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
-  // models.list control-plane reads so a slow provider cannot delay chat startup.
-  const snapshot = params.facts.modelCatalog;
-  const projector = createGatewayAgentModelCatalogProjector({
-    cfg: params.facts.owner.config,
-    agentId: params.facts.agentId,
-    snapshot,
-    metadataSnapshot: params.facts.owner.metadataSnapshot,
-    preparedAuthStore: params.facts.authStore,
-    requesterProfileId: params.requesterProfileId,
-    // The owner records usable auth at discovery; metadata must share that exact generation fact.
-    preparedRuntimeAuthModes: params.facts.authModes,
-    preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(
-      params.facts.owner,
-    ),
-    ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
-    ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
-  });
-  const [modelCatalog, readModels] = await Promise.all([
-    projector.projectCatalog(),
-    prepareModelsListResult({
-      context: params.context,
-      agentId: params.facts.agentId,
-      params: { view: "configured" },
-      preloadedCatalog: {
-        agentId: params.facts.agentId,
-        config: params.facts.owner.config,
-        snapshot,
-      },
-      preloadedOnly: true,
-      catalogProjector: projector,
-    }),
-  ]);
-  return {
-    modelCatalog,
-    read: () => ({ models: readModels.read().models }),
-    isCurrent: readModels.isCurrent,
-  };
-}
-
 export function createGatewayChatMetadataRuntime(params: {
   getConfig: () => OpenClawConfig;
   getContext: () => GatewayRequestContext;
@@ -313,7 +246,7 @@ export function createGatewayChatMetadataRuntime(params: {
     getSkillsVersion: getSkillsSnapshotVersion,
     getPluginRegistryVersion: getActivePluginRegistryVersion,
     buildCommands: defaultBuildCommands,
-    buildProjection: defaultBuildProjection,
+    buildProjection: prepareChatMetadataModelProjection,
     ...params.deps,
   };
   let current: PreparedMetadataGeneration | undefined;

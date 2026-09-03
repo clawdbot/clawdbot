@@ -47,6 +47,14 @@ type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
+function mountProfilePage(context: ApplicationContext<RouteId>) {
+  const provider = createApplicationContextProvider(context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+  return page;
+}
+
 function createContext(
   client: GatewayBrowserClient | null = null,
   connected = false,
@@ -217,10 +225,7 @@ afterEach(async () => {
 });
 
 it("refreshes translated copy when the locale changes while mounted", async () => {
-  const provider = createApplicationContextProvider(createContext());
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(createContext());
   await page.updateComplete;
 
   const note = page.querySelector(".settings-empty");
@@ -254,10 +259,7 @@ it.each([{ emails: ["ada@example.test"] }, { emails: [] }])(
       email: profile.emails[0],
       name: profile.displayName ?? undefined,
     });
-    const provider = createApplicationContextProvider(harness.context);
-    const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-    provider.append(page);
-    document.body.append(provider);
+    const page = mountProfilePage(harness.context);
     await waitForFast(() =>
       expect(page.querySelector("#settings-profile-identity")).not.toBeNull(),
     );
@@ -313,10 +315,7 @@ it("loads and updates co-author consent separately from verified GitHub identity
     id: profile.id,
     name: profile.displayName ?? undefined,
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
   expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
@@ -362,10 +361,7 @@ it("treats a malformed co-author preference as opted out", async () => {
     id: profile.id,
     name: profile.displayName ?? undefined,
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
   const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
@@ -400,10 +396,7 @@ it("keeps co-author credit on until the person opts out", async () => {
     id: profile.id,
     name: profile.displayName ?? undefined,
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
   const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
@@ -452,10 +445,7 @@ it("renders a write-access note without calling users.self for read-only viewers
     auth: { role: "operator", scopes: ["operator.read"] },
     features: { methods: ["users.self"] },
   } as ApplicationGatewaySnapshot["hello"];
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
   expect(request.mock.calls).toEqual([["users.github.status", {}]]);
@@ -466,10 +456,7 @@ it("renders a write-access note without calling users.self for read-only viewers
 it("offers identity connection setup without profile RPCs or secret inputs for unidentified connections", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
   await Promise.resolve();
@@ -503,10 +490,7 @@ it("offers identity connection setup without profile RPCs or secret inputs for u
 it("rerenders on connection transitions for unidentified connections", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
   expect(page.querySelector(".profile-hero")).not.toBeNull();
@@ -547,10 +531,7 @@ it("falls back to the text avatar when the hero image fails to load", async () =
       },
     ],
   };
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await page.updateComplete;
   const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
@@ -599,10 +580,7 @@ it("fetches a protected hero avatar with the current Control UI credential", asy
       },
     ],
   };
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => {
     expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
@@ -633,10 +611,7 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
     email: "ada@example.test",
     name: "Ada",
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".profile-identity-empty")).not.toBeNull());
   const emptyState = page.querySelector<HTMLElement>(".profile-identity-empty");
@@ -675,10 +650,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
     email: profile.emails[0],
     name: profile.displayName ?? undefined,
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() =>
     expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1),
@@ -737,10 +709,7 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     email: staleProfile.emails[0],
     name: staleProfile.displayName ?? undefined,
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   const selfCalls = () => request.mock.calls.filter(([method]) => method === "users.self");
   await waitForFast(() => expect(selfCalls()).toHaveLength(1));
@@ -812,10 +781,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     harness.context.gateway.updateSelfUser?.({
       avatarUrl: `/api/users/${profile.id}/avatar?v=${avatarRevision}`,
     });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
   const identityState = page as unknown as {
@@ -978,10 +944,7 @@ it("keeps model-account actions usable when identity refresh overlaps ChatGPT co
     email: "ada@example.test",
     name: "Ada",
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
   await startProfileSignIn(page);
@@ -1050,10 +1013,7 @@ it("uses the canonical self profile after a merge while presence still carries i
     email: profile.emails[0],
     name: "Ada",
   });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
   await waitForFast(() => expect(page.querySelector(".profile-auth-add-account")).not.toBeNull());
 
   // users.self resolves the merge immediately; profile-change events do not rewrite presence.

@@ -95,7 +95,7 @@ const runAuth = vi.fn(async (ctx: ProviderAuthContext) => {
   });
   return exchange(value, ctx.signal);
 });
-const method: ProviderAuthMethod = {
+const oauthMethod: ProviderAuthMethod = {
   id: "oauth",
   label: "Browser sign-in",
   kind: "oauth",
@@ -263,7 +263,7 @@ beforeEach(async () => {
       groupLabel: "OpenAI",
     },
   ]);
-  resolvePersonalAccountAuthMethod.mockReturnValue(method);
+  resolvePersonalAccountAuthMethod.mockReturnValue(oauthMethod);
   exchange.mockResolvedValue(authorized);
   connectUserModelAccount.mockImplementation(
     (params: {

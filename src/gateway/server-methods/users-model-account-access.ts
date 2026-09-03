@@ -85,3 +85,23 @@ export function preparePersonalModelSelection(
   }
   return preparePersonalModelAccountSelection(options, authProfileId);
 }
+
+/** Capture either an explicit personal selection or the human's creation-time default authority. */
+export function prepareSessionModelAccountAccess(
+  options: Pick<GatewayRequestHandlerOptions, "client" | "context" | "signal">,
+  model: string | undefined,
+): {
+  personalModelSelection?: UserModelAccountSelection;
+  personalAccountDefaults?: ModelAccountConnectAction;
+} {
+  const personalModelSelection = preparePersonalModelSelection(options, model);
+  const { client } = options;
+  const personalAccountDefaults =
+    !personalModelSelection &&
+    client?.connId &&
+    client.authenticatedUserProfile &&
+    !isIneligiblePersonalGatewayCaller(client)
+      ? prepareUserModelAccountAction(options)
+      : undefined;
+  return { personalModelSelection, personalAccountDefaults };
+}

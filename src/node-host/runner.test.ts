@@ -2,6 +2,7 @@
 import { beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import type { GatewayClientOptions } from "../gateway/client.js";
 import {
@@ -896,14 +897,8 @@ describe("runNodeHost", () => {
   });
 
   it("publishes plugin tools during MCP discovery and republishes catalog changes", async () => {
-    let resolveReadiness:
-      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
-      | undefined;
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveReadiness = resolve;
-      }),
-    );
+    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
     let resolveManager: ((manager: NodeHostMcpManager) => void) | undefined;
     vi.mocked(startNodeHostMcpManager).mockImplementationOnce(async (_servers, deps) => {
       mocks.mcpDescriptorsChanged = deps?.onDescriptorsChanged;
@@ -960,7 +955,7 @@ describe("runNodeHost", () => {
     await vi.waitFor(() => {
       expect(publishedToolNames()).toEqual(["healthy_search", "remote_echo"]);
     });
-    resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+    readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
     await expect(running).rejects.toThrow("event loop readiness timeout");
   });
 
@@ -970,14 +965,8 @@ describe("runNodeHost", () => {
     ConnectErrorDetailCodes.CLIENT_VERSION_MISMATCH,
     ConnectErrorDetailCodes.AUTH_IDENTITY_HEADER_REQUIRED,
   ])("closes MCP clients before exiting on terminal reconnect pause %s", async (detailCode) => {
-    let resolveReadiness:
-      | ((value: { ready: false; aborted: false; elapsedMs: number }) => void)
-      | undefined;
-    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(
-      new Promise((resolve) => {
-        resolveReadiness = resolve;
-      }),
-    );
+    const readiness = createDeferred<{ ready: false; aborted: false; elapsedMs: number }>();
+    mocks.startGatewayClientWhenEventLoopReady.mockReturnValueOnce(readiness.promise);
     let resolveMcpClose: (() => void) | undefined;
     mocks.closeMcpManager.mockImplementationOnce(
       () =>
@@ -1004,11 +993,11 @@ describe("runNodeHost", () => {
       resolveMcpClose?.();
       await vi.waitFor(() => expect(exit).toHaveBeenCalledWith(1));
 
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
       await stopped;
     } finally {
       resolveMcpClose?.();
-      resolveReadiness?.({ ready: false, aborted: false, elapsedMs: 0 });
+      readiness.resolve({ ready: false, aborted: false, elapsedMs: 0 });
       exit.mockRestore();
     }
   });
