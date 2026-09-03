@@ -47,10 +47,9 @@ state, so each browser can keep its own working layout.
 Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
 
 <iframe
-  className="w-full aspect-video rounded-lg"
+  style={{ width: "100%", height: "auto", aspectRatio: "16 / 9", border: 0, borderRadius: "8px" }}
   src="https://www.youtube-nocookie.com/embed/gHyBueWideg"
   title="Build an OpenClaw Dashboard with One Prompt"
-  frameBorder="0"
   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
   referrerPolicy="strict-origin-when-cross-origin"
   allowFullScreen
