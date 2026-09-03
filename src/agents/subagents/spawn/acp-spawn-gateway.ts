@@ -27,6 +27,7 @@ export async function launchAcpChildThroughGateway(params: {
   task: string;
 }) {
   const promptedAt = Date.now();
+  params.signal?.throwIfAborted();
   const response = await callSubagentGateway(
     withSubagentGatewayExecutionIdentity(
       {

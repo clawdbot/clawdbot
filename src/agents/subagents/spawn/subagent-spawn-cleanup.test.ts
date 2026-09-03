@@ -81,6 +81,27 @@ describe("subagent spawn cleanup identity", () => {
     });
   });
 
+  it("does not retry guarded deletion after a matching abort already stopped the run", async () => {
+    const callGateway = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true, aborted: true, runIds: ["gateway-run"] })
+      .mockRejectedValueOnce(new Error("gateway unavailable"))
+      .mockRejectedValueOnce(sessionChangedError());
+
+    await expect(
+      terminateAcceptedCollectorRun({
+        childSessionKey: "agent:main:subagent:child",
+        gatewayRunId: "gateway-run",
+        expectedSessionId: "session-id",
+        expectedLifecycleRevision: "session-revision",
+        releaseSessionAfterAbort: true,
+        callGateway,
+      }),
+    ).resolves.toBe("released");
+
+    expect(callGateway).toHaveBeenCalledTimes(2);
+  });
+
   it("stops cleanup when guarded deletion observes a successor lifecycle", async () => {
     const callGateway = vi
       .fn()

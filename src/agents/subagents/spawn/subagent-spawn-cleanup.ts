@@ -149,7 +149,7 @@ export async function terminateAcceptedCollectorRun(params: {
     });
     // A changed lifecycle proves the accepted run no longer owns this session.
     ownership = cleanup === "changed" ? "changed" : ownership;
-    return cleanup !== "failed";
+    return runAborted || cleanup !== "failed";
   });
   return ownership;
 }

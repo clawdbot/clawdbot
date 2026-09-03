@@ -3820,6 +3820,20 @@ describe("spawnAcpDirect", () => {
     );
   });
 
+  it("does not dispatch an ACP child after the requester already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await spawnAcpDirect(createSpawnRequest(), {
+      ...createRequesterContext(),
+      signal: controller.signal,
+    });
+
+    expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
+    expectGatewayMethodNotCalled("agent");
+    expect(hoisted.cleanupFailedAcpSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
   it("aborts the accepted Gateway run before cleanup when the requester aborts during dispatch", async () => {
     const controller = new AbortController();
     let releaseDispatch!: () => void;
@@ -3892,10 +3906,16 @@ describe("spawnAcpDirect", () => {
 
   it("preserves a successor lifecycle after matching abort loses cleanup ownership", async () => {
     const controller = new AbortController();
-    controller.abort();
+    let releaseDispatch!: () => void;
+    const pendingDispatch = new Promise<void>((resolve) => {
+      releaseDispatch = resolve;
+    });
+    let dispatchStarted = false;
     hoisted.callGatewayMock.mockImplementation(async (argsUnknown: unknown) => {
       const args = argsUnknown as { method?: string; params?: { runId?: string } };
       if (args.method === "agent") {
+        dispatchStarted = true;
+        await pendingDispatch;
         return { runId: "accepted-before-successor" };
       }
       if (args.method === "chat.abort") {
@@ -3911,10 +3931,14 @@ describe("spawnAcpDirect", () => {
       return { ok: true };
     });
 
-    const result = await spawnAcpDirect(createSpawnRequest(), {
+    const spawn = spawnAcpDirect(createSpawnRequest(), {
       ...createRequesterContext(),
       signal: controller.signal,
     });
+    await vi.waitFor(() => expect(dispatchStarted).toBe(true));
+    controller.abort();
+    releaseDispatch();
+    const result = await spawn;
 
     expect(expectFailedSpawn(result, "error").errorCode).toBe("dispatch_failed");
     expect(gatewayRequest("sessions.delete")).toMatchObject({
