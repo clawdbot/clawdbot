@@ -377,6 +377,7 @@ async function resolveSessionAuthProfileOverride(params: {
   // preventing a metered backup from staying pinned. The real request proves recovery.
   const currentOrderIndex = current ? order.indexOf(current) : -1;
   const retryableHigherPriorityProfile =
+    source === "auto" &&
     hasExplicitOrder &&
     !currentUnavailable &&
     compactionCount <= storedCompaction &&
