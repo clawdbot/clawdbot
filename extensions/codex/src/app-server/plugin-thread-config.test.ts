@@ -3090,7 +3090,8 @@ describe("Codex plugin thread config", () => {
       { apps: { calendar: { tools: { ["__proto__"]: { approval_mode: "auto" } } } } },
     );
     // Only own properties reach the native JSON request.
-    expect(JSON.parse(JSON.stringify(config))).toEqual({
+    const wireConfig = JSON.stringify(config);
+    expect(JSON.parse(wireConfig)).toEqual({
       apps: {
         calendar: {
           tools: { read: { enabled: true }, ["__proto__"]: { approval_mode: "auto" } },
