@@ -21,6 +21,7 @@ import { dispatchGatewayRequestInProcess } from "./server-in-process-dispatch.js
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import type { GatewayHostLifecycle } from "./server-public.js";
 
 describe("createGatewayKernel", () => {
   it("does not start recovered channels after close prelude begins", async () => {
@@ -124,7 +125,7 @@ describe("createGatewayKernel", () => {
     }
   });
 
-  it("reports startup and readiness as draining during a direct close", async () => {
+  it("reports draining and fences hosted lifecycle authority during a direct close", async () => {
     const port = 19_789;
     const state = await createOpenClawTestState({
       label: "gateway-kernel-direct-close-readiness",
@@ -146,6 +147,19 @@ describe("createGatewayKernel", () => {
     const bootId = "gateway-kernel-direct-close";
     const configReloaderStop = createDeferred();
     const updateCheckStopped = createDeferred();
+    const nativePreparation = createDeferred();
+    const preparationStarted = createDeferred();
+    const acceptRequest = vi.fn();
+    const hostLifecycle: GatewayHostLifecycle = {
+      async request(_action, assertCaller) {
+        assertCaller();
+        preparationStarted.resolve();
+        await nativePreparation.promise;
+        assertCaller();
+        acceptRequest();
+        return { ok: true, value: { outcome: "scheduled" } };
+      },
+    };
     let kernel: Awaited<ReturnType<typeof createGatewayKernel>> | undefined;
     let closing: Promise<void> | undefined;
     try {
@@ -159,9 +173,12 @@ describe("createGatewayKernel", () => {
         bind: "loopback",
         controlUiEnabled: false,
         sidecarStartup: "defer",
+        hostLifecycle,
       });
       kernel.kernel.unlockStartupMethods();
       kernel.kernel.markSidecarsReady();
+      // Direct kernel proof must publish the dispatch readiness normally owned by transport attach.
+      kernel.kernel.setDispatchReady(true);
       const { getStartup, getReadiness } = kernel.createHttpTransportOptions();
       expect(getStartup()).toMatchObject({ ok: true, status: "started" });
       expect(getReadiness()).toMatchObject({ ready: true, failing: [] });
@@ -184,6 +201,11 @@ describe("createGatewayKernel", () => {
         ok: true,
         value: { gatewayInstanceId: bootId, items: [] },
       });
+      const boundHost = kernel.gatewayRequestContext.hostLifecycle!;
+      const pendingStop = expect(boundHost.request("stop", () => {})).rejects.toThrow(
+        "closed instance",
+      );
+      await preparationStarted.promise;
 
       const closeFirstStop = vi.fn(async () => {});
       kernel.kernel.swapBonjourStop(closeFirstStop);
@@ -201,6 +223,10 @@ describe("createGatewayKernel", () => {
         ok: false,
         error: { code: "UNAVAILABLE" },
       });
+      nativePreparation.resolve();
+      await pendingStop;
+      await expect(boundHost.request("start", () => {})).rejects.toThrow("closed instance");
+      expect(acceptRequest).not.toHaveBeenCalled();
       configReloaderStop.resolve();
       await vi.waitFor(() => expect(stopUpdateCheck).toHaveBeenCalled());
       await new Promise<void>((resolve) => {
@@ -212,6 +238,7 @@ describe("createGatewayKernel", () => {
       expect(closeFirstStop).toHaveBeenCalledOnce();
       expect(kernel.runtimeState.bonjourStop).toBeNull();
     } finally {
+      nativePreparation.resolve();
       configReloaderStop.resolve();
       updateCheckStopped.resolve();
       try {
