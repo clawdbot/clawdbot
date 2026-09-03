@@ -660,13 +660,15 @@ export function handleMessageUpdate(
   }
   if (evtType === "text_end") {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;
+    const deferPendingToolMedia =
+      ctx.state.pendingToolMediaUrls.length > 0 && isResponsesApiAssistantMessage(partialAssistant);
     const onFlushError = (err: unknown) => {
       ctx.log.debug(`text_end block reply flush failed: ${String(err)}`);
     };
     try {
       const pending = ctx.flushBlockReplyBuffer({
         assistantMessageIndex,
-        deferPendingToolMedia: isResponsesApiAssistantMessage(partialAssistant),
+        ...(deferPendingToolMedia ? { deferPendingToolMedia: true } : {}),
         final: finalText,
       });
       if (pending) {
