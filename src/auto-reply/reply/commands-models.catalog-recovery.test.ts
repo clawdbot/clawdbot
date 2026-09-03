@@ -220,6 +220,25 @@ describe("/models browse catalog recovery", () => {
 
   it("bounds current-owner reacquisition by the original browse deadline", async () => {
     vi.useFakeTimers();
+    const fallbackCfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "openai/gpt-configured": { alias: "configured" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+    catalogMocks.loadSnapshot.mockImplementationOnce(() => new Promise(() => {}));
+
+    const ordinaryTimeoutPromise = buildPreparedModelsProviderData(fallbackCfg);
+    await vi.advanceTimersByTimeAsync(750);
+    const ordinaryTimeout = await ordinaryTimeoutPromise;
+    expect(ordinaryTimeout.byProvider.get("openai")).toEqual(new Set(["gpt-configured"]));
+
+    catalogMocks.loadSnapshot.mockReset();
+    catalogMocks.loadPublishedOwner.mockReset();
     catalogMocks.loadSnapshot.mockImplementationOnce(
       () =>
         new Promise<never>((_resolve, reject) => {
@@ -231,14 +250,11 @@ describe("/models browse catalog recovery", () => {
     );
     catalogMocks.loadPublishedOwner.mockImplementationOnce(() => new Promise(() => {}));
 
-    const resultPromise = buildPreparedModelsProviderData(staleCfg);
-    const result = expect(resultPromise).resolves.toMatchObject({
-      resolvedDefault: { provider: "anthropic", model: "claude-opus-4-5" },
-      providers: ["anthropic"],
-    });
+    const resultPromise = buildPreparedModelsProviderData(fallbackCfg);
     await vi.advanceTimersByTimeAsync(750);
-    await result;
+    const reacquisitionTimeout = await resultPromise;
 
+    expect(reacquisitionTimeout).toEqual(ordinaryTimeout);
     expect(catalogMocks.loadSnapshot).toHaveBeenCalledTimes(1);
     expect(catalogMocks.loadPublishedOwner).toHaveBeenCalledTimes(1);
   });
