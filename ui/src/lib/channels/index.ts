@@ -1,5 +1,7 @@
+import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.ts";
 import type {
+  ChannelAccountSnapshot,
   ChannelsPairingApproveResult,
   ChannelsPairingListResult,
   ChannelsStatusSnapshot,
@@ -82,16 +84,85 @@ export type ChannelCapability = {
   dispose: () => void;
 };
 
-export {
-  channelSnapshotEntryIsActive,
-  channelSnapshotHasActiveChannel,
-  resolveChannelAccounts,
-} from "./readiness.ts";
-export {
-  formatChannelExtraValue,
-  resolveChannelConfigValue,
-  resolveChannelExtras,
-} from "./config.ts";
+export function resolveChannelAccounts(
+  channelAccounts: ChannelsStatusSnapshot["channelAccounts"] | null | undefined,
+  channelId: string,
+): ChannelAccountSnapshot[] {
+  const accounts =
+    channelAccounts && Object.hasOwn(channelAccounts, channelId) && channelAccounts[channelId];
+  return Array.isArray(accounts) ? accounts : [];
+}
+
+export function channelSnapshotEntryIsActive(
+  snapshot: ChannelsStatusSnapshot | null,
+  channelId: string,
+): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const status = asRecord(
+    Object.hasOwn(snapshot.channels, channelId) ? snapshot.channels[channelId] : undefined,
+  );
+  if (status?.configured === true || status?.running === true || status?.connected === true) {
+    return true;
+  }
+  return resolveChannelAccounts(snapshot.channelAccounts, channelId).some(
+    (account) =>
+      account.configured === true || account.running === true || account.connected === true,
+  );
+}
+
+/** Matches the Channels hub's definition of a transport the operator already uses. */
+export function channelSnapshotHasActiveChannel(snapshot: ChannelsStatusSnapshot | null): boolean {
+  if (!snapshot) {
+    return false;
+  }
+  const channelIds = new Set([
+    ...snapshot.channelOrder,
+    ...Object.keys(snapshot.channels),
+    ...Object.keys(snapshot.channelAccounts),
+  ]);
+  return [...channelIds].some((channelId) => channelSnapshotEntryIsActive(snapshot, channelId));
+}
+
+export function resolveChannelConfigValue(
+  configForm: Record<string, unknown> | null | undefined,
+  channelId: string,
+): Record<string, unknown> | null {
+  if (!configForm) {
+    return null;
+  }
+  const channels = asRecord(configForm.channels);
+  return asRecord(channels?.[channelId]) ?? asRecord(configForm[channelId]);
+}
+
+export function formatChannelExtraValue(raw: unknown): string {
+  if (raw == null) {
+    return t("common.na");
+  }
+  if (typeof raw === "string" || typeof raw === "number" || typeof raw === "boolean") {
+    return String(raw);
+  }
+  try {
+    return JSON.stringify(raw);
+  } catch {
+    return t("common.na");
+  }
+}
+
+export function resolveChannelExtras(params: {
+  configForm: Record<string, unknown> | null | undefined;
+  channelId: string;
+  fields: readonly string[];
+}): Array<{ label: string; value: string }> {
+  const value = resolveChannelConfigValue(params.configForm, params.channelId);
+  if (!value) {
+    return [];
+  }
+  return params.fields.flatMap((field) =>
+    field in value ? [{ label: field, value: formatChannelExtraValue(value[field]) }] : [],
+  );
+}
 
 export function resolveChannelPairingAuthSignature(
   snapshot: Partial<ChannelGatewaySnapshot>,
