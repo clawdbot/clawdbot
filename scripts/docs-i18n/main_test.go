@@ -278,6 +278,20 @@ func TestProcessFileAcceptsYamlDocumentEndFrontMatter(t *testing.T) {
 	}
 }
 
+func TestSplitFrontMatterRejectsPrefixedOpeningDelimiter(t *testing.T) {
+	t.Parallel()
+
+	content := stringsJoin(
+		"---not-front-matter",
+		"...",
+		"# Gateway",
+	)
+	front, body := splitFrontMatter(content)
+	if front != "" || body != content {
+		t.Fatalf("ordinary body text was parsed as front matter: front=%q body=%q", front, body)
+	}
+}
+
 func TestRunDocsI18NDoesNotSkipOutputAfterPostprocessFailure(t *testing.T) {
 	t.Parallel()
 

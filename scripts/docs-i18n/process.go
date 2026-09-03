@@ -96,11 +96,8 @@ func processFile(ctx context.Context, translator docsTranslator, tm *Translation
 }
 
 func splitFrontMatter(content string) (string, string) {
-	if !strings.HasPrefix(content, "---") {
-		return "", content
-	}
 	lines := strings.Split(content, "\n")
-	if len(lines) < 2 {
+	if len(lines) < 2 || !isFrontMatterOpener(lines[0]) {
 		return "", content
 	}
 	endIndex := -1
@@ -123,6 +120,10 @@ func splitFrontMatter(content string) (string, string) {
 // Reject lookalikes so a marker-like value in front matter cannot truncate the metadata.
 func isFrontMatterTerminator(line string) bool {
 	return frontMatterTerminatorPattern.MatchString(line)
+}
+
+func isFrontMatterOpener(line string) bool {
+	return strings.HasPrefix(line, "---") && frontMatterTerminatorPattern.MatchString(line)
 }
 
 var frontMatterTerminatorPattern = regexp.MustCompile(`^(?:---|\.\.\.)(?:[ \t]+(?:#[^\r\n]*)?)?[ \t]*\r?$`)
