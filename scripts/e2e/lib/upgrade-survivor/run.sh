@@ -1320,7 +1320,11 @@ repair_fixture_plugin_consent() {
     fi
   fi
   if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-    phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
+    if [ "$SCENARIO" = "watchos-direct-node" ]; then
+      phase assert-prepublish-recovery-idle assert_prepublish_fixture_idle
+    else
+      phase assert-prepublish-recovery-requests assert_prepublish_plugin_install
+    fi
   fi
 }
 
@@ -1536,7 +1540,11 @@ if [ "$SCENARIO" = "recovery-cleanup" ]; then
   phase assert-recovery-migration node scripts/e2e/lib/upgrade-survivor/recovery-cleanup.mjs migrated
 fi
 if [ -n "${OPENCLAW_CLAWHUB_URL:-}" ]; then
-  phase assert-prepublish-requests assert_prepublish_plugin_install 1
+  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+    phase assert-prepublish-idle assert_prepublish_fixture_idle
+  else
+    phase assert-prepublish-requests assert_prepublish_plugin_install 1
+  fi
 fi
 phase root-managed-vps-cli-usable assert_root_managed_vps_cli_usable
 phase assert-legacy-plugin-dependency-debris-before-doctor assert_legacy_plugin_dependency_debris_before_doctor

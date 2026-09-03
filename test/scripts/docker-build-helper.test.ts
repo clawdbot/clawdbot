@@ -2739,6 +2739,24 @@ docker_e2e_docker_run_cmd run demo
     expect(publishedRunner.indexOf("phase update-candidate update_candidate")).toBeLessThan(
       publishedRunner.indexOf("phase assert-prepublish-requests assert_prepublish_plugin_install"),
     );
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
+        "    phase assert-prepublish-idle assert_prepublish_fixture_idle",
+        "  else",
+        "    phase assert-prepublish-requests assert_prepublish_plugin_install 1",
+        "  fi",
+      ].join("\n"),
+    );
+    expect(publishedRunner).toContain(
+      [
+        'if [ "$SCENARIO" = "watchos-direct-node" ]; then',
+        "      phase assert-prepublish-recovery-idle assert_prepublish_fixture_idle",
+        "    else",
+        "      phase assert-prepublish-recovery-requests assert_prepublish_plugin_install",
+        "    fi",
+      ].join("\n"),
+    );
     expect(publishedRunner).not.toContain('if [ "$candidate_version" = "2026.6.35" ]; then');
     expect(publishedRunner).toContain(
       'local tarball="$fixture_root/openclaw-brave-plugin-${candidate_version}.tgz"',
