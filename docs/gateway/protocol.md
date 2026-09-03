@@ -67,6 +67,13 @@ When waiting capacity is exhausted, the Gateway returns retryable `UNAVAILABLE`
 before the method runs; retry within the request's budget. Started requests
 complete concurrently, so responses can arrive out of order.
 
+Ordinary UI/SDK requests may outlive a socket disconnect, but cannot start a
+handler in a retiring Gateway instance. Shutdown fences new request entry and
+joins pending handler loading and authorization before releasing their runtime.
+Already-started methods retain their own shutdown behavior; shutdown does not
+wait for every RPC to finish. Exact pending node progress and result replies
+remain available during node cleanup, until transport shutdown seals entry.
+
 Clients should branch on `code` and `details.code`; `message` remains human-readable
 and can change except where a compatibility note says otherwise. Method-level
 authorization failures use top-level `code: "FORBIDDEN"` with structured
