@@ -191,6 +191,11 @@ vi.mock("./embedded-agent-runner/model.js", () => ({
 
 vi.mock("./model-auth.js", () => ({
   applySecretRefHeaderSentinels: (model: unknown) => model,
+  createRuntimeProviderAuthLookup: () => ({
+    envApiKey: { skipSetupProviderFallback: true },
+    syntheticAuthProviderRefs: [],
+    syntheticAuthProviderRefsComplete: true,
+  }),
   ensureAuthProfileStore: (...args: unknown[]) => ensureAuthProfileStoreMock(...args),
   ensureAuthProfileStoreWithoutExternalProfiles: (...args: unknown[]) =>
     ensureAuthProfileStoreWithoutExternalProfilesMock(...args),

@@ -33,7 +33,10 @@ import {
   resolveManagedSecretRefRuntimeProviderAuth,
 } from "./model-auth-runtime-config.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
-import { resolveSyntheticLocalProviderAuth } from "./model-auth-runtime.js";
+import {
+  resolveSyntheticLocalProviderAuth,
+  type RuntimeProviderAuthLookup,
+} from "./model-auth-runtime.js";
 
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
@@ -171,6 +174,13 @@ export async function resolveApiKeyForProviderCore(params: {
   credentialPrecedence?: ProviderCredentialPrecedence;
   /** Skip implicit profile discovery for a prepared env/config fallback attempt. */
   allowAuthProfileFallback?: boolean;
+  /** Keep provider plugin synthetic-auth (e.g. GCP-ADC) reachable even when
+   *  auth-profile fallback is off. Defaults to tracking allowAuthProfileFallback
+   *  so existing callers are unchanged; isolated direct attempts pass true to
+   *  preserve plugin synthetic auth without re-opening stored profiles. */
+  allowPluginSyntheticAuth?: boolean;
+  /** Prepared env/synthetic-auth lookup reused for eligibility without a parallel API. */
+  runtimeLookup?: RuntimeProviderAuthLookup;
   /** Skip plugin setup fallback when the prepared route already excludes it. */
   skipSetupProviderFallback?: boolean;
   modelId?: string;
@@ -630,7 +640,14 @@ export async function resolveApiKeyForProviderCore(params: {
     provider,
     modelApi: params.modelApi,
     secretSentinels: params.secretSentinels,
-    allowPluginSyntheticAuth: params.allowAuthProfileFallback !== false,
+    // Plugin synthetic-auth is a provider-owned credential hook, distinct from
+    // stored-profile discovery. Keep it available on its own flag so an
+    // isolated direct attempt can disable profile fallback yet still resolve
+    // GCP-ADC-style auth. A prepared runtimeLookup scopes eligibility via
+    // shouldResolvePluginSyntheticAuth in core.
+    allowPluginSyntheticAuth:
+      params.allowPluginSyntheticAuth ?? params.allowAuthProfileFallback !== false,
+    runtimeLookup: params.runtimeLookup,
   });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;

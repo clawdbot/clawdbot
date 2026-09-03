@@ -828,6 +828,11 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   vi.doMock("../model-auth.js", () => ({
     applyAuthHeaderOverride: vi.fn((model: unknown) => model),
     applyLocalNoAuthHeaderOverride: vi.fn((model: unknown) => model),
+    createRuntimeProviderAuthLookup: vi.fn(() => ({
+      envApiKey: { skipSetupProviderFallback: true },
+      syntheticAuthProviderRefs: [],
+      syntheticAuthProviderRefsComplete: true,
+    })),
     ensureAuthProfileStore: ensureAuthProfileStoreMock,
     ensureAuthProfileStoreWithoutExternalProfiles:
       ensureAuthProfileStoreWithoutExternalProfilesMock,

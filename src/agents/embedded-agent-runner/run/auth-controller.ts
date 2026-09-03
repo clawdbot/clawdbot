@@ -48,6 +48,7 @@ import {
   RUNTIME_AUTH_REFRESH_RETRY_MS,
   type RuntimeAuthState,
 } from "./helpers.js";
+import { createIsolatedPluginAuthResolver } from "./isolated-plugin-auth.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 
 type ApiKeyInfo = ResolvedProviderAuth;
@@ -510,12 +511,17 @@ export function createEmbeddedRunAuthController(params: {
     throw new Error(message);
   };
 
-  const resolveApiKeyForCandidate = async (
+  const isolatedPluginAuth = createIsolatedPluginAuthResolver({
+    cfg: params.config,
+    workspaceDir: params.workspaceDir,
+  });
+
+  const resolveApiKeyForCandidate = (
     candidate?: string,
     model = params.getRuntimeModel(),
     allowAuthProfileFallback?: boolean,
-  ) => {
-    return getApiKeyForModelCore({
+  ) =>
+    getApiKeyForModelCore({
       model,
       cfg: params.config,
       profileId: candidate,
@@ -524,9 +530,9 @@ export function createEmbeddedRunAuthController(params: {
       workspaceDir: params.workspaceDir,
       lockedProfile: candidate != null && candidate === params.lockedProfileId,
       allowAuthProfileFallback,
+      ...isolatedPluginAuth(allowAuthProfileFallback),
       secretSentinels: true,
     });
-  };
 
   const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);

@@ -1600,6 +1600,183 @@ describe("resolveApiKeyForProviderCore", () => {
     });
   });
 
+  // Regression for #110103: a gateway-isolated attempt disables auth-profile
+  // fallback, but a provider whose only credential source is a plugin synthetic
+  // -auth hook (GCP-ADC style) must still resolve. Before the fix the two
+  // permissions were coupled, so allowAuthProfileFallback: false also silenced
+  // the plugin hook and the gateway path failed with "No API key found".
+  it("resolves plugin synthetic auth on an isolated attempt without profile fallback", async () => {
+    const resolved = await resolveApiKeyForProviderCore({
+      provider: "native-cli",
+      cfg: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "native-cli/demo-model",
+            },
+          },
+        },
+      },
+      store: { version: 1, profiles: {} },
+      // Gateway isolation: stored-profile discovery stays off, plugin synthetic
+      // -auth stays on via its own decoupled flag.
+      allowAuthProfileFallback: false,
+      allowPluginSyntheticAuth: true,
+    });
+
+    expect(resolved).toEqual({
+      apiKey: "native-cli-access-token",
+      source: "Native CLI auth",
+      mode: "oauth",
+    });
+  });
+
+  // Back-compat guard for the same coupling: callers that disable profile
+  // fallback without opting into plugin synthetic-auth keep the pre-existing
+  // behavior, so only the isolated gateway path widens.
+  it("keeps plugin synthetic auth off when fallback is off without the decoupled flag", async () => {
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg: {
+          agents: {
+            defaults: {
+              model: {
+                primary: "native-cli/demo-model",
+              },
+            },
+          },
+        },
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+  });
+
+  // Companion to the regression above: enabling plugin synthetic-auth on a
+  // gateway attempt must NOT re-open stored-profile discovery. A provider with
+  // only a stored api-key profile stays unresolved when profile fallback is off,
+  // even with allowPluginSyntheticAuth: true; it resolves once fallback is on.
+  it("keeps stored-profile isolation when plugin synthetic auth is enabled but profile fallback is off", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "isolated-store:default": {
+          type: "api_key" as const,
+          provider: "isolated-store",
+          key: "sk-stored-isolated", // pragma: allowlist secret
+        },
+      },
+    };
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "isolated-store",
+        store,
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+      }),
+    ).rejects.toThrow('No API key found for provider "isolated-store"');
+
+    const resolvedWithFallback = await resolveApiKeyForProviderCore({
+      provider: "isolated-store",
+      store,
+    });
+    expectAuthFields(resolvedWithFallback, {
+      apiKey: "sk-stored-isolated",
+      source: "profile:isolated-store:default",
+      mode: "api-key",
+    });
+  });
+
+  // Gateway callers pass a prepared RuntimeProviderAuthLookup instead of a
+  // public eligibility helper. Matching refs keep synthetic auth; other refs
+  // stay on env/config resolution.
+  it("scopes gateway plugin synthetic auth through prepared runtimeLookup refs", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "native-cli/demo-model",
+          },
+        },
+      },
+    };
+
+    const resolved = await resolveApiKeyForProviderCore({
+      provider: "native-cli",
+      cfg,
+      store: { version: 1, profiles: {} },
+      allowAuthProfileFallback: false,
+      allowPluginSyntheticAuth: true,
+      runtimeLookup: {
+        envApiKey: { skipSetupProviderFallback: true },
+        syntheticAuthProviderRefs: ["native-cli"],
+        syntheticAuthProviderRefsComplete: true,
+      },
+    });
+    expect(resolved).toEqual({
+      apiKey: "native-cli-access-token",
+      source: "Native CLI auth",
+      mode: "oauth",
+    });
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: {
+          envApiKey: { skipSetupProviderFallback: true },
+          syntheticAuthProviderRefs: ["anthropic-vertex"],
+          syntheticAuthProviderRefsComplete: true,
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+  });
+
+  it("fails closed when a prepared plugin lookup is incomplete", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "native-cli/demo-model",
+          },
+        },
+      },
+    };
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: {
+          envApiKey: { skipSetupProviderFallback: true },
+          syntheticAuthProviderRefsComplete: false,
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: createRuntimeProviderAuthLookup({
+          includePluginSyntheticAuth: false,
+          env: {},
+        }),
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+  });
+
   it("reuses the loaded auth profile store after deferring an explicit synthetic profile", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "custom-auth",
