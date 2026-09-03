@@ -27,12 +27,14 @@ type RuntimeModel = NonNullable<ModelResolution["model"]>;
 
 function loadEmbeddedRunAuthProfileStore(params: {
   agentDir: string;
+  profileId?: string;
   config: RunEmbeddedAgentParams["config"];
   externalCliProviderIds: Iterable<string>;
 }): AuthProfileStore {
   // Provider pins own ambient overlays at this loader seam. Genuinely stored profiles and
   // explicit bindings remain available for the cross-class contracts in prepare-auth.test.ts.
   return ensureAuthProfileStore(params.agentDir, {
+    profileId: params.profileId,
     config: params.config,
     externalCliProviderIds: params.externalCliProviderIds,
     allowKeychainPrompt: false,
@@ -90,6 +92,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   let noExternalAuthStore: AuthProfileStore | undefined;
   if (!initialPluginHarnessOwnsTransport && !externalCliAuthScope.providerIds) {
     noExternalAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+      profileId: runParams.authProfileId,
       allowKeychainPrompt: false,
     });
     externalCliAuthScope = resolveExternalCliAuthOverlayScopeFromSelection({
@@ -108,21 +111,25 @@ export async function prepareEmbeddedRunAuthPlan(params: {
   const attemptAuthProfileStore = usesOpenAIAuthRouting
     ? loadEmbeddedRunAuthProfileStore({
         agentDir: params.agentDir,
+        profileId: runParams.authProfileId,
         config: runParams.config,
         externalCliProviderIds: [OPENAI_PROVIDER_ID],
       })
     : initialPluginHarnessOwnsTransport
       ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+          profileId: runParams.authProfileId,
           allowKeychainPrompt: false,
         })
       : externalCliAuthScope.providerIds
         ? loadEmbeddedRunAuthProfileStore({
             agentDir: params.agentDir,
+            profileId: runParams.authProfileId,
             config: runParams.config,
             externalCliProviderIds: externalCliAuthScope.providerIds,
           })
         : (noExternalAuthStore ??
           ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {
+            profileId: runParams.authProfileId,
             allowKeychainPrompt: false,
           }));
   params.markStage?.("store");

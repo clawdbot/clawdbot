@@ -84,12 +84,12 @@ cat ~/.openclaw/openclaw.json
 `openclaw doctor --fix`. They share the same Doctor rule registry, but they do
 not select or act on rules in the same way:
 
-| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                       |
-| ------------------------ | --------- | ----------------------- | ---------------------- | -------------------------------- |
-| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status          |
-| `openclaw doctor --json` | no        | no                      | JSON advisory report   | machine-readable operator checks |
-| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs        |
-| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates  |
+| Mode                     | Prompts   | Writes config/state                        | Output                 | Use it for                       |
+| ------------------------ | --------- | ------------------------------------------ | ---------------------- | -------------------------------- |
+| `openclaw doctor`        | yes       | yes, safe migrations and confirmed repairs | friendly health report | guided checks and repairs        |
+| `openclaw doctor --json` | no        | no                                         | JSON advisory report   | machine-readable operator checks |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy                    | friendly repair log    | applying approved repairs        |
+| `openclaw doctor --lint` | no        | no                                         | structured findings    | CI, preflight, and review gates  |
 
 Default `doctor --lint` runs the broad-safe automation profile: checks that are
 static, local, and useful in CI or preflight output. It skips opt-in checks that
@@ -521,7 +521,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="8. Gateway service migrations and cleanup hints">
-    Doctor detects legacy gateway services (launchd/systemd/schtasks) and offers to remove them and install the OpenClaw service using the current gateway port. It can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
+    Run `openclaw doctor` interactively to review legacy gateway services (launchd/systemd/schtasks) and confirm supported cleanup. Explicit repair maintenance skips this separate cleanup flow. Removal is reported separately from installation; use `openclaw gateway install` when the intended native service is missing. Doctor can also scan for extra gateway-like services and print cleanup hints. Profile-named OpenClaw gateway services are considered first-class and are not flagged as "extra."
 
     Linux user-service cleanup preserves the unit file if stopping or disabling the service fails. An interrupted status probe does not permit file-only removal; that fallback is reported only when `systemctl` is unavailable.
 
@@ -529,7 +529,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="8b. Startup Matrix migration">
-    When a Matrix channel account has a pending or actionable legacy state migration, doctor (in `--fix` / `--repair` mode) creates a pre-migration snapshot and then runs the best-effort migration steps: legacy Matrix state migration and legacy encrypted-state preparation. Both steps are non-fatal; errors are logged and startup continues. In read-only mode (`openclaw doctor` without `--fix`) this check is skipped entirely.
+    When a Matrix channel account has a pending or actionable legacy state migration, doctor (in `--fix` / `--repair` mode) creates a pre-migration snapshot and then runs the best-effort migration steps: legacy Matrix state migration and legacy encrypted-state preparation. Both steps are non-fatal; errors are logged and startup continues. Without explicit repair (`--fix`, `--repair`, or `--yes`), this check is skipped.
   </Accordion>
   <Accordion title="8c. Device pairing and auth drift">
     Doctor inspects device-pairing state as part of the normal health pass, reporting:
@@ -609,7 +609,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="13. Gateway health check + restart">
-    Doctor runs a health check and offers to restart the gateway when it looks unhealthy.
+    Guided Doctor runs a health check and can offer recovery for a local Gateway, subject to service ownership and confirmation. A failed remote health check does not trigger local service recovery, even when the remote URL is a loopback SSH tunnel. Check the remote connection and recover the Gateway on its host. Explicit repair maintenance only resumes the matching service it stopped. A loaded, enabled macOS job between respawns is not treated as an intentionally stopped service.
   </Accordion>
   <Accordion title="13b. Memory search readiness">
     Doctor checks whether the configured memory search embedding provider is ready for the default agent. The behavior depends on the configured provider:
@@ -633,9 +633,9 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     Notes:
 
-    - `openclaw doctor` prompts before rewriting supervisor config.
+    - `openclaw doctor` prompts before rewriting supervisor config. `openclaw doctor --force` alone remains guided: it allows aggressive repair choices but still requires interactive consent for an eligible service rewrite. It does not enter repair maintenance or bypass ownership and write-access checks.
     - `openclaw doctor --yes` accepts default non-service repair prompts and enters maintenance while preserving the service definition.
-    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias; `--yes` also enters repair maintenance). It stops the matching managed Gateway before plugin or mutable-state inspection, verifies repairs, and restarts the same service once, even when no changes are needed. It preserves the installed service definition, leaves already-stopped services stopped, and refuses to stop an ancestor Gateway. Plain inspection does not enter maintenance, and custom state directories do not adopt native services.
+    - `openclaw doctor --fix` applies recommended repairs without prompts (`--repair` is an alias; `--yes` also enters repair maintenance). It stops the matching managed Gateway before plugin or mutable-state inspection, verifies repairs, and restarts the same service once, even when no changes are needed. It preserves the installed service definition, leaves services confirmed offline before maintenance offline, and refuses to stop an ancestor Gateway. Plain inspection does not enter maintenance, and custom state directories do not adopt native services.
     - Explicit repair refuses unavailable service inspection and unmatched services that may still run. After their owner stops them and the native manager confirms they are offline, Doctor repairs its selected state without changing or starting those services. A disabled systemd unit can still be restarting; Doctor checks runtime state as well as installation state.
     - An updater's explicit Gateway activation policy leaves stop/restart ownership with the updater. Doctor still requires native proof that the service is offline; a live `update --no-restart` repair fails without stopping or restarting it. Stop the service through its owner before retrying the update. Older update parents without that policy retain ordinary Doctor maintenance.
     - `openclaw doctor --fix --force` preserves the service definition too. Use `openclaw gateway install --force` to request a rewrite; operator-owned systemd drop-ins remain unchanged.

@@ -1009,6 +1009,26 @@ describe("full release candidate binding authority", () => {
     expect(candidateArtifactJsonFromBinding(fresh)).toBe(candidateArtifactJsonFromBinding(reused));
   });
 
+  it("preserves published package provenance across fresh and reused evidence", () => {
+    const binding = fullReleaseCandidateBindingFixture({ packagePublished: true });
+    const fresh = resolveCandidateBinding({
+      freshBinding: binding,
+      now: NOW,
+      request: binding.request,
+      required: true,
+    });
+    const reused = resolveCandidateBinding({
+      now: NOW,
+      request: binding.request,
+      required: true,
+      reusedBinding: binding,
+    });
+    const freshArtifact = candidateArtifactJsonFromBinding(fresh);
+
+    expect(freshArtifact).toBe(candidateArtifactJsonFromBinding(reused));
+    expect(JSON.parse(freshArtifact)).toMatchObject({ packagePublished: true });
+  });
+
   it("rejects missing, ambiguous, expired, and wrong-request evidence", () => {
     const binding = fullReleaseCandidateBindingFixture();
     expect(() =>

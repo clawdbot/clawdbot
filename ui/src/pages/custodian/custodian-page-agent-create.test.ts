@@ -153,4 +153,23 @@ describe("custodian new-agent flow", () => {
       search: "?draft=Wake%20up%2C%20my%20friend!",
     });
   });
+
+  it("hands model-account setup to the existing human Profile controls", async () => {
+    const request = vi.fn().mockResolvedValue({
+      sessionId: "control-ui-onboarding-00000000-0000-4000-8000-000000000001",
+      reply: "Open Settings → Profile → Connected accounts to connect your account.",
+      action: "none",
+      handoff: { kind: "model-accounts" },
+    });
+    const { context, refreshList, setAgent, setSessionKey } = createContext(request);
+    const client = context.gateway.snapshot.client;
+    await mountPage(context);
+
+    await waitForFast(() => expect(context.navigate).toHaveBeenCalledWith("profile"));
+    expect(context.gateway.snapshot.client).toBe(client);
+    expect(refreshList).not.toHaveBeenCalled();
+    expect(setAgent).not.toHaveBeenCalled();
+    expect(setSessionKey).not.toHaveBeenCalled();
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["openclaw.chat"]);
+  });
 });

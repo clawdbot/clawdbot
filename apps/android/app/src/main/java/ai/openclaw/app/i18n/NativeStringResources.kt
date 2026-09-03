@@ -876,7 +876,6 @@ internal val nativeStringResourceIds: Map<String, Int> =
     "Not delivered" to R.string.native_f498742c19d9bbdb,
     "Not granted" to R.string.native_352a5b4c1246d1bf,
     "Not now" to R.string.native_a0e63d7c7125d29a,
-    "Not paired" to R.string.native_53f15ea2f2343351,
     "Not pinned" to R.string.native_47bce0ade1d74d4b,
     "Not requested" to R.string.native_2bb186b55caf8791,
     "Not scanned by ClawHub" to R.string.native_8ab6bd3b9c656e1d,

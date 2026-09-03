@@ -565,7 +565,6 @@
     <string name="native_53b7230f9bf052b7" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"J’ai approuvé"</string>
     <string name="native_53c8ee5160e74bf2" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Révision par IA, avec recours humain, pour un accès supplémentaire."</string>
     <string name="native_53dd551fe4010842" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Connectez votre Gateway pour charger la disponibilité des fournisseurs."</string>
-    <string name="native_53f15ea2f2343351" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Non associé"</string>
     <string name="native_53fb429d67bd4aab" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Cette approbation a expiré avant de pouvoir être résolue."</string>
     <string name="native_541ff80fcb2f8e87" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Observation dans %1$s s — basculez vers l\'application cible"</string>
     <string name="native_542e9aa519c89605" formatted="false" tools:ignore="Typos,TypographyDashes,TypographyEllipsis">"Invite de l’agent"</string>

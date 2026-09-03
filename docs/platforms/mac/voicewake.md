@@ -47,6 +47,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 - **Hold Right Option to talk**: enables the push-to-talk monitor.
 - If the selected language lacks on-device recognition on this Mac, Voice Wake stays disabled while push-to-talk and Talk Mode remain available.
 - Language and mic pickers, a live level meter, a trigger-word table, and a tester (local-only, never forwards).
+- Trigger words follow the Primary Gateway and refresh when it reconnects or you select a different Primary. Opening a saved Gateway chat does not change them.
 - The mic picker preserves the last selection if a device disconnects, shows a disconnected hint, and temporarily falls back to the system default until it returns.
 - **Sounds**: chimes on trigger detect and on send, defaulting to the macOS "Glass" system sound. Pick any `NSSound`-loadable file (e.g. MP3/WAV/AIFF) per event, or choose **No Sound**.
 

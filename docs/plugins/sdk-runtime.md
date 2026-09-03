@@ -1153,6 +1153,8 @@ snapshots; OpenClaw owns all persistence and lifecycle coordination.
 
     Remote media options and `fetchWithSsrFGuard(...)` from `openclaw/plugin-sdk/ssrf-runtime` accept a synchronous `beforeRequest` callback for final-dispatch authorization checks. It runs after proxy, DNS, and dispatcher preparation and immediately before every physical request. Redirects invoke it once per hop; media retries invoke it again for every attempt and hop. If it throws, that request is not sent and the same error propagates. Promise or thenable results are rejected before transport dispatch.
 
+    Guarded fetch also accepts a synchronous `resolveDispatcherPolicy(url)` override, reevaluated for each redirect. An undefined result uses `dispatcherPolicy`, or direct routing when no default policy is supplied. Providers preserving operator-configured proxy routing can use `resolveEnvHttpProxyAgentOptions` and `matchesNoProxy` from `openclaw/plugin-sdk/fetch-runtime` to select each hop. The `trusted_explicit_proxy` mode permits HTTP, HTTPS, `socks:` and `socks5:` proxy URLs and delegates target DNS to the explicitly trusted proxy; proxy-host validation and target-host policy still apply. Direct hops keep DNS pinning. Strict mode rejects SOCKS proxies, and the separate trusted-env-proxy gate remains HTTP(S)-only.
+
     `api.runtime.channel.mentions` is the shared inbound mention-policy surface for bundled channel plugins that use runtime injection:
 
     ```typescript

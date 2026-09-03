@@ -631,7 +631,7 @@ describe("CustodianSessionStore", () => {
     store.connect(context, "caretaker");
     await waitForFast(() => expect(request).toHaveBeenCalledOnce());
 
-    store.openModelSetup();
+    store.exitSetup("model-setup");
     expect(requestSignal?.aborted).toBe(true);
     expect(store.sending).toBe(false);
     resolveReply({

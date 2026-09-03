@@ -297,6 +297,10 @@ export function parseSystemAgentOperation(input: string): SystemAgentOperation {
     case "models":
     case "list models":
       return { kind: "models" };
+    case "model accounts":
+    case "personal model accounts":
+    case "manage model accounts":
+      return { kind: "model-accounts" };
     case "tui":
     case "open tui":
     case "chat":

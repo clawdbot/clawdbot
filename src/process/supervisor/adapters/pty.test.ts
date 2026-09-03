@@ -94,6 +94,21 @@ describe("createPtyAdapter", () => {
     vi.clearAllMocks();
   });
 
+  it("does not spawn when construction aborts during the module import", async () => {
+    const abort = new AbortController();
+    spawnMock.mockReturnValue(createStubPty());
+
+    const starting = createPtyAdapter({
+      shell: "bash",
+      args: ["-lc", "echo started"],
+      abortSignal: abort.signal,
+    });
+    abort.abort();
+
+    await expect(starting).rejects.toThrow("PTY construction aborted");
+    expect(spawnMock).not.toHaveBeenCalled();
+  });
+
   it("uses the default terminal name and child env when Windows TERM is blank", async () => {
     const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
     Object.defineProperty(process, "platform", { value: "win32", configurable: true });

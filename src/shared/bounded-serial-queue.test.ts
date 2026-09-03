@@ -1,23 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { BoundedSerialQueue } from "./bounded-serial-queue.js";
-
-function deferred<T = void>(): {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-} {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((accept, fail) => {
-    resolve = accept;
-    reject = fail;
-  });
-  return { promise, resolve, reject };
-}
 
 describe("BoundedSerialQueue", () => {
   it("runs one task at a time in FIFO order and continues after failures", async () => {
-    const first = deferred();
+    const first = createDeferred();
     const order: string[] = [];
     const queue = new BoundedSerialQueue({ maxPendingCount: 4, maxPendingWeight: 4 });
 
@@ -55,7 +42,7 @@ describe("BoundedSerialQueue", () => {
   });
 
   it("bounds waiting count and weight, then seals on the first overflow", () => {
-    const first = deferred();
+    const first = createDeferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 5 });
     const active = queue.enqueue(async () => await first.promise, { weight: 100 });
     const waiting = queue.enqueue(async () => undefined, { weight: 3 });
@@ -71,7 +58,7 @@ describe("BoundedSerialQueue", () => {
   });
 
   it("can reject at capacity without sealing admission", async () => {
-    const first = deferred();
+    const first = createDeferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
     const active = queue.enqueue(async () => await first.promise);
     const waiting = queue.enqueue(async () => undefined);
@@ -99,8 +86,8 @@ describe("BoundedSerialQueue", () => {
   });
 
   it("flushes only the accepted prefix visible at call time", async () => {
-    const first = deferred();
-    const second = deferred();
+    const first = createDeferred();
+    const second = createDeferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 2 });
     const active = queue.enqueue(async () => await first.promise);
     const flush = queue.flush();
@@ -142,7 +129,7 @@ describe("BoundedSerialQueue", () => {
   });
 
   it("seals idempotently while preserving accepted work", async () => {
-    const first = deferred();
+    const first = createDeferred();
     const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
     const active = queue.enqueue(async () => await first.promise);
     const waiting = queue.enqueue(async () => "done");

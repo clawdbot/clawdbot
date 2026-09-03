@@ -338,14 +338,19 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
         ? nothing
         : html`<div class="sidebar-online__list">
             ${repeat(users, presenceUserKey, (user) => {
-              return html`<div class="sidebar-online__row">
+              return html`<div
+                class="sidebar-online__row"
+                data-person-card
+                data-person-card-section="online"
+              >
                 <button
                   class="sidebar-online__person ${isPresenceViewerIdle(user)
                     ? "sidebar-online__person--away"
                     : ""}"
                   type="button"
                   data-online-user-id=${user.id}
-                  data-online-user-key=${presenceUserKey(user)}
+                  data-person-card-key=${presenceUserKey(user)}
+                  data-person-card-trigger
                   aria-haspopup="dialog"
                   aria-expanded="false"
                   aria-label=${t("presence.card.details", { name: presenceViewerLabel(user) })}

@@ -5,6 +5,7 @@ import { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import {
   createPreparedModelCatalogWorker,
@@ -107,12 +108,16 @@ async function createMismatchFixture() {
   return { agentDir, marker, isCurrent, workerInput };
 }
 
-function trackSpawnedWorkers(run: (spawned: readonly Worker[]) => Promise<void>) {
+function trackSpawnedWorkers(
+  run: (spawned: readonly Worker[]) => Promise<void>,
+  onSpawn?: (worker: Worker) => void,
+) {
   const spawned: Worker[] = [];
   const workerChannel = channel("worker_threads");
   const trackWorker = (message: unknown) => {
     if (isRecord(message) && message.worker instanceof Worker) {
       spawned.push(message.worker);
+      onSpawn?.(message.worker);
     }
   };
   workerChannel.subscribe(trackWorker);
@@ -202,5 +207,85 @@ describe("prepared model catalog worker generation mismatch", () => {
       });
       expect(spawned).toHaveLength(2);
     });
+  });
+
+  it("keeps a replacement worker alive when an old mismatch finishes retiring", async () => {
+    const fixture = await createMismatchFixture();
+    const stopped = createDeferredCore();
+    const releaseTermination = createDeferredCore();
+    const replacementStarted = createDeferredCore();
+    let restoreTermination: (() => void) | undefined;
+    let drifted = true;
+    const transientInput = { ...fixture.workerInput };
+    Object.defineProperty(transientInput, "generationFingerprint", {
+      enumerable: true,
+      get: () => (drifted ? DRIFTED_OWNER_FINGERPRINT : fixture.workerInput.generationFingerprint),
+    });
+    await trackSpawnedWorkers(
+      async (spawned) => {
+        const worker = createPreparedModelCatalogWorker({
+          input: transientInput,
+          isCurrent: fixture.isCurrent,
+        });
+        const auth = worker
+          .loadAuth({ providerIds: [PROVIDER_ID] })
+          .catch((error: unknown) => error);
+        const queued = worker.loadCatalog().catch((error: unknown) => error);
+        let replacement: ReturnType<typeof worker.loadCatalog> | undefined;
+        try {
+          // The queued catch can retire the old pool while the active request still
+          // awaits termination. An independent caller need not await either public result.
+          await Promise.race([
+            stopped.promise,
+            Promise.all([auth, queued]).then(() => {
+              throw new Error("Expected the old worker's held termination");
+            }),
+          ]);
+          drifted = false;
+          replacement = worker.loadCatalog();
+          const outcome = replacement.catch((error: unknown) => error);
+          await Promise.race([
+            replacementStarted.promise,
+            outcome.then(() => {
+              throw new Error("Expected an independent replacement worker");
+            }),
+          ]);
+          expect(spawned).toHaveLength(2);
+
+          releaseTermination.resolve();
+          const initial = await Promise.all([auth, queued]);
+          for (const failure of initial) {
+            expect(failure).toMatchObject({ name: "PreparedModelCatalogGenerationMismatchError" });
+          }
+          expect(await outcome).toMatchObject({
+            entries: expect.arrayContaining([
+              expect.objectContaining({ provider: PROVIDER_ID, id: "account-scoped-model" }),
+            ]),
+          });
+          await expect(worker.loadAuth({ providerIds: [PROVIDER_ID] })).resolves.toMatchObject({
+            authStore: expect.objectContaining({ version: 1 }),
+          });
+          expect(spawned).toHaveLength(2);
+        } finally {
+          releaseTermination.resolve();
+          await Promise.allSettled([auth, queued, replacement]);
+          restoreTermination?.();
+        }
+      },
+      (worker) => {
+        if (restoreTermination) {
+          replacementStarted.resolve();
+          return;
+        }
+        const terminate = worker.terminate.bind(worker);
+        const spy = vi.spyOn(worker, "terminate").mockImplementation(async () => {
+          const code = await terminate();
+          stopped.resolve();
+          await releaseTermination.promise;
+          return code;
+        });
+        restoreTermination = () => spy.mockRestore();
+      },
+    );
   });
 });

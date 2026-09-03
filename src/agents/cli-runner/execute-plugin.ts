@@ -12,7 +12,6 @@ import type {
   CliBackendUserInputResult,
 } from "../../plugins/cli-backend.types.js";
 import type { RunExit, TerminationReason } from "../../process/supervisor/types.js";
-import { resolveAdmittedRunActiveAssertion } from "../admitted-run-context.js";
 import { runBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
 import type { CliTerminalInterruption } from "../cli-output-contracts.js";
 import { resolveExecDefaults } from "../exec-defaults.js";
@@ -32,6 +31,7 @@ import {
   resolveCliNativeToolApprovalPlan,
 } from "./cli-native-tool-approval.js";
 import { createCliAbortError } from "./execute-node-claude.js";
+import { createCliRunCurrentAssertion } from "./execution-target.js";
 import { createCliFailoverError as failover } from "./exit-error.js";
 import * as noOutputPolicy from "./no-output-timeout-policy.js";
 import type { PreparedCliRunContext } from "./types.js";
@@ -61,10 +61,7 @@ function createPluginToolPermissionHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return denyTool("OpenClaw denied native tool use: the admitted run is no longer active.");
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -261,12 +258,7 @@ function createPluginUserInputHandler(params: {
     const signal = request.abortSignal
       ? AbortSignal.any([params.abortSignal, request.abortSignal])
       : params.abortSignal;
-    const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-    if (!assertActive) {
-      return cancelUserInput(
-        "OpenClaw cancelled operator input: the admitted run is no longer active.",
-      );
-    }
+    const assertActive = createCliRunCurrentAssertion(run, signal);
     try {
       assertActive();
     } catch {
@@ -425,6 +417,7 @@ export async function executePluginOwnedProcess(params: {
   const signal = run.abortSignal
     ? AbortSignal.any([controller.signal, run.abortSignal])
     : controller.signal;
+  const assertCurrent = createCliRunCurrentAssertion(run, signal);
   const termination: { reason: TerminationReason } = { reason: "exit" };
   const outstanding = {
     approvals: 0,
@@ -503,6 +496,7 @@ export async function executePluginOwnedProcess(params: {
   let liveSession: ReturnType<typeof createCliLiveSessionCapability> | undefined;
   let terminalResult: "none" | "success" | "error" = "none";
   try {
+    assertCurrent();
     resetNoOutputTimer();
     if (
       params.liveSession &&
@@ -513,12 +507,8 @@ export async function executePluginOwnedProcess(params: {
         throw new Error("The required CLI live session cannot be replaced by a fresh process.");
       }
       await closeCliLiveSession(params.context, "restart");
-      const assertActive = resolveAdmittedRunActiveAssertion(run.admittedRunContext, signal);
-      if (!assertActive) {
-        throw new Error("CLI live session turn closed while restarting its process.");
-      }
-      assertActive();
     }
+    assertCurrent();
     if (params.liveSession) {
       liveSession = createCliLiveSessionCapability({
         context: params.context,
@@ -543,6 +533,7 @@ export async function executePluginOwnedProcess(params: {
       ...(params.sessionId ? { sessionId: params.sessionId } : {}),
       useResume: params.useResume,
       abortSignal: signal,
+      assertCurrent,
       timeoutMs: run.timeoutMs,
       ...(run.executionMode ? { executionMode: run.executionMode } : {}),
       ...(run.cliToolAvailability ? { toolAvailability: run.cliToolAvailability } : {}),

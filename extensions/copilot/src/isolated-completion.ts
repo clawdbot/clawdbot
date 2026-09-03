@@ -78,16 +78,14 @@ async function awaitWithinCompletionBoundary<T>(params: {
     throw createTimeoutError(params.boundary.timeoutMs);
   }
 
-  let boundaryWon = false;
   let boundaryError: Error | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let onAbort: (() => void) | undefined;
   const boundary = new Promise<never>((_resolve, reject) => {
     const rejectBoundary = (error: Error) => {
-      if (boundaryWon) {
+      if (boundaryError) {
         return;
       }
-      boundaryWon = true;
       boundaryError = error;
       params.onBoundary?.();
       reject(error);
@@ -104,24 +102,34 @@ async function awaitWithinCompletionBoundary<T>(params: {
       }
     }
   });
+  const assertCurrent = () => {
+    if (boundaryError) {
+      throw boundaryError;
+    }
+    params.boundary.assertCurrent?.();
+  };
   // Start only after the abort listener exists. Pool/session factories may
   // synchronously trip cancellation before returning their promise.
   const operation = Promise.resolve()
     .then(() => {
-      if (boundaryWon) {
-        throw boundaryError ?? createTimeoutError(params.boundary.timeoutMs);
-      }
-      params.boundary.assertCurrent?.();
+      assertCurrent();
       return params.start(remainingMs);
     })
-    .then(async (value) => {
-      if (boundaryWon) {
-        await params.cleanupLate?.(value);
+    .then((value) => {
+      try {
+        assertCurrent();
+        return value;
+      } catch (error) {
+        // Retirement can reject an acquired resource before its caller owns cleanup.
+        startBestEffortCleanup(async () => await params.cleanupLate?.(value));
+        throw error;
       }
-      return value;
     });
   try {
     return await Promise.race([operation, boundary]);
+  } catch (error) {
+    params.boundary.assertCurrent?.();
+    throw error;
   } finally {
     if (timer) {
       clearTimeout(timer);

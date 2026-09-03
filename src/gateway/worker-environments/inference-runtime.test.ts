@@ -259,7 +259,7 @@ function setup(
     entry.authProfileOverride
       ? {
           profileId: entry.authProfileOverride,
-          source: entry.authProfileOverrideSource ?? "user",
+          source: entry.authProfileOverrideSource === "auto" ? "auto" : "user",
           routeRequirement: undefined,
         }
       : undefined,

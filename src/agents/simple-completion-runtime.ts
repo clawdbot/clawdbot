@@ -286,6 +286,7 @@ async function prepareSimpleCompletionModelCore(
         readOnly: true,
         allowKeychainPrompt: false,
         config: params.cfg,
+        profileId: params.profileId,
       })
     : undefined;
   try {

@@ -2714,7 +2714,7 @@ function createCompactNodeTestShardBundles(
         isExclusiveCompactGroup(candidate[0]) === exclusive &&
         (family === undefined ||
           candidate.every((entry) => compactStripeFamily(entry) !== family)) &&
-        candidate.length < COMPACT_NODE_TEST_JOB_GROUPS &&
+        (parallel || candidate.length < COMPACT_NODE_TEST_JOB_GROUPS) &&
         estimateBinSeconds(combined) <= secondsCap
       );
     });

@@ -783,11 +783,11 @@ class GatewayBootstrapAuthTest {
       auth(token = "shared-token"),
     )
 
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: no secure gateway endpoint was detected. Enable gateway TLS or Tailscale Serve, or use a trusted private LAN address with Unencrypted selected.",
-      waitForStatusText(runtime),
+      runtime.statusText.value,
     )
-    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_UNAVAILABLE, prompt.probeFailure)
   }
@@ -822,11 +822,11 @@ class GatewayBootstrapAuthTest {
       auth(token = "shared-token"),
     )
 
+    val prompt = waitForGatewayTrustPrompt(runtime)
     assertEquals(
       "Failed: secure endpoint reached, but TLS fingerprint verification timed out. Check Tailscale Serve or gateway TLS and retry.",
-      waitForStatusText(runtime),
+      runtime.statusText.value,
     )
-    val prompt = waitForGatewayTrustPrompt(runtime)
     assertNull(prompt.fingerprintSha256)
     assertEquals(GatewayTlsProbeFailure.TLS_HANDSHAKE_TIMEOUT, prompt.probeFailure)
   }
@@ -1306,7 +1306,7 @@ class GatewayBootstrapAuthTest {
 
     invokeAutoConnectIfNeeded(runtime)
 
-    val desired = desiredConnection(runtime, "nodeSession") ?: error("Expected desired node connection")
+    val desired = waitForDesiredConnection(runtime, "nodeSession")
     assertEquals("127.0.0.1", readField<GatewayEndpoint>(desired, "endpoint").host)
     assertEquals("shared-token", readField<String?>(desired, "token"))
   }
@@ -1425,17 +1425,6 @@ class GatewayBootstrapAuthTest {
   ): NodeRuntime.GatewayConnectAuth? = resolveOperatorSessionConnectAuth(auth, storedToken)
 
   private fun usesStoredOperatorToken(auth: NodeRuntime.GatewayConnectAuth): Boolean = operatorSessionUsesStoredDeviceToken(auth, "stored-token")
-
-  private fun waitForStatusText(runtime: NodeRuntime): String {
-    repeat(50) {
-      val status = runtime.statusText.value
-      if (status != "Verify gateway TLS fingerprint…") {
-        return status
-      }
-      Thread.sleep(10)
-    }
-    error("Expected status text update")
-  }
 
   private fun desiredBootstrapToken(
     runtime: NodeRuntime,

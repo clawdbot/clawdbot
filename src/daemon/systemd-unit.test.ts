@@ -5,6 +5,7 @@ import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
   renderSystemdEnvAssignment,
+  splitSystemdLogicalLines,
 } from "./systemd-unit.js";
 
 // Values that need quoting, including the backslash and quote shapes the
@@ -18,6 +19,40 @@ const ROUND_TRIP_VALUES = [
   'mix \\ and " here',
   "trailing\\",
 ];
+
+describe("systemd logical lines", () => {
+  it.each([
+    {
+      name: "standalone comment backslashes",
+      input: ["# note \\", "; note \\", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["# note \\", "; note \\", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "comments inside a continued quoted value",
+      input: ['Environment="SETTING=one\\', " # note \\", " ; note", '  two"'],
+      expected: ['Environment="SETTING=one   two"'],
+    },
+    {
+      name: "escaped trailing backslash pairs",
+      input: ["Environment=SETTING=one\\\\", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["Environment=SETTING=one\\\\", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "blank line ending a continuation",
+      input: ["Environment=SETTING=one\\", "", "ExecStart=/usr/bin/openclaw gateway run"],
+      expected: ["Environment=SETTING=one ", "ExecStart=/usr/bin/openclaw gateway run"],
+    },
+    {
+      name: "continued value at EOF",
+      input: ["Environment=SETTING=one\\", " # note"],
+      expected: ["Environment=SETTING=one "],
+    },
+  ])("preserves $name for LF and CRLF", ({ input, expected }) => {
+    for (const separator of ["\n", "\r\n"]) {
+      expect(splitSystemdLogicalLines(input.join(separator))).toEqual(expected);
+    }
+  });
+});
 
 describe("systemd unit value round-trips", () => {
   it.each(ROUND_TRIP_VALUES)("round-trips %p through Environment=", (value) => {

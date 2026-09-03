@@ -124,27 +124,28 @@ describe.skipIf(process.platform === "win32")("service-managed child lifecycle",
     { reason: "no-output-timeout" as const, timeoutMs: undefined, noOutputTimeoutMs: 100 },
   ])("removes the group before returning $reason", async (timing) => {
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    // Deadlines include construction. Hold the clock until the real PID banner
+    // so this case tests admitted-group cleanup independently of startup speed.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
     const supervisor = createProcessSupervisor();
     let output = "";
-    const run = await supervisor.spawn({
-      mode: "child",
-      argv: [
-        "/bin/sh",
-        "-c",
-        'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
-      ],
-      stdinMode: "pipe-closed",
-      sessionId: "service-lifecycle-test",
-      backendId: "service-lifecycle-test",
-      timeoutMs: timing.timeoutMs,
-      noOutputTimeoutMs: timing.noOutputTimeoutMs,
-      onStdout: (chunk) => {
-        output += chunk;
-      },
-    });
     try {
-      // Startup owns part of the deadline; observe both processes before firing it.
+      const run = await supervisor.spawn({
+        mode: "child",
+        argv: [
+          "/bin/sh",
+          "-c",
+          'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+        ],
+        stdinMode: "pipe-closed",
+        sessionId: "service-lifecycle-test",
+        backendId: "service-lifecycle-test",
+        timeoutMs: timing.timeoutMs,
+        noOutputTimeoutMs: timing.noOutputTimeoutMs,
+        onStdout: (chunk) => {
+          output += chunk;
+        },
+      });
       await waitFor(() => /^\d+ \d+/u.test(output));
       const [rootPid, descendantPid] = parsePidPair(output);
       activePids.add(rootPid);

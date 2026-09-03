@@ -310,8 +310,9 @@ route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
-When supplied, call `params.assertCurrent()` immediately before each inference
-request or process start, including after preparation awaits and on retries.
+When supplied, call `params.assertCurrent()` after preparation awaits and
+immediately before each credential handoff, inference request, or process start,
+including retries.
 It revalidates the caller's live authority and expires when the completion ends.
 A thrown assertion ends execution; do not treat it as a credential failure or
 retry with another profile. Continue to honor `abortSignal`; cleanup must remain

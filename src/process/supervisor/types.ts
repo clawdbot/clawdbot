@@ -81,9 +81,9 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
 };
 
 type SpawnBaseInput = {
-  runId?: string;
-  /** Revalidate caller authority after queued startup and before each process launch. */
+  /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
+  runId?: string;
   sessionId: string;
   backendId: string;
   scopeKey?: string;

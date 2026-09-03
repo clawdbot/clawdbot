@@ -18,12 +18,21 @@ private final class DashboardWindowContentView: NSView {
 private final class DashboardWindow: NSWindow {
     /// User intent belongs to the native window, not the privileged document it hosts.
     var userIntentGeneration: UInt64 = 0
+    var pendingGatewaySwitch: DashboardGatewaySwitchIntent?
 
     override func toggleToolbarShown(_: Any?) {}
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
         if item.action == #selector(NSWindow.toggleToolbarShown(_:)) { return false }
         return super.validateUserInterfaceItem(item)
+    }
+}
+
+final class DashboardGatewaySwitchIntent {
+    let target: DashboardGatewayTarget
+
+    init(target: DashboardGatewayTarget) {
+        self.target = target
     }
 }
 
@@ -423,27 +432,6 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.windowFrameAutosaveName = ""
         self.window = nil
         return window
-    }
-
-    func showFailure(title: String, message: String, detail: String? = nil, present: Bool = true) {
-        self.hasLiveContent = false
-        self.isShowingFailurePage = true
-        self.advanceNavigationGeneration()
-        // Queued commands are moment-bound user intent; replaying them after a
-        // later recovery reload would toggle or navigate unexpectedly.
-        self.pendingNativeCommands = []
-        self.pendingNativeNavigation = nil
-        self.currentURL = URL(string: "about:blank")!
-        self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
-        self.setUpdateBridgeEnabled(false)
-        self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
-        self.webView.stopLoading()
-        self.webView.loadHTMLString(
-            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
-            baseURL: nil)
-        if present {
-            self.show()
-        }
     }
 
     private func load(_ url: URL) {
@@ -1005,10 +993,11 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.hasLiveContent = false
         self.isShowingFailurePage = true
         self.advanceNavigationGeneration()
-        // Same moment-bound rule as showFailure: a terminal load failure
-        // invalidates commands queued for the document that never arrived.
-        self.pendingNativeCommands = []
-        self.pendingNativeNavigation = nil
+        // A failed document retires its actions. A pending picker already owns its successor's commands.
+        if self.pendingGatewaySwitch == nil {
+            self.pendingNativeCommands = []
+            self.pendingNativeNavigation = nil
+        }
         dashboardWindowLogger.error(
             """
             dashboard load failed url=\(dashboardLogString(for: self.currentURL), privacy: .public) \
@@ -1024,6 +1013,59 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
 }
 
 extension DashboardWindowController {
+    func showFailure(
+        title: String,
+        message: String,
+        detail: String? = nil,
+        present: Bool = true,
+        preservingPendingCommands: Bool = false)
+    {
+        self.hasLiveContent = false
+        self.isShowingFailurePage = true
+        self.advanceNavigationGeneration()
+        // Terminal failure drops moment-bound actions. A transient reconnect keeps generic commands
+        // for its successor document; route-specific session navigation always expires here.
+        if !preservingPendingCommands { self.pendingNativeCommands = [] }
+        self.pendingNativeNavigation = nil
+        self.currentURL = URL(string: "about:blank")!
+        self.auth = DashboardWindowAuth(gatewayUrl: nil, token: nil, password: nil)
+        self.setUpdateBridgeEnabled(false)
+        self.refreshNativeAuthScript(url: self.currentURL, auth: self.auth)
+        self.webView.stopLoading()
+        self.webView.loadHTMLString(
+            DashboardFailurePage.html(title: title, message: message, detail: detail, url: nil),
+            baseURL: nil)
+        if present {
+            self.show()
+        }
+    }
+
+    typealias PendingNativeActions = (commands: [DashboardNativeCommand], navigation: DashboardNativeNavigation?)
+
+    func takePendingNativeActions() -> PendingNativeActions {
+        defer {
+            self.pendingNativeCommands = []
+            self.pendingNativeNavigation = nil
+            self.advanceNavigationGeneration()
+        }
+        return (self.pendingNativeCommands, self.pendingNativeNavigation)
+    }
+
+    func restorePendingNativeActions(_ actions: PendingNativeActions, preservingNavigation: Bool) {
+        // Transfer already admitted intent without advancing the native window's generation again.
+        self.pendingNativeCommands = actions.commands
+        self.pendingNativeNavigation = preservingNavigation ? actions.navigation : nil
+    }
+
+    func retirePendingSessionCommands() {
+        self.pendingNativeCommands.removeAll(where: \.supersedesPendingNavigation)
+    }
+
+    var pendingGatewaySwitch: DashboardGatewaySwitchIntent? {
+        get { (self.window as? DashboardWindow)?.pendingGatewaySwitch }
+        set { (self.window as? DashboardWindow)?.pendingGatewaySwitch = newValue }
+    }
+
     func navigateBack() {
         self.activeNavigationWebView.goBack()
     }
@@ -1075,8 +1117,10 @@ extension DashboardWindowController {
     func windowWillClose(_: Notification) {
         self.advanceWindowIntent()
         self.advanceNavigationGeneration()
+        self.hasLiveContent = false
         self.pendingNativeCommands = []
         self.pendingNativeNavigation = nil
+        self.pendingGatewaySwitch = nil
         self.webView.stopLoading()
         self.closeLinkBrowser(focusDashboard: false)
         self.onClosed?()
@@ -1164,7 +1208,7 @@ extension DashboardWindowController {
             self.advanceWindowIntent()
             self.advanceNavigationGeneration()
         }
-        guard self.hasLiveContent else {
+        guard self.hasLiveContent, self.isWindowOpen, self.pendingGatewaySwitch == nil else {
             // Ordered queue, duplicates included: two ⌘K presses while loading
             // must toggle twice, and ⌘N followed by ⌘K must deliver both.
             if command.supersedesPendingNavigation {
@@ -1389,6 +1433,8 @@ extension DashboardWindowController {
             guard !self.isShowingFailurePage else { return }
             self.hasLiveContent = true
             self.publishNativeHistoryState()
+            // Commands admitted after picker selection belong to its successor document.
+            guard self.pendingGatewaySwitch == nil else { return }
             // History state must reach the shell before a queued command can navigate it.
             self.flushPendingNativeCommands()
             self.flushPendingNativeNavigation()

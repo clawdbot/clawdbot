@@ -166,6 +166,14 @@ export async function createServiceChildRelayAdapter(params: {
     windowsHide: true,
     env: process.env,
   });
+  const assertCurrent = () => {
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      child.kill("SIGKILL");
+      throw error;
+    }
+  };
 
   // SAFETY: a defined controlFd was reserved as a pipe in this exact spawn stdio array.
   const control = controlFd === undefined ? null : (child.stdio[controlFd] as Duplex | null);
@@ -452,6 +460,7 @@ export async function createServiceChildRelayAdapter(params: {
     controlFd,
     windowsShellCommand: params.windowsShellCommand,
   };
+  assertCurrent();
   try {
     await Promise.race([sendChildMessage(start), constructionAbort.promise]);
   } catch (error) {
@@ -460,6 +469,7 @@ export async function createServiceChildRelayAdapter(params: {
     throw error;
   }
 
+  assertCurrent();
   const [startupResult, secretDeliveryResult] = await Promise.allSettled([
     startup.promise,
     secretDelivery?.deliverTo(child, { abortSignal: params.abortSignal }),
@@ -486,6 +496,7 @@ export async function createServiceChildRelayAdapter(params: {
   }
   removeConstructionAbortListener();
 
+  assertCurrent();
   const stdin = createManagedChildStdin(child.stdin);
   if (params.input !== undefined) {
     stdin?.write(params.input);

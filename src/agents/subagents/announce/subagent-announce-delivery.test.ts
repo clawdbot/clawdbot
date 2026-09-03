@@ -680,7 +680,6 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterSessionEntry?: SessionEntry;
@@ -729,7 +728,6 @@ async function deliverSlackChannelAnnouncement(params: {
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -3877,7 +3875,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         inputProvenance: {
           kind: "inter_session",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -3906,7 +3904,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceTool: "image_generate",
       internalEvents: imageCompletionEvents(),
       sourceSessionKey: "image_generate:task-123",
-      sourceChannel: "internal",
     });
 
     expectDeliveryPath(result, "queued");

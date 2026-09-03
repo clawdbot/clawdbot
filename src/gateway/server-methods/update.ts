@@ -10,6 +10,7 @@ import {
   validateUpdateStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isConfiguredCommandOwner } from "../../auto-reply/command-auth.js";
+import { formatCommandOwnerHint } from "../../commands/doctor-command-owner.js";
 import { isRestartEnabled } from "../../config/commands.flags.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
@@ -237,6 +238,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     const noticeAttemptId = randomUUID();
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
+    const ownerRequiredMessage = () =>
+      `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: context.getRuntimeConfig(), channel: params.requester?.channel, id: params.requester?.senderId })}`;
     const refuseNonOwner = () => {
       const requester = params.requester;
       // Only external chat identities are revocable here; internal or channel-less
@@ -254,6 +257,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       respond(true, {
         ok: false,
         code: "owner_required",
+        message: ownerRequiredMessage(),
         ackDelivered,
         result: { status: "error", reason: "owner_required" },
       });
@@ -442,11 +446,12 @@ export const updateHandlers: GatewayRequestHandlers = {
             // Recheck after the awaited acknowledgement, immediately before the effect.
             if (refuseNonOwner()) {
               if (ackDelivered) {
-                await notify("failed", "⚠️ Update did not start: owner_required.");
+                await notify("failed", ownerRequiredMessage());
               }
               return;
             }
             const started = await startManagedServiceUpdateHandoff({
+              requester: params.requester,
               root: installRoot,
               timeoutMs,
               restartDrainTimeoutMs: resolveGatewayRestartDeferralTimeoutMs(),
@@ -548,7 +553,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         // Recheck after the awaited acknowledgement, immediately before the effect.
         if (refuseNonOwner()) {
           if (ackDelivered) {
-            await notify("failed", "⚠️ Update did not start: owner_required.");
+            await notify("failed", ownerRequiredMessage());
           }
           return;
         }

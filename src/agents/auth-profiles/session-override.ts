@@ -5,6 +5,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderModelRouteAuthRequirement } from "../../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../../plugins/provider-model-routes.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { isUserModelAuthProfileId } from "../../state/user-model-account-id.js";
+import { resolveUserProfileAuthLink } from "../../state/user-model-accounts.js";
 import {
   isConfiguredAwsSdkAuthProfileForProvider,
   isStoredCredentialCompatibleWithAuthProvider,
@@ -200,6 +202,32 @@ function uniqueProviders(provider: string, acceptedProviderIds?: readonly string
   return [...providers];
 }
 
+/** Resolve a person's new-session default through the canonical credential store. */
+export function resolveUserLinkedAuthProfile(params: {
+  cfg: OpenClawConfig;
+  agentDir: string;
+  provider: string;
+  requesterProfileId: string;
+  acceptedProviderIds?: readonly string[];
+  store?: ReturnType<typeof ensureAuthProfileStore>;
+}): { profileId: string; store: ReturnType<typeof ensureAuthProfileStore> } | undefined {
+  const providers = uniqueProviders(params.provider, params.acceptedProviderIds);
+  const profileId = resolveUserProfileAuthLink({
+    profileId: params.requesterProfileId,
+    providers,
+  });
+  if (!profileId) {
+    return undefined;
+  }
+  const store =
+    !params.store || isUserModelAuthProfileId(profileId)
+      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false, profileId })
+      : params.store;
+  return isProfileForProvider({ cfg: params.cfg, providers, profileId, store })
+    ? { profileId, store }
+    : undefined;
+}
+
 function isProfileGloballyInCooldown(
   store: ReturnType<typeof ensureAuthProfileStore>,
   profileId: string,
@@ -253,6 +281,7 @@ async function resolveSessionAuthProfileOverride(params: {
   storePath?: string;
   isNewSession: boolean;
   acceptedProviderIds?: string[];
+  requesterProfileId?: string;
 }): Promise<SessionAuthProfileOverrideResult> {
   const {
     cfg,
@@ -273,13 +302,17 @@ async function resolveSessionAuthProfileOverride(params: {
     Boolean(params.cfg.auth?.order && Object.keys(params.cfg.auth.order).length > 0);
   if (
     !sessionEntry.authProfileOverride?.trim() &&
+    !params.requesterProfileId &&
     !hasConfiguredAuthProfiles &&
     !hasAnyAuthProfileStoreSource(agentDir)
   ) {
     return { profileId: undefined, store: undefined };
   }
 
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureAuthProfileStore(agentDir, {
+    allowKeychainPrompt: false,
+    profileId: sessionEntry.authProfileOverride,
+  });
   const providers = uniqueProviders(provider, params.acceptedProviderIds);
   const orderResolutions = providers.map((candidateProvider) =>
     resolveAuthProfileOrderWithMetadata({
@@ -305,6 +338,12 @@ async function resolveSessionAuthProfileOverride(params: {
       }),
     )
   ) {
+    if (isUserModelAuthProfileId(currentProfileId)) {
+      // A missing personal owner must not let the next participant claim this session's billing.
+      throw new Error(
+        "This session's personal model account is unavailable. Select another account for this session, or reconnect your account and start a new session.",
+      );
+    }
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });
     current = undefined;
   }
@@ -314,9 +353,37 @@ async function resolveSessionAuthProfileOverride(params: {
     current = undefined;
   }
 
-  // Explicit user pins are strict until the profile disappears or changes provider.
-  if (source === "user" && current) {
+  // Explicit user pins and person-linked pins are strict until the profile
+  // disappears or changes provider.
+  if ((source === "user" || source === "user-link") && current) {
     return { profileId: current, store };
+  }
+
+  // New-session defaults must not repin an existing unpinned/shared session.
+  // Person-linked pins stay sticky across participants and unlinking.
+  if (params.requesterProfileId && isNewSession) {
+    const linked = resolveUserLinkedAuthProfile({
+      cfg,
+      agentDir,
+      provider,
+      requesterProfileId: params.requesterProfileId,
+      acceptedProviderIds: providers,
+      store,
+    });
+    if (linked) {
+      await persistSessionAuthProfileOverrideState({
+        sessionEntry,
+        sessionStore,
+        sessionKey,
+        state: {
+          authProfileOverride: linked.profileId,
+          authProfileOverrideSource: "user-link",
+          authProfileOverrideCompactionCount: undefined,
+        },
+        storePath,
+      });
+      return linked;
+    }
   }
 
   // Automatic pins must stay inside the currently configured rotation order.
@@ -354,7 +421,7 @@ async function resolveSessionAuthProfileOverride(params: {
       return {
         profileId:
           latestProfileId &&
-          latestSource === "user" &&
+          (latestSource === "user" || latestSource === "user-link") &&
           isProfileForProvider({ cfg, providers, profileId: latestProfileId, store })
             ? latestProfileId
             : undefined,
@@ -472,6 +539,7 @@ export async function resolveSessionAuthSelection(params: {
   sessionKey?: string;
   storePath?: string;
   isNewSession: boolean;
+  requesterProfileId?: string;
 }): Promise<SessionAuthSelection | undefined> {
   const acceptedProviderIds = listOpenAIAuthProfileProvidersForAgentRuntime({
     provider: params.provider,
@@ -488,34 +556,39 @@ export async function resolveSessionAuthSelection(params: {
       ? (resolveSessionAuthProfileOverrideSource(params.sessionEntry) ?? "auto")
       : "auto"
     : undefined;
-  const rotatedUserProfileId = rotatedSource === "user" ? rotatedProfileId : undefined;
+  // Person-linked pins carry user strength and outrank the agent's static @profile.
+  const rotatedPinnedProfileId =
+    rotatedSource === "user" || rotatedSource === "user-link" ? rotatedProfileId : undefined;
   const configuredProfileId = params.configuredProfileId?.trim() || undefined;
+  const profileId = rotatedPinnedProfileId ?? configuredProfileId ?? rotatedProfileId;
+  if (!profileId) {
+    return undefined;
+  }
+  // A session pin overrides the configured account; that unused personal credential
+  // does not belong in this operation's private auth view or its validation.
   const authStore =
-    store ??
-    (configuredProfileId
-      ? ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false })
-      : undefined);
+    !store || (isUserModelAuthProfileId(profileId) && !store.profiles[profileId])
+      ? ensureAuthProfileStore(params.agentDir, {
+          allowKeychainPrompt: false,
+          profileId,
+        })
+      : store;
   if (
-    configuredProfileId &&
-    (!authStore ||
-      !isProfileForProvider({
-        cfg: params.cfg,
-        providers: uniqueProviders(params.provider, acceptedProviderIds),
-        profileId: configuredProfileId,
-        store: authStore,
-      }))
+    profileId === configuredProfileId &&
+    !isProfileForProvider({
+      cfg: params.cfg,
+      providers: uniqueProviders(params.provider, acceptedProviderIds),
+      profileId,
+      store: authStore,
+    })
   ) {
     throw new Error(
       `Auth profile "${configuredProfileId}" is not configured for ${params.provider}.`,
     );
   }
-  const profileId = rotatedUserProfileId ?? configuredProfileId ?? rotatedProfileId;
-  if (!profileId) {
-    return undefined;
-  }
   return {
     profileId,
-    source: rotatedUserProfileId || configuredProfileId ? "user" : (rotatedSource ?? "auto"),
+    source: rotatedPinnedProfileId || configuredProfileId ? "user" : "auto",
     routeRequirement: profileAuthRequirement({ cfg: params.cfg, store: authStore, profileId }),
   };
 }

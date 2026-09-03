@@ -5,11 +5,6 @@ import OpenClawKit
 import ServiceManagement
 import SwiftUI
 
-private enum RemoteTLSFingerprintUpdate {
-    case preserve
-    case replace(String?)
-}
-
 @MainActor
 final class VoiceWakeGlobalSyncScheduler {
     private let delay: @Sendable () async throws -> Void
@@ -1170,10 +1165,16 @@ extension AppState {
 }
 
 extension AppState {
+    struct PrimaryGatewayConfiguration: Equatable, Sendable {
+        let url: URL
+        let token: String?
+        let tlsFingerprint: String?
+    }
+
     private static func syncedGatewayRoot(
         currentRoot: [String: Any],
         draft: GatewayConfigSyncDraft,
-        remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate = .preserve)
+        primaryGateway: PrimaryGatewayConfiguration? = nil)
         -> (root: [String: Any], changed: Bool)
     {
         var root = currentRoot
@@ -1219,11 +1220,14 @@ extension AppState {
             remote = updated.remote
             remoteChanged = updated.changed
         }
-        if case let .replace(fingerprint) = remoteTLSFingerprintUpdate {
+        if let primaryGateway {
+            // An explicit Gateway replacement owns the complete auth bundle;
+            // an old password must never reach the new Gateway's native dashboard.
+            remoteChanged = Self.updateGatewayString(&remote, key: "password", value: nil) || remoteChanged
             remoteChanged = Self.updateGatewayString(
                 &remote,
                 key: "tlsFingerprint",
-                value: fingerprint) || remoteChanged
+                value: primaryGateway.tlsFingerprint) || remoteChanged
         }
         if remoteChanged {
             if remote.isEmpty {
@@ -1302,25 +1306,33 @@ extension AppState {
 
     @discardableResult
     func syncGatewayConfigNow() -> Bool {
-        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .preserve)
+        self.syncGatewayConfigNow(primaryGateway: nil)
     }
 
     @discardableResult
-    func syncGatewayConfigNow(remoteTLSFingerprint: String?) -> Bool {
-        self.syncGatewayConfigNow(remoteTLSFingerprintUpdate: .replace(remoteTLSFingerprint))
+    func replacePrimaryGateway(_ configuration: PrimaryGatewayConfiguration) -> Bool {
+        self.syncGatewayConfigNow(primaryGateway: configuration)
     }
 
-    private func syncGatewayConfigNow(remoteTLSFingerprintUpdate: RemoteTLSFingerprintUpdate) -> Bool {
+    private func syncGatewayConfigNow(primaryGateway: PrimaryGatewayConfiguration?) -> Bool {
         guard self.gatewayConfigSyncIsEnabled, !self.isInitializing else { return true }
+        let previousSyncState = self.gatewayConfigSyncState
         self.setGatewayConfigSyncState(.pending)
 
         let currentRoot = OpenClawConfigFile.loadDict()
         self.applyConfigOverrides(currentRoot)
         guard self.conflictedGatewayConfigFields.isEmpty else { return false }
 
-        let draft = self.gatewayConfigDraft()
+        var draft = self.gatewayConfigDraft()
+        if let primaryGateway {
+            draft.connectionMode = .remote
+            draft.remoteTransport = .direct
+            draft.remoteUrl = primaryGateway.url.absoluteString
+            draft.remoteToken = primaryGateway.token ?? ""
+            draft.dirtyFields.formUnion([.mode, .remoteTransport, .remoteUrl, .remoteToken])
+        }
         guard Self.gatewayDraftCanPersist(draft) else {
-            self.setGatewayConfigSyncState(.failed)
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             return false
         }
 
@@ -1328,30 +1340,33 @@ extension AppState {
         let synced = Self.syncedGatewayRoot(
             currentRoot: currentRoot,
             draft: draft,
-            remoteTLSFingerprintUpdate: remoteTLSFingerprintUpdate)
-        guard synced.changed else {
-            self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: currentRoot)
-            self.setGatewayConfigSyncState(.current)
-            return true
-        }
-        guard self.gatewayConfigSaver(synced.root) else {
-            self.setGatewayConfigSyncState(.failed)
+            primaryGateway: primaryGateway)
+        guard !synced.changed || self.gatewayConfigSaver(synced.root) else {
+            self.setGatewayConfigSyncState(primaryGateway == nil ? .failed : previousSyncState)
             Self.logger.warning("gateway config sync rejected to protect persisted gateway auth/mode")
             return false
         }
-        self.acknowledgeGatewayConfigPersistence(draft.dirtyFields, root: synced.root)
+        self.acknowledgeGatewayConfigPersistence(draft, root: synced.root)
+        if primaryGateway != nil {
+            // Publish the selection only after its endpoint and credentials commit.
+            if synced.changed, !self.isPreview {
+                WebChatManager.shared.resetPrimaryConnections()
+            }
+            self.applyGatewayConfigView(synced.root, forcing: Self.gatewayConfigFieldsPersisted(by: draft))
+        }
         self.lastConfigFingerprint = Self.configFingerprint(synced.root)
         self.setGatewayConfigSyncState(.current)
-        NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        if synced.changed {
+            NotificationCenter.default.post(name: .openclawConfigDidChange, object: nil)
+        }
         return true
     }
 
     private func acknowledgeGatewayConfigPersistence(
-        _ fields: Set<GatewayConfigField>,
+        _ draft: GatewayConfigSyncDraft,
         root: [String: Any])
     {
-        let persistedFields = Self.gatewayConfigFieldsPersisted(by: self.gatewayConfigDraft())
-            .intersection(fields)
+        let persistedFields = Self.gatewayConfigFieldsPersisted(by: draft)
         self.dirtyGatewayConfigFields.subtract(persistedFields)
         self.conflictedGatewayConfigFields.subtract(persistedFields)
         self.lastObservedGatewayConfig = Self.gatewayConfigSnapshot(root)

@@ -30,6 +30,7 @@ type ChatContextWindowTarget = Pick<
 >;
 
 type ChatModelControlsProps = {
+  renderAccountControl?: (model: string) => unknown;
   activeRunId: string | null;
   agentDefaultModel?: string;
   connected: boolean;
@@ -39,7 +40,6 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
-  modelSelectionRuntimeId?: string;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
@@ -362,13 +362,11 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   ) {
     activeModelOption.contextTokens = activeSession.contextTokens;
   }
-  const lockedModelLabel =
-    props.modelSelectionRuntimeId?.trim().toLowerCase() === "codex"
-      ? t("chat.selectors.nativeCodexModel")
-      : t("chat.selectors.lockedSessionModel");
+  // A lock prevents model changes; the concrete selection still owns its label.
+  // Without a selection, neither the runtime nor the agent default identifies it.
   const committedModelLabel =
-    props.modelSelectionLocked === true
-      ? lockedModelLabel
+    props.modelSelectionLocked === true && !currentOverride
+      ? t("chat.selectors.lockedSessionModel")
       : (modelOptions.find((entry) => entry.value === currentOverride)?.label ??
         resolveChatModelPickerLabel(
           currentOverride,
@@ -430,6 +428,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
   return html`
     <div class="chat-controls__session chat-controls__model chat-controls__model-settings">
       ${renderChatModelPicker({
+        accountControl: props.renderAccountControl?.(currentOverride || defaultModel),
         contextWindow:
           contextWindows.length > 1
             ? {
@@ -457,8 +456,9 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         sessionModelPinned: modelOverrideSource === "user",
         sessionKey: props.sessionKey,
         triggerModelLabel: formatPickerModelLabel(committedModelLabel),
-        triggerStatusLabel: catalogTriggerStatus,
-        triggerLoading: catalogLoadingWithoutSnapshot && !selectionKnown,
+        triggerStatusLabel: props.modelSelectionLocked ? undefined : catalogTriggerStatus,
+        triggerLoading:
+          !props.modelSelectionLocked && catalogLoadingWithoutSnapshot && !selectionKnown,
         onModelSetup: props.onModelSetup,
         onOpen: props.onModelPickerOpen,
         onOpenChange: props.onModelPickerOpenChange,

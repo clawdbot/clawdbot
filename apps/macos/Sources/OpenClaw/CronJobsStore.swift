@@ -52,8 +52,9 @@ final class CronJobsStore {
             return
         }
         self.eventTask = Task { [weak self, gateway] in
-            for await push in await gateway.subscribe() {
+            for await delivery in await gateway.subscribe() {
                 guard !Task.isCancelled, let self else { return }
+                guard delivery.isCurrent, let push = delivery.push else { continue }
                 self.handle(push: push)
             }
         }
