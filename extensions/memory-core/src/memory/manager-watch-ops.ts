@@ -49,7 +49,18 @@ type NativeMemoryWatchPair = {
   treeWatchers?: Map<string, LinuxMemoryDirectoryWatcher>;
 };
 
-type NativeMemoryWatchResult = "attached" | "missing" | "failed";
+type NativeMemoryWatchResult = "attached" | "missing" | "failed" | "capacity";
+
+// When the kernel cannot grant another inotify/watch instance (shared-tenant
+// containers exhausting fs.inotify.max_user_instances, or global fd limits),
+// every per-file chokidar fs.watch would fail the same way, so the only useful
+// degrade is skipping the fallback entirely and refreshing via interval sync.
+const MEMORY_WATCH_CAPACITY_FALLBACK_INTERVAL_MINUTES = 5;
+
+function isKernelWatchCapacityError(err: unknown): boolean {
+  const code = typeof err === "object" && err !== null && "code" in err ? err.code : undefined;
+  return code === "EMFILE" || code === "ENOSPC" || code === "ENFILE";
+}
 
 type LinuxMemoryDirectoryWatcher = {
   watcher: fsSync.FSWatcher;
@@ -188,19 +199,27 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     // ERR_FEATURE_UNAVAILABLE_ON_PLATFORM) the directory also falls back to
     // chokidar so freshness is preserved on the degraded path.
     const nativeRecursiveSupported = process.platform === "darwin" || process.platform === "win32";
+    let capacityDegraded = false;
     for (const dir of dirWatchPaths) {
       const attached = nativeRecursiveSupported
         ? this.attachNativeMemoryWatchForDir(dir, markDirty)
         : process.platform === "linux"
           ? this.attachLinuxMemoryDirectoryTreeWatchForDir(dir, markDirty)
           : "failed";
+      if (attached === "capacity") {
+        this.degradeMemoryWatchToPollingSync(dir, markDirty);
+        capacityDegraded = true;
+        continue;
+      }
       if (attached !== "attached") {
         // Native creation failed (dir missing, unsupported FS, throw) —
         // fall back to chokidar so directory coverage isn't dropped.
         fileWatchPaths.add(dir);
       }
     }
-    if (fileWatchPaths.size > 0) {
+    if (fileWatchPaths.size > 0 && !capacityDegraded) {
+      // Under exhausted kernel watch capacity every chokidar per-file watch
+      // would fail identically; interval sync covers those paths instead.
       this.attachMemoryChokidarPaths(Array.from(fileWatchPaths), markDirty);
     }
     this.scheduleMemoryWatchPressureStartupCheck();
@@ -296,6 +315,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     } catch (err) {
       if (isFileMissingError(err)) {
         return "missing";
+      }
+      if (isKernelWatchCapacityError(err)) {
+        return "capacity";
       }
       log.warn(
         `failed to start native recursive watcher on ${dir}: ${String(err)}; falling back to chokidar`,
@@ -457,6 +479,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     let pair: NativeMemoryWatchPair | null = null;
     const treeWatchers = new Map<string, LinuxMemoryDirectoryWatcher>();
     let rootMissing = false;
+    let capacityExhausted = false;
 
     const closeAndFallback = (message: string) => {
       log.warn(message);
@@ -555,7 +578,10 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
         );
       } catch (err) {
         rootMissing ||= watchDir === dir && isFileMissingError(err);
-        if (watchDir === dir && !rootMissing) {
+        if (watchDir === dir && isKernelWatchCapacityError(err)) {
+          capacityExhausted = true;
+        }
+        if (watchDir === dir && !rootMissing && !capacityExhausted) {
           log.warn(
             `failed to start Linux memory directory watcher on ${watchDir}: ${String(err)}; falling back to chokidar`,
           );
@@ -575,6 +601,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
 
     const mainWatcher = attachDirectory(dir);
     if (!mainWatcher) {
+      if (capacityExhausted && !rootMissing) {
+        return "capacity";
+      }
       return rootMissing ? "missing" : "failed";
     }
     pair = { dir, main: mainWatcher, parent: null, treeWatchers };
@@ -739,8 +768,27 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     });
   }
 
-  protected ensureIntervalSync() {
-    const minutes = this.settings.sync.intervalMinutes;
+  /**
+   * Degrades a capacity-exhausted directory to interval-sync refreshing: one
+   * warn, an immediate dirty sync, and a guaranteed interval timer (honoring a
+   * configured intervalMinutes, otherwise the fallback cadence).
+   */
+  private degradeMemoryWatchToPollingSync(
+    dir: string,
+    markDirty: (watchPath?: string, stats?: MemoryWatchEventStats) => void,
+  ): void {
+    log.warn(
+      `kernel watch capacity exhausted on ${dir}; skipping chokidar fallback and degrading memory index to interval sync`,
+    );
+    if (!this.closed) {
+      markDirty();
+    }
+    this.ensureIntervalSync(MEMORY_WATCH_CAPACITY_FALLBACK_INTERVAL_MINUTES);
+  }
+
+  protected ensureIntervalSync(fallbackMinutes = 0): void {
+    const configured = this.settings.sync.intervalMinutes;
+    const minutes = configured > 0 ? configured : fallbackMinutes;
     if (!minutes || minutes <= 0 || this.intervalTimer) {
       return;
     }
