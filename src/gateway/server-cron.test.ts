@@ -248,6 +248,7 @@ import {
   abortActiveCronTaskRuns,
   registerActiveCronTaskRun,
   trackActiveCronTaskRunSettlement,
+  getSuspensionVisibleCronTaskRunCount,
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronServiceState } from "../cron/service/state.js";
@@ -1094,11 +1095,10 @@ describe("buildGatewayCronService", () => {
 
   it("aborts and drains active cron runs during shutdown", async () => {
     const controller = new AbortController();
-    const coreRun = new Promise<void>((resolve) => {
-      controller.signal.addEventListener("abort", () => resolve(), { once: true });
-    });
+    const coreRun = createDeferred();
+    controller.signal.addEventListener("abort", () => coreRun.resolve(), { once: true });
     const release = registerActiveCronTaskRun({ runId: "run-shutdown", controller });
-    const trackedRun = coreRun.finally(() => release?.());
+    const trackedRun = coreRun.promise.finally(() => release?.());
     trackActiveCronTaskRunSettlement(trackedRun);
 
     const cfg = createCronConfig("server-cron-active-run-shutdown");
@@ -1110,6 +1110,9 @@ describe("buildGatewayCronService", () => {
       await expect(trackedRun).resolves.toBeUndefined();
     } finally {
       state.cron.stop();
+      coreRun.resolve();
+      await trackedRun;
+      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       resetActiveCronTaskRunsForTests();
     }
   });
@@ -1434,8 +1437,10 @@ describe("buildGatewayCronService", () => {
   it("backs off isolated cron setup timeout without gateway restart", async () => {
     vi.useFakeTimers();
     const runnerEntered = createDeferred();
+    const runnerResult = createDeferred<{ status: "ok"; summary: string }>();
     const cfg = createCronConfig("server-cron-isolated-setup-timeout");
     const state = loadCronService(cfg);
+    let runPromise: ReturnType<typeof state.cron.run> | undefined;
     try {
       const job = await addCronJob(
         state,
@@ -1443,15 +1448,12 @@ describe("buildGatewayCronService", () => {
         { kind: "agentTurn", message: "work", timeoutSeconds: 120 },
         { schedule: { kind: "at", at: new Date(Date.now()).toISOString() } },
       );
-      runCronIsolatedAgentTurnMock.mockImplementationOnce(
-        async ({ abortSignal }: { abortSignal?: AbortSignal }) => {
-          abortSignal?.addEventListener("abort", () => undefined, { once: true });
-          runnerEntered.resolve();
-          return await new Promise<never>(() => {});
-        },
-      );
+      runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
+        runnerEntered.resolve();
+        return await runnerResult.promise;
+      });
 
-      const runPromise = state.cron.run(job.id, "force");
+      runPromise = state.cron.run(job.id, "force");
       await runnerEntered.promise;
       await vi.advanceTimersByTimeAsync(60_100);
       const runResult = await runPromise;
@@ -1460,6 +1462,9 @@ describe("buildGatewayCronService", () => {
       expect(requestSafeGatewayRestartMock).not.toHaveBeenCalled();
     } finally {
       state.cron.stop();
+      runnerResult.resolve({ status: "ok", summary: "done" });
+      await Promise.allSettled([runnerResult.promise, ...(runPromise ? [runPromise] : [])]);
+      await vi.waitFor(() => expect(getSuspensionVisibleCronTaskRunCount()).toBe(0));
       vi.useRealTimers();
     }
   });
@@ -3965,9 +3970,8 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
     noOutputTimedOut: false,
   };
 
-  it("executes an agentTurn payload via the force-run path, not a text wake", async () => {
+  it("executes an agentTurn payload via the force-run path", async () => {
     const run = vi.fn<ForceRunMock>(async () => {});
-    const wake = vi.fn();
     await fireOnExitJob(job({ kind: "agentTurn", message: "go" }), exit, {
       run,
     });
@@ -3979,22 +3983,18 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
       message: expect.stringContaining("stdout:\nbuilt ok"),
     });
     expect(run.mock.calls[0]?.[0]).toBe("job-x");
-    expect(wake).not.toHaveBeenCalled();
   });
 
   it("executes a command payload via the force-run path", async () => {
     const run = vi.fn<ForceRunMock>(async () => {});
-    const wake = vi.fn();
     await fireOnExitJob(job({ kind: "command", argv: ["echo", "hi"] }), exit, {
       run,
     });
     expect(run).toHaveBeenCalledWith("job-x", undefined);
-    expect(wake).not.toHaveBeenCalled();
   });
 
   it("executes a systemEvent payload via the force-run path", async () => {
     const run = vi.fn<ForceRunMock>(async () => {});
-    const wake = vi.fn();
     await fireOnExitJob(
       job({ kind: "systemEvent", text: "done" }, { sessionKey: "sk-1", agentId: "agent-1" }),
       exit,
@@ -4008,7 +4008,6 @@ describe("fireOnExitJob (on-exit fire routing)", () => {
       text: expect.stringContaining("stderr:\nwarned"),
     });
     expect(run.mock.calls[0]?.[0]).toBe("job-x");
-    expect(wake).not.toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
