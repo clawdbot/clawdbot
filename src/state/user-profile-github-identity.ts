@@ -258,6 +258,8 @@ export function applyVerifiedGitHubIdentity(params: {
     : currentProfileId;
   // An email linked by older code must not turn shared owner attribution into a person.
   if (
+    aliasIdentity?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
+    existing?.profile_id === GATEWAY_OWNER_PROFILE_ID ||
     currentProfileId === GATEWAY_OWNER_PROFILE_ID ||
     targetProfileId === GATEWAY_OWNER_PROFILE_ID
   ) {

@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../../config/runtime-snapshot.js";
 import type { GatewayAuthConfig } from "../../../config/types.gateway.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadDeviceAuthToken } from "../../../infra/device-auth-store.js";
 import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
@@ -21,6 +22,18 @@ import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
 } from "../../../shared/device-bootstrap-profile.js";
+import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
+import {
+  disconnectedUserGitHubConnection,
+  readUserGitHubConnection,
+  updateUserGitHubConnection,
+} from "../../../state/user-github-connections.js";
+import {
+  ensureProfileForEmail,
+  getUserProfileListItem,
+  hasMultipleSessionSharingIdentities,
+  setUserProfileRole,
+} from "../../../state/user-profiles.js";
 import {
   GatewayClient,
   type GatewayClientOptions,
@@ -31,6 +44,7 @@ import {
   openTrackedWs,
   pairDeviceIdentity,
 } from "../../device-authz.test-helpers.js";
+import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
 import {
   ConnectErrorDetailCodes,
   CONTROL_UI_CLIENT,
@@ -39,6 +53,7 @@ import {
 import {
   connectReq,
   installGatewayTestHooks,
+  rpcReq,
   startServer,
   startServerWithClient,
   testState,
@@ -64,6 +79,102 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
+  test("restores a merged owner on shared-token reconnect without exposing the person's policy or GitHub", async () => {
+    const origin = "https://localhost";
+    const auth = { mode: "token", token: "merged-owner-secret" } as const;
+    const config: OpenClawConfig = {
+      gateway: {
+        auth,
+        controlUi: { allowedOrigins: [origin] },
+        roles: {
+          default: "guest",
+          definitions: {
+            guest: { sessions: { others: "none" }, agents: ["guest"], scopes: ["operator.read"] },
+          },
+        },
+      },
+    };
+    testState.gatewayAuth = auth;
+    testState.gatewayControlUi = config.gateway?.controlUi;
+    await replaceConfigFile({ nextConfig: config, afterWrite: { mode: "auto" } });
+    const started = await startServerWithClient(undefined, {
+      auth,
+      controlUiEnabled: true,
+      wsHeaders: { origin },
+    });
+    let reconnect: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+    const connectOptions = {
+      token: auth.token,
+      scopes: ["operator.admin"],
+      client: CONTROL_UI_CLIENT,
+      deviceIdentityPath: loadDeviceIdentity("merged-gateway-owner").identityPath,
+    };
+    try {
+      expect((await connectReq(started.ws, connectOptions)).ok).toBe(true);
+      const person = ensureProfileForEmail("person@example.test");
+      setUserProfileRole(person.id, "guest");
+      const personalConnection = updateUserGitHubConnection(
+        person.id,
+        () => ({
+          ...disconnectedUserGitHubConnection(),
+          selection: {
+            kind: "connected",
+            profileId: "ghp_00000000000000000000000000000001",
+            accountId: 101,
+            login: "personal-person",
+            refreshToken: "synthetic-refresh",
+            accessExpiresAtMs: Date.now() + 60_000,
+            refreshExpiresAtMs: Date.now() + 120_000,
+            scopes: ["repo"],
+          },
+        }),
+        () => {},
+      );
+      const db = openOpenClawStateDatabase().db;
+      // The old merge writer moved identities to the person and left the owner tombstone.
+      db.prepare(
+        "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
+      ).run(person.id);
+      db.prepare(
+        "UPDATE user_profile_identities SET profile_id = ? WHERE provider = 'gateway.local' AND subject = 'owner'",
+      ).run(person.id);
+      const rejected = await rpcReq(started.ws, "users.linkEmail", {
+        email: "new@example.test",
+        targetProfileId: "gateway-owner",
+      });
+      expect.soft(rejected).toMatchObject({
+        ok: false,
+        error: {
+          code: "INVALID_REQUEST",
+          message:
+            "the shared owner profile cannot be merged; sign in with a personal identity instead",
+        },
+      });
+      started.ws.close();
+      reconnect = await openTrackedWs(started.port, { origin });
+      const connected = await connectReq(reconnect, connectOptions);
+      expect(connected.ok).toBe(true);
+      const self = await rpcReq<UsersSelfResult>(reconnect, "users.self", {});
+      const profileId = self.payload?.profile.id;
+      expect.soft(profileId).toBe("gateway-owner");
+      expect.soft(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
+      expect.soft(hasMultipleSessionSharingIdentities()).toBe(false);
+      expect.soft(await rpcReq(reconnect, "users.github.status", {})).toMatchObject({
+        ok: true,
+        payload: { personal: { state: "disconnected", account: null } },
+      });
+      expect
+        .soft(getUserProfileListItem(person.id))
+        .toMatchObject({ emails: ["person@example.test"], role: "guest" });
+      expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
+    } finally {
+      reconnect?.close();
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("keeps the owner's renamed profile across shared-token and cached device-token connections", async () => {
     const origin = "https://localhost";
     const auth = { mode: "token", token: "local-owner-secret" } as const;
