@@ -77,6 +77,8 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
 Prices and data-use terms come from Meta's
 [pricing and rate limits](https://dev.meta.ai/docs/pricing-rate-limits/)
 documentation.
+Meta's [model catalog](https://dev.meta.ai/docs/models) identifies Muse Spark 1.3
+as the latest version and recommends it for new work.
 
 | Model ref                         | Name                       | OpenClaw input | Reasoning | Context window | Input / cached input / output per 1M tokens |
 | --------------------------------- | -------------------------- | -------------- | --------- | -------------- | ------------------------------------------- |
