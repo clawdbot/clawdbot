@@ -10,6 +10,8 @@ import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
+import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
+import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { parseSkillProposalRow } from "../skills/workshop/store-sqlite-record.js";
 import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
@@ -43,6 +45,8 @@ const MAX_RECORD_BYTES = 1024 * 1024;
 // SKILL.md plus 64 existing 256 KiB support targets.
 const MAX_ROLLBACK_BYTES = 128 * 1024 * 1024;
 const PROPOSAL_ID_PATTERN = /^[a-z0-9][a-z0-9-]{5,120}$/;
+const INVALID_LEGACY_SKILL_REASON =
+  "Skill Workshop could not load the applied legacy skill; the path stays in place and the proposal is stale.";
 
 type MigrationResult = {
   changes: string[];
@@ -71,16 +75,6 @@ async function readJson(rootDir: Root, relativePath: string, maxBytes: number): 
     symlinks: "reject",
   });
   return JSON.parse(read.buffer.toString("utf8")) as unknown;
-}
-
-function proposalWorkspace(record: SkillProposalRecord): string {
-  return path.dirname(path.dirname(path.resolve(record.target.skillDir)));
-}
-
-function isInsideWorkshopRoot(workshopRoot: string, skillDir: string): boolean {
-  const resolvedRoot = path.resolve(workshopRoot);
-  const resolvedSkillDir = path.resolve(skillDir);
-  return resolvedSkillDir === resolvedRoot || isPathInside(resolvedRoot, resolvedSkillDir);
 }
 
 function retargetWorkshopProposal(
@@ -210,9 +204,9 @@ async function planWorkshopRelocation(
     if (!entry.ownerAgentId) {
       return true;
     }
-    return !isInsideWorkshopRoot(
-      resolveWorkshopSkillsDir(config, entry.ownerAgentId, env),
-      entry.record.target.skillDir,
+    return !isPathInside(
+      path.resolve(resolveWorkshopSkillsDir(config, entry.ownerAgentId, env)),
+      path.resolve(entry.record.target.skillDir),
     );
   });
   const ownersByProposal = new Map<string, string>();
@@ -225,7 +219,7 @@ async function planWorkshopRelocation(
       config,
       env,
       record,
-      workspaceDir: proposalWorkspace(record),
+      workspaceDir: path.dirname(path.dirname(path.resolve(record.target.skillDir))),
       rowOwnerAgentId: entry.ownerAgentId,
     });
     if (!ownerAgentId) {
@@ -277,6 +271,15 @@ async function planWorkshopRelocation(
           "Skill Workshop could not find the applied legacy skill; the proposal is stale.",
         );
       }
+      continue;
+    }
+    const frontmatter = readSkillFrontmatterSafe({
+      rootDir: source,
+      filePath: path.join(source, "SKILL.md"),
+      maxBytes: resolveSkillDiscoveryLimits(config).maxSkillFileBytes,
+    });
+    if (!frontmatter?.description?.trim()) {
+      staleReasons.set(record.id, INVALID_LEGACY_SKILL_REASON);
       continue;
     }
     if (await pathExists(target.skillDir)) {
@@ -340,9 +343,7 @@ async function planWorkshopRelocation(
           skillDir: move.destination,
           skillFile: path.join(move.destination, "SKILL.md"),
         }),
-        ...(ownersByProposal.get(record.id)
-          ? { ownerAgentId: ownersByProposal.get(record.id) }
-          : {}),
+        ...(ownerAgentId ? { ownerAgentId } : {}),
       });
       updatesByMove.set(moveKey, moveUpdates);
       continue;
@@ -350,9 +351,7 @@ async function planWorkshopRelocation(
     if (conflictReason) {
       updates.push({
         record: staleWorkshopProposal(record, conflictReason),
-        ...(ownersByProposal.get(record.id)
-          ? { ownerAgentId: ownersByProposal.get(record.id) }
-          : {}),
+        ...(ownerAgentId ? { ownerAgentId } : {}),
       });
       continue;
     }
@@ -379,7 +378,6 @@ async function planWorkshopRelocation(
         ),
         ownerAgentId,
       });
-      continue;
     }
     if (record.status === "pending" && record.kind === "update") {
       updates.push({
@@ -463,10 +461,6 @@ async function relocateLegacyWorkshopTargets(
   };
 }
 
-function configuredAgentIds(config: OpenClawConfig): string[] {
-  return listAgentIds(config);
-}
-
 function inferOwnerAgentId(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -486,7 +480,7 @@ function inferOwnerAgentId(params: {
       return normalizeAgentId(sessionAgentId);
     }
   }
-  const agentIds = configuredAgentIds(params.config);
+  const agentIds = listAgentIds(params.config);
   const workspaceMatches = agentIds.filter(
     (agentId) =>
       path.resolve(resolveAgentWorkspaceDir(params.config, agentId, params.env)) ===
@@ -567,12 +561,11 @@ async function migrateProposal(params: {
     throw new Error("proposal draft hash does not match proposal metadata");
   }
   const rollback = await readLegacyRollback(params.stateRoot, params.proposalId);
-  const workspaceDir = proposalWorkspace(record.value);
   const ownerAgentId = inferOwnerAgentId({
     config: params.config,
     env: params.env,
     record: record.value,
-    workspaceDir,
+    workspaceDir: path.dirname(path.dirname(path.resolve(record.value.target.skillDir))),
   });
   if (!ownerAgentId) {
     throw new Error(
@@ -733,22 +726,13 @@ export async function migrateLegacySkillWorkshopProposals(params: {
   const env = params.env ?? process.env;
   const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
   const relocation = await relocateLegacyWorkshopTargets(params.config, env);
+  const relocationChanges = Object.values(relocation).some((count) => count > 0)
+    ? [
+        `Relocated ${relocation.movedSkills} Skill Workshop skill${relocation.movedSkills === 1 ? "" : "s"}, retargeted ${relocation.retargetedProposals} proposal${relocation.retargetedProposals === 1 ? "" : "s"}, marked ${relocation.staleProposals} stale, and removed ${relocation.removedBackupRoots} legacy collection backup root${relocation.removedBackupRoots === 1 ? "" : "s"}.`,
+      ]
+    : [];
   return {
     ...sidecars,
-    changes: [...sidecars.changes, ...formatWorkshopRelocationChanges(relocation)],
+    changes: [...sidecars.changes, ...relocationChanges],
   };
-}
-
-function formatWorkshopRelocationChanges(result: WorkshopRelocationResult): string[] {
-  if (
-    result.movedSkills === 0 &&
-    result.retargetedProposals === 0 &&
-    result.staleProposals === 0 &&
-    result.removedBackupRoots === 0
-  ) {
-    return [];
-  }
-  return [
-    `Relocated ${result.movedSkills} Skill Workshop skill${result.movedSkills === 1 ? "" : "s"}, retargeted ${result.retargetedProposals} proposal${result.retargetedProposals === 1 ? "" : "s"}, marked ${result.staleProposals} stale, and removed ${result.removedBackupRoots} legacy collection backup root${result.removedBackupRoots === 1 ? "" : "s"}.`,
-  ];
 }

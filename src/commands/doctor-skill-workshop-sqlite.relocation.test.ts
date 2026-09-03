@@ -261,6 +261,61 @@ describe("doctor Skill Workshop SQLite relocation and legacy migration", () => {
     );
   });
 
+  it("stales an applied legacy directory without a loadable skill file", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-invalid-relocation-workspace-"),
+    );
+    const skillDir = path.join(workspaceDir, "skills", "invalid-relocation");
+    const now = "2026-09-01T00:00:00.000Z";
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: "invalid-relocation-20260901-1234567890",
+      kind: "create",
+      status: "applied",
+      title: "Create Invalid Relocation",
+      description: "Invalid relocation",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent("invalid relocation"),
+      target: {
+        skillName: "invalid-relocation",
+        skillKey: "invalid-relocation",
+        skillDir,
+        skillFile: path.join(skillDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      appliedAt: now,
+    };
+    await fs.mkdir(skillDir, { recursive: true });
+    seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
+
+    const result = await migrateLegacySkillWorkshopProposals({
+      config: {},
+      env: testState.env,
+    });
+
+    expect(result.changes.join("\n")).toContain(
+      "Relocated 0 Skill Workshop skills, retargeted 0 proposals, marked 1 stale",
+    );
+    await expect(fs.access(skillDir)).resolves.toBeUndefined();
+    await expect(
+      fs.access(
+        path.join(resolveWorkshopSkillsDir({}, "main", testState.env), "invalid-relocation"),
+      ),
+    ).rejects.toThrow();
+    await expect(readSkillProposalRecord(record.id, { env: testState.env })).resolves.toMatchObject(
+      {
+        status: "stale",
+        statusReason: expect.stringContaining("could not load"),
+        target: { skillDir },
+      },
+    );
+  });
+
   it.runIf(process.platform !== "win32")(
     "stales symlinked applied skills without relocating them",
     async () => {
