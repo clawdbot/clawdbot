@@ -2216,11 +2216,17 @@ describe("worker runtime", () => {
     expect(gateway.inferenceRequests).toHaveLength(2);
   });
 
-  it("fails closed resolved sandbox-host authority at worker launch", async () => {
+  it("withholds exec for a sandbox-required session at worker launch", async () => {
     const { gateway, workspaceDir, launch } = await setup({ inferencePlans: ["text"] });
+    const sandboxRequiredTurn = restrictedTurn(workspaceDir, { host: "gateway", mode: "full" });
+    sandboxRequiredTurn.execSession = { sandbox: "required" };
+    sandboxRequiredTurn.config = {
+      ...sandboxRequiredTurn.config,
+      agents: { defaults: { sandbox: { mode: "all" } } },
+    };
     launch.assignment.toolAuthority = resolveWorkerToolAuthority({
       modelRef: MODEL_REF,
-      turn: restrictedTurn(workspaceDir, { host: "sandbox", mode: "full" }),
+      turn: sandboxRequiredTurn,
     });
     const admitted = parseWorkerLaunchDescriptor(structuredClone(launch));
 
