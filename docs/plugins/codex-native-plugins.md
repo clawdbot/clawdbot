@@ -326,7 +326,10 @@ entries asynchronously. The cache is process-local; restarting the CLI or
 gateway drops it.
 
 Missing inventory methods, authentication errors, transport failures, and
-connector refresh failures fail closed.
+connector refresh failures do not admit app tools. Ordinary turns, including
+those using `allow_destructive_actions: "ask"`, can continue with native apps
+disabled when inventory exceeds its startup budget. Scheduled runs stop if
+their captured app policy cannot be revalidated within that budget.
 
 Migration and runtime use separate cache keys:
 
@@ -437,6 +440,7 @@ plugins, while unsafe schemas and ambiguous ownership fail closed:
   for the app before the thread starts, and offers only one-shot approval or
   denial so durable approvals cannot suppress later write-action prompts. These
   checks also run before reusing a thread or answering a `/btw` side question.
+  Successful cleanup refreshes loaded native threads as well as saved settings.
   For each admitted app using `"ask"`, OpenClaw selects Codex's human approvals
   reviewer for that app so Codex sends its approval elicitations to
   OpenClaw; other apps and non-app thread approvals keep their configured

@@ -28,7 +28,8 @@ export async function clearPersistedAppApprovalOverrides(params: {
         mergeStrategy: "replace",
       }),
     );
-    const response = await params.request("config/batchWrite", { edits });
+    // Durable readback alone does not refresh a warm thread's captured app overrides.
+    const response = await params.request("config/batchWrite", { edits, reloadUserConfig: true });
     if (
       !isJsonObject(response) ||
       (response.status !== "ok" && response.status !== "okOverridden")

@@ -1474,6 +1474,7 @@ describe("runCodexAppServerSideQuestion", () => {
       }
       if (method === "config/batchWrite") {
         expect(requestParams).toEqual({
+          reloadUserConfig: true,
           edits: [
             {
               keyPath: 'apps."ask-app".links."account".approvals_reviewer',

@@ -720,6 +720,7 @@ describe("Codex plugin thread config", () => {
     expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
     expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
     expect(request).toHaveBeenCalledWith("config/batchWrite", {
+      reloadUserConfig: true,
       edits: [
         {
           keyPath: 'apps."google-calendar-app".links."work.\\"primary\\"".approvals_reviewer',
@@ -2037,6 +2038,7 @@ describe("Codex plugin thread config", () => {
         default_tools_approval_mode: "auto",
       });
       expect(request).toHaveBeenCalledWith("config/batchWrite", {
+        reloadUserConfig: true,
         edits: [
           {
             keyPath,
