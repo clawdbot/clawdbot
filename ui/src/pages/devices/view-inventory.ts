@@ -370,7 +370,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           entry.node?.hostStats,
           !rowConnected ? entry.node?.hostStats?.updatedAtMs : undefined,
         )}
-        ${renderCapabilityChips(entry.node?.caps ?? [])} ${renderEntryDetails(entry, props)}
+        ${renderCapabilityChips(entry.node?.caps ?? [])}
       </div>
       <div class="settings-row__control">
         ${capacity?.meter ?? nothing} ${entryWarnStatuses(entry, props.gatewayVersion)}
@@ -383,6 +383,7 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
           onRemove: () => props.onInventoryRemove(toRemovalRequest(entry)),
         })}
       </div>
+      ${renderEntryDetails(entry, props)}
     </div>
   `;
 }
