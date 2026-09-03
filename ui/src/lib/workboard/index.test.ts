@@ -30,6 +30,7 @@ import {
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
 import { getWorkboardRuntime } from "./runtime.ts";
+import { listWorkboardTasks } from "./task-links.ts";
 import {
   createGatewaySession,
   createLifecycleHarness,
@@ -78,6 +79,41 @@ function makeTask(overrides: Partial<WorkboardTaskSummary> = {}) {
 
 function invalidRequest(message: string) {
   return new GatewayRequestError({ code: "INVALID_REQUEST", message });
+}
+
+function createRejectedContinuationResponder(
+  restartedPages: readonly (readonly WorkboardTaskSummary[])[],
+  staleTasks: readonly WorkboardTaskSummary[] = [],
+) {
+  let cursorlessRequests = 0;
+  let continuationRequests = 0;
+  return (params: unknown) => {
+    const cursor = (params as { cursor?: string }).cursor;
+    if (cursor) {
+      continuationRequests += 1;
+      if (continuationRequests === 1) {
+        throw invalidRequest("task list cursor expired");
+      }
+      return { tasks: restartedPages[1] ?? [] };
+    }
+    cursorlessRequests += 1;
+    if (cursorlessRequests === 1) {
+      return { tasks: staleTasks, nextCursor: "stale-cursor" };
+    }
+    return {
+      tasks: restartedPages[0] ?? [],
+      ...(restartedPages.length > 1 ? { nextCursor: "stale-cursor" } : {}),
+    };
+  };
+}
+
+function expectSingleTaskListRestart(client: WorkboardTestClient, continued = false) {
+  expect(requestCalls(client, "tasks.list").map(([, params]) => params)).toEqual([
+    { limit: 500 },
+    { limit: 500, cursor: "stale-cursor" },
+    { limit: 500 },
+    ...(continued ? [{ limit: 500, cursor: "stale-cursor" }] : []),
+  ]);
 }
 
 function makeDiscoveryCard(id: string, sessionKey: string, taskId?: string) {
@@ -1732,22 +1768,35 @@ describe("workboard controller", () => {
     expect(client.request).toHaveBeenCalledWith("workboard.cards.dispatch", { boardId: "ops" });
   });
 
-  it("clears stale refresh errors after a successful dispatch reload", async () => {
+  it("clears stale refresh errors after a recovered dispatch task scan", async () => {
     state.lastRefreshError = "poll unavailable";
-    const client = createClient({
-      "workboard.cards.dispatch": {
-        promoted: [],
-        reclaimed: [],
-        blocked: [],
-        orchestrated: [],
-        count: 0,
-      },
-      "workboard.cards.list": listResult([sampleCard], ["todo", "done"]),
-      "tasks.list": { tasks: [] },
+    const linked = createLinkedCard({ taskId: undefined });
+    const taskList = createRejectedContinuationResponder([[sampleTask]]);
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.dispatch") {
+        return {
+          promoted: [],
+          reclaimed: [],
+          blocked: [],
+          orchestrated: [],
+          count: 0,
+        };
+      }
+      if (method === "workboard.cards.list") {
+        return listResult([linked], ["todo", "running", "done"]);
+      }
+      if (method === "tasks.list") {
+        return taskList(params);
+      }
+      return {};
     });
 
     await dispatchBoard(client);
 
+    expectSingleTaskListRestart(client);
+    expect(state.cards[0]).toMatchObject({ taskId: sampleTask.taskId });
+    expect(state.tasksByCardId.get(linked.id)).toEqual(sampleTask);
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
     expect(state.lastRefreshError).toBeNull();
   });
 
@@ -2375,32 +2424,116 @@ describe("workboard controller", () => {
     expect(state.loaded).toBe(true);
   });
 
-  it("links cards from paginated Gateway task results", async () => {
+  it("restarts a rejected full task scan before linking loaded cards", async () => {
     const linked = makeCard({
       sessionKey: sampleTaskSessionKey,
       runId: "run-1",
     });
+    const staleTask = makeTask({
+      id: "stale-task",
+      taskId: "stale-task",
+      childSessionKey: sampleTaskSessionKey,
+      runId: "stale-run",
+    });
+    const restartedHead = makeTask({
+      id: "restarted-head",
+      taskId: "restarted-head",
+      childSessionKey: "subagent:workboard-other",
+      runId: "other-run",
+    });
+    const taskList = createRejectedContinuationResponder(
+      [[restartedHead], [sampleTask]],
+      [staleTask],
+    );
     const client = createClient((method, params) => {
       if (method === "workboard.cards.list") {
         return listResult([linked], ["todo", "done"]);
       }
-      if (method === "tasks.list" && (params as { cursor?: string }).cursor === "page-2") {
-        return { tasks: [sampleTask] };
-      }
       if (method === "tasks.list") {
-        return { tasks: [], nextCursor: "page-2" };
+        return taskList(params);
       }
       return {};
     });
 
     await loadBoard(client);
 
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
-    expect(client.request).toHaveBeenCalledWith("tasks.list", {
-      limit: 500,
-      cursor: "page-2",
-    });
+    expectSingleTaskListRestart(client, true);
     expect(getWorkboardState(host).cards[0]).toMatchObject({ taskId: "task-1" });
+    expect(state.tasksByCardId.get(linked.id)).toEqual(sampleTask);
+  });
+
+  it.each([
+    ["initial INVALID_REQUEST", "initial-invalid", [undefined]],
+    ["continuation transport failure", "continuation-unavailable", [undefined, "stale-cursor"]],
+    [
+      "second rejected continuation",
+      "second-continuation-invalid",
+      [undefined, "stale-cursor", undefined, "replacement-cursor"],
+    ],
+  ] as const)("does not broaden task scan retries for %s", async (_name, failure, cursors) => {
+    const initialError = invalidRequest("initial request rejected");
+    const unavailableError = new Error("task ledger unavailable");
+    const secondContinuationError = invalidRequest("replacement cursor expired");
+    let requestCount = 0;
+    const client = createClient((method, params) => {
+      if (method !== "tasks.list") {
+        return {};
+      }
+      requestCount += 1;
+      const cursor = (params as { cursor?: string }).cursor;
+      if (failure === "initial-invalid") {
+        throw initialError;
+      }
+      if (failure === "continuation-unavailable") {
+        if (!cursor) {
+          return { tasks: [], nextCursor: "stale-cursor" };
+        }
+        throw unavailableError;
+      }
+      if (requestCount === 1) {
+        return { tasks: [], nextCursor: "stale-cursor" };
+      }
+      if (requestCount === 2) {
+        throw invalidRequest("stale cursor expired");
+      }
+      if (requestCount === 3) {
+        return { tasks: [], nextCursor: "replacement-cursor" };
+      }
+      throw secondContinuationError;
+    });
+    const expectedError =
+      failure === "initial-invalid"
+        ? initialError
+        : failure === "continuation-unavailable"
+          ? unavailableError
+          : secondContinuationError;
+
+    await expect(listWorkboardTasks(client)).rejects.toBe(expectedError);
+
+    expect(requestCalls(client, "tasks.list").map(([, params]) => params)).toEqual(
+      cursors.map((cursor) => ({ limit: 500, ...(cursor ? { cursor } : {}) })),
+    );
+  });
+
+  it("keeps repeated task cursors terminal", async () => {
+    const first = makeTask({ id: "first", taskId: "first" });
+    const second = makeTask({ id: "second", taskId: "second" });
+    let requestCount = 0;
+    const client = createClient((method) => {
+      if (method !== "tasks.list") {
+        return {};
+      }
+      requestCount += 1;
+      return requestCount === 1
+        ? { tasks: [first], nextCursor: "repeated-cursor" }
+        : { tasks: [second], nextCursor: "repeated-cursor" };
+    });
+
+    await expect(listWorkboardTasks(client)).resolves.toEqual([first, second]);
+    expect(requestCalls(client, "tasks.list").map(([, params]) => params)).toEqual([
+      { limit: 500 },
+      { limit: 500, cursor: "repeated-cursor" },
+    ]);
   });
 
   it("summarizes parent dependency readiness from loaded cards", () => {
@@ -3505,11 +3638,17 @@ describe("workboard controller", () => {
     );
   });
 
-  it("starts a task run and links it back to the card", async () => {
+  it("links a started run after recovering its full task scan", async () => {
     const running = createLinkedCard();
-    const client = createClient({
-      "workboard.cards.start": { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" },
-      "tasks.list": { tasks: [sampleTask] },
+    const taskList = createRejectedContinuationResponder([[sampleTask]]);
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.start") {
+        return { card: running, sessionKey: sampleTaskSessionKey, runId: "run-1" };
+      }
+      if (method === "tasks.list") {
+        return taskList(params);
+      }
+      return {};
     });
 
     const sessionKey = await startSampleCard(client);
@@ -3519,6 +3658,7 @@ describe("workboard controller", () => {
       id: sampleCard.id,
     });
     expect(client.request).toHaveBeenNthCalledWith(2, "tasks.list", { limit: 500 });
+    expectSingleTaskListRestart(client);
     expect(state.cards).toEqual([running]);
     expect(state.tasksByCardId.get(sampleCard.id)).toEqual(sampleTask);
   });
@@ -4065,17 +4205,22 @@ describe("workboard controller", () => {
     }
   });
 
-  it("refreshes task lifecycle for task-backed cards", async () => {
+  it("refreshes task lifecycle after recovering its full task scan", async () => {
     createLifecycleHarness(host);
-    const client = createClient({
-      "tasks.list": { tasks: [makeTask({ status: "completed" })] },
+    const completedTask = makeTask({ status: "completed" });
+    const taskList = createRejectedContinuationResponder([[completedTask]]);
+    const client = createClient((method, params) => {
+      if (method === "tasks.list") {
+        return taskList(params);
+      }
+      return {};
     });
 
     await syncLifecycle(client);
 
-    expect(client.request).toHaveBeenCalledOnce();
-    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expectSingleTaskListRestart(client);
     expect(state.tasksByCardId.get("card-1")).toMatchObject({ status: "completed" });
+    expect(state.lifecycleTaskRefreshFailed).toBe(false);
   });
 
   it("cancels in-flight lifecycle reconciliation when refresh stops", async () => {

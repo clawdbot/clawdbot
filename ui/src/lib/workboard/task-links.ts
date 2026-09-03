@@ -23,21 +23,38 @@ export const WORKBOARD_TASK_LOOKUP_RETRY_DELAYS_MS = [100, 250, 500] as const;
 export async function listWorkboardTasks(
   client: GatewayBrowserClient,
 ): Promise<WorkboardTaskSummary[]> {
-  const tasks: WorkboardTaskSummary[] = [];
-  const seenCursors = new Set<string>();
-  let cursor: string | null = null;
+  let restartAvailable = true;
   while (true) {
-    const payload = await client.request("tasks.list", {
-      limit: WORKBOARD_TASKS_LIST_LIMIT,
-      ...(cursor ? { cursor } : {}),
-    });
-    const page = normalizeTasksPage(payload);
-    tasks.push(...page.tasks);
-    if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
-      return tasks;
+    const tasks: WorkboardTaskSummary[] = [];
+    const seenCursors = new Set<string>();
+    let cursor: string | null = null;
+    try {
+      while (true) {
+        const payload = await client.request("tasks.list", {
+          limit: WORKBOARD_TASKS_LIST_LIMIT,
+          ...(cursor ? { cursor } : {}),
+        });
+        const page = normalizeTasksPage(payload);
+        tasks.push(...page.tasks);
+        if (!page.nextCursor || seenCursors.has(page.nextCursor)) {
+          return tasks;
+        }
+        seenCursors.add(page.nextCursor);
+        cursor = page.nextCursor;
+      }
+    } catch (error) {
+      // A rejected opaque continuation invalidates the whole snapshot. Restart
+      // once with fresh task and cursor state so callers never publish mixed pages.
+      if (
+        !restartAvailable ||
+        cursor === null ||
+        !(error instanceof GatewayRequestError) ||
+        error.gatewayCode !== "INVALID_REQUEST"
+      ) {
+        throw error;
+      }
+      restartAvailable = false;
     }
-    seenCursors.add(page.nextCursor);
-    cursor = page.nextCursor;
   }
 }
 
