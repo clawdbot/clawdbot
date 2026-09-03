@@ -999,6 +999,28 @@ describe("cron tool", () => {
     );
   });
 
+  it("documents caller-scoped visibility of list and get in the tool description", () => {
+    const tool = createTestCronTool();
+
+    // #137418: the automations tool inherits a caller/session authority filter,
+    // so list/get cover only automations visible to the calling session and
+    // account. Without disclosing that boundary, an agent treats the scoped
+    // list as authoritative and concludes operator-visible jobs do not exist.
+    // The boundary must stay the generic caller-visibility predicate: CLI
+    // creation provenance is not the exclusion cause, and the operator CLI is
+    // named only as the recovery path.
+    expect(tool.description).toContain(
+      "list/get cover only automations visible to the calling session and account",
+    );
+    expect(tool.description).toContain("jobs outside that caller visibility");
+    expect(tool.description).toContain("totals/counts reflect that scoped view");
+    expect(tool.description).toContain(
+      "means the job is outside this scope, not that it is missing",
+    );
+    expect(tool.description).toContain("openclaw automations");
+    expect(tool.description).not.toContain("created from operator-CLI authority");
+  });
+
   it("documents the event-trigger authoring contract", () => {
     const tool = createTestCronTool();
 

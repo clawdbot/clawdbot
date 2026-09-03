@@ -185,6 +185,8 @@ function buildCronToolDescription(params: { triggersEnabled: boolean }): string 
 
 ACTIONS: status | list [includeDisabled,limit?,offset?] (use nextOffset for the next page) | get jobId | add job | update jobId job (partial: only supplied fields change; null clears) | remove jobId | run jobId (runMode "force"=now) | runs jobId = history | next_check in:"30m" (own paced run only) | wake text mode?:"now"|"next-heartbeat"(default) nudges a caller-owned lane (sessionKey/agentId to pick another).
 
+SCOPE: list/get cover only automations visible to the calling session and account — jobs outside that caller visibility (for example jobs owned by other agents or accounts, or privileged operator-managed job types) are excluded, and totals/counts reflect that scoped view. "cron job not found" for an id the operator CLI resolves means the job is outside this scope, not that it is missing — ask the operator to check it via the CLI (openclaw automations) instead of re-listing and concluding it does not exist.
+
 ADD: ${addFields}. Required: schedule+payload.
 
 SCHEDULE:
