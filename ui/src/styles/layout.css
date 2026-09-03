@@ -1046,6 +1046,9 @@ openclaw-settings-save-indicator:empty {
 .sidebar-brand__actions {
   display: flex;
   align-items: center;
+  /* One hit-box size and one gap for every header control: the glyph inset
+     inside each 28px box is the only spacing. A per-button offset here reads
+     as a hole in the rail once that button has no border to sit inside. */
   gap: 0;
   /* Keep the action rail independent from the fit-content identity card so
      short agent names never pull navigation controls away from the edge. */
@@ -1066,10 +1069,6 @@ openclaw-settings-save-indicator:empty {
 
 .sidebar-brand__header-control:hover:not(:disabled, [aria-disabled="true"]) svg {
   opacity: 1;
-}
-
-.sidebar-brand__new-thread {
-  margin-inline-start: 5px;
 }
 
 .sidebar-brand__icon {

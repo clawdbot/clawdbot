@@ -86,6 +86,18 @@ If migration or config repair cannot finish, Doctor leaves the stopped service
 stopped and reports an incomplete repair. Resolve the reported blocker, rerun
 `openclaw doctor --fix`, then start the service through its owner.
 
+## Control UI assets
+
+For source installs, Doctor can build missing Control UI assets or rebuild stale
+assets after protocol changes. Its manual build command includes the detected
+checkout path (`pnpm --dir <checkout> ui:build`), so you can run the displayed
+command from another directory. Use the complete command, including its quoted
+path, rather than running `pnpm ui:build` in an unrelated project.
+
+Packaged installs without UI sources receive reinstall guidance instead of a
+source-build command. Doctor does not download a source checkout to repair a
+packaged installation.
+
 ## Examples
 
 ```bash

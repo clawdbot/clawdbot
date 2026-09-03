@@ -325,7 +325,7 @@ describe("createGatewayControlUiRootLifecycle", () => {
 
     expect(lifecycle.state).toEqual({ kind: "failed" });
     expect(warn).toHaveBeenCalledWith(
-      "gateway: Control UI build completed, but its assets are still unavailable. Run `pnpm ui:build`.",
+      "gateway: Control UI build completed, but its assets are still unavailable. Run `openclaw doctor --fix` or reinstall OpenClaw.",
     );
   });
 });

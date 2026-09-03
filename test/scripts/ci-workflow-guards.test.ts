@@ -1630,55 +1630,158 @@ function runCheckShardFixture(options: {
   scripts: string[];
   task?: "guards" | "npm-lock" | "test-types";
   checkoutBase?: string;
+  types?: {
+    compose?: boolean;
+    profile?: "blacksmith" | "github" | "hybrid";
+    eventName?: "pull_request" | "push" | "workflow_dispatch";
+    stripeSupport?: boolean;
+    hostedContract?: boolean;
+    failStripe?: string;
+  };
 }): {
   calls: string[];
   output: string;
   status: number | null;
+  typeCalls: { row: string; command: string; localCheck: string | null }[];
+  rows: { name: string; status: number | null }[];
 } {
   const root = tempDirs.make("openclaw-ci-guards-");
   const fakeBin = path.join(root, "bin");
   const callsPath = path.join(root, "pnpm-calls.txt");
+  const typeCallsPath = path.join(root, "type-calls.txt");
+  const typeCheck = options.task === "test-types";
   mkdirSync(fakeBin);
-  if (options.task === "test-types") {
+  if (typeCheck) {
     mkdirSync(path.join(root, "scripts"));
-    writeFileSync(path.join(root, "scripts/run-tsgo-core-test-shards.mts"), "// --stripe\n");
+    writeFileSync(
+      path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
+      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+    );
+    writeFileSync(
+      path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
+      `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
+if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+`,
+    );
   }
-  writeFileSync(
-    path.join(root, "package.json"),
-    `${JSON.stringify({
-      scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
-    })}\n`,
-  );
+  const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
+  if (options.types?.compose) {
+    // The full-path root-coverage probe must see the actual package alias.
+    scripts["tsgo:test"] = (
+      JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> }
+    ).scripts["tsgo:test"]!;
+  }
+  writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ scripts })}\n`);
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'if [ "$*" = "run --silent" ]; then exit 1; fi',
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ...(typeCheck
+      ? [
+          'printf "%s\\t%s\\tpnpm %s\\n" "$TYPE_ROW" "${OPENCLAW_LOCAL_CHECK-<unset>}" "$*" >> "$TYPE_CALLS"',
+        ]
+      : []),
   ]);
-  const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
+  const workflow = readCiWorkflow();
+  const checkShardStep = workflow.jobs["check-shard"].steps.find(
     (step: WorkflowStep) => step.name === "Run check shard",
-  ).run;
-  const run = spawnSync("bash", ["-c", checkShardRun], {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      FROZEN_TARGET: options.frozenTarget ? "true" : "false",
-      FORMAT_CHECK: "false",
-      HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
-      HOSTED_RUNNER_STRIPES: "true",
-      CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      PNPM_CALLS: callsPath,
-      TASK: options.task ?? "guards",
+  );
+  const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+    eventName:
+      options.types?.eventName ?? (options.frozenTarget ? "workflow_dispatch" : "pull_request"),
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    frozenTarget: options.frozenTarget,
+    hostedRunnerProfileContract: options.types?.hostedContract ?? true,
+    runnerProfile: options.types?.profile ?? "hybrid",
+    preflightOutputs: {
+      compatibility_target: String(options.frozenTarget),
+      run_format_check: "false",
     },
+  };
+  const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
+  const coreJob = workflow.jobs["check-test-types-hosted-core-shard"];
+  if (options.types?.compose && evaluateWorkflowExpression(coreJob.if, context)) {
+    for (const stripe of coreJob.strategy.matrix.stripe) {
+      rows.push({
+        name: `core-${stripe}`,
+        step: coreJob.steps.find(
+          (step: WorkflowStep) => step.name === "Run hosted core test-types stripe",
+        ),
+        matrix: { stripe },
+      });
+    }
+  }
+  rows.push({ name: "central", step: checkShardStep, matrix: { task: options.task ?? "guards" } });
+  // Rows are independent (matrix fail-fast:false); each real Bash body owns its halt.
+  const runs = rows.map((row) => {
+    const resolveValue = (value: unknown) =>
+      typeof value === "string" && value.startsWith("${{")
+        ? evaluateWorkflowExpression(value, { ...context, matrix: row.matrix })
+        : value;
+    const command = typeCheck
+      ? row.step.run!.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+          String(resolveValue(expression)),
+        )
+      : row.step.run!;
+    return Object.assign(
+      spawnSync("bash", ["-c", command], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FROZEN_TARGET: options.frozenTarget ? "true" : "false",
+          FORMAT_CHECK: "false",
+          HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+          HOSTED_RUNNER_STRIPES: "true",
+          CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          PNPM_CALLS: callsPath,
+          TASK: options.task ?? "guards",
+          ...(typeCheck
+            ? {
+                OPENCLAW_LOCAL_CHECK: undefined,
+                TYPE_ROW: row.name,
+                TYPE_CALLS: typeCallsPath,
+                FAIL_TYPE_STRIPE: options.types?.failStripe,
+                ...Object.fromEntries(
+                  Object.entries(row.step.env ?? {}).map(([key, value]) => [
+                    key,
+                    String(resolveValue(value)),
+                  ]),
+                ),
+              }
+            : {}),
+        },
+      }),
+      { name: row.name },
+    );
   });
+  const failed = runs.find((run) => run.status !== 0);
   return {
     calls: existsSync(callsPath)
       ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
       : [],
-    output: `${run.stdout}${run.stderr}`,
-    status: run.status,
+    output: runs.map((run) => `${run.stdout}${run.stderr}`).join("\n"),
+    status: failed ? failed.status : 0,
+    typeCalls: existsSync(typeCallsPath)
+      ? readFileSync(typeCallsPath, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [row, localCheck, command] = line.split("\t");
+            return {
+              row: row!,
+              command: command!,
+              localCheck: localCheck === "<unset>" ? null : localCheck!,
+            };
+          })
+      : [],
+    rows: runs.map(({ name, status }) => ({ name, status })),
   };
 }
 
@@ -9523,6 +9626,67 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(result.calls).toEqual(calls);
     },
   );
+
+  it.each([
+    ["hybrid", "pull_request", false, true, true, true],
+    ["github", "workflow_dispatch", false, true, true, true],
+    ["blacksmith", "push", false, true, true, false],
+    ["hybrid", "workflow_dispatch", true, false, true, false],
+    ["hybrid", "workflow_dispatch", true, true, false, false],
+    ["hybrid", "workflow_dispatch", true, true, true, true],
+  ] as const)(
+    "preserves type workload for %s %s frozen=%s hosted-contract=%s stripe-support=%s",
+    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget,
+        types: { compose: true, profile, eventName, hostedContract, stripeSupport },
+      });
+      expect(result.status, result.output).toBe(0);
+      const stripes = result.typeCalls.filter((call) => call.command.startsWith("node "));
+      const packages = result.typeCalls.filter((call) => call.command.startsWith("pnpm "));
+      expect(packages.map((call) => call.localCheck)).toEqual(packages.map(() => "0"));
+      if (striped) {
+        expect(result.rows).toHaveLength(3);
+        expect(
+          result.rows.map((row) =>
+            stripes
+              .filter((call) => call.row === row.name)
+              .map((call) => call.command.split(" ")[2]),
+          ),
+        ).toEqual([["1/5", "2/5"], ["3/5", "4/5"], ["5/5"]]);
+        for (const call of stripes) {
+          const args = call.command.split(" ").slice(1);
+          expect(args).toEqual(["--stripe", expect.any(String), "--concurrency", "2"]);
+          expect(call.localCheck).toBeNull();
+        }
+        expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"]);
+      } else {
+        expect(stripes).toEqual([]);
+        expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
+      }
+    },
+  );
+
+  it.each(["1/5", "5/5"])("halts only the type row whose first stripe %s fails", (failStripe) => {
+    const result = runCheckShardFixture({
+      task: "test-types",
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      frozenTarget: false,
+      types: { compose: true, failStripe },
+    });
+    expect(result.status, result.output).toBe(17);
+    expect(readCiWorkflow().jobs["check-test-types-hosted-core-shard"].strategy["fail-fast"]).toBe(
+      false,
+    );
+    const failed = result.rows.filter((row) => row.status !== 0);
+    expect(failed).toHaveLength(1);
+    expect(result.rows.filter((row) => row.status === 0)).toHaveLength(2);
+    expect(
+      result.typeCalls.filter((call) => call.row === failed[0]!.name).map((call) => call.command),
+    ).toEqual([`node --stripe ${failStripe} --concurrency 2`]);
+  });
 
   it.each(["main", "trunk/release"])(
     "resolves manual diff and cache bases from authenticated %s when anonymous Git is unavailable",
