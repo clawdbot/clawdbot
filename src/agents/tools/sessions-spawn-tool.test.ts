@@ -1102,6 +1102,46 @@ describe("sessions_spawn tool", () => {
     );
   });
 
+  it("surfaces unsupported configured thinking instead of silently creating a visible child", async () => {
+    const registerRun = vi.fn();
+    const callGateway = vi.fn(async (_method: string, request: Record<string, unknown>) => {
+      expect(request).toMatchObject({
+        agentId: "main",
+        model: "openai/gpt-5.6-luna",
+        thinkingLevel: "ultra",
+      });
+      throw new Error(
+        'thinkingLevel "ultra" is not supported for openai/gpt-5.6-luna (use off|low|medium|high|max)',
+      );
+    });
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+      config: {
+        agents: {
+          defaults: {
+            subagents: {
+              model: "openai/gpt-5.6-luna",
+              thinking: "ultra",
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      },
+      callGateway: callGateway as never,
+      registerRun,
+      countActiveRuns: () => 0,
+    });
+
+    await expect(
+      tool.execute("visible-unsupported-thinking", {
+        task: "inspect issue",
+        visible: true,
+      }),
+    ).rejects.toThrow('thinkingLevel "ultra" is not supported for openai/gpt-5.6-luna');
+    expect(callGateway).toHaveBeenCalledTimes(1);
+    expect(registerRun).not.toHaveBeenCalled();
+  });
+
   it("rejects cross-agent visible transcript forks", async () => {
     const callGateway = vi.fn();
     const tool = createSessionsSpawnTool({
