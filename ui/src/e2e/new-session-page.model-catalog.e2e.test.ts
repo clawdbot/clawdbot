@@ -34,6 +34,27 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
+    const accountHintFitsMenu = () =>
+      page.locator(".chat-model-account__hint").evaluate((hint) => {
+        const menu = hint.closest(".chat-controls__model-menu");
+        if (!menu) {
+          return false;
+        }
+        const bounds = menu.getBoundingClientRect();
+        const range = document.createRange();
+        range.selectNodeContents(hint);
+        const textRects = Array.from(range.getClientRects());
+        return (
+          textRects.length > 0 &&
+          textRects.every(
+            (rect) =>
+              rect.left >= bounds.left - 1 &&
+              rect.right <= bounds.right + 1 &&
+              rect.top >= bounds.top - 1 &&
+              rect.bottom <= bounds.bottom + 1,
+          )
+        );
+      });
     const account = {
       authProfileId: "personal:person-a:anthropic:one",
       provider: "anthropic",
@@ -93,6 +114,7 @@ suite.define(() => {
       await expect
         .poll(() => page.locator(".chat-controls__model-picker").textContent())
         .toContain("No models available");
+      await expect.poll(accountHintFitsMenu).toBe(true);
       if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
@@ -112,6 +134,7 @@ suite.define(() => {
       await modelTrigger.click();
       await expect.poll(() => accountTrigger.textContent()).toContain(account.label);
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
+      await expect.poll(accountHintFitsMenu).toBe(true);
       if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",

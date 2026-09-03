@@ -3411,6 +3411,7 @@
 .chat-model-account.chat-controls__model-provenance {
   flex-direction: column;
   align-items: stretch;
+  white-space: normal;
 }
 
 .chat-model-account__error {

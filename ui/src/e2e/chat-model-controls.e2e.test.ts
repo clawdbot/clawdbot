@@ -99,6 +99,30 @@ suite.define(() => {
               return Boolean(box && box.width > 0 && box.x >= 0 && box.x + box.width <= width + 1);
             })
             .toBe(true);
+          await expect
+            .poll(() =>
+              account.locator(".chat-model-account__hint").evaluate((hint) => {
+                const menu = hint.closest(".chat-controls__model-menu");
+                if (!menu) {
+                  return false;
+                }
+                const bounds = menu.getBoundingClientRect();
+                const range = document.createRange();
+                range.selectNodeContents(hint);
+                const textRects = Array.from(range.getClientRects());
+                return (
+                  textRects.length > 0 &&
+                  textRects.every(
+                    (rect) =>
+                      rect.left >= bounds.left - 1 &&
+                      rect.right <= bounds.right + 1 &&
+                      rect.top >= bounds.top - 1 &&
+                      rect.bottom <= bounds.bottom + 1,
+                  )
+                );
+              }),
+            )
+            .toBe(true);
           if (artifactDir) {
             await page.screenshot({
               animations: "disabled",
