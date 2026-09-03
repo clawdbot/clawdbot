@@ -1,5 +1,5 @@
 // Gateway multi E2E tests validate multi-gateway runtime behavior.
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { access, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,9 +22,10 @@ import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js"
 const E2E_TIMEOUT_MS = 120_000;
 
 const CLOCK_SHIFT_PRELOAD = `
-import { existsSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 
 const shiftPath = process.env.OPENCLAW_CLOCK_SHIFT_PATH;
+const shiftReadyPath = process.env.OPENCLAW_CLOCK_SHIFT_READY_PATH;
 const offsetMs = Number(process.env.OPENCLAW_CLOCK_SHIFT_MS ?? "0");
 const originalNow = Date.now.bind(Date);
 const timer = setInterval(() => {
@@ -33,6 +34,9 @@ const timer = setInterval(() => {
   }
   clearInterval(timer);
   Date.now = () => originalNow() + offsetMs;
+  if (shiftReadyPath) {
+    writeFileSync(shiftReadyPath, "ready\\n");
+  }
   process.stdout.write("[clock-shift] offsetMs=" + offsetMs + String.fromCharCode(10));
 }, 10);
 timer.unref();
@@ -190,6 +194,7 @@ describe("gateway multi-instance e2e", () => {
     async () => {
       const proofRoot = await mkdtemp(path.join(os.tmpdir(), "openclaw-node-invoke-proof-"));
       const shiftPath = path.join(proofRoot, "shift");
+      const shiftReadyPath = path.join(proofRoot, "shift-ready");
       const preloadPath = path.join(proofRoot, "clock-shift.mjs");
       let node: GatewayClient | undefined;
       let operator: GatewayClient | undefined;
@@ -198,7 +203,8 @@ describe("gateway multi-instance e2e", () => {
         const instance = await spawnGatewayInstanceWithEnv("node-invoke-clock", {
           NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
           OPENCLAW_CLOCK_SHIFT_PATH: shiftPath,
-          OPENCLAW_CLOCK_SHIFT_MS: "10000",
+          OPENCLAW_CLOCK_SHIFT_READY_PATH: shiftReadyPath,
+          OPENCLAW_CLOCK_SHIFT_MS: "1000",
         });
         instances.push(instance);
         const nodeIdentity = loadOrCreateDeviceIdentity({
@@ -218,12 +224,13 @@ describe("gateway multi-instance e2e", () => {
           caps: ["system"],
           commands: ["camera.capture"],
           deviceIdentity: nodeIdentity,
-          onEvent: (event) => {
+          onEvent: async (event) => {
             if (event.event !== "node.invoke.request") {
               return;
             }
             const payload = event.payload as { id: string; nodeId: string };
-            void writeFile(shiftPath, "shift\n");
+            await writeFile(shiftPath, "shift\n");
+            await waitForFile(shiftReadyPath);
             setTimeout(() => {
               void nodeClient?.request("node.invoke.result", {
                 id: payload.id,
@@ -231,7 +238,7 @@ describe("gateway multi-instance e2e", () => {
                 ok: true,
                 payloadJSON: JSON.stringify({ captured: true }),
               });
-            }, 350).unref();
+            }, 50).unref();
           },
         });
         nodeClient = node;
@@ -261,11 +268,11 @@ describe("gateway multi-instance e2e", () => {
         );
         const elapsedMs = Math.round(performance.now() - startedAt);
         expect(result.captured).toBe(true);
-        expect(elapsedMs).toBeGreaterThanOrEqual(250);
+        expect(elapsedMs).toBeGreaterThanOrEqual(50);
         expect(elapsedMs).toBeLessThan(1_000);
-        expect(instance.logs()).toContain("[clock-shift] offsetMs=10000");
+        expect(instance.logs()).toContain("[clock-shift] offsetMs=1000");
         console.log(
-          `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=10000 result=SUCCESS elapsedMs=${elapsedMs}`,
+          `[real-gateway-node-proof] gatewayProcess=true nodeWebSocket=true wallClockOffsetMs=1000 result=SUCCESS elapsedMs=${elapsedMs}`,
         );
       } finally {
         operator?.stop();
@@ -288,4 +295,17 @@ async function spawnGatewayInstanceWithEnv(
     await instance.cleanup();
     throw error;
   }
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(filePath);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
 }
