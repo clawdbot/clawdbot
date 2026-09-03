@@ -35,6 +35,29 @@ function spawnOptionsAt(
 }
 
 describe("spawnWithFallback", () => {
+  it("does not retry a failed spawn after its caller authority expires", async () => {
+    const child = new EventEmitter() as ChildProcess;
+    const spawnMock = vi.fn(() => child);
+    let current = true;
+    const pending = spawnWithFallback({
+      argv: ["agent-cli"],
+      options: {},
+      fallbacks: [{ label: "no-detach", options: { detached: false } }],
+      spawnImpl: spawnMock,
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("Completion authority expired");
+        }
+      },
+    });
+    const rejected = expect(pending).rejects.toThrow("Completion authority expired");
+    current = false;
+    child.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
+
+    await rejected;
+    expect(spawnMock).toHaveBeenCalledOnce();
+  });
+
   it("retries on EBADF using fallback options", async () => {
     const spawnMock = vi
       .fn()

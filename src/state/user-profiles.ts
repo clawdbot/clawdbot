@@ -277,8 +277,7 @@ function ensureProfileForEmailWithInitialName(
           .where("email", "=", normalizedEmail),
       );
       if (existingAlias) {
-        // Resolution is a read: publishing here would loop subscriber refreshes
-        // that authenticate their avatar requests through this same path.
+        // Authenticated avatar reads reuse this path; unchanged identities must not refresh rosters.
         return toUserProfile(requireResolvedUserProfileById(db, existingAlias.profile_id));
       }
       const row = insertUserProfile(db, displayName, now);

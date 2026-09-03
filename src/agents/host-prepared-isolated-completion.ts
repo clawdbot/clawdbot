@@ -17,10 +17,10 @@ export async function runHostPreparedIsolatedCompletion(
     ? AbortSignal.any([params.abortSignal, timeoutSignal])
     : timeoutSignal;
   const assistant = await completeWithPreparedSimpleCompletionModel({
+    assertCurrent: params.assertCurrent,
     model: params.authorization.model,
     auth: params.authorization.auth,
     cfg: params.config,
-    assertCurrent: params.assertCurrent,
     context: {
       systemPrompt: params.systemPrompt,
       messages: [{ role: "user", content: params.prompt, timestamp: Date.now() }],

@@ -236,7 +236,7 @@ function renderParticipantMenu(
       const label = participantLabel(participant);
       const activity =
         participant.identity.type === "profile"
-          ? personActivityLink(participant.identity.id, personActivity)
+          ? personActivityLink(participant.identity.id, personActivity, label)
           : null;
       return html`<div role="listitem">
         ${renderPersonName(
@@ -271,7 +271,7 @@ function renderSessionAttribution({
   const primaryParticipant = creator ? undefined : participants[0];
   const primaryActivity =
     primaryIdentity?.type === "profile"
-      ? personActivityLink(primaryIdentity.id, personActivity)
+      ? personActivityLink(primaryIdentity.id, personActivity, primaryLabel)
       : null;
   const creatorInitials = creator ? sessionOwnerInitials(creator) : "";
   const avatarFallback = creatorInitials

@@ -169,7 +169,7 @@ type AgentHarnessIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
-  /** Revalidate after preparation and immediately before credential or model dispatch. */
+  /** Revalidate after preparation and before credential or inference I/O, including retries. */
   assertCurrent?: () => void;
   thinkLevel?: import("../../auto-reply/thinking.js").ThinkLevel;
   /** Do not recover ambiguous reasoning as visible text; an empty visible result is valid. */

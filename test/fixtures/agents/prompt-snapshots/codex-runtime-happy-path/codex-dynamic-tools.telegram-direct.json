@@ -825,17 +825,21 @@
       },
       {
         "deferLoading": true,
-        "description": "Read gateway config + schema. Writes/restart: use openclaw tool.",
+        "description": "Read gateway config/schema. update.run: owner-only update on explicit user request; restart + completion notice automatic. Never via shell. Other system changes: use openclaw tool.",
         "inputSchema": {
           "properties": {
             "action": {
-              "enum": ["config.get", "config.schema.lookup"],
+              "enum": ["config.get", "config.schema.lookup", "update.run"],
               "type": "string"
             },
             "gatewayToken": {
               "type": "string"
             },
             "gatewayUrl": {
+              "type": "string"
+            },
+            "note": {
+              "description": "Short human note for the post-update restart notice.",
               "type": "string"
             },
             "path": {

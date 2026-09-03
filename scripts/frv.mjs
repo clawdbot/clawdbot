@@ -353,6 +353,7 @@ export async function preflightContinuation(
     validateReleaseChildDispatchBinding({
       child,
       log: parentLog,
+      coveragePolicy: plan.coveragePolicy,
       plannedRunAttempt: child.runAttempt,
       repository,
       targetSha: plan.targetSha,

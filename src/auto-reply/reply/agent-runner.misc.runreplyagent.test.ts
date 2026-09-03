@@ -12,6 +12,7 @@ import {
   isEmbeddedAgentRunActive,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { testing as embeddedRunTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { registerPendingAgentQuestion } from "../../agents/harness/gateway-question.js";
 import {
   runFallbackModelAttempt,
   runInitialModelFallbackAttempt,
@@ -49,6 +50,7 @@ import {
 } from "./agent-runner.test-fixtures.js";
 import type { FollowupRun } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { createMockTypingController } from "./test-helpers.js";
@@ -440,6 +442,64 @@ afterEach(() => {
   clearMemoryPluginState();
   replyRunRegistryTesting.resetReplyRunRegistry();
   embeddedRunTesting.resetActiveEmbeddedRuns();
+});
+
+describe("runReplyAgent pending operator input", () => {
+  it("claims a direct CLI answer before active-run queueing", async () => {
+    const gatewayCall = vi.fn(async (_method, _opts, params) => ({
+      status: "answered",
+      answers: (params as { answers: { answers: Record<string, string[]> } }).answers,
+    }));
+    const reservation = registerPendingAgentQuestion({
+      questionId: "ask_direct_cli_answer",
+      sessionKey: "main",
+      questions: [
+        {
+          id: "color",
+          header: "Color",
+          question: "Which color?",
+          options: [{ label: "Blue" }, { label: "Green" }],
+        },
+      ],
+      gatewayCall,
+      answer: Promise.resolve({ status: "pending" }),
+    });
+    reservation.attachRegistration(Promise.resolve({ id: "ask_direct_cli_answer" }));
+    const replyOperationRunState = {};
+    const testRun = createBaseRun({
+      context: { agentText: "Green" },
+      followup: { transcriptPrompt: "Green" },
+      reply: {
+        commandBody: "Green",
+        transcriptCommandBody: "Green",
+        sessionKey: "main",
+        isActive: true,
+        shouldSteer: true,
+        opts: { [REPLY_OPERATION_RUN_STATE]: replyOperationRunState },
+      },
+    });
+
+    try {
+      await expect(testRun.run()).resolves.toBeUndefined();
+      expect(gatewayCall).toHaveBeenCalledWith(
+        "question.resolve",
+        {},
+        {
+          id: "ask_direct_cli_answer",
+          answers: { answers: { color: ["Green"] } },
+          resolvedBy: "plain-text",
+        },
+      );
+      expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+      expect(runCliAgentMock).not.toHaveBeenCalled();
+      expect(testRun.typing.cleanup).toHaveBeenCalledOnce();
+      expect(replyOperationRunState).toEqual({
+        admission: { status: "accepted", mode: "steer" },
+      });
+    } finally {
+      reservation.dispose();
+    }
+  });
 });
 
 describe("runReplyAgent auto-compaction token update", () => {

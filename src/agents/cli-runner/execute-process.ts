@@ -180,6 +180,7 @@ export async function executeCliProcess(params: {
   const pluginTimeout: { error?: FailoverError } = {};
   let terminalInterruption: CliTerminalInterruption | undefined;
   let result: RunExit;
+  runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   params.assertCurrent();
   if (params.nodePlacement) {

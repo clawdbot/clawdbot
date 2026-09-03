@@ -648,11 +648,11 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 }
 
 export async function completeWithPreparedSimpleCompletionModel(params: {
+  assertCurrent?: () => void;
   model: Model;
   auth: ResolvedProviderAuth;
   context: Parameters<typeof completeSimple>[1];
   cfg?: OpenClawConfig;
-  assertCurrent?: () => void;
   options?: SimpleCompletionModelOptions;
 }): Promise<AssistantMessage> {
   const runtime = getModelLlmRuntime(params.model);

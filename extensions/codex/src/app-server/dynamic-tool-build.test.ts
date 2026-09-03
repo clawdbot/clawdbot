@@ -52,6 +52,7 @@ import {
   CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
   flattenCodexDynamicToolFunctions,
 } from "./protocol.js";
+import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -1020,6 +1021,77 @@ describe("Codex app-server dynamic tool build", () => {
         expect.any(AbortSignal),
         undefined,
       );
+    },
+  );
+
+  it.each(["searchable", "direct"] as const)(
+    "keeps regular delegation model-only with %s loading while ordinary tools stay scriptable",
+    async (loading) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.config = { tools: { exec: { mode: "ask" } } };
+      setOpenClawCodingToolsFactoryForTests((options) =>
+        createOpenClawCodingTools(options).filter((tool) =>
+          ["openclaw", "message"].includes(tool.name),
+        ),
+      );
+
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: null,
+        isHostScopedToolActive: () => false,
+      });
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(["message", "openclaw"]);
+      const bridge = createCodexDynamicToolBridge({
+        tools,
+        signal: new AbortController().signal,
+        loading,
+        directToolNames: resolveCodexDynamicToolDirectNames(params, false),
+      });
+
+      expect(bridge.specs).toContainEqual({
+        type: "namespace",
+        name: CODEX_OPENCLAW_DIRECT_DYNAMIC_TOOL_NAMESPACE,
+        description: "",
+        tools: [expect.objectContaining({ type: "function", name: "openclaw" })],
+      });
+      const ordinarySpec = expect.objectContaining({ type: "function", name: "message" });
+      expect(bridge.specs).toContainEqual(
+        loading === "direct"
+          ? ordinarySpec
+          : {
+              type: "namespace",
+              name: "openclaw",
+              description: "",
+              tools: [expect.objectContaining({ name: "message", deferLoading: true })],
+            },
+      );
+    },
+  );
+
+  it.each(["core policy", "Codex excludes", "turn allowlist"])(
+    "filters the real regular delegate when denied by %s",
+    async (policy) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.config = policy === "core policy" ? { tools: { deny: ["openclaw"] } } : {};
+      params.toolsAllow = policy === "turn allowlist" ? ["message"] : ["openclaw", "message"];
+      setOpenClawCodingToolsFactoryForTests((options) =>
+        createOpenClawCodingTools(options).filter((tool) =>
+          ["openclaw", "message"].includes(tool.name),
+        ),
+      );
+
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: null,
+        isHostScopedToolActive: () => false,
+        pluginConfig: policy === "Codex excludes" ? { codexDynamicToolsExclude: ["openclaw"] } : {},
+      });
+
+      expect(tools.map((tool) => tool.name)).toEqual(["message"]);
     },
   );
 

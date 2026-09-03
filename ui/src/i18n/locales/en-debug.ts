@@ -40,6 +40,7 @@ const enDebug = {
       blocked: "Blocked",
     },
     overlay: {
+      ...en.debug.overlay,
       eyebrow: "Live diagnostics",
       openWithShortcut: "Open overlay · {shortcut}",
       unavailable: "Unavailable",

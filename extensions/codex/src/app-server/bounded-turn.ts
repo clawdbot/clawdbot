@@ -232,13 +232,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
   }
   const timeout = setTimeout(() => abortRun(timeoutError), Math.max(1, remainingRunMs));
   timeout.unref?.();
+  let retrySelection = false;
   const requestOptions = {
     timeoutMs,
     signal: abortController.signal,
     assertCurrent: params.assertCurrent,
   };
-
-  let retrySelection = false;
   try {
     params.assertCurrent?.();
     const modelSelection = await resolveCodexBoundedTurnModel({

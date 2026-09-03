@@ -251,6 +251,23 @@ function appendNormalizedPluginMetadataOwners(
   }
 }
 
+export function resolveImplicitProviderDiscoveryScope(
+  params: Pick<
+    ImplicitProviderParams,
+    "config" | "workspaceDir" | "env" | "pluginMetadataSnapshot" | "providerDiscoveryProviderIds"
+  >,
+): ProviderDiscoveryScope | undefined {
+  return resolveProviderDiscoveryScope({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+    env: params.env ?? process.env,
+    resolveOwners: params.pluginMetadataSnapshot
+      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
+      : undefined,
+    providerIds: params.providerDiscoveryProviderIds,
+  });
+}
+
 function mergeImplicitProviderSet(
   target: Record<string, ProviderConfig>,
   additions: Record<string, ProviderConfig> | undefined,
@@ -573,15 +590,7 @@ export async function prepareImplicitProviderStaticCatalog(
   >,
 ): Promise<PreparedProviderStaticCatalog> {
   const env = params.env ?? process.env;
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const providers = await resolveRuntimePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -635,15 +644,7 @@ export async function resolveImplicitProviders(
       allowKeychainPrompt: false,
       externalCliProviderIds: params.providerDiscoveryProviderIds,
     }));
-  const discoveryScope = resolveProviderDiscoveryScope({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    env,
-    resolveOwners: params.pluginMetadataSnapshot
-      ? (provider) => resolvePluginMetadataProviderOwners(params.pluginMetadataSnapshot, provider)
-      : undefined,
-    providerIds: params.providerDiscoveryProviderIds,
-  });
+  const discoveryScope = resolveImplicitProviderDiscoveryScope(params);
   const discoveryPluginIds = discoveryScope ? [...discoveryScope.keys()] : undefined;
   // The runtime config has already resolved SecretRefs at its owning boundary.
   // Re-resolving source refs here would execute unrelated file/exec providers on catalog reads.

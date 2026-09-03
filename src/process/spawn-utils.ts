@@ -20,7 +20,7 @@ type SpawnWithFallbackParams = {
   argv: string[];
   options: SpawnOptions;
   fallbacks?: SpawnFallback[];
-  spawnImpl?: typeof spawn;
+  spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess;
   retryCodes?: string[];
   onFallback?: (err: unknown, fallback: SpawnFallback) => void;
 };
@@ -42,7 +42,7 @@ function shouldRetry(err: unknown, codes: string[]): boolean {
 }
 
 async function spawnAndWaitForSpawn(
-  spawnImpl: typeof spawn,
+  spawnImpl: NonNullable<SpawnWithFallbackParams["spawnImpl"]>,
   argv: string[],
   options: SpawnOptions,
 ): Promise<ChildProcess> {

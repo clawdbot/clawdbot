@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildModelsListResult,
@@ -22,27 +22,41 @@ vi.mock("node:worker_threads", async (importOriginal) => ({
 describe("ClawRouter cold prepared catalog", () => {
   let state: OpenClawTestState;
 
-  beforeEach(async () => {
+  afterEach(async () => {
+    vi.unstubAllGlobals();
+    await state.cleanup();
+  });
+
+  it.each([
+    {
+      label: "publishes metadata with a sibling catalog=false",
+      sibling: false,
+      refreshedAuth: false,
+    },
+    {
+      label: "publishes metadata with a sibling catalog=true",
+      sibling: true,
+      refreshedAuth: false,
+    },
+    {
+      label: "discovers a provider introduced by refreshed auth",
+      sibling: true,
+      refreshedAuth: true,
+    },
+  ])("$label", async ({ sibling, refreshedAuth }) => {
     state = await createOpenClawTestState({
       label: "clawrouter-catalog",
       env: {
-        CLAWROUTER_API_KEY: "catalog-test-key",
+        CLAWROUTER_API_KEY: refreshedAuth ? undefined : "catalog-test-key",
         OPENAI_API_KEY: undefined,
         CODEX_API_KEY: undefined,
         CODEX_HOME: undefined,
         OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
       },
     });
-  });
-
-  afterEach(async () => {
-    vi.unstubAllGlobals();
-    await state.cleanup();
-  });
-
-  it.each([false, true])("publishes metadata with a sibling catalog=%s", async (sibling) => {
     // Distinct catalog URLs keep each scenario cold across plugin module loaders.
-    const baseUrl = `https://${sibling ? "mixed" : "single"}.example.test/private`;
+    const scope = refreshedAuth ? "refreshed" : sibling ? "mixed" : "single";
+    const baseUrl = `https://${scope}.example.test/private`;
     const agentId = "private-openclaw";
     const config: OpenClawConfig = {
       plugins: {
@@ -57,7 +71,15 @@ describe("ClawRouter cold prepared catalog", () => {
         providers: {
           clawrouter: {
             baseUrl,
-            apiKey: { source: "env", provider: "default", id: "CLAWROUTER_API_KEY" },
+            ...(refreshedAuth
+              ? {}
+              : {
+                  apiKey: {
+                    source: "env" as const,
+                    provider: "default",
+                    id: "CLAWROUTER_API_KEY",
+                  },
+                }),
             agentRuntime: { id: "openclaw" },
             models: [],
           },
@@ -68,12 +90,19 @@ describe("ClawRouter cold prepared catalog", () => {
           workspace: state.workspaceDir,
           model: { primary: sibling ? "openai/codex-latest" : "clawrouter/codex-latest" },
           models: {
-            "clawrouter/codex-latest": { agentRuntime: { id: "openclaw" } },
+            ...(refreshedAuth
+              ? {}
+              : { "clawrouter/codex-latest": { agentRuntime: { id: "openclaw" } } }),
             ...(sibling ? { "openai/codex-latest": { agentRuntime: { id: "openclaw" } } } : {}),
           },
           modelPolicy: { allow: ["clawrouter/codex-latest"] },
         },
-        list: [{ id: agentId, model: { primary: "clawrouter/codex-latest" } }],
+        list: [
+          {
+            id: agentId,
+            model: { primary: refreshedAuth ? "openai/codex-latest" : "clawrouter/codex-latest" },
+          },
+        ],
       },
     };
     const fetchMock = vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
@@ -117,6 +146,24 @@ describe("ClawRouter cold prepared catalog", () => {
       agentFacts: prepared.agentFacts[0]!,
       pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
     });
+    if (refreshedAuth) {
+      // The new credential must enter through the worker's durable auth refresh,
+      // without a configured model preloading its provider into the startup scope.
+      expect(value.providerIds).not.toContain("clawrouter");
+      await state.writeAuthProfiles(
+        {
+          version: 1,
+          profiles: {
+            "clawrouter:default": {
+              type: "api_key",
+              provider: "clawrouter",
+              key: "catalog-test-key",
+            },
+          },
+        },
+        agentId,
+      );
+    }
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
     });
@@ -135,7 +182,7 @@ describe("ClawRouter cold prepared catalog", () => {
     const catalog = await buildModelsListResult({
       context: { getRuntimeConfig: () => config } as GatewayRequestContext,
       agentId,
-      params: { view: "configured", preparedOnly: true },
+      params: { view: refreshedAuth ? "all" : "configured", preparedOnly: true },
       preloadedCatalog: { agentId, config, snapshot: result.snapshot },
       preloadedOnly: true,
       catalogProjector: projector,

@@ -650,8 +650,8 @@ export function createWorkerEnvironmentService(options: WorkerEnvironmentService
         }),
       );
     },
-    destroy: async (environmentId: string) =>
-      environmentAccess.project(await providerLifecycle.destroy(environmentId)),
+    destroy: async (environmentId: string, reason?: "operator-abandon") =>
+      environmentAccess.project(await providerLifecycle.destroy(environmentId, { reason })),
     destroyUnattached: async (environmentId: string) =>
       environmentAccess.project(
         await providerLifecycle.destroy(environmentId, { requireUnattached: true }),

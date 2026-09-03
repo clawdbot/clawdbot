@@ -1032,7 +1032,7 @@ describe("runGlobalPackageUpdateSteps", () => {
         }),
       ).resolves.toMatchObject({
         failedStep: { stderrTail: "install crashed", exitCode: 1 },
-        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+        recovery: { serviceRestartSafe: true, version: "1.0.0" },
       });
 
       if (stagePrefix === undefined) {

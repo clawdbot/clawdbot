@@ -112,7 +112,8 @@ export async function completeSimple<TApi extends Api>(
   assertCurrent?: () => void,
 ): Promise<AssistantMessage> {
   await ensureTransportRuntimeHost();
-  // Host initialization yields even when warm; recheck before invoking the provider.
+  // Runtime setup can outlive its caller. Admit only a current request to the provider.
   assertCurrent?.();
+  options?.signal?.throwIfAborted();
   return await resolveRuntime(model).completeSimple(model, context, options);
 }

@@ -1,10 +1,11 @@
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
   adjustTextareaHeight,
   disconnectComposerPopoverAnchorObserver,
 } from "./chat-composer-dom.ts";
 import { clearGoalElapsedTimers } from "./chat-composer-goal.ts";
+import { HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import { createSkillMenuState } from "./chat-composer-skill-menu.ts";
 import { createSlashMenuState } from "./chat-composer-slash-menu.ts";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
@@ -14,6 +15,7 @@ function createChatComposerState(): ChatComposerState {
     ...createSlashMenuState(),
     ...createSkillMenuState(),
     composerComposing: false,
+    mentionMenu: new HumanMentionMenu(),
     composingDraft: null,
     composerInputIntentKey: null,
     pendingClearedSubmittedDraft: null,
@@ -87,12 +89,20 @@ export function composerDraftKey(
   return `${props.currentAgentId}\u0000${props.sessionKey}`;
 }
 
-export function commitComposerDraft(props: ChatComposerProps, value: string): void {
+export function commitComposerDraft(
+  props: ChatComposerProps,
+  value: string,
+  mentions?: readonly HumanMention[],
+): void {
   const currentDraft = props.getDraft ? props.getDraft() : props.draft;
-  if (currentDraft === value) {
+  if (currentDraft === value && mentions === undefined) {
     return;
   }
-  props.onDraftChange(value);
+  const hadMentions = (props.getMentions?.() ?? props.mentions ?? []).length > 0;
+  props.onDraftChange(value, mentions);
+  if (hadMentions || mentions?.length) {
+    props.onRequestUpdate?.();
+  }
 }
 
 export function markComposerInputIntent(state: ChatComposerState, key: string): void {
@@ -138,6 +148,7 @@ export function suppressStaleSubmittedDraftReplay(
 }
 
 function disposeChatComposerState(state: ChatComposerState) {
+  state.mentionMenu.dispose();
   state.composerDraftScopeKey = null;
   state.dictation?.dispose();
   state.microphonePicker?.dispose();

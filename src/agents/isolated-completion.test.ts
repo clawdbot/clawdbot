@@ -204,25 +204,29 @@ function registerHarness(overrides: Partial<AgentHarness>): void {
 }
 
 describe("runIsolatedCompletion", () => {
-  it("rejects a retained dispatch callback after isolated completion closes", async () => {
-    const dispatch = vi.fn();
-    let dispatchLater: (() => void) | undefined;
-    registerHarness({
-      runIsolatedCompletionV2: async (params) => {
+  it.each(["v1", "v2"] as const)(
+    "rejects a retained %s dispatch callback after isolated completion closes",
+    async (version) => {
+      const dispatch = vi.fn();
+      let dispatchLater: (() => void) | undefined;
+      const run = async (params: { assertCurrent?: () => void }) => {
         dispatchLater = () => {
           params.assertCurrent?.();
           dispatch();
         };
         return { assistant: assistant([{ type: "text", text: "done" }]) };
-      },
-    });
-    await runIsolatedCompletion(request());
-    if (!dispatchLater) {
-      throw new Error("The harness did not receive its dispatch callback.");
-    }
-    expect(dispatchLater).toThrow("Isolated completion is no longer active.");
-    expect(dispatch).not.toHaveBeenCalled();
-  });
+      };
+      registerHarness(
+        version === "v1" ? { runIsolatedCompletion: run } : { runIsolatedCompletionV2: run },
+      );
+      await runIsolatedCompletion(request());
+      if (!dispatchLater) {
+        throw new Error("The harness did not receive its dispatch callback.");
+      }
+      expect(dispatchLater).toThrow("Isolated completion has ended");
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     ["runtime", "v2"],

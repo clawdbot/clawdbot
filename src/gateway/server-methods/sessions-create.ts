@@ -45,6 +45,7 @@ import {
 import { prepareSessionWorktree } from "../session-worktree-preparation.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
+import { normalizeChatSendRequest } from "./chat-send-request.js";
 import { chatHandlers } from "./chat.js";
 import { isIneligiblePersonalGatewayCaller } from "./gateway-personal-caller.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
@@ -244,6 +245,53 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       hasInitialTurn,
       message: initialMessage,
     } = initialTurn;
+    const initialRunId = randomUUID();
+    if (p.mentions?.length) {
+      if (catalogId || p.incognito) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "Human mentions are unavailable for this session mode. Remove the selected mentions to continue.",
+          ),
+        );
+        return;
+      }
+      const normalized = normalizeChatSendRequest({
+        params: {
+          sessionKey: agentSelectionKey,
+          message: initialMessage ?? "",
+          mentions: p.mentions,
+          idempotencyKey: initialRunId,
+        },
+        client,
+      });
+      if (!normalized.ok) {
+        respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, normalized.error));
+        return;
+      }
+      const eligible = context.mentionInbox?.validateRecipients(
+        client,
+        {
+          agentId: explicitlyRequestedAgent.agentId,
+          ...(p.visibility ? { visibility: p.visibility } : {}),
+        },
+        p.mentions.map((mention) => mention.profileId),
+      );
+      if (!eligible?.ok) {
+        respond(
+          false,
+          undefined,
+          eligible?.error ??
+            errorShape(
+              ErrorCodes.UNAVAILABLE,
+              "Human mentions are unavailable; reconnect and retry.",
+            ),
+        );
+        return;
+      }
+    }
     let requestedCwd = normalizeOptionalString(p.cwd);
     const requestedExecNode = normalizeOptionalString(p.execNode);
     const requestedProjectId = normalizeOptionalString(p.projectId);
@@ -609,7 +657,8 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
               sessionKey: key,
               agentId,
               message: initialMessage ?? "",
-              idempotencyKey: randomUUID(),
+              idempotencyKey: initialRunId,
+              ...(p.mentions ? { mentions: p.mentions } : {}),
               ...(initialAttachments ? { attachments: initialAttachments } : {}),
             },
             respond: (ok, payload, error, meta) => {

@@ -131,6 +131,8 @@ describe("Gateway pending-profile authorization", () => {
       "controlUi.sessionPreview",
       "exec.approval.resolve",
       "mcp.app.view",
+      "mentions.list",
+      "mentions.dismiss",
       "message.action",
       "models.list",
       "openclaw.chat",
@@ -153,6 +155,7 @@ describe("Gateway pending-profile authorization", () => {
       "users.github.authorize.poll",
       "users.github.authorize.cancel",
       "users.github.disconnect",
+      "users.mentionable",
     ];
     for (const method of methods) {
       const client = createPendingProfileClient();

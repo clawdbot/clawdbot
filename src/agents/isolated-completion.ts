@@ -174,7 +174,6 @@ function hasCliSideEffectEvidence(result: {
 
 async function runCliIsolatedCompletion(params: {
   request: RunIsolatedCompletionParams;
-  assertCurrent: () => void;
   provider: string;
   modelProvider: string;
   agentId: string;
@@ -185,7 +184,7 @@ async function runCliIsolatedCompletion(params: {
     { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
     async ({ dir }) => {
       const { runCliAgent } = await import("./cli-runner.runtime.js");
-      params.assertCurrent();
+      params.request.assertCurrent?.();
       const sessionId = `isolated-completion-${randomUUID()}`;
       const config = params.request.config ?? getRuntimeConfig();
       const preparedRunAdmission = prepareSystemAgentRunAdmission(
@@ -195,6 +194,7 @@ async function runCliIsolatedCompletion(params: {
         "isolated-completion",
       );
       try {
+        params.request.assertCurrent?.();
         const result = await runCliAgent({
           preparedRunAdmission,
           sessionId,
@@ -217,7 +217,7 @@ async function runCliIsolatedCompletion(params: {
           thinkLevel: params.request.thinkLevel,
           streamParams: params.request.streamParams,
           abortSignal: params.request.abortSignal,
-          assertCurrent: params.assertCurrent,
+          assertCurrent: params.request.assertCurrent,
           executionMode: "side-question",
           cliToolAvailability: { native: [], openClaw: [] },
           disableTools: true,
@@ -428,7 +428,7 @@ export async function runIsolatedCompletion(
   let closed = false;
   const assertCurrent = () => {
     if (closed) {
-      throw new Error("Isolated completion is no longer active.");
+      throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
     }
     request.assertCurrent?.();
     request.abortSignal?.throwIfAborted();
@@ -492,8 +492,7 @@ export async function runIsolatedCompletion(
       });
       if (cliOwner) {
         const completion = await runCliIsolatedCompletion({
-          request,
-          assertCurrent,
+          request: { ...request, assertCurrent },
           provider: cliOwner,
           modelProvider: provider,
           agentId,
@@ -689,6 +688,7 @@ export async function runIsolatedCompletion(
             ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
             : {}),
         };
+        assertCurrent();
         result = await harness.runIsolatedCompletion!(
           prepareIsolatedHarnessParams(harness, harnessParams),
         );

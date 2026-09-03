@@ -10,6 +10,7 @@ export {
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
   readSessionPendingInput,
+  readSessionSubmittedInput,
   stageSessionPendingInput,
   withSessionPendingInputPersistence,
   type SessionPendingInput,

@@ -282,12 +282,13 @@ describe("trusted in-process Gateway session creation", () => {
     ).rejects.toThrow("Gateway instance unavailable for sessions.list");
 
     mocks.hasContext = false;
-    await callInProcessGatewayTool("sessions.list", { limit: 5 });
+    const signal = new AbortController().signal;
+    await callInProcessGatewayTool("sessions.list", { limit: 5 }, { timeoutMs: 120_000, signal });
     expect(mocks.callGatewayTool).toHaveBeenCalledWith(
       "sessions.list",
-      {},
+      { timeoutMs: 120_000 },
       { limit: 5 },
-      { scopes: ["operator.write"] },
+      { scopes: ["operator.write"], signal },
     );
   });
 });

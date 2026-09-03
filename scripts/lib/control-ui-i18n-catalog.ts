@@ -44,9 +44,9 @@ export function loadControlUiSourceCatalog(): TranslationMap {
   // en.ts's empty anchors retain source order for extracted whole subtrees.
   return mergeControlUiTranslationMaps(
     registerSkillLibraryEnglish.catalog,
-    en,
+    // Preserve Debug key order while keeping only its title eager.
+    { ...en, debug: registerDebugEnglish.catalog.debug },
     registerActivityEnglish.catalog,
-    registerDebugEnglish.catalog,
     registerDevicesEnglish.catalog,
     registerMeetingsEnglish.catalog,
     registerMemoryImportEnglish.catalog,

@@ -89,7 +89,7 @@ describe("LLM completion transport host", () => {
     await expect(completeSimple(model, { messages: [] })).resolves.toEqual(message);
   });
 
-  it.each(["current", "retired"] as const)(
+  it.each(["current", "retired", "aborted"] as const)(
     "checks %s host-prepared authority after deferred transport initialization",
     async (authority) => {
       const { runHostPreparedIsolatedCompletion } =
@@ -129,16 +129,19 @@ describe("LLM completion transport host", () => {
         },
       });
       // Even a warm transport host yields before it invokes the provider.
-      current = authority === "current";
+      current = authority !== "retired";
+      if (authority === "aborted") {
+        controller.abort(authorityError);
+      }
 
-      if (current) {
+      if (authority === "current") {
         await expect(completion).resolves.toEqual({ assistant: message });
         expect(providerStream).toHaveBeenCalledOnce();
       } else {
         await expect(completion).rejects.toBe(authorityError);
         expect(providerStream).not.toHaveBeenCalled();
       }
-      expect(controller.signal.aborted).toBe(false);
+      expect(controller.signal.aborted).toBe(authority === "aborted");
     },
   );
 });

@@ -174,6 +174,7 @@ describe("handleControlUiHttpRequest", () => {
       terminalEnabled: boolean;
       cliAgentsEnabled: boolean;
       automaticallyFetchFavicons: boolean;
+      communityInvite: boolean;
       pluginFrameGrants?: ControlUiPluginFrameGrantAck[];
     };
   }
@@ -1760,32 +1761,36 @@ describe("handleControlUiHttpRequest", () => {
         expect(parsed.terminalEnabled).toBe(true);
         expect(parsed.cliAgentsEnabled).toBe(true);
         expect(parsed.automaticallyFetchFavicons).toBe(true);
+        expect(parsed.communityInvite).toBe(true);
         expect(parsed.devGitBranch).toBeUndefined();
         expect(Array.isArray(parsed.localMediaPreviewRoots)).toBe(true);
       },
     });
   });
 
-  it("projects an explicit favicon opt-out into bootstrap config", async () => {
-    await withControlUiRoot({
-      fn: async (tmp) => {
-        const { res, end } = makeMockHttpResponse();
-        const handled = await handleControlUiHttpRequest(
-          { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
-          res,
-          {
-            root: { kind: "resolved", path: tmp },
-            config: {
-              gateway: { controlUi: { automaticallyFetchFavicons: false } },
+  it.each(["automaticallyFetchFavicons", "communityInvite"] as const)(
+    "projects an explicit %s opt-out into bootstrap config",
+    async (key) => {
+      await withControlUiRoot({
+        fn: async (tmp) => {
+          const { res, end } = makeMockHttpResponse();
+          const handled = await handleControlUiHttpRequest(
+            { url: CONTROL_UI_BOOTSTRAP_CONFIG_PATH, method: "GET" } as IncomingMessage,
+            res,
+            {
+              root: { kind: "resolved", path: tmp },
+              config: {
+                gateway: { controlUi: { [key]: false } },
+              },
             },
-          },
-        );
+          );
 
-        expect(handled).toBe(true);
-        expect(parseBootstrapPayload(end).automaticallyFetchFavicons).toBe(false);
-      },
-    });
-  });
+          expect(handled).toBe(true);
+          expect(parseBootstrapPayload(end)[key]).toBe(false);
+        },
+      });
+    },
+  );
 
   it("omits the assistant agent id without a config snapshot", async () => {
     await withControlUiRoot({

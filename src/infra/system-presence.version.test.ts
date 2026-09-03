@@ -38,6 +38,7 @@ async function withPresenceModule<T>(
 
 describe("system-presence version fallback", () => {
   beforeEach(() => {
+    vi.resetModules();
     spawnSyncMock.mockReturnValue({
       stdout: "",
       stderr: "",

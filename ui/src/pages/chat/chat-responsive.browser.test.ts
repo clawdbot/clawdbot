@@ -2110,17 +2110,17 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   });
 
   it.each([
-    [1200, 800, "desktop", false],
-    [900, 500, "mobile-landscape-900", false],
-    [640, 900, "mobile-responsive-640", false],
-    [320, 568, "mobile-320", false],
-    [375, 812, "mobile-375", false],
-    [430, 932, "mobile-430", false],
-    [1200, 800, "desktop-with-pull-request", true],
-    [375, 812, "mobile-with-pull-request", true],
+    [1200, 800, "desktop", "overlay", false],
+    [900, 500, "mobile-landscape-900", "inline", false],
+    [640, 900, "mobile-responsive-640", "overlay", false],
+    [320, 568, "mobile-320", "overlay", false],
+    [375, 812, "mobile-375", "overlay", false],
+    [430, 932, "mobile-430", "overlay", false],
+    [1200, 800, "desktop-with-pull-request", "overlay", true],
+    [375, 812, "mobile-with-pull-request", "overlay", true],
   ] as const)(
-    "keeps floating notices clear of mobile chrome without shifting the %sx%s (%s) transcript layout",
-    async (width, height, label, withPullRequest) => {
+    "keeps floating notices below menus and clear of mobile chrome without shifting the %sx%s (%s) transcript layout",
+    async (width, height, label, menuPlacement, withPullRequest) => {
       const page = await openBrowserPage(width, height);
       try {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
@@ -2239,6 +2239,95 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             0,
           );
         }
+
+        await page.locator(".agent-chat__input").evaluate((node) => {
+          node.insertAdjacentHTML(
+            "afterbegin",
+            `<div class="slash-menu mention-menu" role="listbox" aria-label="Mention a person">
+              <div class="slash-menu__scroll">
+                <div class="slash-menu-group">
+                  <div class="slash-menu-group__label">Mention a person</div>
+                  <div class="slash-menu-item slash-menu-item--active" role="option" aria-selected="true">
+                    <span class="slash-menu-icon" aria-hidden="true">B</span>
+                    <span class="slash-menu-copy">
+                      <span class="slash-menu-name">Bob</span>
+                      <span class="slash-menu-desc">Online</span>
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>`,
+          );
+          const option = node.querySelector<HTMLElement>('[role="option"]')!;
+          option.addEventListener("click", () => {
+            option.dataset.selected = "true";
+          });
+        });
+        await waitForLayoutSettled(page, ".slash-menu, .chat-error");
+        expect(await geometry()).toEqual(after);
+        const option = page.getByRole("option");
+        const optionBounds = await getBoundingBox(page, ".slash-menu-item");
+        const noticeBounds = await getBoundingBox(page, ".chat-error");
+        expect(
+          await page.locator(".slash-menu").evaluate((node) => getComputedStyle(node).position),
+        ).toBe(menuPlacement === "inline" ? "sticky" : "absolute");
+        let optionPoint: { x: number; y: number };
+        if (menuPlacement === "inline") {
+          // Short landscape keeps the menu inside the input; notices remain above it.
+          const inputBounds = await getBoundingBox(page, ".agent-chat__input");
+          expect(rectsOverlap(optionBounds, noticeBounds)).toBe(false);
+          expect(noticeBounds.y + noticeBounds.height).toBeLessThanOrEqual(optionBounds.y);
+          expect(optionBounds.y).toBeGreaterThanOrEqual(inputBounds.y);
+          expect(optionBounds.y + optionBounds.height).toBeLessThanOrEqual(
+            inputBounds.y + inputBounds.height,
+          );
+          optionPoint = {
+            x: optionBounds.x + optionBounds.width / 2,
+            y: optionBounds.y + optionBounds.height / 2,
+          };
+        } else {
+          expect(rectsOverlap(optionBounds, noticeBounds)).toBe(true);
+          optionPoint = {
+            x:
+              (Math.max(optionBounds.x, noticeBounds.x) +
+                Math.min(
+                  optionBounds.x + optionBounds.width,
+                  noticeBounds.x + noticeBounds.width,
+                )) /
+              2,
+            y:
+              (Math.max(optionBounds.y, noticeBounds.y) +
+                Math.min(
+                  optionBounds.y + optionBounds.height,
+                  noticeBounds.y + noticeBounds.height,
+                )) /
+              2,
+          };
+        }
+        expect(
+          await option.evaluate((node, point) => {
+            const hit = document.elementFromPoint(point.x, point.y);
+            return node.contains(hit) ? "option" : hit?.className;
+          }, optionPoint),
+        ).toBe("option");
+        await page.mouse.click(optionPoint.x, optionPoint.y);
+        expect(await option.getAttribute("data-selected")).toBe("true");
+        await page.locator(".slash-menu").evaluate((node) => node.remove());
+        const noticePoint =
+          menuPlacement === "inline"
+            ? {
+                x: noticeBounds.x + noticeBounds.width / 2,
+                y: noticeBounds.y + noticeBounds.height / 2,
+              }
+            : optionPoint;
+        expect(
+          await page
+            .locator(".chat-error")
+            .evaluate(
+              (node, point) => node.contains(document.elementFromPoint(point.x, point.y)),
+              noticePoint,
+            ),
+        ).toBe(true);
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
           await mkdir(artifactDir, { recursive: true });

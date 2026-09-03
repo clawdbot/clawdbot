@@ -6,7 +6,6 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationGateway } from "../../app/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { registerDebugEnglish } from "../../i18n/locales/en-debug.ts";
 import {
   formatDurationCompact,
   formatDurationHuman,
@@ -19,8 +18,6 @@ import {
 import { renderCommandLaneRows } from "./lane-table.ts";
 import "./sparkline-tile.ts";
 import type { SparklineSample } from "./sparkline-tile.ts";
-
-registerDebugEnglish();
 
 type DebugOverlaySectionContext = {
   client: GatewayBrowserClient;

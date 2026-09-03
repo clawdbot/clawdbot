@@ -13,8 +13,10 @@ import type {
   ChatGoalDraft,
   ChatGoalDraftMode,
   ChatQueueItem,
+  HumanMention,
 } from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
+import type { HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
@@ -27,6 +29,7 @@ import type { RealtimeTalkStatus } from "../realtime-talk.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachments.ts";
+import type { HumanMentionDirectory, HumanMentionMenu } from "./chat-composer-mention-menu.ts";
 import type {
   ChatComposerCapabilityMenuProps,
   ChatComposerPlusMenuView,
@@ -40,9 +43,10 @@ type ChatQueuedEditProps = {
   /** Id of the row with an inline draft, or null when no row is being edited. */
   editingId: string | null;
   editingText?: string;
+  editingMentions?: readonly HumanMention[];
   source?: ChatQueueItem;
   onEdit?: (id: string) => void;
-  onEditChange?: (text: string) => void;
+  onEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onEditSubmit?: () => void;
   onCancel: () => void;
 };
@@ -92,6 +96,10 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   stream: string | null;
   queue: ChatQueueItem[];
   draft: string;
+  mentions?: readonly HumanMention[];
+  getMentions?: () => readonly HumanMention[];
+  mentionDirectory?: HumanMentionDirectory;
+  mentionsUnsupported?: boolean;
   modelCatalog: readonly ModelCatalogEntry[];
   modelSwitching: boolean;
   sessions: SessionsListResult | null;
@@ -133,7 +141,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   composerControls?: TemplateResult | typeof nothing;
   anchoredNotices?: TemplateResult | typeof nothing;
   permissionPicker?: ChatPermissionPickerProps;
-  onDraftChange: (next: string) => void;
+  onDraftChange: (next: string, mentions?: readonly HumanMention[]) => void;
   onHistoryKeydown?: (input: ChatInputHistoryKeyInput) => ChatInputHistoryKeyResult;
   onSlashIntent?: () => void | Promise<void>;
   onSlashCommand?: (command: string) => void;
@@ -172,6 +180,8 @@ type ComposingDraft = {
 export type ChatComposerState = SkillMenuState &
   SlashMenuState & {
     composerComposing: boolean;
+    mentionMenu: HumanMentionMenu;
+    mentionInput?: HumanMentionInput;
     composingDraft: ComposingDraft | null;
     composerInputIntentKey: string | null;
     pendingClearedSubmittedDraft: PendingClearedSubmittedDraft | null;

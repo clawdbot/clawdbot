@@ -523,7 +523,6 @@ export async function prepareReplyAgentPayloads(state: {
       throw new Error("accepted continuation status could not be prepared for delivery");
     }
     const settlement: PendingContinuationSettlement = {
-      statusPayload,
       settle: async (statusDelivered) => {
         const { settleRequesterAfterSessionSpawns } =
           await import("../../agents/subagents/registry/subagent-registry.js");

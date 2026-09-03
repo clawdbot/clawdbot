@@ -1,6 +1,7 @@
 // New-session submit gate table: the single owner of every reason submission
 // can be blocked. canSubmit, the Start tooltip, and blocked-Enter notices all
 // derive from this walk, so a gate cannot block silently.
+import type { HumanMention } from "@openclaw/gateway-protocol";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import {
@@ -9,8 +10,9 @@ import {
 } from "../../lib/session-method-access.ts";
 import type { SessionPlacementTarget } from "../../lib/sessions/session-placement-recovery.ts";
 import { sessionPlacementDispatchParams } from "../../lib/sessions/session-placement-startup.ts";
+import { requiresChatModelSetup } from "../chat/chat-model-setup.ts";
 import * as catalog from "./catalog-target.ts";
-import { isWorktreeNameValid } from "./create-params.ts";
+import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import { resolveDraftSessionPlacement } from "./draft-session-placement.ts";
@@ -47,6 +49,7 @@ type ReasonedSubmitGate =
   | "worktree-unavailable"
   | "worktree-name"
   | "terminal-capabilities"
+  | "mentions-unsupported"
   | "terminal-folder";
 export type NewSessionSubmitBlock =
   | { gate: SilentSubmitGate; reason?: undefined }
@@ -73,17 +76,18 @@ export function resolveCloudPlacementDisabledReason(place: DraftPlaceState): str
   return place.worktreeAvailable() ? undefined : t("newSession.cloudRequiresWorktree");
 }
 
-export function readNewSessionSubmissionAccess(
-  gateway: Parameters<typeof readSessionMethodAccess>[0],
-  place: DraftPlaceState,
-  pending: PendingSessionPlacementRecoveryState,
-  createParams: Record<string, unknown>,
-  hasInitialTurn: boolean,
-): SessionMethodAccess {
-  const pendingPlacement = Boolean(pending.sessionKey);
-  const { target } = resolveDraftSessionPlacement(pending, place);
+export function readNewSessionSubmissionAccess(options: {
+  gateway: Parameters<typeof readSessionMethodAccess>[0];
+  place: DraftPlaceState;
+  pendingPlacement: PendingSessionPlacementRecoveryState;
+  hasInitialTurn: boolean;
+  createParams: Record<string, unknown>;
+}): SessionMethodAccess {
+  const { gateway, place, pendingPlacement, hasInitialTurn, createParams } = options;
+  const pendingPlacementActive = Boolean(pendingPlacement.sessionKey);
+  const target = resolveDraftSessionPlacement(pendingPlacement, place).target;
   const remoteProject = target || !hasInitialTurn ? place.browser.remoteProject : null;
-  if (!pendingPlacement && remoteProject && !remoteProject.projectId) {
+  if (!pendingPlacementActive && remoteProject && !remoteProject.projectId) {
     const projectAccess = readSessionMethodAccess(gateway, {
       method: "projects.add",
       requiredScope: "operator.write",
@@ -92,7 +96,7 @@ export function readNewSessionSubmissionAccess(
       return projectAccess;
     }
   }
-  if (!target || !pendingPlacement || pending.phase === "creating") {
+  if (!target || !pendingPlacementActive || pendingPlacement.phase === "creating") {
     const createAccess = readSessionMethodAccess(gateway, {
       method: "sessions.create",
       params: createParams,
@@ -105,10 +109,30 @@ export function readNewSessionSubmissionAccess(
     method: "sessions.dispatch",
     requiredScope: target.kind === "profile" ? "operator.admin" : "operator.write",
     params: sessionPlacementDispatchParams({
-      key: pending.sessionKey,
-      agentId: pending.agentId || place.agentId,
+      key: pendingPlacement.sessionKey,
+      agentId: pendingPlacement.agentId || place.agentId,
       target,
     }),
+  });
+}
+
+export function requiresNewSessionModelSetup(options: {
+  snapshot: DraftSubmissionSnapshot;
+  gateway: DraftGatewayState;
+  place: DraftPlaceState;
+  pendingPlacement: PendingSessionPlacementRecoveryState;
+}): boolean {
+  const { snapshot, gateway, place, pendingPlacement } = options;
+  const selectedAgent = place.selectedAgent();
+  return requiresChatModelSetup({
+    catalog:
+      catalog.isTarget(snapshot.data) ||
+      place.remotePlacement ||
+      Boolean(pendingPlacement.sessionKey),
+    connected: gateway.connected,
+    agentsLoaded: snapshot.context?.agents.state.agentsList !== null,
+    selectedAgentFound: selectedAgent !== undefined,
+    agentModel: selectedAgent?.model?.primary,
   });
 }
 
@@ -123,6 +147,8 @@ type SubmitGateHost = {
   readonly pendingAttachmentReads: number;
   readonly hasDraftAttachments: boolean;
   readonly hasCapabilityOverrides: boolean;
+  readonly mentions: readonly HumanMention[];
+  readonly visibility: NewSessionVisibility;
   submissionSnapshot(): DraftSubmissionSnapshot;
   requiresModelSetup(): boolean;
   submissionAccess(): SessionMethodAccess;
@@ -141,6 +167,14 @@ export function resolveNewSessionSubmitBlock(
   const pendingPlacementActive = Boolean(host.pendingPlacement.sessionKey);
   if (host.submitting) {
     return { gate: "submitting" };
+  }
+  if (
+    host.mentions.length > 0 &&
+    (kind === "terminal" ||
+      host.visibility === "incognito" ||
+      host.message.trimStart().startsWith("/"))
+  ) {
+    return { gate: "mentions-unsupported", reason: t("chat.mentions.unsupported") };
   }
   if (
     gateway.preferenceLoading ||

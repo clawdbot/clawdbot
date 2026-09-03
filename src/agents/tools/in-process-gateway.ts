@@ -23,6 +23,8 @@ import { callGatewayTool } from "./gateway.js";
 type InProcessGatewayCallOptions = {
   resolveGatewayContext?: GatewayContextResolver;
   sessionMutationCommitGuard?: () => void;
+  signal?: AbortSignal;
+  timeoutMs?: number | null;
 };
 
 export type InProcessGatewayCaller = <T = Record<string, unknown>>(
@@ -215,8 +217,6 @@ async function callInProcessGatewayToolBound<T>(
   params: Record<string, unknown>,
   options: InProcessGatewayCallOptions & {
     sessionCreation?: TrustedSessionCreation;
-    signal?: AbortSignal;
-    timeoutMs?: number | null;
   },
   fallback: (scopes: ReturnType<typeof resolveLeastPrivilegeOperatorScopesForMethod>) => Promise<T>,
 ): Promise<T> {
@@ -256,7 +256,15 @@ export const callInProcessGatewayTool: InProcessGatewayCaller = async <T>(
   options: InProcessGatewayCallOptions = {},
 ): Promise<T> => {
   return await callInProcessGatewayToolBound(method, params, options, async (scopes) =>
-    callGatewayTool<T>(method, {}, params, { scopes }),
+    callGatewayTool<T>(
+      method,
+      options.timeoutMs == null ? {} : { timeoutMs: options.timeoutMs },
+      params,
+      {
+        scopes,
+        ...(options.signal ? { signal: options.signal } : {}),
+      },
+    ),
   );
 };
 

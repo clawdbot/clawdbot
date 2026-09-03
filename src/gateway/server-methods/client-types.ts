@@ -30,6 +30,8 @@ export type GatewayNodeInvokeStream = {
 /** Per-connection client metadata captured after the gateway handshake. */
 export type GatewayClient = {
   connect: ConnectParams;
+  /** Transport-owned revocation marker; retained callers have no authority after invalidation. */
+  invalidated?: boolean;
   connId?: string;
   presenceKey?: string;
   clientIp?: string;

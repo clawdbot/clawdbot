@@ -44,6 +44,17 @@ state, so each browser can keep its own working layout.
 
 ## Build a dashboard by asking
 
+Watch Patrick Erichsen build an OpenClaw 2.0 release dashboard from one prompt:
+
+<iframe
+  style={{ width: "100%", height: "auto", aspectRatio: "16 / 9", border: 0, borderRadius: "8px" }}
+  src="https://www.youtube-nocookie.com/embed/gHyBueWideg"
+  title="Build an OpenClaw Dashboard with One Prompt"
+  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+  referrerPolicy="strict-origin-when-cross-origin"
+  allowFullScreen
+></iframe>
+
 Ask your agent for what you want to see:
 
 > Create a widget named revenue-graph: an interactive bar chart of monthly
