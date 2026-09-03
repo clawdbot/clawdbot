@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
-import type { WebSocket } from "ws";
+import { WebSocket } from "ws";
 import {
   closeOpenClawStateDatabaseForTest,
   isOpenClawStateDatabaseOpen,
@@ -29,8 +29,18 @@ const IOS_OPERATOR_SCOPES = [
   "operator.write",
 ];
 
+async function closeWs(ws: WebSocket | undefined): Promise<void> {
+  if (!ws || ws.readyState === WebSocket.CLOSED) {
+    return;
+  }
+  await new Promise<void>((resolve) => {
+    ws.once("close", () => resolve());
+    ws.close();
+  });
+}
+
 export function registerControlUiMobileReconnectSuite(): void {
-  test("reconnects persisted iOS node and operator role tokens after password-mode restart", async () => {
+  test("reconnects persisted mobile role tokens through shared and explicit fields after restart", async () => {
     type GatewayServer = Awaited<ReturnType<typeof startTestGatewayServer>>;
     const previousAuth = testState.gatewayAuth;
     const previousToken = process.env.OPENCLAW_GATEWAY_TOKEN;
@@ -38,8 +48,6 @@ export function registerControlUiMobileReconnectSuite(): void {
     let bootstrapServer: GatewayServer | undefined;
     let restartedServer: GatewayServer | undefined;
     let bootstrapWs: WebSocket | undefined;
-    let nodeWs: WebSocket | undefined;
-    let operatorWs: WebSocket | undefined;
     let unauthenticatedWs: WebSocket | undefined;
 
     try {
@@ -128,41 +136,64 @@ export function registerControlUiMobileReconnectSuite(): void {
       unauthenticatedWs.close();
       unauthenticatedWs = undefined;
 
-      nodeWs = await openWs(port);
-      const nodeReconnect = await connectReq(nodeWs, {
-        deviceToken: nodeToken,
-        skipDefaultAuth: true,
-        role: "node",
-        scopes: [],
-        client: nodeClient,
-        deviceIdentityPath: identityPath,
-      });
-      expect(nodeReconnect.ok, JSON.stringify(nodeReconnect.error)).toBe(true);
-      expect(nodeReconnect.payload?.type).toBe("hello-ok");
+      const reconnectRoles = async (
+        pathName: string,
+        credentialField: "token" | "deviceToken",
+      ): Promise<void> => {
+        let nodeWs: WebSocket | undefined;
+        let operatorWs: WebSocket | undefined;
+        try {
+          nodeWs = await openWs(port);
+          const nodeReconnect = await connectReq(nodeWs, {
+            ...(credentialField === "token" ? { token: nodeToken } : { deviceToken: nodeToken }),
+            skipDefaultAuth: true,
+            role: "node",
+            scopes: [],
+            client: nodeClient,
+            deviceIdentityPath: identityPath,
+          });
+          expect(nodeReconnect.ok, `${pathName}: ${JSON.stringify(nodeReconnect.error)}`).toBe(
+            true,
+          );
+          expect(nodeReconnect.payload?.type).toBe("hello-ok");
 
-      operatorWs = await openWs(port);
-      const operatorReconnect = await connectReq(operatorWs, {
-        deviceToken: operatorToken,
-        skipDefaultAuth: true,
-        role: "operator",
-        scopes: IOS_OPERATOR_SCOPES,
-        client: { ...nodeClient, mode: "ui" as const },
-        deviceIdentityPath: identityPath,
-      });
-      expect(operatorReconnect.ok, JSON.stringify(operatorReconnect.error)).toBe(true);
-      expect(operatorReconnect.payload?.type).toBe("hello-ok");
+          operatorWs = await openWs(port);
+          const operatorReconnect = await connectReq(operatorWs, {
+            ...(credentialField === "token"
+              ? { token: operatorToken }
+              : { deviceToken: operatorToken }),
+            skipDefaultAuth: true,
+            role: "operator",
+            scopes: IOS_OPERATOR_SCOPES,
+            client: { ...nodeClient, mode: "ui" as const },
+            deviceIdentityPath: identityPath,
+          });
+          expect(
+            operatorReconnect.ok,
+            `${pathName}: ${JSON.stringify(operatorReconnect.error)}`,
+          ).toBe(true);
+          expect(operatorReconnect.payload?.type).toBe("hello-ok");
 
-      expect((await rpcReq(operatorWs, "health")).ok).toBe(true);
-      const nodes = await rpcReq<{
-        nodes?: Array<{ connected?: boolean; nodeId?: string }>;
-      }>(operatorWs, "node.list", {});
-      expect(nodes.ok).toBe(true);
-      expect(nodes.payload?.nodes).toContainEqual(
-        expect.objectContaining({
-          connected: true,
-          nodeId: identity.deviceId,
-        }),
-      );
+          expect((await rpcReq(operatorWs, "health")).ok).toBe(true);
+          const nodes = await rpcReq<{
+            nodes?: Array<{ connected?: boolean; nodeId?: string }>;
+          }>(operatorWs, "node.list", {});
+          expect(nodes.ok).toBe(true);
+          expect(nodes.payload?.nodes).toContainEqual(
+            expect.objectContaining({
+              connected: true,
+              nodeId: identity.deviceId,
+            }),
+          );
+        } finally {
+          await Promise.all([closeWs(operatorWs), closeWs(nodeWs)]);
+        }
+      };
+
+      // iPhone and Android normal stored-token reconnects use auth.token; Watch/direct
+      // and trusted retry paths use auth.deviceToken. Keep both mobile contracts covered.
+      await reconnectRoles("normal stored-token fallback", "token");
+      await reconnectRoles("explicit device-token path", "deviceToken");
 
       const pairingAfterReconnect = await listDevicePairing();
       expect(
@@ -173,8 +204,6 @@ export function registerControlUiMobileReconnectSuite(): void {
       expect(pairedAfterReconnect?.tokens?.operator?.token).toBe(operatorToken);
     } finally {
       unauthenticatedWs?.close();
-      operatorWs?.close();
-      nodeWs?.close();
       bootstrapWs?.close();
       await restartedServer?.close();
       await bootstrapServer?.close();
