@@ -84,6 +84,7 @@ export function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     skillCardErrors: {},
     clawhubQuery: "",
     clawhubResults: null,
+    clawhubIconUrls: {},
     clawhubSearchLoading: false,
     clawhubSearchError: null,
     clawhubDetail: null,

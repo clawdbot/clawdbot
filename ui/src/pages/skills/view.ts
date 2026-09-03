@@ -86,6 +86,7 @@ type SkillsProps = {
   skillCardErrors: Record<string, string>;
   clawhubQuery: string;
   clawhubResults: ClawHubSearchResult[] | null;
+  clawhubIconUrls: Record<string, string>;
   clawhubSearchLoading: boolean;
   clawhubSearchError: string | null;
   clawhubDetail: ClawHubSkillDetail | null;
@@ -443,7 +444,7 @@ function renderClawHubResults(props: SkillsProps) {
   }
   return html`
     ${results.map((r) => {
-      const iconUrl = safeExternalHref(r.icon ?? undefined);
+      const iconUrl = props.clawhubIconUrls[r.icon ?? ""];
       // Same slug can appear once per publisher, so the reference is the only thing that tells
       // otherwise identical rows apart — and it is what install sends back.
       const ref = clawHubSkillRef(r);
@@ -501,9 +502,7 @@ function renderClawHubResults(props: SkillsProps) {
 
 function renderClawHubDetailDialog(props: SkillsProps) {
   const detail = props.clawhubDetail;
-  const skillIconUrl = safeExternalHref(detail?.skill?.icon ?? undefined);
-  const profileImageUrl = skillIconUrl ? null : safeExternalHref(detail?.owner?.image ?? undefined);
-  const detailImageUrl = skillIconUrl ?? profileImageUrl;
+  const detailImageUrl = props.clawhubIconUrls[detail?.skill?.icon ?? ""];
 
   return html`
     <openclaw-modal-dialog
@@ -520,9 +519,7 @@ function renderClawHubDetailDialog(props: SkillsProps) {
           <div class="clawhub-skill-detail__identity">
             ${detailImageUrl
               ? html`<img
-                  class="clawhub-skill-icon clawhub-skill-icon--detail ${profileImageUrl
-                    ? "clawhub-skill-icon--profile"
-                    : ""}"
+                  class="clawhub-skill-icon clawhub-skill-icon--detail"
                   src=${detailImageUrl}
                   alt=""
                 />`

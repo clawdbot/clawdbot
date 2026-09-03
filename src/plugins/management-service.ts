@@ -19,6 +19,7 @@ import { resolveIsNixMode } from "../config/paths.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { resolveClawHubImageUrl } from "../infra/clawhub-client.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { buildNpmResolutionFields, type NpmSpecResolution } from "../infra/install-source-utils.js";
@@ -862,6 +863,24 @@ export function resolveManagedSetupCatalogIconUrl(params: {
     return undefined;
   }
   const env = params.env ?? process.env;
+  const registryBaseUrl =
+    normalizeOptionalString(env.OPENCLAW_CLAWHUB_URL) ??
+    normalizeOptionalString(env.CLAWHUB_URL) ??
+    "https://clawhub.ai";
+  const registryUrl = URL.parse(registryBaseUrl);
+  // Skill icons are registry-owned, not caller-owned; pin the target before
+  // handing it to the authenticated proxy so it cannot become an SSRF relay.
+  if (
+    registryUrl &&
+    registryUrl.protocol === "https:" &&
+    !registryUrl.username &&
+    !registryUrl.password &&
+    !registryUrl.search &&
+    !registryUrl.hash &&
+    resolveClawHubImageUrl(requested, registryBaseUrl) === requested
+  ) {
+    return requested;
+  }
   const allowedUrls = [
     ...resolveManifestProviderAuthChoices({
       config: params.config,

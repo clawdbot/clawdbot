@@ -96,7 +96,6 @@ async function loadCatalogIcon(params: {
   cacheScope: string;
   iconUrl: string;
   maxBytes?: number;
-  requireHttps?: boolean;
   retainFailureForMs?: number;
   limitConcurrency?: boolean;
 }): Promise<HttpImageRepresentation | null> {
@@ -136,7 +135,7 @@ async function loadCatalogIcon(params: {
         url: parsed.href,
         maxBytes: params.maxBytes ?? PLUGIN_ICON_MAX_BYTES,
         maxRedirects: PLUGIN_ICON_MAX_REDIRECTS,
-        requireHttps: params.requireHttps,
+        requireHttps: true,
         timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
         responseHeaderTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
         readIdleTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
@@ -287,7 +286,6 @@ export async function handlePluginIconHttpRequest(
     ...(faviconHostname
       ? {
           maxBytes: LINK_FAVICON_MAX_BYTES,
-          requireHttps: true,
           retainFailureForMs: LINK_FAVICON_NEGATIVE_CACHE_TTL_MS,
           limitConcurrency: true,
         }

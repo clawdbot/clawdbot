@@ -82,13 +82,15 @@ export function resolveClawHubImageUrl(value: string | null | undefined, baseUrl
   try {
     const registryUrl = new URL(`${normalizeBaseUrl(baseUrl)}/`);
     const url = new URL(normalized, registryUrl);
+    const registryPathPrefix = registryUrl.pathname.replace(/\/+$/u, "");
     if (
       url.origin !== registryUrl.origin ||
       url.username ||
       url.password ||
       url.search ||
       url.hash ||
-      !/^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname)
+      !url.pathname.startsWith(`${registryPathPrefix}/`) ||
+      !/^\/api\/v1\/skill-icons\/[a-f\d]{64}$/u.test(url.pathname.slice(registryPathPrefix.length))
     ) {
       return undefined;
     }

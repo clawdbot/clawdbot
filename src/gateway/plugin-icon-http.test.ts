@@ -386,6 +386,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       url: "https://cdn.example.test/plugin.svg",
       maxBytes: PLUGIN_ICON_MAX_BYTES,
       maxRedirects: PLUGIN_ICON_MAX_REDIRECTS,
+      requireHttps: true,
       timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
       responseHeaderTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
       readIdleTimeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
@@ -406,7 +407,7 @@ describe("Control UI plugin and catalog icon routes", () => {
     });
   });
 
-  it("resolves encoded catalog URLs through the server-owned allowlist", async () => {
+  it("keeps encoded catalog URLs on HTTPS across redirects", async () => {
     const iconUrl = CATALOG_ICON_URL;
     const response = await request(`/__openclaw__/catalog-icon/${encodeURIComponent(iconUrl)}`);
 
@@ -416,7 +417,7 @@ describe("Control UI plugin and catalog icon routes", () => {
       iconUrl,
     });
     expect(mocks.readRemoteMediaBuffer).toHaveBeenCalledWith(
-      expect.objectContaining({ url: iconUrl }),
+      expect.objectContaining({ requireHttps: true, url: iconUrl }),
     );
   });
 
