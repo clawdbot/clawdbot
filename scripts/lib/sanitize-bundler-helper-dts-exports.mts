@@ -131,7 +131,7 @@ function scanDts(sourceText: string, fileName: string): DtsSanitization {
       continue;
     }
     const exportClause = statement.exportClause;
-    if (!ts.isNamedExports(exportClause)) {
+    if (!exportClause || !ts.isNamedExports(exportClause)) {
       continue;
     }
     for (const element of exportClause.elements) {
