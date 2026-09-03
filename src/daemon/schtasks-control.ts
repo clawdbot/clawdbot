@@ -116,17 +116,20 @@ async function shouldFallbackScheduledTaskLaunch(params: {
     signature: string;
   }> => {
     const runtime = await readScheduledTaskRuntime(params.env).catch(() => null);
-    // `readScheduledTaskRuntime` reports `running` with the owning pid when raw Task
-    // Scheduler state is not running but a gateway owns the managed port. That pid is
-    // launch progress only when it appeared after `/Run`; a pre-existing foreground
-    // gateway must fall through to the raw last-run-result classification below.
-    if (
-      runtime?.status === "running" &&
-      !(runtime.pid !== undefined && params.preLaunchGatewayPids.has(runtime.pid))
-    ) {
+    // A listener-backed owner promotes `status` to `running` while the raw state stays
+    // stopped; only an owner that appeared after `/Run` is launch progress. Without the
+    // demotion a pre-existing gateway masks a task that never started as activity.
+    const promotedByPreLaunchOwner =
+      runtime !== null &&
+      runtime.status === "running" &&
+      runtime.state !== "Running" &&
+      runtime.pid !== undefined &&
+      params.preLaunchGatewayPids.has(runtime.pid);
+    const status = promotedByPreLaunchOwner ? "stopped" : runtime?.status;
+    if (status === "running") {
       return { state: "running", signature: runtimeSignature(runtime) };
     }
-    if (runtime?.status !== "stopped") {
+    if (runtime === null || status !== "stopped") {
       return { state: "other", signature: runtimeSignature(runtime) };
     }
     // SCHED_S_TASK_HAS_NOT_RUN is history, and only a stopped task is a fallback candidate.

@@ -1825,9 +1825,9 @@ describe("Windows startup fallback", () => {
       });
       addAcceptedRunNeverStartsResponses();
 
-      await installGatewayScheduledTask(env);
+      await expect(installGatewayScheduledTask(env)).rejects.toThrow("refusing a direct fallback");
 
-      expectStartupFallbackSpawn();
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -1852,9 +1852,9 @@ describe("Windows startup fallback", () => {
       );
       addAcceptedRunNeverStartsResponses();
 
-      await installGatewayScheduledTask(env);
+      await expect(installGatewayScheduledTask(env)).rejects.toThrow("refusing a direct fallback");
 
-      expectStartupFallbackSpawn();
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
@@ -1880,20 +1880,22 @@ describe("Windows startup fallback", () => {
       );
       addAcceptedRunNeverStartsResponses();
 
-      await installScheduledTask({
-        env,
-        stdout: new PassThrough(),
-        programArguments: [
-          "C:\\Program Files\\nodejs\\node.exe",
-          "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
-          "gateway",
-          "--port",
-          "18789",
-        ],
-        environment: { OPENCLAW_GATEWAY_PORT: "18789" },
-      });
+      await expect(
+        installScheduledTask({
+          env,
+          stdout: new PassThrough(),
+          programArguments: [
+            "C:\\Program Files\\nodejs\\node.exe",
+            "C:\\Users\\steipete\\AppData\\Roaming\\npm\\node_modules\\openclaw\\dist\\index.js",
+            "gateway",
+            "--port",
+            "18789",
+          ],
+          environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+        }),
+      ).rejects.toThrow("refusing a direct fallback");
 
-      expectStartupFallbackSpawn();
+      expect(spawn).not.toHaveBeenCalled();
     });
   });
 
