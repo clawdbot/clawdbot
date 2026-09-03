@@ -1,13 +1,18 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { resolveStateDir } from "../../config/paths.js";
+import { resolveAgentDir } from "../../agents/agent-scope-config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { logWarn } from "../../logger.js";
 
 const BACKUP_REL_DIR = path.join("skill-workshop", "collection-backups");
 
-export function resolveSkillCollectionBackupRoot(env?: NodeJS.ProcessEnv): string {
-  return path.join(resolveStateDir(env), BACKUP_REL_DIR);
+export function resolveSkillCollectionBackupRoot(
+  config: OpenClawConfig,
+  agentId: string,
+  env?: NodeJS.ProcessEnv,
+): string {
+  return path.join(resolveAgentDir(config, agentId, env), BACKUP_REL_DIR);
 }
 
 export async function pruneOlderSkillCollectionBackups(

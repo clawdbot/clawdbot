@@ -362,6 +362,73 @@ function staleReleasedWorkshopClaims(db: DatabaseSync): void {
   }
 }
 
+function migrateSkillWorkshopCollectionReviewOwnership(db: DatabaseSync): void {
+  if (!tableExists(db, "skill_workshop_proposals")) {
+    db.exec(`
+      CREATE TABLE skill_workshop_collection_reviews_v16 (
+        review_id TEXT NOT NULL PRIMARY KEY,
+        owner_agent_id TEXT NOT NULL,
+        backup_id TEXT NOT NULL,
+        create_time INTEGER NOT NULL,
+        kept_names_json TEXT NOT NULL,
+        written_names_json TEXT NOT NULL,
+        dropped_json TEXT NOT NULL
+      ) STRICT;
+      DROP TABLE skill_workshop_collection_reviews;
+      ALTER TABLE skill_workshop_collection_reviews_v16
+        RENAME TO skill_workshop_collection_reviews;
+      CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
+        ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
+    `);
+    return;
+  }
+  db.exec(`
+    CREATE TABLE skill_workshop_collection_reviews_v16 (
+      review_id TEXT NOT NULL PRIMARY KEY,
+      owner_agent_id TEXT NOT NULL,
+      backup_id TEXT NOT NULL,
+      create_time INTEGER NOT NULL,
+      kept_names_json TEXT NOT NULL,
+      written_names_json TEXT NOT NULL,
+      dropped_json TEXT NOT NULL
+    ) STRICT;
+    INSERT INTO skill_workshop_collection_reviews_v16 (
+      review_id, owner_agent_id, backup_id, create_time,
+      kept_names_json, written_names_json, dropped_json
+    )
+    SELECT review.review_id,
+           (
+             SELECT MIN(proposal.owner_agent_id)
+             FROM skill_workshop_proposals AS proposal
+             WHERE proposal.workspace_dir = review.workspace_dir
+               AND proposal.owner_agent_id IS NOT NULL
+               AND (
+                 SELECT COUNT(DISTINCT owner_agent_id)
+                 FROM skill_workshop_proposals AS matching
+                 WHERE matching.workspace_dir = review.workspace_dir
+                   AND matching.owner_agent_id IS NOT NULL
+               ) = 1
+           ),
+           review.backup_id,
+           review.create_time,
+           review.kept_names_json,
+           review.written_names_json,
+           review.dropped_json
+    FROM skill_workshop_collection_reviews AS review
+    WHERE (
+      SELECT COUNT(DISTINCT proposal.owner_agent_id)
+      FROM skill_workshop_proposals AS proposal
+      WHERE proposal.workspace_dir = review.workspace_dir
+        AND proposal.owner_agent_id IS NOT NULL
+    ) = 1;
+    DROP TABLE skill_workshop_collection_reviews;
+    ALTER TABLE skill_workshop_collection_reviews_v16
+      RENAME TO skill_workshop_collection_reviews;
+    CREATE INDEX idx_skill_workshop_collection_reviews_owner_time
+      ON skill_workshop_collection_reviews(owner_agent_id, create_time DESC, review_id);
+  `);
+}
+
 /** Remove row provenance after the Workshop directory becomes the ownership boundary. */
 function migrateSkillWorkshopDirectoryOwnership(
   db: DatabaseSync,
@@ -384,12 +451,11 @@ function migrateSkillWorkshopDirectoryOwnership(
   if (proposalColumns.includes("claim_released_time")) {
     staleReleasedWorkshopClaims(db);
   }
-  db.exec("DROP INDEX IF EXISTS idx_skill_workshop_collection_reviews_workspace_time;");
+  if (reviewHasWorkspace) {
+    migrateSkillWorkshopCollectionReviewOwnership(db);
+  }
   for (const column of proposalColumns) {
     db.exec(`ALTER TABLE skill_workshop_proposals DROP COLUMN ${column};`);
-  }
-  if (reviewHasWorkspace) {
-    db.exec("ALTER TABLE skill_workshop_collection_reviews DROP COLUMN workspace_dir;");
   }
   return true;
 }
@@ -410,6 +476,6 @@ export const versionedStateMigrations: ReadonlyArray<{
   },
   {
     migrate: migrateSkillWorkshopDirectoryOwnership,
-    applied: "Moved Skill Workshop ownership to its global directory (v16)",
+    applied: "Moved Skill Workshop ownership to per-agent directories (v16)",
   },
 ];

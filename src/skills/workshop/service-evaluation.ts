@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
   PluginHookSkillEvaluationFinding,
   PluginHookSkillProposalEvaluateResult,
@@ -52,11 +53,14 @@ export async function evaluateSkillProposal(
 ): Promise<SkillProposalEvaluateResult> {
   const correlationId = normalizeSkillProposalCorrelationId(input.correlationId);
   const shouldRunEvaluators = hasSkillProposalEvaluators();
-  const initial = await readRequiredProposal(input.proposalId, input.env, input.agentId);
+  const initial = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+    config: input.config,
+  });
   const snapshot = await withSkillProposalTargetLock(
     initial.record,
     async () => {
       const read = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        config: input.config,
         reconcile: false,
       });
       if (read.record.status !== "pending") {
@@ -87,7 +91,7 @@ export async function evaluateSkillProposal(
           : undefined,
       };
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
   const { read, bundles } = snapshot;
   const startedAt = new Date().toISOString();
@@ -151,6 +155,7 @@ export async function evaluateSkillProposal(
     read.record,
     async () => {
       const current = await readRequiredProposal(input.proposalId, input.env, input.agentId, {
+        config: input.config,
         reconcile: false,
       });
       if (
@@ -180,10 +185,10 @@ export async function evaluateSkillProposal(
         expectedRevisionHash: read.revisionHash,
         evaluation,
         event: eventInput,
-        store: storeOptions(input.env),
+        store: storeOptions(input.env, input.agentId, input.config),
       });
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
   await dispatchSkillProposalChanged({
     event: stored.event,
@@ -350,6 +355,14 @@ function boundedOptional(value: string | undefined, maxLength: number): string |
   return normalized === undefined ? undefined : truncateUtf16Safe(normalized, maxLength);
 }
 
-function storeOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
+function storeOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId?: string,
+  config?: OpenClawConfig,
+) {
+  return {
+    ...(env ? { env } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(config ? { config } : {}),
+  };
 }

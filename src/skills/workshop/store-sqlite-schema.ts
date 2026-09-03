@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawStateDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
@@ -20,6 +21,8 @@ export type SkillProposalRow = Selectable<SkillWorkshopDatabase["skill_workshop_
 export type SkillWorkshopStoreOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
+  agentId?: string;
+  config?: OpenClawConfig;
 };
 
 const SCHEMA_SQL = `
@@ -45,6 +48,7 @@ CREATE TABLE IF NOT EXISTS skill_workshop_proposals (
 
 CREATE TABLE IF NOT EXISTS skill_workshop_collection_reviews (
   review_id TEXT NOT NULL PRIMARY KEY,
+  owner_agent_id TEXT NOT NULL,
   backup_id TEXT NOT NULL,
   create_time INTEGER NOT NULL,
   kept_names_json TEXT NOT NULL,

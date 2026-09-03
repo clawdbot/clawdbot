@@ -70,6 +70,7 @@ export function resolveReusableWorkspaceSkillSnapshot(
       workspaceDir: watcherWorkspaceDir,
       ...(skillRoots ? { executionSkillsDir: skillRoots.executionSkillsDir } : {}),
       config: params.config,
+      agentId: params.agentId,
       ...(params.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
         : {}),

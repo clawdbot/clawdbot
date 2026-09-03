@@ -63,7 +63,7 @@ import {
 } from "./workspace-skill-read.js";
 
 /**
- * The Workshop's whole editable collection is the contents of its global directory.
+ * The Workshop's editable collection is the active agent's Workshop directory.
  */
 export function listWritableSkillCollection(
   options: WorkshopSkillReadOptions = {},
@@ -86,11 +86,20 @@ export async function reconcileSkillCollection(params: {
   env?: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
 }): Promise<SkillCollectionReconcileResult> {
-  const skillsRoot = resolveWorkshopSkillsDir(params.env);
+  if (!params.agentId) {
+    throw new Error("Skill Workshop collection review requires the active agent id.");
+  }
+  const config = params.config ?? {};
+  const agentId = params.agentId;
+  const skillsRoot = resolveWorkshopSkillsDir(config, agentId, params.env);
   const commit = await withSkillCollectionLock(
     async () => {
       params.assertCurrent?.();
-      const current = listWritableSkillCollection({ config: params.config, env: params.env });
+      const current = listWritableSkillCollection({
+        config,
+        agentId,
+        env: params.env,
+      });
       const currentByName = new Map(current.map((skill) => [skill.name, skill]));
       if (currentByName.size !== current.length) {
         throw new Error("Writable skill names must be unique before collection reconciliation.");
@@ -120,14 +129,14 @@ export async function reconcileSkillCollection(params: {
       );
       params.assertCurrent?.();
       if (plan.length === 0) {
-        const backupRoot = resolveSkillCollectionBackupRoot(params.env);
+        const backupRoot = resolveSkillCollectionBackupRoot(config, agentId, params.env);
         let backupId = await latestCommittedBackupId(backupRoot);
         if (!backupId) {
           const backup = await createCollectionBackup({
             skillsRoot,
             current,
             plan,
-            env: params.env,
+            backupRoot,
           });
           try {
             params.assertCurrent?.();
@@ -141,11 +150,7 @@ export async function reconcileSkillCollection(params: {
         }
         params.assertCurrent?.();
         const result: SkillCollectionReconcileResult = { backupId, ...outcome };
-        recordSkillCollectionReviewHistory(
-          Date.now(),
-          result,
-          params.env ? { env: params.env } : {},
-        );
+        recordSkillCollectionReviewHistory(agentId, Date.now(), result, { env: params.env });
         return {
           result,
           changes: [],
@@ -155,14 +160,14 @@ export async function reconcileSkillCollection(params: {
         skillsRoot,
         current,
         plan,
-        config: params.config,
+        config,
       });
       await assertResultCollectionBytes(current, plan, prepared, MAX_RECONCILED_SKILL_BYTES);
       const backup = await createCollectionBackup({
         skillsRoot,
         current,
         plan,
-        env: params.env,
+        backupRoot: resolveSkillCollectionBackupRoot(config, agentId, params.env),
       });
       const shouldDispatch = hasCommittedSkillChangeHooks();
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
@@ -238,14 +243,17 @@ export async function reconcileSkillCollection(params: {
       if (droppedSkills.length > 0) {
         clearSkillUsageForRemovedSkills(
           droppedSkills.map(({ name }) => currentByName.get(name)!.filePath),
-          params.env ? { env: params.env } : {},
+          { env: params.env },
         );
       }
       const result: SkillCollectionReconcileResult = {
         backupId: backup.manifest.id,
         ...outcome,
       };
-      recordSkillCollectionReviewHistory(Date.now(), result, params.env ? { env: params.env } : {});
+      recordSkillCollectionReviewHistory(agentId, Date.now(), result, {
+        env: params.env,
+        agentId,
+      });
       await pruneOlderSkillCollectionBackups(backup.backupRoot, backup.manifest.id);
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
@@ -271,7 +279,7 @@ export async function reconcileSkillCollection(params: {
         changes,
       };
     },
-    params.env ? { env: params.env } : {},
+    { env: params.env, agentId },
   );
   for (const change of commit.changes) {
     await dispatchCommittedSkillChangeBestEffort({
@@ -285,12 +293,18 @@ export async function reconcileSkillCollection(params: {
 
 export async function restoreLatestSkillCollectionBackup(params: {
   workspaceDir: string;
+  config: OpenClawConfig;
+  agentId: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<SkillCollectionRestoreResult> {
-  const skillsRoot = resolveWorkshopSkillsDir(params.env);
+  const skillsRoot = resolveWorkshopSkillsDir(params.config, params.agentId, params.env);
   const commit = await withSkillCollectionLock(
     async () => {
-      const backupRoot = resolveSkillCollectionBackupRoot(params.env);
+      const backupRoot = resolveSkillCollectionBackupRoot(
+        params.config,
+        params.agentId,
+        params.env,
+      );
       if (!(await pathExists(backupRoot))) {
         throw new Error("No skill collection backup is available.");
       }
@@ -388,7 +402,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
         changes,
       };
     },
-    params.env ? { env: params.env } : {},
+    { env: params.env, agentId: params.agentId },
   );
   for (const change of commit.changes) {
     await dispatchCommittedSkillChangeBestEffort({

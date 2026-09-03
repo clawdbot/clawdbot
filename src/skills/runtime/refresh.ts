@@ -109,6 +109,7 @@ const DEFAULT_SKILLS_WATCH_IGNORED: RegExp[] = [
 function resolveWatchTargets(
   workspaceDir: string,
   config: OpenClawConfig | undefined,
+  agentId: string | undefined,
   executionSkillsDir: string | undefined,
   watcherKey: string,
   pluginMetadataSnapshot: PluginMetadataSnapshot | undefined,
@@ -124,7 +125,12 @@ function resolveWatchTargets(
   if (executionSkillsDir) {
     baseRoots.push({ path: executionSkillsDir, source: "openclaw-workspace" });
   }
-  baseRoots.push({ path: resolveWorkshopSkillsDir(), source: "openclaw-workshop" });
+  if (config && agentId) {
+    baseRoots.push({
+      path: resolveWorkshopSkillsDir(config, agentId),
+      source: "openclaw-workshop",
+    });
+  }
   baseRoots.push({ path: path.join(CONFIG_DIR, "skills"), source: "openclaw-managed" });
   if (isDefaultStateDir()) {
     baseRoots.push({
@@ -679,15 +685,14 @@ export function ensureSkillsWatcher(params: {
   workspaceDir: string;
   executionSkillsDir?: string;
   config?: OpenClawConfig;
+  agentId?: string;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 }) {
   const workspaceDir = params.workspaceDir.trim();
   if (!workspaceDir) {
     return;
   }
-  const watcherKey = params.executionSkillsDir
-    ? JSON.stringify([workspaceDir, params.executionSkillsDir])
-    : workspaceDir;
+  const watcherKey = JSON.stringify([workspaceDir, params.executionSkillsDir, params.agentId]);
   workspaceWatchOwnerDirs.set(watcherKey, workspaceDir);
   const now = Date.now();
   const watchEnabled = params.config?.skills?.load?.watch !== false;
@@ -703,6 +708,7 @@ export function ensureSkillsWatcher(params: {
   const watchTargets = resolveWatchTargets(
     workspaceDir,
     params.config,
+    params.agentId,
     params.executionSkillsDir,
     watcherKey,
     params.pluginMetadataSnapshot,
@@ -756,3 +762,4 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
     resetSkillsRefreshForTest: () => closeSkillsWatchers(true),
   };
 }
+/* oxlint-disable max-lines -- Agent-specific watcher state stays with the refresh owner. */

@@ -354,12 +354,15 @@ const skillWorkshopToolPolicyCheck: HealthCheck = {
 const skillWorkshopRelocationCheck: HealthCheck = {
   id: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
   kind: "core",
-  description: "Skill Workshop files and proposals use the global Workshop directory.",
+  description: "Skill Workshop files and proposals use each agent's Workshop directory.",
   source: "doctor",
-  async detect() {
+  async detect(ctx) {
     const { inspectLegacySkillWorkshopMigration } =
       await import("../commands/doctor-skill-workshop-sqlite.js");
-    const inspection = await inspectLegacySkillWorkshopMigration(process.env);
+    const inspection = await inspectLegacySkillWorkshopMigration({
+      config: ctx.cfg,
+      env: process.env,
+    });
     if (inspection.externalProposalCount === 0 && inspection.legacyBackupRootCount === 0) {
       return [];
     }
@@ -367,7 +370,13 @@ const skillWorkshopRelocationCheck: HealthCheck = {
       {
         checkId: SKILL_WORKSHOP_RELOCATION_CHECK_ID,
         severity: "warning",
-        message: `Skill Workshop has ${inspection.externalProposalCount} proposal target${inspection.externalProposalCount === 1 ? "" : "s"} outside its global directory and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"}.`,
+        message: `Skill Workshop has ${inspection.externalProposalCount} proposal target${inspection.externalProposalCount === 1 ? "" : "s"} outside agent directories (${Object.entries(
+          inspection.externalProposalCountsByAgent,
+        )
+          .map(([agentId, count]) => `${agentId}: ${count}`)
+          .join(
+            ", ",
+          )}) and ${inspection.legacyBackupRootCount} legacy collection backup root${inspection.legacyBackupRootCount === 1 ? "" : "s"}.`,
         path: "skills.workshop",
         fixHint:
           "Run `openclaw doctor --fix` to relocate Workshop-owned skills and retire legacy backup roots.",

@@ -9,7 +9,6 @@ import type {
   SkillCollectionPlanEntry,
   WritableSkillCollectionEntry,
 } from "./collection-contracts.js";
-import { resolveSkillCollectionBackupRoot } from "./collection-paths.js";
 import { readSkillProposalTargetTreeSha256 } from "./proposal-bundle.js";
 
 const BACKUP_SCHEMA = "openclaw.skill-collection-backup.v2";
@@ -26,14 +25,14 @@ export async function createCollectionBackup(params: {
   skillsRoot: string;
   current: readonly WritableSkillCollectionEntry[];
   plan: readonly SkillCollectionPlanEntry[];
-  env?: NodeJS.ProcessEnv;
+  backupRoot: string;
 }): Promise<{
   backupDir: string;
   committedBackupDir: string;
   backupRoot: string;
   manifest: CollectionBackupManifest;
 }> {
-  const backupRoot = resolveSkillCollectionBackupRoot(params.env);
+  const backupRoot = params.backupRoot;
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
@@ -158,7 +157,7 @@ export async function readCollectionBackupManifest(params: {
   };
 }
 
-/** Manifest entries are normalized relative paths to skill directories under the Workshop root. */
+/** Manifest entries are normalized relative paths to skill directories under one agent's Workshop root. */
 function readBackupSkillDirs(value: unknown, label: string, skillsRoot: string): string[] {
   if (
     !Array.isArray(value) ||

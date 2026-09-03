@@ -24,6 +24,7 @@ import type { SkillProposalManifest, SkillProposalReadResult } from "./types.js"
 type SkillProposalScopeOptions = {
   agentId?: string;
   env?: NodeJS.ProcessEnv;
+  config?: OpenClawConfig;
 };
 
 type RequiredProposalReadOptions = {
@@ -31,8 +32,19 @@ type RequiredProposalReadOptions = {
   reconcile?: boolean;
 };
 
-function storeOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
+function storeOptions(env?: NodeJS.ProcessEnv, agentId?: string, config?: OpenClawConfig) {
+  return {
+    ...(env ? { env } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(config ? { config } : {}),
+  };
+}
+
+function workshopSkillsDir(options: SkillProposalScopeOptions): string {
+  if (!options.agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return resolveWorkshopSkillsDir(options.config ?? {}, options.agentId, options.env);
 }
 
 function proposalScope(options: SkillProposalScopeOptions) {
@@ -42,11 +54,11 @@ function proposalScope(options: SkillProposalScopeOptions) {
 export async function listSkillProposals(
   options: SkillProposalScopeOptions = {},
 ): Promise<SkillProposalManifest> {
-  const store = storeOptions(options.env);
+  const store = storeOptions(options.env, options.agentId, options.config);
   const scope = proposalScope(options);
   const manifest = await readSkillProposalManifest(store, scope);
   const missingDrafts = new Set<string>();
-  // Every reconciliation takes the same collection lease. Serialize them so a
+  // Every reconciliation takes the agent's collection lease. Serialize them so a
   // large manifest cannot make its own waiters exhaust the bounded lease wait.
   for (const proposal of manifest.proposals) {
     if (proposal.kind !== "create" || proposal.status !== "pending") {
@@ -79,7 +91,7 @@ export async function listSkillProposals(
 export async function getSkillProposalRunProgress(
   options: SkillProposalScopeOptions & { runId: string },
 ): Promise<{ mutationCount: number; proposalIds: string[] }> {
-  const store = storeOptions(options.env);
+  const store = storeOptions(options.env, options.agentId, options.config);
   const manifest = await readSkillProposalManifest(store, options);
   const ids: string[] = [];
   let mutationCount = 0;
@@ -102,7 +114,7 @@ export async function inspectSkillProposal(
 ): Promise<SkillProposalReadResult | null> {
   const read = await readSkillProposal(
     proposalId,
-    storeOptions(options.env),
+    storeOptions(options.env, options.agentId, options.config),
     proposalScope(options),
   );
   if (!read) {
@@ -113,6 +125,7 @@ export async function inspectSkillProposal(
 
 export async function resolvePendingSkillProposal(input: {
   agentId?: string;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId?: string;
   name?: string;
@@ -121,8 +134,10 @@ export async function resolvePendingSkillProposal(input: {
   const proposalId = normalizeOptionalString(input.proposalId);
   if (proposalId) {
     const direct = await reconcilePendingCreateProposal(
-      await readRequiredProposal(proposalId, input.env, input.agentId),
-      { agentId: input.agentId, env: input.env },
+      await readRequiredProposal(proposalId, input.env, input.agentId, {
+        config: input.config,
+      }),
+      { agentId: input.agentId, env: input.env, config: input.config },
     );
     if (direct.record.status !== "pending") {
       throw new Error(
@@ -138,6 +153,7 @@ export async function resolvePendingSkillProposal(input: {
   const manifest = await listSkillProposals({
     agentId: input.agentId,
     env: input.env,
+    config: input.config,
   });
   const matches = manifest.proposals.filter(
     (proposal) => proposal.status === "pending" && proposalMatchesName(proposal, name),
@@ -157,8 +173,9 @@ export async function resolvePendingSkillProposal(input: {
       expectDefined(matches[0], "matches capture group 0").id,
       input.env,
       input.agentId,
+      { config: input.config },
     ),
-    { agentId: input.agentId, env: input.env },
+    { agentId: input.agentId, env: input.env, config: input.config },
   );
   if (matched.record.status !== "pending") {
     throw new Error(
@@ -176,7 +193,7 @@ export async function readRequiredProposal(
 ): Promise<SkillProposalReadResult> {
   const read = await readSkillProposal(
     proposalId,
-    storeOptions(env),
+    storeOptions(env, agentId, readOptions.config),
     agentId ? { agentId } : {},
     readOptions,
   );
@@ -193,8 +210,8 @@ async function reconcilePendingCreateProposal(
   if (read.record.kind !== "create" || read.record.status !== "pending") {
     return read;
   }
-  const workshopDir = resolveWorkshopSkillsDir(options.env);
-  const store = storeOptions(options.env);
+  const workshopDir = workshopSkillsDir(options);
+  const store = storeOptions(options.env, options.agentId, options.config);
   const scope = proposalScope(options);
   const reconciled = await withSkillProposalCommitLock(
     read.record,
@@ -217,6 +234,7 @@ async function reconcilePendingCreateProposal(
         input: {
           workspaceDir: workshopDir,
           ...(options.agentId ? { agentId: options.agentId } : {}),
+          ...(options.config ? { config: options.config } : {}),
           eventActor: { type: "system" },
           ...(options.env ? { env: options.env } : {}),
         },

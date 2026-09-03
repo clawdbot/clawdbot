@@ -11,7 +11,6 @@ import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
-import { resolveSkillCollectionBackupRoot } from "../skills/workshop/collection-paths.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
 import { parseSkillProposalRow } from "../skills/workshop/store-sqlite-record.js";
 import { openSkillWorkshopStore } from "../skills/workshop/store-sqlite-schema.js";
@@ -62,6 +61,7 @@ type WorkshopRelocationResult = {
 
 export type LegacyWorkshopMigrationInspection = {
   externalProposalCount: number;
+  externalProposalCountsByAgent: Record<string, number>;
   legacyBackupRootCount: number;
 };
 
@@ -132,7 +132,7 @@ async function moveWorkshopSkillDirectory(source: string, destination: string): 
 async function listLegacyCollectionBackupRoots(
   env: NodeJS.ProcessEnv,
 ): Promise<{ backupRoot: string; names: string[] }> {
-  const backupRoot = resolveSkillCollectionBackupRoot(env);
+  const backupRoot = path.join(resolveStateDir(env), WORKSHOP_DIR, "collection-backups");
   if (!(await pathExists(backupRoot))) {
     return { backupRoot, names: [] };
   }
@@ -142,11 +142,13 @@ async function listLegacyCollectionBackupRoots(
   return { backupRoot, names };
 }
 
-export async function inspectLegacySkillWorkshopMigration(
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<LegacyWorkshopMigrationInspection> {
+export async function inspectLegacySkillWorkshopMigration(params: {
+  config: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<LegacyWorkshopMigrationInspection> {
+  const env = params.env ?? process.env;
   const database = await openExistingOpenClawStateDatabaseReadOnly({ env });
-  let records: SkillProposalRecord[] = [];
+  let records: LegacyWorkshopProposal[] = [];
   try {
     if (database && tableExists(database.db, "skill_workshop_proposals")) {
       const kysely = getNodeSqliteKysely<Pick<OpenClawStateDatabase, "skill_workshop_proposals">>(
@@ -154,12 +156,12 @@ export async function inspectLegacySkillWorkshopMigration(
       );
       const rows = executeSqliteQuerySync(
         database.db,
-        kysely.selectFrom("skill_workshop_proposals").select("record_json"),
+        kysely.selectFrom("skill_workshop_proposals").select(["record_json", "owner_agent_id"]),
       ).rows;
       records = rows.flatMap((row) => {
         try {
           const parsed = validateSkillProposalRecord(JSON.parse(row.record_json) as unknown);
-          return parsed.ok ? [parsed.value] : [];
+          return parsed.ok ? [{ record: parsed.value, ownerAgentId: row.owner_agent_id }] : [];
         } catch {
           return [];
         }
@@ -168,42 +170,88 @@ export async function inspectLegacySkillWorkshopMigration(
   } finally {
     database?.walMaintenance.close();
   }
-  const plan = await planWorkshopRelocation(records, env);
+  const plan = await planWorkshopRelocation(records, params.config, env);
   const backups = await listLegacyCollectionBackupRoots(env);
   return {
-    externalProposalCount:
-      plan.updates.length + plan.moves.reduce((count, move) => count + move.updates.length, 0),
+    externalProposalCount: plan.externalProposalCount,
+    externalProposalCountsByAgent: plan.externalProposalCountsByAgent,
     legacyBackupRootCount: backups.names.length,
   };
 }
 
+type LegacyWorkshopProposal = {
+  record: SkillProposalRecord;
+  ownerAgentId: string | null;
+};
+
+type WorkshopProposalUpdate = {
+  record: SkillProposalRecord;
+  ownerAgentId?: string;
+};
+
 async function planWorkshopRelocation(
-  records: SkillProposalRecord[],
+  records: LegacyWorkshopProposal[],
+  config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<{
   moves: Array<{
     source: string;
     destination: string;
     adopted: boolean;
-    updates: SkillProposalRecord[];
+    updates: WorkshopProposalUpdate[];
   }>;
-  updates: SkillProposalRecord[];
+  updates: WorkshopProposalUpdate[];
+  externalProposalCount: number;
+  externalProposalCountsByAgent: Record<string, number>;
 }> {
-  const workshopRoot = resolveWorkshopSkillsDir(env);
-  const external = records.filter(
-    (record) => !isInsideWorkshopRoot(workshopRoot, record.target.skillDir),
-  );
-  const movesBySource = new Map<string, { destination: string; adopted: boolean }>();
+  const external = records.filter((entry) => {
+    if (entry.record.status !== "pending" && entry.record.status !== "applied") {
+      return false;
+    }
+    if (!entry.ownerAgentId) {
+      return true;
+    }
+    return !isInsideWorkshopRoot(
+      resolveWorkshopSkillsDir(config, entry.ownerAgentId, env),
+      entry.record.target.skillDir,
+    );
+  });
+  const ownersByProposal = new Map<string, string>();
+  const movesByKey = new Map<string, { source: string; destination: string; adopted: boolean }>();
+  const moveKeysByProposal = new Map<string, string>();
   const staleReasons = new Map<string, string>();
-  for (const record of external) {
+  for (const entry of external) {
+    const record = entry.record;
+    const ownerAgentId = inferOwnerAgentId({
+      config,
+      env,
+      record,
+      workspaceDir: proposalWorkspace(record),
+      rowOwnerAgentId: entry.ownerAgentId,
+    });
+    if (!ownerAgentId) {
+      staleReasons.set(
+        record.id,
+        "Skill Workshop could not identify one owning agent; the legacy path stays in place and the proposal is stale.",
+      );
+      continue;
+    }
+    ownersByProposal.set(record.id, ownerAgentId);
     if (record.kind !== "create" || record.status !== "applied") {
       continue;
     }
     const source = path.resolve(record.target.skillDir);
-    if (movesBySource.has(source)) {
+    const target = resolveSkillProposalTarget({
+      skillName: record.target.skillKey,
+      config,
+      agentId: ownerAgentId,
+      env,
+    });
+    const moveKey = `${source}\0${target.skillDir}`;
+    if (movesByKey.has(moveKey)) {
+      moveKeysByProposal.set(record.id, moveKey);
       continue;
     }
-    const target = resolveSkillProposalTarget({ skillName: record.target.skillKey, env });
     let sourceStat: Awaited<ReturnType<typeof fs.lstat>> | undefined;
     try {
       sourceStat = await fs.lstat(source);
@@ -222,7 +270,13 @@ async function planWorkshopRelocation(
     if (!sourceStat) {
       // The move is durable before metadata persistence; on rerun, adopt the existing destination.
       if (await pathExists(target.skillFile)) {
-        movesBySource.set(source, { destination: target.skillDir, adopted: true });
+        movesByKey.set(moveKey, { source, destination: target.skillDir, adopted: true });
+        moveKeysByProposal.set(record.id, moveKey);
+      } else {
+        staleReasons.set(
+          record.id,
+          "Skill Workshop could not find the applied legacy skill; the proposal is stale.",
+        );
       }
       continue;
     }
@@ -233,13 +287,14 @@ async function planWorkshopRelocation(
       );
       continue;
     }
-    movesBySource.set(source, { destination: target.skillDir, adopted: false });
+    movesByKey.set(moveKey, { source, destination: target.skillDir, adopted: false });
+    moveKeysByProposal.set(record.id, moveKey);
   }
 
   const movesByDestination = new Map<string, string[]>();
-  for (const [source, move] of movesBySource) {
+  for (const move of movesByKey.values()) {
     const sources = movesByDestination.get(move.destination) ?? [];
-    sources.push(source);
+    sources.push(move.source);
     movesByDestination.set(move.destination, sources);
   }
   for (const [destination, sources] of movesByDestination) {
@@ -247,68 +302,106 @@ async function planWorkshopRelocation(
       continue;
     }
     const conflictReason = `Skill Workshop relocation conflict: sources ${sources.toSorted().join(", ")} map to the same destination ${destination}.`;
-    for (const record of external) {
-      if (sources.includes(path.resolve(record.target.skillDir))) {
-        staleReasons.set(record.id, conflictReason);
+    for (const entry of external) {
+      if (sources.includes(path.resolve(entry.record.target.skillDir))) {
+        staleReasons.set(entry.record.id, conflictReason);
       }
     }
-    for (const source of sources) {
-      movesBySource.delete(source);
+    for (const [moveKey, move] of movesByKey) {
+      if (sources.includes(move.source)) {
+        movesByKey.delete(moveKey);
+      }
     }
   }
 
-  const updates: SkillProposalRecord[] = [];
-  const updatesBySource = new Map<string, SkillProposalRecord[]>();
-  for (const record of external) {
-    const source = path.resolve(record.target.skillDir);
-    const move = movesBySource.get(source);
+  const updates: WorkshopProposalUpdate[] = [];
+  const updatesByMove = new Map<string, WorkshopProposalUpdate[]>();
+  for (const entry of external) {
+    const record = entry.record;
+    const moveKey = moveKeysByProposal.get(record.id);
+    const move = moveKey ? movesByKey.get(moveKey) : undefined;
     const conflictReason = staleReasons.get(record.id);
-    if (move) {
-      const sourceUpdates = updatesBySource.get(source) ?? [];
-      sourceUpdates.push(
-        retargetWorkshopProposal(record, {
+    if (move && moveKey) {
+      const moveUpdates = updatesByMove.get(moveKey) ?? [];
+      moveUpdates.push({
+        record: retargetWorkshopProposal(record, {
           skillKey: record.target.skillKey,
           skillDir: move.destination,
           skillFile: path.join(move.destination, "SKILL.md"),
         }),
-      );
-      updatesBySource.set(source, sourceUpdates);
+        ...(ownersByProposal.get(record.id)
+          ? { ownerAgentId: ownersByProposal.get(record.id) }
+          : {}),
+      });
+      updatesByMove.set(moveKey, moveUpdates);
       continue;
     }
     if (conflictReason) {
-      updates.push(staleWorkshopProposal(record, conflictReason));
+      updates.push({
+        record: staleWorkshopProposal(record, conflictReason),
+        ...(ownersByProposal.get(record.id)
+          ? { ownerAgentId: ownersByProposal.get(record.id) }
+          : {}),
+      });
       continue;
     }
-    if (record.status === "pending" && record.kind === "create") {
-      updates.push(
-        retargetWorkshopProposal(
+    const ownerAgentId = ownersByProposal.get(record.id);
+    if (record.status === "pending" && record.kind === "create" && ownerAgentId) {
+      updates.push({
+        record: retargetWorkshopProposal(
           record,
-          resolveSkillProposalTarget({ skillName: record.target.skillKey, env }),
+          resolveSkillProposalTarget({
+            skillName: record.target.skillKey,
+            config,
+            agentId: ownerAgentId,
+            env,
+          }),
         ),
-      );
+        ownerAgentId,
+      });
+      continue;
+    }
+    if (record.status === "applied" && record.kind === "create" && ownerAgentId) {
+      updates.push({
+        record: staleWorkshopProposal(
+          record,
+          "Skill Workshop could not find the applied legacy skill; the proposal is stale.",
+        ),
+        ownerAgentId,
+      });
       continue;
     }
     if (record.status === "pending" && record.kind === "update") {
-      updates.push(
-        staleWorkshopProposal(
+      updates.push({
+        record: staleWorkshopProposal(
           record,
           "Skill Workshop no longer edits skills outside its own directory.",
         ),
-      );
+        ...(ownerAgentId ? { ownerAgentId } : {}),
+      });
     }
   }
   return {
-    moves: [...movesBySource].map(([source, move]) => ({
-      source,
+    moves: [...movesByKey].map(([moveKey, move]) => ({
+      source: move.source,
       destination: move.destination,
       adopted: move.adopted,
-      updates: updatesBySource.get(source) ?? [],
+      updates: updatesByMove.get(moveKey) ?? [],
     })),
     updates,
+    externalProposalCount:
+      updates.length +
+      [...updatesByMove.values()].reduce((count, entries) => count + entries.length, 0),
+    externalProposalCountsByAgent: external.reduce<Record<string, number>>((counts, entry) => {
+      const ownerAgentId = ownersByProposal.get(entry.record.id) ?? "unknown";
+      counts[ownerAgentId] = (counts[ownerAgentId] ?? 0) + 1;
+      return counts;
+    }, {}),
   };
 }
 
 async function relocateLegacyWorkshopTargets(
+  config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): Promise<WorkshopRelocationResult> {
   const { database, kysely } = openSkillWorkshopStore({ env });
@@ -317,21 +410,25 @@ async function relocateLegacyWorkshopTargets(
     kysely.selectFrom("skill_workshop_proposals").selectAll(),
   ).rows.flatMap((row) => {
     const record = parseSkillProposalRow(row);
-    return record ? [record] : [];
+    return record ? [{ record, ownerAgentId: row.owner_agent_id }] : [];
   });
   let retargetedProposals = 0;
   let staleProposals = 0;
-  const persistUpdates = async (updates: SkillProposalRecord[]): Promise<void> => {
-    for (const record of updates) {
-      if (record.status === "stale") {
+  const persistUpdates = async (updates: WorkshopProposalUpdate[]): Promise<void> => {
+    for (const update of updates) {
+      if (update.record.status === "stale") {
         staleProposals += 1;
       } else {
         retargetedProposals += 1;
       }
-      await updateSkillProposalRecord({ record, store: { env } });
+      await updateSkillProposalRecord({
+        record: update.record,
+        ...(update.ownerAgentId ? { ownerAgentId: update.ownerAgentId } : {}),
+        store: { env },
+      });
     }
   };
-  const plan = await planWorkshopRelocation(records, env);
+  const plan = await planWorkshopRelocation(records, config, env);
   for (const move of plan.moves) {
     if (!move.adopted) {
       await moveWorkshopSkillDirectory(move.source, move.destination);
@@ -365,7 +462,11 @@ function inferOwnerAgentId(params: {
   env: NodeJS.ProcessEnv;
   record: SkillProposalRecord;
   workspaceDir: string;
+  rowOwnerAgentId?: string | null;
 }): string | undefined {
+  if (params.rowOwnerAgentId) {
+    return normalizeAgentId(params.rowOwnerAgentId);
+  }
   if (params.record.origin?.agentId) {
     return normalizeAgentId(params.record.origin.agentId);
   }
@@ -384,7 +485,7 @@ function inferOwnerAgentId(params: {
   if (workspaceMatches.length === 1) {
     return workspaceMatches[0];
   }
-  return agentIds.length === 1 ? agentIds[0] : undefined;
+  return undefined;
 }
 
 async function readLegacyRollback(
@@ -621,7 +722,7 @@ export async function migrateLegacySkillWorkshopProposals(params: {
 }): Promise<MigrationResult> {
   const env = params.env ?? process.env;
   const sidecars = await importLegacySkillProposalSidecars({ config: params.config, env });
-  const relocation = await relocateLegacyWorkshopTargets(env);
+  const relocation = await relocateLegacyWorkshopTargets(params.config, env);
   return {
     ...sidecars,
     changes: [...sidecars.changes, ...formatWorkshopRelocationChanges(relocation)],

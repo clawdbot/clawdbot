@@ -11,7 +11,14 @@ const TARGET_LEASE_MS = 60_000;
 const TARGET_LEASE_WAIT_MS = 5_000;
 const COLLECTION_LEASE_MS = 10 * 60_000;
 
-/** One Workshop skills tree means one collection lease; every writer serializes on this key. */
+function requireAgentId(options: SkillWorkshopStoreOptions): string {
+  if (!options.agentId) {
+    throw new Error("Skill Workshop requires an agent id for storage ownership.");
+  }
+  return options.agentId;
+}
+
+/** Each agent owns one collection lease; writers for different agents do not contend. */
 export async function withSkillCollectionLock<T>(
   fn: () => Promise<T>,
   options: SkillWorkshopStoreOptions = {},
@@ -20,7 +27,7 @@ export async function withSkillCollectionLock<T>(
   return await withOpenClawStateLease(
     {
       scope: "skill-collection",
-      key: "workshop",
+      key: requireAgentId(options),
       database: { scope: "shared", options: databaseOptions(options) },
       leaseMs: COLLECTION_LEASE_MS,
       waitMs: TARGET_LEASE_WAIT_MS,
@@ -40,7 +47,7 @@ export async function withSkillProposalTargetLock<T>(
   return await withOpenClawStateLease(
     {
       scope: "skill-workshop-target",
-      key: hashSkillProposalContent(record.target.skillFile),
+      key: `${requireAgentId(options)}:${hashSkillProposalContent(record.target.skillFile)}`,
       database: { scope: "shared", options: databaseOptions(options) },
       leaseMs: TARGET_LEASE_MS,
       waitMs: TARGET_LEASE_WAIT_MS,

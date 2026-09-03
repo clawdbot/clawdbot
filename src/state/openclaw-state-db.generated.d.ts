@@ -1236,6 +1236,7 @@ export interface SkillWorkshopCollectionReviews {
   create_time: number;
   dropped_json: string;
   kept_names_json: string;
+  owner_agent_id: string;
   review_id: string;
   written_names_json: string;
 }

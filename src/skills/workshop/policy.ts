@@ -44,7 +44,7 @@ function lifecycleApprovalText(action: SkillWorkshopLifecycleAction): {
   if (action === "apply") {
     return {
       title: "Apply Skill Workshop proposal",
-      description: "Apply a pending proposal inside the global Skill Workshop directory.",
+      description: "Apply a pending proposal inside your agent's Workshop directory.",
       severity: "warning",
     };
   }
@@ -113,6 +113,8 @@ function buildLifecycleApprovalDescription(params: {
 async function resolveLifecycleApprovalDescription(params: {
   toolParams: unknown;
   workspaceDir?: string;
+  config?: OpenClawConfig;
+  agentId?: string;
   fallback: string;
 }): Promise<{
   description: string;
@@ -128,6 +130,8 @@ async function resolveLifecycleApprovalDescription(params: {
       proposalId: normalizeOptionalString(toolParams?.proposal_id),
       name: normalizeOptionalString(toolParams?.name),
       workspaceDir: params.workspaceDir,
+      config: params.config,
+      agentId: params.agentId,
     });
     const record = proposal.record;
     return {
@@ -190,6 +194,7 @@ export async function resolveSkillWorkshopToolApproval(params: {
   toolParams: unknown;
   config?: OpenClawConfig;
   workspaceDir?: string;
+  agentId?: string;
 }): Promise<PluginHookBeforeToolCallResult | undefined> {
   if (params.toolName !== "skill_workshop") {
     return undefined;
@@ -209,6 +214,8 @@ export async function resolveSkillWorkshopToolApproval(params: {
       : await resolveLifecycleApprovalDescription({
           toolParams: params.toolParams,
           workspaceDir: params.workspaceDir,
+          config: params.config,
+          agentId: params.agentId,
           fallback: text.description,
         });
   return {

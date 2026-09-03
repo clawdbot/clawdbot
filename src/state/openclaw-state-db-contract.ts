@@ -78,6 +78,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_cron_run_receipts_job_history",
   "idx_github_publication_requests_pending",
   "secret_store_entries_live_idx",
+  "idx_skill_workshop_collection_reviews_owner_time",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

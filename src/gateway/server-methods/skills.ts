@@ -26,9 +26,12 @@ import {
   validateSkillsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SkillLibrarySelection } from "../../../packages/gateway-protocol/src/schema/skill-library.js";
-import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  tryResolveAmbientOwnerAgentId,
+} from "../../agents/agent-scope-config.js";
 import { resolveNodeExecEligibility } from "../../agents/exec-defaults.js";
-import { listAgentWorkspaceDirs } from "../../agents/workspace-dirs.js";
 import { redactConfigObject } from "../../config/redact-snapshot.js";
 import { fetchClawHubSkillDetail } from "../../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -348,10 +351,12 @@ export const skillsHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const workspaceDirs = listAgentWorkspaceDirs(cfg);
     const bins = new Set<string>();
-    for (const workspaceDir of workspaceDirs) {
-      const entries = loadWorkspaceSkills(workspaceDir, { config: cfg });
+    for (const agentId of listAgentIds(cfg)) {
+      const entries = loadWorkspaceSkills(resolveAgentWorkspaceDir(cfg, agentId), {
+        config: cfg,
+        agentId,
+      });
       for (const bin of collectSkillBins(entries)) {
         bins.add(bin);
       }
@@ -429,7 +434,8 @@ export const skillsHandlers: GatewayRequestHandlers = {
       respond,
       context,
       validate: validateSkillsProposalsListParams,
-      run: (_parsedParams, resolved) => listSkillProposals({ agentId: resolved.agentId }),
+      run: (_parsedParams, resolved) =>
+        listSkillProposals({ config: resolved.cfg, agentId: resolved.agentId }),
     });
   },
   "skills.proposals.events.list": async ({ params, respond, context }) => {

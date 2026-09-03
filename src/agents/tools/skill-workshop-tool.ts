@@ -249,7 +249,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         }
         const skill = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, env: options.env },
+          { config: options.config, agentId: options.agentId, env: options.env },
         );
         if (
           options.collectionReconcile &&
@@ -339,6 +339,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           proposals: (
             await listSkillProposals({
               agentId: options.agentId,
+              config: options.config,
               env: options.env,
             })
           ).proposals,
@@ -353,6 +354,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         const proposal = await readProposalForInspect(
           params,
           options.workspaceDir,
+          options.config,
           options.env,
           options.agentId,
         );
@@ -393,6 +395,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
           workspaceDir: options.workspaceDir,
           agentId: options.agentId,
           eventActor: skillWorkshopAgentEventActor(options.agentId),
+          config: options.config,
           env: options.env,
           proposalId: readLifecycleProposalIdParam(params),
           expectedRevisionHash: readToolStringParam(params, "expected_revision_hash"),
@@ -484,7 +487,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         // redeem one exact span prepared from the authoritative full skill.
         const target = await readWritableWorkshopSkill(
           readToolStringParam(params, "skill_name", { required: true, label: "skill_name" }),
-          { config: options.config, env: options.env },
+          { config: options.config, agentId: options.agentId, env: options.env },
         );
         const readHash = readSkillHashes.get(target.skillKey);
         const contentHash = sha256Hex(target.content);

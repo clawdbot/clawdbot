@@ -302,6 +302,7 @@ export type SkillProposalEvaluateInput = {
   workspaceDir: string;
   agentId?: string;
   eventActor?: SkillProposalEventActor;
+  config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   proposalId: string;
   expectedRevisionHash?: string;

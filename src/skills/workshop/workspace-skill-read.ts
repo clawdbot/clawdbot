@@ -13,9 +13,9 @@ import { resolveWorkshopSkillsDir } from "./skills-root.js";
 
 function assertWritableSkillTarget(
   skill: Pick<Skill, "baseDir" | "filePath" | "name">,
-  env?: NodeJS.ProcessEnv,
+  options: WorkshopSkillReadOptions,
 ): void {
-  const skillsRoot = resolveWorkshopSkillsDir(env);
+  const skillsRoot = workshopSkillsDir(options);
   assertInsideSkillsRoot(skillsRoot, skill.filePath, "skill file");
   assertInsideSkillsRoot(skillsRoot, skill.baseDir, "skill directory");
   if (path.basename(skill.filePath) !== "SKILL.md") {
@@ -33,8 +33,16 @@ export type WritableWorkshopSkillSummary = {
 
 export type WorkshopSkillReadOptions = {
   config?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
 };
+
+function workshopSkillsDir(options: WorkshopSkillReadOptions): string {
+  if (!options.agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return resolveWorkshopSkillsDir(options.config ?? {}, options.agentId, options.env);
+}
 
 export function listWritableWorkshopSkillSummaries(
   options: WorkshopSkillReadOptions = {},
@@ -42,7 +50,7 @@ export function listWritableWorkshopSkillSummaries(
   // The inventory is model-visible and reviewer-iterated, so it shares the loader's
   // per-source count, file-size, symlink, and hardlink limits instead of an unbounded read.
   const records = loadSkillRootRecords({
-    dir: resolveWorkshopSkillsDir(options.env),
+    dir: workshopSkillsDir(options),
     source: "openclaw-workshop",
     config: options.config,
   });
@@ -92,7 +100,7 @@ export async function readWritableWorkshopSkill(
       `Skill Workshop can only update skills it generated. No Workshop-generated skill matched: ${name}. Create it as a new skill, or edit the file directly.`,
     );
   }
-  assertWritableSkillTarget(targetSkill, options.env);
+  assertWritableSkillTarget(targetSkill, options);
   const content = await readWorkspaceSkillFile(targetSkill.filePath);
   if (content === null) {
     throw new Error(`Skill file is missing: ${targetSkill.filePath}`);

@@ -87,7 +87,7 @@ export type SkillProposalApplyTransitionDependencies = {
 
 export type SkillProposalTransitionInput = Pick<
   SkillProposalActionInput,
-  "agentId" | "correlationId" | "env" | "eventActor" | "workspaceDir"
+  "agentId" | "config" | "correlationId" | "env" | "eventActor" | "workspaceDir"
 >;
 
 class SkillProposalLifecycleError extends Error {
@@ -134,6 +134,7 @@ export async function applySkillProposalTransition(
     evaluated = await dependencies.evaluateSkillProposal({
       workspaceDir: input.workspaceDir,
       ...(input.agentId ? { agentId: input.agentId } : {}),
+      ...(input.config ? { config: input.config } : {}),
       ...(input.eventActor ? { eventActor: input.eventActor } : {}),
       ...(input.env ? { env: input.env } : {}),
       proposalId: input.proposalId,
@@ -166,7 +167,7 @@ export async function applySkillProposalTransition(
           }
           throw error;
         },
-        storeOptions(input.env),
+        storeOptions(input.env, input.agentId, input.config),
       );
       await withSkillProposalLifecycleDispatch(input, staleTransition);
     }
@@ -209,7 +210,10 @@ export async function applySkillProposalTransition(
         await quarantineSkillProposalAfterScan({ input, record, scan });
       }
 
-      const skillsRoot = resolveWorkshopSkillsDir(input.env);
+      if (!input.agentId) {
+        throw new Error("Skill Workshop requires the active agent id.");
+      }
+      const skillsRoot = resolveWorkshopSkillsDir(input.config ?? {}, input.agentId, input.env);
       assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
       assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
       if (record.evaluation?.id !== evaluated.evaluation.id) {
@@ -250,7 +254,7 @@ export async function applySkillProposalTransition(
       await writeSkillProposalRollback({
         proposalId: record.id,
         rollback,
-        store: storeOptions(input.env),
+        store: storeOptions(input.env, input.agentId, input.config),
       });
 
       try {
@@ -263,7 +267,7 @@ export async function applySkillProposalTransition(
           await clearSkillProposalRollback({
             proposalId: record.id,
             expectedRecordJson: JSON.stringify(record),
-            store: storeOptions(input.env),
+            store: storeOptions(input.env, input.agentId, input.config),
           }).catch(() => false);
         }
         throw error;
@@ -301,7 +305,7 @@ export async function applySkillProposalTransition(
           expected: record,
           record: applied,
           event: eventInput,
-          store: storeOptions(input.env),
+          store: storeOptions(input.env, input.agentId, input.config),
           operationLabel: "skill-workshop.apply.commit",
         });
       } catch (error) {
@@ -312,6 +316,8 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
+          agentId: input.agentId,
+          config: input.config,
         });
         if (!recoveredEvent) {
           throw error;
@@ -327,6 +333,8 @@ export async function applySkillProposalTransition(
           event: eventInput,
           mutation,
           env: input.env,
+          agentId: input.agentId,
+          config: input.config,
         });
         if (!recoveredEvent) {
           throw error;
@@ -346,7 +354,7 @@ export async function applySkillProposalTransition(
           : undefined,
       };
     },
-    storeOptions(input.env),
+    storeOptions(input.env, input.agentId, input.config),
   );
 
   const result = await withSkillProposalLifecycleDispatch(input, application);
@@ -444,7 +452,7 @@ export function transitionPendingSkillProposalToStale(params: {
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),
-    store: storeOptions(params.input.env),
+    store: storeOptions(params.input.env, params.input.agentId, params.input.config),
     operationLabel: "skill-workshop.stale.commit",
   });
   if (commit.state !== "committed") {
@@ -512,7 +520,7 @@ async function quarantineSkillProposalAfterScan(params: {
       ...(params.input.correlationId ? { correlationId: params.input.correlationId } : {}),
       occurredAt: now,
     }),
-    store: storeOptions(params.input.env),
+    store: storeOptions(params.input.env, params.input.agentId, params.input.config),
     operationLabel: "skill-workshop.quarantine.commit",
   });
   if (commit.state !== "committed") {
@@ -592,16 +600,21 @@ async function recoverAfterApplyCommitFailure(params: {
   event: NewSkillProposalEvent;
   mutation: PreparedWorkspaceSkillMutation;
   env?: NodeJS.ProcessEnv;
+  agentId?: string;
+  config?: OpenClawConfig;
 }): Promise<SkillProposalEvent | null> {
   const committed = readCommittedSkillProposalTransition({
     record: params.applied,
     event: params.event,
-    store: storeOptions(params.env),
+    store: storeOptions(params.env, params.agentId, params.config),
   });
   if (committed) {
     return committed.event;
   }
-  const authoritative = readStoredProposal(params.expected.id, storeOptions(params.env));
+  const authoritative = readStoredProposal(
+    params.expected.id,
+    storeOptions(params.env, params.agentId, params.config),
+  );
   if (authoritative?.record.status === "applied") {
     throw new Error("Applied Skill Workshop transition is missing its committed event.", {
       cause: params.error,
@@ -632,7 +645,7 @@ async function recoverAfterApplyCommitFailure(params: {
   await clearSkillProposalRollback({
     proposalId: params.expected.id,
     expectedRecordJson: JSON.stringify(params.expected),
-    store: storeOptions(params.env),
+    store: storeOptions(params.env, params.agentId, params.config),
   }).catch(() => false);
   return null;
 }
@@ -645,6 +658,14 @@ function requiredApplyStatus(outcome: SkillProposalApplyOutcome): SkillProposalS
   return status;
 }
 
-function storeOptions(env?: NodeJS.ProcessEnv): SkillWorkshopStoreOptions {
-  return env ? { env } : {};
+function storeOptions(
+  env: NodeJS.ProcessEnv | undefined,
+  agentId: string | undefined,
+  config: OpenClawConfig | undefined,
+): SkillWorkshopStoreOptions {
+  return {
+    ...(env ? { env } : {}),
+    ...(agentId ? { agentId } : {}),
+    ...(config ? { config } : {}),
+  };
 }

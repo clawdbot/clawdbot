@@ -23,9 +23,6 @@ import {
 } from "./store-sqlite-schema.js";
 
 const REVIEW_CLAIM_MS = 11 * 60_000;
-// The Workshop owns one global skill collection, so its review lease, status entry, and
-// history all live under this single key. Experience reviews stay per workspace.
-const COLLECTION_REVIEW_KEY = "workshop";
 // Bound history so unattended weekly maintenance cannot grow state forever.
 const SKILL_COLLECTION_REVIEW_RETENTION_COUNT = 90;
 const SKILL_COLLECTION_REVIEW_HISTORY_LIMIT = 20;
@@ -59,18 +56,19 @@ export type SkillExperienceReviewStatus = {
   usage?: { inputTokens: number; cachedInputTokens: number; outputTokens: number };
 };
 
-function workspaceKey(workspaceDir: string): string {
-  return sha256Hex(path.resolve(workspaceDir));
+function experienceReviewKey(agentId: string, workspaceDir: string): string {
+  return sha256Hex(`${agentId}\0${path.resolve(workspaceDir)}`);
 }
 
 export async function withSkillCollectionReviewClaim<T>(
+  agentId: string,
   run: () => Promise<T>,
   options: OpenClawStateDatabaseOptions = {},
 ): Promise<T> {
   return await withOpenClawStateLease(
     {
       scope: "skill-collection-review",
-      key: COLLECTION_REVIEW_KEY,
+      key: agentId,
       database: { scope: "shared", options },
       leaseMs: REVIEW_CLAIM_MS,
       waitMs: 0,
@@ -103,6 +101,7 @@ export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = 
 }
 
 export function recordSkillCollectionReviewStatus(
+  agentId: string,
   review: { attemptedAtMs: number; succeededAtMs?: number; error?: unknown },
   options: OpenClawStateDatabaseOptions = {},
 ): void {
@@ -116,25 +115,22 @@ export function recordSkillCollectionReviewStatus(
           attemptedAtMs: review.attemptedAtMs,
           ...(review.succeededAtMs !== undefined ? { succeededAtMs: review.succeededAtMs } : {}),
         };
-  recordReviewEntry(
-    "collectionReviews",
-    COLLECTION_REVIEW_KEY,
-    status,
-    {
-      lastAttemptAtMs: status.attemptedAtMs,
-      ...(status.succeededAtMs !== undefined ? { lastSuccessAtMs: status.succeededAtMs } : {}),
-      lastError: status.error ?? null,
-    },
-    options,
-  );
+  recordReviewEntry("collectionReviews", agentId, status, {}, options);
 }
 
 export function recordSkillExperienceReviewOutcome(
+  agentId: string,
   workspaceDir: string,
   review: SkillExperienceReviewStatus,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  recordReviewEntry("experienceReviews", workspaceKey(workspaceDir), review, {}, options);
+  recordReviewEntry(
+    "experienceReviews",
+    experienceReviewKey(agentId, workspaceDir),
+    review,
+    {},
+    options,
+  );
 }
 
 function recordReviewEntry(
@@ -193,6 +189,7 @@ function parseStoredDrops(value: string): SkillCollectionReconcileResult["droppe
 }
 
 export function listSkillCollectionReviewOutcomes(
+  agentId: string,
   options: SkillWorkshopStoreOptions = {},
 ): SkillCollectionReviewOutcome[] {
   ensureSkillWorkshopSchema(options);
@@ -203,6 +200,7 @@ export function listSkillCollectionReviewOutcomes(
     kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select(["backup_id", "create_time", "kept_names_json", "written_names_json", "dropped_json"])
+      .where("owner_agent_id", "=", agentId)
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_HISTORY_LIMIT),
@@ -216,6 +214,7 @@ export function listSkillCollectionReviewOutcomes(
 }
 
 export function recordSkillCollectionReviewHistory(
+  agentId: string,
   nowMs: number,
   result: SkillCollectionReconcileResult,
   options: SkillWorkshopStoreOptions = {},
@@ -227,6 +226,7 @@ export function recordSkillCollectionReviewHistory(
       db,
       kysely.insertInto("skill_workshop_collection_reviews").values({
         review_id: randomUUID(),
+        owner_agent_id: agentId,
         backup_id: result.backupId,
         create_time: nowMs,
         kept_names_json: JSON.stringify(result.kept),
@@ -237,6 +237,7 @@ export function recordSkillCollectionReviewHistory(
     const retainedReviewIds = kysely
       .selectFrom("skill_workshop_collection_reviews")
       .select("review_id")
+      .where("owner_agent_id", "=", agentId)
       .orderBy("create_time", "desc")
       .orderBy("review_id", "desc")
       .limit(SKILL_COLLECTION_REVIEW_RETENTION_COUNT);
@@ -244,6 +245,7 @@ export function recordSkillCollectionReviewHistory(
       db,
       kysely
         .deleteFrom("skill_workshop_collection_reviews")
+        .where("owner_agent_id", "=", agentId)
         .where("review_id", "not in", retainedReviewIds),
     );
   }, databaseOptions(options));

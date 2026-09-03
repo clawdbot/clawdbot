@@ -145,6 +145,8 @@ export function prepareSkillProposalSupportFiles(
 
 export function resolveSkillProposalTarget(params: {
   skillName: string;
+  config: OpenClawConfig;
+  agentId: string;
   env?: NodeJS.ProcessEnv;
 }): {
   skillKey: string;
@@ -155,7 +157,7 @@ export function resolveSkillProposalTarget(params: {
   if (!skillKey) {
     throw new Error("Skill name must contain at least one letter or number.");
   }
-  const skillsRoot = resolveWorkshopSkillsDir(params.env);
+  const skillsRoot = resolveWorkshopSkillsDir(params.config, params.agentId, params.env);
   const skillDir = path.resolve(skillsRoot, skillKey);
   const skillFile = path.join(skillDir, "SKILL.md");
   assertInsideSkillsRoot(skillsRoot, skillDir, "skill directory");
@@ -164,9 +166,7 @@ export function resolveSkillProposalTarget(params: {
 }
 
 function isStoredProposalVisible(row: SkillProposalRow, scope: SkillProposalLookupScope): boolean {
-  // Proposals all target the one Workshop directory, so an unowned row is
-  // visible everywhere; only agent ownership narrows the view.
-  return !scope.agentId || row.owner_agent_id === scope.agentId || row.owner_agent_id === null;
+  return row.owner_agent_id !== null && (!scope.agentId || row.owner_agent_id === scope.agentId);
 }
 
 export class SkillProposalDraftMissingError extends Error {
@@ -188,10 +188,19 @@ export async function readSkillProposal(
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
+  const scopedOptions = {
+    ...options,
+    ...(readOptions.config ? { config: readOptions.config } : {}),
+    ...(scope.agentId
+      ? { agentId: scope.agentId }
+      : stored.row.owner_agent_id
+        ? { agentId: stored.row.owner_agent_id }
+        : {}),
+  };
   if (readOptions.reconcile === false) {
     return await readSkillProposalBundle(stored.record, options);
   }
-  if (await reconcileInterruptedApply(proposalId, options)) {
+  if (await reconcileInterruptedApply(proposalId, scopedOptions)) {
     stored = readStoredProposal(proposalId, options);
     if (!stored || !isStoredProposalVisible(stored.row, scope)) {
       return null;
@@ -205,7 +214,7 @@ export async function readSkillProposal(
         ? await readSkillProposalBundle(current.record, options)
         : null;
     },
-    options,
+    scopedOptions,
   );
 }
 
@@ -219,8 +228,17 @@ export async function readSkillProposalRecord(
   if (!stored || !isStoredProposalVisible(stored.row, scope)) {
     return null;
   }
+  const scopedOptions = {
+    ...options,
+    ...(readOptions.config ? { config: readOptions.config } : {}),
+    ...(scope.agentId
+      ? { agentId: scope.agentId }
+      : stored.row.owner_agent_id
+        ? { agentId: stored.row.owner_agent_id }
+        : {}),
+  };
   if (readOptions.reconcile !== false) {
-    await reconcileInterruptedApply(proposalId, options);
+    await reconcileInterruptedApply(proposalId, scopedOptions);
   }
   stored = readStoredProposal(proposalId, options);
   return stored && isStoredProposalVisible(stored.row, scope) ? stored.record : null;
@@ -230,7 +248,7 @@ export async function writeSkillProposal(params: {
   record: SkillProposalRecord;
   content: string;
   supportFiles?: readonly PreparedSkillProposalSupportFile[];
-  ownerAgentId?: string;
+  ownerAgentId: string;
   maxPending: number;
   event: NewSkillProposalEvent;
   store?: SkillWorkshopStoreOptions;
@@ -259,6 +277,7 @@ export async function writeSkillProposal(params: {
           kysely
             .selectFrom("skill_workshop_proposals")
             .select((eb) => eb.fn.countAll<number>().as("count"))
+            .where("owner_agent_id", "=", params.ownerAgentId)
             .where("status", "in", ["pending", "quarantined"]),
         );
         if ((count?.count ?? 0) >= params.maxPending) {
@@ -266,7 +285,7 @@ export async function writeSkillProposal(params: {
         }
         insertProposal(db, {
           record: params.record,
-          ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
+          ownerAgentId: params.ownerAgentId,
         });
         return appendSkillProposalEvent(db, params.event);
       },
@@ -348,6 +367,7 @@ export async function replaceSkillProposalDraft(params: {
 
 export async function updateSkillProposalRecord(params: {
   record: SkillProposalRecord;
+  ownerAgentId?: string;
   store?: SkillWorkshopStoreOptions;
   invalidateRollback?: boolean;
   event?: NewSkillProposalEvent;
@@ -375,7 +395,7 @@ export async function updateSkillProposalRecord(params: {
             .where("proposal_id", "=", params.record.id),
         );
       }
-      updateProposal(db, current, params.record);
+      updateProposal(db, current, params.record, params.ownerAgentId);
       return params.event ? appendSkillProposalEvent(db, params.event) : undefined;
     },
     databaseOptions(params.store),
@@ -390,9 +410,9 @@ function listStoredProposals(
   const { database, kysely } = openSkillWorkshopStore(options);
   let query = kysely.selectFrom("skill_workshop_proposals").selectAll();
   if (scope.agentId) {
-    query = query.where((eb) =>
-      eb.or([eb("owner_agent_id", "=", scope.agentId!), eb("owner_agent_id", "is", null)]),
-    );
+    query = query.where("owner_agent_id", "=", scope.agentId);
+  } else {
+    query = query.where("owner_agent_id", "is not", null);
   }
   return executeSqliteQuerySync(
     database.db,
@@ -411,7 +431,16 @@ export async function readSkillProposalManifest(
   await Promise.all(
     before
       .filter(({ record }) => record.status === "pending")
-      .map(({ record }) => reconcileInterruptedApply(record.id, options)),
+      .map(({ record, row }) =>
+        reconcileInterruptedApply(record.id, {
+          ...options,
+          ...(scope.agentId
+            ? { agentId: scope.agentId }
+            : row.owner_agent_id
+              ? { agentId: row.owner_agent_id }
+              : {}),
+        }),
+      ),
   );
   const proposals = listStoredProposals(options, scope).map(({ record }) =>
     manifestEntryFromRecord(record),
@@ -509,7 +538,7 @@ async function readSkillProposalBundle(
 export function importLegacySkillProposal(params: {
   record: SkillProposalRecord;
   rollback?: SkillProposalRollback;
-  ownerAgentId?: string;
+  ownerAgentId: string;
   store?: SkillWorkshopStoreOptions;
 }): "imported" | "already-imported" {
   assertProposalId(params.record.id);
@@ -536,7 +565,7 @@ export function importLegacySkillProposal(params: {
       } else {
         insertProposal(db, {
           record: params.record,
-          ownerAgentId: params.ownerAgentId ?? params.record.origin?.agentId ?? null,
+          ownerAgentId: params.ownerAgentId,
         });
       }
       if (params.rollback) {

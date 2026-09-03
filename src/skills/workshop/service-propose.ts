@@ -94,6 +94,8 @@ export async function proposeCreateSkill(
   const config = resolveSkillWorkshopConfig(input.config);
   const target = resolveSkillProposalTarget({
     skillName: name,
+    config: input.config ?? {},
+    agentId: requireWorkshopAgentId(input.agentId),
     ...(input.env ? { env: input.env } : {}),
   });
   if ((await readWorkspaceSkillFile(target.skillFile)) !== null) {
@@ -163,14 +165,14 @@ export async function proposeCreateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    ownerAgentId: input.agentId,
+    ownerAgentId: requireWorkshopAgentId(input.agentId),
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: proposalStoreOptions(input.env),
+    store: { ...proposalStoreOptions(input.env), agentId: requireWorkshopAgentId(input.agentId) },
   });
   await dispatchSkillProposalChanged({
     event,
@@ -222,6 +224,7 @@ export async function proposeUpdateSkill(
   const config = resolveSkillWorkshopConfig(input.config);
   const target = await readWritableWorkshopSkill(skillName, {
     config: input.config,
+    agentId: requireWorkshopAgentId(input.agentId),
     env: input.env,
   });
   const currentContent = target.content;
@@ -308,14 +311,14 @@ export async function proposeUpdateSkill(
     record,
     content: proposalContent,
     supportFiles,
-    ownerAgentId: input.agentId ?? origin?.agentId,
+    ownerAgentId: requireWorkshopAgentId(input.agentId),
     maxPending: config.maxPending,
     event: createSkillProposalEvent({
       record,
       type: "created",
       actor: input.eventActor,
     }),
-    store: proposalStoreOptions(input.env),
+    store: { ...proposalStoreOptions(input.env), agentId: requireWorkshopAgentId(input.agentId) },
   });
   await dispatchSkillProposalChanged({
     event,
@@ -324,6 +327,13 @@ export async function proposeUpdateSkill(
     ...(input.agentId ? { agentId: input.agentId } : {}),
   });
   return { record, revisionHash: hashSkillProposalRevision(record), content: proposalContent };
+}
+
+function requireWorkshopAgentId(agentId: string | undefined): string {
+  if (!agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return agentId;
 }
 
 export async function buildSupportFileMetadata(

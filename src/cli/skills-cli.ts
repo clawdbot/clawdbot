@@ -1029,7 +1029,7 @@ export function registerSkillsCli(program: Command) {
       runWorkshopAction(
         opts,
         command,
-        ({ agentId }) => listSkillProposals({ agentId }),
+        ({ config, agentId }) => listSkillProposals({ config, agentId }),
         formatSkillProposalList,
       ),
     );

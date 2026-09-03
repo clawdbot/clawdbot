@@ -129,9 +129,21 @@ export async function executeSkillCollectionReconcile(params: {
 
 export async function executeSkillCollectionRestore(params: {
   workspaceDir: string;
+  config?: OpenClawConfig;
+  agentId?: string;
   env?: NodeJS.ProcessEnv;
 }) {
-  const result = await restoreLatestSkillCollectionBackup(params);
+  if (!params.config || !params.agentId) {
+    throw new ToolInputError(
+      "Skill Workshop restore requires the active agent configuration and id",
+    );
+  }
+  const result = await restoreLatestSkillCollectionBackup({
+    workspaceDir: params.workspaceDir,
+    config: params.config,
+    agentId: params.agentId,
+    ...(params.env ? { env: params.env } : {}),
+  });
   return textResult(
     `Restored skill collection backup ${result.backupId}: restored ${result.restored.length}, removed ${result.removed.length}.`,
     result,
@@ -141,11 +153,19 @@ export async function executeSkillCollectionRestore(params: {
 export function executeSkillCollectionHistory(
   params: {
     workspaceDir: string;
+    config?: OpenClawConfig;
+    agentId?: string;
     env?: NodeJS.ProcessEnv;
   },
   maxChars: number,
 ) {
-  const outcomes = listSkillCollectionReviewOutcomes(params.env ? { env: params.env } : {});
+  if (!params.agentId) {
+    throw new ToolInputError("Skill Workshop history requires the active agent id");
+  }
+  const outcomes = listSkillCollectionReviewOutcomes(
+    params.agentId,
+    params.env ? { env: params.env } : {},
+  );
   const reviews = [];
   let text = "Recent collection reviews, newest first:";
   let truncated = false;

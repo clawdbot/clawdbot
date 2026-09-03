@@ -174,6 +174,7 @@ export async function runBeforeToolCallHook(args: {
       toolParams: normalizedParams,
       ...(args.ctx?.config ? { config: args.ctx.config } : {}),
       ...(args.ctx?.workspaceDir ? { workspaceDir: args.ctx.workspaceDir } : {}),
+      ...(args.ctx?.agentId ? { agentId: args.ctx.agentId } : {}),
     });
     const voiceRun = resolveClientVoiceRunBinding(args.ctx?.runId);
     const voiceConfirmation = checkClientVoiceToolConfirmationPolicy({

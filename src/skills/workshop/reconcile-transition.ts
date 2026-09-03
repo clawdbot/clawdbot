@@ -87,7 +87,7 @@ export async function reconcileInterruptedSkillProposalApply(params: {
       }
       if (recovery.state === "partial") {
         const restoration = await prepareWorkspaceSkillRestoration({
-          skillsRoot: resolveWorkshopSkillsDir(params.store?.env),
+          skillsRoot: resolveStoreWorkshopSkillsDir(params.store),
           skillDir: stored.record.target.skillDir,
           skillFile: stored.record.target.skillFile,
           previousContent: rollback.previousContent ?? null,
@@ -114,6 +114,13 @@ export async function reconcileInterruptedSkillProposalApply(params: {
     },
     params.store,
   ).catch(() => false);
+}
+
+function resolveStoreWorkshopSkillsDir(store: SkillWorkshopStoreOptions | undefined): string {
+  if (!store?.agentId) {
+    throw new Error("Skill Workshop recovery requires the active agent id.");
+  }
+  return resolveWorkshopSkillsDir(store.config ?? {}, store.agentId, store.env);
 }
 
 type SkillProposalRecoverySupportFile = {

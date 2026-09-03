@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
@@ -60,8 +61,22 @@ export {
 } from "./service-query.js";
 export { evaluateSkillProposal, listSkillProposalEvents } from "./service-evaluation.js";
 
-function proposalStoreOptions(env?: NodeJS.ProcessEnv) {
-  return env ? { env } : {};
+function proposalStoreOptions(env: NodeJS.ProcessEnv | undefined, agentId: string | undefined) {
+  if (!agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return { ...(env ? { env } : {}), agentId };
+}
+
+function workshopSkillsDir(input: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  env?: NodeJS.ProcessEnv;
+}): string {
+  if (!input.agentId) {
+    throw new Error("Skill Workshop requires the active agent id.");
+  }
+  return resolveWorkshopSkillsDir(input.config ?? {}, input.agentId, input.env);
 }
 
 const APPLY_TRANSITION_DEPENDENCIES = {
@@ -87,7 +102,7 @@ export async function reviseSkillProposal(
   const config = resolveSkillWorkshopConfig(input.config);
   const revision = withPendingSkillProposalRevision(input, async (read) => {
     const { record } = read;
-    const skillsRoot = resolveWorkshopSkillsDir(input.env);
+    const skillsRoot = workshopSkillsDir(input);
     assertInsideSkillsRoot(skillsRoot, record.target.skillFile, "skill file");
     assertInsideSkillsRoot(skillsRoot, record.target.skillDir, "skill directory");
 
@@ -197,7 +212,7 @@ export async function reviseSkillProposal(
         ...(input.correlationId ? { correlationId: input.correlationId } : {}),
         occurredAt: now,
       }),
-      store: proposalStoreOptions(input.env),
+      store: proposalStoreOptions(input.env, input.agentId),
     });
     return {
       read: {
@@ -240,13 +255,10 @@ async function markProposal(
   input: SkillProposalActionInput,
   status: "quarantined" | "rejected",
 ): Promise<SkillProposalRecord> {
-  const scope = {
-    ...(input.agentId ? { agentId: input.agentId } : {}),
-    workspaceDir: input.workspaceDir,
-  };
+  const scope = input.agentId ? { agentId: input.agentId } : {};
   const initial = await readSkillProposalRecord(
     input.proposalId,
-    proposalStoreOptions(input.env),
+    proposalStoreOptions(input.env, input.agentId),
     scope,
     input.config ? { config: input.config } : undefined,
   );
@@ -258,7 +270,7 @@ async function markProposal(
     async () => {
       const current = await readSkillProposalRecord(
         input.proposalId,
-        proposalStoreOptions(input.env),
+        proposalStoreOptions(input.env, input.agentId),
         scope,
         { reconcile: false },
       );
@@ -295,11 +307,11 @@ async function markProposal(
           ...(input.correlationId ? { correlationId: input.correlationId } : {}),
           occurredAt: now,
         }),
-        store: proposalStoreOptions(input.env),
+        store: proposalStoreOptions(input.env, input.agentId),
       });
       return { record, event };
     },
-    proposalStoreOptions(input.env),
+    proposalStoreOptions(input.env, input.agentId),
   );
   if (result.event) {
     await dispatchSkillProposalChanged({
@@ -350,7 +362,7 @@ async function withPendingSkillProposalRevision<T>(
       }
       return await fn(read);
     },
-    proposalStoreOptions(input.env),
+    proposalStoreOptions(input.env, input.agentId),
   );
 }
 

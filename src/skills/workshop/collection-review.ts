@@ -37,7 +37,11 @@ async function runSkillCollectionReview(params: {
   assertCurrent: () => void;
 }): Promise<SkillCollectionReconcileResult | null> {
   params.assertCurrent();
-  const skills = listWritableSkillCollection({ config: params.config, env: params.env });
+  const skills = listWritableSkillCollection({
+    config: params.config,
+    agentId: params.agentId,
+    env: params.env,
+  });
   if (skills.length === 0) {
     return null;
   }
@@ -108,48 +112,57 @@ export async function runSkillCollectionReviewForAgent(params: {
   if (resolveSkillWorkshopConfig(params.config).autonomous.mode !== "auto") {
     return { status: "skipped", summary: "skill collection review disabled" };
   }
-  // The Workshop owns one global collection, so the review runs once for the configured
-  // agent; its workspace only supplies session context for the embedded run.
+  // Each review is admitted and recorded for one agent, and the workspace only supplies
+  // session context for the embedded run.
   const workspaceDir = canonicalizePath(
     resolveAgentWorkspaceDir(params.config, params.agentId, params.env),
   );
   const stateOptions = params.env ? { env: params.env } : {};
   try {
-    return await withSkillCollectionReviewClaim(async () => {
-      const attemptedAtMs = Date.now();
-      assertCurrent();
-      recordSkillCollectionReviewStatus({ attemptedAtMs }, stateOptions);
-      try {
-        await runSkillCollectionReview({
-          config: params.config,
-          agentId: params.agentId,
-          workspaceDir,
-          env: params.env,
-          ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-          assertCurrent,
-        });
+    return await withSkillCollectionReviewClaim(
+      params.agentId,
+      async () => {
+        const attemptedAtMs = Date.now();
         assertCurrent();
-        recordSkillCollectionReviewStatus(
-          { attemptedAtMs, succeededAtMs: Date.now() },
-          stateOptions,
-        );
-        return { status: "ok" as const, summary: "skill collection review completed" };
-      } catch (error) {
-        assertCurrent();
+        recordSkillCollectionReviewStatus(params.agentId, { attemptedAtMs }, stateOptions);
         try {
-          recordSkillCollectionReviewStatus({ attemptedAtMs, error }, stateOptions);
-        } catch (recordError) {
-          const outcomeWriteError = new AggregateError(
-            [error, recordError],
-            "Skill collection review failed and its outcome could not be recorded.",
-            { cause: error },
+          await runSkillCollectionReview({
+            config: params.config,
+            agentId: params.agentId,
+            workspaceDir,
+            env: params.env,
+            ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
+            assertCurrent,
+          });
+          assertCurrent();
+          recordSkillCollectionReviewStatus(
+            params.agentId,
+            { attemptedAtMs, succeededAtMs: Date.now() },
+            stateOptions,
           );
-          throw outcomeWriteError;
+          return { status: "ok" as const, summary: "skill collection review completed" };
+        } catch (error) {
+          assertCurrent();
+          try {
+            recordSkillCollectionReviewStatus(
+              params.agentId,
+              { attemptedAtMs, error },
+              stateOptions,
+            );
+          } catch (recordError) {
+            const outcomeWriteError = new AggregateError(
+              [error, recordError],
+              "Skill collection review failed and its outcome could not be recorded.",
+              { cause: error },
+            );
+            throw outcomeWriteError;
+          }
+          const summary = `Skill collection review failed: ${String(error)}`;
+          return { status: "error" as const, summary, error: summary };
         }
-        const summary = `Skill collection review failed: ${String(error)}`;
-        return { status: "error" as const, summary, error: summary };
-      }
-    }, stateOptions);
+      },
+      stateOptions,
+    );
   } catch (error) {
     const summary = `Skill collection review failed: ${String(error)}`;
     return { status: "error", summary, error: summary };

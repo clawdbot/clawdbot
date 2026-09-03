@@ -145,6 +145,7 @@ async function resolveStatusAllLocalDiagnosis(params: {
             });
             return buildWorkspaceSkillStatus(defaultWorkspace, {
               config: overview.cfg,
+              agentId: controlPlaneWorkspace.agentId,
               eligibility: {
                 nodeSkills,
                 remote: getRemoteSkillEligibility({

@@ -96,11 +96,12 @@ export function updateProposal(
   database: DatabaseSync,
   current: SkillProposalRow,
   record: SkillProposalRecord,
+  ownerAgentId?: string,
 ): void {
   const kysely = getNodeSqliteKysely<SkillWorkshopDatabase>(database);
   const { proposal_id: _proposalId, ...values } = proposalRowValues({
     record,
-    ownerAgentId: current.owner_agent_id,
+    ownerAgentId: ownerAgentId ?? current.owner_agent_id,
   });
   executeSqliteQuerySync(
     database,
