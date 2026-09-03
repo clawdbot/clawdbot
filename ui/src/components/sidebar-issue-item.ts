@@ -97,9 +97,11 @@ export function renderSidebarMentionItem(params: {
         <span class="sidebar-issues-panel__state" title=${mention.sessionTitle}
           >${mention.sessionTitle}</span
         >
-        ${mention.excerpt
-          ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
-          : nothing}
+        ${
+          mention.excerpt
+            ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
+            : nothing
+        }
         <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">
           <a
             class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"

@@ -42,11 +42,13 @@ function renderDraftError(message: string, action?: { label: string; onClick: ()
       <span class="callout__content new-session-page__alert-message"
         >${formatUiError(message)}</span
       >
-      ${action
-        ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
-            ${action.label}
-          </button>`
-        : nothing}
+      ${
+        action
+          ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
+              ${action.label}
+            </button>`
+          : nothing
+      }
     </div>
   `;
 }
@@ -66,27 +68,31 @@ export function renderNewSessionDraftErrors(
   const capabilities = submission.capabilities;
   return html`
     ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
-    ${isCatalogTarget && capabilities.toolOverrides
-      ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
-          label: t("common.reset"),
-          onClick: () => capabilities.setToolOverrides(null),
-        })
-      : nothing}
-    ${submission.submissionOutcomeUnknown
-      ? renderDraftError(
-          t(
-            submission.submissionOutcomeUnknown === "gateway-changed"
-              ? "newSession.createOutcomeUnknown"
-              : "newSession.placementSetupInterrupted",
-          ),
-          submission.pendingPlacement.sessionKey
-            ? {
-                label: t("common.reset"),
-                onClick: () => submission.clearPendingPlacementRecovery(),
-              }
-            : undefined,
-        )
-      : nothing}
+    ${
+      isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing
+    }
+    ${
+      submission.submissionOutcomeUnknown
+        ? renderDraftError(
+            t(
+              submission.submissionOutcomeUnknown === "gateway-changed"
+                ? "newSession.createOutcomeUnknown"
+                : "newSession.placementSetupInterrupted",
+            ),
+            submission.pendingPlacement.sessionKey
+              ? {
+                  label: t("common.reset"),
+                  onClick: () => submission.clearPendingPlacementRecovery(),
+                }
+              : undefined,
+          )
+        : nothing
+    }
   `;
 }
 
