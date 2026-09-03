@@ -58,9 +58,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
+    // Fusion ranks only what the retrieval window already fetched, so a window that
+    // shrinks with the requested count changes which candidates compete and can make
+    // top-1 worse than the first row of a wider request. Floor the window at the
+    // configured default before project expansion, then trim to the caller's count.
+    const windowResults = Math.max(maxResults, this.settings.query.maxResults);
     const candidateMaxResults = hasActiveProject
-      ? Math.min(200, Math.max(maxResults, maxResults * 4))
-      : maxResults;
+      ? Math.min(200, Math.max(windowResults, windowResults * 4))
+      : windowResults;
     // Retrieval owners apply project ranking and eligibility, including lexical recall.
     // Only cap the expanded window here so partial and final recall survive together.
     const selectResults = (results: MemorySearchResult[]) => results.slice(0, maxResults);
@@ -278,16 +283,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       // every other caller defaults to the configured search corpus.
       const sourceFilterList = searchSources ?? this.settings.searchSources;
       const hybrid = this.settings.query.hybrid;
-      // Both retrieval legs are capped by this pool, and fusion runs after it, so a
-      // pool that shrinks with the requested count hides chunks that only become
-      // top-ranked once vector and keyword scores combine: top-1 then differs from
-      // the first row of a wider request. Floor the pool at what the configured
-      // default result count already retrieves, so an explicit small-k caller ranks
-      // over the same candidates as the default path without widening worst-case cost.
-      const poolResults = Math.max(maxResults, this.settings.query.maxResults);
       const candidates = Math.min(
         200,
-        Math.max(1, Math.floor(poolResults * hybrid.candidateMultiplier)),
+        Math.max(1, Math.floor(maxResults * hybrid.candidateMultiplier)),
       );
       const finalizeKeywords = (results: KeywordSearchHit[]) =>
         this.finalizeKeywordOnlyResults({

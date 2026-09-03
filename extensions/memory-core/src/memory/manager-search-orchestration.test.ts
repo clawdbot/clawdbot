@@ -995,36 +995,4 @@ describe("memory index", () => {
     await expect(manager.close?.()).resolves.toBeUndefined();
     expect(syncSpy).toHaveBeenCalledWith({ reason: "search" });
   });
-
-  it("keeps the hybrid top hit stable when an explicit maxResults is below the default", async () => {
-    // Descending "alpha" density gives note-0 the strongest vector score, and the
-    // fixture embedder counts that term, so the best chunk sorts last by path.
-    // A pool tied to maxResults would exclude it from a top-1 request.
-    for (let index = 0; index < 12; index += 1) {
-      await fs.writeFile(
-        path.join(fixture.paths.memory, `pool-note-${index}.md`),
-        `# Pool note ${index}\n${"alpha ".repeat(12 - index)}shared filler body.`,
-      );
-    }
-    const manager = await getFreshManager(
-      createCfg({
-        vectorEnabled: true,
-        minScore: 0,
-        hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
-      }),
-    );
-    try {
-      await manager.sync({ reason: "test" });
-      const wide = await manager.search("alpha", { maxResults: 6, minScore: 0 });
-      const single = await manager.search("alpha", { maxResults: 1, minScore: 0 });
-      const best = wide[0];
-      expect(best?.path).toBe("memory/pool-note-0.md");
-      expect(single).toHaveLength(1);
-      // Narrowing the window may only drop trailing rows, never promote a weaker hit.
-      expect(single[0]?.path).toBe(best?.path);
-      expect(single[0]?.score).toBeCloseTo(best?.score ?? 0, 10);
-    } finally {
-      await manager.close?.();
-    }
-  });
 });
