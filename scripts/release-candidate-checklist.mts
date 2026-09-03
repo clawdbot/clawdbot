@@ -11,11 +11,13 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve as resolvePath } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
@@ -28,6 +30,7 @@ import {
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
+import { parseReleaseVersion } from "./lib/release-version.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
@@ -679,14 +682,42 @@ function runFromTrustedTooling(
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
   const toolingRoot = join(tempRoot, "checkout");
   let worktreeAdded = false;
+  let linkedNodeModules = false;
   try {
     run("git", ["worktree", "add", "--detach", toolingRoot, trustedToolingSha], {
       cwd: targetRoot,
     });
     worktreeAdded = true;
+    const toolingPackage = readJson(join(toolingRoot, "package.json"), "tooling package");
+    const targetPackage = readJson(join(targetRoot, "package.json"), "target package");
+    // Matching lockfile bytes and dependency declarations are the reuse trust boundary:
+    // a different graph must be installed from trusted tooling, never borrowed from the target.
+    const matchingDependencies =
+      readFileSync(join(toolingRoot, "pnpm-lock.yaml")).equals(
+        readFileSync(join(targetRoot, "pnpm-lock.yaml")),
+      ) &&
+      ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].every(
+        (key) => JSON.stringify(toolingPackage[key]) === JSON.stringify(targetPackage[key]),
+      );
+    if (matchingDependencies && existsSync(join(targetRoot, "node_modules"))) {
+      symlinkSync(join(targetRoot, "node_modules"), join(toolingRoot, "node_modules"), "junction");
+      linkedNodeModules = true;
+    } else {
+      run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+        cwd: toolingRoot,
+      });
+    }
+    const tsxLoader = pathToFileURL(
+      createRequire(join(toolingRoot, "package.json")).resolve("tsx"),
+    ).href;
     const result = spawnSync(
       process.execPath,
-      ["--import", "tsx", join(toolingRoot, "scripts/release-candidate-checklist.mts"), ...argv],
+      [
+        "--import",
+        tsxLoader,
+        join(toolingRoot, "scripts/release-candidate-checklist.mts"),
+        ...argv,
+      ],
       {
         cwd: targetRoot,
         env: { ...process.env, [TRUSTED_TOOLING_SHA_ENV]: trustedToolingSha },
@@ -699,6 +730,9 @@ function runFromTrustedTooling(
       );
     }
   } finally {
+    if (linkedNodeModules) {
+      rmSync(join(toolingRoot, "node_modules"), { force: true });
+    }
     if (worktreeAdded) {
       const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
         cwd: targetRoot,
@@ -1738,11 +1772,6 @@ async function runParallelsIfNeeded(
   if (options.skipParallels) {
     return { status: "skipped", reason: options.parallelsSkipReason };
   }
-  // This function runs inside trusted tooling, not the frozen target checkout.
-  // Prepare its isolated dependencies here before importing the Parallels harness.
-  run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
-    cwd: TOOLING_ROOT,
-  });
   const timeoutBin = run("bash", ["-lc", "command -v gtimeout || command -v timeout"], {
     capture: true,
   }).trim();
@@ -1853,6 +1882,30 @@ async function runTelegramIfNeeded(
   };
 }
 
+function checkCandidateAndroidVersion(targetSha: string, tag: string) {
+  const release = parseReleaseVersion(tag.replace(/^v/u, ""));
+  if (release?.channel !== "stable") {
+    return undefined;
+  }
+  const manifest: unknown = JSON.parse(
+    run("git", ["show", `${targetSha}:apps/android/version.json`], { capture: true }),
+  );
+  const androidVersion = requireString(
+    isRecord(manifest) ? manifest.version : undefined,
+    "Android version",
+  );
+  const targetVersion = release.baseVersion;
+  const matches = androidVersion === targetVersion;
+  return {
+    status: matches ? "passed" : "warning",
+    androidVersion,
+    targetVersion,
+    message: matches
+      ? `PASS: Android version ${androidVersion} matches release train ${targetVersion}.`
+      : `WARNING: Android version ${androidVersion} does not match release train ${targetVersion}; run node --import tsx scripts/mobile-release-version.ts --prepare --version ${targetVersion} --write before tagging, or accept that Android will not ship for this release.`,
+  };
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2));
   const targetRoot = gitTopLevel(process.cwd());
@@ -1916,6 +1969,10 @@ async function main() {
   options.fullReleaseRunId = candidateState.fullReleaseRunId;
   options.npmPreflightRunId = candidateState.npmPreflightRunId;
   writeReleaseCandidateState(statePath, candidateState);
+  const androidVersionCheck = checkCandidateAndroidVersion(targetSha, options.tag);
+  if (androidVersionCheck) {
+    console.log(androidVersionCheck.message);
+  }
   const releaseChangelog = run("git", ["show", `${targetSha}:CHANGELOG.md`], { capture: true });
   const releaseNotesVersion = releaseNotesVersionForTag(options.tag);
   const releaseNotesCheck = validateCandidateReleaseNotes({
@@ -2219,6 +2276,7 @@ async function main() {
     },
     releaseNotesCheck,
     releaseNotesProvenance,
+    androidVersionCheck,
     localGeneratedCheck,
     tarball: {
       name: basename(tarballPath),
@@ -2242,6 +2300,7 @@ async function main() {
       `# ${options.tag} release candidate evidence`,
       "",
       `- target SHA: ${targetSha}`,
+      ...(androidVersionCheck ? [`- **${androidVersionCheck.message}**`] : []),
       `- full release validation: ${options.fullReleaseRunId} ${fullRun.url}`,
       `- npm preflight: ${npmProducerRunId} ${npmRun.url}`,
       ...(windowsNodeSourceRelease
@@ -2290,6 +2349,9 @@ async function main() {
 
   console.log(`release candidate evidence: ${evidencePath}`);
   console.log(`release candidate summary: ${evidenceMarkdownPath}`);
+  if (androidVersionCheck) {
+    console.log(androidVersionCheck.message);
+  }
   console.log("publish command:");
   console.log(publishCommand);
 }
