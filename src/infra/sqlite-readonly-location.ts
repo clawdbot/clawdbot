@@ -3,13 +3,10 @@ import { execFile, spawnSync } from "node:child_process";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
+import { backupSqliteOnline, createSqliteBackupContentionError } from "./sqlite-online-backup.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
@@ -17,6 +14,7 @@ import {
 } from "./sqlite-private-directory.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
+const SQLITE_READONLY_WORKER_TIMEOUT_MS = 30 * 60 * 1_000;
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
@@ -433,22 +431,17 @@ async function createOnlineReadOnlyBackup(
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const tempDir = await createSqliteSnapshotStagingDirectory();
   const snapshotPath = path.join(tempDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
   try {
     if (process.platform !== "win32") {
       fs.chmodSync(tempDir, 0o700);
     }
-    const source = openNodeSqliteDatabase(pathname, { readOnly: true });
-    try {
-      source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
-      source.prepare("PRAGMA schema_version;").get();
-      await sqlite.backup(source, resolveSqliteFilesystemPath(snapshotPath));
-      source.exec("ROLLBACK;");
-    } finally {
-      if (source.isOpen) {
-        source.close();
-      }
-    }
+    await backupSqliteOnline({
+      beforeBackup: (source) => {
+        source.prepare("PRAGMA schema_version;").get();
+      },
+      destinationPath: snapshotPath,
+      sourcePath: pathname,
+    });
     const snapshot = openNodeSqliteDatabase(snapshotPath);
     try {
       snapshot.exec("PRAGMA journal_mode = DELETE;");
@@ -657,18 +650,22 @@ export async function prepareSqliteReadOnlyLocation(
   pathname: string,
 ): Promise<PreparedSqliteReadOnlyLocation> {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const sourcePath = path.resolve(pathname);
   return await new Promise((resolve, reject) => {
     execFile(
       process.execPath,
-      [
-        ...resolveRuntimeWorkerArgv(workerUrl),
-        SQLITE_READONLY_CHILD_ARG,
-        "async",
-        path.resolve(pathname),
-      ],
-      { encoding: "utf8" },
+      [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "async", sourcePath],
+      {
+        encoding: "utf8",
+        killSignal: "SIGKILL",
+        timeout: SQLITE_READONLY_WORKER_TIMEOUT_MS,
+      },
       (error, stdout, stderr) => {
         try {
+          const workerSignal: unknown = error?.signal;
+          if (error?.killed === true && (workerSignal === "SIGKILL" || workerSignal === null)) {
+            throw createSqliteBackupContentionError(sourcePath);
+          }
           const failure = error ? `exited unsuccessfully: ${error.message}` : undefined;
           resolve(adoptSqliteReadOnlyWorkerResult({ failure, stderr, stdout }));
         } catch (workerError) {
@@ -683,16 +680,19 @@ export function prepareSqliteReadOnlyLocationSync(
   pathname: string,
 ): PreparedSqliteReadOnlyLocation {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sqliteReadOnly);
+  const sourcePath = path.resolve(pathname);
   const result = spawnSync(
     process.execPath,
-    [
-      ...resolveRuntimeWorkerArgv(workerUrl),
-      SQLITE_READONLY_CHILD_ARG,
-      "sync",
-      path.resolve(pathname),
-    ],
-    { encoding: "utf8" },
+    [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "sync", sourcePath],
+    {
+      encoding: "utf8",
+      killSignal: "SIGKILL",
+      timeout: SQLITE_READONLY_WORKER_TIMEOUT_MS,
+    },
   );
+  if (result.error && "code" in result.error && result.error.code === "ETIMEDOUT") {
+    throw createSqliteBackupContentionError(sourcePath);
+  }
   const failure = result.error
     ? `failed to start: ${result.error.message}`
     : result.status === 0

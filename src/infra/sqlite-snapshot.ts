@@ -16,12 +16,9 @@ import {
 } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { sameFileIdentity, type FileIdentityStat } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
+import { backupSqliteOnline } from "./sqlite-online-backup.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withSqliteSnapshotSource } from "./sqlite-readonly-location.js";
 import { readSqliteUserVersion } from "./sqlite-user-version.js";
@@ -642,32 +639,21 @@ export async function createVerifiedSqliteSnapshot(
   );
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = path.join(stagingDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
     await withSqliteSnapshotSource(options.sourcePath, async (snapshotSourcePath) => {
       await fs.rm(stagedPath, { force: true });
-      const source = openNodeSqliteDatabase(snapshotSourcePath, {
+      await backupSqliteOnline({
         allowExtension: true,
-        readOnly: true,
-      });
-      try {
-        source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
-        try {
-          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+        beforeBackup: async (source) => {
           source.prepare("PRAGMA schema_version;").get();
           await loadSqliteVecExtension({ db: source });
           assertSqliteIntegrity(source, options.sourcePath);
           options.validate?.(source, options.sourcePath);
-          await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
-        } finally {
-          source.exec("ROLLBACK;");
-        }
-      } finally {
-        if (source.isOpen) {
-          source.close();
-        }
-      }
+        },
+        destinationPath: stagedPath,
+        sourcePath: snapshotSourcePath,
+      });
     });
 
     await fs.chmod(stagedPath, 0o600);
