@@ -27,13 +27,13 @@ import {
   type ChatImageContent,
   type OffloadedRef,
 } from "../chat-attachments.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { resolveSessionRuntimeCwd } from "../server-methods/agent-session-reset.js";
 import { gatewayClientSenderFields } from "../server-methods/gateway-client-identity.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
 import {
-  clientHasAdminScope,
   shouldSuppressAgentPromptPersistence,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
@@ -129,7 +129,7 @@ export async function prepareAgentRunUserTurn(params: {
 
     const senderIsOwner = params.restoredCronContinuation
       ? true
-      : clientHasAdminScope(params.client);
+      : hasOperatorAdminScope(params.client?.connect?.scopes);
     const suppressPromptPersistence =
       params.requestedPromptPersistenceSuppression ||
       shouldSuppressAgentPromptPersistence({

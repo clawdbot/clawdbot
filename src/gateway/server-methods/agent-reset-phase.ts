@@ -12,8 +12,8 @@ import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-even
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
 import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { formatForLog } from "../ws-log.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
@@ -81,7 +81,7 @@ export async function runAgentResetPhase(params: {
     return { ...base, stop: true, accepted: true };
   }
   const postResetMessage = normalizeOptionalString(resetCommandMatch[2]) ?? "";
-  if (!clientHasAdminScope(params.client)) {
+  if (!hasOperatorAdminScope(params.client?.connect?.scopes)) {
     params.respond(
       false,
       undefined,

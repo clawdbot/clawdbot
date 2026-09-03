@@ -25,9 +25,9 @@ import { isBrowserCopilotClient, isOperatorUiClient } from "../../utils/message-
 import { isChatStopCommandText } from "../chat-abort.js";
 import type { ChatAttachment } from "../chat-attachments.js";
 import { sanitizeChatSendMessageInput } from "../chat-input-sanitize.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
 import {
-  hasGatewayAdminScope,
   normalizeExplicitChatSendOrigin,
   normalizeOptionalChatSystemReceipt,
   type ChatSendExplicitOrigin,
@@ -132,7 +132,7 @@ export function normalizeChatSendRequest(params: {
       suppressCommandInterpretation ||
       explicitOriginResult.value) &&
     !params.trustedSystemInput &&
-    !hasGatewayAdminScope(params.client)
+    !hasOperatorAdminScope(params.client?.connect?.scopes)
   ) {
     return {
       ok: false,
@@ -195,7 +195,10 @@ export function normalizeChatSendRequest(params: {
           operationId: p.idempotencyKey,
           issuedAtMs: p.intent.issuedAtMs,
           objective: p.message,
-          requestFingerprint: fingerprintSessionGoalRequest([p, hasGatewayAdminScope(client)]),
+          requestFingerprint: fingerprintSessionGoalRequest([
+            p,
+            hasOperatorAdminScope(client?.connect?.scopes),
+          ]),
         }
       : undefined);
   const commandInterpretationSuppressed =

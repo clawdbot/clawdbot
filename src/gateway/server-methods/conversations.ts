@@ -16,7 +16,7 @@ import {
 import { runGatewayConversationList } from "../conversation-list.js";
 import { runGatewayConversationSend } from "../conversation-send.js";
 import { runGatewayConversationTurn } from "../conversation-turn.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { formatForLog } from "../ws-log.js";
@@ -44,7 +44,7 @@ type ConversationHandlerDeps = {
 function isAuthenticatedOwner(client: GatewayClient | null): boolean {
   // These RPCs require operator.admin. Derive owner status from the admitted
   // socket anyway so no future schema field can self-assert channel authority.
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+  return hasOperatorAdminScope(client?.connect?.scopes);
 }
 
 function validateConversationSourceSession(params: {

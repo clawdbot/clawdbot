@@ -39,7 +39,11 @@ import type {
 } from "../plugins/runtime/types.js";
 import type { PluginLogger, PluginOrigin } from "../plugins/types.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
-import { normalizeOperatorScopeList, type OperatorScope } from "./operator-scopes.js";
+import {
+  hasOperatorAdminScope,
+  normalizeOperatorScopeList,
+  type OperatorScope,
+} from "./operator-scopes.js";
 import type { GatewayNodeInvokeStream } from "./server-methods/shared-types.js";
 import type {
   GatewayContextResolver,
@@ -176,13 +180,10 @@ function authorizeFallbackModelOverride(params: {
 
 // ── Internal gateway dispatch for plugin runtime ────────────────────
 
-function hasAdminScope(client: GatewayRequestOptions["client"] | undefined): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
-
 function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boolean {
-  return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
+  return (
+    hasOperatorAdminScope(client?.connect?.scopes) || client?.internal?.allowModelOverride === true
+  );
 }
 
 function canTrustedOfficialPluginRequestScopes(params: {
@@ -380,7 +381,7 @@ export function createGatewaySubagentRuntime(
       const pluginOwnedCleanupOptions = pluginId
         ? {
             pluginRuntimeOwnerId: pluginId,
-            ...(!hasAdminScope(scope?.client)
+            ...(!hasOperatorAdminScope(scope?.client?.connect?.scopes)
               ? {
                   forceSyntheticClient: true,
                   syntheticScopes: [ADMIN_SCOPE],

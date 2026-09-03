@@ -9,6 +9,11 @@ export const PAIRING_SCOPE = "operator.pairing" as const;
 export const TALK_SCOPE = "operator.talk" as const;
 export const TALK_SECRETS_SCOPE = "operator.talk.secrets" as const;
 
+/** Exact raw membership only; no normalization or implied scopes. */
+export function hasOperatorAdminScope(scopes: unknown): boolean {
+  return Array.isArray(scopes) && scopes.includes(ADMIN_SCOPE);
+}
+
 /** Operator privileges advertised by gateway auth and checked by method policy. */
 export type OperatorScope =
   | typeof ADMIN_SCOPE

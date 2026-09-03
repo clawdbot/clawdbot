@@ -23,7 +23,7 @@ import {
   NODE_WAKE_RECONNECT_WAIT_MS,
   releaseNodeWakeLifecycle,
 } from "../node-wake-state.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasOperatorAdminScope } from "../operator-scopes.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
 import { handleNodeInvokeProgress } from "./nodes.handlers.invoke-progress.js";
@@ -115,10 +115,7 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    if (
-      isAdminOnlyNodeInvokeCommand(command) &&
-      !nodeInvokePolicy.clientHasOperatorAdminScope(client)
-    ) {
+    if (isAdminOnlyNodeInvokeCommand(command) && !hasOperatorAdminScope(client?.connect?.scopes)) {
       respond(
         false,
         undefined,

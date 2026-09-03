@@ -30,7 +30,7 @@ import {
   resolveSupportedVoiceModelRefs,
   type VoiceModelProvider,
 } from "../../tts/voice-models.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 
 /** Resolve the Talk session mode, defaulting managed-room transports to stt-tts. */
 export function normalizeTalkSessionMode(params: { mode?: string; transport?: string }): TalkMode {
@@ -75,8 +75,7 @@ export async function resolveTalkRealtimeProviderInstructions(params: {
 }
 
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
+  return hasOperatorAdminScope(client?.connect?.scopes);
 }
 
 export function broadcastTalkRoomEvents(

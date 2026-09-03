@@ -44,7 +44,7 @@ import {
 } from "../talk/realtime-session-harness.js";
 import type { TalkEvent } from "../talk/talk-events.js";
 import { registerChatAbortController } from "./chat-abort.js";
-import { ADMIN_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import { hasOperatorAdminScope, WRITE_SCOPE } from "./operator-scopes.js";
 import type { GatewayRequestContext } from "./server-methods/shared-types.js";
 import { resolveOwnedActiveTalkRunTarget } from "./server-methods/talk-client-run-ownership.js";
 import { formatError } from "./server-utils.js";
@@ -82,7 +82,7 @@ export type TalkAgentConsultAuthority = {
 export function resolveTalkAgentConsultAuthority(
   scopes: readonly string[] | undefined,
 ): TalkAgentConsultAuthority {
-  const senderIsOwner = scopes?.includes(ADMIN_SCOPE) === true;
+  const senderIsOwner = hasOperatorAdminScope(scopes);
   if (senderIsOwner || scopes?.includes(WRITE_SCOPE) === true) {
     return { senderIsOwner };
   }

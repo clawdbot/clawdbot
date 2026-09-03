@@ -6,9 +6,9 @@ import {
   type UserTurnInput,
   type UserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import { loadSessionEntry } from "../session-utils.js";
 import { formatForLog } from "../ws-log.js";
-import { hasGatewayAdminScope } from "./chat-origin-routing.js";
 import { buildRestartSafeChatTranscriptState } from "./chat-restart-recovery.js";
 import type { AdmittedChatSend } from "./chat-send-admission.js";
 import {
@@ -52,7 +52,7 @@ export function createGatewayChatUserTurnController(params: {
     idempotencyKey: buildRunUserTurnIdempotencyKey(session.clientRunId),
     ...(request.p.replyToId ? { replyToId: request.p.replyToId } : {}),
     ...(sender ? { sender } : {}),
-    ...(hasGatewayAdminScope(params.client) ? { senderIsOwner: true } : {}),
+    ...(hasOperatorAdminScope(params.client?.connect?.scopes) ? { senderIsOwner: true } : {}),
     ...(request.systemInputProvenance ? { provenance: request.systemInputProvenance } : {}),
   };
   const replyContextFieldsPromise = request.p.replyToId

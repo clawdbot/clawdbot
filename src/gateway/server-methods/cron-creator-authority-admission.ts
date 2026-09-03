@@ -1,5 +1,5 @@
 import type { InputProvenance } from "../../sessions/input-provenance.js";
-import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayClient } from "./shared-types.js";
 
@@ -24,7 +24,7 @@ function resolveDirectLocalOperatorAuthority(
   const runId = params.runId.trim();
   const isDirectLocalOperator =
     runId.length > 0 &&
-    clientHasAdminScope(params.client ?? null) &&
+    hasOperatorAdminScope(params.client?.connect?.scopes) &&
     internal?.isLocalClient === true &&
     Boolean(params.resolvedSessionKey?.trim()) &&
     !params.spawnedBy?.trim() &&

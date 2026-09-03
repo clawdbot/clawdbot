@@ -16,6 +16,7 @@ import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-har
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import { isBrowserOperatorUiClient } from "../../utils/message-channel.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import {
   loadSessionEntry,
@@ -24,7 +25,6 @@ import {
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import {
-  hasGatewayAdminScope,
   resolveChatSendActiveScopeKey,
   resolveRequestedChatAgentId,
   validateChatSelectedAgent,
@@ -239,7 +239,7 @@ export function prepareChatSendSession(params: {
       request.systemProvenanceReceipt === undefined &&
       !request.suppressCommandInterpretation,
     message: rawMessage,
-    senderIsOwner: hasGatewayAdminScope(client),
+    senderIsOwner: hasOperatorAdminScope(client?.connect?.scopes),
   });
 
   return {

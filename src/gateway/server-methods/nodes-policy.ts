@@ -12,10 +12,6 @@ export const nodeInvokePolicy = {
     const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     return scopes.includes(ADMIN_SCOPE) || scopes.includes(PAIRING_SCOPE);
   },
-  clientHasOperatorAdminScope(client: GatewayClient | null): boolean {
-    const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-    return scopes.includes(ADMIN_SCOPE);
-  },
   rejectClaudeAgentRun(command: string, respond: RespondFn): boolean {
     if (command !== NODE_AGENT_CLI_CLAUDE_RUN_COMMAND) {
       return false;

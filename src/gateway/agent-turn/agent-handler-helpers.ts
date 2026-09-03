@@ -24,7 +24,7 @@ import {
 } from "../../sessions/agent-harness-session-key.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
-import { ADMIN_SCOPE } from "../method-scopes.js";
+import { hasOperatorAdminScope } from "../operator-scopes.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import {
   emitGatewaySessionEndPluginHook,
@@ -51,11 +51,6 @@ export type RestoredCronContinuation = {
     requireExplicitMessageTarget?: boolean;
   };
 };
-
-export function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): boolean {
-  const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-  return scopes.includes(ADMIN_SCOPE);
-}
 
 export function respondDeletedAgentSession(params: {
   cfg: OpenClawConfig;
@@ -139,7 +134,9 @@ export function respondUnavailableAgentSessionForKey(params: {
 export function resolveAllowModelOverrideFromClient(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
-  return clientHasAdminScope(client) || client?.internal?.allowModelOverride === true;
+  return (
+    hasOperatorAdminScope(client?.connect?.scopes) || client?.internal?.allowModelOverride === true
+  );
 }
 
 export function resolveCanUseInternalRuntimeHandoff(

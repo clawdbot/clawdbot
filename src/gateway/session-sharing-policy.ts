@@ -15,6 +15,7 @@ import {
   resolveGatewayOperatorRoleActor,
   resolveOperatorRolePolicy,
 } from "./operator-role-policy.js";
+import { hasOperatorAdminScope } from "./operator-scopes.js";
 import {
   authenticatedProfileUnavailableError,
   gatewayClientSessionCreator,
@@ -49,7 +50,7 @@ export function resolveSessionVisibility(
 export function isGatewayAdmin(client: Pick<GatewayClient, "connect"> | null): boolean {
   // Internal/plugin-runtime runs reach authorization with a client that has no
   // connect handshake; treat a connect-less client as a non-admin, never a crash.
-  return client?.connect?.scopes?.includes("operator.admin") === true;
+  return hasOperatorAdminScope(client?.connect?.scopes);
 }
 
 export function allowedSessionVisibilities(cfg: OpenClawConfig): SessionVisibility[] {

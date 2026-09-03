@@ -20,7 +20,7 @@ import { controlRealtimeVoiceAgentRun } from "../../talk/agent-run-control.js";
 import { ensureClientVoiceAgentSessionEntry } from "../../talk/client-voice-session.js";
 import { resolveConfiguredRealtimeVoiceProvider } from "../../talk/provider-resolver.js";
 import { resolveSandboxedSessionCreation } from "../operator-role-policy.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasOperatorAdminScope } from "../operator-scopes.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { resolveTalkAgentConsultAuthority } from "../talk-client-gateway-control.js";
@@ -87,7 +87,7 @@ function canCloseManagedRoomSession(
 function canCreateUnscopedManagedRoomSession(
   client: { connect?: { scopes?: string[] } } | null,
 ): boolean {
-  return client?.connect?.scopes?.includes(ADMIN_SCOPE) === true;
+  return hasOperatorAdminScope(client?.connect?.scopes);
 }
 
 function managedRoomOwnershipError(action: string) {
