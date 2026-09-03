@@ -122,11 +122,15 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
   // of another's turn - the turn is authorized once, for its holder.
   const pendingBySet = new Map<string, PendingImageSet<TEvent, TLifecycle>>();
   // A set whose parts straddle the wait is delivered in pieces, and the pieces
-  // already handed over are not missing from the send. Each entry carries its own
-  // removal timer, so a set nobody finishes cannot accumulate here.
+  // already handed over are not missing from the send. Message ids, not a count:
+  // a piece whose turn failed is redelivered, and counting it twice would report
+  // fewer missing parts than there are. Each entry carries its own removal timer,
+  // so a set nobody finishes cannot accumulate here — and a piece that arrives
+  // after that timer, or after a restart, is counted against the total on its
+  // own again, which reports more missing than there are rather than fewer.
   const deliveredBySet = new Map<
     string,
-    { count: number; timer?: ReturnType<typeof setTimeout> }
+    { messageIds: Set<string>; timer?: ReturnType<typeof setTimeout> }
   >();
   const pendingKey = (laneKey: string, senderKey: string, setId: string) =>
     `${laneKey}\u0000${senderKey}\u0000${setId}`;
@@ -217,7 +221,7 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
       clearTimeout(carried.timer);
       deliveredBySet.delete(key);
     }
-    const carriedDelivered = carried?.count ?? 0;
+    const carriedMessageIds = carried?.messageIds ?? new Set<string>();
     const releaseLane = await enterLane(input.laneKey);
     // The wait starts here, not on arrival: time spent queued behind earlier work
     // on this lane is not time LINE spent delivering the rest of the set.
@@ -231,10 +235,12 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     // queues behind this delivery rather than joining a snapshot it missed.
     pendingBySet.delete(key);
     const ordered = orderedParts(pending);
-    const delivered = carriedDelivered + ordered.length;
-    const missing = pending.total === undefined ? 0 : pending.total - delivered;
+    const deliveredMessageIds = new Set([...carriedMessageIds, ...pending.parts.keys()]);
+    const missing = pending.total === undefined ? 0 : pending.total - deliveredMessageIds.size;
     if (missing > 0) {
-      const carry: { count: number; timer?: ReturnType<typeof setTimeout> } = { count: delivered };
+      const carry: { messageIds: Set<string>; timer?: ReturnType<typeof setTimeout> } = {
+        messageIds: deliveredMessageIds,
+      };
       carry.timer = setTimeout(() => deliveredBySet.delete(key), pending.flushDelayMs * 5);
       carry.timer.unref?.();
       deliveredBySet.set(key, carry);

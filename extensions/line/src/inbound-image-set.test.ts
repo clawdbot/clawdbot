@@ -304,6 +304,25 @@ describe("createLineImageSetIngressBuffer", () => {
     secondSet?.finish();
   });
 
+  it("does not count a redelivered part as one more image of the same set", async () => {
+    const first = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const firstSet = await first;
+    expect(firstSet?.missing).toBe(1);
+    firstSet?.finish();
+
+    // A turn that failed is retried, and LINE redelivers the same events. The
+    // carry has to recognise them the way the set itself does, or the notice
+    // reports fewer missing parts every time the turn is retried.
+    const retry = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
+    void arrive({ index: 2, total: 3, flushDelayMs: 1_000 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    const retrySet = await retry;
+    expect(retrySet?.missing).toBe(1);
+    retrySet?.finish();
+  });
+
   it("lets an unrelated lane through while a set is still forming", async () => {
     const held = arrive({ index: 1, total: 3, flushDelayMs: 1_000 });
 
