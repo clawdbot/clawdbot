@@ -2047,6 +2047,8 @@
     "tui:pty:test:watch:local": "node --import ./scripts/tsx.mjs scripts/dev/tui-pty-test-watch.ts --mode local",
     "ui:boot-manifest:gen": "node --import ./scripts/tsx.mjs scripts/control-ui-boot-manifest.mts",
     "ui:build": "node scripts/ui.js build",
+    "ui:check-performance": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance.mts",
+    "ui:check-performance:base": "node --import ./scripts/tsx.mjs scripts/check-control-ui-performance-base.mts",
     "ui:dev": "node scripts/ui.js dev",
     "ui:i18n:baseline": "node --import ./scripts/tsx.mjs scripts/control-ui-i18n-verify.ts baseline",
     "ui:i18n:check": "node --import ./scripts/tsx.mjs scripts/control-ui-i18n.ts check",
