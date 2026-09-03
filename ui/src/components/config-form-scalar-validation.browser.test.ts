@@ -559,6 +559,8 @@ describe("scalar validation error accessibility", () => {
   it.each([
     ["scalar", "snapshot"],
     ["json", "snapshot"],
+    ["scalar", "sibling snapshot"],
+    ["json", "sibling snapshot"],
     ["scalar", "removal"],
     ["json", "removal"],
     ["scalar", "ack"],
@@ -691,8 +693,15 @@ describe("scalar validation error accessibility", () => {
       expect(state.configForm).toEqual({ entries: expectedEntries });
       expect(state.configFormDirty).toBe(true);
     } else if (transition !== "removal") {
-      if (transition === "snapshot") {
-        applyConfigSnapshot(state, snapshot());
+      if (transition === "snapshot" || transition === "sibling snapshot") {
+        applyConfigSnapshot(
+          state,
+          snapshot(
+            transition === "sibling snapshot"
+              ? { entries: [sourceConfig.entries[0], { name: "updated" }] }
+              : sourceConfig,
+          ),
+        );
       } else if (transition === "ack") {
         adoptConfigSetAck(state, snapshot().raw, "ack-row-revision");
         expect(state.configSnapshot?.hash).toBe("ack-row-revision");
@@ -705,12 +714,17 @@ describe("scalar validation error accessibility", () => {
       expect(controls()).toHaveLength(2);
       expect(document.activeElement).toBe(refreshed);
       expect(state.configForm).toEqual(
-        transition === "sibling patch"
+        transition === "sibling patch" || transition === "sibling snapshot"
           ? { entries: [{ name: "same" }, { name: "updated" }] }
           : sourceConfig,
       );
       expect(state.configFormDirty).toBe(transition === "sibling patch");
       expect(onPatch).not.toHaveBeenCalled();
+      if (transition === "sibling snapshot") {
+        expect(controls()[1]?.value).toBe(
+          isJson ? JSON.stringify({ name: "updated" }, null, 2) : "updated",
+        );
+      }
       expect(refreshed.value).toBe(draft);
       expect(refreshed.validity.valid).toBe(false);
       expect(refreshed.getAttribute("aria-invalid")).toBe("true");

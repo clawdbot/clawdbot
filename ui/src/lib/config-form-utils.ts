@@ -1,7 +1,6 @@
 // Control UI controller manages form utils gateway state.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ConfigUiHint, ConfigUiHints } from "../api/types.ts";
-import { preserveConfigArrayRowIdentities } from "../components/config-form-array-identity.ts";
+import { preserveConfigArrayRowIdentities } from "./config/config-array-row-state.ts";
 
 export type JsonSchema = {
   type?: string | string[];
@@ -64,46 +63,6 @@ export function schemaMayAcceptString(schema: JsonSchema): boolean {
     return false;
   }
   return !schema.oneOf || schema.oneOf.some(schemaMayAcceptString);
-}
-
-export function pathKey(path: Array<string | number>): string {
-  return path.filter((segment) => typeof segment === "string").join(".");
-}
-
-const wildcardHintCache = new WeakMap<ConfigUiHints, Array<[string[], ConfigUiHint]>>();
-
-export function hintForPath(path: Array<string | number>, hints: ConfigUiHints) {
-  const direct = hints[pathKey(path)];
-  if (direct) {
-    return direct;
-  }
-  const segments = path.map(String);
-  let wildcardHints = wildcardHintCache.get(hints);
-  if (!wildcardHints) {
-    // Schema reloads replace the hints object, so identity safely owns this index.
-    // Reuse it across recursive form and search lookups instead of rescanning the catalog.
-    wildcardHints = Object.entries(hints).flatMap(([hintKey, hint]) =>
-      hintKey.includes("*") ? [[hintKey.split("."), hint]] : [],
-    );
-    wildcardHintCache.set(hints, wildcardHints);
-  }
-  for (const [hintSegments, hint] of wildcardHints) {
-    if (
-      hintSegments.length === segments.length &&
-      hintSegments.every((segment, index) => segment === "*" || segment === segments[index])
-    ) {
-      return hint;
-    }
-  }
-  return undefined;
-}
-
-export function humanize(raw: string) {
-  return raw
-    .replace(/_/g, " ")
-    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
-    .replace(/\s+/g, " ")
-    .replace(/^./, (m) => m.toUpperCase());
 }
 
 export function cloneConfigObject<T>(value: T, previous: unknown = value): T {
