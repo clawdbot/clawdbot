@@ -123,6 +123,9 @@ suite.define(() => {
       await page.locator(".side-panel__minimize").click();
       await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
       await page.locator(".chat-thread").waitFor();
+      if (recordProof) {
+        await page.screenshot({ path: path.join(proofDir, "04-chat-only.png") });
+      }
 
       await page.setViewportSize({ width: 390, height: 844 });
       await page.goto(`${suite.server.baseUrl}dashboards`);
@@ -144,7 +147,7 @@ suite.define(() => {
           ),
       ).toBe(1);
       if (recordProof) {
-        await page.screenshot({ path: path.join(proofDir, "04-gallery-mobile.png") });
+        await page.screenshot({ path: path.join(proofDir, "05-gallery-mobile.png") });
       }
     } finally {
       await context.close();
