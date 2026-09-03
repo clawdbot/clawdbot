@@ -11,11 +11,11 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   cancelSessionWorkAdmissionHandoff,
 } from "../../../sessions/session-lifecycle-admission.js";
-import { INTERNAL_PROVENANCE_SOURCE_CHANNEL } from "../../../sessions/input-provenance.js";
 import { resolveInternalSessionEffectsTarget } from "../../internal-session-effects.js";
 import {
   formatSubagentRecoveryWedgedReason,
