@@ -578,7 +578,7 @@ struct ChatSessionSidebarModelTests {
         #expect(ChatSessionSidebarModel.canArchiveSession(
             self.entry(key: "agent:main:active", sessionId: "session-active", hasActiveRun: true),
             mainSessionKey: "agent:main:main"))
-        #expect(ChatSessionSidebarModel.canArchiveSession(
+        #expect(!ChatSessionSidebarModel.canArchiveSession(
             self.entry(
                 key: "agent:main:active-child",
                 sessionId: "session-active-child",

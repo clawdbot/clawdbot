@@ -498,7 +498,8 @@ public enum ChatSessionSidebarModel {
         mainSessionKey: String) -> Bool
     {
         self.normalized(session.sessionId) != nil &&
-            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey)
+            self.canDeleteSession(key: session.key, mainSessionKey: mainSessionKey) &&
+            session.hasActiveSubagentRun != true
     }
 
     public static func isSessionInActiveAgentScope(
