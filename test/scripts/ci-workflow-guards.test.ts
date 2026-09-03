@@ -15306,13 +15306,13 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     }
     expect(steps[index]).toEqual({
       name: "Prepare Git owner",
-      uses: "openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475",
+      uses: "openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7",
       ...(decision ? { if: "steps.lane.outputs.run == 'true'" } : {}),
     });
     expect(job["timeout-minutes"]).toBe(timeout);
     const bodies = steps.map(({ run }) => run ?? "").join("\n");
     expect(bodies).not.toMatch(/(?:^|[\s(])git\s/mu);
-    expect(bodies).not.toMatch(/timeout[^\n]*git/u);
+    expect(bodies).not.toMatch(/(?:^|[\s(])timeout\s+[^\n]*\bgit\b/u);
     const ownerDeadlines = [...bodies.matchAll(/--(?:checkout-)?git (\d+)/gu)].map((match) =>
       Number(match[1]),
     );
@@ -15320,14 +15320,15 @@ it("pins every Performance Git owner before checkout and preserves Git deadlines
     if (jobId !== "publish") {
       expect(bodies).not.toMatch(/timeout=\d+/u);
     } else {
-      expect(bodies.match(/timeout=120/g)).toHaveLength(3);
+      expect(bodies.match(/timeout=120/g)).toHaveLength(2);
       expect(bodies).not.toMatch(/timeout=(?!120)\d+/u);
       expect(bodies.match(/for attempt in range\(1, 6\)/gu)).toHaveLength(1);
       expect(bodies.match(/backoff\(attempt \* 2\)/gu)).toHaveLength(1);
       expect(bodies).toContain('"push", "origin", "HEAD:main", timeout=120, reclaim_locks=True');
       expect(
         bodies.match(/"fetch", "--depth=1", "origin", "main", timeout=120, reclaim_locks=True/gu),
-      ).toHaveLength(2);
+      ).toHaveLength(1);
+      expect(bodies).toContain('fetch(sys.argv[3], "main", max_attempts=3, retry_failures=True)');
       expect(bodies).toContain("if error.code != 1:");
       expect(bodies).toContain(
         '"ls-tree", "--name-only", "FETCH_HEAD", "--", f"{dest}/report.json"',
