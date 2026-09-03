@@ -4,6 +4,7 @@ import {
   type ControlUiFocusLocation,
 } from "@openclaw/session-url-contract";
 import type { RouteLocation } from "@openclaw/uirouter";
+import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import {
   createApplicationRouter,
@@ -356,7 +357,12 @@ export function bootstrapApplication(): ApplicationRuntime {
     if (snapshot.phase === "connected") {
       browserBootstrapAttempted = true;
     }
-    if (!browserBootstrapAttempted && snapshot.phase === "stopped" && snapshot.lastErrorCode) {
+    if (
+      !browserBootstrapAttempted &&
+      snapshot.phase === "stopped" &&
+      (snapshot.lastErrorCode === ConnectErrorDetailCodes.AUTH_TOKEN_MISSING ||
+        snapshot.lastErrorCode === ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING)
+    ) {
       browserBootstrapAttempted = true;
       // Recovery stays off the startup path; loading it cannot revive a replaced connection.
       startupLifecycle.trackDisposer(

@@ -32,45 +32,84 @@ afterEach(() => {
 });
 
 describe("pending Gateway credentials", () => {
-  it("recovers a bare dashboard login through its same-origin handoff without changing the route", async () => {
-    window.history.replaceState({}, "", "/settings/appearance?keep=yes#section");
-    const initialUrl = window.location.href;
-    const store = createGatewayStoreTestStore();
-    vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
-    const fetchMock = vi.fn<typeof fetch>(async () =>
-      Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
-    );
-    vi.stubGlobal("fetch", fetchMock);
-    runtime = bootstrapApplication();
-    vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
-    await runtime.start();
-    expect(fetchMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      name: "an initial missing token",
+      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+      retryUnavailable: false,
+    },
+    {
+      name: "a missing token after retrying an unavailable Gateway",
+      authCode: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING,
+      retryUnavailable: true,
+    },
+    {
+      name: "a missing password after retrying an unavailable Gateway",
+      authCode: ConnectErrorDetailCodes.AUTH_PASSWORD_MISSING,
+      retryUnavailable: true,
+    },
+  ])(
+    "recovers $name through its same-origin handoff without changing the route",
+    async ({ authCode, retryUnavailable }) => {
+      window.history.replaceState({}, "", "/settings/appearance?keep=yes#section");
+      const initialUrl = window.location.href;
+      const store = createGatewayStoreTestStore();
+      vi.spyOn(gatewayStore, "createApplicationGateway").mockReturnValue(store.gateway);
+      const fetchMock = vi.fn<typeof fetch>(async () =>
+        Response.json({ bootstrapToken: "owner-bootstrap", bootstrapProfile: "owner" }),
+      );
+      vi.stubGlobal("fetch", fetchMock);
+      runtime = bootstrapApplication();
+      vi.spyOn(runtime.router, "start").mockResolvedValue(undefined);
+      await runtime.start();
+      expect(fetchMock).not.toHaveBeenCalled();
 
-    store.current().opts.onClose?.({
-      code: 4008,
-      reason: "connect failed",
-      error: {
-        code: "INVALID_REQUEST",
-        message: "token missing",
-        details: { code: ConnectErrorDetailCodes.AUTH_TOKEN_MISSING },
-      },
-      willRetry: false,
-    });
+      if (retryUnavailable) {
+        const revision = store.gateway.connectionRevision;
+        store.current().opts.onClose?.({
+          code: 4008,
+          reason: "connect failed",
+          error: { code: "UNAVAILABLE", message: "Gateway temporarily unavailable" },
+          willRetry: false,
+        });
+        expect(store.gateway.snapshot).toMatchObject({
+          phase: "stopped",
+          lastErrorCode: "UNAVAILABLE",
+        });
+        expect(fetchMock).not.toHaveBeenCalled();
 
-    await vi.waitFor(() => expect(store.gateway.connection.bootstrapToken).toBe("owner-bootstrap"));
-    expect(fetchMock).toHaveBeenCalledOnce();
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/.well-known/openclaw/browser-bootstrap",
-      expect.objectContaining({
-        method: "GET",
-        credentials: "same-origin",
-        cache: "no-store",
-        redirect: "error",
-      }),
-    );
-    expect(store.current().opts.bootstrapProfile).toBe("owner");
-    expect(window.location.href).toBe(initialUrl);
-  });
+        store.gateway.connect();
+        expect(store.gateway.connectionRevision).toBe(revision);
+      }
+
+      store.current().opts.onClose?.({
+        code: 4008,
+        reason: "connect failed",
+        error: {
+          code: "INVALID_REQUEST",
+          message: "authentication missing",
+          details: { code: authCode },
+        },
+        willRetry: false,
+      });
+
+      await vi.waitFor(() =>
+        expect(store.gateway.connection.bootstrapToken).toBe("owner-bootstrap"),
+      );
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/.well-known/openclaw/browser-bootstrap",
+        expect.objectContaining({
+          method: "GET",
+          credentials: "same-origin",
+          cache: "no-store",
+          redirect: "error",
+        }),
+      );
+      expect(store.current().opts.bootstrapProfile).toBe("owner");
+      expect(window.location.href).toBe(initialUrl);
+    },
+  );
 
   it.each(["native client", "unconfirmed Gateway"])(
     "does not replace the %s authentication flow with a browser handoff",
