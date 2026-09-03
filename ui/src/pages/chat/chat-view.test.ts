@@ -6910,6 +6910,7 @@ describe("chat model controls", () => {
           id: "gpt-5.6-sol",
           name: "GPT-5.6 Sol",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth",
         },
@@ -6917,6 +6918,7 @@ describe("chat model controls", () => {
           id: "gpt-5.6-luna",
           name: "GPT-5.6 Luna",
           provider: "openai",
+          contextWindow: 1_000_000,
           available: false,
           unavailableReason: "missing-auth",
         },
@@ -6937,9 +6939,13 @@ describe("chat model controls", () => {
     expect(options[0]?.textContent).toContain("Default");
     expect([...options].every((option) => !option.disabled)).toBe(true);
     expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
-    expect([...options].every((option) => option.textContent?.includes("Sign-in needed"))).toBe(
-      true,
-    );
+    for (const option of options) {
+      const warning = option.querySelector("[data-chat-model-auth-warning]");
+      expect(warning?.textContent?.trim()).toBe("Sign-in needed");
+      expect(warning?.querySelector("svg")).not.toBeNull();
+      expect(option.querySelector(".chat-controls__model-option-meta")).toBeNull();
+      expect(option.textContent).not.toContain("1M");
+    }
     expect(
       container.querySelector('[data-chat-model-catalog-state="ready"]')?.textContent,
     ).toContain("No models available");
@@ -7059,12 +7065,12 @@ describe("chat model controls", () => {
   });
 
   it.each([
-    { target: "session", label: "This session" },
-    { target: "agent", label: "Agent default" },
-    { target: "global", label: "Global default" },
+    ["session", "This session", "Selecting a model changes only this session."],
+    ["agent", "Agent default", "Selecting a model updates this agent's default."],
+    ["global", "Global default", "Selecting a model updates the global default."],
   ] as const)(
-    "discloses the $target write target before pointer selection",
-    ({ target, label }) => {
+    "does not expose the internal $target write target in the picker",
+    (target, scopeLabel, scopeDescription) => {
       const { state } = createOpenAiHeaderState();
       state.sessionsResult = {
         ...expectDefined(state.sessionsResult, "sessions result"),
@@ -7076,9 +7082,13 @@ describe("chat model controls", () => {
       const onModelSelect = vi.fn(async () => true);
       const container = renderModelControls(state, { onModelSelect });
 
-      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-        label,
-      );
+      expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
+      const trigger = getChatModelSelect(container);
+      expect(trigger.title).toBe(scopeDescription);
+      expect(trigger.getAttribute("aria-label")).toContain(scopeDescription);
+      const scope = container.querySelector<HTMLElement>("[data-chat-model-selection-scope]");
+      expect(scope?.textContent?.trim()).toBe(scopeLabel);
+      expect(scope?.getAttribute("aria-label")).toBe(scopeDescription);
       const modelOption = Array.from(
         container.querySelectorAll<HTMLButtonElement>("[data-chat-model-option]"),
       ).find((button) => button.getAttribute("aria-selected") === "false");
@@ -7311,12 +7321,9 @@ describe("chat model controls", () => {
     container.remove();
   });
 
-  it.each([
-    { target: "agent", targetLabel: "Agent default" },
-    { target: "global", targetLabel: "Global default" },
-  ] as const)(
+  it.each(["agent", "global"] as const)(
     "keeps a pinned reset session-only while model rows write to the $target target",
-    ({ target, targetLabel }) => {
+    (target) => {
       const { state } = createChatHeaderState({
         model: "gpt-5.4",
         modelOverrideSource: "user",
@@ -7333,9 +7340,7 @@ describe("chat model controls", () => {
       const onModelSelect = vi.fn(async () => true);
       const container = renderModelControls(state, { onModelSelect });
 
-      expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-        targetLabel,
-      );
+      expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
       const reset = container.querySelector<HTMLButtonElement>("[data-chat-model-reset]");
       expect(reset?.textContent?.trim()).toBe("Reset session model");
       expect(reset?.title).toContain("for this session");
@@ -7524,20 +7529,33 @@ describe("chat model controls", () => {
       ],
     });
     const onModelSelect = vi.fn(async () => true);
+    const onModelSetup = vi.fn();
     const container = renderModelControls(state, {
-      modelSelectionTarget: "agent",
       onModelSelect,
+      onModelSetup,
     });
     document.body.append(container);
 
     const providerHeadings = Array.from(
       container.querySelectorAll<HTMLElement>("[data-chat-model-provider]"),
     );
-    expect(providerHeadings.map((heading) => heading.textContent?.trim())).toEqual([
-      "OpenAI",
-      "Anthropic",
-      "Google",
-    ]);
+    expect(
+      providerHeadings.map((heading) =>
+        heading.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
+      ),
+    ).toEqual(["OpenAI", "Anthropic", "Google"]);
+    const providerSettings = providerHeadings[0]?.querySelector<HTMLButtonElement>(
+      "[data-chat-model-provider-settings]",
+    );
+    expect(providerSettings?.getAttribute("aria-label")).toBe("Configure models");
+    expect(providerSettings?.closest('[role="listbox"]')).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll<HTMLElement>('[role="option"]')).every(
+        (option) => option.closest('[role="listbox"]') !== null,
+      ),
+    ).toBe(true);
+    providerSettings?.click();
+    expect(onModelSetup).toHaveBeenCalledOnce();
     const anthropicModels = container.querySelector<HTMLElement>(
       '[data-chat-model-provider-group="anthropic"]',
     );
@@ -7545,9 +7563,7 @@ describe("chat model controls", () => {
     const details = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
     const search = container.querySelector<HTMLInputElement>("[data-chat-model-search]");
     details!.open = true;
-    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "Agent default",
-    );
+    expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
     search!.value = "anth";
     search!.dispatchEvent(new InputEvent("input", { bubbles: true }));
 
@@ -7617,7 +7633,6 @@ describe("chat model controls", () => {
     });
     const onModelSelect = vi.fn(async () => true);
     const container = renderModelControls(state, {
-      modelSelectionTarget: "global",
       onModelSelect,
     });
     document.body.append(container);
@@ -7651,7 +7666,11 @@ describe("chat model controls", () => {
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
-    expect(providerButtons.map((button) => button.textContent?.trim())).toEqual(["OpenAI"]);
+    expect(
+      providerButtons.map((button) =>
+        button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
+      ),
+    ).toEqual(["OpenAI"]);
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="openai"]')?.hidden,
     ).toBe(false);
@@ -7678,7 +7697,9 @@ describe("chat model controls", () => {
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
-    const providerLabels = providerButtons.map((button) => button.textContent?.trim());
+    const providerLabels = providerButtons.map((button) =>
+      button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
+    );
     expect(providerLabels).toEqual(["Google", "OpenCode", "Moonshot AI"]);
     expect(new Set(providerLabels).size).toBe(providerLabels.length);
     expect(
@@ -8191,10 +8212,11 @@ describe("chat model controls", () => {
     const providerButtons = Array.from(
       container.querySelectorAll<HTMLButtonElement>("[data-chat-model-provider]"),
     );
-    expect(providerButtons.map((button) => button.textContent?.trim())).toEqual([
-      "OpenRouter",
-      "Google",
-    ]);
+    expect(
+      providerButtons.map((button) =>
+        button.querySelector(".chat-controls__provider-label")?.textContent?.trim(),
+      ),
+    ).toEqual(["OpenRouter", "Google"]);
     expect(
       container.querySelector<HTMLElement>('[data-chat-model-provider-group="google"]')
         ?.textContent,

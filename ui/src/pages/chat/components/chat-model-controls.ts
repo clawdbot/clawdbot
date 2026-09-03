@@ -39,8 +39,8 @@ type ChatModelControlsProps = {
   modelCatalogState?: ChatModelCatalogState;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
-  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelSelectionRuntimeId?: string;
+  modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
   modelPickerTargetGroups?: readonly ChatModelPickerTargetGroup[];
   modelPickerOpen?: boolean;
   modelSwitching: boolean;
@@ -161,6 +161,30 @@ function resolveChatModelPickerLabel(
 function formatPickerModelLabel(label: string): string {
   const match = /^Default \((.+)\)$/u.exec(label);
   return match?.[1] ?? label;
+}
+
+function resolveModelSelectionScope(
+  target: SessionsListResult["defaults"]["modelSelectionTarget"],
+): { label: string; description: string } | undefined {
+  switch (target) {
+    case "session":
+      return {
+        label: t("chat.modelControls.selectionScopeSessionLabel"),
+        description: t("chat.modelControls.selectionScopeSession"),
+      };
+    case "agent":
+      return {
+        label: t("chat.modelControls.selectionScopeAgentLabel"),
+        description: t("chat.modelControls.selectionScopeAgent"),
+      };
+    case "global":
+      return {
+        label: t("chat.modelControls.selectionScopeGlobalLabel"),
+        description: t("chat.modelControls.selectionScopeGlobal"),
+      };
+    default:
+      return undefined;
+  }
 }
 
 function resolveCatalogTriggerStatus(
@@ -425,7 +449,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
         modelCatalogState: managedCatalog,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
-        modelSelectionTarget: props.modelSelectionTarget,
+        selectionScope: resolveModelSelectionScope(props.modelSelectionTarget),
         modelOptions,
         targetGroups: props.modelPickerTargetGroups,
         selectedModelValue: pickerValue,

@@ -589,7 +589,9 @@ suite.define(() => {
         .toBe(1);
       await page.keyboard.press("Escape");
       await model.click();
-      const providerHeadings = composer.locator("[data-chat-model-provider]");
+      const providerHeadings = composer.locator(
+        "[data-chat-model-provider] .chat-controls__provider-label",
+      );
       await expect
         .poll(async () => (await providerHeadings.allTextContents()).map((label) => label.trim()))
         .toEqual(["OpenAI", "Anthropic"]);
