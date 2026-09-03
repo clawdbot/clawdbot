@@ -290,7 +290,6 @@ async function resolveSessionAuthProfileOverride(params: {
     }),
   );
   const order = [...new Set(orderResolutions.flatMap((resolution) => resolution.profileIds))];
-  const hasExplicitOrder = orderResolutions.some((resolution) => resolution.hasExplicitOrder);
   let current = sessionEntry.authProfileOverride?.trim();
   const source = resolveSessionAuthProfileOverrideSource(sessionEntry);
 
@@ -375,15 +374,14 @@ async function resolveSessionAuthProfileOverride(params: {
       : compactionCount;
   // A healthy automatic fallback yields when an explicit preference is eligible to retry,
   // preventing a metered backup from staying pinned. The real request proves recovery.
-  const currentOrderIndex = current ? order.indexOf(current) : -1;
   const retryableHigherPriorityProfile =
-    source === "auto" &&
-    hasExplicitOrder &&
-    !currentUnavailable &&
-    compactionCount <= storedCompaction &&
-    currentOrderIndex > 0
-      ? order
-          .slice(0, currentOrderIndex)
+    source === "auto" && !currentUnavailable && compactionCount <= storedCompaction && current
+      ? orderResolutions
+          .filter((resolution) => resolution.hasExplicitOrder)
+          .flatMap((resolution) => {
+            const currentOrderIndex = resolution.profileIds.indexOf(current);
+            return currentOrderIndex > 0 ? resolution.profileIds.slice(0, currentOrderIndex) : [];
+          })
           .find((profileId) => !isProfileUnavailableForSessionModel(profileId))
       : undefined;
   const shouldRotateCurrent =
