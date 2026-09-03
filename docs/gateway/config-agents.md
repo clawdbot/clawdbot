@@ -69,8 +69,9 @@ home directory on every platform — `OPENCLAW_HOME` when set, otherwise the OS
 home — so the tilde examples in these docs are portable. On Windows with
 neither `OPENCLAW_HOME` nor `HOME` set, `~/.openclaw/workspace` resolves under
 the Windows profile directory (`USERPROFILE`, for example
-`C:\Users\<name>\.openclaw\workspace`). Absolute paths, including
-Windows drive paths such as `C:\openclaw\workspace`, are used as-is. Other
+`C:\Users\<name>\.openclaw\workspace`). Non-tilde paths are resolved against
+the host platform: absolute paths are used as-is, and on Windows a
+drive-letter path such as `C:\openclaw\workspace` counts as absolute. Other
 path settings follow their own resolvers: `agents.defaults.repoRoot` and
 `OPENCLAW_WORKSPACE_DIR` are resolved as plain paths without tilde expansion.
 
