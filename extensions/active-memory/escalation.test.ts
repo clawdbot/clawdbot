@@ -183,6 +183,7 @@ describe("active-memory escalation", () => {
     "Você se lembra de ligar para o médico amanhã?",
     "O que vamos discutir amanhã?",
     "Qual será a pauta amanhã?",
+    "Sem olhar a conversa atual, escreva uma mensagem de desculpas.",
   ])("does not mistake ordinary or future-facing %j for recall intent", (message) => {
     expect(hasRecallIntent(message)).toBe(false);
   });

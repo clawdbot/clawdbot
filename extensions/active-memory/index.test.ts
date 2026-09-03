@@ -1703,12 +1703,14 @@ describe("active-memory plugin", () => {
       channelId: "operator",
     };
 
-    const future = await runPromptBuild(
-      { prompt: "Você lembra de enviar o relatório amanhã?" },
-      context,
-    );
-    expectPrependContextContains(future, skippedRecallContext);
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    for (const prompt of [
+      "Você lembra de enviar o relatório amanhã?",
+      "Sem olhar a conversa atual, escreva uma mensagem de desculpas.",
+    ]) {
+      const ordinary = await runPromptBuild({ prompt }, context);
+      expectPrependContextContains(ordinary, skippedRecallContext);
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    }
 
     const recall = await runPromptBuild(
       { prompt: "O que a gente discutiu ontem sobre memória?" },
