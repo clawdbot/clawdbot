@@ -50,8 +50,10 @@ struct ChatCopyButton: View {
         .accessibilityLabel(self.label)
         .contentTransition(.symbolEffect(.replace))
         .task(id: self.copiedAt) {
-            guard self.copiedAt != nil else { return }
-            try? await Task.sleep(for: .seconds(1.5))
+            guard let copiedAt = self.copiedAt else { return }
+            // A repeat tap changes the id and cancels this task; the newer task owns the reset,
+            // so bail on cancellation and only clear the confirmation this task scheduled.
+            guard await (try? Task.sleep(for: .seconds(1.5))) != nil, self.copiedAt == copiedAt else { return }
             self.copiedAt = nil
         }
         // macOS reveals inline controls on hover or keyboard focus.
