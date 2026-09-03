@@ -4,10 +4,7 @@ import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it } from "vitest";
 import { withTestTimeout } from "../../test/helpers/promise.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
-import {
-  DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS,
-  openAICompatibleEmbeddingProviderAdapter,
-} from "./openai-compatible-embedding-provider.js";
+import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
 const servers: Array<{ close: () => Promise<void> }> = [];
 
@@ -140,10 +137,6 @@ describe("openai-compatible embedding stall deadlines", () => {
         "timed out waiting for the explicit provider batch deadline",
       ),
     ).rejects.toThrow("openai-compatible embeddings request timed out after 1s");
-  });
-
-  it("applies the built-in query stall deadline only to labeled query calls", () => {
-    expect(DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS).toBe(30_000);
   });
 
   it("keeps the caller signal ahead of the client stall deadline", async () => {

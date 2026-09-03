@@ -32,7 +32,7 @@ const EMBEDDING_ERROR_TRUNCATED_SUFFIX = "... [truncated]";
 // actionable error instead of burning the caller's whole budget or hanging
 // signal-less callers (memory status, indexing) for minutes. Batch indexing
 // keeps its inline-batch bound.
-export const DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS = 30_000;
+const DEFAULT_QUERY_EMBEDDING_TIMEOUT_MS = 30_000;
 
 /** Normalized OpenAI-compatible embedding client configuration. */
 type OpenAICompatibleEmbeddingClient = {
