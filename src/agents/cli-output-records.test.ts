@@ -520,6 +520,42 @@ describe("parseCliJson", () => {
 });
 
 describe("parseCliJsonl", () => {
+  it.each([
+    {
+      name: "records a reply-less terminal stop for any claude-stream-json backend",
+      backend: { command: "acme-agent", jsonlDialect: "claude-stream-json" as const },
+      expected: [
+        "Claude CLI ended the turn without a reply (terminal_reason: hook_stopped, stop_reason: tool_use).",
+        { reason: "turn_stopped", terminalReason: "hook_stopped", stopReason: "tool_use" },
+      ],
+    },
+    {
+      name: "leaves terminal_reason alone outside the claude-stream-json dialect",
+      backend: { command: "acme-agent" },
+      expected: [undefined, undefined],
+    },
+  ])("$name", ({ backend, expected }) => {
+    // The dialect, not the provider id, owns Claude Code's terminal semantics:
+    // a plugin backend that declares `claude-stream-json` gets the same stop
+    // classification as the bundled `claude-cli`, and one that does not stays
+    // on the generic result path.
+    const result = parseCliJsonl(
+      JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        session_id: "acme-hook-stopped",
+        stop_reason: "tool_use",
+        terminal_reason: "hook_stopped",
+        result: "",
+      }),
+      { ...backend, output: "jsonl", sessionIdFields: ["session_id"] },
+      "acme-cli",
+    );
+
+    expect([result.errorText, result.terminalFailure]).toEqual(expected);
+  });
+
   it.each(OPENAI_COMPATIBLE_CLI_USAGE_CASES)(
     "normalizes $name from CLI JSONL output",
     ({ raw, normalized }) => {
