@@ -1,12 +1,17 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { CodeModeOutputState } from "./code-mode-json.js";
 import { createCodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import { consumeRepairableCodeModeFailure } from "./code-mode-repair-provenance.js";
+import type { CodeModeWorkerResult } from "./code-mode-runtime.js";
 import { applyCodeModeCatalog, resolveCodeModeConfig } from "./code-mode.js";
 import {
   createCodeModeHarness,
   fakeTool,
+  resetCodeModeTestState,
+  resultDetails,
   runUntilCompleted,
   testing,
 } from "./code-mode.test-support.js";
@@ -15,6 +20,7 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "./subagents/swarm/swarm-code-mode.js";
+import { clearToolSearchCatalog } from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 const swarmMocks = vi.hoisted(() => ({
@@ -42,34 +48,53 @@ vi.mock("./tools/agents-wait-tool.js", async (importOriginal) => ({
 
 const config = resolveCodeModeConfig({ tools: { codeMode: true } } as never);
 
+function projectWorkerResult(result: CodeModeWorkerResult) {
+  const output = new CodeModeOutputState(config.maxOutputBytes);
+  output.append(result.output);
+  return {
+    ...result,
+    ...output.take(
+      result.status === "completed"
+        ? { value: result.value }
+        : result.status === "failed"
+          ? { error: result.error }
+          : {},
+    ),
+  };
+}
+
 function workerExec(source: string, swarmEnabled: boolean) {
-  return testing.runCodeModeWorker(
-    {
-      kind: "exec",
-      source,
-      config,
-      catalog: [],
-      apiFiles: [],
-      namespaces: [],
-      swarmEnabled,
-    },
-    10_000,
-  );
+  return testing
+    .runCodeModeWorker(
+      {
+        kind: "exec",
+        source,
+        config,
+        catalog: [],
+        apiFiles: [],
+        namespaces: [],
+        swarmEnabled,
+      },
+      10_000,
+    )
+    .then(projectWorkerResult);
 }
 
 function workerResume(
   waiting: Extract<Awaited<ReturnType<typeof workerExec>>, { status: "waiting" }>,
   settledRequests: Array<{ id: string; ok: true; value: unknown }>,
 ) {
-  return testing.runCodeModeWorker(
-    {
-      kind: "resume",
-      snapshotBytes: waiting.snapshotBytes,
-      config,
-      settledRequests,
-    },
-    10_000,
-  );
+  return testing
+    .runCodeModeWorker(
+      {
+        kind: "resume",
+        snapshot: waiting.snapshot,
+        config,
+        settledRequests,
+      },
+      10_000,
+    )
+    .then(projectWorkerResult);
 }
 
 function expectWaiting(
@@ -168,7 +193,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  testing.activeRuns.clear();
+  resetCodeModeTestState();
+  vi.useRealTimers();
 });
 
 describe("Code Mode swarm guest", () => {
@@ -286,18 +312,51 @@ describe("Code Mode swarm guest", () => {
     }
   });
 
-  it("keeps a guest error after agents.run restricted", async () => {
-    const details = await runSwarmCode(
-      createSwarmHarness(),
-      `await agents.run("Research"); return missingAfterCollector();`,
-    );
-
-    expect(details).toMatchObject({
-      status: "failed",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
+  it("keeps a guest error after a parked agents.run restricted without replaying the collector", async () => {
+    const collectorStarted = createDeferred();
+    const collectorRelease = createDeferred();
+    swarmMocks.waitForCollectorCompletion.mockImplementation(async () => {
+      collectorStarted.resolve();
+      await collectorRelease.promise;
+      return { runId: "collector-1", status: "done", result: "collected" };
     });
-    expect(consumeRepairableCodeModeFailure(details)).toBe(false);
+    const harness = createSwarmHarness();
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+    const executing = harness.tools[0]!.execute("parked-collector", {
+      code: `await agents.run("Research"); return missingAfterCollector();`,
+    });
+    try {
+      await collectorStarted.promise;
+      await vi.advanceTimersByTimeAsync(10_000);
+      const parked = resultDetails(await executing);
+      expect(parked).toMatchObject({
+        status: "waiting",
+        reason: "pending_tools",
+        pendingToolCalls: [expect.objectContaining({ method: "agentWait" })],
+      });
+      vi.useRealTimers();
+      collectorRelease.resolve();
+      const details = resultDetails(
+        await harness.tools[1]!.execute("collector-wait", {
+          runId: parked.runId,
+        }),
+      );
+
+      expect(details).toMatchObject({
+        status: "failed",
+        failurePhase: "bridge",
+        bridgeDispatchStarted: true,
+        error: expect.stringContaining("ReferenceError: missingAfterCollector is not defined"),
+      });
+      expect(consumeRepairableCodeModeFailure(details)).toBe(false);
+      expect(harness.spawnTool.execute).toHaveBeenCalledOnce();
+      expect(swarmMocks.waitForCollectorCompletion).toHaveBeenCalledOnce();
+      expect(testing.activeRuns.size).toBe(0);
+    } finally {
+      collectorRelease.resolve();
+      vi.useRealTimers();
+      await executing;
+    }
   });
 
   it.each([
@@ -413,6 +472,58 @@ describe("Code Mode swarm host bridge", () => {
     expect(harness.spawnTool.execute).not.toHaveBeenCalled();
   });
 
+  it.each(["abort", "catalog"] as const)(
+    "discards queued collector launches after %s closure",
+    async (closure) => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      const launches: Array<Promise<ReturnType<typeof jsonResult>>> = [];
+      const harness = createSwarmHarness(() => {
+        const launch = release.promise.then(() =>
+          jsonResult({ status: "accepted", runId: "late-collector" }),
+        );
+        launches.push(launch);
+        if (launches.length === config.maxPendingToolCalls) {
+          entered.resolve();
+        }
+        return launch;
+      });
+      const controller = new AbortController();
+      const executing = harness.tools[0]!.execute(
+        "queued-collector-closure",
+        {
+          code: `return await Promise.all(Array.from(
+            { length: ${config.maxPendingToolCalls + 4} },
+            (_, index) => agents.run("Research " + index),
+          ));`,
+        },
+        controller.signal,
+      );
+      try {
+        await Promise.race([
+          entered.promise,
+          executing.then(() => {
+            throw new Error("execution ended before the collector frontier started");
+          }),
+        ]);
+        if (closure === "abort") {
+          controller.abort();
+        } else {
+          clearToolSearchCatalog(harness.ctx);
+        }
+        expect(resultDetails(await executing)).toMatchObject({ status: "failed", code: "aborted" });
+      } finally {
+        controller.abort();
+        release.resolve();
+        await Promise.allSettled(launches);
+        await executing;
+      }
+      expect(harness.spawnTool.execute).toHaveBeenCalledTimes(config.maxPendingToolCalls);
+      expect(swarmMocks.waitForCollectorCompletion).not.toHaveBeenCalled();
+      expect(testing.activeRuns.size).toBe(0);
+    },
+  );
+
   it("re-settles a persisted collector after restart without double-spawn", async () => {
     let persisted: SubagentRunRecord | undefined;
     const harness = createSwarmHarness(async (_toolCallId, input) => {
@@ -494,7 +605,7 @@ describe("Code Mode swarm host bridge", () => {
   it("renews expired snapshots while agentWait remains pending", () => {
     const now = 10_000;
     testing.activeRuns.set("cm-pending-agent", {
-      releaseOwner: () => undefined,
+      owner: { close: () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now + 120_000,
@@ -517,7 +628,7 @@ describe("Code Mode swarm host bridge", () => {
     const now = 10_000;
     const cancel = vi.fn();
     testing.activeRuns.set("cm-expired-agent", {
-      releaseOwner: () => undefined,
+      owner: { close: () => undefined },
       config: { ...config, snapshotTtlSeconds: 60 },
       expiresAt: now - 1,
       agentWaitRetainUntil: now - 1,

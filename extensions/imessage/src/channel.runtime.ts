@@ -1,3 +1,4 @@
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 // Imessage plugin module implements channel behavior.
 import {
   createAccountStatusSink,
@@ -5,9 +6,9 @@ import {
 } from "openclaw/plugin-sdk/channel-outbound";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
 import {
   listEnabledIMessageAccounts,
+  resolveIMessageAccount,
   resolveIMessageDuplicateSourceOwner,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
@@ -41,10 +42,7 @@ export async function sendIMessageOutbound(params: {
     }) ?? sendMessageIMessage;
   const maxBytes = resolveChannelMediaMaxBytes({
     cfg: params.cfg,
-    resolveChannelLimitMb: ({ cfg, accountId }) =>
-      cfg.channels?.imessage?.accounts?.[accountId]?.mediaMaxMb ??
-      cfg.channels?.imessage?.mediaMaxMb,
-    accountId: params.accountId,
+    resolveChannelLimitMb: () => resolveIMessageAccount(params).config.mediaMaxMb,
   });
   const result = await send(params.to, params.text, {
     config: params.cfg,

@@ -30,13 +30,14 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
   const createMock = vi.fn();
 
   async function expectFallbackResult(
-    send: () => Promise<{ messageId?: string }>,
+    send: () => Promise<{ messageId?: string; receipt?: { replyToId?: string } }>,
     expectedMessageId: string,
   ) {
     const result = await send();
     expect(replyMock).toHaveBeenCalledTimes(1);
     expect(createMock).toHaveBeenCalledTimes(1);
     expect(result.messageId).toBe(expectedMessageId);
+    expect(result.receipt?.replyToId).toBeUndefined();
   }
 
   beforeAll(async () => {
@@ -364,6 +365,25 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
       "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
     );
 
+    expect(createMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves the reply anchor after a successful native thread reply", async () => {
+    replyMock.mockResolvedValue({
+      code: 0,
+      data: { message_id: "om_thread_reply" },
+    });
+
+    const result = await sendMessageFeishu({
+      cfg: {} as never,
+      to: "chat:oc_group_1",
+      text: "hello",
+      replyToMessageId: "om_parent",
+      replyInThread: true,
+    });
+
+    expect(result.receipt.replyToId).toBe("om_parent");
+    expect(result.receipt.threadId).toBeUndefined();
     expect(createMock).not.toHaveBeenCalled();
   });
 

@@ -120,7 +120,6 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/agents/model-auth-model.ts", // Null Authorization sentinel crosses the SDK's string-only header type.
   "src/agents/model-provider-auth.ts", // Route-fact cache keys cross a config-only hash API.
   "src/agents/modes/interactive/theme/theme.ts", // Global symbol registry and Proxy receiver bridge duplicate module copies.
-  "src/agents/subagents/spawn/subagent-depth.ts", // Generic session projections cross the fixed accessor entry type.
   "src/agents/tool-search-transcript.ts", // Synthetic target turns omit provider-owned assistant metadata.
   "src/channels/plugins/config-schema.ts", // Public SDK Zod generics preserve caller schema identity.
   "src/commands/channel-test-registry.ts", // Test support.
@@ -130,7 +129,7 @@ export const CHAINED_ASSERTION_EXCLUDED_ROOTS = [
   "src/config/schema.hints.ts", // Zod pipe internals cross its public type namespace.
   "src/config/sessions/store-entry-shape.ts", // Legacy projection accepts partially validated session records.
   "src/gateway/cli-session-history.claude.ts", // External CLI messages cross the canonical transcript redactor.
-  "src/gateway/mcp-app-standalone.ts", // Generated standalone browser code bridges the DOM namespace.
+  "src/gateway/mcp-app-standalone-host.ts", // Generated standalone browser code bridges the DOM namespace.
   "src/gateway/server-methods/chat-transcript-inject.ts", // Gateway media blocks exceed the canonical message content union.
   "src/gateway/test-http-response.ts", // Test support.
   "src/infra/backup-volatile-stat-cache.ts", // node-tar's cache expects full Stats for a synthetic sentinel.

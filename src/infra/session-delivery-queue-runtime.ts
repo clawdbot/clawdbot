@@ -73,7 +73,8 @@ function armSessionDeliveryId(id: string, delayMs: number, generation: number): 
   if (!runtime || generation !== runtimeGeneration) {
     return;
   }
-  const dueAt = Date.now() + delayMs;
+  // Native timers measure elapsed time, so preemption deadlines must ignore wall-clock jumps.
+  const dueAt = performance.now() + delayMs;
   const existing = scheduledEntries.get(id);
   if (existing && existing.dueAt <= dueAt) {
     return;
@@ -202,15 +203,3 @@ export async function schedulePendingSessionDeliveries(): Promise<void> {
     armSessionDelivery(entry, generation);
   }
 }
-
-const testing = {
-  reset(): void {
-    runtimeGeneration += 1;
-    runtime = undefined;
-    clearScheduledEntries();
-  },
-};
-
-(globalThis as Record<PropertyKey, unknown>)[
-  Symbol.for("openclaw.sessionDeliveryQueueRuntimeTestApi")
-] = testing;

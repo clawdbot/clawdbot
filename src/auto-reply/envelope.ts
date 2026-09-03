@@ -127,35 +127,23 @@ export function formatAgentEnvelopeTimestamp(
     return undefined;
   }
   const zone = resolveEnvelopeTimezone(resolved);
-  // Include a weekday prefix so models do not need to derive DOW from the date
-  // (small models are notoriously unreliable at that).
-  const weekday = (() => {
-    try {
-      if (zone.mode === "utc") {
-        return new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(date);
-      }
-      if (zone.mode === "local") {
-        return new Intl.DateTimeFormat("en-US", { weekday: "short" }).format(date);
-      }
-      return new Intl.DateTimeFormat("en-US", { timeZone: zone.timeZone, weekday: "short" }).format(
-        date,
-      );
-    } catch {
-      return undefined;
-    }
-  })();
-
-  const formatted =
-    zone.mode === "utc"
-      ? formatUtcTimestamp(date, { displaySeconds: true })
-      : zone.mode === "local"
-        ? formatZonedTimestamp(date, { displaySeconds: true })
-        : formatZonedTimestamp(date, { timeZone: zone.timeZone, displaySeconds: true });
-
-  if (!formatted) {
-    return undefined;
+  // Include the weekday so models do not need to derive it from the date.
+  if (zone.mode !== "utc") {
+    return formatZonedTimestamp(date, {
+      timeZone: zone.mode === "iana" ? zone.timeZone : undefined,
+      displaySeconds: true,
+      displayWeekday: true,
+    });
   }
-  return weekday ? `${weekday} ${formatted}` : formatted;
+  const formatted = formatUtcTimestamp(date, { displaySeconds: true });
+  try {
+    const weekday = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "short" }).format(
+      date,
+    );
+    return `${weekday} ${formatted}`;
+  } catch {
+    return formatted;
+  }
 }
 
 function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {

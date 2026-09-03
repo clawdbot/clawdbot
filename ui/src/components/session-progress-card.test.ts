@@ -44,7 +44,7 @@ describe("renderSessionProgressCard", () => {
         expect(timestamp?.getAttribute("datetime")).toBe(
           new Date(progressCard.updatedAt).toISOString(),
         );
-        expect(timestamp?.textContent).toBe("Updated 2m ago");
+        expect(timestamp?.textContent).toBe(placement === "hovercard" ? "2m" : "Updated 2m ago");
         expect(timestamp?.getAttribute("aria-label")).toBe("Updated 2m ago");
         expect(timestamp?.getAttribute("title")).toBe(timestamp?.getAttribute("aria-label"));
         const accessibleCard =
@@ -94,19 +94,22 @@ describe("renderSessionProgressCard", () => {
     expect(container.querySelector("time")?.textContent).toBe("Updated 2m ago");
   });
 
-  it("refreshes relative time while connected and stops after disconnect", async () => {
+  it("refreshes relative time while connected and stops after disconnect", () => {
     const container = document.createElement("div");
-    render(
+    const part = render(
       renderSessionProgressCard({ ...progressCard, updatedAt: NOW_MS - 10_000 }, "composer"),
       container,
     );
     expect(container.querySelector("time")?.textContent).toBe("Updated just now");
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    vi.advanceTimersByTime(60_000);
+    expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
+
+    part.setConnected(false);
+    vi.advanceTimersByTime(60_000);
     expect(container.querySelector("time")?.textContent).toBe("Updated 1m ago");
 
     render(null, container);
-    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("labels activity from the last minute as just now", () => {
@@ -263,6 +266,44 @@ describe("renderSessionProgressCard", () => {
     ).toBe("Updated 2m ago · 2 of 3");
     expect(card?.querySelector("progress")).toBeNull();
     expect(card?.querySelectorAll(".session-progress-card__step")).toHaveLength(3);
+  });
+
+  it("collapses active composer progress when requested and preserves manual expansion", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionProgressCard(
+        progressCard,
+        "composer",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+      ),
+      container,
+    );
+
+    const card = container.querySelector<HTMLDetailsElement>(
+      '[data-progress-card-placement="composer"]',
+    );
+    expect(card?.open).toBe(false);
+    card!.open = true;
+
+    render(
+      renderSessionProgressCard(
+        { ...progressCard, revision: progressCard.revision + 1 },
+        "composer",
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        true,
+        true,
+      ),
+      container,
+    );
+    expect(card?.open).toBe(true);
   });
 
   it("keeps the collapsed counter in the summary action column", () => {

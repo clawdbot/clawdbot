@@ -1,10 +1,15 @@
 /**
  * Normalizes configured provider model rows for runtime/discovery use.
  */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { mergeModelCost } from "../config/model-cost.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
+import {
+  createConfiguredProviderCatalogModelIdNormalizer,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -17,15 +22,15 @@ import {
   resolveApiKeyFromProfiles,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secret-helpers.js";
-import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
+import {
+  enforceSourceManagedProviderSecrets,
+  normalizeSourceProviderLookup,
+} from "./models-config.providers.source-managed.js";
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 type ProviderModelConfig = NonNullable<
   NonNullable<ModelsConfig["providers"]>[string]["models"]
 >[number];
-type ProviderModelNormalizationOptions = {
-  manifestPlugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
-};
 
 function getProviderModelId(model: ProviderModelConfig): string | undefined {
   return typeof model.id === "string" && model.id.trim() ? model.id : undefined;
@@ -57,40 +62,27 @@ function mergeNormalizedProviderModel(
   existing: ProviderModelConfig,
   incoming: ProviderModelConfig,
 ): ProviderModelConfig {
-  return {
-    ...incoming,
-    ...existing,
-    ...(existing.cost || incoming.cost
-      ? {
-          cost: {
-            ...incoming.cost,
-            ...existing.cost,
-          },
-        }
-      : undefined),
-  };
+  const cost = mergeModelCost(incoming.cost, existing.cost);
+  return { ...incoming, ...existing, ...(cost ? { cost } : {}) };
 }
 
 function normalizeProviderModelsForConfig(
   providerKey: string,
   provider: ProviderConfig,
-  options: ProviderModelNormalizationOptions = {},
+  options: ModelManifestNormalizationContext = {},
   completeCatalogCosts = false,
 ): ProviderConfig {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return provider;
   }
 
+  const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(options);
   let mutated = false;
   const nextModels: ProviderModelConfig[] = [];
   const seenById = new Map<string, number>();
   for (const model of provider.models) {
     const rawId = getProviderModelId(model);
-    const normalizedId = rawId
-      ? normalizeConfiguredProviderCatalogModelId(providerKey, rawId, {
-          manifestPlugins: options.manifestPlugins,
-        })
-      : rawId;
+    const normalizedId = rawId ? normalizeModelId(providerKey, rawId) : rawId;
     const normalizedModel =
       normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
     if (normalizedModel !== model) {
@@ -127,7 +119,7 @@ function normalizeProviderModelsForConfig(
 
 export function normalizeProviderCatalogModelsForConfig(
   providers: ModelsConfig["providers"],
-  options: ProviderModelNormalizationOptions = {},
+  options: ModelManifestNormalizationContext = {},
 ): ModelsConfig["providers"] {
   if (!providers) {
     return providers;
@@ -151,10 +143,9 @@ export function normalizeProviders(params: {
   agentDir: string;
   env?: NodeJS.ProcessEnv;
   secretDefaults?: SecretDefaults;
-  sourceProviders?: ModelsConfig["providers"];
-  sourceSecretDefaults?: SecretDefaults;
+  sourceConfigForSecrets?: OpenClawConfig;
   secretRefManagedProviders?: Set<string>;
-  manifestPlugins?: ProviderModelNormalizationOptions["manifestPlugins"];
+  manifestPlugins?: ModelManifestNormalizationContext["manifestPlugins"];
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): ModelsConfig["providers"] {
   const { providers } = params;
@@ -162,6 +153,9 @@ export function normalizeProviders(params: {
     return providers;
   }
   const env = params.env ?? process.env;
+  const sourceProviders = normalizeSourceProviderLookup(
+    params.sourceConfigForSecrets?.models?.providers,
+  );
   let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
   const resolveProfileApiKey = (providerKey: string) => {
     authStore ??= ensureAuthProfileStore(params.agentDir, {
@@ -185,16 +179,36 @@ export function normalizeProviders(params: {
     if (normalizedKey !== key) {
       mutated = true;
     }
+    // Only authored fields inherit loader facts; plugin-discovered inputs keep their own syntax.
+    const sourceProvider = sourceProviders.get(normalizeProviderId(normalizedKey));
+    const source =
+      sourceProvider && params.sourceConfigForSecrets
+        ? {
+            config: params.sourceConfigForSecrets,
+            providerKey: sourceProvider.providerKey,
+          }
+        : undefined;
     let normalizedProvider = provider;
     const normalizedHeaders = normalizeHeaderValues({
       headers: normalizedProvider.headers,
       secretDefaults: params.secretDefaults,
+      source,
     });
     if (normalizedHeaders.mutated) {
       normalizedProvider = { ...normalizedProvider, headers: normalizedHeaders.headers };
     }
+    const sourceInput =
+      sourceProvider?.providerConfig.apiKey !== undefined
+        ? {
+            config: params.sourceConfigForSecrets,
+            path: `models.providers.${sourceProvider.providerKey}.apiKey`,
+            value: sourceProvider.providerConfig.apiKey,
+            defaults: params.sourceConfigForSecrets?.secrets?.defaults,
+          }
+        : undefined;
     normalizedProvider = normalizeConfiguredProviderApiKey({
       providerKey: normalizedKey,
+      sourceInput,
       provider: normalizedProvider,
       secretDefaults: params.secretDefaults,
       profileApiKey: undefined,
@@ -261,8 +275,7 @@ export function normalizeProviders(params: {
   const normalizedProviders = mutated ? next : providers;
   return enforceSourceManagedProviderSecrets({
     providers: normalizedProviders,
-    sourceProviders: params.sourceProviders,
-    sourceSecretDefaults: params.sourceSecretDefaults,
+    sourceConfigForSecrets: params.sourceConfigForSecrets,
     secretRefManagedProviders: params.secretRefManagedProviders,
   });
 }

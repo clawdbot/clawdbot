@@ -164,10 +164,11 @@ export type ChannelDeliveryInfo = ReplyDispatchRuntimeInfo;
 
 type ChannelCoreManagedDeliveryInfo = Omit<
   ChannelDeliveryInfo,
-  "bindPendingFinalDelivery" | "onPlatformSendDispatch"
+  "assertPlatformSendAuthorized" | "bindPendingFinalDelivery" | "onPlatformSendDispatch"
 >;
 
 type ChannelProviderOwnedDeliveryInfo = ChannelDeliveryInfo & {
+  assertPlatformSendAuthorized: () => void;
   onPlatformSendDispatch: () => Promise<void>;
 };
 

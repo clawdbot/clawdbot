@@ -1,6 +1,6 @@
 // Tests execution approval policy matching and persistence.
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
@@ -113,7 +113,8 @@ function expectMalformedAgentAskUsesDefaults(agentAsk: unknown): void {
 }
 
 describe("exec approvals policy helpers", () => {
-  beforeEach(async () => {
+  beforeAll(async () => {
+    // Reload once to isolate this suite from facade mocks left by other test files.
     await loadActualExecApprovalModules();
   });
 

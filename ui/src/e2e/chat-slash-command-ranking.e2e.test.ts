@@ -2,6 +2,7 @@
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,7 +14,10 @@ suite.define(() => {
   it.each(["/export-session", "/export"])(
     "shows an empty export result and retains staged attachments for %s",
     async (command) => {
-      const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+      const artifactDir = artifactRoot
+        ? createControlUiE2eArtifactDir("chat-slash-command-ranking", artifactRoot)
+        : undefined;
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: [] });
         const downloads: string[] = [];
@@ -99,7 +103,10 @@ suite.define(() => {
   });
 
   it("keeps visible search results and keyboard selection in relevance order", async () => {
-    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const artifactDir = artifactRoot
+      ? createControlUiE2eArtifactDir("chat-slash-command-ranking", artifactRoot)
+      : undefined;
     await suite.withPage(
       {
         viewport: { width: 1280, height: 900 },

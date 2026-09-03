@@ -1,6 +1,7 @@
 // Qa Lab plugin module implements gateway log redaction behavior.
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { escapeRegExp, sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   QA_PROVIDER_SECRET_ENV_KEY_PATTERNS,
   QA_PROVIDER_SECRET_ENV_VARS,
@@ -139,4 +140,20 @@ export function redactQaGatewayDebugText(text: string) {
 export function formatQaGatewayLogsForError(logs: string) {
   const sanitized = redactQaGatewayDebugText(logs).trim();
   return sanitized.length > 0 ? `\nGateway logs:\n${sanitized}` : "";
+}
+
+export function createQaGatewayCliError(error: unknown): Error {
+  // Candidate errors can carry credentials in nested causes, spawnargs, or output.
+  // Retain only a bounded, redacted message, including for lifecycle-held failures.
+  let message = redactQaGatewayDebugText(coerceErrorMessage(error));
+  const maxChars = 2_048;
+  if (message.length > maxChars) {
+    // Doctor can print setup panels before its terminal error. Preserve both
+    // ends after redaction so the bounded diagnostic retains the failure.
+    // Keep the tail on this line so slicing cannot create a workflow command.
+    const marker = "\n… output omitted … ";
+    const edgeChars = Math.floor((maxChars - marker.length) / 2);
+    message = `${sliceUtf16Safe(message, 0, edgeChars)}${marker}${sliceUtf16Safe(message, -edgeChars)}`;
+  }
+  return new Error(message);
 }

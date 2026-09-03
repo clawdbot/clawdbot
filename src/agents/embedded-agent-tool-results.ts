@@ -190,6 +190,7 @@ function extractDirectErrorCodeField(value: unknown): string | undefined {
 }
 
 export function buildToolLifecycleErrorResult(error: unknown): {
+  content: { type: "text"; text: string }[];
   details: Record<string, unknown>;
 } {
   const errorRecord = readRecord(error);
@@ -199,6 +200,7 @@ export function buildToolLifecycleErrorResult(error: unknown): {
     readErrorCodeField(errorRecord?.gatewayCode) ?? readErrorCodeField(errorRecord?.code);
   const message = error instanceof Error ? error.message : String(error);
   return {
+    content: [{ type: "text", text: message }],
     details: {
       status: "error",
       error: message,

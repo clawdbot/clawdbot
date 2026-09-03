@@ -65,6 +65,8 @@ export type GatewayServerOptions = {
   /** Internal lifecycle callback that re-proves and records crash-loop recovery. */
   tryRecoverChannelAutostartSuppression?: () => boolean;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
+  /** Internal Node process-origin timestamp used only for initial startup tracing. */
+  processStartedAt?: number;
   /** Optional startup timestamp used for concise readiness logging. */
   startupStartedAt?: number;
   /**

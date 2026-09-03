@@ -165,7 +165,7 @@ export class SubagentLifecycleController {
     // Callers can detach while retaining parent ALS, so nesting is intentional.
     await runWithGatewayIndependentRootWorkContinuation(async () => {
       await completeSubagentRunAttempt(this, completeParams);
-    });
+    }, "subagents:lifecycle-complete");
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {

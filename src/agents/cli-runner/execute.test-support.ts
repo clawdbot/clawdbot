@@ -48,6 +48,13 @@ setCliRunnerExecuteTestDeps({
         const managedRun = (await supervisorSpawnMock(wrappedParams)) as Awaited<
           ReturnType<SupervisorSpawnFn>
         >;
+        if (!managedRun) {
+          // A defeated or reset once-mock returns undefined; fail loudly instead
+          // of letting the run wedge into an opaque test timeout.
+          throw new Error(
+            "supervisorSpawnMock returned no managed run; a test consumed or reset the mock implementation",
+          );
+        }
         activeRuns.set(params.runId ?? managedRun.runId, managedRun);
         const wait = managedRun.wait;
         return {

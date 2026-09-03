@@ -33,6 +33,8 @@ type ReadCronTaskRunHistoryPageOptions = {
   query?: string;
   sortDir?: CronRunHistorySortDir;
   jobNameById?: Record<string, string>;
+  /** Filter before paging so hidden runs cannot consume page slots or inflate totals. */
+  entryFilter?: (entry: CronRunLogEntry) => boolean;
 };
 
 type CronTaskRunHistoryPage = {
@@ -112,7 +114,7 @@ function attachJobNames(entries: CronRunLogEntry[], jobNameById?: Record<string,
   for (const entry of entries) {
     const jobName = jobNameById?.[entry.jobId];
     if (jobName) {
-      (entry as CronRunLogEntry & { jobName?: string }).jobName = jobName;
+      entry.jobName = jobName;
     }
   }
 }
@@ -149,8 +151,9 @@ export function readCronTaskRunHistoryPage(
         return false;
       }
       return (
-        !query ||
-        normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)
+        (!query ||
+          normalizeLowercaseStringOrEmpty(queryText(entry, options.jobNameById)).includes(query)) &&
+        (!options.entryFilter || options.entryFilter(entry))
       );
     })
     .toSorted((left, right) => compareHistoryRows(left, right, sortDir));

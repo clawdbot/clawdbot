@@ -2,7 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import gitPrerequisites from "../../.github/actions/git-owner/test-prerequisites.json" with { type: "json" };
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -29,7 +31,7 @@ import {
 } from "./message-delivery-progress-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const PINNED_PRE_C04_READER_SHA = "5dc4cf602bc5e263e83cd16a12bb1e100544f4c3";
+const PINNED_PRE_C04_READER_SHA = gitPrerequisites.outboundMessageTerminalReader.commit;
 const OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT = 1_024;
 
 function ensurePinnedReaderCommit(repositoryRoot: string): void {
@@ -147,7 +149,6 @@ describe("outbound message progress companion", () => {
     expect(opened.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
-    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
@@ -276,11 +277,44 @@ describe("outbound message progress companion", () => {
     expect(
       tableExists(openOpenClawStateDatabase(database).db, "outbound_message_execution_bindings"),
     ).toBe(true);
+    const repositoryRoot = process.cwd();
+    ensurePinnedReaderCommit(repositoryRoot);
+    const projectedDatabase = openOpenClawStateDatabase(database).db;
+    // Only audit rows belong to this proof. Restore the empty binding table from
+    // the immutable reader's schema without inventing a production downgrade.
+    expect(
+      projectedDatabase
+        .prepare("SELECT COUNT(*) AS count FROM current_conversation_bindings")
+        .get(),
+    ).toEqual({ count: 0 });
+    const pinnedSchemaDatabase = openNodeSqliteDatabase(":memory:");
+    try {
+      pinnedSchemaDatabase.exec(
+        execFileSync(
+          "git",
+          ["show", `${PINNED_PRE_C04_READER_SHA}:src/state/openclaw-state-schema.sql`],
+          { cwd: repositoryRoot, encoding: "utf8" },
+        ),
+      );
+      const bindingStatements = pinnedSchemaDatabase
+        .prepare(
+          `SELECT sql FROM sqlite_schema
+           WHERE tbl_name = 'current_conversation_bindings'
+             AND type IN ('table', 'index') AND sql IS NOT NULL
+           ORDER BY type = 'table' DESC, name`,
+        )
+        .all() as Array<{ sql: string }>;
+      projectedDatabase.exec("DROP TABLE current_conversation_bindings;");
+      for (const { sql } of bindingStatements) {
+        projectedDatabase.exec(sql);
+      }
+    } finally {
+      pinnedSchemaDatabase.close();
+    }
     // This pinned reader predates the Workshop's first-use column and requires present lazy tables
     // to retain its exact shape; project that unrelated table to the reader's historical contract.
     // The v9-era reader needs the v13 projection removal, v12 singleton fold-in,
     // v11 curator retirement, and v10 dead-table retirement reversed in order.
-    const projectedDatabase = openOpenClawStateDatabase(database).db;
     projectedDatabase.exec("ALTER TABLE skill_workshop_proposals DROP COLUMN claim_released_time;");
     projectedDatabase.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
     projectedDatabase.exec(STATE_SCHEMA_12_TO_11_DOWNGRADE_SQL);
@@ -288,8 +322,6 @@ describe("outbound message progress companion", () => {
     projectedDatabase.exec(STATE_SCHEMA_10_TO_9_DOWNGRADE_SQL);
     closeOpenClawStateDatabaseForTest();
 
-    const repositoryRoot = process.cwd();
-    ensurePinnedReaderCommit(repositoryRoot);
     const checkoutParent = tempDirs.make("message-progress-pinned-reader-");
     const pinnedCheckout = path.join(checkoutParent, "checkout");
     execFileSync(

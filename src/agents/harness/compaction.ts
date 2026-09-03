@@ -386,9 +386,10 @@ export async function maybeCompactAgentHarnessSession(
   }
   const runtimePolicySessionKey = params.sandboxSessionKey ?? params.sessionKey;
   const runtimePolicyAgentId =
-    params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
+    params.sandboxAgentId ??
+    (params.sandboxSessionKey && parseAgentSessionKey(params.sandboxSessionKey)
       ? undefined
-      : params.agentId;
+      : params.agentId);
   const runtimeAuthPlan = params.runtimeAuthPlan ?? params.runtimePlan?.auth;
   const modelRoute = runtimeAuthPlan?.modelRoute;
   if (

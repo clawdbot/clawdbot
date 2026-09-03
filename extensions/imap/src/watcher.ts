@@ -295,7 +295,8 @@ export class ImapAccountWatcher {
       await this.recordSkip(message.uid, undefined, "message-source-missing");
       return true;
     }
-    const mail = await simpleParser(message.source, { skipImageLinks: true });
+    // Only consume plain text; avoid generating unused HTML and scanning untrusted links.
+    const mail = await simpleParser(message.source, { skipImageLinks: true, skipTextToHtml: true });
     const verdict = await evaluateImapSender({
       mail,
       raw: message.source,
@@ -362,8 +363,9 @@ export class ImapAccountWatcher {
       if (mail.messageId) {
         await rememberImapMessage(state, accountId, mail.messageId);
       }
+      const gate = verdict.reason === "token" ? "gate=token" : `strength=${verdict.strength}`;
       this.options.context.logger.info(
-        `imap: account=${accountId} uid=${message.uid} domain=${senderDomain(verdict.sender)} strength=${verdict.strength} run=${result.runId}`,
+        `imap: account=${accountId} uid=${message.uid} domain=${senderDomain(verdict.sender)} ${gate} run=${result.runId}`,
       );
       return true;
     }

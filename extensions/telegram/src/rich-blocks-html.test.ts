@@ -33,6 +33,21 @@ describe("block HTML islands", () => {
     expect(block.blocks).toEqual([{ type: "paragraph", text: "hidden body" }]);
   });
 
+  it("keeps Markdown lists inside <details> islands", () => {
+    const block = single("<details><summary>List</summary>\n\n- item A\n- item B\n\n</details>");
+    expect(block.type).toBe("details");
+    if (block.type !== "details") {
+      return;
+    }
+    expect(block.summary).toBe("List");
+    expect(block.blocks).toHaveLength(1);
+    expect(block.blocks[0]?.type).toBe("paragraph");
+    const serialized = JSON.stringify(block);
+    expect(serialized).toContain("• item A");
+    expect(serialized).toContain("• item B");
+    expect(serialized).not.toContain("<details>");
+  });
+
   it("maps <ul> with checkbox tasks", () => {
     const block = single(
       '<ul><li><input type="checkbox" checked/>Done</li><li><input type="checkbox"/>Todo</li><li>Plain</li></ul>',
@@ -153,8 +168,8 @@ describe("block HTML islands", () => {
     if (block.type !== "table") {
       return;
     }
-    expect(block.cells[0]?.[0]).toEqual({ text: "bad span" });
-    expect(block.cells[0]?.[1]).toEqual({ text: "next" });
+    expect(block.cells[0]?.[0]).toEqual({ text: "bad span", align: "left", valign: "middle" });
+    expect(block.cells[0]?.[1]).toEqual({ text: "next", align: "left", valign: "middle" });
   });
 
   it.each([

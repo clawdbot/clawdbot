@@ -14,15 +14,21 @@ describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
   let tempDir = "";
 
   beforeAll(() => {
-    const tempRoot = tmpdir() === "/tmp" ? "/var/tmp" : tmpdir();
-    tempDir = mkdtempSync(path.join(tempRoot, "openclaw-docs-i18n-test-"));
+    tempDir = mkdtempSync(path.join(tmpdir(), "openclaw-docs-i18n-test-"));
     binaryPath = path.join(
       tempDir,
       process.platform === "win32" ? "docs-i18n.test.exe" : "docs-i18n.test",
     );
-    const result = spawnSync("go", ["test", "-c", "-o", binaryPath, "."], {
+    const result = spawnSync("go", ["test", "-modcacherw", "-c", "-o", binaryPath, "."], {
       cwd: "scripts/docs-i18n",
       encoding: "utf8",
+      // Go's default read-only module directories prevent recursive teardown.
+      // Keep this build's writable module cache inside the suite-owned root.
+      env: {
+        ...process.env,
+        GOMODCACHE: path.join(tempDir, "gomodcache"),
+        GOTOOLCHAIN: "local",
+      },
     });
     if (result.error || result.status !== 0) {
       throw result.error ?? new Error(result.stderr || result.stdout || "failed to build Go tests");
@@ -44,7 +50,7 @@ describe.skipIf(!hasGoToolchain)("docs-i18n Go module", () => {
     await execFileAsync(binaryPath, ["-test.count=1", `-test.run=${pattern}`], {
       cwd: "scripts/docs-i18n",
       encoding: "utf8",
-      // The fixture verifies Codex auth never lands under the shared system temp directory.
+      // The user cache can be under /tmp when the test invocation owns it.
       env: { ...process.env, XDG_CACHE_HOME: path.join(tempDir, "cache", partition) },
     });
   });

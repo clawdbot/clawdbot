@@ -10,8 +10,51 @@ import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
   normalizePendingFinalRecoveryPayloads,
+  resolvePendingFinalDeliveryCompletion,
   sanitizePendingFinalDeliveryText,
 } from "./pending-final-delivery.js";
+
+describe("resolvePendingFinalDeliveryCompletion", () => {
+  it("persists the session writer authority with durable final custody", () => {
+    const payload = setReplyPayloadMetadata(
+      { text: "settled final" },
+      {
+        pendingFinalDeliveryCompletion: {
+          deliveryId: "delivery-1",
+          intentId: "intent-1",
+          sessionId: "session-1",
+          sessionKey: "agent:main:telegram:direct:1",
+          storePath: "/tmp/sessions.json",
+        },
+        sessionWriterDeliveryAuthority: {
+          agentId: "main",
+          expectedLifecycleRevision: "revision-a",
+          expectedSessionId: "session-1",
+          expectedWriterRunId: "run-a",
+          sessionKey: "agent:main:telegram:direct:1",
+          storePath: "/tmp/sessions.json",
+        },
+      },
+    );
+
+    expect(resolvePendingFinalDeliveryCompletion([payload])).toEqual({
+      kind: "pending-final",
+      deliveryId: "delivery-1",
+      intentId: "intent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:telegram:direct:1",
+      storePath: "/tmp/sessions.json",
+      sessionWriterDeliveryAuthority: {
+        agentId: "main",
+        expectedLifecycleRevision: "revision-a",
+        expectedSessionId: "session-1",
+        expectedWriterRunId: "run-a",
+        sessionKey: "agent:main:telegram:direct:1",
+        storePath: "/tmp/sessions.json",
+      },
+    });
+  });
+});
 
 describe("sanitizePendingFinalDeliveryText", () => {
   it("strips internal metadata from durable pending delivery text", () => {

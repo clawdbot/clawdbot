@@ -3,6 +3,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 export type RuntimeConfigWriteApplicationStatus =
   | "applied"
   | "applied-restart-required"
+  // Restart admission accepted the saved config; the current runtime is not updated.
+  | "restart-pending"
   | "superseded"
   | "failed"
   | "stopped"
@@ -10,6 +12,9 @@ export type RuntimeConfigWriteApplicationStatus =
 
 export type RuntimeConfigWriteApplicationClaim = {
   settle: (status: RuntimeConfigWriteApplicationStatus) => void;
+  // Re-enter only the originating request root so channel drain excludes the RPC awaiting
+  // this receipt; unrelated watcher reloads retain their independent transaction root.
+  runTransaction?: <T>(run: () => Promise<T>) => Promise<T>;
 };
 
 type RuntimeConfigWriteApplication = {
@@ -21,7 +26,9 @@ type RuntimeConfigWriteApplication = {
 const runtimeConfigWriteApplications = new WeakMap<object, RuntimeConfigWriteApplication>();
 
 /** Creates a single-owner receipt for one persisted config write. */
-export function createRuntimeConfigWriteApplication(): RuntimeConfigWriteApplication {
+export function createRuntimeConfigWriteApplication(
+  runTransaction?: <T>(run: () => Promise<T>) => Promise<T>,
+): RuntimeConfigWriteApplication {
   let claimed = false;
   const result = createDeferredCore<RuntimeConfigWriteApplicationStatus>();
   return {
@@ -34,7 +41,7 @@ export function createRuntimeConfigWriteApplication(): RuntimeConfigWriteApplica
         return null;
       }
       claimed = true;
-      return { settle: result.resolve };
+      return { settle: result.resolve, ...(runTransaction ? { runTransaction } : {}) };
     },
   };
 }

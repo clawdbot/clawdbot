@@ -49,6 +49,15 @@ function normalizeDiscordNameSubject(value: string): string | null {
 }
 
 export const discordIngressIdentity = defineStableChannelIngressIdentity({
+  resolveParticipant: (subject) => {
+    const kind = subject.aliases?.participantKind;
+    const id = subject.stableId;
+    return typeof id === "string" &&
+      id &&
+      (kind === "user" || kind === "bot" || kind === "pluralkit-member")
+      ? { domain: kind === "pluralkit-member" ? "pluralkit" : "discord", idKind: kind, id }
+      : undefined;
+  },
   key: "discordUserId",
   kind: DISCORD_USER_ID_KIND,
   // Discord binds author/user.id on events delivered over the authenticated bot-token session.

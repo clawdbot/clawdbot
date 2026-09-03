@@ -5,13 +5,15 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { normalizeChatMessageMaxWidth } from "../../app/settings.ts";
 import { countSensitiveConfigValues } from "../../components/config-form.shared.ts";
 import { renderConfigForm } from "../../components/config-form.ts";
+import { renderHubTabs } from "../../components/hub-tabs.ts";
 import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
-import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { renderNotificationsSection } from "./notifications-section.ts";
+import { renderSetupSection } from "./setup.ts";
 import { renderAppearanceSection } from "./view-appearance.ts";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
 import {
@@ -34,6 +36,8 @@ import {
   toggleSensitivePathReveal,
 } from "./view-state.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+registerSettingsEnglish();
 
 export { createConfigViewState } from "./view-state.ts";
 export type { ConfigProps, ConfigViewState } from "./view-types.ts";
@@ -213,6 +217,16 @@ export function renderConfig(props: ConfigProps) {
           },
         }
       : analysis.schema;
+  const setupSchema = formSchema?.properties?.wizard;
+  const showSetup = setupSchema && (!props.activeSection || props.activeSection === "wizard");
+  const editorSchema = setupSchema
+    ? {
+        ...formSchema,
+        properties: Object.fromEntries(
+          Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
+        ),
+      }
+    : formSchema;
   const topTabs = [
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -379,14 +393,14 @@ export function renderConfig(props: ConfigProps) {
 
   const showSectionTabs = settingsLayout !== "accordion" && topTabs.length > 1;
   const sectionTabs = showSectionTabs
-    ? renderSettingsSegmented({
-        value: props.activeSection ?? "root",
-        options: topTabs.map((tab) => ({ value: tab.key ?? "root", label: tab.label })),
+    ? renderHubTabs({
+        id: "config-sections",
+        active: props.activeSection ?? "root",
+        tabs: topTabs.map((tab) => ({ value: tab.key ?? "root", label: tab.label })),
         ariaLabel: t("common.settingsSections"),
-        onChange: (value, element) => {
-          props.onSectionChange(value === "root" ? null : value);
-          resetContentScroll(element);
-        },
+        panelId: "config-section-panel",
+        onSelect: (value) => props.onSectionChange(value === "root" ? null : value),
+        onActivate: resetContentScroll,
       })
     : nothing;
   const showToolbar = showModeToggle || showSectionTabs;
@@ -489,8 +503,11 @@ export function renderConfig(props: ConfigProps) {
     <div
       id="config-section-panel"
       class="config-content"
-      role="region"
-      aria-label=${t("common.settingsSections")}
+      role=${showSectionTabs ? "tabpanel" : "region"}
+      aria-labelledby=${showSectionTabs
+        ? `config-sections-tab-${props.activeSection ?? "root"}`
+        : nothing}
+      aria-label=${showSectionTabs ? nothing : t("common.settingsSections")}
     >
       ${props.activeSection === "__appearance__"
         ? includeVirtualSections
@@ -523,10 +540,10 @@ export function renderConfig(props: ConfigProps) {
                       <span>${t("configView.loadingSchema")}</span>
                     </div>`
                   : renderConfigForm({
-                      schema: formSchema,
+                      schema: editorSchema,
                       uiHints: props.uiHints,
                       value: props.formValue,
-                      embedded: props.embeddedEditor === true,
+                      embedded: props.embeddedEditor === true || Boolean(showSetup),
                       rawAvailable,
                       disabled: configBusy || !props.formValue || !mutationAllowed,
                       unsupportedPaths: analysis.unsupportedPaths,
@@ -557,6 +574,7 @@ export function renderConfig(props: ConfigProps) {
                               ${t("configView.peek")}
                             </button>`
                           : undefined,
+                      showSectionDocs: props.showSectionDocs,
                       sectionPrelude: props.sectionPrelude,
                       revealSensitive: props.activeSection === "env" ? envSensitiveVisible : false,
                       isSensitivePathRevealed: (path) => isSensitivePathRevealed(viewState, path),
@@ -565,6 +583,13 @@ export function renderConfig(props: ConfigProps) {
                         requestUpdate();
                       },
                     })}
+                ${showSetup && !props.schemaLoading
+                  ? renderSetupSection(
+                      setupSchema,
+                      props,
+                      configBusy || !props.formValue || !mutationAllowed,
+                    )
+                  : nothing}
               `
             : (() => {
                 const sensitiveCount = countSensitiveConfigValues(

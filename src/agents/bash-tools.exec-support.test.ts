@@ -12,13 +12,15 @@ describe("exec foreground retention", () => {
         aggregated: "retained output",
         timedOut: false,
       },
+      warningText: "w".repeat(80_000),
       aggregateOutputDropped: true,
     });
 
-    expect(result.content[0]).toMatchObject({
-      type: "text",
-      text: expect.stringContaining("discarded at the retention cap and cannot be recovered"),
-    });
+    const content = result.content[0];
+    expect(content).toMatchObject({ type: "text" });
+    expect(content?.type === "text" ? content.text : "").toMatch(
+      /^\[earlier output was discarded at the retention cap and cannot be recovered\]/,
+    );
     expect((result.details as { aggregated?: string }).aggregated).toBe("retained output");
   });
 });

@@ -1,5 +1,6 @@
 // Covers plugin-dispatched message actions, target resolution, dry-run behavior,
 // and plugin tool-result extraction.
+import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -134,6 +135,92 @@ describe("runMessageAction plugin dispatch", () => {
         "gateway message params",
       );
       expect(mocks.executeSendAction).not.toHaveBeenCalled();
+    });
+
+    it("stages workspace-reader media before gateway dispatch", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat sandbox media test plugin.",
+        actions: ["send"],
+        messaging: { targetResolver: { looksLikeId: () => true } },
+        handleAction: vi.fn(async () => jsonResult({ ok: true })),
+      });
+      setTestPlugin(gatewayPlugin, "gatewaychat");
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        messageId: "gw-sandbox-media",
+      });
+      const workspaceReadFile = vi.fn(async () => Buffer.from("remote chart"));
+      mocks.loadWebMedia.mockImplementation(async (mediaUrl, maxBytesOrOptions) => {
+        const options =
+          typeof maxBytesOrOptions === "object" && maxBytesOrOptions !== null
+            ? maxBytesOrOptions
+            : undefined;
+        const readFile = options?.readFile;
+        if (!readFile) {
+          throw new Error("expected gateway staging media reader");
+        }
+        return {
+          buffer: await readFile(mediaUrl),
+          contentType: "text/plain",
+          fileName: "chart.txt",
+          kind: "document",
+        };
+      });
+
+      await runMessageAction({
+        cfg: { channels: { gatewaychat: { enabled: true } } } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "gatewaychat",
+          target: "user-123",
+          path: "/sandbox/chart.txt",
+          filePath: "/sandbox/chart.txt",
+          fileUrl: "/sandbox/chart.txt",
+          attachments: [
+            {
+              type: "file",
+              path: "/sandbox/chart.txt",
+              fileUrl: "/sandbox/chart.txt",
+              name: "chart.txt",
+              mimeType: "text/plain",
+            },
+          ],
+        },
+        sandboxRoot: "/host-mirror",
+        sandboxContainerWorkdir: "/sandbox",
+        workspaceMediaAccess: {
+          localRoots: ["/host-mirror", "/sandbox"],
+          readFile: workspaceReadFile,
+          workspaceDir: "/host-mirror",
+        },
+        gateway: { clientName: "cli", mode: "cli" },
+      });
+
+      const gatewayCall = readMockCallArg(
+        mocks.callGatewayLeastPrivilege,
+        "gateway least privilege call",
+      );
+      const gatewayParams = readRecordField(gatewayCall, "params", "gateway call params");
+      const messageParams = readRecordField(gatewayParams, "params", "gateway message params");
+      const stagedPath = String(messageParams.media);
+      expect(stagedPath).not.toBe("/sandbox/chart.txt");
+      expect(messageParams.mediaUrl).toBe(stagedPath);
+      expect(messageParams.mediaUrls).toEqual([stagedPath]);
+      expect(messageParams.attachments).toEqual([
+        {
+          type: "file",
+          path: stagedPath,
+          name: "chart.txt",
+          mimeType: "text/plain",
+        },
+      ]);
+      expect(messageParams).not.toHaveProperty("path");
+      expect(messageParams).not.toHaveProperty("filePath");
+      expect(messageParams).not.toHaveProperty("fileUrl");
+      await expect(fs.readFile(stagedPath, "utf8")).resolves.toBe("remote chart");
+      expect(workspaceReadFile).toHaveBeenCalled();
     });
 
     it.each([

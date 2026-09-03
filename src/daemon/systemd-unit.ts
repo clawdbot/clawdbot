@@ -28,8 +28,9 @@ function renderEnvLines(env: Record<string, string | undefined> | undefined): st
   if (!env) {
     return [];
   }
+  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
   const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
   if (entries.length === 0) {
     return [];
@@ -139,6 +140,12 @@ export function parseSystemdEnvAssignments(raw: string): Array<{ key: string; va
     const parsed = parseSystemdEnvAssignment(entry);
     return parsed ? [parsed] : [];
   });
+}
+
+export function splitSystemdLogicalLines(content: string): string[] {
+  // A trailing backslash joins the next physical line. Comments inside that
+  // continuation are skipped by systemd and must not hide later assignments.
+  return content.replace(/\\\r?\n(?:\s*[#;][^\r\n]*\r?\n)*\s*/g, " ").split(/\r?\n/);
 }
 
 export function renderSystemdEnvAssignment(key: string, value: string): string {

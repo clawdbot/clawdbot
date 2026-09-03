@@ -2,6 +2,8 @@ export const UI_APPEARANCE_PREFERENCE_KEYS = {
   theme: "ui.theme",
   themeMode: "ui.themeMode",
   accent: "ui.accent",
+  fontUi: "ui.fontUi",
+  fontChat: "ui.fontChat",
 } as const;
 
 export type UiAppearancePreferenceKey =
@@ -21,9 +23,28 @@ export const UI_APPEARANCE_THEME_VALUES = [
   "tide",
   "beacon",
   "phosphor",
+  "crt",
+  "manuscript",
+  "rose",
+  "miami",
+] as const;
+// Wire-contract list of profile-storable typefaces. The Control UI derives
+// its override normalization from this tuple so browser and profile values agree.
+export const UI_APPEARANCE_TYPEFACE_VALUES = [
+  "instrument-sans",
+  "geist",
+  "dm-sans",
+  "ibm-plex-sans",
+  "space-grotesk",
+  "atkinson-hyperlegible",
+  "fraunces",
+  "lora",
+  "jetbrains-mono",
+  "system",
 ] as const;
 const UI_APPEARANCE_THEMES = new Set<string>(UI_APPEARANCE_THEME_VALUES);
 const UI_APPEARANCE_THEME_MODES = new Set(["light", "dark", "system"]);
+const UI_APPEARANCE_TYPEFACES = new Set<string>(UI_APPEARANCE_TYPEFACE_VALUES);
 
 export function normalizeUiAppearancePreference(
   key: UiAppearancePreferenceKey,
@@ -34,6 +55,12 @@ export function normalizeUiAppearancePreference(
   }
   if (key === UI_APPEARANCE_PREFERENCE_KEYS.accent) {
     return /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : undefined;
+  }
+  if (
+    key === UI_APPEARANCE_PREFERENCE_KEYS.fontUi ||
+    key === UI_APPEARANCE_PREFERENCE_KEYS.fontChat
+  ) {
+    return UI_APPEARANCE_TYPEFACES.has(value) ? value : undefined;
   }
   const allowedValues =
     key === UI_APPEARANCE_PREFERENCE_KEYS.theme ? UI_APPEARANCE_THEMES : UI_APPEARANCE_THEME_MODES;

@@ -1,0 +1,363 @@
+name: iOS Beta Release
+
+run-name: iOS Beta ${{ inputs.operation }} ${{ inputs.target_ref }}@${{ inputs.target_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Upload and record, or recover recording after a terminal upload run failure
+        required: true
+        default: upload-and-record
+        type: choice
+        options:
+          - upload-and-record
+          - record-only
+      target_ref:
+        description: Canonical mobile release branch (release/YYYY.M.PATCH-mobile)
+        required: true
+        type: string
+      target_sha:
+        description: Exact lowercase commit SHA at the release branch head
+        required: true
+        type: string
+      source_run_id:
+        description: Original failed upload run ID; required only for record-only recovery
+        required: false
+        type: string
+
+permissions: {}
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+
+jobs:
+  authorize:
+    name: Authorize exact iOS release candidate
+    if: inputs.operation == 'upload-and-record'
+    permissions:
+      actions: read
+      attestations: write
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      actor: ${{ steps.authority.outputs.actor }}
+      approved: ${{ steps.authority.outputs.approved }}
+      build_timestamp: ${{ steps.authority.outputs.build-timestamp }}
+      receipt_digest: ${{ steps.authority.outputs.receipt-digest }}
+      run_id: ${{ steps.authority.outputs.run-id }}
+      target_ref: ${{ steps.authority.outputs.target-ref }}
+      target_sha: ${{ steps.authority.outputs.target-sha }}
+      triggering_actor: ${{ steps.authority.outputs.triggering-actor }}
+    steps:
+      - name: Checkout trusted mobile release authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/actions/mobile-release-authority
+            scripts
+            apps/mobile/version.json
+            apps/android/version.json
+            apps/android/Config/Version.properties
+            apps/android/fastlane/metadata/android/en-US/release_notes.txt
+            apps/ios/CHANGELOG.md
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Authorize iOS beta release
+        id: authority
+        uses: ./.github/actions/mobile-release-authority
+        with:
+          operation: authorize
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ inputs.target_ref }}
+          target-sha: ${{ inputs.target_sha }}
+          authority-run-id: ${{ github.run_id }}
+          actor: ${{ github.actor }}
+          triggering-actor: ${{ github.triggering_actor }}
+
+  release:
+    name: Upload and record iOS beta
+    needs: authorize
+    if: inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    runs-on: macos-26
+    timeout-minutes: 120
+    environment: ios-beta-release
+    concurrency:
+      group: ios-beta-release-openclaw
+      cancel-in-progress: false
+    env:
+      BUILD_TIMESTAMP: ${{ needs.authorize.outputs.build_timestamp }}
+      RELEASE_TARGET_SHA: ${{ needs.authorize.outputs.target_sha }}
+    steps:
+      - name: Checkout approved release target
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.RELEASE_TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Checkout trusted mobile release authority
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .mobile-release-authority
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/actions/mobile-release-authority
+            scripts
+            apps/mobile/version.json
+            apps/android/version.json
+            apps/android/Config/Version.properties
+            apps/android/fastlane/metadata/android/en-US/release_notes.txt
+            apps/ios/CHANGELOG.md
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Revalidate release authority immediately before signing access
+        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
+      - name: Create apps-signing read token
+        id: apps-signing-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: "2729701"
+          private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+          owner: openclaw
+          repositories: apps-signing
+          permission-contents: read
+
+      - name: Revalidate release authority immediately before iOS signing checkout
+        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
+      - name: Checkout encrypted iOS signing assets
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: openclaw/apps-signing
+          ref: main
+          path: apps/ios/build/release-signing/apps-signing
+          token: ${{ steps.apps-signing-token.outputs.token }}
+          persist-credentials: false
+
+      - name: Route readonly match checkout to approved signing assets
+        run: |
+          set -euo pipefail
+          signing_repo="file://${GITHUB_WORKSPACE}/apps/ios/build/release-signing/apps-signing/"
+          git config --global url."${signing_repo}".insteadOf git@github.com:openclaw/apps-signing.git
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: off
+          install-bun: "false"
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4.10"
+          bundler: "2.6.9"
+          bundler-cache: false
+          working-directory: apps/ios
+
+      - name: Install locked Fastlane bundle
+        working-directory: apps/ios
+        run: |
+          set -euo pipefail
+          bundle _2.6.9_ install --jobs 4 --retry 3
+          bundle _2.6.9_ check
+          test "$(bundle _2.6.9_ exec ruby -e 'require "fastlane"; print Fastlane::VERSION')" = "2.238.0"
+
+      - name: Select Xcode 26
+        run: |
+          set -euo pipefail
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
+            if [[ -d "${xcode_app}/Contents/Developer" ]]; then
+              sudo xcode-select -s "${xcode_app}/Contents/Developer"
+              break
+            fi
+          done
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          [[ "$xcode_version" == 26.6* ]] || {
+            echo "Expected Xcode 26.6, got ${xcode_version}." >&2
+            exit 1
+          }
+
+      - name: Install pinned Swift build tools
+        run: |
+          set -euo pipefail
+          swift_tools_dir="${RUNNER_TEMP}/openclaw-swift-tools"
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          ./scripts/install-swift-tools.sh "$swift_tools_dir"
+          echo "$swift_tools_dir" >> "$GITHUB_PATH"
+
+      - name: Refresh trusted authority before store access
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .mobile-release-sink
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/actions/mobile-release-authority
+            scripts
+            apps/mobile/version.json
+            apps/android/version.json
+            apps/android/Config/Version.properties
+            apps/android/fastlane/metadata/android/en-US/release_notes.txt
+            apps/ios/CHANGELOG.md
+
+      - name: Revalidate release authority immediately before upload
+        uses: ./.mobile-release-sink/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+
+      - name: Upload and distribute iOS beta
+        env:
+          APP_STORE_CONNECT_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+          APP_STORE_CONNECT_KEY_CONTENT: ${{ secrets.APP_STORE_CONNECT_KEY_CONTENT }}
+          APP_STORE_CONNECT_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+          GIT_COMMIT: ${{ env.RELEASE_TARGET_SHA }}
+          MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
+          OPENCLAW_BUILD_TIMESTAMP: ${{ env.BUILD_TIMESTAMP }}
+          OPENCLAW_MOBILE_RELEASE_AUTHORITY_RECEIPT_DIGEST: ${{ needs.authorize.outputs.receipt_digest }}
+          OPENCLAW_MOBILE_RELEASE_INTENT_PATH: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
+          OPENCLAW_MOBILE_RELEASE_REF_MODE: intent
+          OPENCLAW_MOBILE_RELEASE_TARGET_REF: ${{ needs.authorize.outputs.target_ref }}
+          TESTFLIGHT_INTERNAL_GROUP: ${{ vars.TESTFLIGHT_INTERNAL_GROUP }}
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/mobile-release-intent-ios"
+          pnpm ios:release:upload
+          test -f "$RUNNER_TEMP/mobile-release-intent-ios/intent.json"
+          test "$(wc -c < "$RUNNER_TEMP/mobile-release-intent-ios/intent.json")" -le 4096
+
+      - name: Upload exact iOS release intent
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: mobile-release-intent-ios-${{ github.run_id }}-1
+          path: ${{ runner.temp }}/mobile-release-intent-ios/intent.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Checkout trusted mobile release recorder
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .mobile-release-recorder
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/actions/mobile-release-authority
+            scripts
+            apps/mobile/version.json
+            apps/android/version.json
+            apps/android/Config/Version.properties
+            apps/android/fastlane/metadata/android/en-US/release_notes.txt
+            apps/ios/CHANGELOG.md
+
+      - name: Validate and record immutable iOS release ref
+        uses: ./.mobile-release-recorder/.github/actions/mobile-release-authority
+        with:
+          operation: record
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
+          release-ref-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
+
+  recover-record:
+    name: Recover immutable iOS release ref
+    if: inputs.operation == 'record-only'
+    permissions:
+      actions: read
+      attestations: read
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: ios-beta-release
+    concurrency:
+      group: ios-beta-release-openclaw
+      cancel-in-progress: false
+    steps:
+      - name: Checkout trusted mobile release recorder
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          fetch-depth: 0
+          sparse-checkout: |
+            .github/actions/mobile-release-authority
+            scripts
+            apps/mobile/version.json
+            apps/android/version.json
+            apps/android/Config/Version.properties
+            apps/android/fastlane/metadata/android/en-US/release_notes.txt
+            apps/ios/CHANGELOG.md
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Validate and recover immutable iOS release ref
+        uses: ./.github/actions/mobile-release-authority
+        with:
+          operation: record
+          platform: ios
+          workflow-path: .github/workflows/ios-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ inputs.target_ref }}
+          target-sha: ${{ inputs.target_sha }}
+          authority-run-id: ${{ inputs.source_run_id }}
+          recovery: "true"
+          release-ref-private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}

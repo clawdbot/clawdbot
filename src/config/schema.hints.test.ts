@@ -5,14 +5,21 @@ import { isSensitiveUrlConfigPath } from "@openclaw/net-policy/redact-sensitive-
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { buildSecretInputSchema } from "../plugin-sdk/secret-input-schema.js";
-import { buildBaseHints, testApi } from "./schema.hints.js";
+import {
+  buildBaseHints,
+  collectMatchingSchemaPaths,
+  mapSensitivePaths,
+  testApi,
+} from "./schema.hints.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { OpenClawSchema } from "./zod-schema.js";
 import { OpenClawSchemaShape } from "./zod-schema.root-shape.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const { collectMatchingSchemaPaths, mapSensitivePaths, SECTION_DOCS_URLS, SECTIONS_WITHOUT_DOCS } =
-  testApi;
+const { SECTION_DOCS_URLS } = testApi;
+// Root sections without beginner-worthy pages stay explicit. Adding a root config key
+// requires choosing a docsUrl or listing it here.
+const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 const BUNDLED_CHANNEL_HINT_PREFIXES = [
   "channels.discord",
   "channels.imessage",

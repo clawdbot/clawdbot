@@ -73,6 +73,8 @@ export function isChatAbortMarkerCurrent(
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
+  controlUiVisible?: boolean;
+  isCurrent?: () => boolean;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
@@ -101,25 +103,22 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
-  /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
+  bufferIsCurrent?: () => boolean;
+  /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
   /** Last time any buffered assistant text changed, including suppressed raw buffers. */
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
-  /** Length of text at the time of the last broadcast, used to avoid duplicate flushes. */
-  deltaLastBroadcastLen?: number;
+  assistantScope?: { itemId: string; prefix: string };
+  managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
-  agentText?: {
-    assistant?: ChatRunAgentTextState;
-    thinking?: ChatRunAgentTextState;
-  };
+  agentText?: Partial<
+    Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
+  >;
   abortMarker?: ChatAbortMarker;
   toolRecipient?: ChatRunToolRecipientState;
-};
-
-type InternalChatRunRecord = ChatRunRecord & {
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
@@ -151,16 +150,11 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
-function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
-  return record;
-}
-
 function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
-  const internal = internalChatRunRecord(record);
-  for (const pending of Object.values(internal.pendingTextFlushes ?? {})) {
+  for (const pending of Object.values(record.pendingTextFlushes ?? {})) {
     clearTimeout(pending.timer);
   }
-  delete internal.pendingTextFlushes;
+  delete record.pendingTextFlushes;
 }
 
 export type ChatRunRegistry = {
@@ -233,7 +227,10 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (runId: string) => { text: string; suppress: boolean };
+  resolveBuffer: (
+    runId: string,
+    options?: { final?: boolean },
+  ) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
   recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
@@ -269,12 +266,14 @@ export function createChatRunState(): ChatRunState {
     }
     delete record.rawBuffer;
     delete record.buffer;
+    delete record.bufferIsCurrent;
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
-    delete record.deltaLastBroadcastLen;
+    delete record.assistantScope;
+    delete record.managedMediaUrls;
     delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
@@ -288,16 +287,20 @@ export function createChatRunState(): ChatRunState {
     store.runs.clear();
   };
 
-  const resolveBuffer = (runId: string) => {
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
     const record = store.runs.get(runId);
-    if (!record) {
+    if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
     const rawText = record.rawBuffer;
     if (rawText === undefined) {
       return projectLiveAssistantBufferedText(record.buffer ?? "");
     }
-    if (record.bufferProjection?.source === rawText && record.buffer !== undefined) {
+    if (
+      !options?.final &&
+      record.bufferProjection?.source === rawText &&
+      record.buffer !== undefined
+    ) {
       return {
         text: record.buffer,
         suppress: record.bufferProjection.suppress,
@@ -305,10 +308,17 @@ export function createChatRunState(): ChatRunState {
     }
     // Protected blocks and directive tags can span delta frames, so the
     // projection cache belongs to the complete merged raw buffer.
-    const normalizedText = normalizeLiveAssistantBufferedText(rawText);
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    });
     const projected = projectLiveAssistantBufferedText(normalizedText);
-    record.buffer = projected.text;
-    record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    // A terminal read releases ambiguous directive prefixes as ordinary text;
+    // caching it would expose that prefix again if a late live reader races cleanup.
+    if (!options?.final) {
+      record.buffer = projected.text;
+      record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    }
     return projected;
   };
 
@@ -568,20 +578,7 @@ export function createSessionMessageSubscriberRegistry(
           connToSessionRecency.delete(normalizedConnId);
         }
       }
-      const approvalConnIds = approvalSessionToConnIds.get(normalizedSessionKey);
-      if (approvalConnIds) {
-        approvalConnIds.delete(normalizedConnId);
-        if (approvalConnIds.size === 0) {
-          approvalSessionToConnIds.delete(normalizedSessionKey);
-        }
-      }
-      const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
-      if (approvalSessionKeys) {
-        approvalSessionKeys.delete(normalizedSessionKey);
-        if (approvalSessionKeys.size === 0) {
-          connToApprovalSessionKeys.delete(normalizedConnId);
-        }
-      }
+      setApprovalSubscription(normalizedConnId, normalizedSessionKey, false);
     },
     unsubscribeAll: (connId: string) => {
       const normalizedConnId = normalize(connId);
@@ -604,13 +601,8 @@ export function createSessionMessageSubscriberRegistry(
 
       const approvalSessionKeys = connToApprovalSessionKeys.get(normalizedConnId);
       for (const sessionKey of approvalSessionKeys ?? []) {
-        const connIds = approvalSessionToConnIds.get(sessionKey);
-        connIds?.delete(normalizedConnId);
-        if (connIds?.size === 0) {
-          approvalSessionToConnIds.delete(sessionKey);
-        }
+        setApprovalSubscription(normalizedConnId, sessionKey, false);
       }
-      connToApprovalSessionKeys.delete(normalizedConnId);
     },
     get: (sessionKey: string) => {
       const normalizedSessionKey = normalize(sessionKey);
@@ -678,12 +670,12 @@ function createToolEventRecipientRegistryForStore(
 
   const get = (runId: string) => {
     const entry = store.runs.get(runId)?.toolRecipient;
-    if (!entry) {
-      return undefined;
+    if (entry) {
+      entry.updatedAt = Date.now();
+      prune();
     }
-    entry.updatedAt = Date.now();
-    prune();
-    return entry.connIds;
+    // Pruning may retire this finalized run; never return its former audience.
+    return store.runs.get(runId)?.toolRecipient?.connIds;
   };
 
   const markFinal = (runId: string) => {

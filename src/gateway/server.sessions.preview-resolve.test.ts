@@ -142,6 +142,7 @@ test("sessions.preview reads only a bounded tail from a large transcript", async
   );
   const fullRead = vi.spyOn(sessionAccessor, "readSessionTranscriptMessageEvents");
   const tailRead = vi.spyOn(sessionHistoryEvents, "readRecentSessionTranscriptHistoryEvents");
+  const storeRead = vi.spyOn(sessionAccessor, "listSessionEntriesCore");
 
   try {
     const preview = await directSessionReq<{
@@ -156,6 +157,7 @@ test("sessions.preview reads only a bounded tail from a large transcript", async
       })),
     );
     expect(fullRead).not.toHaveBeenCalled();
+    expect(storeRead).not.toHaveBeenCalled();
     expect(tailRead).toHaveBeenCalledOnce();
     expect(tailRead.mock.results[0]).toMatchObject({
       type: "return",
@@ -164,6 +166,7 @@ test("sessions.preview reads only a bounded tail from a large transcript", async
   } finally {
     fullRead.mockRestore();
     tailRead.mockRestore();
+    storeRead.mockRestore();
   }
 });
 
@@ -307,7 +310,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Visible session",
         updatedAt: 40,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [hiddenCollisionKey]: {
         sessionId: "sess-collision",
@@ -315,7 +318,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Hidden collision",
         updatedAt: 30,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [secondVisibleKey]: {
         sessionId: "sess-second-visible",
@@ -323,7 +326,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Second visible session",
         updatedAt: 35,
         visibility: "shared",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [hiddenOnlyKey]: {
         sessionId: "sess-hidden-only",
@@ -331,7 +334,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         displayName: "Hidden only",
         updatedAt: 20,
         visibility: "draft",
-        createdActor: { type: "human", id: "owner" },
+        createdActor: { type: "human", source: "profile", id: "owner" },
       },
       [incognitoKey]: {
         sessionId: "sess-incognito",
@@ -340,7 +343,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         updatedAt: 10,
         visibility: "shared",
         incognito: true,
-        createdActor: { type: "human", id: "viewer" },
+        createdActor: { type: "human", source: "profile", id: "viewer" },
       },
     },
   });

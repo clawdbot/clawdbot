@@ -18,6 +18,7 @@ import {
 import type { RuntimeId, RuntimeParityDrift, RuntimeParityResult } from "./runtime-parity.js";
 import {
   isRuntimeParityResultPass,
+  normalizeRuntimePair,
   resolveRuntimeParityUsagePolicy,
   runtimeParityCellStatus,
 } from "./runtime-parity.js";
@@ -269,15 +270,6 @@ function describeLiveUsageFailure(scenarioName: string, scenario: QaRuntimeParit
     return undefined;
   }
   return `${scenarioName} missing live assistant-message usage (${missing.join(", ")}).`;
-}
-
-function normalizeRuntimePair(
-  pair: [RuntimeId, RuntimeId] | null | undefined,
-): [RuntimeId, RuntimeId] {
-  if (pair?.[0] && pair?.[1]) {
-    return pair;
-  }
-  return ["openclaw", "codex"];
 }
 
 function requiredCoverageStatus(

@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resetPluginCache } from "../plugins/plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
@@ -67,8 +68,89 @@ describe("getSecretTargetRegistry metadata reuse", () => {
   });
 
   afterEach(() => {
+    resetPluginCache();
+    vi.unstubAllEnvs();
     cleanupTrackedTempDirs(tempDirs);
   });
+
+  it.each(["bundled", "config"])(
+    "rejects a broken %s contract during source docs generation without changing runtime tolerance",
+    async (origin) => {
+      const healthy = writeChannelContract({
+        channelId: "healthy",
+        pluginId: "healthy",
+        targetId: "channels.healthy.token",
+        ownership: "channels",
+      });
+      const broken = writeChannelContract({
+        channelId: "broken",
+        pluginId: "broken",
+        targetId: "channels.broken.token",
+        ownership: "channels",
+      });
+      const missing = {
+        ...broken,
+        id: "missing",
+        rootDir: makeTrackedTempDir("openclaw-target-registry-missing", tempDirs),
+      };
+      // A dependency failure can resemble the old missing-artifact message; it is not absence.
+      const failure = "Unable to resolve bundled plugin public surface fixture dependency failed";
+      fs.writeFileSync(
+        path.join(broken.rootDir, "secret-contract-api.cjs"),
+        `throw new Error(${JSON.stringify(failure)});`,
+      );
+      const records = [healthy, broken, missing].map((record) =>
+        Object.assign({}, record, {
+          origin,
+          id: origin === "bundled" ? path.basename(record.rootDir) : record.id,
+        }),
+      );
+      vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.dirname(healthy.rootDir));
+      vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: records } as never);
+      const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+      const { buildSecretRefCredentialMatrix } =
+        await import("./credential-matrix.test-support.js");
+
+      const runtimeIds = getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id);
+      expect(runtimeIds).toContain("channels.healthy.token");
+      expect(runtimeIds).toContain("gateway.auth.token");
+      expect(runtimeIds).not.toContain("channels.broken.token");
+      expect(() => buildSecretRefCredentialMatrix()).toThrow(failure);
+
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({
+        plugins: [records[0], records[2]],
+      } as never);
+      const matrixIds = buildSecretRefCredentialMatrix().entries.map((entry) => entry.id);
+      expect(matrixIds).toContain("channels.healthy.token");
+      expect(matrixIds).toContain("gateway.auth.token");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "reports a rejected contract boundary during source generation after runtime cached the rejection",
+    async () => {
+      const record = writeChannelContract({
+        channelId: "blocked",
+        pluginId: "blocked",
+        targetId: "channels.blocked.token",
+        ownership: "channels",
+      });
+      const outsideDir = makeTrackedTempDir("openclaw-contract-outside", tempDirs);
+      fs.linkSync(
+        path.join(record.rootDir, "secret-contract-api.cjs"),
+        path.join(outsideDir, "linked-contract.cjs"),
+      );
+      metadataMocks.resolvePluginMetadataSnapshot.mockReturnValue({ plugins: [record] } as never);
+      const { getSecretTargetRegistry } = await import("./target-registry-data.js");
+      expect(
+        getSecretTargetRegistry({ config: {}, env: {} }).map((entry) => entry.id),
+      ).not.toContain("channels.blocked.token");
+      expect(() => getSecretTargetRegistry({ sourceTree: true })).toThrow(
+        "Unable to open channel secret contract for blocked",
+      );
+    },
+  );
 
   it("allows configless runtime targets to reuse the lifecycle workspace", async () => {
     const { getSecretTargetRegistry } = await import("./target-registry-data.js");

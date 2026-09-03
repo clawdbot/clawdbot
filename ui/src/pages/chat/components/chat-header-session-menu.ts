@@ -14,9 +14,15 @@ import {
   renderCompactSessionMenuFrame,
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
-import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
+import type { SessionCreatedActor } from "../../../components/session-owner-chip.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import {
+  canManageChatSessionSharing,
+  renderChatSessionSharing,
+  selectChatSessionSharingItem,
+  type ChatSessionSharingProps,
+} from "./chat-session-sharing.ts";
 
 export type HeaderMenuAction = SessionManagementAction | { kind: "continue-in-terminal" };
 export type HeaderMenuActionKind = HeaderMenuAction["kind"];
@@ -40,7 +46,7 @@ export type HeaderMenuStatusAction = {
 
 const EMPTY_SETTINGS = {} as UiSettings;
 
-type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "view";
+type CompactMenuView = CompactSessionMenuView | "panels" | "layout" | "sharing" | "view";
 type MenuSelectEvent = CustomEvent<{ item: { value?: string } }> & {
   currentTarget: HTMLElement & { open: boolean };
 };
@@ -48,6 +54,7 @@ type MenuSelectEvent = CustomEvent<{ item: { value?: string } }> & {
 const COMPACT_MENU_VIEW_BY_VALUE: Record<string, CompactMenuView> = {
   "compact:open-layout": "layout",
   "compact:open-panels": "panels",
+  "compact:open-sharing": "sharing",
   "compact:open-view": "view",
 };
 
@@ -57,14 +64,16 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) onboarding = false;
   @property({ attribute: false }) preferencesBrowserOnly = false;
   @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) navigationAllowed = false;
+  @property({ attribute: false }) copyMarkdownAllowed = false;
+  @property({ attribute: false }) splitAllowed = false;
   @property({ attribute: false }) settings: UiSettings = EMPTY_SETTINGS;
   @property({ attribute: false }) panelActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) layoutActions: HeaderMenuQuickAction[] = [];
   @property({ attribute: false }) statusActions: HeaderMenuStatusAction[] = [];
+  @property({ attribute: false }) sharing: ChatSessionSharingProps | null = null;
   @property({ attribute: false }) groups: readonly string[] = [];
-  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
-  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
-  @property({ attribute: false }) currentOwnerId: string | null = null;
+  @property({ attribute: false }) currentOwner: SessionCreatedActor | null = null;
   @property({ attribute: false }) actionDisabledReasons: Partial<
     Record<HeaderMenuActionKind, string>
   > = {};
@@ -83,6 +92,10 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       session: this.session,
       selectionCount: 1,
       compact: this.compact,
+      navigationAllowed: this.navigationAllowed,
+      copyMarkdownAllowed: this.copyMarkdownAllowed,
+      splitAllowed: this.splitAllowed,
+      renderOpenInExtra: (inline) => this.renderTerminalAction(inline),
       disabled: false,
       actionDisabledReasons: this.actionDisabledReasons,
       forkDisabled: this.forkDisabled,
@@ -90,9 +103,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       archiveAllowed: this.archiveAllowed,
       deleteAllowed: this.deleteAllowed,
       groups: this.groups,
-      ownerOptions: this.ownerOptions,
-      selfOwner: this.selfOwner,
-      currentOwnerId: this.currentOwnerId,
+      currentOwner: this.currentOwner,
       worktreePath: this.worktreePath,
     }),
     (action) => this.onAction(action),
@@ -124,15 +135,16 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       if (
         compactView === "root" ||
         compactView === "open-in" ||
+        compactView === "copy" ||
         compactView === "assign-owner" ||
         compactView === "icon" ||
         compactView === "group"
       ) {
         this.managementActions.prepareCompactView(compactView);
+      } else if (compactView === "sharing" && !this.sharing?.openDisabledReason) {
+        this.sharing?.onOpen();
       }
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLElement>("wa-dropdown-item:not([disabled])")?.focus();
-      });
+      this.managementActions.focusCurrentView();
       return;
     }
     if (value === "open-command-palette") {
@@ -175,7 +187,14 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       }
       return;
     }
+    if (value.startsWith("visibility:") || value.startsWith("member:")) {
+      if (this.sharing) {
+        selectChatSessionSharingItem(this.sharing, value);
+      }
+      return;
+    }
     if (this.managementActions.handleSelect(value)) {
+      event.preventDefault();
       return;
     }
     if (value === "continue-in-terminal" && !this.actionDisabled(value)) {
@@ -283,18 +302,20 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
     if (
       this.compactView === "root" ||
       this.compactView === "open-in" ||
+      this.compactView === "copy" ||
       this.compactView === "assign-owner" ||
       this.compactView === "icon" ||
       this.compactView === "group"
     ) {
       return this.managementActions.renderCompactView(this.compactView);
     }
-    const body =
-      this.compactView === "panels"
-        ? this.renderQuickActionItems("panels", this.panelActions, true)
-        : this.compactView === "layout"
-          ? this.renderQuickActionItems("layout", this.layoutActions, true)
-          : this.renderViewSubmenu(true);
+    const body = html`${this.compactView === "panels"
+      ? this.renderQuickActionItems("panels", this.panelActions, true)
+      : this.compactView === "layout"
+        ? this.renderQuickActionItems("layout", this.layoutActions, true)
+        : this.compactView === "sharing" && this.sharing
+          ? renderChatSessionSharing(this.sharing, true)
+          : this.renderViewSubmenu(true)}`;
     return renderCompactSessionMenuFrame(body);
   }
 
@@ -325,14 +346,16 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             )}
             <div class="session-menu__separator" role="separator"></div>`
         : nothing}
-      ${this.worktreePath
-        ? html`
-            ${this.managementActions.renderOpenInEntry(this.worktreePath)}
-            <div class="session-menu__separator" role="separator"></div>
-          `
-        : nothing}
       ${this.renderQuickActions("panels", this.panelActions)}
       ${this.renderQuickActions("layout", this.layoutActions)}
+      ${this.compact && this.sharing?.session && canManageChatSessionSharing(this.sharing.session)
+        ? this.renderCompactNavigationItem(
+            "sharing",
+            t("chat.sessionSharing.menu"),
+            icons.users,
+            Boolean(this.sharing.openDisabledReason),
+          )
+        : nothing}
       ${this.compact
         ? this.renderCompactNavigationItem("view", t("chat.view.menu"), icons.eye)
         : html`<wa-dropdown-item class="session-menu__item">
@@ -341,23 +364,32 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
             ${this.renderViewSubmenu()}
           </wa-dropdown-item>`}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderPrimaryActions()} ${this.managementActions.renderGroupAction()}
-      <wa-dropdown-item
-        class="session-menu__item"
-        value="continue-in-terminal"
-        ?disabled=${this.actionDisabled("continue-in-terminal")}
-        title=${this.actionTitle("continue-in-terminal")}
-      >
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
-        <span class="session-menu__text">${t("chat.sessionHeader.continueInTerminal.action")}</span>
-      </wa-dropdown-item>
+      ${this.managementActions.renderPrimaryActions()}
       <div class="session-menu__separator" role="separator"></div>
-      ${this.managementActions.renderLifecycleActions()}
+      ${this.managementActions.renderOrganizationActions()}
+      <div class="session-menu__separator" role="separator"></div>
+      ${this.managementActions.renderTransferActions()}
+      <div class="session-menu__separator" role="separator"></div>
+      ${this.managementActions.renderDeleteAction()}
     `;
+  }
+
+  private renderTerminalAction(inline: boolean) {
+    return html`<wa-dropdown-item
+      slot=${inline ? nothing : "submenu"}
+      class="session-menu__item"
+      value="continue-in-terminal"
+      ?disabled=${this.actionDisabled("continue-in-terminal")}
+      title=${this.actionTitle("continue-in-terminal")}
+    >
+      <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.terminal}</span>
+      <span class="session-menu__text">${t("chat.sessionHeader.continueInTerminal.action")}</span>
+    </wa-dropdown-item>`;
   }
 
   private readonly handleShow = () => {
     this.compactView = "root";
+    this.managementActions.loadOwners();
     this.onOpen();
   };
 
@@ -373,7 +405,7 @@ class ChatHeaderSessionMenu extends OpenClawLightDomElement {
       this.statusActions[0]?.tone;
     return html`
       <wa-dropdown
-        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}`}
+        class=${`session-menu chat-header-session-menu${this.compact ? " chat-header-session-menu--compact" : ""}${this.compact && this.compactView === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
         placement="bottom-end"
         aria-label=${menuLabel}
         @keydown=${(event: KeyboardEvent) => {

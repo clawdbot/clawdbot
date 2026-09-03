@@ -42,6 +42,13 @@ export async function runPreparedReply(
       agentDir: dispatchRuntime.agentDir,
       allowGatewaySubagentBinding: true,
       workspaceDir: context.workspaceDir,
+      runtimePluginSelections: [
+        {
+          provider: params.provider,
+          modelId: params.model,
+          runtime: context.thinkingRuntime,
+        },
+      ],
     },
     {
       catalogMode: "static",
@@ -52,7 +59,7 @@ export async function runPreparedReply(
   let leaseActive = true;
   try {
     return await withPreparedModelRuntimePluginGenerationScope(
-      dispatchRuntime.pluginGeneration,
+      lease.pluginGeneration,
       () =>
         withPluginRuntimeGenerationScope(lease.snapshot, () =>
           executePreparedReplyContext(context),

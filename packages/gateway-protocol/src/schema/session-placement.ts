@@ -83,6 +83,11 @@ const SessionPlacementDiskSpaceProperties = {
   diskSpace: Type.Optional(SessionPlacementDiskSpaceSchema),
 };
 
+const SessionPlacementIdentityProperties = {
+  providerId: Type.Optional(NonEmptyString),
+  profileId: Type.Optional(NonEmptyString),
+};
+
 const WorkspaceResultConflictSchema = closedObject({
   paths: Type.Array(NonEmptyString, { minItems: 1, maxItems: 256 }),
   stagedResultRef: NonEmptyString,
@@ -94,6 +99,7 @@ const SessionPlacementConflictProperties = {
 };
 
 const TerminalSessionPlacementProperties = {
+  ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
   activeOwnerEpoch: Type.Optional(SessionPlacementOwnerEpochSchema),
   workspaceBaseManifestRef: Type.Optional(NonEmptyString),
@@ -117,6 +123,7 @@ function workerOwnedSessionPlacementProperties<
   return {
     state: Type.Literal(state),
     ...SessionPlacementTimingProperties,
+    ...SessionPlacementIdentityProperties,
     environmentId: NonEmptyString,
     activeOwnerEpoch: SessionPlacementOwnerEpochSchema,
     workerBundleHash: WorkerBundleHashSchema,
@@ -133,12 +140,14 @@ const RequestedSessionPlacementSchema = createUnownedSessionPlacementSchema("req
 const ProvisioningSessionPlacementSchema = closedObject({
   state: Type.Literal("provisioning"),
   ...SessionPlacementTimingProperties,
+  ...SessionPlacementIdentityProperties,
   environmentId: Type.Optional(NonEmptyString),
 });
 
 const SyncingSessionPlacementSchema = closedObject({
   state: Type.Literal("syncing"),
   ...SessionPlacementTimingProperties,
+  ...SessionPlacementIdentityProperties,
   environmentId: NonEmptyString,
   workerBundleHash: WorkerBundleHashSchema,
 });
@@ -146,6 +155,7 @@ const SyncingSessionPlacementSchema = closedObject({
 const StartingSessionPlacementSchema = closedObject({
   state: Type.Literal("starting"),
   ...SessionPlacementTimingProperties,
+  ...SessionPlacementIdentityProperties,
   environmentId: NonEmptyString,
   workerBundleHash: WorkerBundleHashSchema,
   ...SessionPlacementWorkspaceProperties,
@@ -173,6 +183,7 @@ const FailedSessionPlacementSchema = closedObject({
   ...SessionPlacementTimingProperties,
   ...TerminalSessionPlacementProperties,
   recoveryError: NonEmptyString,
+  recoveryAction: Type.Optional(Type.Enum(["restart", "stop-first"] as const, { type: "string" })),
 });
 
 /** Gateway-visible placement projection; `state` remains the closed discriminator. */

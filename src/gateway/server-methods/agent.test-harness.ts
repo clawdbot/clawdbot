@@ -9,7 +9,12 @@ import { setSubagentRegistryDepsForTest } from "../../agents/subagents/registry/
 import type { SubagentRegistryDeps } from "../../agents/subagents/registry/subagent-registry-deps.js";
 import { resetSubagentRegistryForTests } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import type { SessionTranscriptStats } from "../../config/sessions/session-accessor.js";
+import type {
+  SessionTranscriptStats,
+  recordSessionParticipant,
+  listSessionParticipantsReadOnly,
+  stageSessionPendingInput,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import {
@@ -21,6 +26,7 @@ import { installInMemoryTaskRegistryRuntime } from "../../test-utils/task-regist
 import { createChatRunState } from "../server-chat-state.js";
 import { agentIdentityHandlers } from "./agent-identity.js";
 import { agentHandlers } from "./agent.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { suspendHandlers } from "./suspend.js";
 import type { GatewayRequestContext } from "./types.js";
 
@@ -35,11 +41,14 @@ export const REAL_PNG_DATA_URL = `data:image/png;base64,${REAL_PNG.toString("bas
 
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
-  loadGatewaySessionRow: vi.fn(),
+  loadGatewaySessionRow: vi.fn<typeof import("../session-utils.js").loadGatewaySessionRow>(),
   updateSessionStore: vi.fn(),
   applySessionEntryReplacements: vi.fn(),
   patchSessionEntryTarget: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
+  stageSessionPendingInput: vi.fn<typeof stageSessionPendingInput>(),
+  recordSessionParticipant: vi.fn<typeof recordSessionParticipant>(() => "inserted"),
+  listSessionParticipantsReadOnly: vi.fn<typeof listSessionParticipantsReadOnly>(() => new Map()),
   readTranscriptStatsSync: vi.fn<() => SessionTranscriptStats>(() => ({
     eventCount: 0,
     maxSeq: 0,
@@ -146,6 +155,10 @@ vi.mock("../../config/sessions/session-accessor.js", async () => {
     applySessionEntryReplacements: mocks.applySessionEntryReplacements,
     patchSessionEntryTarget: mocks.patchSessionEntryTarget,
     persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+    stageSessionPendingInput: mocks.stageSessionPendingInput,
+    // These handler fixtures own an in-memory store; participant access must not reach shared /tmp SQLite.
+    recordSessionParticipant: mocks.recordSessionParticipant,
+    listSessionParticipantsReadOnly: mocks.listSessionParticipantsReadOnly,
     readTranscriptStatsSync: mocks.readTranscriptStatsSync,
   };
 });
@@ -292,7 +305,7 @@ vi.mock("../../infra/agent-events.js", () => ({
   emitAgentEvent: mocks.emitAgentEvent,
   getAgentEventLifecycleGeneration: () => mocks.lifecycleGeneration,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   isAgentEventLifecycleGenerationCurrent: (generation: string) =>
     generation === mocks.lifecycleGeneration,
   registerAgentEventLifecycleRotationHandler: vi.fn(),
@@ -303,7 +316,7 @@ vi.mock("../../infra/agent-run-registry.js", () => ({
   claimAgentRunContext: mocks.registerAgentRunContext,
   clearAgentRunContext: mocks.clearAgentRunContext,
   getAgentRunContext: vi.fn(() => undefined),
-  hasProjectedAgentRunForSession: vi.fn(() => false),
+  resolveProjectedAgentRunProgressState: vi.fn(() => undefined),
   registerAgentRunContext: mocks.registerAgentRunContext,
 }));
 
@@ -592,6 +605,25 @@ function selectFreshestTargetFixtureEntry(
 }
 
 function resetSessionAccessorMocks() {
+  // These handler fixtures own an in-memory store. Real admission durability
+  // and execution-time promotion are covered by the gateway-server suites.
+  mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {
+    options.assertCurrent();
+    const message = options.prepareMessageAfterIdempotencyCheck
+      ? options.prepareMessageAfterIdempotencyCheck(options.message)
+      : options.message;
+    return message
+      ? {
+          state: "queued",
+          inputId: "test-user-turn",
+          message,
+          run: (operation) => operation(),
+          finish: vi.fn(),
+        }
+      : undefined;
+  });
+  mocks.recordSessionParticipant.mockReset().mockReturnValue("inserted");
+  mocks.listSessionParticipantsReadOnly.mockReset().mockReturnValue(new Map());
   mocks.readTranscriptStatsSync.mockReset().mockReturnValue({
     eventCount: 0,
     maxSeq: 0,
@@ -923,7 +955,9 @@ export function operatorWriteGatewayClient(): AgentHandlerArgs["client"] {
   } as AgentHandlerArgs["client"];
 }
 
-export function operatorWriteCliClient(): AgentHandlerArgs["client"] {
+export function operatorWriteCliClient(
+  scopes: string[] = ["operator.write"],
+): NonNullable<AgentHandlerArgs["client"]> {
   return {
     connect: {
       minProtocol: 1,
@@ -934,9 +968,9 @@ export function operatorWriteCliClient(): AgentHandlerArgs["client"] {
         platform: "test",
         mode: "cli",
       },
-      scopes: ["operator.write"],
+      scopes,
     },
-  } as AgentHandlerArgs["client"];
+  };
 }
 
 export async function waitForAgentCommandCall<
@@ -1097,6 +1131,9 @@ export function restoreAgentTaskRegistryRuntimeAfterTests(): void {
 }
 
 export const describe0AfterEach0 = () => {
+  // Drain deferred broadcasts before retiring the test-owned row and runtime state.
+  flushPendingSessionsChangedEvents();
+  mocks.loadGatewaySessionRow.mockReset();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetDiagnosticEventsForTest();
@@ -1131,6 +1168,7 @@ export const describe0AfterEach0 = () => {
 };
 
 function resetIntegrationState() {
+  flushPendingSessionsChangedEvents();
   envSnapshot.restore();
   resetDetachedTaskLifecycleRuntimeForTests();
   resetAgentTaskRegistryForTests();

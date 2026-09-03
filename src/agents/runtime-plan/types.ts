@@ -11,6 +11,7 @@ import type {
   ProviderRouteOverridePresence,
 } from "../../plugin-sdk/provider-model-types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
+import type { ProviderModelAuthSourceClassification } from "../provider-model-auth-source-plan.js";
 import type { AgentTool } from "../runtime/index.js";
 
 /** Runtime transport selected for one model attempt. */
@@ -394,6 +395,15 @@ type AgentRuntimeAuthDeferredRouteSupport = {
 };
 
 /** Auth forwarding decision for one runtime attempt. */
+export type AgentRuntimeCredentialSource = ProviderModelAuthSourceClassification | { kind: "none" };
+
+/** Actual provider/model/source tuple owned by one physical model attempt. */
+export type AgentRuntimeModelAttempt = {
+  provider: string;
+  model: string;
+  credentialSource: AgentRuntimeCredentialSource;
+};
+
 export type AgentRuntimeAuthPlan = {
   providerForAuth: string;
   /** Model whose order, cooldown, and route facts produced this plan. */
@@ -411,6 +421,8 @@ export type AgentRuntimeAuthPlan = {
   modelRoute?: AgentRuntimeAuthModelRoute;
   /** Secret-free support shared by every route deferred to harness-owned auth. */
   deferredRouteSupport?: AgentRuntimeAuthDeferredRouteSupport;
+  /** Redacted source selected for this concrete physical attempt. */
+  credentialSource?: AgentRuntimeCredentialSource;
 };
 
 /** Prompt transforms and provider contribution hooks for one runtime attempt. */

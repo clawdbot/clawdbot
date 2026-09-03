@@ -1,4 +1,4 @@
-import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
+import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorAdminAccess } from "./operator-access.ts";
 
@@ -18,4 +18,31 @@ export function isBrowserPanelAvailable(snapshot: GatewaySnapshot): boolean {
 
 export function isDesktopPanelAvailable(snapshot: GatewaySnapshot): boolean {
   return isPanelAvailable(snapshot, "desktop.observe");
+}
+
+const homePanelAccess = new WeakMap<
+  ApplicationContext["gateway"],
+  { gatewayUrl: string; allowed: boolean }
+>();
+
+/** Presentation access survives reconnect; the chat send/outbox owner still authorizes delivery. */
+export function isHomePanelAvailable(gateway: ApplicationContext["gateway"] | undefined): boolean {
+  if (!gateway) {
+    return false;
+  }
+  const snapshot = gateway.snapshot;
+  const gatewayUrl = gateway.connection.gatewayUrl;
+  if (snapshot.phase === "connected") {
+    const allowed =
+      canCallGatewayMethod(snapshot, "chat.history", "operator.read") &&
+      canCallGatewayMethod(snapshot, "chat.send", "operator.write");
+    homePanelAccess.set(gateway, { gatewayUrl, allowed });
+    return allowed;
+  }
+  const previous = homePanelAccess.get(gateway);
+  if (previous?.gatewayUrl !== gatewayUrl || snapshot.phase === "reload-required") {
+    homePanelAccess.delete(gateway);
+    return false;
+  }
+  return previous.allowed;
 }

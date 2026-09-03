@@ -335,7 +335,6 @@ describe("mcp connection resolver helpers", () => {
           stopStreamWatchers: async () => {},
           reconcileHeartbeatJobs: async () => "converged" as const,
         },
-        channelHealthMonitor: null,
       };
       const reloadLog = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
       const requestRecoveryRestart = vi.fn(() => ({ status: "failed" as const }));
@@ -362,7 +361,9 @@ describe("mcp connection resolver helpers", () => {
         setState(nextState) {
           gatewayState = nextState;
         },
-        async startChannel() {},
+        async startChannel() {
+          return new Map();
+        },
         async stopChannel() {},
         pruneInactiveChannelAccountState() {},
         async reloadPlugins({ beforeReplace, commitRuntime }) {
@@ -381,7 +382,6 @@ describe("mcp connection resolver helpers", () => {
           isClosing: () => false,
           async runHook() {},
         }),
-        createHealthMonitor: () => null,
         requestRecoveryRestart,
       });
 

@@ -17,7 +17,10 @@ import {
 } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import { shouldMirrorRefreshedOAuthCredential } from "./oauth-identity.js";
-import { OAuthRefreshFailureError } from "./oauth-refresh-failure.js";
+import {
+  OAuthRefreshFailureError,
+  readProviderOAuthRefreshFailure,
+} from "./oauth-refresh-failure.js";
 import {
   buildRefreshContentionError,
   isGlobalRefreshLockTimeoutError,
@@ -96,12 +99,19 @@ export class OAuthManagerRefreshError extends OAuthRefreshFailureError {
       ...(params.attemptedCredentials ?? []),
       storedCredential?.type === "oauth" ? storedCredential : undefined,
     );
+    const presentation = readProviderOAuthRefreshFailure(params.cause);
     const causeMessage = formatRedactedOAuthRefreshError(surfacedCause, secrets);
     super({
       provider: params.credential.provider,
       profileId: params.profileId,
       message: `OAuth token refresh failed for ${params.credential.provider}: ${causeMessage}`,
       cause: createRedactedOAuthRefreshCause(surfacedCause, secrets),
+      errorType: presentation?.errorType,
+      reason: presentation?.reason,
+      status: presentation?.status,
+      summary: presentation?.summary
+        ? formatRedactedOAuthRefreshError(presentation.summary, secrets)
+        : undefined,
     });
     this.name = "OAuthManagerRefreshError";
     this.#credential = params.credential;

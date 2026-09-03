@@ -219,6 +219,8 @@ function renderChannelBody(key: ChannelKey, props: ChannelsProps, data: Channels
 export function renderChannelDetail(params: {
   channelId: string;
   label: string;
+  pluginIconUrl?: string;
+  preferPluginIcon?: boolean;
   props: ChannelsProps;
   data: ChannelsChannelData;
   onClose: () => void;
@@ -229,7 +231,10 @@ export function renderChannelDetail(params: {
     <openclaw-modal-dialog label=${params.label} @modal-cancel=${() => params.onClose()}>
       <div class="channels-detail">
         <div class="channels-detail__header">
-          ${renderChannelIcon(params.channelId, params.label, "cover")}
+          ${renderChannelIcon(params.channelId, params.label, "cover", {
+            pluginIconUrl: params.pluginIconUrl,
+            preferPluginIcon: params.preferPluginIcon,
+          })}
           <div class="channels-detail__header-actions">
             <a
               class="btn btn--sm"

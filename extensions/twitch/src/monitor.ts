@@ -7,7 +7,7 @@
 
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import { createChannelInboundEnvelopeBuilder } from "openclaw/plugin-sdk/channel-inbound";
-import type { MarkdownTableMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveOutboundMediaUrls } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -15,9 +15,9 @@ import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coer
 import { checkTwitchAccessControl } from "./access-control.js";
 import { getOrCreateClientManager } from "./client-manager-registry.js";
 import { getTwitchRuntime } from "./runtime.js";
+import { sendMessageTwitchInternal } from "./send.js";
 import { createTwitchIngress } from "./twitch-ingress.js";
 import type { TwitchAccountConfig, TwitchChatMessage } from "./types.js";
-import { stripMarkdownForTwitch } from "./utils/markdown.js";
 
 type TwitchRuntimeEnv = {
   log?: (message: string) => void;
@@ -145,11 +145,6 @@ async function processTwitchMessage(params: {
             commandBody: input.textForCommands,
           },
         });
-        const tableMode = channelRuntime.text.resolveMarkdownTableMode({
-          cfg,
-          channel: "twitch",
-          accountId,
-        });
         return {
           cfg,
           channel: "twitch",
@@ -167,7 +162,6 @@ async function processTwitchMessage(params: {
                 account,
                 accountId,
                 config,
-                tableMode,
                 runtime,
               });
             },
@@ -201,7 +195,6 @@ async function deliverTwitchReply(params: {
   account: TwitchAccountConfig;
   accountId: string;
   config: unknown;
-  tableMode: MarkdownTableMode;
   runtime: TwitchRuntimeEnv;
 }): Promise<{ visibleReplySent: boolean }> {
   const { payload, channel, account, accountId, config, runtime } = params;
@@ -214,22 +207,17 @@ async function deliverTwitchReply(params: {
       debug: (msg) => runtime.log?.(msg),
     });
 
-    const textToSend = stripMarkdownForTwitch(
-      [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
-    );
-    if (!textToSend) {
+    const result = await sendMessageTwitchInternal({
+      channel,
+      text: [payload.text, ...resolveOutboundMediaUrls(payload)].filter(Boolean).join(" "),
+      cfg: config as OpenClawConfig,
+      account,
+      accountId,
+      clientManager,
+    });
+    if (result.outcome === "not_sent") {
       runtime.error?.(`No text to send in reply payload`);
       return { visibleReplySent: false };
-    }
-    const result = await clientManager.sendMessage(
-      account,
-      channel,
-      textToSend,
-      config as Parameters<typeof clientManager.sendMessage>[3],
-      accountId,
-    );
-    if (!result.ok) {
-      throw new Error(result.error ?? "Send failed");
     }
     return { visibleReplySent: true };
   } catch (err) {

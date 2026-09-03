@@ -14,7 +14,6 @@ import {
   type AgentWaitResult,
   type AssistantReplySnapshot,
   hasUpdatedAssistantReplySnapshot,
-  isRecoverableAgentWaitError,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
 } from "../run-wait.js";
@@ -52,7 +51,7 @@ function sameOwnedSession(params: {
 }
 function isDeliveryFailureWait(wait: AgentWaitResult): boolean {
   return (
-    (wait.status === "error" && !isRecoverableAgentWaitError(wait.error)) ||
+    (wait.status === "error" && !wait.retryableTransportError) ||
     (wait.status === "timeout" && wait.pendingError === true)
   );
 }
@@ -232,6 +231,7 @@ export async function runSessionsSendA2AFlow(params: {
           extraSystemPrompt: replyPrompt,
           timeoutMs: params.announceTimeoutMs,
           lane: resolveNestedAgentLaneForSession(currentSessionKey),
+          sourceAgentId: nextAgentId,
           sourceSessionKey: nextSessionKey,
           sourceChannel: nextRole === "requester" ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",

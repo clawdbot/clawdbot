@@ -1,6 +1,7 @@
 import { autonomousSkillSizeError } from "../../skills/workshop/collection-contracts.js";
 import {
   readProposalFrontmatter,
+  resolveSkillProposalName,
   stripProposalFrontmatterForSkill,
 } from "../../skills/workshop/frontmatter.js";
 import { prepareSkillProposalDraft } from "../../skills/workshop/proposal-draft.js";
@@ -17,6 +18,7 @@ import type {
   SkillWorkshopProposalReviewCompletion,
 } from "../../skills/workshop/types.js";
 import { readPositiveIntegerParam, readToolStringParam, ToolInputError } from "./common.js";
+import { textResult } from "./tool-results.js";
 
 export function assertAutonomousSkillSize(
   name: string,
@@ -97,34 +99,28 @@ export async function completeProposalReview(completion: SkillWorkshopProposalRe
 }
 
 function completionResult() {
-  return {
-    content: [{ type: "text" as const, text: "Completed Skill Workshop review." }],
-    details: { completed: true },
-  };
+  return textResult("Completed Skill Workshop review.", { completed: true });
 }
 
 export function proposalMutationText(action: string, record: SkillProposalRecord): string {
-  return `${action} ${record.id} (${record.status}) for ${record.target.skillKey}.`;
+  return `${action} ${record.id} (${record.status}) for ${resolveSkillProposalName(record.kind, record.target)}.`;
 }
 
 export function actionResult(
   record: SkillProposalRecord,
   options: { contentText: string; targetSkillFile?: string },
 ) {
-  return {
-    content: [{ type: "text" as const, text: options.contentText }],
-    details: {
-      id: record.id,
-      status: record.status,
-      kind: record.kind,
-      skillName: record.target.skillName,
-      skillKey: record.target.skillKey,
-      targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
-      scanState: record.scan.state,
-      proposedVersion: record.proposedVersion,
-      draftHash: record.draftHash,
-    },
-  };
+  return textResult(options.contentText, {
+    id: record.id,
+    status: record.status,
+    kind: record.kind,
+    skillName: record.target.skillName,
+    skillKey: record.target.skillKey,
+    targetSkillFile: options.targetSkillFile ?? record.target.skillFile,
+    scanState: record.scan.state,
+    proposedVersion: record.proposedVersion,
+    draftHash: record.draftHash,
+  });
 }
 
 export function proposalResult(

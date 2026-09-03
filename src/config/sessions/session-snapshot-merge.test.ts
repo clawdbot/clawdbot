@@ -382,6 +382,29 @@ describe("session snapshot merge", () => {
     expect(mergeSessionSnapshotChanges({ initial, next, current })).toEqual(current);
   });
 
+  it("projects a runtime admission without losing its refreshed recovery budget", () => {
+    const initialRecovery: SessionEntry = {
+      ...initial,
+      mainRestartRecovery: { cycleId: "cycle-1", revision: 4, chargedAttempts: 3 },
+    };
+    const next: SessionEntry = {
+      ...initialRecovery,
+      mainRestartRecovery: {
+        ...initialRecovery.mainRestartRecovery!,
+        revision: 5,
+        startedAttempt: 3,
+      },
+    };
+
+    const merged = mergeSessionSnapshotChanges({
+      initial: initialRecovery,
+      next,
+      current: initialRecovery,
+    });
+
+    expect(merged.mainRestartRecovery).toEqual(next.mainRestartRecovery);
+  });
+
   it("preserves the recovery aggregate when a restart marker wins a stale healthy clear", () => {
     const initialRecovery: SessionEntry = {
       ...initial,

@@ -91,6 +91,48 @@ describe("llama-server discovery projection", () => {
   });
 
   it.each([
+    { name: "HTML app shell", body: "<!doctype html><html><body>Local model app</body></html>" },
+    { name: "non-model JSON", body: JSON.stringify({ app: "local-models" }) },
+  ])("discovers an existing server behind a root $name response", async ({ body }) => {
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-setup")>(
+      "openclaw/plugin-sdk/provider-setup",
+    );
+    discoverRowsMock.mockImplementation(actual.discoverOpenAICompatibleLocalModels);
+    const requests: string[] = [];
+    const server = createServer((request, response) => {
+      requests.push(request.url ?? "");
+      if (request.url === "/models") {
+        response.end(body);
+      } else if (request.url === "/v1/models") {
+        response.setHeader("Content-Type", "application/json");
+        response.end(JSON.stringify({ data: [{ id: "local-model", object: "model" }] }));
+      } else {
+        response.end("{}");
+      }
+    });
+    server.listen(0, "127.0.0.1");
+    await once(server, "listening");
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("expected a listening TCP server");
+      }
+      await expect(
+        discoverLlamaServer({ baseUrl: `http://127.0.0.1:${address.port}`, cacheTtlMs: 0 }),
+      ).resolves.toMatchObject({
+        kind: "success",
+        models: [{ config: { id: "local-model" } }],
+      });
+      expect(requests).toEqual(["/health", "/models", "/v1/models", "/props"]);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it.each([
     { name: "API key", access: { apiKey: "endpoint-key" } },
     { name: "authorization header", access: { headers: { Authorization: "Bearer endpoint-key" } } },
     { name: "explicit refresh", access: { cacheTtlMs: 0 } },

@@ -31,6 +31,7 @@ scenario:
   execution:
     kind: script
     path: test/e2e/qa-lab/runtime/docker-artifact-proof.ts
+    dockerLane: docker-package-install
     summary: Builds one real package artifact, installs and executes it through npm, pnpm, and Bun PATH entrypoints in clean containers, and records artifact identities.
     timeoutMs: 1800000
     args:

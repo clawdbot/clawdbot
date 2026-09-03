@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
+import { startWebSocketKeepalive } from "../websocket-keepalive.js";
 import { connectRfbAttachment, type DesktopRfbAttachment } from "./attachment.js";
 import {
   preauthenticateRfb,
@@ -203,7 +204,8 @@ export function handleDesktopObserveUpgrade(
     const observer = deps.registry.attachObserver(entry.sourceKey, {
       control: entry.control,
       ownerEpoch: entry.ownerEpoch,
-      close: (code, reason) => ws.close(code, reason),
+      // Retire the stream and keepalive before the close handshake can wait on a paused peer.
+      close: (code, reason) => closeBoth(code, reason),
     });
     if (!observer) {
       claimedStream?.destroy();
@@ -220,12 +222,14 @@ export function handleDesktopObserveUpgrade(
     let closed = false;
     let negotiating = Boolean(entry.preauth);
     let resumeTimer: ReturnType<typeof setInterval> | undefined;
+    const stopKeepalive = startWebSocketKeepalive(ws);
 
     const closeBoth = (code: number, reason: string) => {
       if (closed) {
         return;
       }
       closed = true;
+      stopKeepalive();
       clearInterval(resumeTimer);
       resumeTimer = undefined;
       observer.release();

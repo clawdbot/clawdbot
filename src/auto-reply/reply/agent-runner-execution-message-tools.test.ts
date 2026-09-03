@@ -16,7 +16,7 @@ import type {
 } from "./agent-runner-execution.test-support.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 
-const state = setupAgentRunnerExecutionTestState();
+const state = await setupAgentRunnerExecutionTestState();
 
 describe("executeAgentTurn: message tool progress", () => {
   it("suppresses progress callbacks after message-tool-only delivery completes", async () => {

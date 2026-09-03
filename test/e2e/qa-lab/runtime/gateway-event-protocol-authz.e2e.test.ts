@@ -17,6 +17,7 @@ import {
 installGatewayTestHooks({ scope: "suite" });
 
 type RecordingSocket = {
+  readyState: number;
   bufferedAmount: number;
   close: ReturnType<typeof vi.fn>;
   sent: Array<{ event?: string }>;
@@ -26,6 +27,7 @@ type RecordingSocket = {
 function makeRecordingSocket(): RecordingSocket {
   const sent: Array<{ event?: string }> = [];
   return {
+    readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
     sent,

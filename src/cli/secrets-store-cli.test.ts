@@ -21,6 +21,10 @@ const mocks = await vi.hoisted(async () => {
 });
 
 vi.mock("../runtime.js", () => ({ defaultRuntime: mocks.defaultRuntime }));
+vi.mock("./one-shot-exit.js", () => ({
+  exitCliAfterOutput: (runtime: typeof mocks.defaultRuntime, exitCode: number) =>
+    runtime.exit(exitCode),
+}));
 vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../secrets/store/secret-store.js")>();
   return {
@@ -75,6 +79,31 @@ beforeEach(() => {
 });
 
 describe("secrets store CLI", () => {
+  it("writes JSON results for list and get", async () => {
+    mocks.list.mockReturnValueOnce([
+      { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },
+    ]);
+    await createProgram().parseAsync(["secrets", "store", "list", "--json"], { from: "user" });
+
+    mocks.list.mockReturnValueOnce([{ name: "SERVICE_MODE", kind: "env" }]);
+    mocks.read.mockReturnValueOnce({ ok: true, value: "production" });
+    await createProgram().parseAsync(["secrets", "store", "get", "SERVICE_MODE", "--json"], {
+      from: "user",
+    });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(2);
+    expect(mocks.runtimeLogs).toHaveLength(2);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(1, [
+      { name: "SERVICE_MODE", kind: "env", valuePreview: "production" },
+    ]);
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenNthCalledWith(2, {
+      name: "SERVICE_MODE",
+      kind: "env",
+      value: "production",
+    });
+    expect(mocks.runtimeErrors).toHaveLength(0);
+  });
+
   it("shows non-secret allowed-host metadata in list output", async () => {
     mocks.list.mockReturnValue([
       {
@@ -237,20 +266,38 @@ describe("secrets store CLI", () => {
     expect(mocks.updateHosts).not.toHaveBeenCalled();
   });
 
-  it("returns exit 3 for a missing get and exit 1 for a database failure", async () => {
-    mocks.list.mockReturnValueOnce([]);
-    await expect(
-      createProgram().parseAsync(["secrets", "store", "get", "MISSING_VALUE"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("__exit__:3");
+  it.each([
+    {
+      name: "missing get",
+      prepare: () => mocks.list.mockReturnValueOnce([]),
+      args: ["secrets", "store", "get", "MISSING_VALUE", "--json"],
+      exitCode: 3,
+      message: 'Secret store entry "MISSING_VALUE" was not found.',
+    },
+    {
+      name: "database failure",
+      prepare: () =>
+        mocks.list.mockImplementationOnce(() => {
+          throw new Error("database unavailable");
+        }),
+      args: ["secrets", "store", "list", "--json"],
+      exitCode: 1,
+      message: "database unavailable",
+    },
+  ])("writes one JSON failure for $name", async (testCase) => {
+    testCase.prepare();
 
-    mocks.list.mockImplementationOnce(() => {
-      throw new Error("database unavailable");
+    await expect(createProgram().parseAsync(testCase.args, { from: "user" })).rejects.toThrow(
+      `__exit__:${testCase.exitCode}`,
+    );
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledTimes(1);
+    expect(mocks.runtimeLogs).toHaveLength(1);
+    expect(JSON.parse(mocks.runtimeLogs[0] ?? "")).toEqual({
+      ok: false,
+      error: { type: "cli_error", message: testCase.message },
     });
-    await expect(
-      createProgram().parseAsync(["secrets", "store", "list"], { from: "user" }),
-    ).rejects.toThrow("__exit__:1");
+    expect(mocks.runtimeErrors).toHaveLength(0);
   });
 
   it("keeps rm idempotent when entries are already missing", async () => {

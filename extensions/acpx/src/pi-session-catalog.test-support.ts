@@ -186,6 +186,7 @@ export function capturePiContinuationCatalog() {
         pluginOwnerId: "acpx",
         initializationPending: true as const,
         ...(params.label ? { label: params.label } : {}),
+        ...(params.displayName ? { displayName: params.displayName } : {}),
         ...(params.spawnedCwd ? { spawnedCwd: params.spawnedCwd } : {}),
         pluginExtensions: params.initialEntry.pluginExtensions,
       };

@@ -98,19 +98,31 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function stubGrants(
+  history: (method: string, params?: unknown) => unknown,
+): GatewayBrowserClient["request"] {
+  // The page also loads the standing-grant ledger; answer it out of band so
+  // history tests keep their ordered mock queues and call counts.
+  return ((method: string, params?: unknown) =>
+    method === "exec.approval.grants.list"
+      ? Promise.resolve({ grants: [] })
+      : (history(method, params) as Promise<unknown>)) as GatewayBrowserClient["request"];
+}
+
 describe("ApprovalsPage", () => {
   it("loads and renders terminal history, then paginates", async () => {
     const request = vi
       .fn()
       .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
       .mockResolvedValueOnce({ items: [terminal("second", 1_000)] });
-    const { page } = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(stubGrants(request));
 
     await settle(page);
 
     expect(request).toHaveBeenNthCalledWith(1, "approval.history", { limit: 50 });
-    const docsLink = page.querySelector<HTMLAnchorElement>(".settings-page__intro a");
+    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
     expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(page.querySelector(".settings-page__intro")).toBeNull();
     expect(docsLink?.href).toBe("https://docs.openclaw.ai/tools/exec-approvals");
     expect(page.querySelectorAll(".approval-history-table tbody tr")).toHaveLength(1);
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("agent:main:test");
@@ -132,7 +144,7 @@ describe("ApprovalsPage", () => {
 
   it("does not claim an empty history when the load failed", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("boom"));
-    const { page } = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(stubGrants(request));
 
     await settle(page);
 
@@ -142,7 +154,7 @@ describe("ApprovalsPage", () => {
 
   it("shows the empty message only after a successful zero-row load", async () => {
     const request = vi.fn().mockResolvedValueOnce({ items: [] });
-    const { page } = createPage(request as GatewayBrowserClient["request"]);
+    const { page } = createPage(stubGrants(request));
 
     await settle(page);
 
@@ -159,7 +171,7 @@ describe("ApprovalsPage", () => {
       .fn()
       .mockResolvedValueOnce({ items: [] })
       .mockResolvedValueOnce({ items: [terminal("newly-resolved", 2_000)] });
-    const { page, emitGatewayEvent } = createPage(request as GatewayBrowserClient["request"]);
+    const { page, emitGatewayEvent } = createPage(stubGrants(request));
 
     await settle(page);
     expect(page.querySelector(".approval-history-table")?.textContent).toContain(
@@ -186,7 +198,7 @@ describe("ApprovalsPage", () => {
       .mockResolvedValueOnce({ items: [terminal("first", 2_000)], nextCursor: "next" })
       .mockReturnValueOnce(olderPage)
       .mockResolvedValueOnce({ items: [terminal("newest", 3_000), terminal("first", 2_000)] });
-    const { page, emitGatewayEvent } = createPage(request as GatewayBrowserClient["request"]);
+    const { page, emitGatewayEvent } = createPage(stubGrants(request));
 
     await settle(page);
     const loadMore = [...page.querySelectorAll("button")].find((button) =>
@@ -213,7 +225,7 @@ describe("ApprovalsPage", () => {
     { name: "write-only", scopes: ["operator.write"] },
   ])("does not request or render approval history for a $name operator", async ({ scopes }) => {
     const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(request as GatewayBrowserClient["request"], {
+    const { page } = createPage(stubGrants(request), {
       role: "operator",
       scopes,
     });
@@ -231,7 +243,7 @@ describe("ApprovalsPage", () => {
     { name: "legacy operator", auth: { role: "operator" } },
   ])("loads approval history for a $name", async ({ auth }) => {
     const request = vi.fn().mockResolvedValue({ items: [] });
-    const { page } = createPage(request as GatewayBrowserClient["request"], auth);
+    const { page } = createPage(stubGrants(request), auth);
 
     await settle(page);
 
@@ -249,13 +261,10 @@ describe("ApprovalsPage", () => {
       .fn()
       .mockReturnValueOnce(staleHistory)
       .mockResolvedValueOnce({ items: [terminal("current", 2_000)] });
-    const { page, emitGatewayEvent, updateGateway } = createPage(
-      request as GatewayBrowserClient["request"],
-      {
-        role: "operator",
-        scopes: ["operator.approvals"],
-      },
-    );
+    const { page, emitGatewayEvent, updateGateway } = createPage(stubGrants(request), {
+      role: "operator",
+      scopes: ["operator.approvals"],
+    });
 
     await settle(page);
     expect(request).toHaveBeenCalledOnce();
@@ -284,5 +293,50 @@ describe("ApprovalsPage", () => {
     await settle(page);
     expect(page.querySelector(".approval-history-table")?.textContent).toContain("echo current");
     expect(page.querySelector(".approval-history-table")?.textContent).not.toContain("echo stale");
+  });
+
+  it("renders the standing-grant ledger and revokes through the gateway", async () => {
+    const history = vi.fn().mockResolvedValue({ items: [] });
+    const grant = {
+      grantId: "grant-1",
+      agentId: "main",
+      cronJobId: "job-1",
+      cronJobName: "Nightly backup",
+      command: "id -un",
+      cwd: null,
+      createdAtMs: 1_000,
+      expiresAtMs: null,
+      revokedAtMs: null,
+      revokedBy: null,
+      lastUsedAtMs: null,
+      useCount: 3,
+    };
+    const request = vi.fn((method: string, params?: unknown) => {
+      if (method === "exec.approval.grants.list") {
+        return Promise.resolve({ grants: [grant] });
+      }
+      if (method === "exec.approval.grants.revoke") {
+        return Promise.resolve({ outcome: "revoked", params });
+      }
+      return history(method, params) as Promise<unknown>;
+    });
+    const { page } = createPage(request as unknown as GatewayBrowserClient["request"]);
+
+    await settle(page);
+    await settle(page);
+
+    const ledger = page.querySelector(".standing-grants-table");
+    expect(ledger?.textContent).toContain("Nightly backup");
+    expect(ledger?.textContent).toContain("id -un");
+    expect(ledger?.textContent).toContain("Until revoked");
+
+    const revoke = [...page.querySelectorAll("button")].find((button) =>
+      button.textContent?.includes("Revoke"),
+    );
+    revoke?.click();
+    await settle(page);
+
+    expect(request).toHaveBeenCalledWith("exec.approval.grants.revoke", { grantId: "grant-1" });
+    expect(page.querySelector(".standing-grants-table")?.textContent).toContain("Revoked");
   });
 });

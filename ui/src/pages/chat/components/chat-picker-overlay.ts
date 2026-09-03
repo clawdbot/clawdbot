@@ -1,4 +1,5 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
+import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 
 const MOBILE_COMPOSER_OVERLAY_QUERY =
   "(max-width: 640px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape)";
@@ -63,7 +64,12 @@ function dismissChatComposerPickersOutside(event: PointerEvent): void {
 }
 
 function dismissChatComposerPickersOnEscape(event: KeyboardEvent): void {
-  if (event.key !== "Escape" || document.querySelector(".shell-nav[aria-modal='true']")) {
+  if (
+    event.defaultPrevented ||
+    consumeTooltipEscape(event, document) ||
+    event.key !== "Escape" ||
+    document.querySelector(".shell-nav[aria-modal='true']")
+  ) {
     return;
   }
   const pickers = openChatComposerPickers();

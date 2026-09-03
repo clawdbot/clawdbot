@@ -9,7 +9,8 @@ import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
 } from "../../../lib/chat/chat-queue-order.ts";
-import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
@@ -22,11 +23,13 @@ type ChatQueueProps = {
   onQueueSteer?: (id: string) => void;
   onQueueMove?: (id: string, toIndex: number) => void;
   onQueueEdit?: (id: string) => void;
-  onQueueEditChange?: (text: string) => void;
+  onQueueEditChange?: (text: string, mentions?: readonly HumanMention[]) => void;
   onQueueEditSubmit?: () => void;
   onQueueEditCancel?: () => void;
   editingId?: string | null;
   editingText?: string;
+  editingMentions?: readonly HumanMention[];
+  editingSource?: ChatQueueItem;
   onQueueRemove: (id: string) => void;
 };
 
@@ -44,6 +47,7 @@ const QUEUE_ROW_CONTROL_SELECTOR =
 const QUEUE_DRAG_SCROLL_EDGE = 24;
 const QUEUE_DRAG_SCROLL_MAX_SPEED = 12;
 const mountedQueueEditInputs = new WeakSet<HTMLTextAreaElement>();
+const queueMentionInputs = new WeakMap<HTMLTextAreaElement, HumanMentionInput>();
 const queueWaitingIcon = strokeIcon(svg` <path d="M16 5H3" />
   <path d="M16 12H3" />
   <path d="M9 19H3" />
@@ -156,6 +160,15 @@ export function renderChatQueue(props: ChatQueueProps) {
   const visibleQueue = props.queue.filter(
     (item) => item.sendState !== "sending" && !isQueuedSendInlineState(item),
   );
+  // A peer can retire the source while this pane is away. Render its retained
+  // correction for recovery/cancel; this never recreates a row in the outbox.
+  if (
+    props.editingSource &&
+    props.editingId === props.editingSource.id &&
+    !visibleQueue.some((item) => item.id === props.editingId)
+  ) {
+    visibleQueue.push(props.editingSource);
+  }
   if (!visibleQueue.length) {
     return nothing;
   }
@@ -173,12 +186,15 @@ export function renderChatQueue(props: ChatQueueProps) {
     // edit shrinks the segments but must not retract the handle column.
     offered: visibleQueue.filter(isMovableChatQueueItem).length > 1,
   };
-  // Applying settings belongs to the queue as a whole. Connection loss is the
-  // exceptional per-item delivery state operators need to see on every row.
+  // Attempted sends live in the transcript but still own their FIFO position.
+  // Keep their unresolved delivery visible beside the messages they block.
+  const head = props.queue.find((item) => item.sendState !== "failed" || item.localCommandName);
   const globalState =
-    visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
-      ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
-      : null;
+    head?.sendState === "unconfirmed" && isQueuedSendInlineState(head)
+      ? { label: t("chat.queue.states.blockedByUnconfirmed"), tone: "warn" }
+      : visibleQueue.some((item) => item.sendState === "waiting-model") && !props.offline
+        ? { label: t("chat.queue.states.applyingSettings"), tone: "settings" }
+        : null;
   // Keyed rows so a reorder moves the existing DOM node instead of rewriting
   // it in place; that is what keeps focus on the handle the operator is using.
   return html`
@@ -257,12 +273,15 @@ function renderChatQueueItem(
   const steered = item.queueMode === "steer" && stateLabel === null;
   const busy = item.sendState === "executing-command";
   const editing = props.editingId === item.id;
+  const mentionText = editing ? (props.editingText ?? item.text) : item.text;
+  const mentions = editing ? props.editingMentions : item.mentions;
   const canSteer =
     Boolean(props.canAbort && props.onQueueSteer) && isSteerableQueuedMessage(item) && !editing;
   const showsSteer =
     Boolean(props.canAbort && props.onQueueSteer) &&
     !editing &&
     !item.localCommandName &&
+    !item.intent &&
     (isSteerableQueuedMessage(item) || item.sendState === "waiting-model");
   const segment = reorder.segments.find((ids) => ids.includes(item.id)) ?? [];
   const moveIndex = segment.indexOf(item.id);
@@ -398,10 +417,34 @@ function renderChatQueueItem(
             rows="1"
             ${ref((element) => mountQueueEditInput(element, props.editingText ?? item.text))}
             aria-label=${t("chat.queue.editQueuedMessage")}
+            @beforeinput=${(event: InputEvent) => {
+              if (event.currentTarget instanceof HTMLTextAreaElement) {
+                queueMentionInputs.set(event.currentTarget, {
+                  value: event.currentTarget.value,
+                  start: event.currentTarget.selectionStart,
+                  end: event.currentTarget.selectionEnd,
+                  inputType: event.inputType,
+                });
+              }
+            }}
             @input=${(event: Event) => {
               if (event.currentTarget instanceof HTMLTextAreaElement) {
-                fitQueueEditInput(event.currentTarget);
-                props.onQueueEditChange?.(event.currentTarget.value);
+                const textarea = event.currentTarget;
+                fitQueueEditInput(textarea);
+                if (mentions?.length) {
+                  props.onQueueEditChange?.(
+                    textarea.value,
+                    updateHumanMentions(
+                      mentionText,
+                      textarea.value,
+                      mentions,
+                      queueMentionInputs.get(textarea),
+                    ),
+                  );
+                } else {
+                  props.onQueueEditChange?.(textarea.value);
+                }
+                queueMentionInputs.delete(textarea);
               }
             }}
             @keydown=${(event: KeyboardEvent) => {
@@ -541,6 +584,23 @@ function renderChatQueueItem(
               </wa-dropdown>
             `}
       </span>
+      ${mentions?.length
+        ? html`<span class="chat-queue__mentions">
+            ${t("chat.mentions.selected", {
+              names: mentions.map(({ start, end }) => mentionText.slice(start, end)).join(", "),
+            })}
+            ${editing
+              ? html`<button
+                  class="chat-queue__remove"
+                  type="button"
+                  aria-label=${t("chat.mentions.remove")}
+                  @click=${() => props.onQueueEditChange?.(mentionText, [])}
+                >
+                  ${icons.x}
+                </button>`
+              : nothing}
+          </span>`
+        : nothing}
       ${
         // Reconnect rows auto-retry, so the raw transport error is noise there;
         // it stays inspectable via the badge tooltip. Failed/unconfirmed rows

@@ -110,6 +110,24 @@ describe("resolveChannelSetupSelectionContributions", () => {
     isChannelConfigured.mockReturnValue(false);
   });
 
+  it("uses the caller-selected workspace for explicit-fleet status and selection notes", async () => {
+    const params = {
+      cfg: { agents: { ownership: "explicit" as const, entries: { alpha: {}, beta: {} } } },
+      workspaceDir: "/tmp/beta-workspace",
+      accountOverrides: {},
+      installedPlugins: [],
+      selection: [],
+    };
+
+    await collectChannelStatus(params);
+    resolveChannelSelectionNoteLines(params);
+
+    expect(resolveChannelSetupEntries).toHaveBeenCalledTimes(2);
+    for (const [request] of resolveChannelSetupEntries.mock.calls) {
+      expect(request.workspaceDir).toBe(params.workspaceDir);
+    }
+  });
+
   it("uses the configured system agent workspace for explicit multi-agent setup", async () => {
     const cfg = {
       agents: {

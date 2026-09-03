@@ -419,7 +419,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       },
     });
 
-    expect(seenSystemPrompt).toBe("system prompt");
+    expect(seenSystemPrompt?.split("\n")).toContain("system prompt");
   });
 
   it("enforces code-mode payload surface from active-agent config during an embedded attempt", async () => {
@@ -1186,6 +1186,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       sessionKey,
       tempPaths,
       attemptOverrides: {
+        inputProvenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+        },
         prompt: "visible ask",
         suppressNextUserMessagePersistence: true,
         onUserMessagePersistenceInvalidated,
@@ -1218,11 +1222,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seen.modelMessages)).toContain("dynamic hook tail");
     expect(JSON.stringify(seen.messages)).not.toContain("dynamic hook context");
     expect(JSON.stringify(result.messagesSnapshot)).not.toContain("dynamic hook tail");
-    expect(hoisted.sessionManager.branch).toHaveBeenCalledWith("parent-leaf");
+    expect(hoisted.sessionManager.branch).not.toHaveBeenCalled();
     expect(
       hoisted.sessionManager.clearNextUserMessagePersistenceSuppression,
-    ).toHaveBeenCalledOnce();
-    expect(onUserMessagePersistenceInvalidated).toHaveBeenCalledOnce();
+    ).not.toHaveBeenCalled();
+    expect(onUserMessagePersistenceInvalidated).not.toHaveBeenCalled();
   });
 
   it("targets the latest active prompt after orphan repair reaches the embedded provider", async () => {
@@ -2234,10 +2238,11 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
   });
 
-  it("skips the generic precheck when the context engine owns compaction", async () => {
+  it("defers ordinary admission when the context engine owns compaction", async () => {
     let sawPrompt = false;
     const hugeHistory = "large raw history ".repeat(2_000);
 
@@ -2274,7 +2279,8 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(sawPrompt).toBe(true);
     expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(0);
+    expect(result.contextBudgetStatus).toBeUndefined();
+    expect(result.preflightRecovery).toBeUndefined();
   });
 
   it("preserves pipeline history when owning context engine assembly mutates then fails", async () => {
@@ -2323,7 +2329,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).not.toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
   });
 
   it("repairs tool-result pairing after context engine assembly", async () => {
@@ -2398,7 +2404,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toEqual([
+      expect.objectContaining({ role: "user", content: expect.stringContaining(hugeHistory) }),
+    ]);
+    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
   it("submits owning context-engine preassembly pressure to the provider once", async () => {
@@ -2441,7 +2450,10 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
     expect(result.preflightRecovery).toBeUndefined();
     expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)).toHaveProperty("unwindowedMessages");
+    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toEqual([
+      expect.objectContaining({ role: "user", content: expect.stringContaining(hugeHistory) }),
+    ]);
+    expect(result.contextBudgetStatus?.overflowTokens).toBeGreaterThan(0);
   });
 
   it("snapshots pre-assembly messages before assemble even when the engine windows in place", async () => {
@@ -2900,71 +2912,87 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
-  it("submits a pre-persisted current user turn exactly once to the provider", async () => {
-    const admittedMessage = {
-      role: "user" as const,
-      content: "durable current turn",
-      idempotencyKey: "restart-safe-run:user",
-      timestamp: 1,
-      __openclaw: { senderId: "alice-id", senderName: "Alice" },
-    };
-    const recorder = createUserTurnTranscriptRecorder({
-      message: admittedMessage,
-      target: () => undefined,
-    });
-    recorder.markRuntimePersisted(admittedMessage);
-    let submittedMessages: AgentMessage[] = [];
+  it.each([false, true])(
+    "submits a persisted current turn once with context exclusion %s",
+    async (excludeFromContext) => {
+      const admittedMessage = {
+        role: "user" as const,
+        content: "durable current turn",
+        idempotencyKey: "restart-safe-run:user",
+        ...(excludeFromContext ? { excludeFromContext: true as const } : {}),
+        timestamp: 1,
+        __openclaw: { senderId: "alice-id", senderName: "Alice" },
+      };
+      const recorder = createUserTurnTranscriptRecorder({
+        message: admittedMessage,
+        target: () => undefined,
+      });
+      recorder.markRuntimePersisted(admittedMessage);
+      if (excludeFromContext) {
+        hoisted.sessionManager.getLeafEntry.mockReturnValueOnce({
+          id: "speech",
+          parentId: "previous-assistant",
+          type: "message",
+          message: { role: "user", content: "spoken predecessor", timestamp: 0 },
+        });
+      }
+      let submittedMessages: AgentMessage[] = [];
+      const initialMessages = excludeFromContext ? [] : [admittedMessage];
 
-    await createContextEngineAttemptRunner({
-      contextEngine: createContextEngineBootstrapAndAssemble(),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [admittedMessage],
-      attemptOverrides: {
-        prompt: admittedMessage.content,
-        transcriptPrompt: admittedMessage.content,
-        suppressNextUserMessagePersistence: true,
-        userTurnTranscriptRecorder: recorder,
-      },
-      createSession: () => {
-        const session = createDefaultEmbeddedSession({ initialMessages: [admittedMessage] });
-        session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
-        const baseStreamFn = session.agent.streamFn;
-        session.agent.streamFn = async (...args) => {
-          const context = args[1] as { messages?: AgentMessage[] } | undefined;
-          submittedMessages =
-            ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ?? [];
-          return await baseStreamFn?.(...args);
-        };
-        session.prompt = async (prompt, options) => {
-          session.messages = [
-            ...session.messages,
-            {
-              role: "user",
-              content: prompt,
-              idempotencyKey: admittedMessage.idempotencyKey,
-              timestamp: admittedMessage.timestamp,
-            },
-          ];
-          options?.preflightResult?.(true);
-          await session.agent.streamFn?.(
-            {} as never,
-            { messages: session.messages } as never,
-            {} as never,
-          );
-          session.messages = [...session.messages, doneMessage];
-        };
-        return session;
-      },
-    });
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createContextEngineBootstrapAndAssemble(),
+        sessionKey,
+        tempPaths,
+        sessionMessages: initialMessages,
+        attemptOverrides: {
+          prompt: admittedMessage.content,
+          transcriptPrompt: admittedMessage.content,
+          suppressNextUserMessagePersistence: true,
+          userTurnTranscriptRecorder: recorder,
+        },
+        createSession: () => {
+          const session = createDefaultEmbeddedSession({ initialMessages });
+          session.agent.convertToLlm = vi.fn(async (messages) => messages as never);
+          const baseStreamFn = session.agent.streamFn;
+          session.agent.streamFn = async (...args) => {
+            const context = args[1] as { messages?: AgentMessage[] } | undefined;
+            submittedMessages =
+              ((await session.agent.convertToLlm?.(context?.messages ?? [])) as AgentMessage[]) ??
+              [];
+            return await baseStreamFn?.(...args);
+          };
+          session.prompt = async (prompt, options) => {
+            session.messages = [
+              ...session.messages,
+              {
+                role: "user",
+                content: prompt,
+                idempotencyKey: admittedMessage.idempotencyKey,
+                timestamp: admittedMessage.timestamp,
+              },
+            ];
+            options?.preflightResult?.(true);
+            await session.agent.streamFn?.(
+              {} as never,
+              { messages: session.messages } as never,
+              {} as never,
+            );
+            session.messages = [...session.messages, doneMessage];
+          };
+          return session;
+        },
+      });
 
-    expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
-      expect.objectContaining({
-        content: expect.stringContaining('"name":"Alice"'),
-        role: "user",
-      }),
-    ]);
-  });
+      expect(result.finalPromptText).toBe(admittedMessage.content);
+      expect(result.messagesSnapshot).toContainEqual(doneMessage);
+      expect(submittedMessages.filter((message) => message.role === "user")).toEqual([
+        expect.objectContaining({
+          content: expect.stringContaining('"name":"Alice"'),
+          role: "user",
+        }),
+      ]);
+    },
+  );
 
   it("passes context engines the message budget after reserve and rendered prompt pressure", async () => {
     const contextEngine = createContextEngineBootstrapAndAssemble();

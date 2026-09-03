@@ -20,6 +20,9 @@ type AgentToolSurfacePlanParams = {
   sessionKey?: string;
   forceDirectMessageTool: boolean;
   model?: { compat?: unknown };
+  modelProvider?: string;
+  modelId?: string;
+  codeModeOverride?: boolean | "auto";
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
@@ -29,7 +32,14 @@ type AgentToolSurfacePlanParams = {
 };
 
 export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) {
-  const codeModeConfig = resolveCodeModeConfig(params.config, params.agentId);
+  const codeModeConfig = resolveCodeModeConfig(
+    params.config,
+    params.agentId,
+    params.modelProvider && params.modelId
+      ? { provider: params.modelProvider, modelId: params.modelId }
+      : undefined,
+  );
+  codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
   const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
     agentId: params.agentId,
@@ -79,7 +89,6 @@ type ApplyAgentToolSurfaceCatalogParams = Omit<CodeModeCatalogParams, "directToo
   codeModeControlsEnabled: boolean;
   toolSearchConfig: ToolSearchConfig;
   forceDirectMessageTool: boolean;
-  forceCodeModeControls?: boolean;
 };
 
 export function applyAgentToolSurfaceCatalog({
@@ -87,7 +96,6 @@ export function applyAgentToolSurfaceCatalog({
   toolSearchConfig,
   toolSearchRuntimeConfig,
   forceDirectMessageTool,
-  forceCodeModeControls,
   ...catalogParams
 }: ApplyAgentToolSurfaceCatalogParams) {
   // When the message tool is the only reply path it must stay directly visible
@@ -98,7 +106,6 @@ export function applyAgentToolSurfaceCatalog({
       ...catalogParams,
       config: catalogParams.config,
       directToolNames,
-      forceEnabled: forceCodeModeControls,
     });
   }
   const applyCatalog =

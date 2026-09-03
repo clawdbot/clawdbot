@@ -3,6 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import {
   getChannelPlugin,
   getLoadedChannelPlugin,
@@ -72,6 +77,47 @@ describe("listChannelPlugins", () => {
           label: "external fallback",
         },
       },
+    });
+  });
+
+  it("keeps the scoped channel implementation and its registration provenance together", () => {
+    const root = createChannelTestPluginBase({ id: "fallback", label: "Root" });
+    const scoped = createChannelTestPluginBase({ id: "fallback", label: "Scoped" });
+    const resolveChannelRuntime = vi.fn();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "root", plugin: root, origin: "bundled", source: "root" }]),
+    );
+    const registry = createEmptyPluginRegistry();
+    registry.channels = [
+      {
+        pluginId: "scoped",
+        plugin: scoped,
+        origin: "config",
+        source: "scoped",
+        resolveChannelRuntime,
+      },
+    ];
+
+    withPluginRuntimeRegistryScope(registry, () => {
+      expect(resolveChannelPluginRegistration("fallback")).toEqual({
+        plugin: scoped,
+        origin: "config",
+        resolveChannelRuntime,
+      });
+      expect(getChannelPlugin("fallback")).toBe(scoped);
+    });
+    expect(getChannelPlugin("fallback")).toBe(root);
+  });
+
+  it("preserves unrelated root and bundled addressability inside an empty CLI handle", () => {
+    const root = createChannelTestPluginBase({ id: "root-only" });
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "root-only", plugin: root, source: "root" }]),
+    );
+
+    withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+      expect(getChannelPlugin("root-only")).toBe(root);
+      expect(resolveChannelPluginRegistration("fallback")?.origin).toBe("bundled");
     });
   });
 

@@ -7,6 +7,7 @@ import {
   validateUsersSetDisplayNameResult,
   validateUsersSetRoleResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import { usersHandlers } from "./users.js";
 
 const linkEmail = vi.hoisted(() => vi.fn());
@@ -20,18 +21,23 @@ const getUserProfileDisplay = vi.hoisted(() => vi.fn());
 const getUserProfileListItem = vi.hoisted(() => vi.fn());
 const resolveUserProfileId = vi.hoisted(() => vi.fn());
 
-vi.mock("../../state/user-profiles.js", () => ({
-  ensureProfileForEmail,
-  getUserProfileDisplay,
-  getUserProfileListItem,
-  linkEmail,
-  listProfiles,
-  resolveUserProfileId,
-  setAvatar,
-  setDisplayName,
-  setUserProfileRole,
-  UserProfileNotFoundError: class UserProfileNotFoundError extends Error {},
-}));
+vi.mock("../../state/user-profiles.js", async () => {
+  const { UserProfileNotFoundError } = await vi.importActual<
+    typeof import("../../state/user-profiles-schema.js")
+  >("../../state/user-profiles-schema.js");
+  return {
+    ensureProfileForEmail,
+    getUserProfileDisplay,
+    getUserProfileListItem,
+    linkEmail,
+    listProfiles,
+    resolveUserProfileId,
+    setAvatar,
+    setDisplayName,
+    setUserProfileRole,
+    UserProfileNotFoundError,
+  };
+});
 
 vi.mock("../operator-role-policy.js", () => ({ invalidateOperatorRolePolicy }));
 
@@ -169,10 +175,11 @@ describe("users gateway methods", () => {
     expect(getUserProfileListItem).toHaveBeenNthCalledWith(2, profile.id);
   });
 
-  it("uses the connect-time provider profile without recreating an email alias", async () => {
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
+  function connectedProfileClient(kind: string) {
+    return {
+      ...(kind === "provider"
+        ? { authenticatedUserId: "ada@github", authenticatedUserIsTailscaleProvider: true }
+        : {}),
       authenticatedUserProfile: {
         profileId: profile.id,
         displayName: "Ada",
@@ -181,14 +188,21 @@ describe("users gateway methods", () => {
       },
       connect: { scopes: ["operator.write"] },
     };
-    resolveUserProfileId.mockReturnValue(profile.id);
-    getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
+  }
 
-    const respond = await runUsersHandler("users.self", {}, providerClient);
+  it.each(["provider", "owner"])(
+    "uses the connect-time %s profile without recreating an email alias",
+    async (kind) => {
+      const providerClient = connectedProfileClient(kind);
+      resolveUserProfileId.mockReturnValue(profile.id);
+      getUserProfileListItem.mockReturnValue({ ...profile, emails: [] });
 
-    expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
-    expect(ensureProfileForEmail).not.toHaveBeenCalled();
-  });
+      const respond = await runUsersHandler("users.self", {}, providerClient);
+
+      expect(respond).toHaveBeenCalledWith(true, { profile: { ...profile, emails: [] } });
+      expect(ensureProfileForEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it("waits for the authenticated GitHub sync before returning users.self", async () => {
     let finishSync: (() => void) | undefined;
@@ -332,6 +346,47 @@ describe("users gateway methods", () => {
       updatedAt: profile.updatedAt,
     });
   });
+
+  it.each([
+    {
+      method: "users.linkEmail",
+      operation: "merge",
+      params: { email: "person@example.test", targetProfileId: "gateway-owner" },
+      store: linkEmail,
+      message:
+        "the shared owner profile cannot be merged; sign in with a personal identity instead",
+    },
+    {
+      method: "users.setRole",
+      operation: "role",
+      params: { profileId: "gateway-owner", role: "guest" },
+      store: setUserProfileRole,
+      message: "the shared owner profile is not governed by operator roles",
+    },
+  ] as const)(
+    "maps owner rejection from $method to an invalid request",
+    async ({ method, operation, params, store, message }) => {
+      store.mockImplementationOnce(() => {
+        throw new UserProfileOwnerError(operation);
+      });
+      const refreshConnectedUserProfile = vi.fn();
+      const disconnectClientsForUserProfile = vi.fn();
+
+      const respond = await runUsersHandler(method, params, adminClient, {
+        getRuntimeConfig: () => ({ gateway: { roles: { definitions: { guest: {} } } } }),
+        refreshConnectedUserProfile,
+        disconnectClientsForUserProfile,
+      });
+
+      expect(respond).toHaveBeenCalledWith(false, undefined, {
+        code: "INVALID_REQUEST",
+        message,
+      });
+      expect(refreshConnectedUserProfile).not.toHaveBeenCalled();
+      expect(disconnectClientsForUserProfile).not.toHaveBeenCalled();
+      expect(invalidateOperatorRolePolicy).not.toHaveBeenCalled();
+    },
+  );
 
   it("returns protocol-complete display name mutations", async () => {
     setDisplayName.mockReturnValue(profile);
@@ -613,30 +668,23 @@ describe("users gateway methods", () => {
     expect(ensureProfileForEmail).toHaveBeenCalledWith("ada@example.com");
   });
 
-  it("authorizes provider-owned profile edits from the connect-time profile id", async () => {
-    const providerClient = {
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedUserProfile: {
-        profileId: profile.id,
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
-      connect: { scopes: ["operator.write"] },
-    };
-    resolveUserProfileId.mockReturnValue(profile.id);
-    setDisplayName.mockReturnValue(profile);
+  it.each(["provider", "owner"])(
+    "authorizes %s profile edits from the connect-time profile id",
+    async (kind) => {
+      const providerClient = connectedProfileClient(kind);
+      resolveUserProfileId.mockReturnValue(profile.id);
+      setDisplayName.mockReturnValue(profile);
 
-    expect(
-      await runUsersHandler(
-        "users.setDisplayName",
-        { profileId: profile.id, displayName: "Ada Lovelace" },
-        providerClient,
-      ),
-    ).toHaveBeenCalledWith(true, { profile });
-    expect(ensureProfileForEmail).not.toHaveBeenCalled();
-  });
+      expect(
+        await runUsersHandler(
+          "users.setDisplayName",
+          { profileId: profile.id, displayName: "Ada Lovelace" },
+          providerClient,
+        ),
+      ).toHaveBeenCalledWith(true, { profile });
+      expect(ensureProfileForEmail).not.toHaveBeenCalled();
+    },
+  );
 
   it("denies an identified write caller changing another profile's avatar", async () => {
     ensureProfileForEmail.mockReturnValue(profile);

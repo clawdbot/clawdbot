@@ -6,7 +6,7 @@ import {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSourceSnapshot,
   selectApplicableRuntimeConfig,
-} from "../config/config.js";
+} from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   findActiveDegradedSecretOwner,
@@ -46,8 +46,9 @@ export function resolveManagedSecretRefRuntimeProviderAuth(params: {
   if (!runtimeConfig || !usesRuntimeProvider) {
     return undefined;
   }
-  const resolved = authConfig.resolveLiteralProviderConfigApiKeyAuth({
+  const resolved = authConfig.resolveRuntimeProviderConfigApiKeyAuth({
     cfg: runtimeConfig,
+    sourceConfig,
     provider: params.provider,
   });
   if (!resolved?.apiKey) {

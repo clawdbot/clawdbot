@@ -30,8 +30,10 @@ export type LegacyChannelPairingStateDetection = {
 export function detectLegacyChannelPairingState(params: {
   sourceDir: string;
   configuredChannelIds?: readonly string[];
-  configuredDefaultAccountIds?: Readonly<Record<string, string>>;
-  configuredAccountIds?: Readonly<Record<string, readonly string[]>>;
+  resolveAccounts?: () => {
+    defaultAccountIds?: Readonly<Record<string, string>>;
+    accountIds?: Readonly<Record<string, readonly string[]>>;
+  };
 }): LegacyChannelPairingStateDetection {
   let directoryEntries: fs.Dirent[] = [];
   try {
@@ -52,6 +54,11 @@ export function detectLegacyChannelPairingState(params: {
   const pairedChannelIds = files
     .filter((filename) => filename.endsWith(PAIRING_SUFFIX))
     .map((filename) => filename.slice(0, -PAIRING_SUFFIX.length));
+  // Pairing requests carry their own account metadata. Only allowFrom filenames need
+  // config facts, which can materialize channel runtimes even when no input exists.
+  const accounts = files.some((filename) => filename.endsWith(ALLOW_FROM_SUFFIX))
+    ? params.resolveAccounts?.()
+    : undefined;
   const knownChannelIds = dedupePreserveOrder([
     ...CHANNEL_IDS,
     ...(params.configuredChannelIds ?? []),
@@ -61,9 +68,9 @@ export function detectLegacyChannelPairingState(params: {
     sourceDir: params.sourceDir,
     files,
     knownChannelIds,
-    defaultAccountIds: { ...params.configuredDefaultAccountIds },
+    defaultAccountIds: { ...accounts?.defaultAccountIds },
     accountIds: Object.fromEntries(
-      Object.entries(params.configuredAccountIds ?? {}).map(([channel, accountIds]) => [
+      Object.entries(accounts?.accountIds ?? {}).map(([channel, accountIds]) => [
         channel,
         dedupePreserveOrder(accountIds.map((accountId) => resolveAllowFromAccountId(accountId))),
       ]),

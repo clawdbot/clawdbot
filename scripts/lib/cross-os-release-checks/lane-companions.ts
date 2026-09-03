@@ -1,4 +1,5 @@
 import { join } from "node:path";
+import { fixtureCapabilityConsentArgs } from "../../e2e/lib/package-compat.mjs";
 import type { LaneBaseParams, LaneState } from "./config.ts";
 import { runInstalledCli } from "./installed.ts";
 import { runTimedLanePhase } from "./reporting.ts";
@@ -15,6 +16,30 @@ export async function installLaneCompanions(
     return;
   }
   await runTimedLanePhase(params.lane, "install-companions", async () => {
+    const runCli = (args: string[], logPath: string, timeoutMs: number) =>
+      params.cliPath
+        ? runInstalledCli({
+            cliPath: params.cliPath,
+            args,
+            env: params.env,
+            cwd: params.lane.homeDir,
+            logPath,
+            timeoutMs,
+          })
+        : runOpenClaw({
+            lane: params.lane,
+            args,
+            env: params.env,
+            logPath,
+            timeoutMs,
+          });
+    const help = await runCli(
+      ["plugins", "install", "--help"],
+      join(params.logsDir, "companion-install-help.log"),
+      2 * 60 * 1000,
+    );
+    const capabilityConsentArgs = fixtureCapabilityConsentArgs(`${help.stdout}\n${help.stderr}`);
+
     for (const companion of params.companions) {
       const logPath = join(
         params.logsDir,
@@ -25,26 +50,9 @@ export async function installLaneCompanions(
         "install",
         `npm-pack:${companion.tarballPath}`,
         "--force",
-        "--accept-capabilities",
+        ...capabilityConsentArgs,
       ];
-      if (params.cliPath) {
-        await runInstalledCli({
-          cliPath: params.cliPath,
-          args,
-          env: params.env,
-          cwd: params.lane.homeDir,
-          logPath,
-          timeoutMs: 10 * 60 * 1000,
-        });
-        continue;
-      }
-      await runOpenClaw({
-        lane: params.lane,
-        args,
-        env: params.env,
-        logPath,
-        timeoutMs: 10 * 60 * 1000,
-      });
+      await runCli(args, logPath, 10 * 60 * 1000);
     }
   });
 }

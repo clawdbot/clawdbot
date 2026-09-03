@@ -40,7 +40,7 @@ const PROCESS_BOUNDARY_DIRECT_CONFIG_LOAD_FILES = new Set([
   // reads the ambient location and resolves from an already published runtime
   // snapshot, so it cannot express a pinned run; the file-scoped loader is the
   // point. Ambient resolution in the same command does use `getRuntimeConfig()`.
-  "src/commands/agent-exec.ts",
+  "src/commands/agent-exec-input.ts",
 ]);
 
 const BROAD_CONFIG_RUNTIME_COMPAT_FILES = new Set([

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,6 +36,79 @@ function collectPages(entry: unknown, pages: string[] = []): string[] {
 }
 
 describe("docs-sync-publish", () => {
+  it("executes the copied MDX checker and shared anchor runtime closures", () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-sync-runtime-"));
+    const publishRoot = path.join(tempRoot, "publish");
+    const clawhubRoot = path.join(tempRoot, "clawhub");
+    const minimalMdx = path.join(tempRoot, "valid.mdx");
+
+    fs.mkdirSync(publishRoot, { recursive: true });
+    fs.mkdirSync(path.join(clawhubRoot, "docs"), { recursive: true });
+    fs.writeFileSync(path.join(publishRoot, "package.json"), "{}\n");
+    fs.writeFileSync(path.join(clawhubRoot, "docs", "index.md"), "# ClawHub\n");
+    fs.writeFileSync(minimalMdx, "# Valid MDX\n\nThis file is valid.\n");
+    fs.symlinkSync(
+      path.resolve("node_modules"),
+      path.join(publishRoot, "node_modules"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+
+    try {
+      execFileSync(
+        process.execPath,
+        ["scripts/docs-sync-publish.mjs", "--target", publishRoot, "--clawhub-repo", clawhubRoot],
+        { stdio: "pipe" },
+      );
+      execFileSync(
+        process.execPath,
+        [path.join(publishRoot, ".openclaw-sync", "check-docs-mdx.mjs"), minimalMdx],
+        { cwd: publishRoot, stdio: "pipe" },
+      );
+      const anchors = execFileSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          String.raw`
+        import assert from 'node:assert/strict';
+        import { parseDocsDocument } from './.openclaw-sync/lib/docs-markdown.mjs';
+        import { resolveRedirects } from './.openclaw-sync/lib/docs-redirects.mjs';
+        const redirect = (source, destination) => resolveRedirects({
+          redirects: [{ source, destination }], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x,
+        });
+        const rejected = [...Array.from({ length: 33 }, (_, code) => String.fromCharCode(code)), '<', '>', '\\', '*'];
+        for (const character of rejected) {
+          assert.throws(() => redirect('/a' + character + 'b', 'https://example.com/valid'), /Unsafe redirect path/);
+          for (const prefix of ['/', 'https://example.com/']) {
+            assert.throws(() => redirect('/from', prefix + 'a' + character + 'b.png'), /Unsupported redirect destination/);
+          }
+        }
+        for (const route of ['/a:b', '/a%2Fb', '/a%5Cb', '/a/%2e%2e/b', '/a/%2E/b', '/bad%zz']) {
+          assert.throws(() => redirect(route, 'https://example.com/valid'), /Unsafe redirect path/);
+          assert.throws(() => redirect('/from', route + '.png'), /Unsafe redirect path/);
+        }
+        for (const [source, destination] of [
+          ['/日本語/🦞', '/目標.png'],
+          ['/encoded%20%00%3C%3E%2A%3A', '/encoded%20%00%3C%3E%2A%3A.png'],
+          ['/nonbreaking\u00a0space', '/nonbreaking\u00a0space.png'],
+          ['/del\u007fbyte', '/del\u007fbyte.png'],
+          ['/query', '/image.png?q=a:b#c:d'],
+          ['/external', 'https://example.com/a:b/%2F?q=é#章'],
+        ]) {
+          assert.deepEqual(redirect(source, destination), [{ source, destination }]);
+        }
+        console.log(JSON.stringify(parseDocsDocument('## agents.defaults.cwd').ids));
+        console.log(resolveRedirects({redirects: [], pages: [], localeCodes: ['en'], prefixes: [], publicPath: x => x}).length);
+      `,
+        ],
+        { cwd: publishRoot, encoding: "utf8" },
+      );
+      expect(anchors).toBe('["agents.defaults.cwd","agents-defaults-cwd"]\n0\n');
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
+  });
+
   it("materializes the public docs map only in the publish tree", () => {
     const targetDocsDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-docs-map-publish-"));
     try {
@@ -139,10 +213,25 @@ describe("docs-sync-publish", () => {
       "Help",
     ]);
 
+    const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
+    const releaseNotes = collectPages(releaseTab?.groups?.[0]);
+    expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
+      "Release notes",
+      "Maturity",
+      "Release process",
+      "Testing and CI",
+    ]);
+    // Every release adds a releases/<version> page, so read the published versions from the
+    // navigation rather than pinning them here; only the index-first ordering and the version
+    // route shape are invariant. Pinning the list makes this assertion fail on release PRs whose
+    // change classification never selects this lane, so the break first lands on main.
+    expect(releaseNotes[0]).toBe("releases/index");
+    expect(releaseNotes.length).toBeGreaterThan(1);
+    for (const page of releaseNotes.slice(1)) {
+      expect(page).toMatch(/^releases\/\d{4}\.\d{1,2}\.\d+$/);
+    }
     const releaseRoutes = [
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
+      ...releaseNotes,
       "maturity/scorecard",
       "maturity/taxonomy",
       "reference/RELEASING",
@@ -152,20 +241,8 @@ describe("docs-sync-publish", () => {
       "ci",
       "help/scripts",
     ];
-    const releaseTab = english!.tabs.find((tab) => tab.tab === "Release & CI");
-    expect(releaseTab?.groups?.map((group) => group.group)).toEqual([
-      "Release notes",
-      "Maturity",
-      "Release process",
-      "Testing and CI",
-    ]);
-    expect(releaseTab?.groups?.[0]?.pages).toEqual([
-      "releases/index",
-      "releases/2026.7.1",
-      "releases/2026.6.11",
-    ]);
     expect(collectPages(releaseTab)).toEqual(releaseRoutes);
-    expect(new Set(collectPages(releaseTab))).toHaveLength(releaseRoutes.length);
+    expect(new Set(releaseRoutes)).toHaveLength(releaseRoutes.length);
 
     const englishWithoutClawHub = {
       ...english,
@@ -186,11 +263,9 @@ describe("docs-sync-publish", () => {
       "发布流程",
       "测试与 CI",
     ]);
-    expect(simplifiedChineseReleaseTab?.groups?.[0]?.pages).toEqual([
-      "zh-CN/releases/index",
-      "zh-CN/releases/2026.7.1",
-      "zh-CN/releases/2026.6.11",
-    ]);
+    expect(collectPages(simplifiedChineseReleaseTab?.groups?.[0])).toEqual(
+      releaseNotes.map((page) => `zh-CN/${page}`),
+    );
     expect(collectPages(simplifiedChineseReleaseTab)).toEqual(
       releaseRoutes.map((page) => `zh-CN/${page}`),
     );

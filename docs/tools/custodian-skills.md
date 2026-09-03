@@ -20,11 +20,13 @@ Every shipped Custodian skill uses the same five sections in this order:
 
 1. **Gather** reads redacted current config and probes live state.
 2. **Mutate** uses validated non-interactive writes — `openclaw config set` / `openclaw config patch` from a trusted shell, or the in-session Custodian tool actions where policy allows — never a direct file edit.
-3. **Repair** runs `openclaw doctor` and separates diagnosis from any approved repair.
+3. **Repair** diagnoses with `openclaw doctor --lint`; only an explicitly approved repair uses `openclaw doctor --fix --non-interactive`. The read-only `diagnose-gateway` skill recommends that separate step but never runs it.
 4. **Prove** exercises one live end-to-end outcome.
 5. **Report** records what changed, what was observed, and what remains.
 
 All five-section playbooks keep secret values out of prompts, logs, and files. Credentials use SecretRefs or credential stores. A workflow never claims success without its Prove outcome; it reports the exact blocker when live proof is unavailable.
+
+Lint exit code `1` means findings, not a failed diagnostic command: read the report and continue the remaining checks. Ordinary `doctor`, including `--non-interactive`, can copy legacy config and migrate state without `--fix`; it is not a read-only substitute. Read-only diagnostics exclude config/service repairs and state migrations, not incidental logs or cache bookkeeping. See [Doctor](/cli/doctor#lint-mode).
 
 ## First wave
 

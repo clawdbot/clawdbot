@@ -210,6 +210,7 @@ export async function runMemorySearch(
     agent: opts.agent,
     diagnosticsToStderr: Boolean(opts.json),
     purpose: "cli",
+    inspectSources: true,
     ...hostOptions,
     run: async ({ manager, cfg, agentId }) => {
       const memoryPluginConfig = resolveMemoryPluginConfig(cfg);
@@ -316,6 +317,11 @@ export async function runMemoryForget(opts: MemoryForgetCommandOptions) {
     }
     for (const session of report.sessionResolutions) {
       lines.push(`${muted("Session resolution:")} ${session.sessionId} (${session.source})`);
+    }
+    for (const match of report.participantMatches) {
+      lines.push(
+        `${muted("Raw participant selector:")} ${match.actorId}: ${match.identities.map((identity) => JSON.stringify(identity)).join(", ") || "no live match"}. Matches select whole sessions across identity namespaces.`,
+      );
     }
     if (report.mixedLineageEntryKeys.length > 0) {
       lines.push(

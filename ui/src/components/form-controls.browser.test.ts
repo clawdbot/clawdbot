@@ -31,8 +31,11 @@ function readUiCss(): string {
     "ui/src/styles/config.css",
     "ui/src/styles/usage.css",
     "ui/src/styles/chat/layout.css",
+    "ui/src/styles/chat/message-layout.css",
+    "ui/src/styles/chat/composer.css",
     "ui/src/styles/sidebar-markdown.css",
     "ui/src/styles/chat/sidebar.css",
+    "ui/src/styles/plugins.css",
   ];
   return files.map((file) => readStyleSheet(file)).join("\n");
 }
@@ -165,6 +168,43 @@ describeBrowserLayout("sensitive input visibility", () => {
         display: getComputedStyle(mask).display,
       }));
       expect(state).toEqual({ hidden: true, display: "none" });
+    } finally {
+      await page.close().catch(() => {});
+    }
+  });
+});
+
+describeBrowserLayout("settings icon buttons", () => {
+  it("keeps plugin and MCP remove glyphs proportionate to settings buttons", async () => {
+    const page = await desktopContext.newPage();
+    try {
+      await page.setContent(`
+        <!doctype html>
+        <html data-theme-mode="light">
+          <head><style>${readUiCss()}</style></head>
+          <body>
+            <div class="settings-row__control">
+              <button class="btn btn--sm btn--icon plugins-remove" type="button">
+                <svg viewBox="0 0 24 24"><path d="M3 6h18" /></svg>
+              </button>
+            </div>
+          </body>
+        </html>
+      `);
+
+      const metrics = await page.locator(".plugins-remove").evaluate((button) => {
+        const glyph = button.querySelector("svg");
+        if (!(glyph instanceof SVGElement)) {
+          throw new Error("Missing remove button glyph");
+        }
+        const buttonRect = button.getBoundingClientRect();
+        const glyphRect = glyph.getBoundingClientRect();
+        return {
+          button: [buttonRect.width, buttonRect.height],
+          glyph: [glyphRect.width, glyphRect.height],
+        };
+      });
+      expect(metrics).toEqual({ button: [32, 32], glyph: [18, 18] });
     } finally {
       await page.close().catch(() => {});
     }
@@ -597,7 +637,7 @@ describeBrowserLayout("app chrome interaction styles", () => {
 
       expect(metrics).toEqual({
         chatSelection: "text",
-        chromeSelection: "none",
+        chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",
         inputSelection: "text",

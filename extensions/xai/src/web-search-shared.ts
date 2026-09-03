@@ -9,7 +9,6 @@ import {
   resolveXaiResponsesEndpoint,
 } from "./responses-tool-shared.js";
 import type { XaiWebSearchResponse } from "./web-search-response.types.js";
-export { extractXaiWebSearchContent } from "./responses-tool-shared.js";
 export type { XaiWebSearchResponse } from "./web-search-response.types.js";
 
 const XAI_DEFAULT_WEB_SEARCH_MODEL = XAI_DEFAULT_MODEL_ID;

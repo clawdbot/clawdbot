@@ -76,9 +76,11 @@ export async function transcribeOpenAiCompatibleAudio(
   });
 
   try {
-    await assertOkOrThrowHttpError(res, "Audio transcription failed");
+    await assertOkOrThrowHttpError(res, "Audio transcription failed", { requestHeaders: headers });
 
-    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed");
+    const payload = await readProviderJsonObjectResponse(res, "Audio transcription failed", {
+      requestHeaders: headers,
+    });
     const text = requireTranscriptionText(
       typeof payload.text === "string" ? payload.text : undefined,
       "Audio transcription response missing text",

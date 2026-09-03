@@ -8,6 +8,11 @@ import {
 } from "@openclaw/normalization-core/number-coercion";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { formatErrorMessage } from "./errors.js";
+import {
+  isHttpConnectionClosing,
+  selectHttpRequestRejection,
+  sendHttpRequestRejection,
+} from "./http-request-lifecycle.js";
 import { readChunkWithIdleTimeout, withResponseBodyTimeout } from "./http-response-body-timeout.js";
 
 export { readChunkWithIdleTimeout } from "./http-response-body-timeout.js";
@@ -106,12 +111,6 @@ type RequestBodyLimitValues = {
   timeoutMs: number;
 };
 
-type RequestBodyChunkProgress = {
-  buffer: Buffer;
-  totalBytes: number;
-  exceeded: boolean;
-};
-
 function resolveRequestBodyLimitValues(options: {
   maxBytes: number;
   timeoutMs?: number;
@@ -129,20 +128,6 @@ function resolveRequestBodyLimitValues(options: {
 export const testApi = { resolveRequestBodyLimitValues };
 export { testApi as __test__ };
 
-function advanceRequestBodyChunk(
-  chunk: Buffer | string,
-  totalBytes: number,
-  maxBytes: number,
-): RequestBodyChunkProgress {
-  const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-  const nextTotalBytes = totalBytes + buffer.length;
-  return {
-    buffer,
-    totalBytes: nextTotalBytes,
-    exceeded: nextTotalBytes > maxBytes,
-  };
-}
-
 function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean): void {
   if (req.destroyed) {
     return;
@@ -153,23 +138,7 @@ function stopRequestBodyAfterLimit(req: IncomingMessage, destroyOnLimit: boolean
     req.destroy();
     return;
   }
-  req.pause();
-}
-
-/** Close a limited request only after its response transport has closed. */
-export function closeRequestAfterResponse(req: IncomingMessage, res: ServerResponse): void {
-  if (!res.headersSent) {
-    res.setHeader("Connection", "close");
-  }
-  const once = Reflect.get(res, "once");
-  if (typeof once !== "function") {
-    return;
-  }
-  once.call(res, "close", () => {
-    if (!req.destroyed) {
-      req.destroy();
-    }
-  });
+  selectHttpRequestRejection(req);
 }
 
 type ReadResponsePrefixResult = {
@@ -190,19 +159,12 @@ type ReadResponsePrefixOptions = ReadResponseTextPrefixOptions & {
   stopAtLimit?: boolean;
 };
 
-function validateMaxBytes(maxBytes: number): void {
-  if (!Number.isFinite(maxBytes) || maxBytes < 0) {
-    throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
-  }
-}
-
 async function readResponsePrefixFromReader(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   maxBytes: number,
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
   const chunks: Uint8Array[] = [];
-  let total = 0;
   let size = 0;
   let truncated = false;
   try {
@@ -211,28 +173,23 @@ async function readResponsePrefixFromReader(
         ? await readChunkWithIdleTimeout(reader, options.chunkTimeoutMs, options.onIdleTimeout)
         : await reader.read();
       if (done) {
-        size = total;
         break;
       }
       if (!value?.length) {
         continue;
       }
-      const nextTotal = total + value.length;
-      if (nextTotal > maxBytes || (options?.stopAtLimit && nextTotal === maxBytes)) {
-        const remaining = maxBytes - total;
+      const remaining = maxBytes - size;
+      size += value.length;
+      if (size > maxBytes || (options?.stopAtLimit && size === maxBytes)) {
         if (remaining > 0) {
           chunks.push(value.subarray(0, remaining));
-          total += remaining;
         }
-        size = nextTotal;
         truncated = true;
         // A capture tee can retain cancellation until the caller releases its request.
         void reader.cancel().catch(() => undefined);
         break;
       }
       chunks.push(value);
-      total = nextTotal;
-      size = total;
     }
   } finally {
     try {
@@ -241,10 +198,8 @@ async function readResponsePrefixFromReader(
   }
 
   return {
-    buffer: Buffer.concat(
-      chunks.map((chunk) => Buffer.from(chunk)),
-      total,
-    ),
+    // MiB limits can yield fractional bytes; retained slices contain only whole bytes.
+    buffer: Buffer.concat(chunks, Math.floor(Math.min(size, maxBytes))),
     size,
     truncated,
   };
@@ -255,7 +210,9 @@ async function readResponsePrefix(
   maxBytes: number,
   options?: ReadResponsePrefixOptions,
 ): Promise<ReadResponsePrefixResult> {
-  validateMaxBytes(maxBytes);
+  if (!Number.isFinite(maxBytes) || maxBytes < 0) {
+    throw new RangeError(`maxBytes must be a non-negative finite number: ${maxBytes}`);
+  }
   let timeoutMs: number | undefined;
   try {
     timeoutMs = typeof options?.timeoutMs === "function" ? options.timeoutMs() : options?.timeoutMs;
@@ -323,10 +280,7 @@ export async function readResponseWithLimit(
     onOverflow?: (params: { size: number; maxBytes: number; res: Response }) => Error;
   },
 ): Promise<Buffer> {
-  const onOverflow =
-    options?.onOverflow ??
-    ((params: { size: number; maxBytes: number }) =>
-      new Error(`Content too large: ${params.size} bytes (limit: ${params.maxBytes} bytes)`));
+  const onOverflow = options?.onOverflow;
   const prefix = await readResponsePrefix(response, maxBytes, {
     chunkTimeoutMs: options?.chunkTimeoutMs,
     onIdleTimeout: options?.onIdleTimeout,
@@ -334,7 +288,9 @@ export async function readResponseWithLimit(
     onTimeout: options?.onTimeout,
   });
   if (prefix.truncated) {
-    throw onOverflow({ size: prefix.size, maxBytes, res: response });
+    throw onOverflow
+      ? onOverflow({ size: prefix.size, maxBytes, res: response })
+      : new Error(`Content too large: ${prefix.size} bytes (limit: ${maxBytes} bytes)`);
   }
   return prefix.buffer;
 }
@@ -376,6 +332,10 @@ export async function readRequestBodyWithLimit(
   const { maxBytes, timeoutMs } = resolveRequestBodyLimitValues(options);
   const encoding = options.encoding ?? "utf-8";
   const destroyOnLimit = options.destroyOnLimit !== false;
+
+  if (isHttpConnectionClosing(req.socket)) {
+    throw new RequestBodyLimitError({ code: "CONNECTION_CLOSED" });
+  }
 
   const declaredLength = parseContentLengthHeader(req);
   if (declaredLength !== null && declaredLength > maxBytes) {
@@ -420,18 +380,22 @@ export async function readRequestBodyWithLimit(
       if (done) {
         return;
       }
-      const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-      totalBytes = progress.totalBytes;
-      if (progress.exceeded) {
+      const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+      totalBytes += buffer.length;
+      if (totalBytes > maxBytes) {
         const error = new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" });
         stopRequestBodyAfterLimit(req, destroyOnLimit);
         fail(error);
         return;
       }
-      chunks.push(progress.buffer);
+      chunks.push(buffer);
     };
 
     const onEnd = () => {
+      if (isHttpConnectionClosing(req.socket)) {
+        fail(new RequestBodyLimitError({ code: "CONNECTION_CLOSED" }));
+        return;
+      }
       finish(() =>
         resolve(
           chunks.length === 1
@@ -548,18 +512,16 @@ export function installRequestBodyLimitGuard(
   };
 
   const respond = (error: RequestBodyLimitError) => {
-    closeRequestAfterResponse(req, res);
     const text = customText[error.code] ?? requestBodyErrorToText(error.code);
-    if (!res.headersSent) {
-      res.statusCode = error.statusCode;
-      if (responseFormat === "text") {
-        res.setHeader("Content-Type", "text/plain; charset=utf-8");
-        res.end(text);
-      } else {
-        res.setHeader("Content-Type", "application/json; charset=utf-8");
-        res.end(JSON.stringify({ error: text }));
-      }
-    }
+    const body = responseFormat === "text" ? text : JSON.stringify({ error: text });
+    const contentType = responseFormat === "text" ? "text/plain" : "application/json";
+    void sendHttpRequestRejection(
+      req,
+      res,
+      error.statusCode,
+      body,
+      `${contentType}; charset=utf-8`,
+    );
   };
 
   const trip = (error: RequestBodyLimitError) => {
@@ -576,9 +538,8 @@ export function installRequestBodyLimitGuard(
     if (done) {
       return;
     }
-    const progress = advanceRequestBodyChunk(chunk, totalBytes, maxBytes);
-    totalBytes = progress.totalBytes;
-    if (progress.exceeded) {
+    totalBytes += typeof chunk === "string" ? Buffer.byteLength(chunk) : chunk.length;
+    if (totalBytes > maxBytes) {
       trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));
     }
   };
@@ -593,7 +554,11 @@ export function installRequestBodyLimitGuard(
   req.on("error", finish);
 
   const declaredLength = parseContentLengthHeader(req);
-  if (req.destroyed && !req.readableEnded) {
+  if (isHttpConnectionClosing(req.socket)) {
+    tripped = true;
+    reason = "CONNECTION_CLOSED";
+    finish();
+  } else if (req.destroyed && !req.readableEnded) {
     finish();
   } else if (declaredLength !== null && declaredLength > maxBytes) {
     trip(new RequestBodyLimitError({ code: "PAYLOAD_TOO_LARGE" }));

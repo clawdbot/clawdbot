@@ -22,6 +22,7 @@ import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
 import * as support from "./service.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
+import { measureLaunchTurn } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 type WorkerEnvironmentServiceError = support.WorkerEnvironmentServiceError;
@@ -217,6 +218,7 @@ describe("worker environment service provision replay", () => {
       start: vi.fn(async ({ environmentId, ownerEpoch }) => ({
         environmentId,
         ownerEpoch,
+        measureLaunchTurn,
         launchTurn: vi.fn(),
         runWorkspaceCommand: vi.fn(),
         quiesceWorkspace: vi.fn(),
@@ -239,7 +241,7 @@ describe("worker environment service provision replay", () => {
           setupCode: "setup-code",
           setupId: enrolled.nodeSetupId!,
           openclawVersion: "2026.8.19",
-          packageSpecs: ["openclaw@2026.8.19"],
+          nodeBootstrap: { ...support.NODE_BOOTSTRAP, openclawVersion: "2026.8.19" },
           displayName: "Cloud worker replay",
           waitForDeviceId: async () => await enrollmentConnected.promise,
         };
@@ -286,6 +288,7 @@ describe("worker environment service provision replay", () => {
       runActivationBarrier: activationBarrier,
       runMoveBarrier: async ({ begin }) => begin(),
       resolveMoveDestination: async () => undefined,
+      runReclaimPreparation: async ({ run, authorize }) => await run(authorize),
       runReclaimBarrier: async ({ begin, reclaim }) => await reclaim("/gateway/workspace", begin()),
       runFailedReclaimBarrier: async ({ reclaim }) => await reclaim(),
       resolveWorkspacePath: async () => "/gateway/workspace",
@@ -428,40 +431,6 @@ describe("worker environment service provision replay", () => {
     });
   });
 
-  it("records a permanent legacy provision replay failure without allocating", async () => {
-    const legacyOperationId = `provision:${"0".repeat(64)}`;
-    const intent = support.testState.store.createIntent({
-      environmentId: "worker-legacy-provision",
-      providerId: "fake",
-      profileId: "development",
-      profileSnapshot: { settings: { region: "test" } },
-      provisionOperationId: legacyOperationId,
-    });
-    support.testState.store.transition({
-      environmentId: intent.environmentId,
-      from: intent.state,
-      to: "provisioning",
-    });
-    const allocate = vi.fn(async () => ({ leaseId: "must-not-exist", ssh: support.SSH_ENDPOINT }));
-    const provider = support.createProvider({
-      provision: async (_profile, operationId) => {
-        if (operationId === legacyOperationId) {
-          throw new WorkerProviderError("Legacy Crabbox provision state cannot be replayed safely");
-        }
-        return await allocate();
-      },
-    });
-
-    await support.createService(provider).reconcileOnce();
-
-    expect(allocate).not.toHaveBeenCalled();
-    expect(support.testState.store.get(intent.environmentId)).toMatchObject({
-      state: "failed",
-      leaseId: null,
-      lastError: "Legacy Crabbox provision state cannot be replayed safely",
-    });
-  });
-
   it("does not resolve a provider provision timeout when the service override is set", async () => {
     const resolveProvisionTimeoutMs = vi.fn(() => {
       throw new Error("provider timeout hook must not run");
@@ -500,13 +469,17 @@ describe("worker environment service provision replay", () => {
     await expect(
       workerService.create("development", `request-invalid-provider-timeout-${String(timeoutMs)}`),
     ).rejects.toMatchObject({
-      code: "invalid_profile",
+      code: "provider_failure",
       message: expect.stringContaining("Worker provider provision timeout must be an integer"),
     } satisfies Partial<WorkerEnvironmentServiceError>);
     expect(provision).not.toHaveBeenCalled();
+    expect(support.testState.store.list()[0]).toMatchObject({
+      state: "provisioning",
+      leaseId: null,
+    });
   });
 
-  it("serializes destroy and provision replay behind a timed-out provider operation", async () => {
+  it("serializes allocation resolution and destroy behind a timed-out provider operation", async () => {
     const events: string[] = [];
     const operationIds: string[] = [];
     let active = 0;
@@ -524,6 +497,11 @@ describe("worker environment service provision replay", () => {
       events.push("destroy:end");
     });
     const provider = support.createProvider({
+      resolveAllocation: async () => {
+        events.push("resolve");
+        expect(active).toBe(0);
+        return { leaseId: "lease-timeout-replay", sharedHost: false };
+      },
       provision: async (_profile, operationId) => {
         originalProvisionCalls += 1;
         const call = originalProvisionCalls;
@@ -572,14 +550,13 @@ describe("worker environment service provision replay", () => {
 
     await teardownResult;
     const finalEnvironmentId = expectDefined(environmentId, "timed-out provision environment id");
-    expect(operationIds).toHaveLength(2);
+    expect(operationIds).toHaveLength(1);
     expect(new Set(operationIds).size).toBe(1);
     expect(maxActive).toBe(1);
     expect(events).toEqual([
       "provision:1:start",
       "provision:1:end",
-      "provision:2:start",
-      "provision:2:end",
+      "resolve",
       "destroy:start",
       "destroy:end",
     ]);

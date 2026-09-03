@@ -76,7 +76,17 @@ type SectionCategoryDefinition = {
 export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
   {
     id: "core",
-    sections: ["env", "auth", "update", "meta", "logging", "diagnostics", "cli", "secrets"],
+    sections: [
+      "env",
+      "auth",
+      "update",
+      "meta",
+      "logging",
+      "diagnostics",
+      "cli",
+      "secrets",
+      "wizard",
+    ],
   },
   { id: "ai", sections: ["agents", "models", "skills", "tools", "memory", "session"] },
   {
@@ -89,7 +99,7 @@ export const SECTION_CATEGORIES: SectionCategoryDefinition[] = [
     id: "infrastructure",
     sections: ["gateway", "browser", "nodeHost", "discovery", "acp", "mcp"],
   },
-  { id: "appearance", sections: ["__appearance__", "ui", "wizard"] },
+  { id: "appearance", sections: ["__appearance__", "ui"] },
 ];
 
 export const CATEGORISED_KEYS = new Set(

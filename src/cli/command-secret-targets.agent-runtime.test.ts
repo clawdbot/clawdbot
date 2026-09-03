@@ -98,7 +98,7 @@ describe("agent runtime command secret targets", () => {
     } as never);
 
     expect(paths).toEqual(new Set([firecrawlPath, dottedExaPath]));
-    const runtimeTargetIds = getAgentRuntimeCommandSecretTargetIds();
+    const runtimeTargetIds = getAgentRuntimeCommandSecretTargetIds({ config: {} });
     expect(runtimeTargetIds.has(firecrawlPath)).toBe(true);
     expect(runtimeTargetIds.has(dottedExaPath)).toBe(true);
   });

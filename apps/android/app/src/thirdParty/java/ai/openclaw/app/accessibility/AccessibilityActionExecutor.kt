@@ -171,12 +171,14 @@ class AccessibilityActionExecutor internal constructor(
         is MobileUiAction.Tap,
         is MobileUiAction.Swipe,
         -> coordinateGesturePreflight(service)?.let { return it }
+
         // Node actions use per-node refresh() for freshness; UI epoch gates only blind coordinates.
         // Do not add an epoch check here: unrelated changes/app switches would break valid act flows.
         is MobileUiAction.Activate,
         is MobileUiAction.SetText,
         is MobileUiAction.Scroll,
         -> nodeActionPackagePreflight(service)?.let { return it }
+
         is MobileUiAction.GlobalAction,
         is MobileUiAction.Wait,
         -> Unit
@@ -184,7 +186,7 @@ class AccessibilityActionExecutor internal constructor(
     }
 
     return when (action) {
-      is MobileUiAction.Activate ->
+      is MobileUiAction.Activate -> {
         synchronized(generationLock) {
           performNodeAction(
             snapshotId = snapshotId,
@@ -193,14 +195,23 @@ class AccessibilityActionExecutor internal constructor(
             actionName = "activate",
           )
         }
-      is MobileUiAction.SetText -> synchronized(generationLock) { setText(snapshotId, action) }
-      is MobileUiAction.Scroll -> synchronized(generationLock) { scroll(snapshotId, action) }
+      }
+
+      is MobileUiAction.SetText -> {
+        synchronized(generationLock) { setText(snapshotId, action) }
+      }
+
+      is MobileUiAction.Scroll -> {
+        synchronized(generationLock) { scroll(snapshotId, action) }
+      }
+
       is MobileUiAction.Tap -> {
         val gesture =
           runCatching { tapGesture(action.x, action.y) }
             .getOrElse { return ActionResult(ActionOutcomeCode.ActionRejected, "Invalid tap gesture") }
         dispatchGesture(service, gesture)
       }
+
       is MobileUiAction.Swipe -> {
         if (action.durationMs <= 0) {
           ActionResult(ActionOutcomeCode.ActionRejected, "Swipe duration must be positive")
@@ -211,7 +222,11 @@ class AccessibilityActionExecutor internal constructor(
           dispatchGesture(service, gesture)
         }
       }
-      is MobileUiAction.GlobalAction -> performGlobalAction(service, action.name)
+
+      is MobileUiAction.GlobalAction -> {
+        performGlobalAction(service, action.name)
+      }
+
       is MobileUiAction.Wait -> {
         if (action.ms < 0) {
           ActionResult(ActionOutcomeCode.ActionRejected, "Wait duration cannot be negative")
@@ -276,9 +291,13 @@ class AccessibilityActionExecutor internal constructor(
   ): ActionResult {
     val node =
       when (val target = generation.resolve(snapshotId, ref)) {
-        is GenerationTarget.Found -> target.value
-        GenerationTarget.Stale ->
+        is GenerationTarget.Found -> {
+          target.value
+        }
+
+        GenerationTarget.Stale -> {
           return ActionResult(ActionOutcomeCode.TargetStale, "Node $ref is not in the current snapshot")
+        }
       }
     if (!runCatching { node.refresh() }.getOrDefault(false)) {
       return ActionResult(ActionOutcomeCode.TargetNotFound, "Node $ref is no longer available")

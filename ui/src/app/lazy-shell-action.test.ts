@@ -56,7 +56,8 @@ async function withConnectedShell(shell: ShellLifecycle, run: () => void | Promi
   }
 }
 
-afterEach(() => {
+afterEach(async () => {
+  await vi.dynamicImportSettled();
   resetAppHostTestGlobals();
   vi.restoreAllMocks();
   recovery.reload.mockClear();
@@ -244,10 +245,13 @@ describe("shell lazy events", () => {
 
     try {
       await withConnectedShell(shell, async () => {
+        input.focus();
+        expect(document.activeElement).toBe(input);
         input.dispatchEvent(shortcut);
 
         expect(shortcut.defaultPrevented).toBe(true);
         expect(requested).toHaveBeenCalledOnce();
+        await vi.dynamicImportSettled();
         await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
 
         input.dispatchEvent(
@@ -289,6 +293,7 @@ describe("shell lazy events", () => {
     await withConnectedShell(shell, async () => {
       shell.handleDocumentKeydown(shortcut);
       expect(shortcut.defaultPrevented).toBe(true);
+      await vi.dynamicImportSettled();
       await vi.waitFor(() => expect(toggled).toHaveBeenCalledOnce());
 
       const input = document.body.appendChild(document.createElement("input"));

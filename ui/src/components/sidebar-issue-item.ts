@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { MentionInboxItem } from "../../../packages/gateway-protocol/src/index.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -6,15 +7,17 @@ import type { ScopeUpgradeState } from "../app/device-scope-upgrade-availability
 import type { ExecApprovalDecision, ExecApprovalRequest } from "../app/exec-approval.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
+import { formatDateTimeMs, formatRelativeTimestamp } from "../lib/format.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import type { PresenceViewer } from "../lib/presence-users.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { renderSidebarApprovalRow } from "./exec-approval-card.ts";
 import { icons } from "./icons.ts";
-import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import type { SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import "./sidebar-update-card.ts";
+import "./viewer-facepile.ts";
 
 type SidebarIssueItemHandlers = {
   basePath: string;
@@ -43,38 +46,87 @@ function renderSidebarDismissButton(itemLabel: string, onDismiss?: () => void) {
   </button>`;
 }
 
-export function renderSidebarAskOpenClawButton(params: {
-  count: number;
-  severity: "error" | "warning" | null;
-  snapshot: ApplicationContext["gateway"]["snapshot"] | undefined;
+export function renderSidebarMentionItem(params: {
+  mention: MentionInboxItem;
+  context: Pick<ApplicationContext, "basePath" | "navigate">;
+  dismissing: boolean;
+  onDismiss: () => void;
+  onClosePanel: () => void;
 }) {
-  if (!canCallGatewayMethod(params.snapshot, "openclaw.chat", "operator.admin")) {
-    return nothing;
-  }
-  const label = params.count
-    ? t(params.count === 1 ? "attention.custodianAlertAria" : "attention.custodianAlertsAria", {
-        count: String(params.count),
-      })
-    : t("nav.askOpenClaw");
-  return html`<openclaw-tooltip .content=${label}>
-    <button
-      type="button"
-      class="sidebar-brand__icon sidebar-footer-bar__custodian sidebar-issues-panel__ask"
-      aria-label=${label}
-      @click=${() => window.dispatchEvent(new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT))}
-    >
-      <span class="sidebar-footer-bar__custodian-glyph">
-        ${icons.lobster}
-        ${params.count
-          ? html`<span
-              class="session-glyph__badge sidebar-footer-bar__custodian-badge sidebar-footer-bar__custodian-badge--${params.severity ??
-              "warning"}"
-              aria-hidden="true"
-            ></span>`
-          : nothing}
+  const { mention, context } = params;
+  const sender: PresenceViewer = {
+    id: mention.senderProfileId,
+    identity: { type: "profile", id: mention.senderProfileId },
+    name: mention.senderLabel,
+    avatarUrl: mention.senderAvatarUrl,
+    watchedSessions: [],
+  };
+  const label = t("attention.mentions.from", { sender: mention.senderLabel });
+  const target = sessionNavigationTarget({
+    face: "chat",
+    sessionKey: mention.sessionKey,
+    fallbackAgentId: mention.agentId,
+    basePath: context.basePath,
+    row: { key: mention.sessionKey, displayName: mention.sessionTitle },
+    exactKey: true,
+  });
+  return html`<article
+    class="sidebar-mention-row"
+    data-attention-kind="mention"
+    data-mention-id=${mention.id}
+    aria-label=${label}
+  >
+    <div class="sidebar-issues-panel__summary sidebar-mention-row__summary">
+      <span class="sidebar-mention-row__avatar" aria-hidden="true">
+        <openclaw-viewer-avatar
+          .user=${sender}
+          .markAsViewer=${false}
+          variant="footer"
+        ></openclaw-viewer-avatar>
       </span>
-    </button>
-  </openclaw-tooltip>`;
+      <div class="sidebar-issues-panel__content">
+        <div class="sidebar-mention-row__header">
+          <span class="sidebar-issues-panel__entity" title=${label}>${label}</span>
+          <time
+            class="sidebar-mention-row__age"
+            datetime=${new Date(mention.createdAt).toISOString()}
+            title=${formatDateTimeMs(mention.createdAt)}
+            >${formatRelativeTimestamp(mention.createdAt)}</time
+          >
+        </div>
+        <span class="sidebar-issues-panel__state" title=${mention.sessionTitle}
+          >${mention.sessionTitle}</span
+        >
+        ${mention.excerpt
+          ? html`<p class="sidebar-mention-row__excerpt">${mention.excerpt}</p>`
+          : nothing}
+        <div class="sidebar-issues-panel__actions sidebar-mention-row__actions">
+          <a
+            class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+            href=${target.href}
+            data-issue-row-focus
+            @click=${(event: MouseEvent) => {
+              if (!shouldHandleNavigationClick(event)) {
+                return;
+              }
+              event.preventDefault();
+              params.onClosePanel();
+              context.navigate("chat", target.options);
+            }}
+            >${t("attention.mentions.open")}</a
+          >
+          <button
+            type="button"
+            class="sidebar-issues-panel__action"
+            ?disabled=${params.dismissing}
+            @click=${params.onDismiss}
+          >
+            ${t(params.dismissing ? "attention.mentions.dismissing" : "attention.mentions.dismiss")}
+          </button>
+        </div>
+      </div>
+    </div>
+  </article>`;
 }
 
 export function renderSidebarApprovalItem(params: {
@@ -148,7 +200,6 @@ export function renderSidebarUpdateSurface(params: {
     .onHoldUpdate=${() => context.overlays.holdUpdate()}
     .onReviewUpdate=${params.onNavigate}
     .onDismiss=${params.onDismiss}
-    .recoverNativeDecline=${false}
   ></openclaw-sidebar-update-card>`;
 }
 
@@ -172,12 +223,6 @@ function scopeUpgradeText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>
   return state satisfies never;
 }
 
-function scopeUpgradeSummaryText(state: Exclude<ScopeUpgradeState, { phase: "hidden" }>): string {
-  return state.phase === "guidance" || state.phase === "available"
-    ? t("connection.scopeUpgrade.inboxState")
-    : scopeUpgradeText(state);
-}
-
 export function renderSidebarScopeUpgradeItem(params: {
   state: ScopeUpgradeState;
   onCancel: () => void;
@@ -189,8 +234,11 @@ export function renderSidebarScopeUpgradeItem(params: {
     return nothing;
   }
   const text = scopeUpgradeText(params.state);
-  const summary = scopeUpgradeSummaryText(params.state);
-  const retryable = ["pending", "rejected", "error"].includes(params.state.phase);
+  const summary = t("connection.scopeUpgrade.inboxState");
+  const retryable =
+    params.state.phase === "error"
+      ? params.state.retryable
+      : params.state.phase === "pending" || params.state.phase === "rejected";
   return html`<details
     class="sidebar-issues-panel__details sidebar-issues-panel__details--${params.state.phase ===
       "error" || params.state.phase === "rejected"
@@ -231,15 +279,17 @@ export function renderSidebarScopeUpgradeItem(params: {
                 ${t("connection.scopeUpgrade.requestingAction")}
               </button>
             </div>`
-          : retryable
+          : retryable || params.state.phase === "error"
             ? html`<div class="sidebar-issues-panel__actions">
-                <button
-                  type="button"
-                  class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
-                  @click=${params.onRetry}
-                >
-                  ${t("connection.scopeUpgrade.retry")}
-                </button>
+                ${retryable
+                  ? html`<button
+                      type="button"
+                      class="sidebar-issues-panel__action sidebar-issues-panel__action--primary"
+                      @click=${params.onRetry}
+                    >
+                      ${t("connection.scopeUpgrade.retry")}
+                    </button>`
+                  : nothing}
                 <button
                   type="button"
                   class="sidebar-issues-panel__action"

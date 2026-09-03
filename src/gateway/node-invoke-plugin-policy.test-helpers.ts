@@ -1,6 +1,7 @@
 /** Shared harness for node invoke plugin-policy tests. */
 import { expect, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -165,6 +166,15 @@ export function createApprovalRequestPolicy(params?: {
 
 export function setDangerousDemoCommandRegistry(policies: NodeInvokePolicyRegistration[] = []) {
   const registry = createEmptyPluginRegistry();
+  registry.plugins.push(
+    createPluginRecord({
+      id: DEMO_PLUGIN_ID,
+      source: "test",
+      origin: "bundled",
+      enabled: true,
+      configSchema: true,
+    }),
+  );
   registry.nodeHostCommands.push({
     pluginId: DEMO_PLUGIN_ID,
     command: {

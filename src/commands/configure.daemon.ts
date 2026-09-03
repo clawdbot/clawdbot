@@ -113,11 +113,13 @@ export async function maybeInstallDaemon(params: {
           progress.setLabel("Gateway service install blocked.");
           return;
         }
+        const existingCommand = await service.readCommand(process.env).catch(() => null);
         const { programArguments, workingDirectory, environment, environmentValueSources } =
           await buildGatewayInstallPlan({
             env: process.env,
             port: params.port,
             runtime: daemonRuntime,
+            existingCommand,
             warn: (message, title) => note(message, title),
             config: cfg,
           });

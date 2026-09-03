@@ -5,7 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import type { McpToolCatalog } from "../../agents/agent-bundle-mcp-types.js";
-import { setPluginToolMeta } from "../../plugins/tools.js";
+import { setPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createToolsEffectiveHandlers, testing } from "./tools-effective.js";
 
 type ToolsEffectiveDependencies = NonNullable<Parameters<typeof createToolsEffectiveHandlers>[0]>;

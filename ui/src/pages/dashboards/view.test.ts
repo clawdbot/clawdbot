@@ -23,7 +23,7 @@ function routeData(sessions: SessionsListResult["sessions"], basePath = ""): Das
 
 describe("dashboards index", () => {
   it.each(["", "/openclaw"])(
-    "links each row through the dashboard session namespace at %s",
+    "links each dashboard back to its owning chat with the panel expanded at %s",
     (basePath) => {
       const container = document.createElement("div");
       render(
@@ -47,15 +47,9 @@ describe("dashboards index", () => {
 
       const row = container.querySelector<HTMLElement>("[data-dashboard-session]");
       expect(row?.textContent).toContain("Deploy monitor");
-      expect(row?.querySelector<HTMLAnchorElement>(".list-main")?.getAttribute("href")).toBe(
-        `${basePath}/dashboard/main/deploy-monitor-12345678`,
-      );
-      const fullscreen = row?.querySelector<HTMLAnchorElement>("[data-dashboard-fullscreen]");
-      expect(fullscreen?.getAttribute("href")).toBe(
-        `${basePath}/focus/dashboard/main/deploy-monitor-12345678`,
-      );
-      expect(fullscreen?.hasAttribute("target")).toBe(false);
-      expect(fullscreen?.getAttribute("aria-label")).toBe("Open dashboard in focus mode");
+      expect(
+        row?.querySelector<HTMLAnchorElement>(".dashboard-card__main")?.getAttribute("href"),
+      ).toBe(`${basePath}/chat/main/deploy-monitor-12345678?dashboard=expanded`);
     },
   );
 
@@ -65,6 +59,6 @@ describe("dashboards index", () => {
 
     const empty = container.querySelector("[data-dashboards-empty]");
     expect(empty?.textContent).toContain("No dashboards yet");
-    expect(empty?.textContent).toContain("Open a session and switch to the Dashboard face");
+    expect(empty?.textContent).toContain("Dashboards created in your tasks will appear here");
   });
 });

@@ -249,7 +249,10 @@ describe("Reef gateway account ownership", () => {
       }),
     );
     setReefRuntime(runtime);
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Unexpected Reef relay request"));
     vi.spyOn(ReefTransportClient.prototype, "listFriends").mockResolvedValue({ friendships: [] });
+    // Startup reconciliation polls REST before the mocked inbox loop starts.
+    vi.spyOn(ReefTransportClient.prototype, "pull").mockResolvedValue({ entries: [], cursor: 0 });
     vi.spyOn(ReefInboxConnection.prototype, "start").mockImplementation(() => {
       const drain = createDeferred<void>();
       inboxDrains.push(drain);
@@ -265,12 +268,15 @@ describe("Reef gateway account ownership", () => {
       drain.resolve();
     }
     await Promise.allSettled(accountTasks.splice(0));
+    // Count only: failed assertions must not dump signed request headers.
+    const relayRequests = vi.mocked(fetch).mock.calls.length;
     vi.restoreAllMocks();
     vi.unstubAllEnvs();
     activeReefSlot.clearRuntime();
     reefRuntimeSlot.clearRuntime();
     resetPluginStateStoreForTests();
     fs.rmSync(stateDir, { recursive: true, force: true });
+    expect(relayRequests).toBe(0);
   });
 
   function startAccount() {

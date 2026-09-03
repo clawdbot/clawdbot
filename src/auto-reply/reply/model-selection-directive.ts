@@ -4,11 +4,13 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { modelKey } from "../../agents/model-ref-shared.js";
 import {
-  isModelKeyAllowedBySet,
   type ModelAliasIndex,
-  resolveConfiguredModelPolicyAllow,
   resolveModelRefFromString,
 } from "../../agents/model-selection-shared.js";
+import {
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 export { modelKey };
 export type { ModelAliasIndex };
@@ -52,15 +54,6 @@ const FUZZY_VARIANT_TOKENS = [
   "small",
   "nano",
 ];
-
-/** Resolves an explicit model directive string into a provider/model ref. */
-export function resolveModelRefFromDirectiveString(params: {
-  raw: string;
-  defaultProvider: string;
-  aliasIndex: ModelAliasIndex;
-}): { ref: { provider: string; model: string }; alias?: string } | null {
-  return resolveModelRefFromString(params);
-}
 
 function boundedLevenshteinDistance(a: string, b: string, maxDistance: number): number | null {
   if (a === b) {
@@ -224,18 +217,28 @@ function scoreFuzzyMatch(params: {
   };
 }
 
-/** Resolves a `/model` directive into an allowlisted model selection or error. */
+/** Resolves a `/model` directive under the effective model policy. */
 export function resolveModelDirectiveSelection(params: {
   raw: string;
   defaultProvider: string;
   defaultModel: string;
   aliasIndex: ModelAliasIndex;
   allowedModelKeys: Set<string>;
+  modelPolicy?: ModelVisibilityPolicy;
   cfg?: OpenClawConfig;
   agentId?: string;
   rawRuntime?: string | undefined;
 }): { selection?: ModelDirectiveSelection; error?: string } {
   const { raw, defaultProvider, defaultModel, aliasIndex, allowedModelKeys } = params;
+  const policy =
+    params.modelPolicy ??
+    createModelVisibilityPolicy({
+      cfg: params.cfg ?? {},
+      catalog: [],
+      defaultProvider,
+      defaultModel,
+      agentId: params.agentId,
+    });
 
   const rawTrimmed = raw.trim();
   const rawLower = normalizeLowercaseStringOrEmpty(rawTrimmed);
@@ -274,7 +277,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       const provider = normalizeProviderId(key.slice(0, slash));
       const model = key.slice(slash + 1);
-      if (model === "*") {
+      if (model.endsWith("*") || !policy.allowsKey(key)) {
         continue;
       }
       if (providerFilter && provider !== providerFilter) {
@@ -297,7 +300,7 @@ export function resolveModelDirectiveSelection(params: {
       }
       for (const match of aliasMatches) {
         const key = modelKey(match.provider, match.model);
-        if (!isModelKeyAllowedBySet(allowedModelKeys, key)) {
+        if (!policy.allowsKey(key)) {
           continue;
         }
         if (!candidates.some((c) => c.provider === match.provider && c.model === match.model)) {
@@ -356,7 +359,9 @@ export function resolveModelDirectiveSelection(params: {
     return { selection: buildSelection(best.provider, best.model) };
   };
 
-  const resolved = resolveModelRefFromDirectiveString({
+  const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
+    agentId: params.agentId,
     raw: rawTrimmed,
     defaultProvider,
     aliasIndex,
@@ -373,15 +378,22 @@ export function resolveModelDirectiveSelection(params: {
   }
 
   const resolvedKey = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowedModelKeys.size === 0 || isModelKeyAllowedBySet(allowedModelKeys, resolvedKey)) {
-    return {
-      selection: {
-        provider: resolved.ref.provider,
-        model: resolved.ref.model,
-        isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
-        alias: resolved.alias,
-      },
-    };
+  const explicitSelection = {
+    selection: {
+      provider: resolved.ref.provider,
+      model: resolved.ref.model,
+      isDefault: resolved.ref.provider === defaultProvider && resolved.ref.model === defaultModel,
+      ...(resolved.alias ? { alias: resolved.alias } : {}),
+    },
+  };
+  const permitted = policy.allowsKey(resolvedKey);
+  // Preserve catalog hints for bare fragments, while explicit routes and aliases
+  // depend only on policy, never on finite picker membership.
+  if (
+    permitted &&
+    (rawLower.includes("/") || resolved.alias || allowedModelKeys.has(resolvedKey))
+  ) {
+    return explicitSelection;
   }
 
   // If the user specified a provider/model but the exact model isn't allowed,
@@ -402,11 +414,14 @@ export function resolveModelDirectiveSelection(params: {
     return fuzzy;
   }
 
+  if (permitted) {
+    return explicitSelection;
+  }
+
   return {
     error: formatNotAllowedError({
       modelRef: `${resolved.ref.provider}/${resolved.ref.model}`,
-      policyPath: resolveConfiguredModelPolicyAllow({ cfg: params.cfg, agentId: params.agentId })
-        .repairConfigPath,
+      policyPath: policy.allowRepairConfigPath,
       rawRuntime: params.rawRuntime,
     }),
   };

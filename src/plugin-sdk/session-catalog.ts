@@ -227,7 +227,7 @@ function truncateUtf8(text: string, maxBytes: number): string {
   return `${text.slice(0, end)}…`;
 }
 
-/** Page transcript items from the tail, bounding per-item and per-page byte budgets. */
+/** Page chronological source items newest-first, bounding per-item and per-page byte budgets. */
 function boundSessionCatalogTranscriptPage(
   items: SessionCatalogTranscriptItem[],
   limit: number,
@@ -250,7 +250,7 @@ function boundSessionCatalogTranscriptPage(
     if (page.length > 0 && pageBytes + itemBytes > MAX_TRANSCRIPT_PAGE_BYTES) {
       break;
     }
-    page.unshift(bounded);
+    page.push(bounded);
     pageBytes += itemBytes;
   }
   const consumed = offset + page.length;

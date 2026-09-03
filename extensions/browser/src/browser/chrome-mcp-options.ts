@@ -1,16 +1,23 @@
 // Normalizes Chrome MCP profile options and subprocess arguments.
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  CHROME_MCP_CONNECTION_FLAGS,
-  CHROME_MCP_USAGE_STATISTICS_FLAG_RE,
-  CHROME_MCP_USER_DATA_DIR_FLAGS,
-  DEFAULT_CHROME_MCP_COMMAND,
-  DEFAULT_CHROME_MCP_FEATURE_ARGS,
-  DEFAULT_CHROME_MCP_PACKAGE_ARGS,
-  type ChromeMcpOptionsInput,
-  type ChromeMcpProfileOptions,
-  type NormalizedChromeMcpProfileOptions,
+import parseArgs from "yargs-parser";
+import type {
+  ChromeMcpOptionsInput,
+  ChromeMcpProfileOptions,
+  NormalizedChromeMcpProfileOptions,
 } from "./chrome-mcp-contracts.js";
+import { BrowserProfileUnavailableError } from "./errors.js";
+
+const DEFAULT_CHROME_MCP_COMMAND = "npx";
+// Endpoint policy below must match the launched CLI's argument grammar.
+const DEFAULT_CHROME_MCP_PACKAGE_ARGS = ["-y", "chrome-devtools-mcp@1.8.0"];
+const DEFAULT_CHROME_MCP_FEATURE_ARGS = [
+  "--no-usage-statistics",
+  // Direct chrome-devtools-mcp launches do not enable structuredContent by default.
+  "--experimentalStructuredContent",
+  "--experimental-page-id-routing",
+];
+const CHROME_MCP_USAGE_STATISTICS_FLAG_RE = /^--(?:no-)?usage-?statistics(?:=.*)?$/i;
 
 function normalizeChromeMcpStringList(values?: string[]): string[] {
   return Array.isArray(values)
@@ -23,52 +30,68 @@ function normalizeChromeMcpStringList(values?: string[]): string[] {
 export function normalizeChromeMcpOptions(
   input?: ChromeMcpOptionsInput,
 ): NormalizedChromeMcpProfileOptions {
-  if (typeof input === "object" && input && "command" in input && "extraArgs" in input) {
+  if (typeof input === "object" && input && "command" in input && "args" in input) {
     return input;
   }
   const options = typeof input === "string" ? { userDataDir: input } : (input ?? {});
   const command = normalizeOptionalString(options.mcpCommand) ?? DEFAULT_CHROME_MCP_COMMAND;
+  const extraArgs = normalizeChromeMcpStringList(options.mcpArgs);
+  // Match Chrome MCP's Yargs grammar, including short groups and camel-case
+  // aliases. Policy and direct CDP operations must use the endpoint it launches.
+  const { argv, error } = parseArgs.detailed(extraArgs, {
+    alias: { browserUrl: "u", wsEndpoint: "w" },
+    string: ["browserUrl", "wsEndpoint", "userDataDir"],
+    boolean: ["autoConnect"],
+    configuration: { "strip-aliased": true, "strip-dashed": true },
+  });
+  const endpoint: unknown = argv.wsEndpoint ?? argv.browserUrl;
+  if (
+    error ||
+    (argv.browserUrl !== undefined && argv.wsEndpoint !== undefined) ||
+    (endpoint !== undefined && (typeof endpoint !== "string" || !URL.canParse(endpoint))) ||
+    (argv.autoConnect !== undefined && typeof argv.autoConnect !== "boolean")
+  ) {
+    throw new BrowserProfileUnavailableError(
+      "Chrome MCP endpoint arguments must select one valid browserUrl or wsEndpoint URL. Remove duplicate, conflicting, or empty endpoint arguments from mcpArgs.",
+    );
+  }
+  if (
+    typeof endpoint === "string" &&
+    !(argv.wsEndpoint !== undefined ? /^wss?:$/ : /^https?:$/).test(new URL(endpoint).protocol)
+  ) {
+    throw new BrowserProfileUnavailableError(
+      "Chrome MCP endpoint arguments require http(s) for browserUrl or ws(s) for wsEndpoint.",
+    );
+  }
+  const overridesConnection = endpoint !== undefined || argv.autoConnect !== undefined;
+  const browserUrl = overridesConnection
+    ? typeof endpoint === "string"
+      ? endpoint
+      : undefined
+    : normalizeOptionalString(options.cdpUrl);
+  const userDataDir = normalizeOptionalString(options.userDataDir);
+  const connectionArgs = overridesConnection
+    ? []
+    : browserUrl
+      ? [/^wss?:\/\//i.test(browserUrl) ? "--wsEndpoint" : "--browserUrl", browserUrl]
+      : ["--autoConnect"];
+  const defaultFeatureArgs = extraArgs.some((arg) => CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg))
+    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
+    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
   return {
     command,
-    userDataDir: normalizeOptionalString(options.userDataDir),
-    browserUrl: normalizeOptionalString(options.cdpUrl),
-    extraArgs: normalizeChromeMcpStringList(options.mcpArgs),
+    userDataDir,
+    browserUrl,
+    args: [
+      ...(command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : []),
+      ...connectionArgs,
+      ...defaultFeatureArgs,
+      ...(!overridesConnection && !browserUrl && userDataDir && argv.userDataDir === undefined
+        ? ["--userDataDir", userDataDir]
+        : []),
+      ...extraArgs,
+    ],
   };
-}
-
-function hasFlag(args: string[], flags: Set<string>): boolean {
-  return args.some((arg) => {
-    const [name] = arg.split("=", 1);
-    return flags.has(name ?? arg);
-  });
-}
-
-function isChromeMcpWebSocketEndpoint(url: string): boolean {
-  return /^wss?:\/\//i.test(url);
-}
-
-function buildChromeMcpConnectionArgs(options: NormalizedChromeMcpProfileOptions): string[] {
-  if (hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS)) {
-    return [];
-  }
-  if (options.browserUrl) {
-    return isChromeMcpWebSocketEndpoint(options.browserUrl)
-      ? ["--wsEndpoint", options.browserUrl]
-      : ["--browserUrl", options.browserUrl];
-  }
-  return ["--autoConnect"];
-}
-
-function buildChromeMcpUserDataDirArgs(options: NormalizedChromeMcpProfileOptions): string[] {
-  if (
-    !options.userDataDir ||
-    options.browserUrl ||
-    hasFlag(options.extraArgs, CHROME_MCP_CONNECTION_FLAGS) ||
-    hasFlag(options.extraArgs, CHROME_MCP_USER_DATA_DIR_FLAGS)
-  ) {
-    return [];
-  }
-  return ["--userDataDir", options.userDataDir];
 }
 
 export function buildChromeMcpSessionCacheKey(
@@ -80,7 +103,7 @@ export function buildChromeMcpSessionCacheKey(
     options.userDataDir ?? "",
     options.browserUrl ?? "",
     options.command,
-    options.extraArgs,
+    options.args,
   ]);
 }
 
@@ -98,23 +121,4 @@ export function cacheKeyMatchesProfileName(cacheKey: string, profileName: string
   } catch {
     return false;
   }
-}
-
-export function buildChromeMcpArgsFromOptions(
-  options: NormalizedChromeMcpProfileOptions,
-): string[] {
-  const commandPrefix =
-    options.command === DEFAULT_CHROME_MCP_COMMAND ? DEFAULT_CHROME_MCP_PACKAGE_ARGS : [];
-  const defaultFeatureArgs = options.extraArgs.some((arg) =>
-    CHROME_MCP_USAGE_STATISTICS_FLAG_RE.test(arg),
-  )
-    ? DEFAULT_CHROME_MCP_FEATURE_ARGS.filter((arg) => arg !== "--no-usage-statistics")
-    : DEFAULT_CHROME_MCP_FEATURE_ARGS;
-  return [
-    ...commandPrefix,
-    ...buildChromeMcpConnectionArgs(options),
-    ...defaultFeatureArgs,
-    ...buildChromeMcpUserDataDirArgs(options),
-    ...options.extraArgs,
-  ];
 }

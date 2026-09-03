@@ -3,7 +3,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
+import { writeWorkspaceSkills } from "../skills/test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../skills/test-support/test-helpers.js";
 import type { SkillEntry } from "../skills/types.js";
 import { captureEnv } from "../test-utils/env.js";
@@ -110,6 +112,84 @@ describe("skills-cli (e2e)", () => {
     const output = formatSkillInfo(report, "peekaboo", {});
     expect(output).toContain("peekaboo");
     expect(output).toContain("Details:");
+  });
+
+  it.each([
+    ["plain", "left\tright"],
+    ["ESC CSI", "left\x1b[31\tmright\x1b[0m"],
+    ["C1 CSI", "left\x9b31\tmright\x9b0m"],
+  ])(
+    "keeps %s tab-separated skill descriptions in their table cell",
+    async (_label, description) => {
+      const workspaceDir = fs.mkdtempSync(path.join(tempWorkspaceDir, "tab-spacing-"));
+      await writeWorkspaceSkills(workspaceDir, [
+        {
+          name: "tab-spacing",
+          description: JSON.stringify(description).replaceAll("\x9b", "\\u009b"),
+        },
+      ]);
+      const report = buildWorkspaceSkillStatus(workspaceDir, {
+        managedSkillsDir: path.join(workspaceDir, "managed"),
+        config: { plugins: { enabled: false } },
+      });
+      expect(report.skills.find((skill) => skill.name === "tab-spacing")?.description).toBe(
+        description,
+      );
+
+      const row = stripAnsi(formatSkillsList(report, {}))
+        .split("\n")
+        .find((line) => line.includes("tab-spacing"));
+      expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    },
+  );
+
+  it("reports missing prerequisites for discovered agent-excluded skills", async () => {
+    const missingBin = "qa35-fixture-absent-binary";
+    await writeWorkspaceSkills(tempWorkspaceDir, [
+      { name: "ready", description: "Allowed ready control" },
+      { name: "excluded-ready", description: "Excluded ready control" },
+      ...["missing", "excluded-missing"].map((name) => ({
+        name,
+        description: "Missing prerequisite fixture",
+        metadata: JSON.stringify({ openclaw: { requires: { bins: [missingBin] } } }),
+      })),
+    ]);
+    const report = buildWorkspaceSkillStatus(tempWorkspaceDir, {
+      managedSkillsDir: path.join(tempWorkspaceDir, "managed"),
+      agentId: "qa",
+      config: {
+        plugins: { enabled: false },
+        agents: { entries: { qa: { workspace: tempWorkspaceDir, skills: ["ready", "missing"] } } },
+      },
+    });
+    expect(report.skills).toHaveLength(4);
+    expect(report.skills.find((skill) => skill.name === "excluded-missing")).toMatchObject({
+      eligible: false,
+      disabled: false,
+      blockedByAllowlist: false,
+      blockedByAgentFilter: true,
+      modelVisible: false,
+      commandVisible: false,
+      missing: { bins: [missingBin] },
+    });
+    const parsed = JSON.parse(formatSkillsCheck(report, { json: true }));
+    expect(parsed.missingRequirements.map((skill: { name: string }) => skill.name)).toEqual([
+      "excluded-missing",
+      "missing",
+    ]);
+    expect(parsed.agentFiltered).toEqual(["excluded-missing", "excluded-ready"]);
+    expect(parsed.eligible).toEqual(["excluded-ready", "ready"]);
+    expect(parsed.modelVisible).toEqual(["ready"]);
+    expect(parsed.commandVisible).toEqual(["ready"]);
+    const human = formatSkillsCheck(report, {});
+    expect(human).toContain(`excluded-missing (bins: ${missingBin})`);
+    expect(human).toContain("excluded-ready (loaded, but this agent is not allowed to see/use it)");
+
+    const readyList = JSON.parse(formatSkillsList(report, { eligible: true, json: true }));
+    expect(readyList.skills.map((skill: { name: string }) => skill.name)).toEqual(["ready"]);
+    const info = formatSkillInfo(report, "excluded-missing", {});
+    expect(info).toContain("Excluded by agent allowlist");
+    expect(info).toContain(`✗ ${missingBin}`);
   });
 });
 

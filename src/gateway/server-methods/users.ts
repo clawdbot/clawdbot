@@ -14,6 +14,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { UserProfileOwnerError } from "../../state/user-profiles-schema.js";
 import {
   ensureProfileForEmail,
   getUserProfileDisplay,
@@ -33,6 +34,7 @@ import {
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { usersGitHubHandlers } from "./users-github.js";
 import { assertValidParams } from "./validation.js";
 
 function refreshConnectedProfile(
@@ -60,7 +62,7 @@ function decodeBase64(value: string): Uint8Array | undefined {
 }
 
 function profileError(error: unknown) {
-  if (error instanceof UserProfileNotFoundError) {
+  if (error instanceof UserProfileNotFoundError || error instanceof UserProfileOwnerError) {
     return errorShape(ErrorCodes.INVALID_REQUEST, error.message);
   }
   return errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error));
@@ -120,6 +122,7 @@ function requireProfileMutationAccess(
 }
 
 export const usersHandlers: GatewayRequestHandlers = {
+  ...usersGitHubHandlers,
   "users.list": ({ params, respond }) => {
     if (!assertValidParams(params, validateUsersListParams, "users.list", respond)) {
       return;
@@ -130,7 +133,7 @@ export const usersHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateUsersSelfParams, "users.self", respond)) {
       return;
     }
-    if (!client?.authenticatedUserId) {
+    if (!client?.authenticatedUserId && !client?.authenticatedUserProfile) {
       respond(
         false,
         undefined,

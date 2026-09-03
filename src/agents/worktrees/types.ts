@@ -47,6 +47,8 @@ export type CreateManagedWorktreeParams = {
   ownerId?: string;
   // Repository Git hooks are always disabled; only the setup script runs repo-local code.
   runSetupScript?: boolean;
+  signal?: AbortSignal;
+  onProgress?: (phase: "checkout" | "setup") => void;
   /** Synchronous caller-authority guard checked at allocation commit boundaries. */
   commitGuard?: () => void;
 };
