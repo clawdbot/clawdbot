@@ -535,6 +535,14 @@ install_companion_plugins() {
       plugins install "npm:@openclaw/codex@$package_version" --pin
     install_status=$?
   fi
+  if [ "$install_status" -eq 0 ]; then
+    # Inspection validates config too; keep the legacy migration specimen parked
+    # until companion installation and its provenance checks have both finished.
+    node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
+      assert-companion-installs "$package_version" \
+      "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
+    install_status=$?
+  fi
   node "$OPENCLAW_UPGRADE_SURVIVOR_CONFIG_PARKING_HELPER" \
     restore "$OPENCLAW_CONFIG_PATH" "$authored_config"
   restore_status=$?
@@ -546,9 +554,6 @@ install_companion_plugins() {
   if [ "$restore_status" -ne 0 ]; then
     return "$restore_status"
   fi
-  node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
-    assert-companion-installs "$package_version" \
-    "${OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED:?missing candidate capability-consent support}"
 }
 
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_FUNCTION_B64:?missing OPENCLAW_TEST_STATE_FUNCTION_B64}"
