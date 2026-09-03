@@ -1,4 +1,10 @@
 /** Model-facing MCP outage reporting for Tool Search catalog misses (#137398). */
+
+// When a configured MCP server disconnects, the bundle-MCP runtime drops every
+// catalog entry for that server (see agent-bundle-mcp-runtime.ts). A subsequent
+// lookup of one of its tools used to loop forever on a generic "Unknown tool id"
+// error; this module attributes such id-shaped misses to the owning server so
+// the model receives a decisive outage signal and stops re-searching.
 import type { ToolSearchCatalogEntry } from "./tool-search-types.js";
 
 const MCP_SERVER_OUTAGE_HINT =
