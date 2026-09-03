@@ -143,52 +143,118 @@ describe("echo cache — message ID type canary (#47830)", () => {
 });
 
 describe("echo cache — reply_to_guid reflections", () => {
+  const outboundGuid = "p:0/outbound-guid";
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it.each([
     {
-      label: "drops matching parent GUID, text, and scope",
-      sender: "+15555550123",
-      text: "Reflected reply",
+      label: "drops matching parent GUID and text in a verified self-chat",
+      cachedScope: SELF_CHAT_SCOPE,
+      message: selfChatMessage({
+        id: 200,
+        guid: "p:0/reflected-row-guid",
+        reply_to_guid: outboundGuid,
+        text: "Reflected reply",
+        is_from_me: false,
+      }),
       expectedKind: "drop",
     },
     {
-      label: "keeps a reply with different text",
-      sender: "+15555550123",
-      text: "User response",
+      label: "keeps a self-chat reply with different text",
+      cachedScope: SELF_CHAT_SCOPE,
+      message: selfChatMessage({
+        id: 201,
+        guid: "p:0/user-reply-guid",
+        reply_to_guid: outboundGuid,
+        text: "User response",
+        is_from_me: false,
+      }),
       expectedKind: "dispatch",
     },
     {
-      label: "keeps matching text in a different scope",
-      sender: "+15555550124",
-      text: "Reflected reply",
+      label: "keeps a matching inline reply in a normal direct message",
+      cachedScope: SELF_CHAT_SCOPE,
+      message: {
+        id: 202,
+        guid: "p:0/direct-reply-guid",
+        reply_to_guid: outboundGuid,
+        sender: SELF_CHAT_HANDLE,
+        chat_identifier: SELF_CHAT_HANDLE,
+        destination_caller_id: "+15557654321",
+        text: "Reflected reply",
+        is_from_me: false,
+        is_group: false,
+      },
       expectedKind: "dispatch",
     },
-  ] as const)("$label", async ({ sender, text, expectedKind }) => {
-    const outboundGuid = "p:0/outbound-guid";
+    {
+      label: "keeps a matching inline reply in a group",
+      cachedScope: "default:chat_id:42",
+      message: {
+        id: 203,
+        guid: "p:0/group-reply-guid",
+        reply_to_guid: outboundGuid,
+        sender: SELF_CHAT_HANDLE,
+        chat_id: 42,
+        text: "Reflected reply",
+        is_from_me: false,
+        is_group: true,
+      },
+      expectedKind: "dispatch",
+    },
+    {
+      label: "keeps matching self-chat text in a different scope",
+      cachedScope: "default:imessage:+15555550124",
+      message: selfChatMessage({
+        id: 204,
+        guid: "p:0/different-scope-guid",
+        reply_to_guid: outboundGuid,
+        text: "Reflected reply",
+        is_from_me: false,
+      }),
+      expectedKind: "dispatch",
+    },
+  ] as const)("$label", async ({ cachedScope, message, expectedKind }) => {
     rememberPersistedIMessageEcho({
-      scope: "default:imessage:+15555550123",
+      scope: cachedScope,
       text: "Reflected reply",
       messageId: outboundGuid,
     });
     const echoCache = createSentMessageCache();
 
-    const decision = await resolveDecision({
-      message: {
-        id: 200,
-        guid: "p:0/reflected-row-guid",
-        reply_to_guid: outboundGuid,
-        sender,
-        text,
-        is_from_me: false,
-        is_group: false,
-      },
-      echoCache,
-    });
+    const decision = await resolveDecision({ message, echoCache });
 
     if (expectedKind === "drop") {
       expect(decision).toEqual({ kind: "drop", reason: "echo" });
     } else {
       expect(decision.kind).toBe("dispatch");
     }
+  });
+
+  it("keeps a matching self-chat inline reply after the reflection window", async () => {
+    useFakeTimersAt();
+    rememberPersistedIMessageEcho({
+      scope: SELF_CHAT_SCOPE,
+      text: "Reflected reply",
+      messageId: outboundGuid,
+    });
+    vi.advanceTimersByTime(4_001);
+
+    const decision = await resolveDecision({
+      message: selfChatMessage({
+        id: 205,
+        guid: "p:0/late-reply-guid",
+        reply_to_guid: outboundGuid,
+        text: "Reflected reply",
+        is_from_me: false,
+      }),
+      echoCache: createSentMessageCache(),
+    });
+
+    expect(decision.kind).toBe("dispatch");
   });
 });
 

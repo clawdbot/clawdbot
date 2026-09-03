@@ -107,6 +107,9 @@ class DefaultSentMessageCache implements SentMessageCache {
         skipIdShortCircuit: resolvedOptions.skipIdShortCircuit,
         includePendingText: resolvedOptions.includePendingText,
         requireMessageIdTextMatch: resolvedOptions.requireMessageIdTextMatch,
+        messageIdMaxAgeMs: resolvedOptions.requireMessageIdTextMatch
+          ? SENT_MESSAGE_TEXT_TTL_MS
+          : undefined,
       })
     ) {
       return true;

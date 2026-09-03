@@ -717,7 +717,7 @@ export async function resolveIMessageInboundDecision(params: {
       sender,
     });
     const hasReplyToEcho =
-      replyToGuid && bodyText
+      isSelfChat && replyToGuid && bodyText
         ? echoScope.some((scope) =>
             echoCache.has(
               scope,
