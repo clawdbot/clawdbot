@@ -2133,7 +2133,7 @@ export const en: TranslationMap & {
     blockedAgentFilter: "blocked by agent filter",
   },
   nav: {
-    account: "Account",
+    owner: "Owner",
     back: "Back",
     forward: "Forward",
     settings: "Settings",
@@ -3552,6 +3552,8 @@ export const en: TranslationMap & {
       description: "Your profile on this gateway.",
       loading: "Loading your identity…",
       profileUnavailable: "Your identity profile could not be loaded.",
+      unidentified:
+        "This connection has no personal profile, so a display name and avatar are not available. Sign in with a profile through Cloudflare Access, Tailscale Serve, or a trusted proxy to use them.",
       writeRequired: "Profile editing requires operator.write access.",
       notSet: "Identity is not set.",
       setIdentity: "Set identity",

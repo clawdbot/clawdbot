@@ -27,7 +27,7 @@ export function refreshClientPresence(
     return false;
   }
   const identity = presenceIdentity(client);
-  if (!identity || !client.authenticatedUserId) {
+  if (!identity) {
     return false;
   }
   const peers = [...clients].filter(

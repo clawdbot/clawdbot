@@ -28,6 +28,13 @@ function isSyntheticCaller(client: GatewayClient | null): boolean {
   );
 }
 
+function hasIneligibleRoleActor(client: GatewayClient): boolean {
+  const actor = client.internal?.operatorRoleActor;
+  // A system actor without a person stays ineligible; the owner profile is the person.
+  // Other delegated role actors cannot authorize personal GitHub.
+  return Boolean(actor && (actor.kind !== "system" || !client.authenticatedUserProfile));
+}
+
 /** Intersect the live role ceiling with the socket grant, preserving scope implications. */
 function currentGitHubClient(
   options: Request,
@@ -95,7 +102,7 @@ export function prepareGitHubPublicationOptionsRead(options: Request, sessionKey
   const resolveEligibility = (): PersonalEligibility => {
     currentGitHubClient(options, "operator.read");
     const client = options.client;
-    if (!client?.connId || isSyntheticCaller(client) || client.internal?.operatorRoleActor) {
+    if (!client?.connId || isSyntheticCaller(client) || hasIneligibleRoleActor(client)) {
       return { kind: "ineligible" };
     }
     if (!client.authenticatedUserProfile) {
@@ -162,7 +169,7 @@ export function preparePersonalGitHubAction(
       !client?.connId ||
       client.connect?.role !== "operator" ||
       isSyntheticCaller(client) ||
-      client.internal?.operatorRoleActor ||
+      hasIneligibleRoleActor(client) ||
       options.signal?.aborted ||
       !context.getClientConnIds?.((current) => current === client).has(client.connId)
     ) {

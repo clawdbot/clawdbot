@@ -9,6 +9,28 @@ import { createGatewayHarness, createSessions, mountSidebar } from "../app-sideb
 import "../../components/app-sidebar.ts";
 
 describe("AppSidebar footer identity menu", () => {
+  it("opens Profile from the Owner header without a self user", async () => {
+    const { sidebar } = await mountSidebar(
+      createGatewayHarness({ instanceId: "self-instance" } as GatewayBrowserClient).gateway,
+      createSessions("main", ["agent:main:main"]),
+    );
+    sidebar.onNavigate = vi.fn();
+    sidebar.querySelector<HTMLButtonElement>(".sidebar-identity-card")?.click();
+    await sidebar.updateComplete;
+
+    const menu = sidebar.querySelector<HTMLElement>(".sidebar-identity-menu");
+    const header = menu?.querySelector<HTMLElement>('wa-dropdown-item[value="command:profile"]');
+    expect(header?.querySelector(".sidebar-identity-menu__name")?.textContent?.trim()).toBe(
+      "Owner",
+    );
+    expect(header?.querySelector('[data-viewer-id="owner"]')?.textContent).toContain("O");
+    menu?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: header }, bubbles: true }));
+    await sidebar.updateComplete;
+    expect(sidebar.onNavigate).toHaveBeenCalledWith("profile", {
+      hash: "#settings-profile-identity",
+    });
+  });
+
   it("keeps a dismissed update as a discreet account-menu chip", async () => {
     const gatewayHarness = createGatewayHarness({
       instanceId: "self-instance",

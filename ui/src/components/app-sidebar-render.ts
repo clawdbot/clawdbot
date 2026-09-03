@@ -376,9 +376,10 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
     presenceEntries: readPresenceEntries(host.sessionData.presencePayload),
     presenceInstanceId: host.sessionData.presenceInstanceId,
   });
-  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.account");
+  const selfLabel = selfUser?.name ?? selfUser?.email ?? t("nav.owner");
   const avatarUser = {
-    ...(selfUser ?? { id: "account", name: selfLabel }),
+    ...(selfUser ?? { id: "owner" }),
+    name: selfLabel,
     watchedSessions: [],
   };
   const gateway = host.offline ? null : readSidebarNativeGateway();

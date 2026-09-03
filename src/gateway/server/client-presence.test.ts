@@ -81,7 +81,7 @@ describe("live person presence timing", () => {
     vi.useRealTimers();
   });
 
-  async function connect(email: string, profileId = "timing-person") {
+  async function connect(email: string | undefined, profileId = "timing-person") {
     const { socket } = attachGatewayWsForTest({
       attach: attachGatewayWsConnectionHandler,
       clients,
@@ -124,6 +124,27 @@ describe("live person presence timing", () => {
   function row(email: string) {
     return listSystemPresence().find((entry) => entry.user?.email === email);
   }
+
+  it("shares the owner's online interval and activity across tabs without an email", async () => {
+    const first = await connect(undefined, "timing-owner");
+    const started = Date.now();
+    expect(first.handler.setClient(first.client)).toBe(true);
+    vi.setSystemTime(started + 1_000);
+    const second = await connect(undefined, "timing-owner");
+    expect(second.handler.setClient(second.client)).toBe(true);
+    expect(recordClientPresenceActivity(clients, second.client)).toBe(true);
+
+    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "timing-owner");
+    expect(ownerRows).toHaveLength(2);
+    for (const entry of ownerRows) {
+      expect(entry).toMatchObject({
+        onlineSince: started,
+        lastActivityAt: started + 1_000,
+        user: { id: "timing-owner", identity: { type: "profile", id: "timing-owner" } },
+      });
+      expect(entry.user).not.toHaveProperty("email");
+    }
+  });
 
   it("retains the oldest online interval across overlapping sockets but not a full reconnect", async () => {
     const first = await connect("first@timing.test");

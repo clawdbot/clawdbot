@@ -618,7 +618,11 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       releasePreauthBudget();
       client = next;
       clients.add(next);
-      if (next.presenceKey && next.authenticatedUserId && next.connect.role !== "node") {
+      if (
+        next.presenceKey &&
+        (next.authenticatedUserId || next.authenticatedUserProfile) &&
+        next.connect.role !== "node"
+      ) {
         next.personPresence = { onlineSince: Date.now() };
         refreshClientPresence(clients, next);
       }

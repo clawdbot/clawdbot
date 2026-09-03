@@ -84,6 +84,8 @@ The accepted spawn result doubles as a receipt: it includes the child session ke
 
 When a connection has a durable Gateway profile, new-session preferences and picker recents follow that person across browsers. Preferences remain per agent, while recents are derived only from sessions that person created. Connections without a durable identity keep browser-local preferences and derive recents from the loaded session roster.
 
+Single-user Gateways give unidentified operators one shared owner profile, including device-token reconnects. With `gateway.roles` configured, this applies only to token/password connections. Devices using that profile share its identity and preferences; use per-person sign-in to distinguish teammates. See [Gateway profiles](/concepts/user-model#gateway-profile-and-github-credit).
+
 This state improves continuity; it is not an authorization or isolation boundary. Operator scopes still control actions, and a shared Gateway remains one trust domain for sessions, tools, credentials, and files.
 
 ## Drafts

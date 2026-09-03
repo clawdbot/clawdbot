@@ -194,50 +194,55 @@ it("refreshes translated copy when the locale changes while mounted", async () =
   expect(note?.textContent?.trim()).not.toBe(englishNote);
 });
 
-it("renders identity before a Usage statistics link without requesting usage data", async () => {
-  const profile: UserProfile = {
-    id: "profile-1",
-    displayName: "Ada",
-    avatarMime: null,
-    mergedInto: null,
-    createdAt: 1,
-    updatedAt: 2,
-    emails: ["ada@example.test"],
-    githubIdentity: null,
-    hasAvatar: false,
-  };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    email: profile.emails[0],
-    name: profile.displayName ?? undefined,
-  });
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
-  await waitForFast(() => expect(page.querySelector("#settings-profile-identity")).not.toBeNull());
+it.each([{ emails: ["ada@example.test"] }, { emails: [] }])(
+  "renders identity before Usage statistics with emails $emails",
+  async ({ emails }) => {
+    const profile: UserProfile = {
+      id: "profile-1",
+      displayName: "Ada",
+      avatarMime: null,
+      mergedInto: null,
+      createdAt: 1,
+      updatedAt: 2,
+      emails,
+      githubIdentity: null,
+      hasAvatar: false,
+    };
+    const request = vi.fn(async (method: string) => {
+      if (method === "users.self") {
+        return { profile };
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+      id: profile.id,
+      email: profile.emails[0],
+      name: profile.displayName ?? undefined,
+    });
+    const provider = createApplicationContextProvider(harness.context);
+    const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+    provider.append(page);
+    document.body.append(provider);
+    await waitForFast(() =>
+      expect(page.querySelector("#settings-profile-identity")).not.toBeNull(),
+    );
 
-  expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
-  const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
-  expect(docsLink?.textContent?.trim()).toBe("Learn more");
-  expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
-  expect(page.querySelector(".profile-stats")).toBeNull();
-  expect(page.querySelector(".profile-heatmap")).toBeNull();
-  const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
-  expect(usageRow?.textContent).toContain("Usage statistics");
-  expect(page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!)).toBe(
-    Node.DOCUMENT_POSITION_FOLLOWING,
-  );
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self"]);
+    const docsLink = page.querySelector<HTMLAnchorElement>(".page-subtitle a");
+    expect(docsLink?.textContent?.trim()).toBe("Learn more");
+    expect(docsLink?.href).toBe("https://docs.openclaw.ai/concepts/user-model");
+    expect(page.querySelector(".profile-stats")).toBeNull();
+    expect(page.querySelector(".profile-heatmap")).toBeNull();
+    const usageRow = page.querySelector<HTMLButtonElement>(".settings-row--nav");
+    expect(usageRow?.textContent).toContain("Usage statistics");
+    expect(
+      page.querySelector("#settings-profile-identity")?.compareDocumentPosition(usageRow!),
+    ).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
 
-  usageRow?.click();
-  expect(harness.context.navigate).toHaveBeenCalledWith("usage");
-});
+    usageRow?.click();
+    expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+  },
+);
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {
   const profile: UserProfile = {
@@ -435,7 +440,7 @@ it("renders a write-access note without calling users.self for read-only viewers
   expect(page.querySelector(".identity-name-control")).toBeNull();
 });
 
-it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
+it("explains unavailable identity without profile RPCs for unidentified connections", async () => {
   const request = vi.fn();
   const harness = createConnectedContext(request as GatewayBrowserClient["request"]);
   const provider = createApplicationContextProvider(harness.context);
@@ -447,7 +452,14 @@ it("keeps identity UI and profile RPCs absent for unidentified connections", asy
   await Promise.resolve();
 
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
-  expect(page.querySelector("#settings-profile-identity")).toBeNull();
+  const identity = page.querySelector("#settings-profile-identity");
+  expect(identity?.textContent).toContain("This connection has no personal profile");
+  expect(identity?.textContent).toContain("Cloudflare Access, Tailscale Serve, or a trusted proxy");
+  expect(
+    page.querySelector('a[href="https://docs.openclaw.ai/concepts/user-model"]'),
+  ).not.toBeNull();
+  expect(page.querySelector(".identity-name-control")).toBeNull();
+  expect(page.querySelector('input[type="file"]')).toBeNull();
   expect(page.querySelector(".profile-refresh")).toBeNull();
 });
 

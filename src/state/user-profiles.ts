@@ -91,6 +91,9 @@ type UserProfileListRow = Pick<
 };
 
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
+// A dot keeps the local owner outside Tailscale's provider-suffix namespace.
+const GATEWAY_OWNER_PROFILE_PROVIDER = "gateway.local";
+const GATEWAY_OWNER_PROFILE_SUBJECT = "owner";
 
 function runUserProfileWriteTransaction<T>(
   operation: (database: OpenClawStateDatabase) => T,
@@ -116,7 +119,7 @@ function normalizeEmail(email: string): string {
   return normalized;
 }
 
-function normalizeInitialDisplayName(name: string | undefined): string | null {
+function normalizeInitialDisplayName(name: string | null | undefined): string | null {
   const normalized = name?.trim();
   return normalized ? normalized.slice(0, MAX_USER_PROFILE_DISPLAY_NAME_LENGTH) : null;
 }
@@ -435,7 +438,7 @@ function adoptDisplayNameIfEmpty(
   return runUserProfileWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
-      if (profile.display_name !== null) {
+      if (profile.display_name?.trim()) {
         return toUserProfile(profile);
       }
       executeSqliteQuerySync(
@@ -450,6 +453,21 @@ function adoptDisplayNameIfEmpty(
     options,
     { operationLabel: "user-profiles.adopt-display-name" },
   );
+}
+
+/** Shared-secret devices resolve one local owner without inventing an email identity. */
+export function ensureGatewayOwnerProfile(
+  initialDisplayName: string | null,
+  options: OpenClawStateDatabaseOptions = {},
+): UserProfile {
+  const displayName = normalizeInitialDisplayName(initialDisplayName);
+  const profile = ensureProfileForProviderIdentity({
+    provider: GATEWAY_OWNER_PROFILE_PROVIDER,
+    subject: GATEWAY_OWNER_PROFILE_SUBJECT,
+    initialDisplayName: displayName,
+    options,
+  });
+  return adoptDisplayNameIfEmpty(profile.id, displayName, options);
 }
 
 async function adoptAvatarIfEmpty(params: {
