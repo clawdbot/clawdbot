@@ -480,6 +480,37 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(readIntervalTimer(active)).toBeTruthy();
   });
 
+  it("parent-watcher capacity error with a live main degrades the tree", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+
+    const active = await createManager(createWatchConfig());
+    await vi.waitFor(() => {
+      const main = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
+      const parent = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir);
+      expect(main).toBeTruthy();
+      expect(parent).toBeTruthy();
+    });
+    const parentWatcher = createdNativeWatchers.find((watcher) => watcher.dir === workspaceDir);
+    const chokidarBaseline = createdChokidarWatchers.length;
+
+    // The parent watcher dies from capacity exhaustion while the main
+    // watcher is still live: the tree must degrade anyway, because the
+    // kernel can never grant the parent watch back and root replacement
+    // would otherwise go undetected.
+    parentWatcher?.emitError(Object.assign(new Error("simulated EMFILE"), { code: "EMFILE" }));
+
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
+    expect(readIntervalTimer(active)).toBeTruthy();
+  });
+
   it("linux child-directory capacity failure degrades the whole tree", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     await setupCapacityWorkspace();

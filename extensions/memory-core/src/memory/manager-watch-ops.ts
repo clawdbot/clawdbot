@@ -414,15 +414,22 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           // ignore
         }
         pair.parent = null;
+        if (isKernelWatchCapacityError(err)) {
+          // Even with a live main watcher, the kernel can no longer grant the
+          // parent watch, so root replacement would go undetected — and a
+          // retry would hit the same limit. Degrade the whole tree to forced
+          // polling instead of running blind on the parent.
+          this.closeNativeMemoryWatchPair(pair);
+          if (!this.closed) {
+            this.degradeMemoryWatchToPollingSync(dir, markDirty);
+          }
+          return;
+        }
         if (!pair.main) {
           this.closeNativeMemoryWatchPair(pair);
           if (!this.closed) {
             markDirty();
-            if (isKernelWatchCapacityError(err)) {
-              this.degradeMemoryWatchToPollingSync(dir, markDirty);
-            } else {
-              this.attachMemoryChokidarFallback(dir, markDirty);
-            }
+            this.attachMemoryChokidarFallback(dir, markDirty);
           }
         }
         // A live main watcher still covers normal events without its parent.
