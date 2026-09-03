@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, test } from "vitest";
 import type { WebSocket } from "ws";
 import {
@@ -27,10 +28,6 @@ const IOS_OPERATOR_SCOPES = [
   "operator.talk.secrets",
   "operator.write",
 ];
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 export function registerControlUiMobileReconnectSuite(): void {
   test("reconnects persisted iOS node and operator role tokens after password-mode restart", async () => {
