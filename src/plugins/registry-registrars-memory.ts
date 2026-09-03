@@ -4,7 +4,7 @@ import { hasKind } from "./slots.js";
 import type { OpenClawPluginApi } from "./types.js";
 
 export function createMemoryRegistrars(state: PluginRegistryState) {
-  const { registry, pushDiagnostic, reportRegistrationError, reportRegistrationWarning } = state;
+  const { registry, reportRegistrationError, reportRegistrationWarning } = state;
 
   const requireMemorySlot = (record: PluginRecord, surface: string): boolean => {
     if (!hasKind(record.kind, "memory")) {
@@ -27,13 +27,8 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
     if (!requireMemorySlot(record, "capability")) {
       return;
     }
-    // A dreaming sidecar stays loadable so its consolidation lifecycle (prompt
-    // section, flush plan, public artifacts) survives beside the selected memory
-    // plugin, but slot-owner facts never do: the owner is the only indexing
-    // runtime, and Active Memory resolves recall authorization by resolved
-    // plugin id against the configured memory slot, so a sidecar's recall tool
-    // identity or private-transcript grant must not survive registration for the
-    // owner-first capability merge to lend to the selected plugin.
+    // Dreaming keeps an unselected sidecar active for consolidation. Strip its
+    // slot-owner fields so resolution cannot lend its runtime or recall grant.
     const memorySlotSelected = record.memorySlotSelected === true;
     const dropsSlotOwnerFacts =
       !memorySlotSelected &&
@@ -41,13 +36,10 @@ export function createMemoryRegistrars(state: PluginRegistryState) {
         capability.deterministicRecallToolName !== undefined ||
         capability.supportsPrivateTranscriptRecall !== undefined);
     if (dropsSlotOwnerFacts) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message:
-          "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
-      });
+      reportRegistrationWarning(
+        record,
+        "memory plugin not selected for the memory slot; skipping its indexing runtime and recall registration (consolidation lifecycle preserved)",
+      );
     }
     const {
       runtime: _droppedRuntime,

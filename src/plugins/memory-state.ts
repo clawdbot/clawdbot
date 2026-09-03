@@ -49,25 +49,35 @@ export function resolveMemoryCapabilityRegistration(
       effective = registration;
       continue;
     }
-    // The memory slot owner outranks registration order: a dreaming sidecar or
-    // artifact bridge contributes fields the owner lacks, but never displaces
-    // the owner's runtime or consolidation surface, no matter which loader
-    // order registered the two plugins. Registration order still decides every
-    // other pairing (both undeclared, both declared, or a later declared
-    // owner), matching the shipped last-registration-wins contract that
-    // per-scope re-registration depends on.
-    const owner =
-      existing.memorySlotSelected === true && registration.memorySlotSelected !== true
-        ? existing
-        : registration;
-    const contributor = owner === existing ? registration : existing;
+    const existingOwnsSlot = existing.memorySlotSelected === true;
+    const registrationOwnsSlot = registration.memorySlotSelected === true;
+    if (existingOwnsSlot !== registrationOwnsSlot) {
+      // A dreaming sidecar contributes consolidation fields, but the selected
+      // plugin keeps every field it declares regardless of registration order.
+      const owner = existingOwnsSlot ? existing : registration;
+      const contributor = existingOwnsSlot ? registration : existing;
+      effective = {
+        pluginId: owner.pluginId,
+        capability: {
+          ...contributor.capability,
+          ...owner.capability,
+        },
+        memorySlotSelected: true,
+      };
+      continue;
+    }
+    const preserveExisting =
+      Boolean(registration.capability.publicArtifacts) &&
+      !registration.capability.promptBuilder &&
+      !registration.capability.flushPlanResolver &&
+      !registration.capability.runtime;
     effective = {
-      pluginId: owner.pluginId,
+      pluginId: registration.pluginId,
       capability: {
-        ...contributor.capability,
-        ...owner.capability,
+        ...(preserveExisting ? existing.capability : {}),
+        ...registration.capability,
       },
-      memorySlotSelected: owner.memorySlotSelected,
+      memorySlotSelected: registration.memorySlotSelected,
     };
   }
   return effective;

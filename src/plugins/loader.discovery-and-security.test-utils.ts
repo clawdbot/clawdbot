@@ -42,6 +42,7 @@ import {
   globalAfterEach0,
   globalAfterAll1,
 } from "./loader.test-harness.js";
+import { getActiveMemorySearchManagerCore } from "./memory-runtime.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 
 afterEach(globalAfterEach0);
@@ -527,6 +528,88 @@ describe("loadOpenClawPlugins", () => {
     ] as const;
 
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
+  });
+
+  it("routes indexing I/O to the configured memory slot owner", async () => {
+    const traceKey = "openclaw.test.memory-slot-runtime-owner";
+    const trace: string[] = [];
+    (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)] = trace;
+    const runtimePluginBody = (id: string, includeRecall: boolean) => `
+      const trace = globalThis[Symbol.for(${JSON.stringify(traceKey)})];
+      const id = ${JSON.stringify(id)};
+      module.exports = {
+        id,
+        kind: "memory",
+        register(api) {
+          api.registerMemoryCapability({
+            runtime: {
+              async getMemorySearchManager() {
+                trace.push(id + ":manager");
+                return {
+                  manager: {
+                    async sync(input) {
+                      trace.push(id + ":sync:" + input.reason);
+                    },
+                  },
+                };
+              },
+              resolveMemoryBackendConfig() {
+                return { backend: "builtin" };
+              },
+            },
+            ${includeRecall ? 'deterministicRecallToolName: "memory_search", supportsPrivateTranscriptRecall: true,' : ""}
+            promptBuilder: () => [id + " prompt"],
+          });
+        },
+      };`;
+
+    try {
+      const selected = writePlugin({
+        id: "memory-lancedb",
+        body: runtimePluginBody("memory-lancedb", false),
+      });
+      updatePluginManifest(selected, {
+        kind: "memory",
+        configSchema: { type: "object", additionalProperties: true },
+      });
+      const bundledDir = makePluginLoaderTempDir();
+      const sidecarDir = path.join(bundledDir, "memory-core");
+      mkdirSafe(sidecarDir);
+      const sidecar = writePlugin({
+        id: "memory-core",
+        dir: sidecarDir,
+        filename: "index.cjs",
+        body: runtimePluginBody("memory-core", true),
+      });
+      updatePluginManifest(sidecar, { kind: "memory" });
+      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+
+      const config = {
+        plugins: {
+          allow: [selected.id, sidecar.id],
+          load: { paths: [selected.file] },
+          slots: { memory: selected.id },
+          entries: {
+            [selected.id]: { enabled: true, config: { dreaming: { enabled: true } } },
+            [sidecar.id]: { enabled: true },
+          },
+        },
+      };
+      const registry = loadOpenClawPlugins({ cache: false, config });
+      const resolved = resolveMemoryCapabilityRegistration(registry.memoryCapabilities);
+      const acquired = await getActiveMemorySearchManagerCore({
+        cfg: config,
+        agentId: "main",
+      });
+      await acquired.manager?.sync?.({ reason: "post-compaction" });
+
+      expect(resolved?.pluginId).toBe(selected.id);
+      expect(resolved?.capability.deterministicRecallToolName).toBeUndefined();
+      expect(resolved?.capability.supportsPrivateTranscriptRecall).toBeUndefined();
+      expect(trace).toEqual(["memory-lancedb:manager", "memory-lancedb:sync:post-compaction"]);
+    } finally {
+      delete (globalThis as Record<PropertyKey, unknown>)[Symbol.for(traceKey)];
+    }
   });
 
   it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {

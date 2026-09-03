@@ -1,4 +1,4 @@
-/** Verifies memory provider registration keeps text and binary embedding kinds isolated. */
+/** Verifies memory capability registration keeps slot ownership explicit. */
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -228,6 +228,22 @@ describe("dual-kind memory registration gate", () => {
         publicArtifacts: expect.any(Object),
       },
       memorySlotSelected: true,
+    });
+  });
+
+  it("keeps last-registration-wins behavior when neither registration owns the slot", () => {
+    const runtime = createStubMemoryRuntime();
+    const promptBuilder = () => ["replacement prompt"];
+
+    const selected = resolveMemoryCapabilityRegistration([
+      { pluginId: "memory-first", capability: { runtime } },
+      { pluginId: "memory-second", capability: { promptBuilder } },
+    ]);
+
+    expect(selected).toEqual({
+      pluginId: "memory-second",
+      capability: { promptBuilder },
+      memorySlotSelected: undefined,
     });
   });
 });
