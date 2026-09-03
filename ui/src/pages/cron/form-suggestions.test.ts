@@ -83,7 +83,7 @@ describe("buildCronSuggestions", () => {
     expect(suggestions.deliveryToSuggestions).toEqual(
       scenario.mode === "webhook"
         ? scenario.recipients
-        : [...scenario.recipients, "-1009876543210"].sort(),
+        : [...scenario.recipients, "-1009876543210"].toSorted(),
     );
     expect(suggestions.accountTargets).toEqual(scenario.accounts);
   });
