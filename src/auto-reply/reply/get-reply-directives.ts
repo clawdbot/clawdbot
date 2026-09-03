@@ -304,13 +304,12 @@ export async function resolveReplyDirectives(params: {
     (alias) => !reservedCommands.has(normalizeLowercaseStringOrEmpty(alias)),
   );
   const commandTurn = resolveCommandTurnContext(ctx);
-  const canResolveExplicitDirectiveCommand =
+  const commandRegistry =
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&
-    (commandTurn.kind === "native" || canInterpretTextDirectives);
-  const commandRegistry = canResolveExplicitDirectiveCommand
-    ? await loadCommandsRegistry()
-    : undefined;
+    (commandTurn.kind === "native" || canInterpretTextDirectives)
+      ? await loadCommandsRegistry()
+      : undefined;
   const explicitDirectiveCommand = resolveReplyDirectiveCommand(
     commandRegistry
       ? commandTurn.kind === "native"
