@@ -945,7 +945,7 @@ function computeNextProfileUsageStats(params: {
   const nextErrorCount = baseErrorCount + 1;
   const preservedRateLimitCount = params.existing.failureCounts?.rate_limit;
   const failureCounts = shouldResetAggregateCounter
-    ? params.reason === "rate_limit" && preservedRateLimitCount
+    ? preservedRateLimitCount
       ? { rate_limit: preservedRateLimitCount }
       : {}
     : { ...params.existing.failureCounts };

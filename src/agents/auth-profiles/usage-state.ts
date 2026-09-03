@@ -247,10 +247,6 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       stats.disabledUntil > 0 &&
       ts >= stats.disabledUntil;
 
-    const preserveRateLimitBackoff =
-      (cooldownExpired && stats.cooldownReason === "rate_limit") ||
-      (blockedExpired && stats.blockedReason === "subscription_limit");
-
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
@@ -279,10 +275,9 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (profileMutated && !resolveProfileUnusableUntil(stats)) {
       stats.errorCount = 0;
       const rateLimitFailureCount = stats.failureCounts?.rate_limit;
-      stats.failureCounts =
-        preserveRateLimitBackoff && rateLimitFailureCount
-          ? { rate_limit: rateLimitFailureCount }
-          : undefined;
+      stats.failureCounts = rateLimitFailureCount
+        ? { rate_limit: rateLimitFailureCount }
+        : undefined;
     }
 
     if (profileMutated) {

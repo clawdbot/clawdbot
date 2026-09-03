@@ -577,7 +577,7 @@ describe("clearExpiredCooldowns", () => {
           cooldownUntil: now - 1_000,
           cooldownClassification: "wham_token_expired",
           errorCount: 4,
-          failureCounts: { rate_limit: 3, timeout: 1 },
+          failureCounts: { timeout: 1 },
           lastFailureAt: now - 120_000,
         },
       },
@@ -661,7 +661,7 @@ describe("clearExpiredCooldowns", () => {
       },
     },
     {
-      name: "resets errorCount only when both cooldown and disabled have expired",
+      name: "resets aggregate count but preserves rate-limit history after all windows expire",
       usageStats: {
         "anthropic:default": {
           cooldownUntil: now - 2_000,
@@ -672,16 +672,16 @@ describe("clearExpiredCooldowns", () => {
         },
       },
       expectedMutated: true,
-      expectCleared: true,
       expectedUsageStats: {
         "anthropic:default": {
           cooldownUntil: undefined,
           cooldownReason: undefined,
+          cooldownClassification: undefined,
           cooldownModel: undefined,
           disabledUntil: undefined,
           disabledReason: undefined,
           errorCount: 0,
-          failureCounts: undefined,
+          failureCounts: { rate_limit: 2 },
         },
       },
     },
@@ -868,7 +868,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
   async function markFailureAt(params: {
     store: ReturnType<typeof makeStore>;
     now: number;
-    reason: "rate_limit" | "billing" | "auth_permanent";
+    reason: "rate_limit" | "timeout" | "billing" | "auth_permanent";
     cfg?: OpenClawConfig;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -916,6 +916,34 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     expect(store.usageStats?.["anthropic:default"]?.failureCounts?.rate_limit).toBe(
       expectedDelays.length,
     );
+  });
+
+  it("preserves rate-limit history through a differently classified failed probe", async () => {
+    let now = 1_700_000_000_000;
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now - 1,
+        cooldownReason: "rate_limit",
+        errorCount: 3,
+        failureCounts: { rate_limit: 3 },
+        lastFailureAt: now - 60_000,
+      },
+    });
+
+    await markFailureAt({ store, now, reason: "timeout" });
+    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(1);
+    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toEqual({
+      rate_limit: 3,
+      timeout: 1,
+    });
+
+    now = (store.usageStats?.["anthropic:default"]?.cooldownUntil ?? now) + 1;
+    clearExpiredCooldowns(store, now);
+    expect(store.usageStats?.["anthropic:default"]?.failureCounts).toEqual({ rate_limit: 3 });
+
+    await markFailureAt({ store, now, reason: "rate_limit" });
+    expect(store.usageStats?.["anthropic:default"]?.failureCounts?.rate_limit).toBe(4);
+    expect((store.usageStats?.["anthropic:default"]?.cooldownUntil ?? 0) - now).toBe(4 * 60_000);
   });
 
   const activeWindowCases = [
