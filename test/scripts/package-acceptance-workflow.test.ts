@@ -7911,9 +7911,12 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(packageAcceptanceResolve.env?.PUBLISHED_ARTIFACT).toBe(
       "${{ fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}",
     );
-    expect(packageAcceptanceBaseline.env?.CANDIDATE_PUBLISHED).toBe(
-      "${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}",
-    );
+    expect(packageAcceptanceBaseline.env).toMatchObject({
+      CANDIDATE_PUBLISHED:
+        "${{ inputs.source == 'npm' || fromJSON(inputs.candidate_artifact_json || '{}').packagePublished == true }}",
+      CANDIDATE_VERSION: "${{ steps.resolve.outputs.package_version }}",
+      TARGET_CONTEXT_REF: "${{ inputs.target_context_ref }}",
+    });
     expect(releaseChecksTargetSummary.env).toMatchObject({
       SKIP_PACKAGE_TELEGRAM_E2E: "${{ steps.inputs.outputs.skip_package_telegram_e2e }}",
     });
