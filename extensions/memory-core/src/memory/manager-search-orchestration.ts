@@ -58,10 +58,9 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
     const maxResults = opts?.maxResults ?? this.settings.query.maxResults;
     const minScore = opts?.minScore ?? this.settings.query.minScore;
     const hasActiveProject = (opts?.activeProjectKeys?.length ?? 0) > 0;
-    // Fusion ranks only what the retrieval window already fetched, so a window that
-    // shrinks with the requested count changes which candidates compete and can make
-    // top-1 worse than the first row of a wider request. Floor the window at the
-    // configured default before project expansion, then trim to the caller's count.
+    // Fusion ranks only what retrieval fetched, so a window that shrinks with the
+    // requested count can rank top-1 below the first row of a wider request. Floor it
+    // at the configured default before project expansion, then trim to the caller.
     const windowResults = Math.max(maxResults, this.settings.query.maxResults);
     const candidateMaxResults = hasActiveProject
       ? Math.min(200, Math.max(windowResults, windowResults * 4))
