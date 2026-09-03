@@ -511,12 +511,12 @@ export function createEmbeddedRunAuthController(params: {
     workspaceDir: params.workspaceDir,
   });
 
-  const resolveApiKeyForCandidate = async (
+  const resolveApiKeyForCandidate = (
     candidate?: string,
     model = params.getRuntimeModel(),
     allowAuthProfileFallback?: boolean,
-  ) => {
-    return getApiKeyForModelCore({
+  ) =>
+    getApiKeyForModelCore({
       model,
       cfg: params.config,
       profileId: candidate,
@@ -528,7 +528,6 @@ export function createEmbeddedRunAuthController(params: {
       ...isolatedPluginAuth(allowAuthProfileFallback),
       secretSentinels: true,
     });
-  };
 
   const applyApiKeyInfo = async (candidate?: string, attemptIndex?: number): Promise<void> => {
     const preparedModel = await params.prepareModelForAuthProfile?.(candidate, attemptIndex);

@@ -43,15 +43,15 @@ vi.mock("../../model-auth.js", async () => {
 });
 
 import {
+  createEmbeddedRunAuthController,
+  resolveEmbeddedAuthCooldownProbePolicy,
+} from "./auth-controller.js";
+import {
   createMutableAuthControllerHarness,
   createMutableEmbeddedRunAuthController,
   createTestModel,
   getRuntimeAuthSnapshot,
-} from "./auth-controller-harness.js";
-import {
-  createEmbeddedRunAuthController,
-  resolveEmbeddedAuthCooldownProbePolicy,
-} from "./auth-controller.js";
+} from "./auth-controller.test-harness.js";
 
 function expectProtectedRuntimeValue(value: string | undefined, plaintext: string): void {
   expect(value).not.toBe(plaintext);
