@@ -47,7 +47,7 @@ export type SlashMenuHost = {
   getTextarea: () => HTMLTextAreaElement | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
-  canRunInlineCommand: () => boolean;
+  canRun: (inline: boolean) => boolean;
   runInlineCommand?: (command: string) => void;
   refreshCommands?: () => void | Promise<void>;
   commandFilter?: (command: SlashCommandDef) => boolean;
@@ -198,7 +198,7 @@ export function updateSlashMenu(
   const items = getSlashCommandCompletions(completion.query, {
     showAll: true,
     inlineOnly: completion.inline,
-    allowImmediateInlineCommands: host.canRunInlineCommand() && !completion.skillOnly,
+    allowImmediateInlineCommands: host.canRun(true) && !completion.skillOnly,
   }).filter((command) => host.commandFilter?.(command) ?? true);
   state.slashMenuCompletion = completion;
   state.slashMenuItems = [
@@ -223,7 +223,7 @@ function beginInlineSlashArguments(
     !state.slashMenuCompletion?.inline ||
     cmd.source === "skill" ||
     !cmd.args ||
-    !host.canRunInlineCommand() ||
+    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -258,7 +258,7 @@ function selectSlashCommand(
   if (host.activateComposerMode?.(cmd)) {
     return;
   }
-  if (cmd.source !== "skill" && !host.canRunInlineCommand() && state.slashMenuCompletion?.inline) {
+  if (cmd.source !== "skill" && !host.canRun(true) && state.slashMenuCompletion?.inline) {
     return;
   }
   const inlineReplacement = cmd.source === "skill" ? `$${cmd.name}` : `/${cmd.name}`;
@@ -268,7 +268,7 @@ function selectSlashCommand(
   if (
     state.slashMenuCompletion?.inline &&
     executesInlineImmediately(cmd) &&
-    host.canRunInlineCommand() &&
+    host.canRun(true) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -344,8 +344,8 @@ function selectSlashArg(
   requestUpdate: () => void,
   run: boolean,
 ): void {
-  const command = state.slashMenuCommand;
-  if (command?.source !== "skill" && !host.canRunInlineCommand()) {
+  const { slashMenuCommand: command, slashMenuCompletion: completion } = state;
+  if (command?.source !== "skill" && !host.canRun(completion?.inline === true)) {
     return;
   }
   const cmdName = command?.name ?? "";
@@ -354,7 +354,7 @@ function selectSlashArg(
     state.slashMenuCompletion?.inline &&
     command &&
     executesInlineImmediately(command) &&
-    host.canRunInlineCommand() &&
+    host.canRun(true) &&
     host.runInlineCommand &&
     removeInlineSlashSelection(state, host)
   ) {
@@ -392,7 +392,7 @@ function submitInlineSlashArgument(
     !completion?.inline ||
     !command ||
     !executesInlineImmediately(command) ||
-    !host.canRunInlineCommand() ||
+    !host.canRun(true) ||
     !host.runInlineCommand
   ) {
     return false;
@@ -410,7 +410,7 @@ function submitInlineSlashArgument(
 }
 
 function beginDirectInlineSlashArgument(state: SlashMenuState, host: SlashMenuHost): boolean {
-  if (!host.canRunInlineCommand() || !host.runInlineCommand) {
+  if (!host.canRun(true) || !host.runInlineCommand) {
     return false;
   }
   const current = host.getTextarea()?.value ?? host.getDraft();
