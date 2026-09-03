@@ -4,7 +4,12 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import * as avatarImage from "./avatar-image.ts";
-import { resetIdentityDraft, saveIdentityDraft, selectIdentityAvatar } from "./identity-actions.ts";
+import {
+  clearIdentityAvatar,
+  resetIdentityDraft,
+  saveIdentityDraft,
+  selectIdentityAvatar,
+} from "./identity-actions.ts";
 
 const fileToAvatarDataUrlMock = vi.fn<typeof avatarImage.fileToAvatarDataUrl>();
 
@@ -27,7 +32,7 @@ function host(): Parameters<typeof resetIdentityDraft>[0] {
 }
 
 describe("agent identity actions", () => {
-  it("keeps unsupported blank edits visible without sending an update", async () => {
+  it("keeps unsupported blank name edits visible without sending an update", async () => {
     const state = host();
     state.identityDraft.name = "  ";
     const runExternalMutation = vi.fn();
@@ -49,6 +54,120 @@ describe("agent identity actions", () => {
 
     expect(runExternalMutation).not.toHaveBeenCalled();
     expect(state.identityDraft.name).toBe("  ");
+  });
+
+  it("sends null emoji tombstone when the emoji draft is explicitly emptied", async () => {
+    const state = host();
+    state.identityDraft.emoji = "";
+    const request = vi.fn(async () => ({}));
+    const expectedClient = { request } as unknown as GatewayBrowserClient;
+    const runtimeConfig = {
+      runExternalMutation: vi.fn(async (task) => ({
+        ok: true as const,
+        value: await task(expectedClient),
+        refresh: { ok: true as const },
+      })),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const agents = {
+      refreshList: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agents"];
+    const agentIdentity = {
+      invalidate: vi.fn(),
+      ensure: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agentIdentity"];
+
+    await saveIdentityDraft({
+      host: state,
+      expectedClient,
+      agentId: "main",
+      agents,
+      agentIdentity,
+      runtimeConfig,
+      canDispatch: () => true,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+
+    expect(request).toHaveBeenCalledWith("agents.update", {
+      agentId: "main",
+      emoji: null,
+    });
+  });
+
+  it("omits whitespace-only emoji drafts so stored emoji is preserved", async () => {
+    const state = host();
+    state.identityDraft.emoji = "  ";
+    const request = vi.fn(async () => ({}));
+    const expectedClient = { request } as unknown as GatewayBrowserClient;
+    const runExternalMutation = vi.fn(async (task) => ({
+      ok: true as const,
+      value: await task(expectedClient),
+      refresh: { ok: true as const },
+    }));
+    const runtimeConfig = {
+      runExternalMutation,
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const agents = {
+      refreshList: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agents"];
+    const agentIdentity = {
+      invalidate: vi.fn(),
+      ensure: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agentIdentity"];
+
+    await saveIdentityDraft({
+      host: state,
+      expectedClient,
+      agentId: "main",
+      agents,
+      agentIdentity,
+      runtimeConfig,
+      canDispatch: () => true,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+
+    expect(runExternalMutation).not.toHaveBeenCalled();
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it("sends null avatar tombstone after clearIdentityAvatar", async () => {
+    const state = host();
+    clearIdentityAvatar(state);
+    expect(state.identityDraft.avatar).toBe("");
+    const request = vi.fn(async () => ({}));
+    const expectedClient = { request } as unknown as GatewayBrowserClient;
+    const runtimeConfig = {
+      runExternalMutation: vi.fn(async (task) => ({
+        ok: true as const,
+        value: await task(expectedClient),
+        refresh: { ok: true as const },
+      })),
+    } as unknown as ApplicationContext["runtimeConfig"];
+    const agents = {
+      refreshList: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agents"];
+    const agentIdentity = {
+      invalidate: vi.fn(),
+      ensure: vi.fn(async () => undefined),
+    } as unknown as ApplicationContext["agentIdentity"];
+
+    await saveIdentityDraft({
+      host: state,
+      expectedClient,
+      agentId: "main",
+      agents,
+      agentIdentity,
+      runtimeConfig,
+      canDispatch: () => true,
+      isCurrent: () => true,
+      onSaved: vi.fn(),
+    });
+
+    expect(request).toHaveBeenCalledWith("agents.update", {
+      agentId: "main",
+      avatar: null,
+    });
   });
 
   it("drops an avatar decode that completes after the selected agent resets", async () => {

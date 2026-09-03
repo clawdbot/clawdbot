@@ -172,14 +172,15 @@ export const AgentsCreateResultSchema = closedObject({
   model: Type.Optional(NonEmptyString),
 });
 
-/** Updates mutable agent identity, workspace, and model fields; null clears the model override. */
+/** Updates mutable agent identity, workspace, and model fields; null clears overrides. */
 export const AgentsUpdateParamsSchema = closedObject({
   agentId: NonEmptyString,
   name: Type.Optional(NonEmptyString),
   workspace: Type.Optional(NonEmptyString),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-  emoji: Type.Optional(Type.String()),
-  avatar: Type.Optional(Type.String()),
+  // Null clears; empty and whitespace strings preserve existing identity values.
+  emoji: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  avatar: Type.Optional(Type.Union([Type.String(), Type.Null()])),
 });
 
 /** Result returned after updating an agent. */

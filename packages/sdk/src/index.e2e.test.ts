@@ -430,6 +430,14 @@ describe("OpenClaw SDK websocket e2e", () => {
         await oc.agents.update({ agentId: "sdk-agent", model: null }),
       );
       expect(clearAgentModel.params).toEqual({ agentId: "sdk-agent", model: null });
+      const clearAgentEmoji = expectJsonObject(
+        await oc.agents.update({ agentId: "sdk-agent", emoji: null, avatar: null }),
+      );
+      expect(clearAgentEmoji.params).toEqual({
+        agentId: "sdk-agent",
+        emoji: null,
+        avatar: null,
+      });
       const deleteAgent = expectJsonObject(await oc.agents.delete({ agentId: "sdk-agent" }));
       expect(deleteAgent.method).toBe("agents.delete");
       expect(deleteAgent.params).toEqual({ agentId: "sdk-agent" });

@@ -52,6 +52,13 @@ export function selectIdentityAvatar(host: AgentIdentityEditorHost, file: File) 
   });
 }
 
+/** Mark avatar for clear on next save (`null` tombstone via agents.update). */
+export function clearIdentityAvatar(host: AgentIdentityEditorHost) {
+  advanceAvatarSelectionEpoch(host);
+  host.identityDraft = { ...host.identityDraft, avatar: "" };
+  host.identityError = null;
+}
+
 /** Persist the draft via agents.update, then refresh the roster and the
     identity cache so the sidebar chip and page pick up the new identity. */
 export async function saveIdentityDraft(params: {
@@ -67,15 +74,31 @@ export async function saveIdentityDraft(params: {
 }) {
   const { host, expectedClient, agentId, agents, agentIdentity, runtimeConfig } = params;
   const draft = host.identityDraft;
-  // Set/replace only: agents.update has no explicit clear operation. Keep a
-  // blank edit visible and unsaved instead of pretending it removed a field.
+  // Name stays set-only (blank name edits stay local). Emoji/avatar are
+  // tri-state like model: omit preserves, null clears. Literal empty drafts
+  // (including Remove-avatar's "") send the null tombstone; whitespace-only
+  // drafts omit so Gateway keeps the stored value.
   const name = draft.name?.trim();
-  const emoji = draft.emoji?.trim();
-  const avatar = draft.avatar ?? undefined;
-  if ((draft.name !== null && !name) || (draft.emoji !== null && !emoji)) {
+  if (draft.name !== null && !name) {
     return;
   }
-  if (!name && !emoji && !avatar) {
+  const emojiUpdate =
+    draft.emoji === null
+      ? undefined
+      : draft.emoji.trim()
+        ? draft.emoji.trim()
+        : draft.emoji === ""
+          ? null
+          : undefined;
+  const avatarUpdate =
+    draft.avatar === null
+      ? undefined
+      : draft.avatar.trim()
+        ? draft.avatar
+        : draft.avatar === ""
+          ? null
+          : undefined;
+  if (!name && emojiUpdate === undefined && avatarUpdate === undefined) {
     resetIdentityDraft(host);
     return;
   }
@@ -87,7 +110,12 @@ export async function saveIdentityDraft(params: {
         if (client !== expectedClient) {
           throw new Error("Connection changed before the agent identity update started.");
         }
-        return updateAgentIdentity(client, { agentId, name, emoji, avatar });
+        return updateAgentIdentity(client, {
+          agentId,
+          ...(name ? { name } : {}),
+          ...(emojiUpdate !== undefined ? { emoji: emojiUpdate } : {}),
+          ...(avatarUpdate !== undefined ? { avatar: avatarUpdate } : {}),
+        });
       },
       {
         canDispatch: params.canDispatch,

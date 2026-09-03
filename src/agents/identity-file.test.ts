@@ -138,6 +138,39 @@ Fluent in over six million error messages.
 
     expect(merged).toBe("- Name: New Name\n");
   });
+
+  it("clears parser-accepted unbulleted emoji and avatar labels", () => {
+    const merged = mergeIdentityMarkdownContent(
+      `# IDENTITY.md - Agent Identity
+
+Name: Keep Me
+Emoji: 🤖
+Avatar: https://example.com/a.png
+Creature: Familiar
+`,
+      {},
+      { clearFields: ["emoji", "avatar"] },
+    );
+
+    expect(merged).toContain("Name: Keep Me");
+    expect(merged).toContain("Creature: Familiar");
+    expect(merged).not.toMatch(/Emoji\s*:/);
+    expect(merged).not.toMatch(/Avatar\s*:/);
+  });
+
+  it("clears both bulleted and unbulleted emoji forms", () => {
+    const merged = mergeIdentityMarkdownContent(
+      `- Emoji: 🤖
+Emoji: 🦞
+- Avatar: avatars/a.png
+`,
+      {},
+      { clearFields: ["emoji", "avatar"] },
+    );
+
+    expect(merged).not.toMatch(/Emoji\s*:/);
+    expect(merged).not.toMatch(/Avatar\s*:/);
+  });
 });
 
 describe("loadAgentIdentityFromWorkspace", () => {

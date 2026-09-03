@@ -161,11 +161,10 @@ function buildIdentityLine(label: string, value: string): string {
 }
 
 function matchesIdentityLabel(line: string, label: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("-")) {
-    return false;
-  }
-  const cleaned = trimmed.replace(/^\s*-\s*/, "");
+  // Match the reader: optional leading bullet, then Label: value.
+  // Clearing must remove unbulleted `Emoji:` / `Avatar:` lines too, or a
+  // config tombstone can leave a file-backed identity value active.
+  const cleaned = line.trim().replace(/^\s*-\s*/, "");
   const colonIndex = cleaned.indexOf(":");
   if (colonIndex === -1) {
     return false;
@@ -217,11 +216,23 @@ function resolveIdentityInsertIndex(lines: string[]): number {
 export function mergeIdentityMarkdownContent(
   content: string | undefined,
   identity: Pick<AgentIdentityFile, "name" | "theme" | "emoji" | "avatar">,
+  opts?: { clearFields?: ReadonlyArray<"name" | "theme" | "emoji" | "avatar"> },
 ): string {
   const lines = normalizeIdentityContent(content);
   const nextLines = lines.length > 0 ? [...lines] : ["# IDENTITY.md - Agent Identity", ""];
+  const clearFields = new Set(opts?.clearFields ?? []);
 
   for (const [field, label] of WRITABLE_IDENTITY_FIELDS) {
+    if (clearFields.has(field)) {
+      for (let index = nextLines.length - 1; index >= 0; index -= 1) {
+        const line = nextLines[index];
+        if (line !== undefined && matchesIdentityLabel(line, label)) {
+          nextLines.splice(index, 1);
+        }
+      }
+      continue;
+    }
+
     const value = identity[field]?.trim();
     if (!value) {
       continue;

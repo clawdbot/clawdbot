@@ -162,6 +162,23 @@ describe("agents helpers", () => {
     expect(work?.identity?.theme).toBe("chill");
   });
 
+  it("applyAgentConfig clears identity fields with null", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        entries: { work: { identity: { name: "Old", theme: "chill", emoji: "🐢" } } },
+      },
+    };
+
+    const next = applyAgentConfig(cfg, {
+      agentId: "work",
+      identity: { emoji: null },
+    });
+
+    const work = next.agents?.entries?.work;
+    expect(work?.identity).toEqual({ name: "Old", theme: "chill" });
+    expect(work?.identity).not.toHaveProperty("emoji");
+  });
+
   it("applyAgentConfig skips identity when not provided", () => {
     const cfg: OpenClawConfig = {
       agents: {

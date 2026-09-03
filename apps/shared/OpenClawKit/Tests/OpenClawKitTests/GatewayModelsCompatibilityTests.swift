@@ -282,6 +282,8 @@ struct GatewayModelsCompatibilityTests {
     func `agent update model keeps legacy source compatibility and nullable wire semantics`() throws {
         let legacyParams = AgentsUpdateParams(agentid: "work", model: "openai/gpt-5.6")
         let omittedParams = AgentsUpdateParams(agentid: "work")
+        // Shipped raw model-null call site: uniquely matches the raw initializer
+        // because mixed emoji/avatar labels are required (no defaults).
         let clearedParams = AgentsUpdateParams(agentid: "work", modelvalue: AnyCodable(NSNull()))
 
         #expect(legacyParams.model == "openai/gpt-5.6")
@@ -314,5 +316,105 @@ struct GatewayModelsCompatibilityTests {
         #expect(decodedOmitted.modelvalue == nil)
         #expect(decodedCleared.modelvalue?.value is NSNull)
         #expect(reencodedCleared["model"] is NSNull)
+    }
+
+    @Test
+    func `agent update keeps mixed modelvalue plus String emoji avatar call sites`() throws {
+        let noneParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable(NSNull()))
+        let emojiOnlyParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable("openai/gpt-5.6-luna"),
+            emoji: "🦞")
+        let avatarOnlyParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable("openai/gpt-5.6-luna"),
+            avatar: "https://example.com/a.png")
+        let mixedParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: AnyCodable(NSNull()),
+            emoji: "🦞",
+            avatar: "https://example.com/a.png")
+        let noneJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(noneParams))
+                as? [String: Any])
+        let emojiOnlyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(emojiOnlyParams))
+                as? [String: Any])
+        let avatarOnlyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(avatarOnlyParams))
+                as? [String: Any])
+        let mixedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(mixedParams))
+                as? [String: Any])
+
+        #expect(noneParams.modelvalue?.value is NSNull)
+        #expect(noneParams.emoji == nil)
+        #expect(noneParams.avatar == nil)
+        #expect(noneJSON["model"] is NSNull)
+        #expect(noneJSON["emoji"] == nil)
+        #expect(noneJSON["avatar"] == nil)
+        #expect(emojiOnlyParams.model == "openai/gpt-5.6-luna")
+        #expect(emojiOnlyParams.emoji == "🦞")
+        #expect(emojiOnlyParams.avatar == nil)
+        #expect(emojiOnlyJSON["emoji"] as? String == "🦞")
+        #expect(emojiOnlyJSON["avatar"] == nil)
+        #expect(avatarOnlyParams.model == "openai/gpt-5.6-luna")
+        #expect(avatarOnlyParams.emoji == nil)
+        #expect(avatarOnlyParams.avatar == "https://example.com/a.png")
+        #expect(avatarOnlyJSON["emoji"] == nil)
+        #expect(avatarOnlyJSON["avatar"] as? String == "https://example.com/a.png")
+        #expect(mixedParams.modelvalue?.value is NSNull)
+        #expect(mixedParams.emoji == "🦞")
+        #expect(mixedParams.avatar == "https://example.com/a.png")
+        #expect(mixedJSON["model"] is NSNull)
+        #expect(mixedJSON["emoji"] as? String == "🦞")
+        #expect(mixedJSON["avatar"] as? String == "https://example.com/a.png")
+    }
+
+    @Test
+    func `agent update emoji and avatar keep String call sites and nullable clears`() throws {
+        let legacyParams = AgentsUpdateParams(agentid: "work", emoji: "🐢", avatar: "https://example.com/a.png")
+        let omittedParams = AgentsUpdateParams(agentid: "work")
+        let clearedParams = AgentsUpdateParams(
+            agentid: "work",
+            modelvalue: nil,
+            emojivalue: AnyCodable(NSNull()),
+            avatarvalue: AnyCodable(NSNull()))
+
+        #expect(legacyParams.emoji == "🐢")
+        #expect(legacyParams.avatar == "https://example.com/a.png")
+        #expect(omittedParams.emojivalue == nil)
+        #expect(omittedParams.avatarvalue == nil)
+
+        let legacyJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(legacyParams))
+                as? [String: Any])
+        let omittedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(omittedParams))
+                as? [String: Any])
+        let clearedJSON = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(clearedParams))
+                as? [String: Any])
+
+        #expect(legacyJSON["emoji"] as? String == "🐢")
+        #expect(legacyJSON["avatar"] as? String == "https://example.com/a.png")
+        #expect(omittedJSON["emoji"] == nil)
+        #expect(omittedJSON["avatar"] == nil)
+        #expect(clearedJSON["emoji"] is NSNull)
+        #expect(clearedJSON["avatar"] is NSNull)
+
+        let decodedCleared = try JSONDecoder().decode(
+            AgentsUpdateParams.self,
+            from: Data(#"{"agentId":"work","emoji":null,"avatar":null}"#.utf8))
+        let reencodedCleared = try #require(
+            JSONSerialization.jsonObject(with: JSONEncoder().encode(decodedCleared))
+                as? [String: Any])
+
+        #expect(decodedCleared.emojivalue?.value is NSNull)
+        #expect(decodedCleared.avatarvalue?.value is NSNull)
+        #expect(reencodedCleared["emoji"] is NSNull)
+        #expect(reencodedCleared["avatar"] is NSNull)
     }
 }

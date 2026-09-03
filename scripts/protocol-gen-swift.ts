@@ -102,6 +102,9 @@ function safeName(name: string) {
 }
 
 // Canonical initializer labels must match stored properties; compatibility initializers
+/** AgentsUpdateParams fields that keep String? call sites while wire-encoding null clears. */
+const agentsUpdateNullableStringKeys = new Set(["model", "emoji", "avatar"]);
+
 // declare legacy labels separately.
 function swiftStoredPropertyName(structName: string, key: string): string {
   if (structName === "SessionCompactionCheckpoint" && key === "tokensVersion") {
@@ -113,8 +116,8 @@ function swiftStoredPropertyName(structName: string, key: string): string {
   if (structName === "ChatSendParams" && key === "fastMode") {
     return "fastmodevalue";
   }
-  if (structName === "AgentsUpdateParams" && key === "model") {
-    return "modelvalue";
+  if (structName === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) {
+    return `${safeName(key)}value`;
   }
   if (structName === "ChatSendParams" && key === "fast_seconds") {
     return "fastseconds";
@@ -126,8 +129,9 @@ function swiftCompatibilityPropertyLines(structName: string, key: string): strin
   if (structName === "ChatSendParams" && key === "fastMode") {
     return ["    public var fastmode: Bool? { fastmodevalue?.value as? Bool }"];
   }
-  if (structName === "AgentsUpdateParams" && key === "model") {
-    return ["    public var model: String? { modelvalue?.value as? String }"];
+  if (structName === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) {
+    const stored = swiftStoredPropertyName(structName, key);
+    return [`    public var ${safeName(key)}: String? { ${stored}?.value as? String }`];
   }
   return [];
 }
@@ -441,10 +445,15 @@ function emitStruct(
         .map(([key, prop]) => {
           const propName = swiftStoredPropertyName(name, key);
           const req = required.has(key);
-          if (name === "AgentsUpdateParams" && key === "model") {
-            // Keep the raw nullable value explicit so the source-compatible initializer stays
-            // unambiguous when callers omit model.
-            return "        modelvalue: AnyCodable?";
+          if (name === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) {
+            // modelvalue stays required so AgentsUpdateParams(agentid:) uniquely resolves
+            // to the String?-facing compatibility initializer. emojivalue/avatarvalue keep
+            // defaults so the shipped raw call AgentsUpdateParams(agentid:modelvalue:) still
+            // compiles without naming the newer clearable fields.
+            if (key === "model") {
+              return `        ${swiftStoredPropertyName(name, key)}: AnyCodable?`;
+            }
+            return `        ${swiftStoredPropertyName(name, key)}: AnyCodable? = nil`;
           }
           return `        ${swiftInitializerParam({
             name: propName,
@@ -501,14 +510,17 @@ function emitStructCustomCodable(
   props: Record<string, JsonSchema>,
   required: Set<string>,
 ): string {
-  if (name !== "AgentsUpdateParams" || !props.model) {
+  const preservesExplicitNull = (key: string) =>
+    (name === "AgentsUpdateParams" && agentsUpdateNullableStringKeys.has(key)) ||
+    (name === "NodeInvokeRequestEvent" && key === "sessionKey");
+  if (!Object.keys(props).some(preservesExplicitNull)) {
     return "";
   }
   const decodedProperties = Object.entries(props).map(([key, propSchema]) => {
     const propName = swiftStoredPropertyName(name, key);
-    if (key === "model") {
+    if (preservesExplicitNull(key)) {
       // decodeIfPresent collapses an explicit JSON null into nil. Presence-aware decoding
-      // preserves the Gateway patch distinction between clearing and omitting the model.
+      // preserves Gateway distinctions between clearing and omitting nullable fields.
       return `        self.${propName} = container.contains(.${propName})\n            ? try container.decode(AnyCodable.self, forKey: .${propName})\n            : nil`;
     }
     if (required.has(key)) {
@@ -540,11 +552,14 @@ function emitStructCompatibilityInitializer(
   props: Record<string, JsonSchema>,
   required: Set<string>,
 ): string {
-  if (name === "AgentsUpdateParams" && props.model) {
+  if (
+    name === "AgentsUpdateParams" &&
+    [...agentsUpdateNullableStringKeys].some((key) => Boolean(props[key]))
+  ) {
     const initializerParams = Object.entries(props).map(([key, prop]) => {
       const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
-        return "        model: String? = nil";
+      if (agentsUpdateNullableStringKeys.has(key)) {
+        return `        ${safeName(key)}: String? = nil`;
       }
       return `        ${swiftInitializerParam({
         name: propName,
@@ -554,11 +569,64 @@ function emitStructCompatibilityInitializer(
     });
     const delegatedArgs = Object.keys(props).map((key) => {
       const propName = swiftStoredPropertyName(name, key);
-      if (key === "model") {
-        return "            modelvalue: model.map { AnyCodable($0) }";
+      if (agentsUpdateNullableStringKeys.has(key)) {
+        const publicName = safeName(key);
+        return `            ${propName}: ${publicName}.map { AnyCodable($0) }`;
       }
       return `            ${propName}: ${propName}`;
     });
+    const emitMixedInitializer = (params: {
+      comment: string;
+      identityLabels: ReadonlySet<string>;
+    }): string => {
+      const mixedInitializerParams = Object.entries(props).flatMap(([key, prop]) => {
+        const propName = swiftStoredPropertyName(name, key);
+        if (key === "model") {
+          return [`        ${propName}: AnyCodable?`];
+        }
+        if (agentsUpdateNullableStringKeys.has(key)) {
+          if (!params.identityLabels.has(key)) {
+            return [];
+          }
+          // Mixed String labels omit defaults so
+          // AgentsUpdateParams(agentid:modelvalue:) uniquely matches the raw
+          // initializer instead of a String-label overload.
+          return [`        ${safeName(key)}: String?`];
+        }
+        return [
+          `        ${swiftInitializerParam({
+            name: propName,
+            schema: prop,
+            required: required.has(key),
+          })}`,
+        ];
+      });
+      const mixedDelegatedArgs = Object.keys(props).map((key) => {
+        const propName = swiftStoredPropertyName(name, key);
+        if (key === "model") {
+          return `            ${propName}: ${propName}`;
+        }
+        if (agentsUpdateNullableStringKeys.has(key)) {
+          if (!params.identityLabels.has(key)) {
+            return `            ${propName}: nil`;
+          }
+          const publicName = safeName(key);
+          return `            ${propName}: ${publicName}.map { AnyCodable($0) }`;
+        }
+        return `            ${propName}: ${propName}`;
+      });
+      return (
+        `\n\n    /// ${params.comment}\n` +
+        "    public init(\n" +
+        mixedInitializerParams.join(",\n") +
+        ")\n" +
+        "    {\n" +
+        "        self.init(\n" +
+        mixedDelegatedArgs.join(",\n") +
+        ")\n" +
+        "    }"
+      );
+    };
     return (
       "\n\n    public init(\n" +
       initializerParams.join(",\n") +
@@ -567,7 +635,19 @@ function emitStructCompatibilityInitializer(
       "        self.init(\n" +
       delegatedArgs.join(",\n") +
       ")\n" +
-      "    }"
+      "    }" +
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String emoji/avatar labels.",
+        identityLabels: new Set(["emoji", "avatar"]),
+      }) +
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String emoji label.",
+        identityLabels: new Set(["emoji"]),
+      }) +
+      emitMixedInitializer({
+        comment: "Shipped mixed call shape: raw modelvalue plus String avatar label.",
+        identityLabels: new Set(["avatar"]),
+      })
     );
   }
   if (name !== "ChatSendParams" || !props.fastMode) {
