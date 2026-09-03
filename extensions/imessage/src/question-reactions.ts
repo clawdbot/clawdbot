@@ -6,7 +6,7 @@ import {
   questionGatewayRuntime,
 } from "openclaw/plugin-sdk/question-gateway-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { normalizeIMessageGuid } from "./approval-target-keys.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import { resolveIMessageReactionContext } from "./monitor/reaction-context.js";
 import type { IMessagePayload } from "./monitor/types.js";
 

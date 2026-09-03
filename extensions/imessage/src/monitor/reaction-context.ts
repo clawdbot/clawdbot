@@ -1,5 +1,5 @@
 // Imessage plugin module implements reaction context behavior.
-import { normalizeIMessageGuid } from "../approval-target-keys.js";
+import { normalizeIMessageGuid } from "../message-guid.js";
 import type { IMessagePayload } from "./types.js";
 
 export type IMessageReactionContext = {

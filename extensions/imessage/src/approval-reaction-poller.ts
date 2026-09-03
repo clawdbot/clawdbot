@@ -11,8 +11,8 @@ import {
   registerIMessageApprovalReactionTarget,
   type IMessageApprovalConversationKey,
 } from "./approval-reactions.js";
-import { normalizeIMessageGuid } from "./approval-target-keys.js";
 import type { IMessageRpcClient } from "./client.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import type { IMessagePayload } from "./monitor/types.js";
 
 const RECENT_CHAT_LIMIT = 50;
