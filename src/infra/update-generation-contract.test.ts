@@ -137,7 +137,10 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "resume-materialization", role: "candidate" });
@@ -162,7 +165,11 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "persist-candidate-selection-intent", role: "candidate" });
@@ -191,6 +198,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
@@ -201,6 +209,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
         ],
@@ -210,6 +219,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(roundTrip, {
         selector: candidate,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
@@ -237,6 +247,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: null,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
         ],
@@ -253,7 +264,10 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: null,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: false,
       }),
     ).toMatchObject({ action: "persist-baseline-selection-intent", role: "previous" });
@@ -261,22 +275,49 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: false,
       }),
     ).toMatchObject({ action: "record-baseline-selected" });
     record = append(record, receipt("baseline-selected", 4, { selection: previous }));
     expect(
       adjudicateUpdateGenerationTransaction(record, {
+        selector: null,
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
+        bindingConverged: false,
+      }),
+    ).toMatchObject({ action: "inconsistent" });
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
+        selectorDurable: true,
         generations: [],
+        bindingConverged: false,
+      }),
+    ).toMatchObject({ action: "inconsistent" });
+    expect(
+      adjudicateUpdateGenerationTransaction(record, {
+        selector: previous,
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: false,
       }),
     ).toMatchObject({ action: "persist-binding-intent" });
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "persist-binding-intent" });
@@ -292,7 +333,10 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "record-binding-completed" });
@@ -340,7 +384,11 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: candidate,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+          { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "record-candidate-selected" });
@@ -384,6 +432,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: candidate,
+        selectorDurable: true,
         generations: [],
         bindingConverged: true,
       }),
@@ -399,7 +448,10 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
-        generations: [],
+        selectorDurable: true,
+        generations: [
+          { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
+        ],
         bindingConverged: true,
       }),
     ).toMatchObject({ action: "record-rolled-back" });
@@ -425,6 +477,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
           { generationId: candidate.generationId, manifestSha256: candidate.manifestSha256 },
@@ -435,6 +488,7 @@ describe("durable update generation transaction contract", () => {
     expect(
       adjudicateUpdateGenerationTransaction(record, {
         selector: previous,
+        selectorDurable: true,
         generations: [
           { generationId: previous.generationId, manifestSha256: previous.manifestSha256 },
         ],
@@ -598,6 +652,25 @@ describe("durable update generation transaction contract", () => {
       namespaceKey: NAMESPACE_KEY,
       receipts: [nextIntent],
     });
+    await expect(
+      persistUpdateGenerationReceipt({ ledger, snapshot: priorSnapshot, receipt: nextIntent }),
+    ).resolves.toEqual(next);
+    await expect(
+      persistUpdateGenerationReceipt({
+        ledger,
+        snapshot: next,
+        receipt: {
+          ...nextIntent,
+          transactionId: "foreign-transaction",
+          receiptId: buildUpdateGenerationReceiptId({
+            transactionId: "foreign-transaction",
+            sequence: 0,
+            kind: "intent",
+          }),
+          namespaceKey: "foreign-namespace",
+        },
+      }),
+    ).rejects.toThrow("snapshot belongs to a different namespace");
     await expect(
       persistUpdateGenerationReceipt({
         ledger: new MemoryLedger({ revision: "5", record: priorRecord }),

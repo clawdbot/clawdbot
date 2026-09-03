@@ -503,6 +503,13 @@ export async function persistUpdateGenerationReceipt(params: {
   snapshot: UpdateGenerationTransactionSnapshot | null;
   receipt: UpdateGenerationTransactionReceipt;
 }): Promise<UpdateGenerationTransactionSnapshot> {
+  if (
+    params.snapshot &&
+    params.receipt.kind === "intent" &&
+    params.snapshot.record.namespaceKey !== params.receipt.namespaceKey
+  ) {
+    throw new Error("Update generation ledger snapshot belongs to a different namespace");
+  }
   const replay = params.snapshot?.record.receipts.find(
     (receipt) => receipt.receiptId === params.receipt.receiptId,
   );
@@ -535,6 +542,12 @@ export async function persistUpdateGenerationReceipt(params: {
   });
   if (result.status === "conflict") {
     throw new Error("Authoritative update ledger revision changed during generation transaction");
+  }
+  if (
+    result.snapshot.record.namespaceKey !== nextRecord.namespaceKey ||
+    result.snapshot.record.transactionId !== nextRecord.transactionId
+  ) {
+    throw new Error("Authoritative update ledger returned a different transaction namespace");
   }
   const persistedReceipt = result.snapshot.record.receipts.find(
     (receipt) => receipt.receiptId === params.receipt.receiptId,

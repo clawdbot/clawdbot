@@ -15,6 +15,7 @@ import {
   replaceUpdateGenerationSelector,
   resolveSelectedUpdateGeneration,
   resolveUpdateGenerationSelectorPath,
+  stabilizeUpdateGenerationSelector,
   UPDATE_GENERATION_LAUNCHER_FILE_NAME,
   UPDATE_GENERATION_LAUNCHER_SOURCE,
 } from "./update-generation-store.js";
@@ -85,6 +86,18 @@ async function withGenerationTestDir(
     } finally {
       await makeFixtureWritable(base);
     }
+  });
+}
+
+function failNextOpenForPath(targetPath: string, message: string) {
+  const realOpen = fs.open.bind(fs);
+  let pending = true;
+  return vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
+    if (pending && path.resolve(String(filePath)) === path.resolve(targetPath)) {
+      pending = false;
+      throw Object.assign(new Error(message), { code: "EIO" });
+    }
+    return await realOpen(filePath, flags, mode);
   });
 }
 
@@ -390,6 +403,69 @@ describe("update generation fail-closed boundaries", () => {
     });
   });
 
+  it("repairs selector directory durability before recording a committed swap", async () => {
+    await withGenerationTestDir("openclaw-generation-selector-sync-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const previousStage = path.join(base, "previous");
+      const candidateStage = path.join(base, "candidate");
+      await Promise.all([
+        writeRuntime(previousStage, "1.0.0"),
+        writeRuntime(candidateStage, "2.0.0"),
+      ]);
+      const previous = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: previousStage,
+        version: "1.0.0",
+      });
+      const candidate = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: candidateStage,
+        version: "2.0.0",
+      });
+      const previousSelection = selectionOf(previous);
+      const candidateSelection = selectionOf(candidate);
+      await replaceUpdateGenerationSelector({
+        namespaceRoot,
+        expected: null,
+        next: previousSelection,
+      });
+
+      const realRename = fs.rename.bind(fs);
+      let restoreOpen: () => void = () => undefined;
+      const rename = vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
+        await realRename(from, to);
+        const open = failNextOpenForPath(namespaceRoot, "injected selector sync failure");
+        restoreOpen = () => open.mockRestore();
+      });
+      try {
+        await expect(
+          replaceUpdateGenerationSelector({
+            namespaceRoot,
+            expected: previousSelection,
+            next: candidateSelection,
+          }),
+        ).rejects.toThrow("injected selector sync failure");
+      } finally {
+        restoreOpen();
+        rename.mockRestore();
+      }
+      await expect(readUpdateGenerationSelector(namespaceRoot)).resolves.toEqual(
+        candidateSelection,
+      );
+
+      const retryOpen = failNextOpenForPath(namespaceRoot, "injected selector retry sync failure");
+      await expect(
+        stabilizeUpdateGenerationSelector({ namespaceRoot, expected: candidateSelection }),
+      ).rejects.toThrow("injected selector retry sync failure");
+      retryOpen.mockRestore();
+      await expect(
+        stabilizeUpdateGenerationSelector({ namespaceRoot, expected: candidateSelection }),
+      ).resolves.toBeUndefined();
+      await expect(fs.stat(previous.generationRoot)).resolves.toBeDefined();
+      await expect(fs.stat(candidate.generationRoot)).resolves.toBeDefined();
+    });
+  });
+
   it("refuses stale expected selectors and tampered generations", async () => {
     await withGenerationTestDir("openclaw-generation-tamper-", async (base) => {
       const namespaceRoot = path.join(base, "managed");
@@ -524,11 +600,7 @@ describe("update generation fail-closed boundaries", () => {
       let restoreOpen: () => void = () => undefined;
       const rename = vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
         await realRename(from, to);
-        const open = vi
-          .spyOn(fs, "open")
-          .mockRejectedValueOnce(
-            Object.assign(new Error("injected directory sync failure"), { code: "EIO" }),
-          );
+        const open = failNextOpenForPath(namespaceRoot, "injected directory sync failure");
         restoreOpen = () => open.mockRestore();
       });
       try {
@@ -542,6 +614,11 @@ describe("update generation fail-closed boundaries", () => {
         restoreOpen();
         rename.mockRestore();
       }
+      const retryOpen = failNextOpenForPath(namespaceRoot, "injected retry directory sync failure");
+      await expect(ensureUpdateGenerationLauncher(namespaceRoot)).rejects.toThrow(
+        "injected retry directory sync failure",
+      );
+      retryOpen.mockRestore();
       await expect(ensureUpdateGenerationLauncher(namespaceRoot)).resolves.toBe(launcherPath);
     });
   });
@@ -622,6 +699,49 @@ describe("update generation fail-closed boundaries", () => {
     });
   });
 
+  it("retries generation directory sync after a committed materialization", async () => {
+    await withGenerationTestDir("openclaw-generation-materialize-sync-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      const generationId = createUpdateGenerationId();
+      const generationRoot = path.join(namespaceRoot, "generations", generationId);
+      const generationsRoot = path.dirname(generationRoot);
+      await writeRuntime(stageRoot, "1.0.0");
+      const manifest = await captureUpdateGenerationManifest(stageRoot);
+      const realRename = fs.rename.bind(fs);
+      let restoreOpen: () => void = () => undefined;
+      const rename = vi.spyOn(fs, "rename").mockImplementationOnce(async (from, to) => {
+        await realRename(from, to);
+        const open = failNextOpenForPath(generationsRoot, "injected materialization sync failure");
+        restoreOpen = () => open.mockRestore();
+      });
+      const materialize = () =>
+        materializeUpdateGeneration({
+          namespaceRoot,
+          sourceRoot: stageRoot,
+          generationId,
+          expectedManifest: manifest,
+          packageVersion: "1.0.0",
+          entrypointRelativePath: "entry.mjs",
+        });
+      try {
+        await expect(materialize()).rejects.toThrow("injected materialization sync failure");
+      } finally {
+        restoreOpen();
+        rename.mockRestore();
+      }
+      await expect(fs.stat(generationRoot)).resolves.toBeDefined();
+
+      const retryOpen = failNextOpenForPath(
+        generationsRoot,
+        "injected materialization retry sync failure",
+      );
+      await expect(materialize()).rejects.toThrow("injected materialization retry sync failure");
+      retryOpen.mockRestore();
+      await expect(materialize()).resolves.toMatchObject({ generationRoot });
+    });
+  });
+
   it("finishes an interrupted deterministic retired-tree cleanup", async () => {
     await withGenerationTestDir("openclaw-generation-retired-recovery-", async (base) => {
       const namespaceRoot = path.join(base, "managed");
@@ -647,6 +767,42 @@ describe("update generation fail-closed boundaries", () => {
         }),
       ).resolves.toBe(true);
       await expect(fs.stat(retiredRoot)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("retries cleanup directory sync after removing a retired generation", async () => {
+    await withGenerationTestDir("openclaw-generation-cleanup-sync-", async (base) => {
+      const namespaceRoot = path.join(base, "managed");
+      const stageRoot = path.join(base, "stage");
+      await writeRuntime(stageRoot, "1.0.0");
+      const generation = await materializeRuntime({
+        namespaceRoot,
+        sourceRoot: stageRoot,
+        version: "1.0.0",
+      });
+      const retiredRoot = path.join(
+        namespaceRoot,
+        "generations",
+        `.retired-${generation.generation.generationId}`,
+      );
+      const generationsRoot = path.dirname(retiredRoot);
+      await fs.rename(generation.generationRoot, retiredRoot);
+      const remove = () =>
+        removeObsoleteUpdateGeneration({
+          namespaceRoot,
+          generationId: generation.generation.generationId,
+          protectedGenerationIds: [],
+        });
+
+      const firstSync = failNextOpenForPath(generationsRoot, "injected cleanup sync failure");
+      await expect(remove()).rejects.toThrow("injected cleanup sync failure");
+      firstSync.mockRestore();
+      await expect(fs.stat(retiredRoot)).rejects.toMatchObject({ code: "ENOENT" });
+
+      const retrySync = failNextOpenForPath(generationsRoot, "injected cleanup retry sync failure");
+      await expect(remove()).rejects.toThrow("injected cleanup retry sync failure");
+      retrySync.mockRestore();
+      await expect(remove()).resolves.toBe(false);
     });
   });
 });

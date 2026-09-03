@@ -190,7 +190,20 @@ async function resolveUpdateGenerationNamespace(params: {
 }): Promise<UpdateGenerationNamespace | null> {
   const requestedRoot = path.resolve(params.namespaceRoot);
   if (params.create) {
-    await fs.mkdir(requestedRoot, { recursive: true, mode: 0o700 });
+    let createdRoot = false;
+    await fs.mkdir(requestedRoot, { mode: 0o700 }).then(
+      () => {
+        createdRoot = true;
+      },
+      (error: unknown) => {
+        if (!hasErrnoCode(error, "EEXIST")) {
+          throw error;
+        }
+      },
+    );
+    if (createdRoot) {
+      await syncUpdateGenerationPath(path.dirname(requestedRoot));
+    }
   }
   const rootStat = await fs.lstat(requestedRoot).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -207,11 +220,20 @@ async function resolveUpdateGenerationNamespace(params: {
   const root = await fs.realpath(requestedRoot);
   const requestedGenerationsRoot = path.join(root, GENERATIONS_DIRECTORY_NAME);
   if (params.create) {
-    await fs.mkdir(requestedGenerationsRoot, { mode: 0o700 }).catch((error: unknown) => {
-      if (!hasErrnoCode(error, "EEXIST")) {
-        throw error;
-      }
-    });
+    let createdGenerationsRoot = false;
+    await fs.mkdir(requestedGenerationsRoot, { mode: 0o700 }).then(
+      () => {
+        createdGenerationsRoot = true;
+      },
+      (error: unknown) => {
+        if (!hasErrnoCode(error, "EEXIST")) {
+          throw error;
+        }
+      },
+    );
+    if (createdGenerationsRoot) {
+      await syncUpdateGenerationPath(root);
+    }
   }
   const generationsStat = await fs.lstat(requestedGenerationsRoot).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -293,6 +315,7 @@ export async function materializeUpdateGeneration(params: {
     });
     await assertGenerationEntrypoint(paths.payloadRoot, entrypointRelativePath);
     await removeUpdateGenerationTree(incomingRoot);
+    await syncUpdateGenerationPath(paths.generationsRoot);
     return {
       generation: {
         formatVersion: 1,
@@ -416,6 +439,26 @@ export async function readUpdateGenerationSelector(
     requireGenerations: false,
   });
   return namespace ? await readUpdateGenerationSelectorAtRoot(namespace.root) : null;
+}
+
+export async function stabilizeUpdateGenerationSelector(params: {
+  namespaceRoot: string;
+  expected: UpdateGenerationSelection;
+}): Promise<void> {
+  assertSelection(params.expected);
+  const namespace = await resolveUpdateGenerationNamespace({
+    namespaceRoot: params.namespaceRoot,
+    create: false,
+    requireGenerations: true,
+  });
+  if (!namespace) {
+    throw new Error(`Update generation namespace is unavailable: ${params.namespaceRoot}`);
+  }
+  const selected = await readUpdateGenerationSelectorAtRoot(namespace.root);
+  if (!selectionsEqual(selected, params.expected)) {
+    throw new Error("Update generation selector changed before durability repair");
+  }
+  await syncUpdateGenerationPath(namespace.root);
 }
 
 async function assertGenerationEntrypoint(
@@ -551,6 +594,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
       throw new Error(`Refusing to use an unknown generation launcher: ${launcherPath}`);
     }
     await fs.chmod(launcherPath, 0o500);
+    await syncUpdateGenerationPath(launcherPath);
   };
   const existingStat = await fs.lstat(launcherPath).catch((error: unknown) => {
     if (hasErrnoCode(error, "ENOENT")) {
@@ -560,6 +604,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
   });
   if (existingStat) {
     await verifyLauncher();
+    await syncUpdateGenerationPath(root);
     return launcherPath;
   }
   const temporaryPath = path.join(root, `.launcher-${randomBytes(8).toString("hex")}.tmp`);
@@ -583,6 +628,7 @@ export async function ensureUpdateGenerationLauncher(namespaceRoot: string): Pro
     }
     try {
       await verifyLauncher();
+      await syncUpdateGenerationPath(root);
       return launcherPath;
     } catch {
       throw error;
@@ -623,6 +669,7 @@ export async function removeObsoleteUpdateGeneration(params: {
   if (!existing) {
     const retired = await fs.lstat(retiredRoot).catch(() => null);
     if (!retired) {
+      await syncUpdateGenerationPath(paths.generationsRoot);
       return false;
     }
     if (!retired.isDirectory() || retired.isSymbolicLink()) {
@@ -644,6 +691,7 @@ export async function removeObsoleteUpdateGeneration(params: {
   const rechecked = await readUpdateGenerationSelectorAtRoot(namespace.root);
   if (rechecked?.generationId === params.generationId) {
     await fs.rename(retiredRoot, paths.generationRoot);
+    await syncUpdateGenerationPath(paths.generationsRoot);
     throw new Error(`Active update generation changed during cleanup: ${params.generationId}`);
   }
   await removeUpdateGenerationTree(retiredRoot);
