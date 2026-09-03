@@ -70,6 +70,9 @@ export async function runManagerInitializeSession(params: {
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedModel && input.modelExplicit ? { modelExplicit: true } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
+        ...(requestedThinking && input.thinkingExplicit !== undefined
+          ? { thinkingExplicit: input.thinkingExplicit }
+          : {}),
         cwd: requestedCwd,
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -84,6 +87,11 @@ export async function runManagerInitializeSession(params: {
         ? handle.appliedModel.model
         : undefined
       : requestedModel,
+    thinking: handle.appliedThinking
+      ? handle.appliedThinking.kind === "applied"
+        ? handle.appliedThinking.thinking
+        : undefined
+      : requestedThinking,
     ...(effectiveCwd ? { cwd: effectiveCwd } : {}),
   });
 
