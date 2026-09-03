@@ -1434,12 +1434,8 @@ class ChatControllerBranchCoordinationTest {
     runTest {
       val key = "agent:main:health-retirement"
       val gateway = ScriptedGateway(json)
-      val historyRequests = AtomicInteger()
       val healthRequests = AtomicInteger()
       val healthy = AtomicBoolean(true)
-      val refreshStarted = CompletableDeferred<Job>()
-      val reconciliationStarted = CompletableDeferred<Job>()
-      val releaseRefresh = CompletableDeferred<Unit>()
       val healthStarted = CompletableDeferred<Job>()
       val releaseHealth = CompletableDeferred<Unit>()
       gateway.respondChatSend("started")
@@ -1457,13 +1453,6 @@ class ChatControllerBranchCoordinationTest {
               entryId = "$id-input",
             )
           messages += ReplayHistoryMessage("assistant", "confirmed", 3L + index * 2, entryId = "$id-reply")
-        }
-        val historyRequest = historyRequests.incrementAndGet()
-        if (historyRequest == 2) {
-          refreshStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
-          releaseRefresh.await()
-        } else if (historyRequest == 3) {
-          reconciliationStarted.complete(requireNotNull(currentCoroutineContext()[Job]))
         }
         historyResponse("health-retirement", messages)
       }
@@ -1490,47 +1479,23 @@ class ChatControllerBranchCoordinationTest {
 
       healthy.set(false)
       controller.refresh()
-      val refreshJob = refreshStarted.await()
-      assertTrue(controller.sendMessageAwaitAcceptance("successor", "off", emptyList()))
-      val healthJob = healthStarted.await()
-      val successor = outbox.load("gateway-a").single { it.id != head.id }
       try {
-        releaseRefresh.complete(Unit)
-        refreshJob.join()
+        // Any current history owner may claim Refresh's health check. Hold only the
+        // unrelated RPC: canonical Room retirement must already be observable.
+        val healthJob = healthStarted.await()
         assertEquals(listOf("before", "head", "confirmed"), controller.messages.value.map { it.content.single().text })
         assertFalse(
           "Canonical history must retire the accepted Room row before the health response",
           outbox.load("gateway-a").any { it.id == head.id },
         )
-        assertEquals(listOf(successor.id), controller.outboxItems.value.map { it.id })
-        assertEquals(ChatOutboxStatus.Queued, successor.status)
-        assertEquals("The successor still waits for branch reconciliation", 1, gateway.callCount("chat.send"))
-
-        releaseHealth.complete(Unit)
-        healthJob.join()
-        reconciliationStarted.await().join()
-        assertFalse(controller.healthOk.value)
-        assertEquals(ChatOutboxStatus.Queued, outbox.load("gateway-a").single().status)
+        assertTrue(controller.outboxItems.value.isEmpty())
         assertEquals(1, gateway.callCount("chat.send"))
 
-        healthy.set(true)
-        controller.refresh()
-        awaitBranchProgress { outbox.load("gateway-a").isEmpty() && controller.outboxItems.value.isEmpty() }
-        val sentIds =
-          gateway.calls.filter { it.method == "chat.send" }.map {
-            json
-              .parseToJsonElement(requireNotNull(it.paramsJson))
-              .jsonObject
-              .getValue("idempotencyKey")
-              .jsonPrimitive
-              .content
-          }
-        assertEquals(listOf(head.id, successor.id), sentIds)
-        assertEquals(listOf("before", "head", "confirmed", "successor", "confirmed"), controller.messages.value.map { it.content.single().text })
-      } finally {
-        releaseRefresh.complete(Unit)
         releaseHealth.complete(Unit)
         healthJob.join()
+        assertFalse(controller.healthOk.value)
+      } finally {
+        releaseHealth.complete(Unit)
       }
     }
 

@@ -109,6 +109,7 @@ export function createChatSendReplyDispatch(params: {
   isAgentRunStarted: () => boolean;
   isRunCurrent?: () => boolean;
   getReplyDispatchRun?: () => ReplyDispatchRun | undefined;
+  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
   logGateway: GatewayRequestContext["logGateway"];
   session: Pick<
     PreparedChatSendSession,
@@ -161,7 +162,11 @@ export function createChatSendReplyDispatch(params: {
     }
     // Record delivery ownership before publication, while preserving raw refs for
     // the exact-row materializer. This is display provenance, never local-file trust.
-    return recordAssistantManagedMediaUrls(message, splitMediaFromOutput(sourceText).mediaUrls);
+    const prepared = recordAssistantManagedMediaUrls(
+      message,
+      splitMediaFromOutput(sourceText).mediaUrls,
+    );
+    return params.prepareAssistantTranscriptMessage?.(prepared, sourceText) ?? prepared;
   };
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
     isMediaBearingPayload(payload) ||

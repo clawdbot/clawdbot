@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { initializeGlobalHookRunner, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { registerMemoryCapability } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
 import { registerPluginCommand } from "openclaw/plugin-sdk/plugin-runtime";
@@ -38,6 +39,7 @@ import {
   getCodexWorkspaceMemoryToolNames,
   prependCodexOpenClawPromptContext,
 } from "./attempt-context.js";
+import * as attemptStartup from "./attempt-startup.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_FINALIZE_DRAIN_ABORT_GRACE_MS, withCodexStartupTimeout } from "./attempt-timeouts.js";
 import { prepareCodexAppServerAuthBinding } from "./auth-binding.js";
@@ -78,6 +80,7 @@ import {
   type v2,
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
+import * as runAttemptResources from "./run-attempt-resources.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
@@ -1974,6 +1977,74 @@ describe("runCodexAppServerAttempt", () => {
       expect(onUserMessagePersisted).toHaveBeenCalledTimes(1);
     },
   );
+  it("persists terminal failure when the execution device disconnects during finalization", async () => {
+    const resourcesSpy = vi.spyOn(runAttemptResources, "prepareCodexAttemptResources");
+    const startupSpy = vi.spyOn(attemptStartup, "startCodexAttemptThread");
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session-terminal-disconnect.jsonl"),
+      path.join(tempDir, "workspace-terminal-disconnect"),
+    );
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "sessions-terminal-disconnect.json"),
+      "session-terminal-disconnect",
+    );
+    const preparedMessages: AssistantMessage[] = [];
+    params.prepareAssistantTranscriptMessage = (message) => {
+      preparedMessages.push(structuredClone(message));
+      return message;
+    };
+    const onAgentEvent = vi.fn();
+    params.onAgentEvent = onAgentEvent;
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await vi.waitFor(() => {
+      expect(resourcesSpy.mock.results[0]?.value.projectorRef.current).toBeDefined();
+    });
+    const projector = resourcesSpy.mock.results[0]?.value.projectorRef.current;
+    const onExecutionDisconnect = startupSpy.mock.calls[0]?.[0].onExecutionDisconnect;
+    if (!projector || !onExecutionDisconnect) {
+      throw new Error("Expected the attempt's active projector and execution disconnect owner");
+    }
+    const disconnectError = new Error("Paired execution device disconnected during finalization.");
+    const buildResult = projector.buildResult.bind(projector);
+    vi.spyOn(projector, "buildResult").mockImplementationOnce((...args) => {
+      const result = buildResult(...args);
+      // Inject device loss at the real enrichment await, after the initial snapshot exists.
+      queueMicrotask(() => onExecutionDisconnect(disconnectError));
+      return result;
+    });
+    const text = "Answer text generated before the device was lost.";
+    await harness.notify(
+      itemNotification("item/completed", {
+        type: "agentMessage",
+        id: "terminal-answer",
+        phase: "final_answer",
+        text,
+      }),
+    );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await expect(run).rejects.toBe(disconnectError);
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "lifecycle",
+      data: expect.objectContaining({ phase: "error", error: disconnectError.message }),
+    });
+    const expectedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text }],
+      stopReason: "error",
+      errorMessage: disconnectError.message,
+    };
+    const persistedMessage = (await readTranscriptMessagesByIdentity(params)).find(
+      (message) => message.idempotencyKey === "codex-app-server:thread-1:turn-1:assistant",
+    );
+    expect({ preparedMessages, persistedMessage }).toEqual({
+      preparedMessages: [expect.objectContaining(expectedAssistant)],
+      persistedMessage: expect.objectContaining(expectedAssistant),
+    });
+  });
+
   it.each([true, false])(
     "checkpoints raw patch output and network provenance with commentary persistence %s",
     async (persistCommentary) => {

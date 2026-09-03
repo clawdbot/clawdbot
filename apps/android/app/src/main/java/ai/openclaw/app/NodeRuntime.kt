@@ -138,6 +138,7 @@ import androidx.webkit.WebViewFeature
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
@@ -150,6 +151,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
@@ -2274,7 +2276,13 @@ class NodeRuntime private constructor(
       },
       onBeforeSpeak = { micCapture.pauseForTts() },
       onAfterSpeak = { micCapture.resumeAfterTts() },
-      onStoppedByRelay = { finishTalkModeAfterRelayClose() },
+      captureRelayStopNotification = {
+        val ownershipEpoch = voiceCaptureOwnershipEpoch.get()
+
+        fun(isCurrent: () -> Boolean) {
+          finishTalkModeAfterRelayClose(ownershipEpoch, isCurrent)
+        }
+      },
     )
   }
 
@@ -3194,9 +3202,13 @@ class NodeRuntime private constructor(
     voiceWakeManager.setForeground(initialForeground)
     voiceWakeManager.setEnabled(prefs.voiceWakeEnabled.value)
     scope.launch {
-      micCapture.micCooldown.collect {
-        // Manual capture drains partial audio for two seconds after its toggle
-        // turns off. Resume Voice Wake only after that capture owner releases.
+      combine(micCapture.micCooldown, talkMode.audioRetirement.completion, micCapture.audioRetirement.completion) { _, talk, mic ->
+        talk to mic
+      }.collectLatest { (talk, mic) ->
+        reconcileVoiceWakeCaptureSuppression()
+        // Completion wakes the projection; failed/cancelled retirement remains suppressed.
+        talk.join()
+        mic.join()
         reconcileVoiceWakeCaptureSuppression()
       }
     }
@@ -3873,6 +3885,8 @@ class NodeRuntime private constructor(
       }
     applyVoiceWakeSuppression(suppressionUpdate)
     try {
+      micCapture.awaitCaptureStopped()
+      talkMode.audioRetirement.await()
       talkMode.refreshConfig()
       return ownershipEpoch
     } catch (err: Throwable) {
@@ -3953,10 +3967,13 @@ class NodeRuntime private constructor(
     return null
   }
 
-  private fun finishTalkModeAfterRelayClose() {
+  private fun finishTalkModeAfterRelayClose(
+    ownershipEpoch: Long,
+    isCurrent: () -> Boolean,
+  ) {
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
-        if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode) return
+        if (_voiceCaptureMode.value != VoiceCaptureMode.TalkMode || voiceCaptureOwnershipEpoch.get() != ownershipEpoch || !isCurrent()) return
         talkPttCommandEpoch.incrementAndGet()
         voiceCaptureOwnershipEpoch.incrementAndGet()
         _voiceCaptureMode.value = VoiceCaptureMode.Off
@@ -4188,16 +4205,18 @@ class NodeRuntime private constructor(
     persistManualMic: Boolean = true,
   ) {
     var startAfterSuppression: VoiceCaptureMode? = null
+    var ownershipEpoch = 0L
     val suppressionUpdate =
       synchronized(voiceCaptureOwnershipLock) {
         if (mode != VoiceCaptureMode.Off && (voiceNoteOwnsMic || dictationOwnsMic)) return
         if (mode != VoiceCaptureMode.Off && cameraAudioOwnsMic) return
+        // Every mode command cancels queued PTT intent; only a real transition replaces the capture owner.
         talkPttCommandEpoch.incrementAndGet()
-        voiceCaptureOwnershipEpoch.incrementAndGet()
         val permissionDenied = mode.requiresMicrophonePermission && !hasRecordAudioPermission()
         val captureMode = if (permissionDenied) VoiceCaptureMode.Off else mode
         if (permissionDenied) prefs.setVoiceMicEnabled(false)
         if (_voiceCaptureMode.value == captureMode && isVoiceCaptureModeActive(captureMode)) return
+        ownershipEpoch = voiceCaptureOwnershipEpoch.incrementAndGet()
         talkPttOwnership.set(null)
         _voiceCaptureMode.value = captureMode
         _activeAudioInputDevicePreference.value = null
@@ -4244,24 +4263,34 @@ class NodeRuntime private constructor(
         }
       }
     applyVoiceWakeSuppression(suppressionUpdate)
-    synchronized(voiceCaptureOwnershipLock) {
-      when (startAfterSuppression) {
-        VoiceCaptureMode.ManualMic -> {
-          if (_voiceCaptureMode.value == VoiceCaptureMode.ManualMic && externalAudioCaptureActive.value) {
-            micCapture.setMicEnabled(true)
+    if (startAfterSuppression == null) return
+    scope.launch(start = CoroutineStart.UNDISPATCHED) {
+      try {
+        if (startAfterSuppression == VoiceCaptureMode.TalkMode) micCapture.awaitCaptureStopped()
+        talkMode.audioRetirement.await()
+      } catch (error: CancellationException) {
+        throw error
+      } catch (error: Exception) {
+        val failed =
+          synchronized(voiceCaptureOwnershipLock) {
+            if (voiceCaptureOwnershipEpoch.get() != ownershipEpoch) return@launch
+            voiceCaptureOwnershipEpoch.incrementAndGet()
+            _voiceCaptureMode.value = VoiceCaptureMode.Off
+            talkMode.ttsOnAllResponses = false
+            talkMode.stopAllCapture(nativeText("Start failed: \$message", error.message.orEmpty()))
+            prefs.setVoiceMicEnabled(false)
+            NodeForegroundService.setVoiceCaptureMode(appContext, VoiceCaptureMode.Off)
+            setExternalAudioCaptureActiveLocked(false)
           }
-        }
-
-        VoiceCaptureMode.TalkMode -> {
-          if (_voiceCaptureMode.value == VoiceCaptureMode.TalkMode && externalAudioCaptureActive.value) {
-            talkMode.setEnabled(true)
-          }
-        }
-
-        VoiceCaptureMode.Off,
-        null,
-        -> {
-          Unit
+        applyVoiceWakeSuppression(failed)
+        return@launch
+      }
+      synchronized(voiceCaptureOwnershipLock) {
+        if (voiceCaptureOwnershipEpoch.get() != ownershipEpoch || _voiceCaptureMode.value != startAfterSuppression) return@launch
+        when (startAfterSuppression) {
+          VoiceCaptureMode.ManualMic -> micCapture.setMicEnabled(true)
+          VoiceCaptureMode.TalkMode -> talkMode.setEnabled(true)
+          else -> Unit
         }
       }
     }
@@ -4346,7 +4375,7 @@ class NodeRuntime private constructor(
   private fun createVoiceCaptureSuppressionUpdateLocked(): VoiceWakeSuppressionUpdate =
     createVoiceWakeSuppressionUpdateLocked(
       reason = VoiceWakeSuppressionReason.VoiceCapture,
-      suppressed = externalAudioCaptureActive.value || micCapture.micCooldown.value,
+      suppressed = externalAudioCaptureActive.value || micCapture.micCooldown.value || talkMode.audioRetirement.pending || micCapture.audioRetirement.pending,
     )
 
   private fun createVoiceWakeSuppressionUpdateLocked(
@@ -4389,6 +4418,8 @@ class NodeRuntime private constructor(
           !externalAudioCaptureActive.value &&
           !micCapture.micEnabled.value &&
           !micCapture.micCooldown.value &&
+          !micCapture.audioRetirement.pending &&
+          !talkMode.audioRetirement.pending &&
           !talkMode.isEnabled.value &&
           talkMode.activePushToTalkCaptureId == null
       }
