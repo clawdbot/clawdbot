@@ -569,10 +569,11 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
       authProfileId: null,
       timeoutMs: 180_000,
     });
+    const activeClient = client;
 
     // Read-only observation of the production RPC payloads; the request itself is untouched.
-    const originalRequest = client.request.bind(client);
-    (client as unknown as { request: unknown }).request = async (
+    const originalRequest = activeClient.request.bind(activeClient);
+    (activeClient as unknown as { request: unknown }).request = async (
       method: string,
       params: unknown,
       opts?: unknown,
@@ -711,7 +712,7 @@ async function runTrial(arm: Arm, scenario: Scenario, replicate: number): Promis
         {
           bindingStore: createCodexTestBindingStore(),
           pluginConfig: { appServer: { homeScope: "user" } },
-          clientFactory: async () => client,
+          clientFactory: async () => activeClient,
         },
       );
       trial.terminal = asText((result.terminal as { kind?: unknown })?.kind, "unknown");
