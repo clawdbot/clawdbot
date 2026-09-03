@@ -8,7 +8,7 @@ import android.net.NetworkRequest
 import android.util.Log
 
 /**
- * Listens for Android transport restores and signals [onValidatedNetworkAvailable] when the device
+ * Listens for Android transport restores and signals [onNetworkAvailable] when the device
  * regains a validated internet connection, or when any network newly attaches at all. Used to
  * trigger an immediate gateway reconnect instead of waiting out the time-based backoff slot in
  * [GatewaySession].
@@ -24,15 +24,12 @@ import android.util.Log
  */
 internal class NetworkMonitor(
   context: Context,
-  private val onValidatedNetworkAvailable: () -> Unit,
+  private val onNetworkAvailable: () -> Unit,
 ) {
   private val connectivity = context.getSystemService(ConnectivityManager::class.java)
   private val logTag = "OpenClaw/NetworkMonitor"
 
-  // Tracks the last emitted transport state so capability churn (e.g. signal strength
-  // changes) does not re-fire the reconnect path. Only a lost->validated transition
-  // should signal.
-  private val validatedNetworks = ValidatedNetworkState<Network>()
+  private val restoreState = NetworkRestoreState<Network>()
 
   // registerNetworkCallback() replays every already-matching network's current state right after
   // registration, and that replay is indistinguishable from a later genuine change: there is no
@@ -47,14 +44,6 @@ internal class NetworkMonitor(
   // asks for acceptance of elsewhere in this body.
   private val registeredAtNanos = System.nanoTime()
 
-  // The fan-out a notification triggers reaches every session regardless of which network
-  // changed, so when several transports validate close together (e.g. Wi-Fi and cellular both
-  // reactivating from doze at once) each one's own edge would otherwise fire its own full
-  // fan-out — repeatedly closing a session's just-started reconnect attempt before its handshake
-  // can finish. This debounces to one notification per burst; nothing about which network caused
-  // it is lost, because the fan-out is not per-network to begin with.
-  @Volatile private var lastNotifiedAtNanos: Long? = null
-
   private val callback =
     object : ConnectivityManager.NetworkCallback() {
       override fun onAvailable(network: Network) {
@@ -63,8 +52,9 @@ internal class NetworkMonitor(
         // registration-replay hazard as onCapabilitiesChanged below: registerNetworkCallback()
         // replays onAvailable for every network already connected at registration time, so the
         // same bootstrap grace absorbs it.
-        if (!isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
-          notifyValidatedNetworkAvailableDebounced()
+        val newlyAvailable = restoreState.onAvailable(network)
+        if (newlyAvailable && !isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
+          notifyNetworkAvailable()
         }
       }
 
@@ -72,14 +62,18 @@ internal class NetworkMonitor(
         network: Network,
         capabilities: NetworkCapabilities,
       ) {
-        val justValidated = validatedNetworks.update(network, isTransportValidated(capabilities))
+        val justValidated =
+          restoreState.onCapabilitiesChanged(
+            network,
+            isTransportValidated(capabilities),
+          )
         if (justValidated && !isWithinNetworkMonitorBootstrapGrace(registeredAtNanos, System.nanoTime())) {
-          notifyValidatedNetworkAvailableDebounced()
+          notifyNetworkAvailable()
         }
       }
 
       override fun onLost(network: Network) {
-        validatedNetworks.update(network, isValidated = false)
+        restoreState.onLost(network)
       }
     }
 
@@ -93,25 +87,15 @@ internal class NetworkMonitor(
   private fun start() {
     val cm = connectivity ?: return
     try {
-      // Equivalent to the default request used by GatewayDiscovery: match any network.
-      cm.registerNetworkCallback(NetworkRequest.Builder().build(), callback)
+      cm.registerNetworkCallback(appUsableNetworkRequest(), callback)
     } catch (err: Throwable) {
       Log.w(logTag, "registerNetworkCallback failed: ${err.message ?: err::class.java.simpleName}")
     }
   }
 
-  private fun notifyValidatedNetworkAvailableDebounced() {
-    val now = System.nanoTime()
-    synchronized(this) {
-      if (isWithinNetworkMonitorNotifyDebounce(lastNotifiedAtNanos, now)) return
-      lastNotifiedAtNanos = now
-    }
-    notifyValidatedNetworkAvailable()
-  }
-
-  private fun notifyValidatedNetworkAvailable() {
+  private fun notifyNetworkAvailable() {
     try {
-      onValidatedNetworkAvailable()
+      onNetworkAvailable()
     } catch (err: Throwable) {
       Log.w(logTag, "network restore callback threw: ${err.message ?: err::class.java.simpleName}")
     }
@@ -123,7 +107,7 @@ internal class NetworkMonitor(
       val active = cm.activeNetwork ?: return
       val caps = cm.getNetworkCapabilities(active) ?: return
       if (isTransportValidated(caps)) {
-        validatedNetworks.update(active, isValidated = true)
+        restoreState.seedValidated(active)
       }
     } catch (_: Throwable) {
       // Callback delivery remains the source of truth when the initial snapshot races.
@@ -131,32 +115,57 @@ internal class NetworkMonitor(
   }
 }
 
-internal class ValidatedNetworkState<T>(
+// Android requests exclude VPNs by default. Both discovery and reconnect monitoring need every
+// app-visible route or a private Gateway can return without either owner observing its VPN.
+internal fun appUsableNetworkRequest(): NetworkRequest =
+  NetworkRequest
+    .Builder()
+    .removeCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+    .build()
+
+// onAvailable and its first capability callback describe one availability episode. Coalesce only
+// that pair per network; a different route must always be able to wake the reconnect fleet.
+internal class NetworkRestoreState<T>(
   initialValidatedNetworks: Set<T> = emptySet(),
 ) {
+  private val availableNetworks = initialValidatedNetworks.toMutableSet()
   private val validatedNetworks = initialValidatedNetworks.toMutableSet()
+  private val awaitingInitialCapabilities = mutableSetOf<T>()
 
-  /**
-   * Records [network]'s current validated state and reports whether it just became reachable.
-   *
-   * Signals on this network's own offline->online edge, not on the aggregate "is anything
-   * online" state: a saved Gateway can be reachable over one specific route only, so cellular
-   * staying validated the whole time must not swallow a returning Wi-Fi/LAN network's own
-   * restore. A network already known validated still reports no change, which is what keeps
-   * capability churn (e.g. signal-strength updates) from re-firing.
-   */
   @Synchronized
-  fun update(
+  fun onAvailable(network: T): Boolean {
+    if (!availableNetworks.add(network)) return false
+    awaitingInitialCapabilities.add(network)
+    return true
+  }
+
+  @Synchronized
+  fun onCapabilitiesChanged(
     network: T,
     isValidated: Boolean,
   ): Boolean {
+    availableNetworks.add(network)
+    val followsAvailability = awaitingInitialCapabilities.remove(network)
     val wasValidated = validatedNetworks.contains(network)
     if (isValidated) {
       validatedNetworks.add(network)
     } else {
       validatedNetworks.remove(network)
     }
-    return isValidated && !wasValidated
+    return isValidated && !wasValidated && !followsAvailability
+  }
+
+  @Synchronized
+  fun onLost(network: T) {
+    availableNetworks.remove(network)
+    validatedNetworks.remove(network)
+    awaitingInitialCapabilities.remove(network)
+  }
+
+  @Synchronized
+  fun seedValidated(network: T) {
+    availableNetworks.add(network)
+    validatedNetworks.add(network)
   }
 }
 
@@ -182,21 +191,3 @@ internal fun isWithinNetworkMonitorBootstrapGrace(
   registeredAtNanos: Long,
   nowNanos: Long,
 ): Boolean = nowNanos - registeredAtNanos < NETWORK_MONITOR_BOOTSTRAP_GRACE_NANOS
-
-/**
- * How long one notification suppresses another. Long enough to coalesce several transports
- * validating together (radios reactivating from doze tend to land within the same instant, not
- * seconds apart); short enough that a later, genuinely separate restore is not meaningfully
- * delayed.
- */
-internal const val NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS = 2_000_000_000L
-
-/**
- * Whether a notification at [nowNanos] falls inside the debounce window after [lastNotifiedAtNanos]
- * (`null` meaning no notification has happened yet). Exposed internal so the boundary can be
- * unit-tested without a Robolectric ConnectivityManager shadow.
- */
-internal fun isWithinNetworkMonitorNotifyDebounce(
-  lastNotifiedAtNanos: Long?,
-  nowNanos: Long,
-): Boolean = lastNotifiedAtNanos != null && nowNanos - lastNotifiedAtNanos < NETWORK_MONITOR_NOTIFY_DEBOUNCE_NANOS
