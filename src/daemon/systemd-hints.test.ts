@@ -1,7 +1,12 @@
 // Systemd hint tests cover Linux daemon setup guidance.
 import { describe, expect, it } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
-import { isSystemdUnavailableDetail, renderSystemdUnavailableHints } from "./systemd-hints.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
+import {
+  isSystemdUnavailableDetail,
+  renderSystemdErrorHints,
+  renderSystemdUnavailableHints,
+} from "./systemd-hints.js";
 
 describe("isSystemdUnavailableDetail", () => {
   it("matches systemd unavailable error details", () => {
@@ -44,8 +49,26 @@ describe("renderSystemdUnavailableHints", () => {
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
       "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
       "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
+      "If `/run/user/$(id -u)/bus` is missing, install the D-Bus user session bus (Debian/Ubuntu: `sudo apt-get install dbus-user-session`), then run `systemctl --user daemon-reload && systemctl --user start dbus.socket`.",
       `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway")}\`.`,
     ]);
+  });
+
+  it("renders hints only for classified Linux service-manager errors", async () => {
+    const userBusError = new Error(
+      "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory",
+    );
+    await withMockedPlatform("linux", async () => {
+      await expect(renderSystemdErrorHints(userBusError)).resolves.toEqual(
+        expect.arrayContaining([expect.stringContaining("dbus-user-session")]),
+      );
+      await expect(
+        renderSystemdErrorHints(new Error("inspection-secret-canary")),
+      ).resolves.toBeUndefined();
+    });
+    await withMockedPlatform("darwin", async () => {
+      await expect(renderSystemdErrorHints(userBusError)).resolves.toBeUndefined();
+    });
   });
 
   it("skips headless recovery hints when container context is known", () => {

@@ -57,6 +57,8 @@ async function withServiceHome(run: (home: string) => Promise<void>): Promise<vo
         OPENCLAW_SUPERVISOR_MODE: undefined,
         OPENCLAW_SERVICE_MARKER: undefined,
         OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_CONTAINER_HINT: undefined,
+        OPENCLAW_CONTAINER: undefined,
       },
       () => run(home),
     );
@@ -272,4 +274,52 @@ it
       },
     );
   }),
+);
+
+const USER_BUS_INSPECTION_FAILURE =
+  "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory";
+
+it.each([
+  { shouldRestart: true, failure: USER_BUS_INSPECTION_FAILURE, classified: true },
+  { shouldRestart: false, failure: USER_BUS_INSPECTION_FAILURE, classified: true },
+  { shouldRestart: true, failure: "inspection-secret-canary", classified: false },
+])(
+  "keeps a failed Linux inspection fail-closed and names a classified systemd cause (restart=$shouldRestart, classified=$classified)",
+  ({ shouldRestart, failure, classified }) =>
+    withServiceHome(async () => {
+      mockProcessPlatform("linux");
+      const service = createMockGatewayService({
+        readCommand: async () => {
+          throw new Error(failure);
+        },
+      });
+      mocks.service.mockReturnValue(service);
+      const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart,
+        phase: "inspect",
+        jsonMode: true,
+      });
+      // A failed inspection is fail-closed for both restart modes, so the
+      // refusal always travels on blockMessage.
+      const message = inspected.blockMessage;
+      expect(inspected.inspected).toBe(false);
+      expect(inspected.serviceMutationAllowed).toBe(false);
+      expect(message).toContain("inspection is unavailable");
+      expect(message).toContain("gateway status --deep");
+      // Raw inspection errors never reach update output; only the classified family does.
+      expect(message).not.toContain("No such file or directory");
+      expect(message).not.toContain("inspection-secret-canary");
+      if (classified) {
+        expect(message).toContain("dbus-user-session");
+        expect(message).toContain("loginctl enable-linger");
+        expect(inspected.serviceInspectionHints).toEqual(
+          expect.arrayContaining([expect.stringContaining("dbus-user-session")]),
+        );
+      } else {
+        expect(inspected.serviceInspectionHints).toBeUndefined();
+      }
+      expect(service.stop).not.toHaveBeenCalled();
+    }),
 );

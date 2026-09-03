@@ -1,5 +1,6 @@
 /** Renders Linux systemd availability hints for gateway service commands. */
 import { formatCliCommand } from "../cli/command-format.js";
+import { isWSL } from "../infra/wsl.js";
 import { resolveDaemonContainerContext } from "./container-context.js";
 import {
   classifySystemdUnavailableDetail,
@@ -21,6 +22,7 @@ function renderSystemdHeadlessServerHints(): string[] {
   return [
     "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
     "Also ensure XDG_RUNTIME_DIR is set: `export XDG_RUNTIME_DIR=/run/user/$(id -u)`, then retry.",
+    "If `/run/user/$(id -u)/bus` is missing, install the D-Bus user session bus (Debian/Ubuntu: `sudo apt-get install dbus-user-session`), then run `systemctl --user daemon-reload && systemctl --user start dbus.socket`.",
   ];
 }
 
@@ -42,4 +44,11 @@ export function renderSystemdUnavailableHints(
       : renderSystemdHeadlessServerHints()),
     `If you're in a container, run the gateway in the foreground instead of \`${formatCliCommand("openclaw gateway", options.env)}\`.`,
   ];
+}
+
+/** Hints for a failed Linux service-manager call; undefined when the failure is not a known systemd family. */
+export async function renderSystemdErrorHints(error: unknown): Promise<string[] | undefined> {
+  const kind =
+    process.platform === "linux" ? classifySystemdUnavailableDetail(String(error)) : null;
+  return kind ? renderSystemdUnavailableHints({ wsl: await isWSL(), kind }) : undefined;
 }

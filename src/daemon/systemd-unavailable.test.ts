@@ -45,6 +45,12 @@ describe("classifySystemdUnavailableDetail", () => {
         "systemctl --user unavailable: Failed to connect to bus: Permission denied",
       ),
     ).toBe("user_bus_unavailable");
+    // A missing bus socket reports ENOENT too; that is not a missing systemctl binary.
+    expect(
+      classifySystemdUnavailableDetail(
+        "Effective systemd service command could not be inspected: Failed to connect to user scope bus via local transport: No such file or directory",
+      ),
+    ).toBe("user_bus_unavailable");
   });
 
   it("classifies generic systemd-unavailable details", () => {

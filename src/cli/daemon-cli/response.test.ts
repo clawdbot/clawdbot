@@ -15,6 +15,7 @@ describe("daemon action JSON hints", () => {
       "Restart the container or the service that manages it for openclaw-demo-container.",
       "systemd user services are unavailable; install/enable systemd or run the gateway under your supervisor.",
       "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
+      "If `/run/user/$(id -u)/bus` is missing, install the D-Bus user session bus (Debian/Ubuntu: `sudo apt-get install dbus-user-session`), then run `systemctl --user daemon-reload && systemctl --user start dbus.socket`.",
       "If you're in a container, run the gateway in the foreground instead of `openclaw gateway`.",
       "WSL2 needs systemd enabled: edit /etc/wsl.conf with [boot]\\nsystemd=true",
     ];
@@ -39,6 +40,10 @@ describe("daemon action JSON hints", () => {
           {
             kind: "systemd-headless",
             text: "On a headless server (SSH/no desktop session): run `sudo loginctl enable-linger $(whoami)` to persist your systemd user session across logins.",
+          },
+          {
+            kind: "systemd-headless",
+            text: "If `/run/user/$(id -u)/bus` is missing, install the D-Bus user session bus (Debian/Ubuntu: `sudo apt-get install dbus-user-session`), then run `systemctl --user daemon-reload && systemctl --user start dbus.socket`.",
           },
           {
             kind: "container-foreground",

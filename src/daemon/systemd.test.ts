@@ -1605,6 +1605,27 @@ describe("readSystemdServiceExecStart", () => {
     ).rejects.toThrow("unreadable-service-secret-canary");
   });
 
+  it("preserves the user-bus failure behind a strict manager inspection", async () => {
+    // Headless hosts without dbus-user-session: systemctl works, busctl cannot reach the bus.
+    const stderr =
+      "Failed to connect to user scope bus via local transport: No such file or directory";
+    mockReadGatewayServiceFile(["[Service]", "ExecStart=/usr/bin/openclaw gateway run"]);
+    execFileMock.mockReset();
+    execFileMock.mockImplementation((_command, _args, _options, callback) => {
+      callback(createExecFileError(stderr, { stderr }), "", stderr);
+    });
+
+    await expect(
+      readSystemdServiceExecStart({ HOME: TEST_SERVICE_HOME }, { requireEffective: true }),
+    ).rejects.toThrow(`Effective systemd service command could not be inspected: ${stderr}`);
+    expect(execFileMock).toHaveBeenCalledWith(
+      "busctl",
+      expect.arrayContaining(["LoadUnit", GATEWAY_SERVICE]),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it.each([false, true])(
     "reads a global user fragment without inventing a managed base (local=%s)",
     async (local) => {

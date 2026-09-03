@@ -17,7 +17,7 @@ import type {
   GatewayServiceManagedOverrides,
   GatewayServiceReadOptions,
 } from "./service-types.js";
-import { execBusctlUser } from "./systemd-exec.js";
+import { execBusctlUser, readSystemctlDetail } from "./systemd-exec.js";
 import {
   parseSystemdEnvAssignments,
   parseSystemdExecStart,
@@ -96,7 +96,14 @@ async function readSystemdManagerCommand(
 ): Promise<GatewayServiceCommandConfig | null> {
   const manager = "org.freedesktop.systemd1";
   const unitName = `${resolveSystemdServiceName(env)}.service`;
-  const unavailable = () => new Error("Effective systemd service command could not be inspected.");
+  // The manager's own diagnostic (missing user bus, timeout) travels with the
+  // error so callers can classify it instead of reporting a bare inspection failure.
+  const unavailable = (detail?: string) =>
+    new Error(
+      detail
+        ? `Effective systemd service command could not be inspected: ${detail}`
+        : "Effective systemd service command could not be inspected.",
+    );
   const timeoutMs =
     opts?.timeoutMs && opts.timeoutMs > 0 ? opts.timeoutMs : SYSTEMD_MANAGER_QUERY_TIMEOUT_MS;
   const deadlineAt = Date.now() + timeoutMs;
@@ -115,7 +122,7 @@ async function readSystemdManagerCommand(
       ) {
         return null;
       }
-      throw unavailable();
+      throw unavailable(readSystemctlDetail(result));
     }
     const properties = result.stdout
       .trim()
