@@ -158,16 +158,37 @@ suite.define(() => {
             borderWidth: actionStyle.borderTopWidth,
             boxShadow: actionStyle.boxShadow,
             color: actionStyle.color,
-            iconHeight: iconStyle?.height,
             iconOpacity: iconStyle?.opacity,
             iconStrokeWidth: iconStyle?.strokeWidth,
-            iconWidth: iconStyle?.width,
           };
         }),
       );
     expect(actionStyles).toHaveLength(3);
     expect(actionStyles[1]).toEqual(actionStyles[0]);
     expect(actionStyles[2]).toEqual(actionStyles[0]);
+    await expect
+      .poll(() =>
+        sidebarBrand
+          .locator(".sidebar-brand__collapse, .sidebar-brand__search, .sidebar-brand__new-thread")
+          .evaluateAll((actions) =>
+            actions.map((action) => {
+              const icon = action.querySelector("svg");
+              if (!icon) {
+                return null;
+              }
+              const shapes = Array.from(
+                icon.querySelectorAll<SVGGraphicsElement>(
+                  "circle, ellipse, line, path, polygon, polyline, rect",
+                ),
+              );
+              const bounds = shapes.map((shape) => shape.getBBox());
+              const left = Math.min(...bounds.map((box) => box.x));
+              const right = Math.max(...bounds.map((box) => box.x + box.width));
+              return Math.round((right - left) * (icon.getBoundingClientRect().width / 24));
+            }),
+          ),
+      )
+      .toEqual([12, 12, 12]);
 
     const actionInset = async (direction: "ltr" | "rtl") => {
       const [brandBox, actionsBox] = await Promise.all([

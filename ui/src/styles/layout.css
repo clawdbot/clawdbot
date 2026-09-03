@@ -1114,6 +1114,12 @@ openclaw-settings-save-indicator:empty {
   stroke-linejoin: round;
 }
 
+.sidebar-brand__new-thread svg {
+  /* The plus path occupies less of its viewBox than the panel/search artwork. */
+  width: 20px;
+  height: 20px;
+}
+
 .sidebar-shell__content {
   display: flex;
   flex: 1;
