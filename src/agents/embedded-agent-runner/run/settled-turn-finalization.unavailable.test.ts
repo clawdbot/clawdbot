@@ -19,6 +19,8 @@ import { createSettledFinalizationTestInput } from "./settled-turn-finalization.
 
 const FALLBACK =
   "The tool run finished, but no final summary was produced. I did not repeat any completed actions.";
+const CATALOG_MISS =
+  "Unknown tool id: MCP.github.missing. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.";
 
 describe("unavailable finalization through the real core backend", () => {
   const fixture = useTempSessionsFixture("settled-finalization-unavailable-");
@@ -30,12 +32,17 @@ describe("unavailable finalization through the real core backend", () => {
   afterEach(() => admission.close());
 
   it.each([
-    { terminal: "ok", context: "unavailable" },
-    { terminal: "failed", context: "unavailable" },
-    { terminal: "failed", context: "openclaw-transcript" },
+    { terminal: "ok", context: "unavailable", toolFailed: false, silentExpected: false },
+    {
+      terminal: "failed",
+      context: "openclaw-transcript",
+      toolFailed: true,
+      silentExpected: false,
+    },
+    { terminal: "ok", context: "unavailable", toolFailed: false, silentExpected: true },
   ] as const)(
-    "persists one honest fallback without replaying completed work ($terminal/$context)",
-    async ({ terminal, context }) => {
+    "keeps settled work terminal when finalizer capability is absent ($terminal/$context, silent: $silentExpected)",
+    async ({ terminal, context, toolFailed, silentExpected }) => {
       const admittedRunContext = await admission.admit("embedded");
       const assistant = buildEmbeddedRunnerAssistant({
         provider: "openai",
@@ -50,9 +57,9 @@ describe("unavailable finalization through the real core backend", () => {
             : { kind: "failed", source: "prompt", error: new Error("The provider is overloaded") },
         sessionIdUsed: "session-settled",
         assistantTexts: [],
-        currentAttemptAssistant: undefined,
+        currentAttemptAssistant: toolFailed ? assistant : undefined,
         currentAttemptCompletedAssistant: undefined,
-        lastAssistant: undefined,
+        lastAssistant: toolFailed ? assistant : undefined,
         messagesSnapshot: [
           { role: "user", content: "Run the command once.", timestamp: 1 },
           assistant,
@@ -61,14 +68,31 @@ describe("unavailable finalization through the real core backend", () => {
             toolCallId: "completed-command",
             toolName: "exec",
             content: [{ type: "text", text: "completed-once" }],
-            isError: false,
+            isError: toolFailed,
             timestamp: 3,
           },
         ],
-        toolMetas: [{ toolName: "exec", toolCallId: "completed-command", replaySafe: false }],
+        toolMetas: [
+          {
+            toolName: "exec",
+            toolCallId: "completed-command",
+            isError: toolFailed,
+            replaySafe: false,
+          },
+        ],
         itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
         currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
+        ...(toolFailed
+          ? {
+              codeModeEngaged: true,
+              lastToolError: {
+                toolName: "exec",
+                error: CATALOG_MISS,
+                errorCode: "INVALID_REQUEST",
+              },
+            }
+          : {}),
       });
       attempt.settledTurnFinalizationContext =
         context === "unavailable"
@@ -87,8 +111,9 @@ describe("unavailable finalization through the real core backend", () => {
         await appendSessionTranscriptMessageByIdentity({ ...target, message });
       }
       const prefix = await readVisibleSessionTranscriptMessageEntries(target);
+      const prefixBytes = JSON.stringify(prefix);
       const input = createSettledFinalizationTestInput(attempt, admittedRunContext);
-      input.terminalBase.runParams.trigger = "user";
+      input.terminalBase.runParams.trigger = toolFailed ? "cron" : "user";
       input.terminalBase.runParams.sessionKey = target.sessionKey;
       Object.assign(
         input.finalization.preparedAttempt,
@@ -103,22 +128,32 @@ describe("unavailable finalization through the real core backend", () => {
           resolvedApiKey: "synthetic-unused-host-key",
         },
       );
-      const finalize = vi.fn(async () => {
-        throw new Error("Harness-owned finalization is unavailable");
-      });
       const runAttempt = vi.fn(async () => {
         throw new Error("Completed work must not be replayed");
       });
-      input.finalization.harness.finalizeSettledTurn = finalize;
+      delete input.finalization.harness.finalizeSettledTurn;
       input.finalization.harness.runAttempt = runAttempt;
+      input.finalization.preparedAttempt.silentExpected = silentExpected;
 
       const result = await prepareTerminalWithSettledTurnFinalization(input);
 
-      expect(finalize).toHaveBeenCalledOnce();
-      expect(finalize).toHaveBeenCalledWith(expect.objectContaining({ settledAttempt: attempt }));
+      expect("finalizeSettledTurn" in input.finalization.harness).toBe(false);
+      expect(input.finalization.harness.finalizeSettledTurn).toBeUndefined();
       expect(runAttempt).not.toHaveBeenCalled();
       expect(result.finalizationOutcome).toBe("failed");
-      expect(result.prepared.failureSignal).toBeUndefined();
+      expect(JSON.stringify(attempt)).toBe(original);
+      expect(attempt.terminal.kind).toBe(terminal);
+      const transcript = await readVisibleSessionTranscriptMessageEntries(target);
+      expect(JSON.stringify(transcript.slice(0, prefix.length))).toBe(prefixBytes);
+      if (silentExpected) {
+        expect(result.attempt).toBe(attempt);
+        expect(result.prepared.payloadsWithToolMedia).not.toContainEqual(
+          expect.objectContaining({ text: FALLBACK }),
+        );
+        expect(transcript).toHaveLength(prefix.length);
+        return;
+      }
+
       expect(result.prepared.payloadsWithToolMedia?.[0]?.isError).not.toBe(true);
       expect(result.prepared.payloadsWithToolMedia).toEqual([
         expect.objectContaining({ text: FALLBACK }),
@@ -134,12 +169,9 @@ describe("unavailable finalization through the real core backend", () => {
         provider: assistant.provider,
         model: assistant.model,
       });
-      expect(JSON.stringify(attempt)).toBe(original);
-      expect(attempt.terminal.kind).toBe(terminal);
-      const transcript = await readVisibleSessionTranscriptMessageEntries(target);
-      expect(transcript.slice(0, prefix.length)).toEqual(prefix);
       expect(transcript.slice(prefix.length)).toMatchObject([
         {
+          idempotencyKey: "run-settled:settled-finalization-fallback",
           message: {
             provider: "openclaw",
             model: "delivery-mirror",
@@ -148,6 +180,24 @@ describe("unavailable finalization through the real core backend", () => {
         },
       ]);
       expect(transcript).toHaveLength(prefix.length + 1);
+      if (toolFailed) {
+        expect(result.prepared.failureSignal).toEqual({
+          kind: "execution_denied",
+          source: "tool",
+          toolName: "exec",
+          code: "INVALID_REQUEST",
+          message: CATALOG_MISS,
+          fatalForCron: true,
+        });
+        expect(result.prepared.terminalToolFailure).toEqual({
+          source: "tool",
+          toolName: "exec",
+          code: "UNKNOWN_TOOL_ID",
+        });
+      } else {
+        expect(result.prepared.failureSignal).toBeUndefined();
+        expect(result.prepared.terminalToolFailure).toBeUndefined();
+      }
     },
   );
 });

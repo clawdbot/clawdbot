@@ -892,11 +892,19 @@ The callback is a separate capability, not another ordinary attempt. It must:
 - fail closed if its selected transcript/isolation strategy cannot enforce
   those restrictions.
 
-OpenClaw invokes the callback once as a terminal sub-operation, outside the
-ordinary attempt and retry loop. A failure ends the run with the
-side-effect-aware incomplete-turn warning; it cannot enter ordinary
-auth/profile rotation, model fallback, context recovery, compaction
-continuation, or hook-requested revision paths. Finalization also skips plugin
+OpenClaw runs finalization as a terminal sub-operation, outside the ordinary
+attempt and retry loop. An empty result gets one more tool-free finalization
+attempt. If the callback is missing, throws, or exhausts both attempts without
+visible text, an otherwise eligible required visible turn receives one
+deterministic host fallback. OpenClaw persists that fallback as one idempotent
+assistant mirror and marks it for delivery through source-reply suppression. It
+does not call `runAttempt`, repeat the original model turn, or replay completed
+tools. Canonical failed-tool metadata remains attached to the terminal result.
+Runs with `silentExpected` never synthesize or persist this fallback.
+
+Cancellation remains terminal and does not produce the fallback. Finalization
+cannot enter ordinary auth/profile rotation, model fallback, context recovery,
+compaction continuation, or hook-requested revision paths. It also skips plugin
 prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
 `agent_end` hooks. Core diagnostics still record the operation and its failure.
 
@@ -947,12 +955,14 @@ projection field.
 
 Do not implement this callback by calling `runAttempt` with a best-effort
 `disableTools` hint. The harness owner must enforce the complete native
-capability boundary. OpenClaw does not provide a generic fallback because it
-cannot attest that an arbitrary native runtime honored those restrictions.
+capability boundary. OpenClaw does not substitute a generic model completion
+when that boundary is unavailable; its fallback is fixed host text derived
+without invoking the harness or interpreting the settled transcript.
 
 The callback remains optional for experimental third-party harness
-compatibility. When the selected harness omits it, OpenClaw preserves the
-existing incomplete-turn error instead of risking repeated side effects.
+compatibility. Omitting it therefore selects the same deterministic no-model
+fallback used for a failed or exhausted finalizer, subject to the eligibility,
+silence, cancellation, and transcript-writer rules above.
 
 ## Current limitations
 

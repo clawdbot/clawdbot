@@ -134,7 +134,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         payloadsWithToolMedia: [],
         hasTerminalToolPresentation: false,
         terminalState,
-        settledTurnFinalizationAvailable: true,
       });
 
     expect(request("required")).toBe(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);
@@ -153,7 +152,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         payloadsWithToolMedia: [],
         hasTerminalToolPresentation: false,
         terminalState,
-        settledTurnFinalizationAvailable: true,
       }),
     ).toBeNull();
   });
@@ -204,14 +202,13 @@ describe("resolveSettledTurnFinalizationRequest", () => {
           attempt,
           assistant: silentAssistant,
         }),
-        settledTurnFinalizationAvailable: true,
       });
 
     expect(request({ trigger: "heartbeat" })).toBeNull();
     expect(request({ trigger: "user", terminalReplyExpectation: "required" })).toBeNull();
   });
 
-  it("requires an available finalizer and no visible structured error", () => {
+  it("does not finalize a visible structured error", () => {
     const assistant = buildEmbeddedRunnerAssistant({
       stopReason: "toolUse",
       content: [{ type: "toolCall", id: "tool-1", name: "exec", arguments: {} }],
@@ -233,7 +230,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
       payloadsWithToolMedia?: Parameters<
         typeof resolveSettledTurnFinalizationRequest
       >[0]["payloadsWithToolMedia"];
-      settledTurnFinalizationAvailable?: boolean;
     }) =>
       resolveSettledTurnFinalizationRequest({
         runParams: {
@@ -249,7 +245,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         payloadsWithToolMedia: overrides.payloadsWithToolMedia ?? [],
         hasTerminalToolPresentation: false,
         terminalState,
-        settledTurnFinalizationAvailable: overrides.settledTurnFinalizationAvailable ?? true,
       });
 
     expect(
@@ -263,7 +258,6 @@ describe("resolveSettledTurnFinalizationRequest", () => {
         ],
       }),
     ).toBeNull();
-    expect(request({ settledTurnFinalizationAvailable: false })).toBeNull();
     expect(
       request({ payloadsWithToolMedia: [{ text: "⚠️ 🛠️ Exec failed", isError: true }] }),
     ).toContain(SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION);

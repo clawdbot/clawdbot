@@ -102,8 +102,6 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
     terminalState: initial.terminalState,
-    settledTurnFinalizationAvailable:
-      typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
   if (!prompt) {
     return {

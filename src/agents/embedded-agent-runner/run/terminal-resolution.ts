@@ -116,11 +116,7 @@ export function resolveSettledTurnFinalizationRequest(input: {
   recoveredFinalAssistantPayloadsAfterPromptTimeout?: EmbeddedAgentRunResult["payloads"];
   hasTerminalToolPresentation: boolean;
   terminalState: EmbeddedRunTerminalState;
-  settledTurnFinalizationAvailable: boolean;
 }): string | null {
-  if (!input.settledTurnFinalizationAvailable) {
-    return null;
-  }
   const terminalAborted = isEmbeddedRunTerminalAbort(input.terminalState.outcome);
   const terminalTimedOut = isEmbeddedRunTerminalTimeout(input.terminalState.outcome);
   const silentToolResultReplyPayload = resolveSilentToolResultReplyPayload({
