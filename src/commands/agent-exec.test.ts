@@ -198,8 +198,8 @@ describe("agent exec strict result classification", () => {
 });
 
 describe("agent exec command composition", () => {
-  it("bounds blocked service-relay construction through the shipped CLI command", async () => {
-    const root = tempDirs.make("openclaw-agent-exec-service-construction-");
+  it("times out the selected CLI and cleans its process through agent exec", async () => {
+    const root = tempDirs.make("openclaw-agent-exec-cli-timeout-");
     const binDir = path.join(root, "bin");
     const pidPath = path.join(root, "command.pid");
     const configPath = path.join(root, "openclaw.json");
@@ -208,8 +208,12 @@ describe("agent exec command composition", () => {
     await fs.writeFile(
       claudePath,
       `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo '2.1.98 (Claude Code)'
+  exit 0
+fi
 printf '%s' "$$" > ${JSON.stringify(pidPath)}
-sleep 60
+exec sleep 60
 `,
       "utf8",
     );
@@ -238,23 +242,15 @@ sleep 60
       },
       async () => {
         const { runtime } = createRuntime();
-        const result = agentExecCommand(
+        const finished = await agentExecCommand(
           "probe",
           { config: configPath, cwd: root, timeout: "1", json: true },
           runtime,
         );
-        let commandPid: number;
-        try {
-          commandPid = await waitForPidFile(pidPath, 3_000);
-        } catch (error) {
-          const failed = await result;
-          throw new Error(
-            `agent exec did not start the fake CLI: ${String(error)} exit=${String(failed.exitCode)} envelope=${JSON.stringify(failed.envelope)}`,
-            { cause: error },
-          );
-        }
+        // Preparation precedes the execution timeout. Only the executed command
+        // writes this receipt; the capability probe exits before writing it.
+        const commandPid = await waitForPidFile(pidPath, 3_000);
         expect(commandPid).toBeGreaterThan(0);
-        const finished = await result;
         await waitForDead(commandPid, 5_000);
         return finished;
       },
