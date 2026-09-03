@@ -3,6 +3,8 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
+// Native mounts must be defined before activation can publish their registrations.
+import "./control-ui-view.runtime.ts";
 
 function assetUrl(descriptor: ControlUiPluginOwner["descriptor"], path: string): string {
   const url = new URL(path, window.location.href);

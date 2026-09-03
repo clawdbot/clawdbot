@@ -10,6 +10,7 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { renderPluginSurface } from "./control-ui-view.ts";
+import "./control-ui-view.runtime.ts";
 
 function increment(this: SurfaceTestHost) {
   this.count += 1;

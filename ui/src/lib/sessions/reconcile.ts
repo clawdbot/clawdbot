@@ -7,7 +7,6 @@ import {
   sessionMatchesArchivedFilter,
   type SessionArchivedFilter,
 } from "./navigation.ts";
-import type { SessionGateway, SessionState } from "./session-capability.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
@@ -15,6 +14,7 @@ import {
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
   uiSessionRowMatchesSelectedChat,
+  type UiSessionDefaultsHost,
 } from "./session-key.ts";
 
 export type SessionReconcileOptions = {
@@ -197,8 +197,8 @@ export function reconcileRosterPresentationMetadata(
 
 export function preserveCurrentSessionRow(
   result: SessionsListResult,
-  state: SessionState,
-  snapshot: SessionGateway["snapshot"],
+  state: { result: SessionsListResult | null; agentId: string | null },
+  snapshot: UiSessionDefaultsHost & { sessionKey?: string },
   backgroundHydrate: boolean,
 ): SessionsListResult {
   const currentKey = snapshot.sessionKey?.trim();

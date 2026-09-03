@@ -12,6 +12,7 @@ import {
 } from "../lib/board/provider.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "./control-ui-dashboard.ts";
+import "./control-ui-view.runtime.ts";
 
 type DashboardElement = HTMLElementTagNameMap["openclaw-plugin-session-dashboard"] & {
   updateComplete: Promise<boolean>;

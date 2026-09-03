@@ -66,6 +66,8 @@ export async function runControlUiPluginAction(
     session: params.session ? structuredClone(params.session) : undefined,
   };
   const state = entry.value.resolve?.(context);
+  // A resolver can synchronously withdraw its own registration.
+  signal.throwIfAborted();
   if (state?.hidden || state?.disabled) {
     throw new Error(`This plugin action is currently unavailable. ${retry}`);
   }

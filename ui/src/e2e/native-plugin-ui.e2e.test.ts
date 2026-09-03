@@ -508,19 +508,18 @@ suite.define(() => {
       async ({ page }) => {
         const sessionKey = "agent:main:main";
         const otherSessionKey = "agent:main:accessory-peer";
-        const boardSnapshot = (chatDock: "right" | "left" | "bottom" | "hidden", revision = 1) => ({
+        const boardSnapshot = {
           sessionKey,
-          revision,
-          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock }],
+          revision: 1,
+          tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
           widgets: [],
-        });
+        };
         const gateway = await installMockGateway(page, {
           sessionKey,
           pluginAssetsRequireAuth: false,
           featureMethods: [
             ...defaultControlUiFeatureMethods,
             "board.get",
-            "board.update",
             "plugins.controlUi.list",
             "plugins.controlUi.report",
           ],
@@ -540,18 +539,11 @@ suite.define(() => {
             },
             "board.get": {
               cases: [
-                { match: { sessionKey }, response: boardSnapshot("right") },
+                { match: { sessionKey }, response: boardSnapshot },
                 {
                   match: { sessionKey: otherSessionKey },
                   response: { sessionKey: otherSessionKey, revision: 1, tabs: [], widgets: [] },
                 },
-              ],
-            },
-            "board.update": {
-              sequence: [
-                boardSnapshot("left", 2),
-                boardSnapshot("bottom", 3),
-                boardSnapshot("hidden", 4),
               ],
             },
           },
@@ -563,29 +555,36 @@ suite.define(() => {
         await page.getByRole("link", { name: "UI fixture", exact: true }).waitFor();
         const accessories = page.locator("[data-fixture-session-accessory]");
         const accessory = accessories.filter({ hasText: sessionKey });
-        const expectOneAccessory = async (key = sessionKey) => {
+        const expectOneAccessory = async (key = sessionKey, visible = true) => {
           await expect
             .poll(() => page.locator("[data-fixture-session-accessory]:visible").allTextContents())
-            .toEqual([key]);
+            .toEqual(visible ? [key] : []);
           expect(await accessories.filter({ hasText: key }).count()).toBe(1);
         };
         await expectOneAccessory();
-        const mode = (value: "chat" | "split" | "dashboard") =>
-          page.locator(`wa-radio.settings-segmented__btn[value="${value}"]`);
-        await mode("split").click();
-        await page.locator(".board-session-surface--dock-right:not([hidden])").waitFor();
+        await gateway.waitForRequest("board.get");
+        await gateway.emitGatewayEvent("board.command", {
+          sessionKey,
+          command: { kind: "focus_tab", tabId: "main" },
+        });
+        await page.locator(".board-session-surface:not([hidden])").waitFor();
         await expectOneAccessory();
-        for (const dock of ["left", "bottom"] as const) {
-          await page.getByRole("button", { name: /^Chat dock:/ }).click();
-          await page.locator(`.chat-pane__dock-caret wa-dropdown-item[value="${dock}"]`).click();
-          await page.locator(`.board-session-surface--dock-${dock}:not([hidden])`).waitFor();
+        for (const dock of ["bottom", "right"] as const) {
+          await page.locator(`.side-panel__dock-${dock}`).click();
+          await expect
+            .poll(() => page.locator(".sidebar-region--bottom").count())
+            .toBe(dock === "bottom" ? 1 : 0);
           await expectOneAccessory();
         }
-        await mode("dashboard").click();
-        await page.locator(".board-session-surface--dock-hidden:not([hidden])").waitFor();
-        await expectOneAccessory();
-        await mode("chat").click();
-        await page.locator(".board-session-surface[hidden]").waitFor({ state: "attached" });
+        for (const expanded of [true, false]) {
+          await page.locator(".side-panel__expand").click();
+          await expect
+            .poll(() => page.locator(".sidebar-region--expanded").count())
+            .toBe(expanded ? 1 : 0);
+          await expectOneAccessory(sessionKey, !expanded);
+        }
+        await page.locator(".side-panel__minimize").click();
+        await expect.poll(() => page.locator(".board-session-surface").count()).toBe(0);
         await expectOneAccessory();
         await page.screenshot({ path: path.join(suite.artifactDir, "before.png"), fullPage: true });
         for (const replacement of [

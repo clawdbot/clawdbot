@@ -148,6 +148,8 @@ async function mountActions(
   };
   sessions.reconcile(session, undefined, { resultAgentId: session.agentId });
   const abort = new AbortController();
+  const actionAbort = new AbortController();
+  const actionSignal = AbortSignal.any([abort.signal, actionAbort.signal]);
   const pluginListeners = new Set<() => void>();
   let registered = true;
   const run = vi.fn<ControlUiAction["run"]>();
@@ -172,7 +174,7 @@ async function mountActions(
               pluginId: "fixture",
               value: action,
               host,
-              signal: abort.signal,
+              signal: actionSignal,
             },
           ]
         : [],
@@ -222,6 +224,7 @@ async function mountActions(
     setSessionKey,
     unregister: () => {
       registered = false;
+      actionAbort.abort();
       for (const listener of pluginListeners) {
         listener();
       }
@@ -351,6 +354,20 @@ describe("native plugin session actions", () => {
     const retained = element.querySelector<HTMLButtonElement>("button")!;
     unregister();
     retained.click();
+    expect(run.mock.calls.length).toBe(0);
+    await element.updateComplete;
+    expect(element.querySelector("button")).toBeNull();
+  });
+
+  it("does not start an action that withdraws itself during resolution", async () => {
+    const { element, run, resolve, unregister } = await mountActions();
+    resolve.mockImplementationOnce(() => {
+      unregister();
+      return {};
+    });
+
+    element.querySelector<HTMLButtonElement>("button")!.click();
+
     expect(run.mock.calls.length).toBe(0);
     await element.updateComplete;
     expect(element.querySelector("button")).toBeNull();

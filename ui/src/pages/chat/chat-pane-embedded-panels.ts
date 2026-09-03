@@ -203,6 +203,17 @@ export function sidebarPanelDefinitions(
     attachmentContent && params
       ? params.renderDetail(attachmentContent)
       : (params?.workspace ?? null);
+  const pluginPanels = new Map<SidebarSlotId, ControlUiRegistration<ControlUiPanel> | undefined>(
+    (params?.pluginPanels ?? []).map((entry) => [`plugin:${entry.key}`, entry]),
+  );
+  // Saved tabs outlive registrations, including during reconnect and activation.
+  for (const column of state?.sidebarLayout.columns ?? []) {
+    for (const { slot } of column.panels) {
+      if (slot.startsWith("plugin:") && !pluginPanels.has(slot)) {
+        pluginPanels.set(slot, undefined);
+      }
+    }
+  }
   return [
     definePanel("conversation", "conversation", icons.messageSquare, nothing, { available: false }),
     definePanel(
@@ -295,24 +306,25 @@ export function sidebarPanelDefinitions(
     definePanel("dashboard", "dashboard", icons.layoutDashboard, params?.dashboard ?? null, {
       available: params?.dashboard !== nothing,
     }),
-    ...(params?.pluginPanels ?? []).map((entry): SidebarPanelDefinition => {
-      const slot: SidebarSlotId = `plugin:${entry.key}`;
-      return {
+    ...[...pluginPanels].map(
+      ([slot, entry]): SidebarPanelDefinition => ({
         slot,
-        label: entry.value.label,
+        label: entry?.value.label ?? slot.slice("plugin:".length),
         icon: icons.puzzle,
-        available: true,
-        content: renderPluginContribution(
-          "panels",
-          entry.key,
-          { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
-          nothing,
-          params?.isPluginPanelPresented(slot),
-        ),
+        available: entry !== undefined,
+        content: entry
+          ? renderPluginContribution(
+              "panels",
+              entry.key,
+              { sessionKey: state?.sessionKey ?? "", agentId: params?.agentId ?? undefined },
+              nothing,
+              params?.isPluginPanelPresented(slot),
+            )
+          : null,
         loading: renderPanelLoadingSkeleton("files", t("common.loading")),
-        empty: { description: entry.value.label },
-      };
-    }),
+        empty: { description: entry?.value.label ?? t("pluginTabs.unavailableSubtitle") },
+      }),
+    ),
   ];
 }
 

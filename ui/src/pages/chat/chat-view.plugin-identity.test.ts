@@ -15,6 +15,7 @@ import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import { renderChat, type ChatProps } from "./chat-view.ts";
 import { renderGroupedMessage } from "./components/chat-message-bubble.ts";
 import { threadProps } from "./components/chat-transcript.test-support.ts";
+import "../../plugins/control-ui-view.runtime.ts";
 
 afterEach(() => resetComposerFixture());
 

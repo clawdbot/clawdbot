@@ -334,13 +334,7 @@ describe("session menu", () => {
     expect(pin.disabled).toBe(true);
     expect(pin.getAttribute("title")).toBe("This action requires operator.write access.");
     expect(deleteItem.disabled).toBe(true);
-    deleteItem.dispatchEvent(
-      new CustomEvent("wa-select", {
-        bubbles: true,
-        composed: true,
-        detail: { item: { value: "delete" } },
-      }),
-    );
+    selectMenuValue(menu, "delete");
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -388,49 +382,24 @@ describe("session menu", () => {
     expect(menuItemLabels(menu)).toContain("Icon & color");
     expect(menuItemLabels(menu)).toContain("Move to group");
 
-    selectMenuValue(menu, "compact:open-open-in");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual([
-      "Back",
-      "New tab",
-      "New window",
-      "Cursor",
-      "VS Code",
-      "Windsurf",
-      "Zed",
-    ]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-copy");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual([
-      "Back",
-      "Session link",
-      "Conversation as Markdown",
-      "Session ID",
-    ]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-assign-owner");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Me", "Research owner"]);
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-icon");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back"]);
-    expect(menu.querySelectorAll(".session-menu__color-choice")).toHaveLength(9);
-    expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
-
-    selectMenuValue(menu, "compact:back");
-    await menu.updateComplete;
-    selectMenuValue(menu, "compact:open-group");
-    await menu.updateComplete;
-    expect(menuItemLabels(menu)).toEqual(["Back", "Research", "Operations", "New group"]);
-    expect(menu.querySelector("[slot='submenu']")).toBeNull();
+    for (const [view, labels] of [
+      ["open-in", ["Back", "New tab", "New window", "Cursor", "VS Code", "Windsurf", "Zed"]],
+      ["copy", ["Back", "Session link", "Conversation as Markdown", "Session ID"]],
+      ["assign-owner", ["Back", "Me", "Research owner"]],
+      ["icon", ["Back"]],
+      ["group", ["Back", "Research", "Operations", "New group"]],
+    ] as const) {
+      selectMenuValue(menu, `compact:open-${view}`);
+      await menu.updateComplete;
+      expect(menuItemLabels(menu)).toEqual(labels);
+      expect(menu.querySelector("[slot='submenu']")).toBeNull();
+      if (view === "icon") {
+        expect(menu.querySelectorAll(".session-menu__color-choice")).toHaveLength(9);
+        expect(menu.querySelector(".session-menu__icon-picker")?.getAttribute("slot")).toBeNull();
+      }
+      selectMenuValue(menu, "compact:back");
+      await menu.updateComplete;
+    }
   });
 
   it("omits root placement actions for child sessions", async () => {
@@ -525,12 +494,7 @@ describe("session menu", () => {
   ])("does not dispatch an unavailable plugin action: %j", async (options) => {
     const onAction = vi.fn<(action: SessionMenuAction) => void>();
     const menu = await mountMenu({ ...options, onAction });
-    menu.querySelector("wa-dropdown")?.dispatchEvent(
-      new CustomEvent("wa-select", {
-        detail: { item: { value: "plugin:review/open" } },
-        bubbles: true,
-      }),
-    );
+    selectMenuValue(menu, "plugin:review/open");
     expect(onAction).not.toHaveBeenCalled();
   });
 
@@ -976,9 +940,12 @@ describe("session menu", () => {
     expect(keydown.defaultPrevented).toBe(true);
   });
 
-  it.each([null, { loading: true, pullRequestUrl: null, worktreePath: null }])(
-    "keeps conversation destinations without unresolved workspace actions (work=%j)",
-    async (work) => {
+  it.each([
+    { name: "absent", work: null },
+    { name: "unresolved", work: { loading: true, pullRequestUrl: null, worktreePath: null } },
+  ])(
+    "keeps conversation destinations without showing $name workspace actions",
+    async ({ work }) => {
       const menu = await mountMenu({ work });
 
       expect(menuItemLabels(menu)).not.toContain("Open PR");

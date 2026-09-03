@@ -115,10 +115,10 @@ A view mounts into an `HTMLElement` and receives `context.host`, `props`,
 `signal`, `presented`, and `mountDefault`. Return an object with `update`,
 `focus`, and `dispose` as needed. Surface props and presentation changes arrive
 through `update`; use `context.host.subscribe(...)` to observe host snapshot
-changes. A hidden view remains mounted with the same host lifetime; use
-`presented` to pause visual work while preserving its state. Disposal aborts the
-view's signal and retires its host handles. Check the signal after asynchronous
-work and release plugin resources in `dispose`.
+changes. A view that remains mounted retains its host lifetime when `presented`
+is false; use it to pause visual work while preserving state. Removing or disposing
+the view aborts its signal and retires its host handles. Check the signal after
+asynchronous work and release plugin resources in `dispose`.
 
 Session-bound views and actions receive `sessionKey` and `agentId`. Carry both
 when making a session request: the application's selected agent can differ from
