@@ -107,7 +107,10 @@ vi.mock("../../gateway/probe.js", () => ({ probeGateway: mocks.probe }));
 vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/systemd.js")>()),
   readSystemdServiceExecStart: mocks.command,
-  readSystemdServiceRuntime: async () => ({ status: mocks.running ? "running" : "stopped" }),
+  readSystemdServiceRuntime: async () => ({
+    status: mocks.running ? "running" : "stopped",
+    ...(mocks.running ? { pid: 4242 } : {}),
+  }),
   isSystemdServiceEnabled: async () => mocks.loaded,
   findInstalledSystemdGatewayScope: async () => null,
   isSystemdUserServiceAvailable: async () => true,

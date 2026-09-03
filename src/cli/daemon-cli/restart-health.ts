@@ -386,8 +386,13 @@ export async function waitForGatewayHealthyRestart(params: {
     // Health probes and state-DB reads are part of the operator-visible wait. A monotonic clock
     // keeps both the normal deadline and migration watchdog bounded when those operations stall.
     const elapsedMs = Math.max(0, performance.now() - startedAtMs);
+    // A managed settle streak needs a concrete process identity. Scheduled Tasks can
+    // report running without exposing a PID, so Windows retains status-only proof.
     const healthy =
-      snapshot.healthy && (!params.requireRunningService || snapshot.runtime.status === "running");
+      snapshot.healthy &&
+      (!params.requireRunningService ||
+        (snapshot.runtime.status === "running" &&
+          (process.platform === "win32" || typeof snapshot.runtime.pid === "number")));
     if (healthy) {
       if (healthyStreak && healthyStreak.pid === snapshot.runtime.pid) {
         healthyStreak.probes += 1;

@@ -57,7 +57,28 @@ describe("restart health", () => {
       outcome: "timeout",
       elapsedMs: 2_000,
     },
-  ])("$name", async ({ pids, reachable, attempts, outcome, elapsedMs }) => {
+    ...(["linux", "darwin"] as const).map((platform) => ({
+      name: `times out without a runtime PID on ${platform}`,
+      platform,
+      pids: [undefined, undefined, undefined, undefined, undefined],
+      reachable: [true, true, true, true, true],
+      attempts: 2,
+      outcome: "timeout",
+      elapsedMs: 2_000,
+    })),
+    {
+      name: "settles without a runtime PID on win32",
+      platform: "win32",
+      pids: [undefined, undefined, undefined],
+      reachable: [true, true, true],
+      attempts: 2,
+      outcome: "healthy",
+      elapsedMs: 1_000,
+    },
+  ])("$name", async ({ platform, pids, reachable, attempts, outcome, elapsedMs }) => {
+    if (platform) {
+      Object.defineProperty(process, "platform", { value: platform, configurable: true });
+    }
     const service = makeGatewayService({ status: "running", pid: 8000 });
     for (const pid of pids) {
       vi.mocked(service.readRuntime).mockResolvedValueOnce({ status: "running", pid });
