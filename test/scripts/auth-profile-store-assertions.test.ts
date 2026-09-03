@@ -21,6 +21,7 @@ function writeSharedDatabase(
   options: {
     asView?: boolean;
     legacyStoreJson?: string;
+    withoutCanonicalTable?: boolean;
     schemaVersion?: 1 | 7 | 12 | 13;
     storeJson?: string;
   } = {},
@@ -32,7 +33,10 @@ function writeSharedDatabase(
     const schemaVersion = options.schemaVersion ?? 13;
     db.exec(`PRAGMA user_version = ${schemaVersion};`);
     const table = schemaVersion >= 13 ? "config_machine_state" : "auth_profile_stores";
-    if (options.asView) {
+    if (options.withoutCanonicalTable) {
+      // The schema version is authoritative for the owner. Leave this database
+      // intentionally missing its expected table to exercise that boundary.
+    } else if (options.asView) {
       if (table === "config_machine_state") {
         db.exec(`
           CREATE VIEW config_machine_state AS
@@ -193,6 +197,23 @@ describe("auth profile store E2E assertions", () => {
     expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
     expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
     expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
+  });
+
+  it("does not let a retired agent row mask a missing v7 shared table", () => {
+    const stateDir = makeStateDir();
+    writeSharedDatabase(stateDir, {
+      schemaVersion: 7,
+      withoutCanonicalTable: true,
+    });
+    writeAgentDatabase(stateDir, {
+      storeJson: '{"version":1,"profiles":{}}',
+      storeKeys: ["primary"],
+    });
+
+    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe("");
+    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).toThrow(
+      "onboard preserved a retired primary row in auth_profile_store",
+    );
   });
 
   it("does not let a retired agent row mask a missing v13 canonical row", () => {

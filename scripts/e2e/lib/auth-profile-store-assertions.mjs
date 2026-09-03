@@ -45,9 +45,9 @@ function readSharedAuthProfileStore(stateDir) {
       .get(storage.table);
     if (!schema) {
       return {
-        // v13 names the canonical table even when the row is absent. Do not
-        // mistake a broken modern store for the legacy per-agent contract.
-        ownsStore: schemaVersion >= AUTH_PROFILE_MACHINE_STATE_SCHEMA_VERSION,
+        // v7 selects the shared owner. Do not let a missing canonical table
+        // reactivate the retired per-agent contract for a broken target.
+        ownsStore: true,
         text: "",
       };
     }
