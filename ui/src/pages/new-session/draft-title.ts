@@ -27,7 +27,7 @@ function sameDraft(left: DraftTitleInput | null, right: DraftTitleInput | null):
 }
 
 /** Disposable creation-only speculation; never owns a session or a metadata write. */
-export class DraftTitlePreparation {
+class DraftTitlePreparation {
   private current: DraftTitleInput | null = null;
   private title: string | null = null;
   private timer: ReturnType<typeof setTimeout> | undefined;
