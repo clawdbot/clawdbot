@@ -6,6 +6,9 @@ import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 
+type BuildPreparedModelsProviderData =
+  typeof import("./runtime-api.js").buildPreparedModelsProviderData;
+
 const mockState = vi.hoisted(() => ({
   readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
   parseSlashCommandPayload: vi.fn(() => ({
@@ -18,7 +21,13 @@ const mockState = vi.hoisted(() => ({
     team_id: "team-1",
   })),
   resolveCommandText: vi.fn((_trigger: string, text: string) => text),
-  buildPreparedModelsProviderData: vi.fn(async () => ({ providers: [], modelNames: new Map() })),
+  buildPreparedModelsProviderData: vi.fn<BuildPreparedModelsProviderData>(async () => ({
+    byProvider: new Map(),
+    providers: [],
+    resolvedDefault: { provider: "openai", model: "gpt-5.5" },
+    modelCatalog: [],
+    modelNames: new Map(),
+  })),
   resolveMattermostModelPickerEntry: vi.fn((): { kind: string } | null => ({ kind: "summary" })),
   authorizeMattermostCommandInvocation: vi.fn(() => ({
     ok: true,
