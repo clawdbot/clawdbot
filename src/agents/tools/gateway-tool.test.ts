@@ -150,6 +150,7 @@ describe("gateway update action", () => {
           signal,
           timeoutMs: 1_200_000,
           forceSyntheticClient: true,
+          operatorRoleActor: { kind: "system" },
           syntheticScopes: ["operator.admin"],
           resolveGatewayContext: expect.any(Function),
         },
