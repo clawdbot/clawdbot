@@ -53,9 +53,11 @@ function runWrapper(apiKey: string | undefined): Record<string, string> | undefi
 function createPayloadCapturingBaseStream(captured: {
   headers?: Record<string, string>;
   payload?: Record<string, unknown>;
+  options?: Parameters<StreamFn>[2];
 }): StreamFn {
   return (model, _context, options) => {
     captured.headers = options?.headers;
+    captured.options = options;
     const payload = {} as Record<string, unknown>;
     options?.onPayload?.(payload as never, model as never);
     captured.payload = payload;
@@ -151,12 +153,18 @@ function runCompactionProviderWrapper(params?: {
   extraParams?: Record<string, unknown>;
   headers?: Record<string, string>;
   payload?: Record<string, unknown>;
+  config?: Parameters<typeof wrapAnthropicProviderStream>[0]["config"];
 }) {
-  const captured: { headers?: Record<string, string>; payload?: Record<string, unknown> } = {};
+  const captured: {
+    headers?: Record<string, string>;
+    payload?: Record<string, unknown>;
+    options?: Parameters<StreamFn>[2];
+  } = {};
   const wrapped = wrapAnthropicProviderStream({
     streamFn: createPayloadCapturingBaseStream(captured),
     modelId: "claude-sonnet-4-6",
     extraParams: params?.extraParams ?? { anthropicServerCompaction: true },
+    config: params?.config,
   } as never);
   const payload = params?.payload ?? {};
   void wrapped?.(
@@ -218,21 +226,34 @@ describe("anthropic stream wrappers", () => {
     expect(captured.payload).toMatchObject({ service_tier: "auto" });
   });
 
-  it("injects opt-in server compaction for direct API-key requests", () => {
+  it("passes opt-in server compaction to the direct API-key transport", () => {
     const captured = runCompactionProviderWrapper({
       headers: { "Anthropic-Beta": "files-api-2025-04-14" },
     });
 
     expect(captured.headers?.["Anthropic-Beta"]).toBe("files-api-2025-04-14,compact-2026-01-12");
-    expect(captured.payload?.context_management).toEqual({
-      edits: [
-        {
-          type: "compact_20260112",
-          trigger: { type: "input_tokens", value: 140_000 },
-        },
-      ],
+    expect(captured.options).toMatchObject({
+      anthropicServerCompaction: true,
+      anthropicCompactThreshold: 140_000,
     });
   });
+
+  it.each(["off", "cache-ttl"] satisfies Array<"off" | "cache-ttl">)(
+    "derives context management from context pruning mode %s",
+    (mode) => {
+      const tools = { allow: ["read*"], deny: ["read_secret"] };
+      const captured = runCompactionProviderWrapper({
+        extraParams: {},
+        config: { agents: { defaults: { contextPruning: { mode, tools } } } },
+      });
+
+      if (mode === "cache-ttl") {
+        expect(captured.options).toMatchObject({ cacheTtlPruning: { tools } });
+      } else {
+        expect(captured.options).not.toHaveProperty("cacheTtlPruning");
+      }
+    },
+  );
 
   it("preserves existing context management under the compaction wrapper", () => {
     const existing = { edits: [{ type: "clear_tool_uses_20250919" }] };

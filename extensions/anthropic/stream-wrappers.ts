@@ -212,32 +212,27 @@ export function createAnthropicFastModeWrapper(
   };
 }
 
-/** Wrap a direct Anthropic API stream with opt-in server-side compaction. */
-function createAnthropicCompactionWrapper(
+/** Pass context-management settings to the shared request payload policy. */
+function createAnthropicContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
+  cacheTtlPruning?: { tools?: { allow?: string[]; deny?: string[] } },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const payloadWrapper = createPayloadPatchStreamWrapper(underlying, ({ payload, model }) => {
-    const payloadPolicy = resolveAnthropicPayloadPolicy({
-      provider: readStringValue(model.provider),
-      api: readStringValue(model.api),
-      baseUrl: readStringValue(model.baseUrl),
-      contextWindow: model.contextWindow,
-      enableServerCompaction: true,
-      extraParams,
-    });
-    applyAnthropicPayloadPolicyToParams(payload, payloadPolicy, new Set());
-  });
   return (model, context, options) => {
-    if (!resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey).enabled) {
-      return underlying(model, context, options);
-    }
-    return payloadWrapper(model, context, {
+    const compaction = resolveAnthropicServerCompactionPlan(model, extraParams, options?.apiKey);
+    const requestOptions = {
       ...options,
-      anthropicServerCompaction: true,
-      headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
-    } as Parameters<StreamFn>[2]);
+      ...(cacheTtlPruning ? { cacheTtlPruning } : {}),
+      ...(compaction.enabled
+        ? {
+            anthropicServerCompaction: true,
+            anthropicCompactThreshold: compaction.threshold,
+            headers: mergeAnthropicBetaHeader(options?.headers, [ANTHROPIC_COMPACTION_BETA]),
+          }
+        : {}),
+    };
+    return underlying(model, context, requestOptions);
   };
 }
 
@@ -316,6 +311,7 @@ export function resolveAnthropicServiceTier(
 export function wrapAnthropicProviderStream(
   ctx: ProviderWrapStreamFnContext,
 ): StreamFn | undefined {
+  const contextPruning = ctx.config?.agents?.defaults?.contextPruning;
   const anthropicBetas = resolveAnthropicBetas(ctx.extraParams, ctx.modelId);
   const needsAnthropicBetaWrapper =
     anthropicBetas !== undefined ||
@@ -337,8 +333,13 @@ export function wrapAnthropicProviderStream(
       ? (streamFn) =>
           createAnthropicFastModeWrapper(streamFn, () => resolveAnthropicFastMode(ctx.extraParams))
       : undefined,
-    ctx.extraParams?.anthropicServerCompaction === true
-      ? (streamFn) => createAnthropicCompactionWrapper(streamFn, ctx.extraParams)
+    ctx.extraParams?.anthropicServerCompaction === true || contextPruning?.mode === "cache-ttl"
+      ? (streamFn) =>
+          createAnthropicContextManagementWrapper(
+            streamFn,
+            ctx.extraParams,
+            contextPruning?.mode === "cache-ttl" ? { tools: contextPruning.tools } : undefined,
+          )
       : undefined,
     (streamFn) => createAnthropicThinkingPrefillWrapper(streamFn),
   );

@@ -6,6 +6,7 @@ import type { guardSessionManager } from "../../session-tool-result-guard-wrappe
 import type { AgentSession } from "../../sessions/index.js";
 import { getProviderPromptState } from "../provider-prompt-state.js";
 import { getEmbeddedSessionPromptState } from "../session-prompt-state.js";
+import { restoreCacheTtlToolResultProjections } from "../tool-result-truncation.js";
 import type { createEmbeddedAttemptExternalAbortController } from "./attempt-finalize.js";
 import {
   prepareEmbeddedAttemptAgentSession,
@@ -163,6 +164,12 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
   // cannot rewrite the provider prompt-cache tail between turns (#99495).
   const sessionPromptState = getEmbeddedSessionPromptState(attempt.sessionId);
   const toolResultPromptProjectionState = sessionPromptState.toolResults;
+  if (!input.isRawModelRun) {
+    restoreCacheTtlToolResultProjections(
+      toolResultPromptProjectionState,
+      sessionManager.getBranch(),
+    );
+  }
   const settleTracker = createEmbeddedAttemptSessionSettleTracker(activeSession);
   input.externalAbortController.setActiveSessionAbort(settleTracker.abortActiveSession);
   input.lifecycle.onSessionSettleTrackerReady(settleTracker.buildAbortSettlePromise);
@@ -187,6 +194,8 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
     onCurrentTurnImageFailure: recordCurrentTurnImageFailure,
     getPromptCacheRetention: () => transport.effectivePromptCacheRetention,
     getCompactionReplayEnabled: () => transport.compactionReplayEnabled,
+    getServerToolClearingEnabled: () => transport.serverToolClearingEnabled,
+    toolResultPromptProjectionState,
     getSystemPrompt: () => state.systemPromptText,
     isOpenAIResponsesApi,
     repairToolUseResultPairing: transcriptPolicy.repairToolUseResultPairing,

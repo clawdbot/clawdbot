@@ -4,6 +4,7 @@ import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { z } from "zod";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import type { AgentContextPruningConfig } from "../../config/types.agent-defaults.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
@@ -47,6 +48,7 @@ type CacheTtlPruningSettings = {
   isToolPrunable: (toolName: string) => boolean;
 };
 type CacheTtlToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
+const TOOL_RESULT_PROJECTION_KEY = Symbol("toolResultProjectionKey");
 
 export function resolveCacheTtlPruningSettings(
   config: AgentContextPruningConfig | undefined,
@@ -170,29 +172,93 @@ export function pruneExpiredCacheTtlToolResults(params: {
   lastCacheTouchAt: number | null;
   dropThinkingBlocksForEstimate: boolean;
   now: number;
+  projectionState: ToolResultPromptProjectionState;
+  onPruned?: () => void;
 }): AgentMessage[] {
-  const { messages, settings } = params;
+  const { settings, projectionState } = params;
+  const projection = projectToolResultBranch({
+    branch: buildToolResultPlanningBranch(params.messages),
+    projectionState,
+    recordSources: true,
+  });
+  const messages = params.messages.map(
+    (message, index) => projection.branch[index]?.message ?? message,
+  );
+  const unchanged = messages.some((message, index) => message !== params.messages[index])
+    ? messages
+    : params.messages;
+  let next: AgentMessage[] | undefined;
+  const recordProjection = (
+    index: number,
+    message: CacheTtlToolResultMessage,
+    mode: "soft" | "hard",
+  ) => {
+    const key = projection.keys[index];
+    const replacement = key
+      ? Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key })
+      : message;
+    if (key) {
+      // TTL gates new edits only: replay these bytes until their source leaves the session.
+      projectionState.replacements.set(key, { message: replacement, cacheTtl: mode });
+      projectionState.frozen.add(key);
+    }
+    (next ??= messages.slice())[index] = replacement;
+  };
+  const clearCacheTtlToolResult = (message: CacheTtlToolResultMessage) => ({
+    ...message,
+    content: [{ type: "text" as const, text: settings.placeholder }],
+  });
+  const restoredMode = (candidate: string | undefined) =>
+    candidate === undefined ? undefined : projectionState.restoredCacheTtl.get(candidate);
+  if (projectionState.restoredCacheTtl.size > 0) {
+    // Marker keys re-derive the same bytes from canonical history; keys whose
+    // source left the branch (compaction, reset) are dropped with this pass.
+    for (const [index, source] of params.messages.entries()) {
+      const key = projection.keys[index];
+      const baseKey = getToolResultProjectionBaseKey(source);
+      const exactMode = restoredMode(key);
+      const mode = exactMode ?? restoredMode(baseKey);
+      if (
+        !key ||
+        !mode ||
+        source.role !== "toolResult" ||
+        projectionState.replacements.get(key)?.cacheTtl
+      ) {
+        continue;
+      }
+      if (!exactMode && baseKey) {
+        // A key persisted before its tool id became ambiguous belongs to the earliest occurrence.
+        projectionState.restoredCacheTtl.delete(baseKey);
+      }
+      recordProjection(
+        index,
+        mode === "hard" ? clearCacheTtlToolResult(source) : softPruneCacheTtlToolResult(source),
+        mode,
+      );
+    }
+    projectionState.restoredCacheTtl.clear();
+  }
   if (
     !params.lastCacheTouchAt ||
     settings.ttlMs <= 0 ||
     params.now - params.lastCacheTouchAt < settings.ttlMs
   ) {
-    return messages;
+    return next ?? unchanged;
   }
   const cutoff =
     messages.flatMap((message, index) => (message.role === "assistant" ? [index] : [])).at(-3) ??
     -1;
   const start = messages.findIndex((message) => message.role === "user");
   if (cutoff < 0 || start < 0) {
-    return messages;
+    return next ?? unchanged;
   }
   const estimate = params.dropThinkingBlocksForEstimate ? dropThinkingBlocks(messages) : messages;
   let totalChars = estimate.reduce((sum, message) => sum + cacheTtlMessageChars(message), 0);
   const charWindow = params.contextWindowTokens * 4;
   if (totalChars / charWindow < 0.3) {
-    return messages;
+    return next ?? unchanged;
   }
-  let next: AgentMessage[] | undefined;
+  let pruned = false;
   const eligible: number[] = [];
   for (let index = start; index < cutoff; index++) {
     const message = messages[index];
@@ -202,34 +268,48 @@ export function pruneExpiredCacheTtlToolResults(params: {
     ) {
       continue;
     }
+    const key = projection.keys[index];
+    const previousMode = key ? projectionState.replacements.get(key)?.cacheTtl : undefined;
+    if (previousMode === "hard") {
+      continue;
+    }
     eligible.push(index);
-    const projected = softPruneCacheTtlToolResult(message);
-    if (projected !== message) {
+    if (previousMode === "soft") {
+      continue;
+    }
+    // Trim the canonical source, not the oversized projection, so a restart re-derives identical bytes.
+    const source = params.messages[index];
+    const projected = source?.role === "toolResult" ? softPruneCacheTtlToolResult(source) : source;
+    if (projected && projected !== source && projected.role === "toolResult") {
       totalChars += cacheTtlMessageChars(projected) - cacheTtlMessageChars(message);
-      (next ??= messages.slice())[index] = projected;
+      recordProjection(index, projected, "soft");
+      pruned = true;
     }
   }
-  const output = next ?? messages;
+  const output = next ?? unchanged;
   if (
-    totalChars / charWindow < 0.5 ||
-    !settings.hardClear ||
-    eligible.reduce((sum, index) => sum + cacheTtlMessageChars(output[index]!), 0) < 50_000
+    totalChars / charWindow >= 0.5 &&
+    settings.hardClear &&
+    eligible.reduce((sum, index) => sum + cacheTtlMessageChars(output[index]!), 0) >= 50_000
   ) {
-    return output;
-  }
-  for (const index of eligible) {
-    if (totalChars / charWindow < 0.5) {
-      break;
+    for (const index of eligible) {
+      if (totalChars / charWindow < 0.5) {
+        break;
+      }
+      const message = (next ?? messages)[index];
+      if (message?.role !== "toolResult") {
+        continue;
+      }
+      const cleared = clearCacheTtlToolResult(message);
+      totalChars += cacheTtlMessageChars(cleared) - cacheTtlMessageChars(message);
+      recordProjection(index, cleared, "hard");
+      pruned = true;
     }
-    const message = (next ?? messages)[index] as AgentMessage;
-    const cleared = {
-      ...message,
-      content: [{ type: "text", text: settings.placeholder }],
-    } as AgentMessage;
-    totalChars += cacheTtlMessageChars(cleared) - cacheTtlMessageChars(message);
-    (next ??= messages.slice())[index] = cleared;
   }
-  return next ?? messages;
+  if (pruned) {
+    params.onPruned?.();
+  }
+  return next ?? unchanged;
 }
 
 const MIN_KEEP_CHARS = 2_000;
@@ -678,7 +758,10 @@ export function truncateOversizedToolResultsInMessages(
           projectedMessage &&
           projectedMessage !== originalMessage
         ) {
-          projectionState.replacements.set(projectionKey, projectedMessage);
+          projectionState.replacements.set(projectionKey, {
+            ...projectionState.replacements.get(projectionKey),
+            message: projectedMessage,
+          });
         }
       }
     }
@@ -779,10 +862,17 @@ function getToolResultProjectionKeys(
   }
   const occurrences = new Map<string, number>();
   return baseKeys.map((baseKey, index) => {
+    const message = messages[index];
+    if (
+      message &&
+      TOOL_RESULT_PROJECTION_KEY in message &&
+      typeof message[TOOL_RESULT_PROJECTION_KEY] === "string"
+    ) {
+      return message[TOOL_RESULT_PROJECTION_KEY];
+    }
     if (baseKey && !projectionState.ambiguousBaseKeys.has(baseKey)) {
       return baseKey;
     }
-    const message = messages[index];
     if (!message || message.role !== "toolResult") {
       return undefined;
     }
@@ -797,16 +887,78 @@ function getToolResultProjectionKeys(
     const fallbackBase = `fallback:${baseKey ?? "tool"}:${sourceIdentity}`;
     const occurrence = occurrences.get(fallbackBase) ?? 0;
     occurrences.set(fallbackBase, occurrence + 1);
-    return `${fallbackBase}:${occurrence}`;
+    const key = `${fallbackBase}:${occurrence}`;
+    const previousSource = baseKey ? projectionState.sourceTextByKey.get(baseKey) : undefined;
+    if (
+      baseKey &&
+      previousSource &&
+      toolResultTextMatches(previousSource, getToolResultTextBlocks(message))
+    ) {
+      // A later duplicate must move the original projection, not make its sent bytes disappear.
+      const replacement = projectionState.replacements.get(baseKey);
+      if (replacement) {
+        projectionState.replacements.set(key, replacement);
+        projectionState.replacements.delete(baseKey);
+      }
+      projectionState.sourceTextByKey.set(key, previousSource);
+      projectionState.sourceTextByKey.delete(baseKey);
+      if (projectionState.frozen.delete(baseKey)) {
+        projectionState.frozen.add(key);
+      }
+    }
+    return key;
   });
 }
 
-/** Drops projections whose source messages no longer exist in canonical session history. */
+const cacheTtlProjectionSnapshotSchema = z.object({
+  prunedToolResults: z.array(z.object({ key: z.string(), mode: z.enum(["soft", "hard"]) })),
+  ambiguousToolResultBaseKeys: z.array(z.string()).optional(),
+});
+
+/** Reads pruned keys from the active transcript branch, never from a sibling branch. */
+export function restoreCacheTtlToolResultProjections(
+  projectionState: ToolResultPromptProjectionState,
+  entries: readonly { type: string; customType?: string; data?: unknown }[],
+): void {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (entry?.type === "reset") {
+      return;
+    }
+    if (entry?.type !== "custom" || entry.customType !== "openclaw.cache-ttl") {
+      continue;
+    }
+    const parsed = cacheTtlProjectionSnapshotSchema.safeParse(entry.data);
+    if (!parsed.success) {
+      continue;
+    }
+    for (const key of parsed.data.ambiguousToolResultBaseKeys ?? []) {
+      projectionState.ambiguousBaseKeys.add(key);
+    }
+    for (const item of parsed.data.prunedToolResults) {
+      if (!projectionState.replacements.get(item.key)?.cacheTtl) {
+        projectionState.restoredCacheTtl.set(item.key, item.mode);
+      }
+    }
+    return;
+  }
+}
+
+/** Drops projections whose source messages were removed or rewritten in canonical history. */
 export function reconcileToolResultPromptProjectionState(
   messages: AgentMessage[],
   projectionState: ToolResultPromptProjectionState,
 ): void {
-  const canonicalKeys = new Set(getToolResultProjectionKeys(messages, projectionState));
+  const keys = getToolResultProjectionKeys(messages, projectionState);
+  const canonicalKeys = new Set(
+    messages.flatMap((message, index) => {
+      const key = keys[index];
+      const source = key ? projectionState.sourceTextByKey.get(key) : undefined;
+      return key && (!source || toolResultTextMatches(source, getToolResultTextBlocks(message)))
+        ? [key]
+        : [];
+    }),
+  );
   for (const key of [
     ...projectionState.frozen,
     ...projectionState.replacements.keys(),
@@ -830,6 +982,7 @@ function mergeProjectedToolResultMessage(
   message: AgentMessage,
   projectedMessage: AgentMessage,
   sourceText: string[] | undefined,
+  cacheTtl?: "soft" | "hard",
 ): AgentMessage {
   if (message.role !== "toolResult" || projectedMessage.role !== "toolResult") {
     return projectedMessage;
@@ -843,10 +996,13 @@ function mergeProjectedToolResultMessage(
     isRecord(block) && block.type === "text" && typeof block.text === "string" ? [block.text] : [],
   );
   const currentText = getToolResultTextBlocks(message);
-  if (
-    (sourceText && currentText.some((text, index) => text !== sourceText[index])) ||
-    currentText.length !== projectedText.length
-  ) {
+  if (sourceText && !toolResultTextMatches(currentText, sourceText)) {
+    return message;
+  }
+  if (cacheTtl) {
+    return { ...message, content: projectedMessage.content };
+  }
+  if (currentText.length !== projectedText.length) {
     return message;
   }
   let textIndex = 0;
@@ -889,13 +1045,18 @@ function projectToolResultBranch(params: {
       if (key && params.recordSources && !params.projectionState.sourceTextByKey.has(key)) {
         params.projectionState.sourceTextByKey.set(key, getToolResultTextBlocks(entry.message));
       }
-      const message = projected
+      let message = projected
         ? mergeProjectedToolResultMessage(
             entry.message,
-            projected,
+            projected.message,
             key ? params.projectionState.sourceTextByKey.get(key) : undefined,
+            projected.cacheTtl,
           )
         : entry.message;
+      if (key && projected?.cacheTtl && message !== entry.message) {
+        // Carry canonical identity through content edits, including duplicate or absent tool ids.
+        message = Object.assign({}, message, { [TOOL_RESULT_PROJECTION_KEY]: key });
+      }
       return {
         ...entry,
         message,
@@ -918,6 +1079,10 @@ function getToolResultTextBlocks(message: AgentMessage): string[] {
           : [],
       )
     : [];
+}
+
+function toolResultTextMatches(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((text, index) => text === right[index]);
 }
 
 function buildAggregateToolResultReplacements(params: {
@@ -1298,6 +1463,13 @@ function truncateOversizedToolResultsInExistingSessionManager(params: {
     sessionManager,
     replacements: plan.replacements,
   });
+  if (rewriteResult.changed && params.projectionState) {
+    // Recovery changed canonical bytes; keeping their former source would undo the next TTL edit.
+    reconcileToolResultPromptProjectionState(
+      sessionManager.buildSessionContext().messages,
+      params.projectionState,
+    );
+  }
   const hasRuntimeTarget = Boolean(
     params.sessionId && params.sessionKey && params.agentId && params.storePath,
   );

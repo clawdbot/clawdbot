@@ -4,10 +4,12 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { AgentMessage } from "../runtime/index.js";
 
 export type ToolResultPromptProjectionState = {
-  replacements: Map<string, AgentMessage>;
+  replacements: Map<string, { message: AgentMessage; cacheTtl?: "soft" | "hard" }>;
   frozen: Set<string>;
   ambiguousBaseKeys: Set<string>;
   sourceTextByKey: Map<string, string[]>;
+  /** Cache-TTL prune modes read from the transcript marker; the next pruning pass materializes them. */
+  restoredCacheTtl: Map<string, "soft" | "hard">;
 };
 
 type EmbeddedSessionPromptState = {
@@ -26,10 +28,11 @@ const sessionPromptStates = resolveGlobalSingleton(
 
 export function createToolResultPromptProjectionState(): ToolResultPromptProjectionState {
   return {
-    replacements: new Map<string, AgentMessage>(),
+    replacements: new Map(),
     frozen: new Set<string>(),
     ambiguousBaseKeys: new Set<string>(),
     sourceTextByKey: new Map<string, string[]>(),
+    restoredCacheTtl: new Map(),
   };
 }
 
@@ -49,6 +52,21 @@ export function cloneToolResultPromptProjectionState(
     frozen: new Set(state.frozen),
     ambiguousBaseKeys: new Set(state.ambiguousBaseKeys),
     sourceTextByKey: new Map(state.sourceTextByKey),
+    restoredCacheTtl: new Map(state.restoredCacheTtl),
+  };
+}
+
+/** Marker payload stays key-sized: pruned bytes are recomputed from canonical history on restore. */
+export function serializeCacheTtlToolResultProjections(state: ToolResultPromptProjectionState) {
+  const modes = new Map(state.restoredCacheTtl);
+  for (const [key, projection] of state.replacements) {
+    if (projection.cacheTtl) {
+      modes.set(key, projection.cacheTtl);
+    }
+  }
+  return {
+    prunedToolResults: [...modes].map(([key, mode]) => ({ key, mode })),
+    ambiguousToolResultBaseKeys: [...state.ambiguousBaseKeys],
   };
 }
 

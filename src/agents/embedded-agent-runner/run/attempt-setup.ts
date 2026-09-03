@@ -55,6 +55,7 @@ import {
   mapSandboxSkillUsagePaths,
   resolveSandboxSkillRuntimeInputs,
 } from "../sandbox-skills.js";
+import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   installContextEngineLoopHook,
   installToolResultContextGuard,
@@ -279,6 +280,8 @@ export function installEmbeddedAttemptContextGuards(input: {
   getPromptCache: () => EmbeddedRunAttemptResult["promptCache"];
   getPromptCacheRetention: () => PromptCacheRetention;
   getCompactionReplayEnabled: () => boolean;
+  getServerToolClearingEnabled: () => boolean;
+  toolResultPromptProjectionState: ToolResultPromptProjectionState;
   getSystemPrompt: () => string;
   onCurrentTurnImageFailure?: (count: number) => void;
   isOpenAIResponsesApi: boolean;
@@ -350,6 +353,9 @@ export function installEmbeddedAttemptContextGuards(input: {
         ? await previousCacheTtlTransform.call(activeSession.agent, messages, signal)
         : messages;
       const sourceMessages = Array.isArray(transformed) ? transformed : messages;
+      if (input.getServerToolClearingEnabled()) {
+        return sourceMessages;
+      }
       const projected = pruneExpiredCacheTtlToolResults({
         messages: sourceMessages,
         settings: cacheTtlSettings,
@@ -357,10 +363,11 @@ export function installEmbeddedAttemptContextGuards(input: {
         lastCacheTouchAt,
         dropThinkingBlocksForEstimate: input.dropThinkingBlocksForEstimate,
         now: Date.now(),
+        projectionState: input.toolResultPromptProjectionState,
+        onPruned: () => {
+          lastCacheTouchAt = Date.now();
+        },
       });
-      if (projected !== sourceMessages) {
-        lastCacheTouchAt = Date.now();
-      }
       return projected;
     };
   }
