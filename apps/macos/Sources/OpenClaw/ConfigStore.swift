@@ -16,6 +16,10 @@ enum ConfigStore {
         #if DEBUG
         /// Isolates focused notification assertions without changing the production sender contract.
         var notificationCenter: NotificationCenter?
+        /// Answers `config.get` so a test can drive a successful fetch. The fetch is the only
+        /// step in a reload that needs a live Gateway, so replacing just it leaves the whole
+        /// apply path after it running as it does in production.
+        var fetchConfigSnapshot: (@MainActor @Sendable () async throws -> ConfigSnapshot)?
         #endif
     }
 
@@ -174,6 +178,12 @@ enum ConfigStore {
 
     static func _testClearOverrides() async {
         await self.overrideStore.setOverride(.init())
+    }
+
+    static func _testFetchConfigSnapshotOverride()
+        async -> (@MainActor @Sendable () async throws -> ConfigSnapshot)?
+    {
+        await self.overrideStore.overrides.fetchConfigSnapshot
     }
 
     @MainActor

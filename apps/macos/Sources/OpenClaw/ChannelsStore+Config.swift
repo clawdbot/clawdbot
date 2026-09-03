@@ -69,13 +69,24 @@ extension ChannelsStore {
         }
     }
 
-    func loadConfig(force: Bool = true, refresh: Bool = false) async {
+    /// - Parameter forceUnlessDraftChangedFrom: revision captured by a caller that wants a forced
+    ///   reload only while the draft it knows about is still the newest. The fetch below is an
+    ///   await of its own, so this is re-checked when the snapshot is applied rather than here.
+    func loadConfig(
+        force: Bool = true,
+        refresh: Bool = false,
+        forceUnlessDraftChangedFrom: Int? = nil) async
+    {
         let sourceKey = self.currentConfigCacheSourceKey()
         self.resetConfigCacheIfSourceChanged(sourceKey)
         if !force, !refresh, self.configLoaded {
             return
         }
-        guard !self.queueConfigReloadIfLoading(sourceKey: sourceKey, force: force, refresh: refresh)
+        guard !self.queueConfigReloadIfLoading(
+            sourceKey: sourceKey,
+            force: force,
+            refresh: refresh,
+            forceUnlessDraftChangedFrom: forceUnlessDraftChangedFrom)
         else { return }
         self.configLoading = true
         self.configLoadingSourceKey = sourceKey
@@ -85,26 +96,50 @@ extension ChannelsStore {
         }
 
         var requestForce = force
+        var requestGuard = forceUnlessDraftChangedFrom
         var requestSourceKey = sourceKey
 
         while true {
             self.configLoadingSourceKey = requestSourceKey
             do {
-                let snap: ConfigSnapshot = try await GatewayConnection.shared.requestDecoded(
-                    method: .configGet,
-                    params: nil,
-                    timeoutMs: 10000)
-                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: requestForce)
+                let snap: ConfigSnapshot = try await Self.fetchConfigSnapshot()
+                // An edit can land while the fetch above is in flight, so whether this may
+                // replace the draft is decided here rather than before the request.
+                var applyForce = requestForce
+                if let admitted = requestGuard,
+                   !Self.saveMayReplaceDraft(
+                       submittedRevision: admitted,
+                       currentRevision: self.configDraftRevision)
+                {
+                    applyForce = false
+                }
+                self.applyConfigSnapshot(snap, sourceKey: requestSourceKey, force: applyForce)
             } catch {
                 self.configStatus = error.localizedDescription
             }
 
             guard self.configReloadPending != .none else { break }
             requestForce = self.configReloadPending == .force
+            requestGuard = self.configReloadPendingDraftGuard
             self.configReloadPending = .none
+            self.configReloadPendingDraftGuard = nil
             requestSourceKey = self.currentConfigCacheSourceKey()
             self.resetConfigCacheIfSourceChanged(requestSourceKey)
         }
+    }
+
+    /// The one step of a reload that needs a live Gateway, kept separate so tests can answer
+    /// it and exercise everything after it for real.
+    static func fetchConfigSnapshot() async throws -> ConfigSnapshot {
+        #if DEBUG
+        if let fetch = await ConfigStore._testFetchConfigSnapshotOverride() {
+            return try await fetch()
+        }
+        #endif
+        return try await GatewayConnection.shared.requestDecoded(
+            method: .configGet,
+            params: nil,
+            timeoutMs: 10000)
     }
 
     func applyConfigSnapshot(_ snap: ConfigSnapshot, sourceKey: String, force: Bool) {
@@ -203,11 +238,18 @@ extension ChannelsStore {
         return nil
     }
 
+    /// Whether a finished save still describes the newest draft, and may therefore reload over
+    /// it and clear dirty. An edit admitted while the save was in flight makes it stale.
+    static func saveMayReplaceDraft(submittedRevision: Int, currentRevision: Int) -> Bool {
+        submittedRevision == currentRevision
+    }
+
     func updateConfigValue(path: ConfigPath, value: Any?) {
         var root: Any = self.configDraft
         setValue(&root, path: path, value: value)
         self.configDraft = root as? [String: Any] ?? self.configDraft
         self.configDirty = true
+        self.configDraftRevision &+= 1
     }
 
     func saveConfigDraft() async {
@@ -215,9 +257,18 @@ extension ChannelsStore {
         self.isSavingConfig = true
         defer { self.isSavingConfig = false }
 
+        // Only the Save and Reload buttons are disabled during a save. The form controls stay
+        // live, so what is written here can be out of date by the time the write returns.
+        let submitted = self.configDraft
+        let submittedRevision = self.configDraftRevision
+
         do {
-            try await ConfigStore.save(self.configDraft)
-            await self.loadConfig()
+            try await ConfigStore.save(submitted)
+            // Still reload, so normalization from the gateway lands as before, but let it
+            // replace the draft only while the one just written is still the newest. Deciding
+            // that here would leave the fetch inside loadConfig as a second window for an edit
+            // to be lost in, so the revision travels down and is checked at apply time.
+            await self.loadConfig(forceUnlessDraftChangedFrom: submittedRevision)
         } catch {
             self.configStatus = error.localizedDescription
         }
@@ -254,10 +305,20 @@ extension ChannelsStore {
         self.configSourceKey = sourceKey
     }
 
-    func queueConfigReloadIfLoading(sourceKey: String, force: Bool, refresh: Bool = false) -> Bool {
+    func queueConfigReloadIfLoading(
+        sourceKey: String,
+        force: Bool,
+        refresh: Bool = false,
+        forceUnlessDraftChangedFrom: Int? = nil) -> Bool
+    {
         guard self.configLoading else { return false }
         if force || self.configLoadingSourceKey != sourceKey {
             self.configReloadPending = .force
+            // The queued force inherits whatever condition it was issued with. Dropping it is
+            // how a save that waited behind a running refresh could still replace a newer
+            // draft. A caller asking for an unconditional reload clears it, which is right,
+            // because that is a reload the user asked for rather than a save tidying up.
+            self.configReloadPendingDraftGuard = forceUnlessDraftChangedFrom
         } else if refresh, self.configReloadPending == .none {
             self.configReloadPending = .refresh
         }

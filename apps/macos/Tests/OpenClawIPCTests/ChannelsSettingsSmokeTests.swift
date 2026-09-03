@@ -290,6 +290,202 @@ struct ChannelsSettingsSmokeTests {
         #expect(store.configDirty == false)
     }
 
+    @Test func `an edit during a save keeps the save from reloading over it`() {
+        // Save admits draft A, the form stays live, and an edit to B lands before the write
+        // returns. The completion must not force a reload, which would republish A over B and
+        // clear dirty as if B had been persisted.
+        let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = "source-a"
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": false]]]
+        store.configDirty = false
+
+        let admitted = store.configDraftRevision
+        store.updateConfigValue(
+            path: [.key("channels"), .key("discord"), .key("enabled")],
+            value: true)
+
+        #expect(store.configDirty == true)
+        #expect(store.configDraftRevision != admitted)
+        #expect(ChannelsStore.saveMayReplaceDraft(
+            submittedRevision: admitted,
+            currentRevision: store.configDraftRevision) == false)
+
+        // That false is what loadConfig receives, and a non forced snapshot leaves the newer
+        // edit and the dirty flag alone.
+        let snap = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
+        store.applyConfigSnapshot(snap, sourceKey: "source-a", force: false)
+
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+    }
+
+    @Test func `a real save that is raced by an edit does not reload over it`() async {
+        // Crosses saveConfigDraft and ConfigStore.save rather than poking the pieces, so a
+        // later miswiring of the completion is caught. The write is held open, an edit lands
+        // while it is in flight, and then it is released. The reload still runs, so gateway
+        // normalization is not lost, but it must not replace the newer edit.
+        let store = makeChannelsStore(channels: [:])
+        // Left nil so the first cache check adopts the real source key instead of treating a
+        // made up one as a source change, which would reset the draft before the save runs.
+        store.configSourceKey = nil
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": false]]]
+        store.configDirty = true
+        store.configStatus = nil
+
+        let gate = SaveGate()
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in await gate.wait() }))
+
+        let saving = Task { await store.saveConfigDraft() }
+        await gate.waitUntilEntered()
+
+        store.updateConfigValue(
+            path: [.key("channels"), .key("discord"), .key("enabled")],
+            value: true)
+
+        await gate.release()
+        await saving.value
+        await ConfigStore._testClearOverrides()
+
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+    }
+
+    @Test func `a raced save survives a config get that succeeds`() async {
+        // The test above holds the write open but leaves the reload to reach a real Gateway,
+        // which is not there, so it lands in the catch and would pass even with the guard
+        // gone. This one answers config.get with the values the save sent, which is the case
+        // the defect needs: the apply runs for real and has to leave the newer edit alone.
+        let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = nil
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": false]]]
+        store.configDirty = true
+        store.configStatus = nil
+
+        // What the gateway would hand back after storing the draft as it was submitted.
+        let saved = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
+
+        let gate = SaveGate()
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in await gate.wait() },
+            fetchConfigSnapshot: { saved }))
+
+        let saving = Task { await store.saveConfigDraft() }
+        await gate.waitUntilEntered()
+
+        store.updateConfigValue(
+            path: [.key("channels"), .key("discord"), .key("enabled")],
+            value: true)
+
+        await gate.release()
+        await saving.value
+        await ConfigStore._testClearOverrides()
+
+        // The fetch succeeded, so the apply really ran. Without the revision condition it
+        // would have forced and put enabled back to false with dirty cleared.
+        #expect(store.configStatus == nil)
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == true)
+        #expect(store.configDirty == true)
+    }
+
+    @Test func `a reload queued behind a running one keeps its draft condition`() {
+        // A save issued while a refresh is already running does not reload immediately, it is
+        // queued. The condition it was issued with has to be queued too, or the replay forces
+        // unconditionally and erases the newer draft anyway.
+        let store = makeChannelsStore(channels: [:])
+        store.configLoading = true
+        store.configLoadingSourceKey = "source-a"
+
+        let admitted = store.configDraftRevision
+        let queued = store.queueConfigReloadIfLoading(
+            sourceKey: "source-a",
+            force: true,
+            forceUnlessDraftChangedFrom: admitted)
+
+        #expect(queued == true)
+        #expect(store.configReloadPending == .force)
+        #expect(store.configReloadPendingDraftGuard == admitted)
+    }
+
+    @Test func `an unconditional queued reload clears the condition`() {
+        // A reload the user asked for should replace the draft, so it must not inherit a
+        // condition left behind by a save.
+        let store = makeChannelsStore(channels: [:])
+        store.configLoading = true
+        store.configLoadingSourceKey = "source-a"
+        store.configReloadPendingDraftGuard = 7
+
+        _ = store.queueConfigReloadIfLoading(sourceKey: "source-a", force: true)
+
+        #expect(store.configReloadPending == .force)
+        #expect(store.configReloadPendingDraftGuard == nil)
+    }
+
+    @Test func `a save with no edit behind it still reloads and clears dirty`() async {
+        // The other half of the guard. Nothing is typed during this save, so the reload has
+        // to force exactly as it always did and the gateway's own view has to land. Asserting
+        // only that the revision comparison says true would still pass if the save stopped
+        // reloading altogether, which is the case this is here to catch.
+        let store = makeChannelsStore(channels: [:])
+        store.configSourceKey = nil
+        store.configLoaded = true
+        store.configDraft = ["channels": ["discord": ["enabled": true]]]
+        store.configDirty = true
+        store.configStatus = nil
+
+        // Stands in for normalization: what comes back is not what went out.
+        let normalized = ConfigSnapshot(
+            path: nil,
+            exists: true,
+            raw: nil,
+            hash: nil,
+            parsed: nil,
+            valid: true,
+            config: ["channels": SnapshotAnyCodable(["discord": ["enabled": false]])],
+            issues: nil)
+
+        await ConfigStore._testSetOverrides(.init(
+            isRemoteMode: { true },
+            saveRemote: { _ in },
+            fetchConfigSnapshot: { normalized }))
+
+        await store.saveConfigDraft()
+        await ConfigStore._testClearOverrides()
+
+        #expect(store.configStatus == nil)
+        let channels = store.configDraft["channels"] as? [String: Any]
+        let discord = channels?["discord"] as? [String: Any]
+        #expect(discord?["enabled"] as? Bool == false)
+        #expect(store.configDirty == false)
+    }
+
     @Test func `forced config load queues behind background load`() {
         let store = makeChannelsStore(channels: [:])
         store.configLoading = true
@@ -327,5 +523,36 @@ struct ChannelsSettingsSmokeTests {
         store.configSchemaReloadPending = false
         #expect(store.queueConfigSchemaReloadIfLoading(sourceKey: "source-b", force: false) == true)
         #expect(store.configSchemaReloadPending == true)
+    }
+}
+
+/// Holds a save open so an edit can land while it is in flight.
+private actor SaveGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        self.entered = true
+        for waiter in self.enteredWaiters {
+            waiter.resume()
+        }
+        self.enteredWaiters.removeAll()
+        if self.released { return }
+        await withCheckedContinuation { self.releaseWaiters.append($0) }
+    }
+
+    func waitUntilEntered() async {
+        if self.entered { return }
+        await withCheckedContinuation { self.enteredWaiters.append($0) }
+    }
+
+    func release() {
+        self.released = true
+        for waiter in self.releaseWaiters {
+            waiter.resume()
+        }
+        self.releaseWaiters.removeAll()
     }
 }

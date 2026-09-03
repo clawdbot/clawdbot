@@ -305,8 +305,14 @@ final class ChannelsStore {
     /// refetches without overwriting a dirty local draft; `force` overwrites it.
     enum ConfigReloadRequest { case none, refresh, force }
     var configReloadPending: ConfigReloadRequest = .none
+    /// Travels with a queued forced reload so a save waiting behind a running refresh keeps the
+    /// condition it was issued with. Without it the replay forces unconditionally.
+    var configReloadPendingDraftGuard: Int?
     var configDraft: [String: Any] = [:]
     var configDirty = false
+    /// Bumped by every edit. A save captures this at admission so its completion can tell
+    /// whether the draft it wrote is still the newest one before it reloads over it.
+    var configDraftRevision = 0
 
     let interval: TimeInterval = 45
     let isPreview: Bool
