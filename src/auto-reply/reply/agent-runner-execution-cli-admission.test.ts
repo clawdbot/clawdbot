@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { withTestRunAdmission } from "../../agents/admitted-run-context.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
 import { buildCliRunResult } from "../../agents/cli-runner/cli-run-settlement.js";
 import { executeDeps } from "../../agents/cli-runner/execute-deps.js";
@@ -295,7 +296,10 @@ describe("executeAgentTurn: CLI admission", () => {
       prepared.reusableCliSession = { mode: "reuse", sessionId: observedCliSessionId };
       executeDeps.invokeNodeClaudeCliRun = nodeInvoke;
       try {
-        await executePreparedCliRun(prepared, observedCliSessionId);
+        await withTestRunAdmission(prepared.params, async (admittedRunContext) => {
+          prepared.params.admittedRunContext = admittedRunContext;
+          await executePreparedCliRun(prepared, observedCliSessionId);
+        });
       } finally {
         executeDeps.invokeNodeClaudeCliRun = restoreNodeInvoke;
       }

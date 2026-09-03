@@ -151,8 +151,9 @@ describe("user profiles", () => {
     expect(tableExists(database, "user_profiles")).toBe(false);
     expect(tableExists(database, "user_profile_identities")).toBe(false);
 
+    const profileVersion = readUserProfileVersion();
     const first = ensureProfileForEmail("  Ada@Example.COM ", options);
-    const version = readUserProfileVersion();
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     const second = ensureProfileForEmail("ada@example.com", options);
 
     expect(tableExists(openOpenClawStateDatabase(options).db, "user_profiles")).toBe(true);
@@ -165,7 +166,7 @@ describe("user profiles", () => {
     expect(versionBefore).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
     expect(second).toEqual(first);
     expect(ensureProfileForEmail("ADA@example.com", options)).toEqual(first);
-    expect(readUserProfileVersion()).toBe(version);
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: ["ada@example.com"] }),
     ]);
@@ -174,11 +175,11 @@ describe("user profiles", () => {
   it("resolves provider identities without storing them as emails", () => {
     const options = stateOptions();
 
+    const profileVersion = readUserProfileVersion();
     const first = ensureProfileForTailscaleIdentity(
       { login: "Ada@GitHub", name: "Ada Lovelace" },
       options,
     );
-    const version = readUserProfileVersion();
     const second = ensureProfileForTailscaleIdentity(
       { login: "ada@github", name: "Different Provider Name" },
       options,
@@ -186,7 +187,7 @@ describe("user profiles", () => {
 
     expect(second.id).toBe(first.id);
     expect(second.displayName).toBe("Ada Lovelace");
-    expect(readUserProfileVersion()).toBe(version);
+    expect(readUserProfileVersion()).toBe(profileVersion + 1);
     expect(listProfiles(options)).toEqual([
       expect.objectContaining({ id: first.id, emails: [], displayName: "Ada Lovelace" }),
     ]);

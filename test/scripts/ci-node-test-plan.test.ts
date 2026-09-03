@@ -150,90 +150,98 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
   });
 
   it("retains a complete measured generation and ignores complementary partial generations", () => {
-    const originalTimings = testTimings.readCompactGroupTimings;
-    let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
-      blacksmith: { "agentic-agents-support": 165 },
-      github: { "agentic-agents-support": 253 },
-    };
-    vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation((profile) => {
-      const unrelated = Object.fromEntries(
-        Object.entries(originalTimings(profile)).filter(
-          ([key]) => !key.startsWith("agentic-agents-support"),
+    const originalShards = fullSuiteVitestShards.slice();
+    const fixtureShards = originalShards
+      .map((shard) => ({
+        ...shard,
+        projects: shard.projects.filter(
+          (config) => config === agentVitestProjectOwners.support.config,
         ),
+      }))
+      .filter((shard) => shard.projects.length > 0);
+    fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...fixtureShards);
+    try {
+      let overlays: Record<"blacksmith" | "github", Readonly<Record<string, number>>> = {
+        blacksmith: { "agentic-agents-support": 165 },
+        github: { "agentic-agents-support": 253 },
+      };
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockImplementation(
+        (profile) => overlays[profile],
       );
-      return { ...unrelated, ...overlays[profile] };
-    });
-    const options = {
-      compactMode: "pull-request" as const,
-      includeReleaseOnlyPluginShards: false,
-      runnerBackend: "hybrid",
-    };
-    const initialPlan = createNodeTestShardBundles(options);
-    const supportGroups = (plan: typeof initialPlan) =>
-      plan
-        .flatMap((job) => job.groups)
-        .filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name))
-        .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
-    const initial = supportGroups(initialPlan);
-    expect(initial).toHaveLength(2);
-    overlays.blacksmith = {
-      ...overlays.blacksmith,
-      ...Object.fromEntries(initial.map((group, index) => [group.timing_key!, 247 + index])),
-    };
+      const options = {
+        compactMode: "pull-request" as const,
+        includeReleaseOnlyPluginShards: false,
+        runnerBackend: "hybrid",
+      };
+      const initialPlan = createNodeTestShardBundles(options);
+      const supportGroups = (plan: typeof initialPlan) =>
+        plan
+          .flatMap((job) => job.groups)
+          .filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name))
+          .toSorted((left, right) => left.shard_name.localeCompare(right.shard_name));
+      const initial = supportGroups(initialPlan);
+      expect(initial).toHaveLength(2);
+      overlays.blacksmith = {
+        ...overlays.blacksmith,
+        ...Object.fromEntries(initial.map((group, index) => [group.timing_key!, 247 + index])),
+      };
 
-    const expanded = supportGroups(createNodeTestShardBundles(options));
-    expect(expanded).toHaveLength(4);
-    const stripes = expanded.map((group) => group.includePatterns!);
-    const changedStripesA = stripes.map((patterns) => patterns.slice());
-    const first = changedStripesA[0]!.shift()!;
-    const second = changedStripesA[1]!.shift()!;
-    changedStripesA[0]!.push(second);
-    changedStripesA[1]!.push(first);
-    const partialA = createCompactSplitTimingGeneration({
-      configs: expanded[0]!.configs,
-      env: expanded[0]!.env,
-      parentShardName: "agentic-agents-support",
-      stripes: changedStripesA,
-    });
-    const changedStripesB = stripes.map((patterns) => patterns.slice());
-    const third = changedStripesB[2]!.shift()!;
-    const fourth = changedStripesB[3]!.shift()!;
-    changedStripesB[2]!.push(fourth);
-    changedStripesB[3]!.push(third);
-    const partialB = createCompactSplitTimingGeneration({
-      configs: expanded[0]!.configs,
-      env: expanded[0]!.env,
-      parentShardName: "agentic-agents-support",
-      stripes: changedStripesB,
-    });
-    overlays = {
-      github: { "agentic-agents-support": 100 },
-      blacksmith: {
-        "agentic-agents-support": 100,
-        [partialA.timingKeys[0]!]: 1_000,
-        [partialA.timingKeys[1]!]: 1_000,
-        [partialB.timingKeys[2]!]: 1_000,
-        [partialB.timingKeys[3]!]: 1_000,
-      },
-    };
-    const incomplete = createNodeTestShardBundles(options).flatMap((job) => job.groups);
-    expect(
-      incomplete.filter((group) => group.shard_name === "agentic-agents-support"),
-    ).toHaveLength(1);
-    expect(
-      incomplete.filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name)),
-    ).toHaveLength(0);
+      const expanded = supportGroups(createNodeTestShardBundles(options));
+      expect(expanded).toHaveLength(4);
+      const stripes = expanded.map((group) => group.includePatterns!);
+      const changedStripesA = stripes.map((patterns) => patterns.slice());
+      const first = changedStripesA[0]!.shift()!;
+      const second = changedStripesA[1]!.shift()!;
+      changedStripesA[0]!.push(second);
+      changedStripesA[1]!.push(first);
+      const partialA = createCompactSplitTimingGeneration({
+        configs: expanded[0]!.configs,
+        env: expanded[0]!.env,
+        parentShardName: "agentic-agents-support",
+        stripes: changedStripesA,
+      });
+      const changedStripesB = stripes.map((patterns) => patterns.slice());
+      const third = changedStripesB[2]!.shift()!;
+      const fourth = changedStripesB[3]!.shift()!;
+      changedStripesB[2]!.push(fourth);
+      changedStripesB[3]!.push(third);
+      const partialB = createCompactSplitTimingGeneration({
+        configs: expanded[0]!.configs,
+        env: expanded[0]!.env,
+        parentShardName: "agentic-agents-support",
+        stripes: changedStripesB,
+      });
+      overlays = {
+        github: { "agentic-agents-support": 100 },
+        blacksmith: {
+          "agentic-agents-support": 100,
+          [partialA.timingKeys[0]!]: 1_000,
+          [partialA.timingKeys[1]!]: 1_000,
+          [partialB.timingKeys[2]!]: 1_000,
+          [partialB.timingKeys[3]!]: 1_000,
+        },
+      };
+      const incomplete = createNodeTestShardBundles(options).flatMap((job) => job.groups);
+      expect(
+        incomplete.filter((group) => group.shard_name === "agentic-agents-support"),
+      ).toHaveLength(1);
+      expect(
+        incomplete.filter((group) => /^agentic-agents-support-hosted-\d+$/u.test(group.shard_name)),
+      ).toHaveLength(0);
 
-    overlays.blacksmith = {
-      ...overlays.blacksmith,
-      ...Object.fromEntries(expanded.map((group) => [group.timing_key!, 124])),
-    };
+      overlays.blacksmith = {
+        ...overlays.blacksmith,
+        ...Object.fromEntries(expanded.map((group) => [group.timing_key!, 124])),
+      };
 
-    const stable = supportGroups(createNodeTestShardBundles(options));
-    expect(stable).toHaveLength(4);
-    expect(stable.map((group) => group.timing_key)).toEqual(
-      expanded.map((group) => group.timing_key),
-    );
+      const stable = supportGroups(createNodeTestShardBundles(options));
+      expect(stable).toHaveLength(4);
+      expect(stable.map((group) => group.timing_key)).toEqual(
+        expanded.map((group) => group.timing_key),
+      );
+    } finally {
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
+    }
   });
 
   it("keeps Chromium files in the UI CI owner and Node-driven Playwright files in Node stripes", () => {
@@ -583,6 +591,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       } finally {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
+
+      // Cheap envelopes use the time budget instead of creating extra
+      // runners at ten groups; serial placements keep their existing count limit.
+      timings.mockReturnValue(
+        Object.fromEntries(createNodeTestShards(options).map((shard) => [shard.shardName, 1])),
+      );
+      const dense = createNodeTestShardBundles(options);
+      expect(dense.some((shard) => shard.groups.length > 10)).toBe(profile !== "github");
+      for (const shard of dense.filter((entry) => entry.groups.length > 10)) {
+        expect(shard).toMatchObject({
+          planConcurrency: 2,
+          requiresDist: false,
+          runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+        });
+        expect(shard.pretestBuildMode).toBeUndefined();
+        expect(shard.predictedSeconds).toBeLessThanOrEqual(360);
+      }
     },
   );
 
@@ -917,9 +942,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               : 150;
           expect(shard.predictedSeconds, profile.name).toBeLessThanOrEqual(budget);
         }
-        expect(plan.every((shard) => shard.groups.length > 0 && shard.groups.length <= 10)).toBe(
-          true,
-        );
+        expect(
+          plan.every(
+            (shard) =>
+              shard.groups.length > 0 && (shard.planConcurrency === 2 || shard.groups.length <= 10),
+          ),
+        ).toBe(true);
         expect(plan.every((shard) => Number.isFinite(shard.predictedSeconds))).toBe(true);
         const names = plan.flatMap((shard) => shard.groups.map((group) => group.shard_name));
         expect(new Set(names).size).toBe(names.length);
@@ -929,7 +957,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
-    expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
+    expect(compact.every((shard) => shard.planConcurrency === 2 || shard.groups.length <= 10)).toBe(
+      true,
+    );
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
@@ -2611,7 +2641,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(
         after.every(
           (shard) =>
-            shard.groups.length <= 10 &&
+            (shard.planConcurrency === 2 || shard.groups.length <= 10) &&
             (shard.planConcurrency === 1 ||
               (runnerBackend !== "github" &&
                 shard.planConcurrency === 2 &&

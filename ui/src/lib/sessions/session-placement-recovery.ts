@@ -61,6 +61,7 @@ const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 // while scoping it to this tab, Gateway, and authenticated credential.
 const PLACEMENT_CREATE_STRING_FIELDS = [
   "category",
+  "displayName",
   "model",
   "contextWindow",
   "thinkingLevel",

@@ -125,16 +125,27 @@ export const ChatHistoryCursorResultSchema = Type.Union([
 ]);
 
 /** Lightweight metadata; session scope preserves the persisted auth-profile selection. */
-export const ChatMetadataParamsSchema = closedObject({
-  agentId: Type.Optional(NonEmptyString),
-  sessionKey: Type.Optional(
-    Type.String({
-      minLength: 1,
-      description:
-        "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
-    }),
-  ),
-});
+export const ChatMetadataParamsSchema = Object.assign(
+  closedObject({
+    agentId: Type.Optional(NonEmptyString),
+    authProfileId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        maxLength: 256,
+        description:
+          "Preview your own saved model account for a new chat without changing defaults. Cannot be combined with sessionKey.",
+      }),
+    ),
+    sessionKey: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Read the authorized session's persisted auth-profile selection instead of neutral agent metadata.",
+      }),
+    ),
+  }),
+  { not: { required: ["sessionKey", "authProfileId"] } },
+);
 
 /** Batched purpose-title request for tool calls rendered in the Control UI. */
 export const ChatToolTitlesParamsSchema = closedObject({

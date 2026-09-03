@@ -10,6 +10,7 @@ import ai.openclaw.app.NodeRuntimeMode
 import ai.openclaw.app.R
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.chat.ChatController
+import ai.openclaw.app.chat.questionsForSession
 import ai.openclaw.app.closeNodeRuntimeTestFixture
 import ai.openclaw.app.gateway.GatewayRegistryEntry
 import ai.openclaw.app.gateway.GatewayRegistryEntryKind
@@ -43,9 +44,11 @@ import androidx.compose.ui.test.assertIsNotEnabled
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
+import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
 import androidx.compose.ui.test.isPopup
@@ -58,8 +61,11 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTextReplacement
+import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.test.swipeDown
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.DpRect
 import androidx.compose.ui.unit.dp
 import androidx.core.os.LocaleListCompat
 import androidx.lifecycle.SavedStateHandle
@@ -127,6 +133,226 @@ class ChatComposerLayoutTest {
     AndroidScreenshotFixture.configure(AndroidScreenshotScene.Home)
     Settings.Global.putString(app.contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, originalAnimatorScale)
     NativeStringResources.install(app)
+  }
+
+  @Test
+  fun shortLoadedHistoryDoesNotOfferJumpWhenBothRowsFit() {
+    withReaderHistory(assistantCount = 1) {
+      assertReaderMessageVisible("You", "Reader prompt")
+      assertReaderMessageVisible("OpenClaw", "Reader answer 1")
+      val range = readerTranscript().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The short transcript starts at its latest edge", 0f, range.value(), 0f)
+      assertEquals("The complete short transcript fits without scrolling", 0f, range.maxValue(), 0f)
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  fun overflowingLoadedHistoryKeepsJumpOutsideMessagesAndReachesLatest() {
+    withReaderHistory(assistantCount = 24) {
+      val transcript = readerTranscript()
+      val before = transcript.getUnclippedBoundsInRoot()
+      assertTrue(
+        "The overflowing transcript must start above the latest reply",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+
+      assertReaderMessageVisible("OpenClaw", "Reader answer 24")
+      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("Jump reaches the latest edge", 0f, range.value(), 0f)
+      assertTrue("The sibling remains overflowing after Jump", range.maxValue() > 0f)
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+      val after = transcript.getUnclippedBoundsInRoot()
+      assertEquals("Using Jump does not change the transcript viewport", before, after)
+    }
+  }
+
+  @Test
+  fun tallLatestRowOffersJumpWhenItsTailIsBelowTheViewport() {
+    val head = "Latest reply starts here."
+    val tail = "Latest reply ends here."
+    val reply = (listOf(head) + List(40) { "Reader paragraph ${it + 1}." } + tail).joinToString("\n\n")
+    withReaderHistory(assistantCount = 1, assistantText = { reply }) {
+      val transcript = readerTranscript()
+      val viewport = transcript.getUnclippedBoundsInRoot()
+      val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+      assertTrue(
+        "Fixture precondition: the transcript viewport must be fully visible: $viewport within $root",
+        viewport.left >= root.left && viewport.right <= root.right && viewport.top >= root.top && viewport.bottom <= root.bottom,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+
+      val replyNode = composeRule.onNode(hasContentDescription(nativeString("OpenClaw")) and hasText(tail))
+      val atLatest = replyNode.getUnclippedBoundsInRoot()
+      assertTrue(
+        "Fixture precondition: one actual latest row must exceed the viewport: $atLatest versus $viewport",
+        atLatest.bottom - atLatest.top > viewport.bottom - viewport.top,
+      )
+      val beginning = readerMarkerBounds(head)
+      assertTrue(
+        "Fixture precondition: the tall reply's beginning must be above the viewport at latest: $beginning versus $viewport",
+        beginning.bottom < viewport.top,
+      )
+
+      fun assertTailVisible() {
+        val ending = readerMarkerBounds(tail)
+        assertTrue(
+          "The actual ending glyphs must be fully inside the transcript: $ending within $viewport",
+          ending.left >= viewport.left && ending.right <= viewport.right && ending.top >= viewport.top && ending.bottom <= viewport.bottom,
+        )
+      }
+      assertTailVisible()
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+
+      transcript.performTouchInput { swipeDown(startY = height * 0.25f, endY = height * 0.75f, durationMillis = 1_000) }
+      composeRule.waitForIdle()
+      val whileReading = replyNode.getUnclippedBoundsInRoot()
+      val hiddenEnding = readerMarkerBounds(tail)
+      assertTrue(
+        "Fixture precondition: the same latest row must still intersect the viewport: $whileReading versus $viewport",
+        whileReading.top < viewport.bottom && whileReading.bottom > viewport.top,
+      )
+      assertTrue(
+        "Fixture precondition: the ending must now be below the viewport: $hiddenEnding versus $viewport",
+        hiddenEnding.top > viewport.bottom,
+      )
+      assertReaderHeaderControl("Jump to latest")
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+      assertTailVisible()
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+      assertEquals("Reading and Jump keep the same transcript viewport", viewport, transcript.getUnclippedBoundsInRoot())
+    }
+  }
+
+  @Test
+  fun growingViewportHidesJumpWhenTheSameLoadedHistoryFits() {
+    val assistantCount = 6
+    val viewportHeight = mutableStateOf(400.dp)
+    withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
+      val transcript = readerTranscript()
+      val before = transcript.getUnclippedBoundsInRoot()
+      assertTrue(
+        "The smaller viewport must hide newer replies",
+        transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value() > 0f,
+      )
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertIsDisplayed()
+
+      composeRule.runOnIdle { viewportHeight.value = 720.dp }
+      composeRule.waitForIdle()
+
+      val after = transcript.getUnclippedBoundsInRoot()
+      assertTrue("Resizing grows the actual transcript viewport", after.bottom - after.top > before.bottom - before.top)
+      assertReaderMessageVisible("You", "Reader prompt")
+      for (index in 1..assistantCount) {
+        assertReaderMessageVisible("OpenClaw", "Reader answer $index")
+      }
+      val range = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+      assertEquals("The resized transcript reaches its latest edge", 0f, range.value(), 0f)
+      assertEquals("The same complete history fits after resizing", 0f, range.maxValue(), 0f)
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  fun readerHeaderKeepsSidebarJumpAndActionsReachableAtLargeFont() {
+    var sidebarRequests = 0
+    withReaderHistory(
+      assistantCount = 24,
+      viewportWidth = 320.dp,
+      fontScale = { 2f },
+      onOpenSidebar = { sidebarRequests += 1 },
+    ) {
+      val transcript = readerTranscript()
+      val before = transcript.getUnclippedBoundsInRoot()
+      val controls = listOf("Show Sidebar", "Jump to latest", "Chat actions").map(::assertReaderHeaderControl)
+      val sidebar = controls.first()
+      controls.drop(1).forEach { bounds ->
+        assertEquals(
+          "Header actions stay on the sidebar's row",
+          (sidebar.top.value + sidebar.bottom.value) / 2,
+          (bounds.top.value + bounds.bottom.value) / 2,
+          1f,
+        )
+      }
+      controls.zipWithNext().forEach { (left, right) ->
+        assertTrue("Header touch targets stay disjoint: $left and $right", left.right <= right.left)
+      }
+
+      readerHeaderControl("Show Sidebar").performClick()
+      composeRule.runOnIdle { assertEquals("The sidebar action remains reachable", 1, sidebarRequests) }
+      readerHeaderControl("Jump to latest").performClick()
+      composeRule.waitForIdle()
+      assertReaderMessageVisible("OpenClaw", "Reader answer 24")
+      composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+      assertEquals("Changing header actions keeps the same transcript viewport", before, transcript.getUnclippedBoundsInRoot())
+
+      readerHeaderControl("Chat actions").performClick()
+      composeRule
+        .onNode(hasText(nativeString("Refresh chat")) and hasClickAction())
+        .assertIsDisplayed()
+        .assertIsEnabled()
+        .performClick()
+      composeRule.waitForIdle()
+      composeRule.onNode(isPopup()).assertDoesNotExist()
+    }
+  }
+
+  @Test
+  fun nearFittingHistoryRetiresJumpAfterRepeatedViewportChanges() {
+    val assistantCount = 6
+    val viewportHeight = mutableStateOf(720.dp)
+    withReaderHistory(assistantCount = assistantCount, viewportHeight = { viewportHeight.value }) {
+      val transcript = readerTranscript()
+      val contentSpan = assertReaderHistoryFits(assistantCount)
+      val initialMessages = controller.messages.value
+      val initialRoot = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+      val initialViewport = transcript.getUnclippedBoundsInRoot()
+      val chrome = (initialRoot.bottom - initialRoot.top) - (initialViewport.bottom - initialViewport.top)
+      val targetHeight = chrome + contentSpan + 24.dp
+      assertTrue(
+        "The measured near-fit target must leave room for a smaller starting viewport: $targetHeight",
+        targetHeight - 96.dp > chrome && targetHeight < initialRoot.bottom - initialRoot.top,
+      )
+
+      repeat(2) { cycle ->
+        composeRule.runOnIdle { viewportHeight.value = targetHeight - 96.dp }
+        composeRule.waitForIdle()
+        val beforeRange = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+        assertTrue("Cycle $cycle starts with actual overflow", beforeRange.maxValue() > 0f)
+        val beforeSwipe = beforeRange.value()
+        transcript.performTouchInput { swipeDown() }
+        composeRule.waitForIdle()
+        val afterSwipe = transcript.fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange].value()
+        assertTrue(
+          "Cycle $cycle gesture must move away from latest: $beforeSwipe to $afterSwipe",
+          afterSwipe > beforeSwipe && afterSwipe > 0f,
+        )
+        composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertIsDisplayed()
+
+        composeRule.runOnIdle { viewportHeight.value = targetHeight }
+        composeRule.waitForIdle()
+        val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+        val calibratedSpare = (root.bottom - root.top) - chrome - contentSpan
+        assertTrue(
+          "Cycle $cycle must reach the measured near-fit band: $calibratedSpare",
+          calibratedSpare > 0.dp && calibratedSpare < 56.dp,
+        )
+        val measuredSpan = assertReaderHistoryFits(assistantCount)
+        val viewport = transcript.getUnclippedBoundsInRoot()
+        val actualSpare = (viewport.bottom - viewport.top) - measuredSpan
+        assertTrue(
+          "Cycle $cycle leaves positive space smaller than the former jump strip: $actualSpare",
+          actualSpare > 0.dp && actualSpare < 56.dp,
+        )
+        assertEquals("Only the viewport changes during cycle $cycle", initialMessages, controller.messages.value)
+      }
+    }
   }
 
   @Test
@@ -242,7 +468,7 @@ class ChatComposerLayoutTest {
   fun narrowFrenchComposerKeepsAnEmptyDraftCompactWithTalkAndRunControls() {
     val fontScale = mutableStateOf(1.3f)
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp, fontScale = { fontScale.value }, talkActive = true)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { fontScale.value }, talkActive = true)
     val editor = composeRule.onNode(hasSetTextAction())
     val failures = mutableListOf<String>()
     val measurements = mutableListOf<String>()
@@ -288,7 +514,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun multilineDraftGrowsThroughSixLinesAndStopsGrowingAtTheSeventh() {
-    showChat(viewportWidth = 360.dp, viewportHeight = 640.dp)
+    showChat(viewportWidth = 360.dp, viewportHeight = { 640.dp })
     val editor = composeRule.onNode(hasSetTextAction())
     val heights =
       (1..7).map { lineCount ->
@@ -371,7 +597,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun lockedModelPickerExplainsNativeOwnershipAndKeepsOtherControlsAvailable() {
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp })
     val sessionKey = controller.sessionKey.value
     val model = composeRule.onNodeWithContentDescription(nativeString("Model"))
     val defaultModel = hasText(nativeString("Default")) and hasClickAction() and hasText(nativeString("Permissions")).not()
@@ -412,7 +638,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun lockedParentDisablesNewChatInWorktreeUntilUnlocked() {
-    showChat(viewportHeight = 640.dp)
+    showChat(viewportHeight = { 640.dp })
     val sessionKey = controller.sessionKey.value
     composeRule.runOnIdle {
       @Suppress("UNCHECKED_CAST")
@@ -446,7 +672,7 @@ class ChatComposerLayoutTest {
   fun narrowComposerKeepsModelNamesOnOneLineWithLargeTextAndContextUsage() {
     NativeStringResources.setApplicationLocales(LocaleListCompat.forLanguageTags("fr"))
     val fontScale = mutableStateOf(1f)
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp, fontScale = { fontScale.value }, talkActive = true)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp }, fontScale = { fontScale.value }, talkActive = true)
     val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
 
     @Suppress("UNCHECKED_CAST")
@@ -537,7 +763,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun progressCardSharesComposerSurfaceAndExpandsUpward() {
-    showChat(viewportHeight = 400.dp)
+    showChat()
     showProgressCard(listOf("Inspect the Android layout", "Implement the attached panel", "Verify the result"))
 
     val card = composeRule.onNodeWithTag("chat-progress-card")
@@ -570,7 +796,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun pendingPermissionsStayVisibleInTheModelSheetUntilApplied() {
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp })
     updatePermissions("guarded", pending = false)
     composeRule.onNodeWithContentDescription(nativeString("Model")).performClick()
     val permissions = composeRule.onNode(hasText(nativeString("Permissions")) and hasClickAction())
@@ -589,7 +815,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun fullPermissionsRequireAdminEvenWhenOtherModesAreSelectable() {
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp })
     updatePermissions("guarded", pending = false)
     composeRule.runOnIdle {
       @Suppress("UNCHECKED_CAST")
@@ -613,7 +839,7 @@ class ChatComposerLayoutTest {
 
   @Test
   fun olderGatewayKeepsModelSelectionButExplainsUnavailablePermissions() {
-    showChat(viewportWidth = 320.dp, viewportHeight = 640.dp)
+    showChat(viewportWidth = 320.dp, viewportHeight = { 640.dp })
     updatePermissions("guarded", pending = false)
     composeRule.runOnIdle {
       ChatController::class.java
@@ -725,11 +951,163 @@ class ChatComposerLayoutTest {
     attachment?.let { composeRule.onNodeWithText(it.fileName).assertIsDisplayed() }
   }
 
+  private fun withReaderHistory(
+    assistantCount: Int,
+    assistantText: (Int) -> String = { "Reader answer ${it + 1}" },
+    viewportHeight: () -> Dp = { 640.dp },
+    viewportWidth: Dp = 360.dp,
+    fontScale: () -> Float = { 1f },
+    onOpenSidebar: () -> Unit = {},
+    assertions: () -> Unit,
+  ) {
+    val sessionKey = "agent:main:reader-history"
+    val texts = listOf("Reader prompt") + List(assistantCount, assistantText)
+    val history =
+      buildJsonObject {
+        put("sessionId", JsonPrimitive("reader-history"))
+        put(
+          "messages",
+          buildJsonArray {
+            texts.forEachIndexed { index, text ->
+              add(
+                buildJsonObject {
+                  put("role", JsonPrimitive(if (index == 0) "user" else "assistant"))
+                  put("content", JsonPrimitive(text))
+                },
+              )
+            }
+          },
+        )
+      }.toString()
+    val requestField = ChatController::class.java.getDeclaredField("requestGatewayForGateway").apply { isAccessible = true }
+
+    @Suppress("UNCHECKED_CAST")
+    val originalRequest = requestField.get(controller) as suspend (String, String, String?) -> String
+    val request: suspend (String, String, String?) -> String = { gatewayId, method, params ->
+      when (method) {
+        "chat.history" -> history
+        "question.list" -> """{"questions":[]}"""
+        "progressCard.get" -> """{"card":null}"""
+        else -> originalRequest(gatewayId, method, params)
+      }
+    }
+    try {
+      requestField.set(controller, request)
+      // A new selection fences the constructor's earlier screenshot-history load.
+      composeRule.runOnUiThread { controller.load(sessionKey, ownerAgentId = "main") }
+      val model =
+        showChat(
+          viewportWidth = viewportWidth,
+          viewportHeight = viewportHeight,
+          fontScale = fontScale,
+          expectedMessageCount = texts.size,
+          onOpenSidebar = onOpenSidebar,
+        )
+      composeRule.waitUntil(timeoutMillis = 5_000) {
+        model.chatSessionKey.value == sessionKey &&
+          !model.chatHistoryLoading.value && model.chatHealthOk.value &&
+          model.chatMessages.value.map { message -> message.content.mapNotNull { it.text }.joinToString("\n") } == texts &&
+          model.pendingRunCount.value == 0 && model.chatStreamingAssistantText.value == null &&
+          model.chatPendingToolCalls.value.isEmpty() && model.chatSubagentActivities.value.isEmpty() &&
+          model.chatOutboxItems.value.isEmpty() && model.chatProgressCard.value == null &&
+          questionsForSession(model.chatQuestions.value, sessionKey, model.mainSessionKey.value, "main").isEmpty()
+      }
+      composeRule.waitForIdle()
+      assertions()
+    } finally {
+      requestField.set(controller, originalRequest)
+    }
+  }
+
+  private fun readerMarkerBounds(marker: String): DpRect {
+    val target =
+      composeRule.onNode(
+        hasText(marker) and hasAnyAncestor(hasContentDescription(nativeString("OpenClaw"))),
+        useUnmergedTree = true,
+      )
+    val layouts = mutableListOf<TextLayoutResult>()
+    target.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { action -> assertTrue(action(layouts)) }
+    val layout = layouts.single()
+    assertEquals("The rendered marker must remain intact", marker, layout.layoutInput.text.text)
+    val position = target.fetchSemanticsNode().positionInRoot
+    val glyphs = marker.indices.filterNot { marker[it].isWhitespace() }.map { layout.getBoundingBox(it).translate(position) }
+    assertTrue(
+      "Marker glyphs need finite positive geometry: $glyphs",
+      glyphs.isNotEmpty() && glyphs.all { it.left.isFinite() && it.top.isFinite() && it.right.isFinite() && it.bottom.isFinite() && it.width > 0 && it.height > 0 },
+    )
+    return with(composeRule.density) {
+      DpRect(glyphs.minOf { it.left }.toDp(), glyphs.minOf { it.top }.toDp(), glyphs.maxOf { it.right }.toDp(), glyphs.maxOf { it.bottom }.toDp())
+    }
+  }
+
+  private fun readerTranscript() =
+    composeRule.onNode(
+      SemanticsMatcher.keyIsDefined(SemanticsActions.ScrollToIndex) and hasAnyAncestor(hasTestTag("chat-viewport")),
+    )
+
+  private fun readerHeaderControl(label: String) =
+    composeRule.onNode(
+      hasContentDescription(nativeString(label)) and hasClickAction() and hasAnyAncestor(hasTestTag("chat-viewport")),
+    )
+
+  private fun assertReaderHeaderControl(label: String): DpRect {
+    val bounds = readerHeaderControl(label).assertIsDisplayed().assertIsEnabled().getUnclippedBoundsInRoot()
+    val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    val transcript = readerTranscript().getUnclippedBoundsInRoot()
+    val retainsTouchTarget =
+      with(composeRule.density) {
+        (bounds.right - bounds.left).roundToPx() >= 48.dp.roundToPx() &&
+          (bounds.bottom - bounds.top).roundToPx() >= 48.dp.roundToPx()
+      }
+    assertTrue("The full $label target remains at least 48dp: $bounds", retainsTouchTarget)
+    assertTrue(
+      "The full $label target stays inside the visible root: $bounds within $root",
+      bounds.left >= root.left && bounds.right <= root.right && bounds.top >= root.top && bounds.bottom <= root.bottom,
+    )
+    assertTrue("The $label target stays outside transcript content: $bounds versus $transcript", bounds.bottom <= transcript.top)
+    return bounds
+  }
+
+  private fun assertReaderHistoryFits(assistantCount: Int): Dp {
+    val messages = listOf("You" to "Reader prompt") + (1..assistantCount).map { index -> "OpenClaw" to "Reader answer $index" }
+    val rows =
+      messages.map { (role, text) ->
+        assertReaderMessageVisible(role, text)
+        composeRule.onNode(hasContentDescription(nativeString(role)) and hasText(text)).getUnclippedBoundsInRoot()
+      }
+    val range = readerTranscript().fetchSemanticsNode().config[SemanticsProperties.VerticalScrollAxisRange]
+    assertEquals("All loaded rows reach the latest edge", 0f, range.value(), 0f)
+    assertEquals("All loaded rows fit without scrolling", 0f, range.maxValue(), 0f)
+    composeRule.onNodeWithContentDescription(nativeString("Jump to latest")).assertDoesNotExist()
+    return rows.maxOf { it.bottom } - rows.minOf { it.top }
+  }
+
+  private fun assertReaderMessageVisible(
+    role: String,
+    text: String,
+  ) {
+    val bounds =
+      composeRule
+        .onNode(hasContentDescription(nativeString(role)) and hasText(text))
+        .assertIsDisplayed()
+        .getUnclippedBoundsInRoot()
+    val viewport = readerTranscript().getUnclippedBoundsInRoot()
+    val root = composeRule.onNodeWithTag("chat-viewport").getUnclippedBoundsInRoot()
+    assertTrue(
+      "The entire $role row stays inside the visible transcript: $bounds within $viewport / $root",
+      bounds.right > bounds.left && bounds.bottom > bounds.top &&
+        bounds.left >= maxOf(viewport.left, root.left) && bounds.right <= minOf(viewport.right, root.right) &&
+        bounds.top >= maxOf(viewport.top, root.top) && bounds.bottom <= minOf(viewport.bottom, root.bottom),
+    )
+  }
+
   private fun showChat(
     viewportWidth: Dp = 360.dp,
-    viewportHeight: Dp = 400.dp,
+    viewportHeight: () -> Dp = { 400.dp },
     fontScale: () -> Float = { 1f },
     talkActive: Boolean = false,
+    expectedMessageCount: Int? = null,
+    onOpenSidebar: () -> Unit = {},
   ): MainViewModel {
     val viewModel = MainViewModel(app, prefs, SavedStateHandle())
     viewModelStore.put("chat", viewModel)
@@ -740,7 +1118,7 @@ class ChatComposerLayoutTest {
           // The default viewport models a portrait phone after its IME opens.
           Box(
             Modifier
-              .size(width = viewportWidth, height = viewportHeight)
+              .size(width = viewportWidth, height = viewportHeight())
               .background(ClawTheme.colors.canvas)
               .clipToBounds()
               .testTag("chat-viewport"),
@@ -749,7 +1127,7 @@ class ChatComposerLayoutTest {
               viewModel = viewModel,
               talkActive = talkActive,
               showSidebarButton = true,
-              onOpenSidebar = {},
+              onOpenSidebar = onOpenSidebar,
               onToggleTalk = {},
               onOpenDashboard = {},
               onOpenGatewaySettings = {},
@@ -758,7 +1136,10 @@ class ChatComposerLayoutTest {
         }
       }
     }
-    composeRule.waitUntil { viewModel.chatCommands.value.size == 6 && viewModel.chatMessages.value.size >= 24 && !viewModel.chatHistoryLoading.value }
+    composeRule.waitUntil {
+      viewModel.chatCommands.value.size == 6 && !viewModel.chatHistoryLoading.value &&
+        (if (expectedMessageCount == null) viewModel.chatMessages.value.size >= 24 else viewModel.chatMessages.value.size == expectedMessageCount)
+    }
     return viewModel
   }
 

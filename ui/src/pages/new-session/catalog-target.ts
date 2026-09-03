@@ -1,10 +1,16 @@
 import { html, nothing } from "lit";
-import type { SessionsCatalogListResult } from "../../../../packages/gateway-protocol/src/index.ts";
+import type {
+  SessionCatalog,
+  SessionsCatalogListResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
+import type { ChatModelPickerTargetGroup } from "../chat/components/chat-model-picker-options.ts";
 import { newSessionLocationFromSearch, type NewSessionRouteData } from "./location.ts";
 
 function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
@@ -198,6 +204,136 @@ export async function resolveCreateTarget(
       : undefined;
   } catch {
     return undefined;
+  }
+}
+
+type CatalogCreateTarget = Pick<SessionCatalog, "id" | "label">;
+type CatalogTargetOwner = { agentId: string; client: GatewayBrowserClient };
+type CatalogTargetDiscoveryState =
+  | { status: "idle" }
+  | {
+      status: "loading";
+      owner: CatalogTargetOwner;
+      controller: AbortController;
+      requestId: number;
+    }
+  | { status: "ready"; owner: CatalogTargetOwner; targets: CatalogCreateTarget[] }
+  | { status: "error"; owner: CatalogTargetOwner };
+
+export class CatalogTargetDiscovery {
+  private requestId = 0;
+  private state: CatalogTargetDiscoveryState = { status: "idle" };
+
+  constructor(private readonly notify: () => void) {}
+
+  clear() {
+    const previous = this.state;
+    this.state = { status: "idle" };
+    this.requestId += 1;
+    if (previous.status === "loading") {
+      previous.controller.abort();
+    }
+    if (previous.status !== "idle") {
+      this.notify();
+    }
+  }
+
+  private startRequest(owner: CatalogTargetOwner) {
+    const controller = new AbortController();
+    const requestId = ++this.requestId;
+    this.state = { status: "loading", owner, controller, requestId };
+    this.notify();
+    void owner.client
+      .request<SessionsCatalogListResult>(
+        "sessions.catalog.list",
+        { agentId: owner.agentId, limitPerHost: 1 },
+        { signal: controller.signal },
+      )
+      .then(
+        (result) => {
+          const active = this.state;
+          if (active.status !== "loading" || active.requestId !== requestId) {
+            return;
+          }
+          this.state = {
+            status: "ready",
+            owner,
+            targets: result.catalogs
+              .filter((catalog) => catalog.capabilities.startTerminal === true)
+              .map(({ id, label }) => ({ id, label })),
+          };
+          this.notify();
+        },
+        () => {
+          const active = this.state;
+          if (active.status !== "loading" || active.requestId !== requestId) {
+            return;
+          }
+          this.state = { status: "error", owner };
+          this.notify();
+        },
+      );
+  }
+
+  load(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
+    const snapshot = context?.gateway.snapshot;
+    const client = snapshot?.client;
+    const normalizedAgentId = agentId.trim() ? normalizeAgentId(agentId) : "";
+    if (
+      !enabled ||
+      snapshot?.phase !== "connected" ||
+      !client ||
+      !normalizedAgentId ||
+      isGatewayMethodAdvertised(snapshot, "sessions.catalog.list") !== true
+    ) {
+      this.clear();
+      return;
+    }
+    const owner = { agentId: normalizedAgentId, client };
+    const current = this.state;
+    if (
+      current.status !== "idle" &&
+      current.owner.client === owner.client &&
+      current.owner.agentId === owner.agentId
+    ) {
+      return;
+    }
+
+    this.clear();
+    this.startRequest(owner);
+  }
+
+  retry(client: GatewayBrowserClient | undefined, agentId: string) {
+    const targetDiscovery = this.state;
+    if (
+      targetDiscovery.status === "error" &&
+      targetDiscovery.owner.client === client &&
+      targetDiscovery.owner.agentId === agentId
+    ) {
+      this.startRequest(targetDiscovery.owner);
+    }
+  }
+
+  groups(): readonly ChatModelPickerTargetGroup[] | undefined {
+    const discovery = this.state;
+    if (
+      discovery.status === "idle" ||
+      (discovery.status === "ready" && !discovery.targets.length)
+    ) {
+      return undefined;
+    }
+    return [
+      {
+        errorLabel: t("newSession.cliAgentsUnavailable"),
+        id: "cliAgents",
+        label: t("newSession.cliAgentsGroup"),
+        options:
+          discovery.status === "ready"
+            ? discovery.targets.map(({ id, label }) => ({ value: id, label }))
+            : [],
+        status: discovery.status,
+      },
+    ];
   }
 }
 

@@ -5278,9 +5278,10 @@ test "$package_manager" = "pnpm@12.1.0"
     }
   });
 
-  it("defaults update migration to stable with optional historical replays", () => {
+  it("keeps update migration manual with optional historical replays", () => {
     const workflow = readFileSync(UPDATE_MIGRATION_WORKFLOW, "utf8");
     const packageWorkflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
+    const job = workflowJob(UPDATE_MIGRATION_WORKFLOW, "update_migration");
 
     expect(workflow).toContain("name: Update Migration");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
@@ -5294,6 +5295,13 @@ test "$package_manager" = "pnpm@12.1.0"
       required: false,
     });
     expect(workflow).toContain("default: plugin-deps-cleanup");
+    expect(workflow).not.toMatch(/\n {2}schedule:/u);
+    expect(job.with).toMatchObject({
+      workflow_ref: "${{ inputs.workflow_ref }}",
+      package_ref: "${{ inputs.package_ref }}",
+      published_upgrade_survivor_baselines: "${{ inputs.baselines }}",
+      published_upgrade_survivor_scenarios: "${{ inputs.scenarios }}",
+    });
     expect(workflow).toContain("telegram_mode: none");
     expect(workflow).toContain("secrets: inherit");
     expect(packageWorkflow).toContain("published-upgrade-survivor/update-migration");
@@ -5606,6 +5614,12 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
     expect(publishedUpgradeSurvivor).toContain("probe_gateway_endpoint");
+    expect(publishedUpgradeSurvivor).toContain("configure_watchos_tls_fixture");
+    expect(publishedUpgradeSurvivor).toContain('"publicUrl":"wss://localhost:18789"');
+    expect(publishedUpgradeSurvivor).toContain('export NODE_EXTRA_CA_CERTS="$WATCH_TLS_CA_CERT"');
+    expect(publishedUpgradeSurvivor).not.toContain(
+      "--base-url http://127.0.0.1:18789/api/nodes/watch",
+    );
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );

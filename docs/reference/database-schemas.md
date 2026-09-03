@@ -193,6 +193,16 @@ Personal publication receipts remain for the logical session's lifetime. Archive
 
 See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
 
+## Personal model accounts
+
+Personal model accounts use the existing `secret_store_entries` identity scope, keyed by the canonical Gateway profile. A versioned `model-accounts` record owns provider selections, while each `model-account:<profile-id>` record owns one inline OAuth or token credential and its usage state. Each record retains the existing 64 KiB secret-store limit; connecting more accounts or merging profiles does not combine credentials under one size limit. This adds no table, column, index, or schema version. Generic secret-list/read methods and profile preferences do not expose these records.
+
+The credential and its selected link commit in one synchronous transaction after the Gateway revalidates the initiating authorization. Runtime loads only an explicitly selected credential and routes refresh and usage updates to that same owner. Shared and agent-local auth saves exclude the reserved personal-profile namespace, including runtime snapshots and CLI mirrors.
+
+Unlink records an explicit disconnected selection and retains credentials used by existing session pins. A verified identity merge transfers only the live source's records, preserving the target's selections and disconnections while retaining old credential IDs for pinned sessions. Credentials stranded on an alias by an older build are not adopted at runtime. A compatible downgrade leaves private records outside the older shared-account pool; re-upgrade can use retained records, while accounts stranded by older identity merges need reconnecting.
+
+See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts) for connection, cancellation, session billing, and unlink behavior.
+
 ## Review checkpoint for material changes
 
 Before implementing a material SQLite or persistent-store change, open or link a maintainer discussion and record acceptance of the design. A schema-version bump is always material, but a change can be material even when the numeric version stays the same.

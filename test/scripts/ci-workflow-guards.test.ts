@@ -4221,7 +4221,7 @@ setImmediate(() => {
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("keeps the gate hosted while security keeps its hybrid-only Blacksmith route", () => {
+  it("keeps hybrid preflight and the gate hosted while security uses Blacksmith", () => {
     const workflow = readCiWorkflow();
     expect(workflow.jobs["ci-gate"]["runs-on"]).toBe("ubuntu-24.04");
     const context = {
@@ -4235,7 +4235,7 @@ setImmediate(() => {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          "blacksmith-4vcpu-ubuntu-2404",
+          jobName === "preflight" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
       for (const override of [
@@ -4592,7 +4592,6 @@ setImmediate(() => {
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
-      preflight: "blacksmith-4vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",

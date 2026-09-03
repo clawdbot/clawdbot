@@ -808,6 +808,7 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
   let lastRuntimeCronRef: CronServiceLike | null = null;
   let startupCronRetryTimer: ReturnType<typeof setTimeout> | null = null;
   let startupDreamingCleanupTimer: ReturnType<typeof setTimeout> | null = null;
+  const startupDreamingCleanupTasks = new Set<Promise<void>>();
   let runtimeCronReconcileTimer: ReturnType<typeof setInterval> | null = null;
   let startupCronRetryAttempts = 0;
   let gatewayLifecycleGeneration = 0;
@@ -1001,6 +1002,14 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     runtimeCronReconcileTimer.unref?.();
   };
 
+  const trackStartupDreamingCleanup = (task: Promise<void>): void => {
+    startupDreamingCleanupTasks.add(task);
+    void task.then(
+      () => startupDreamingCleanupTasks.delete(task),
+      () => startupDreamingCleanupTasks.delete(task),
+    );
+  };
+
   const startDreamingSessionCleanup = async (
     config: OpenClawConfig,
     generation: number,
@@ -1059,14 +1068,16 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
       startupDreamingCleanupTimer = null;
       // Keep the cutoff strictly before startup: equal-millisecond sessions may have
       // started after the hook and must survive even when this timer runs late.
-      void scrubConfiguredAgents(
-        resolveCurrentConfig(),
-        startupStartedAtMs + DREAMING_ORPHAN_MIN_AGE_MS - 1,
-      ).catch((error: unknown) => {
-        api.logger.warn(
-          `memory-core: deferred dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
-        );
-      });
+      trackStartupDreamingCleanup(
+        scrubConfiguredAgents(
+          resolveCurrentConfig(),
+          startupStartedAtMs + DREAMING_ORPHAN_MIN_AGE_MS - 1,
+        ).catch((error: unknown) => {
+          api.logger.warn(
+            `memory-core: deferred dreaming startup cleanup failed: ${formatErrorMessage(error)}`,
+          );
+        }),
+      );
     }, DREAMING_ORPHAN_MIN_AGE_MS);
     startupDreamingCleanupTimer = cleanupTimer;
     startupDreamingCleanupTimer.unref?.();
@@ -1107,8 +1118,9 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
     }
   });
 
-  api.on("gateway_stop", () => {
+  api.on("gateway_stop", async () => {
     disposeStartupCronRetry();
+    await Promise.allSettled(startupDreamingCleanupTasks);
   });
 
   api.on(

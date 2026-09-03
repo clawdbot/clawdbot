@@ -24,7 +24,6 @@ import { resolveControlUiAuthCandidates } from "../../app/control-ui-auth.ts";
 import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
-import { icons } from "../../components/icons.ts";
 import {
   renderLearnMoreLink,
   renderSettingsEmpty,
@@ -37,7 +36,6 @@ import {
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { AuthenticatedAvatarRouteLoader } from "../../lib/authenticated-avatar-route.ts";
-import { resolveAgentAvatarUrl, resolveAssistantTextAvatar } from "../../lib/avatar.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
@@ -45,7 +43,9 @@ import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts
 import "../../styles/profile.css";
 import "../../features/github-connections/github-connections.ts";
 import { renderIdentitySection } from "./identity-section.ts";
+import "./model-accounts.ts";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
+import { renderProfileHero } from "./profile-hero.ts";
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
 
@@ -414,65 +414,41 @@ export class ProfilePage extends OpenClawLightDomElement {
     });
   }
 
+  private renderModelAccounts() {
+    return html`<openclaw-model-accounts
+      .identityId=${this.selfUser?.id ?? null}
+      .profileId=${this.ownProfile?.id ?? null}
+      .personLabel=${this.ownProfile
+        ? this.ownProfile.displayName?.trim() ||
+          this.ownProfile.emails[0] ||
+          t("profilePage.modelAccounts.currentPerson")
+        : null}
+    ></openclaw-model-accounts>`;
+  }
+
   private refreshManually() {
     if (this.selfUser && this.canWrite && !this.identityBusy && !this.identityLoading) {
       void this.loadIdentity();
     }
   }
 
-  private featuredAgent() {
+  private renderHero() {
     const list = this.context.agents.state.agentsList;
     const agentId = list?.defaultId ?? "main";
     const row = list?.agents.find((agent) => agent.id === agentId) ?? { id: agentId };
-    const identity = this.context.agentIdentity.get(agentId);
-    const avatarUrl = resolveAgentAvatarUrl(row, identity);
-    const textAvatar =
-      resolveAssistantTextAvatar(identity?.avatar) ??
-      resolveAssistantTextAvatar(row.identity?.emoji) ??
-      resolveAssistantTextAvatar(row.identity?.avatar);
-    const name =
-      identity?.name?.trim() || row.identity?.name?.trim() || row.name?.trim() || agentId;
-    return { agentId, name, avatarUrl, textAvatar };
-  }
-
-  private renderAvatar(avatarUrl: string | null, textAvatar: string | null, name: string) {
-    const imageUrl = avatarUrl?.startsWith("/")
-      ? this.heroAvatarAuthReady
-        ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
-        : null
-      : avatarUrl;
-    if (avatarUrl && avatarUrl !== this.failedHeroAvatarUrl) {
-      if (imageUrl) {
-        return html`<img
-          class="profile-hero__avatar-image"
-          src=${imageUrl}
-          alt=${name}
-          @error=${() => {
-            this.failedHeroAvatarUrl = avatarUrl;
-          }}
-        />`;
-      }
-    }
-    if (textAvatar) {
-      return html`<span class="profile-hero__avatar-text">${textAvatar}</span>`;
-    }
-    return html`<span class="profile-hero__avatar-mascot" aria-hidden="true"
-      >${icons.lobster}</span
-    >`;
-  }
-
-  private renderHero() {
-    const { agentId, name, avatarUrl, textAvatar } = this.featuredAgent();
-    return renderSettingsGroup(html`
-      <section class="profile-hero">
-        <div class="profile-hero__avatar">${this.renderAvatar(avatarUrl, textAvatar, name)}</div>
-        <div class="profile-hero__name">${name}</div>
-        <div class="profile-hero__handle">
-          <span>@${agentId}</span>
-          <span class="profile-hero__badge">OpenClaw</span>
-        </div>
-      </section>
-    `);
+    return renderProfileHero({
+      agentId,
+      row,
+      identity: this.context.agentIdentity.get(agentId),
+      resolveImageUrl: (avatarUrl) =>
+        this.heroAvatarAuthReady
+          ? this.heroAvatarLoader.resolve(avatarUrl, this.heroAvatarAuthCandidates)
+          : null,
+      failedAvatarUrl: this.failedHeroAvatarUrl,
+      onAvatarError: (avatarUrl) => {
+        this.failedHeroAvatarUrl = avatarUrl;
+      },
+    });
   }
 
   private renderBody() {
@@ -480,7 +456,7 @@ export class ProfilePage extends OpenClawLightDomElement {
       return renderSettingsPage(renderSettingsGroup(renderSettingsEmpty(t("profilePage.offline"))));
     }
     return renderSettingsPage(html`
-      ${this.renderHero()} ${this.renderIdentity()}
+      ${this.renderHero()} ${this.renderIdentity()} ${this.renderModelAccounts()}
       <openclaw-github-connections></openclaw-github-connections>
       ${renderSettingsGroup(
         renderSettingsNavRow({

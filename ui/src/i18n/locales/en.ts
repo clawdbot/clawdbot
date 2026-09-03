@@ -685,6 +685,21 @@ export const en: TranslationMap & {
       title: "Paired devices",
       connected: "connected",
       desktop: "Desktop",
+      actions: "Actions",
+      actionsName: "Actions for {name}",
+      openDesktop: "Open desktop",
+      copyDeviceId: "Copy device ID",
+      deviceIdCopied: "Device ID copied",
+      removeAction: "Remove…",
+      lastKnown: "last known {time}",
+      deviceIdLabel: "Device ID",
+      remoteIpLabel: "Remote IP",
+      scopesLabel: "Scopes",
+      requestedAccessLabel: "Requested access",
+      approvedAccessLabel: "Approved access",
+      tokenRole: "Role",
+      tokenStatus: "Status",
+      tokenAge: "Age",
       desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
         "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart both. The node reconnects with a pending reapproval for desktop.stream; approve it here or with openclaw nodes approve.",
@@ -719,8 +734,6 @@ export const en: TranslationMap & {
       approved: "approved {time}",
       details: "Details",
       deviceId: "Device ID: {id}",
-      remoteIp: "Remote IP: {ip}",
-      scopes: "scopes: {scopes}",
       tokens: "Tokens",
       capabilities: "Capabilities",
       commands: "Commands",
@@ -728,7 +741,6 @@ export const en: TranslationMap & {
       approve: "Approve",
       reject: "Reject",
       remove: "Remove",
-      removeName: "Remove {name}",
       removePromptTitle: "Remove {name}?",
       removePromptBody: "This device must pair again before it can reconnect.",
       removeStalePromptTitle: "Remove {count} stale pairings?",
@@ -764,8 +776,6 @@ export const en: TranslationMap & {
       newPairing: "new device pairing request",
       repair: "repair",
       requestedAt: "{note} · requested {time}",
-      requestedAccess: "requested: {access}",
-      approvedAccess: "approved now: {access}",
     },
     // Lazy: en-devices.ts registers this subtree when the Devices page renders chips.
     capabilities: {},
@@ -3467,6 +3477,77 @@ export const en: TranslationMap & {
         tooLarge: "The processed avatar is larger than 512 KB.",
       },
     },
+    modelAccounts: {
+      title: "Connected accounts",
+      addAccount: "Add account",
+      provider: "Provider",
+      method: "Sign-in method",
+      noMethods: "No personal sign-in methods are available. Ask your administrator for help.",
+      gateway: "Gateway",
+      gatewayUnavailable: "Endpoint unavailable",
+      person: "Person",
+      currentPerson: "Current person",
+      noPerson: "Not identified",
+      scope: "Scope",
+      personal: "Personal",
+      personalDescription:
+        "Sign-in saves an account for this person on this Gateway. System and agent credentials are unchanged.",
+      signInUnavailable: "Sign-in not ready",
+      connectionSettings: "Connection settings",
+      unavailable: {
+        identity:
+          "Use the identity-enabled Gateway address supplied by your administrator, through Tailscale Serve or a trusted proxy. A shared token or device pairing alone does not identify a person.",
+        write:
+          "Personal account sign-in requires operator.write access. Ask your administrator for access, then reconnect to the Gateway.",
+        profile:
+          "Wait for your identity profile to load. If it does not appear, use Refresh or Set identity above to retry.",
+      },
+      description:
+        "Choose the account new chats prefer. Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
+      empty: "No personal default selected. New chats use the gateway's default account.",
+      linkedDescription:
+        "Preferred for new chats with this provider. Clearing the default keeps the saved credential and existing chat choices.",
+      linkedStatus: "New chat default",
+      gatewayAccount: "Selected saved account",
+      selectAction: "Use for new chats",
+      savedAccounts: "Saved accounts",
+      loadMore: "Load more saved accounts",
+      inventoryFailed: "Could not load saved accounts. Refresh to retry.",
+      authTypes: {
+        oauth: "Browser sign-in · saved account",
+        token: "Token · saved account",
+        api_key: "API key · saved account",
+      },
+      checkStatusAction: "Check status",
+      actionFailed: "Could not update connected accounts. Try again.",
+      statusFailed: "Could not check sign-in status. Check again or cancel this attempt.",
+      statusTimedOut: "Sign-in has not finished. Check its status or cancel and sign in again.",
+      notices: {
+        connected: "Account added.",
+        cancelled: "Sign-in cancelled. No account was added by this attempt.",
+        expired: "Sign-in expired. Sign in again to start a new attempt.",
+        selected: "Default updated for new chats. Existing chats are unchanged.",
+        cleared:
+          "New chats use the gateway default for this provider. Saved credentials and existing chats are unchanged.",
+      },
+      connectErrors: {
+        exchange: "Sign-in failed while exchanging the authorization code. Sign in again.",
+        identity:
+          "The account identity could not be verified. Sign in again with your own account.",
+        authority:
+          "Your access changed before sign-in finished. Reconnect to the gateway and try again.",
+        unavailable:
+          "The gateway could not save the account. Sign in again or ask an administrator for help.",
+      },
+      inputLabel: "Use an existing gateway credential",
+      inputDescription:
+        "Admin only: choose an existing Gateway credential for this person's new chats. This does not sign in or change the stored credential.",
+      inputPlaceholder: "openai:alice",
+      linkAction: "Use for new chats",
+      unlinkAction: "Use gateway default",
+      connectAction: "Sign in",
+      cancelAction: "Cancel",
+    },
   },
   tasksPage: {
     active: "Active",
@@ -5065,6 +5146,14 @@ export const en: TranslationMap & {
     },
   },
   chat: {
+    modelAccounts: {
+      label: "Account for this chat",
+      automatic: "Automatic (new-chat default)",
+      manage: "Manage saved accounts…",
+      hint: "This is the chat's saved account choice, not a billing receipt. Gateway fallback rules still apply.",
+      draftHint:
+        "Applies only to this session. Your new-chat default is unchanged; Gateway fallback rules still apply.",
+    },
     mentions: {
       menu: "Mention a person",
       loading: "Loading people…",

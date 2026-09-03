@@ -234,11 +234,6 @@ export function createPreparedModelCatalogWorker(params: {
         }
       },
     });
-  const retire = (error: Error) => {
-    const closing = pool;
-    pool = undefined;
-    return closing?.close(error) ?? Promise.resolve();
-  };
   const stop = (error: Error) => {
     clearInterval(generationPoll);
     generationPoll = undefined;
@@ -248,6 +243,7 @@ export function createPreparedModelCatalogWorker(params: {
     value: PreparedModelWorkerRequest,
   ): Promise<Extract<PreparedModelWorkerResult, { status: "ok" }>> => {
     let message: PreparedModelWorkerResult;
+    let requestPool: typeof pool;
     try {
       assertCurrent();
       generationPoll ??= setInterval(() => {
@@ -256,7 +252,8 @@ export function createPreparedModelCatalogWorker(params: {
         }
       }, PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS);
       generationPoll.unref();
-      message = await (pool ??= createPool()).run(
+      requestPool = pool ??= createPool();
+      message = await requestPool.run(
         () => {
           assertCurrent();
           return value;
@@ -267,10 +264,12 @@ export function createPreparedModelCatalogWorker(params: {
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
       if (failure instanceof PreparedModelCatalogGenerationMismatchError) {
-        // Facts from another generation are never published as this one, but the generation
-        // itself stays open: drop the fenced pool so the next request rebuilds a worker from
-        // the same lifecycle plan instead of replaying a cached terminal error.
-        await retire(failure);
+        // Keep the generation open, but retire only this request's pool: a delayed rejection
+        // from it must not close a replacement already serving the same lifecycle plan.
+        if (pool === requestPool) {
+          pool = undefined;
+        }
+        await requestPool?.close(failure);
         throw failure;
       }
       await stop(failure);

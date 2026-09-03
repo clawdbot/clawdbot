@@ -5,10 +5,10 @@ import {
   type SessionSharingRole,
   type SessionVisibility,
 } from "../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { isSessionMember, type SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../state/user-profiles.js";
 import {
   authorizeGatewaySessionCreation,
   operatorSessionCap,

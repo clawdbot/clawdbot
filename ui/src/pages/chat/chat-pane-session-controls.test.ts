@@ -2,12 +2,21 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type {
+  ChatAccountSelection,
+  UsersListModelAccountsResult,
+} from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import {
+  createTestGatewayClient,
+  type GatewayRequestHandler,
+} from "../../test-helpers/gateway-client.ts";
 import { renderChatPaneComposerControls } from "./chat-pane-session-controls.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatPermissionPicker } from "./components/chat-permission-picker.ts";
 
 function iconMarkup(icon: unknown): string | undefined {
@@ -15,6 +24,154 @@ function iconMarkup(icon: unknown): string | undefined {
   render(icon as never, container);
   return container.querySelector("svg")?.innerHTML;
 }
+
+describe("chat account selection", () => {
+  function mountAccountControl(
+    request: GatewayRequestHandler,
+    selection: ChatAccountSelection | null,
+  ) {
+    const container = document.createElement("div");
+    let current = true;
+    const state: Pick<ChatPageHost, "client" | "chatAccountSelection" | "requestUpdate"> = {
+      client: createTestGatewayClient(request),
+      chatAccountSelection: selection,
+      requestUpdate: () => draw(),
+    };
+    const onSelect = vi.fn(async () => true);
+    const onManage = vi.fn();
+    const draw = () =>
+      render(
+        renderChatModelAccountControl({
+          owner: state,
+          client: state.client,
+          selection: state.chatAccountSelection,
+          model: "openai/gpt-5.5",
+          disabled: false,
+          ownsSelection: () => current,
+          onSelect,
+          onManage,
+          onRequestUpdate: () => draw(),
+        }),
+        container,
+      );
+    draw();
+    return {
+      container,
+      state,
+      draw,
+      onSelect,
+      onManage,
+      retire: () => {
+        current = false;
+      },
+      open: () => container.querySelector("wa-dropdown")?.dispatchEvent(new Event("wa-show")),
+      select: (value: string) => {
+        container
+          .querySelector("wa-dropdown")
+          ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value } } }));
+        return container.querySelector("[data-chat-account-trigger]")?.textContent?.trim();
+      },
+    };
+  }
+
+  it("keeps the current chat choice separate from a saved default for new chats", async () => {
+    const request = vi.fn().mockResolvedValue({
+      profileId: "owner",
+      links: [{ provider: "openai", authProfileId: "openai:work", updatedAt: 1 }],
+      accounts: [
+        {
+          authProfileId: "openai:personal",
+          provider: "openai",
+          label: "Personal workspace",
+          authType: "oauth",
+          selected: false,
+        },
+        {
+          authProfileId: "openai:work",
+          provider: "openai",
+          label: "Work workspace",
+          authType: "oauth",
+          selected: true,
+        },
+        {
+          authProfileId: "anthropic:personal",
+          provider: "anthropic",
+          label: "Claude account",
+          authType: "token",
+          selected: true,
+        },
+      ],
+    } satisfies UsersListModelAccountsResult);
+    const view = mountAccountControl(request, {
+      kind: "personal",
+      label: "Personal workspace",
+      authProfileId: "openai:personal",
+      source: "user",
+    });
+    view.open();
+    await vi.waitFor(() => expect(view.container.textContent).toContain("Work workspace"));
+    expect(view.container.querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+      "Personal workspace",
+    );
+    expect(view.container.textContent).not.toContain("Claude account");
+    expect(view.select("account:openai:work")).toBe("Personal workspace");
+    expect(view.onSelect).toHaveBeenCalledWith(
+      expect.objectContaining({ authProfileId: "openai:work", label: "Work workspace" }),
+    );
+    expect(view.container.querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+      "Personal workspace",
+    );
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["users.listModelAccounts"]);
+
+    view.state.chatAccountSelection = {
+      kind: "personal",
+      label: "Work workspace",
+      authProfileId: "openai:work",
+      source: "user",
+    };
+    view.draw();
+    expect(view.container.querySelector("[data-chat-account-trigger]")?.textContent).toContain(
+      "Work workspace",
+    );
+    view.select("manage");
+    expect(view.onManage).toHaveBeenCalledOnce();
+  });
+
+  it("discards a late inventory after leaving its initiating chat", async () => {
+    const pending = createDeferred<UsersListModelAccountsResult>();
+    const view = mountAccountControl(() => pending.promise, {
+      kind: "personal",
+      label: "Collaborator's saved account",
+    });
+    view.open();
+    view.retire();
+    pending.resolve({
+      profileId: "owner",
+      links: [],
+      accounts: [
+        {
+          authProfileId: "openai:old",
+          provider: "openai",
+          label: "Old connection account",
+          authType: "oauth",
+          selected: false,
+        },
+      ],
+    });
+    await pending.promise;
+    view.draw();
+    expect(view.container.textContent).not.toContain("Old connection account");
+    view.select("account:openai:old");
+    expect(view.onSelect).not.toHaveBeenCalled();
+  });
+
+  it("does not invent an account label without authoritative chat metadata", () => {
+    const request = vi.fn();
+    const view = mountAccountControl(request, null);
+    expect(view.container.querySelector("wa-dropdown")).toBeNull();
+    expect(request).not.toHaveBeenCalled();
+  });
+});
 
 describe("chat pane composer controls", () => {
   it.each([

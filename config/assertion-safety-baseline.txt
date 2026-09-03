@@ -1415,7 +1415,6 @@ extensions/xai/src/x-search-shared.ts	1
 extensions/xai/stream.ts	5
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
-extensions/xai/xai-oauth.ts	1
 extensions/xiaomi/onboard.ts	1
 extensions/xiaomi/speech-provider.ts	2
 extensions/zai/detect.ts	1
@@ -1660,7 +1659,6 @@ src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/repair.ts	1
 src/agents/auth-profiles/source-check.ts	1
 src/agents/auth-profiles/sqlite.ts	2
-src/agents/auth-profiles/state.ts	5
 src/agents/auth-profiles/store.ts	1
 src/agents/auth-profiles/usage.ts	4
 src/agents/bash-process-registry.ts	1
@@ -2639,7 +2637,7 @@ src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-active-events.ts	2
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
-src/config/sessions/session-accessor.sqlite-archive.ts	3
+src/config/sessions/session-accessor.sqlite-archive.ts	2
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-checkpoint.ts	3
@@ -2923,7 +2921,7 @@ src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
-src/gateway/server-methods/web.ts	3
+src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
 src/gateway/server-node-events.ts	3
@@ -3916,7 +3914,6 @@ ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
-ui/src/lib/channels/index.ts	3
 ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1

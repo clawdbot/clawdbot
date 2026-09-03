@@ -358,11 +358,10 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
         widgetFrameUrl: (name, revision) => board.provider.widgetFrameUrl(name, revision),
         workboardCardChip: this.resolveWorkboardCardChip(board, layout),
       });
+    // Keep one template boundary so hiding the panel does not remount app iframes.
     const boardSurface = !shouldRender
       ? nothing
-      : boardActive
-        ? renderSurface(true)
-        : html`${guard([sessionKey], () => renderSurface(false))}`;
+      : html`${boardActive ? renderSurface(true) : guard([sessionKey], () => renderSurface(false))}`;
     return boardSurface;
   }
 

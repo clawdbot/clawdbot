@@ -1,3 +1,5 @@
+import fs from "node:fs/promises";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
@@ -69,12 +71,16 @@ function createClientFactory(
     emptyAnswer?: boolean;
     completeTurn?: boolean;
     models?: ReturnType<typeof codexModel>[];
+    beforeRequest?: (method: string) => Promise<void>;
     modelProvider?: string;
   } = {},
 ) {
   const methods: string[] = [];
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     methods.push(method);
+    if (options.beforeRequest) {
+      await options.beforeRequest(method);
+    }
     if (method === "model/list") {
       const includeHidden = isRecord(params) && params.includeHidden === true;
       return {
@@ -197,6 +203,8 @@ function createClientFactory(
     factory,
     methods,
     request,
+    notifications: fixture.notifications,
+    requests: fixture.requests,
     handleServerRequest: (serverRequest: Parameters<typeof fixture.handleServerRequest>[0]) =>
       fixture.handleServerRequest(serverRequest),
     notify: (notification: Parameters<typeof fixture.notify>[0]) => fixture.notify(notification),
@@ -204,6 +212,58 @@ function createClientFactory(
 }
 
 describe("runBoundedCodexAppServerTurn settled finalization isolation", () => {
+  it.each(["model/list", "mcpServerStatus/list"])(
+    "does not dispatch a turn after its caller retires during %s",
+    async (suspendedMethod) => {
+      const suspended = createDeferred<void>();
+      const release = createDeferred<void>();
+      const fake = createClientFactory({
+        beforeRequest: async (method) => {
+          if (method === suspendedMethod) {
+            suspended.resolve();
+            await release.promise;
+          }
+        },
+      });
+      const retired = new Error("bounded turn caller retired");
+      let current = true;
+      const params = {
+        model: { mode: "required" as const, id: "gpt-5.4" },
+        timeoutMs: 5_000,
+        options: { clientFactory: fake.factory },
+        taskLabel: "isolated completion",
+        developerInstructions: "Name the conversation.",
+        input: [{ type: "text" as const, text: "Help me plan a garden.", text_elements: [] }],
+        requiredModalities: ["text" as const],
+        isolation: "private-stdio" as const,
+        requireNoExternalCapabilities: true,
+        assertCurrent: () => {
+          if (!current) {
+            throw retired;
+          }
+        },
+      };
+      const run = runBoundedCodexAppServerTurn(params);
+      const rejection = expect(run).rejects.toBe(retired);
+      await suspended.promise;
+      const codexHome = vi.mocked(fake.factory).mock.calls[0]?.[0]?.startOptions?.env?.CODEX_HOME;
+      current = false;
+      release.resolve();
+
+      await rejection;
+      expect(fake.methods).not.toContain("turn/start");
+      if (suspendedMethod === "model/list") {
+        expect(fake.methods).not.toContain("thread/start");
+      }
+      expect(fake.notifications).toHaveLength(0);
+      expect(fake.requests).toHaveLength(0);
+      if (!codexHome) {
+        throw new Error("expected the bounded turn's temporary Codex home");
+      }
+      await expect(fs.access(codexHome)).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+
   it.each(["thread/start", "turn/start"] as const)(
     "rejects expired authority before the physical %s write after setup",
     async (blockedMethod) => {

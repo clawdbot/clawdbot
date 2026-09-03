@@ -78,7 +78,13 @@ describe("update.run current owner authority", () => {
       if (allowed) {
         expect(runGatewayUpdateMock).toHaveBeenCalledOnce();
       } else {
-        expect(result.details).toMatchObject({ reason: "owner_required", ackDelivered: false });
+        expect(result.details).toMatchObject({
+          reason: "owner_required",
+          ackDelivered: false,
+          message: expect.stringContaining(
+            `openclaw config set commands.ownerAllowFrom '${JSON.stringify(change === "revoked" ? ["slack:owner"] : ["replacement", "slack:owner"])}'`,
+          ),
+        });
         expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
         expect(sendGatewayLifecycleNoticeMock).not.toHaveBeenCalled();
         expect(runGatewayUpdateMock).not.toHaveBeenCalled();
@@ -102,6 +108,9 @@ describe("update.run current owner authority", () => {
       ok: false,
       reason: "owner_required",
       ackDelivered: true,
+      message: expect.stringContaining(
+        'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
+      ),
     });
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
@@ -109,7 +118,9 @@ describe("update.run current owner authority", () => {
     expect(sentinelState.capturedPayload).toBeUndefined();
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        message: "⚠️ Update did not start: owner_required.",
+        message: expect.stringContaining(
+          'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
+        ),
       }),
     );
   });

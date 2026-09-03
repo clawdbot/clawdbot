@@ -17,6 +17,7 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { mergeUserGitHubConnection } from "./user-github-connections.js";
+import { mergeUserModelAccounts } from "./user-model-accounts.js";
 import { ensureUserPreferencesSchema, mergeUserPreferences } from "./user-preferences.js";
 import { emitUserProfilesChanged } from "./user-profile-events.js";
 import {
@@ -71,7 +72,7 @@ type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export { GATEWAY_OWNER_PROFILE_ID, UserProfileNotFoundError };
+export { UserProfileNotFoundError };
 
 type UserProfileListRow = Pick<
   UserProfileRow,
@@ -374,6 +375,7 @@ function mergeUserProfiles(
     ).rows.map((row) => row.id),
   ];
   prepareUserProfileGitHubMerge(db, sourceProfileIds, targetProfileId);
+  mergeUserModelAccounts(db, sourceProfileId, targetProfileId);
   mergeUserGitHubConnection(db, sourceProfileId, targetProfileId);
   for (const mergedProfileId of sourceProfileIds) {
     mergeUserPreferences(db, mergedProfileId, targetProfileId);

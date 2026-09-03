@@ -7649,7 +7649,7 @@ describe("chat model controls", () => {
     expect(visibleOptions[0]?.dataset.chatModelDefault).toBe("true");
   });
 
-  it("leaves digit keys to the model search and selects the numbered row from the picker", () => {
+  it("leaves digit keys to nested controls and selects the numbered row from the picker", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
       modelProvider: "openai",
@@ -7673,6 +7673,13 @@ describe("chat model controls", () => {
     search!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
     expect(onModelSelect).not.toHaveBeenCalled();
     expect(search!.value).toBe("claude");
+
+    const nestedPicker = document.createElement("wa-dropdown");
+    const nestedTrigger = document.createElement("button");
+    nestedPicker.append(nestedTrigger);
+    details!.append(nestedPicker);
+    nestedTrigger.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
+    expect(onModelSelect).not.toHaveBeenCalled();
 
     details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
     expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main");

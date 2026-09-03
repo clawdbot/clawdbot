@@ -238,7 +238,8 @@ vi.mock("../agents/agent-scope.js", async () => {
   };
 });
 
-vi.mock("../infra/restart-sentinel.js", () => ({
+vi.mock("../infra/restart-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/restart-sentinel.js")>()),
   finalizeUpdateRestartSentinelRunningVersion: mocks.finalizeUpdateRestartSentinelRunningVersion,
   readRestartSentinel: mocks.readRestartSentinel,
   clearRestartSentinelIfRevision: mocks.clearRestartSentinelIfRevision,
@@ -900,7 +901,7 @@ describe("scheduleRestartSentinelWake", () => {
             expectedSessionId: sessionId,
             expectedLifecycleRevision: entry.lifecycleRevision,
             storePath,
-            text: "restart message",
+            text: "✅ OpenClaw updated and restarted.",
             idempotencyKey: `restart-sentinel-notice:${sessionKey}:123`,
           }),
         );
@@ -920,7 +921,7 @@ describe("scheduleRestartSentinelWake", () => {
             sessionKey,
             message: expect.objectContaining({
               role: "assistant",
-              content: [{ type: "text", text: "restart message" }],
+              content: [{ type: "text", text: "✅ OpenClaw updated and restarted." }],
             }),
           }),
           subscribers,
@@ -980,33 +981,69 @@ describe("scheduleRestartSentinelWake", () => {
     },
   );
 
-  it("keeps durable notice delivery and the wake for Telegram update outcomes", async () => {
-    mocks.deliveryContextFromSession.mockReturnValue({ channel: "telegram", to: "chat-123" });
-    mocks.readRestartSentinel.mockResolvedValue({
-      version: 1,
-      revision: 123,
-      payload: { kind: "update", status: "ok", ts: 123, sessionKey: "agent:main:main" },
-    });
-    mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "chat-123" });
+  it.each([
+    { kind: "update", status: "ok", notice: "✅ OpenClaw updated and restarted." },
+    {
+      kind: "update",
+      status: "skipped",
+      notice: "ℹ️ OpenClaw update skipped: already-current.",
+    },
+    {
+      kind: "update",
+      status: "error",
+      notice:
+        "⚠️ OpenClaw update failed: verification failed. The gateway is running the previous version.",
+    },
+    {
+      kind: "restart",
+      status: "ok",
+      notice: "Gateway restart ok (npm)\n/restart\nReason: verification failed",
+    },
+  ] as const)(
+    "keeps durable $kind/$status notice delivery separate from the wake",
+    async ({ kind, status, notice }) => {
+      const payload: RestartSentinelPayload = {
+        kind,
+        status,
+        ts: 123,
+        sessionKey: "agent:main:main",
+        message: kind === "restart" ? "/restart" : "/update",
+        stats: {
+          mode: "npm",
+          reason: status === "skipped" ? "already-current" : "verification failed",
+        },
+      };
+      const { formatRestartSentinelMessage } = await vi.importActual<
+        typeof import("../infra/restart-sentinel.js")
+      >("../infra/restart-sentinel.js");
+      const wake = formatRestartSentinelMessage(payload);
+      mocks.formatRestartSentinelMessage.mockReturnValueOnce(wake);
+      mocks.deliveryContextFromSession.mockReturnValue({ channel: "telegram", to: "chat-123" });
+      mocks.readRestartSentinel.mockResolvedValue({ version: 1, revision: 123, payload });
+      mocks.resolveOutboundTarget.mockReturnValue({ ok: true, to: "chat-123" });
 
-    await scheduleRestartSentinelWake({ deps: {} as never });
+      await scheduleRestartSentinelWake({ deps: {} as never });
 
-    expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expect(mocks.enqueueDeliveryOnce).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "chat-123",
-        payloads: [{ text: "restart message" }],
-      }),
-      "restart-sentinel-notice:agent:main:main:123",
-    );
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledOnce();
-    expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
-      "restart message",
-      expect.objectContaining({ sessionKey: "agent:main:main" }),
-    );
-    expect(mocks.requestHeartbeat).toHaveBeenCalledOnce();
-  });
+      expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+      expect(mocks.enqueueDeliveryOnce).toHaveBeenCalledWith(
+        expect.objectContaining({
+          channel: "telegram",
+          to: "chat-123",
+          payloads: [{ text: notice }],
+        }),
+        "restart-sentinel-notice:agent:main:main:123",
+      );
+      expect(mocks.deliverOutboundPayloads).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ payloads: [{ text: notice }] }),
+      );
+      expect(mocks.formatRestartSentinelMessage).toHaveBeenCalledWith(payload);
+      expect(mocks.enqueueSystemEvent).toHaveBeenCalledWith(
+        wake,
+        expect.objectContaining({ sessionKey: "agent:main:main" }),
+      );
+      expect(mocks.requestHeartbeat).toHaveBeenCalledOnce();
+    },
+  );
 
   it("persists every downstream intent before consuming the loaded revision", async () => {
     await scheduleRestartSentinelWake({ deps: {} as never });
@@ -3211,7 +3248,7 @@ describe("scheduleRestartSentinelWake", () => {
         to: "123",
         accountId: "bot",
         threadId: "7",
-        payloads: [{ text: "restart message" }],
+        payloads: [{ text: "✅ OpenClaw updated and restarted." }],
       }),
     );
     const eventOptions = mocks.enqueueSystemEvent.mock.calls[0]?.[1];

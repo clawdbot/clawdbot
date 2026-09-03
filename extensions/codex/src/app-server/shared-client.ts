@@ -926,7 +926,7 @@ function createSharedCodexAppServerClientStartup(params: {
   return { initialized: initialized.promise, ready };
 }
 
-/** Starts a non-shared Codex app-server client owned entirely by the caller. */
+/** Starts a caller-owned client; its assertion never binds ordinary shared-client leases. */
 export async function createIsolatedCodexAppServerClient(
   options?: CodexAppServerClientOptions,
 ): Promise<CodexAppServerClient> {
@@ -1004,14 +1004,15 @@ async function startInitializedCodexAppServerClient(params: {
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
   abandonSignal?: AbortSignal;
+  assertCurrent?: () => void;
   onStartedClient?: (client: CodexAppServerClient) => void;
   onInitializedClient?: () => void;
-  assertCurrent?: () => void;
 }): Promise<CodexAppServerClient> {
   const acquireStartedAt = Date.now();
   const timeoutMs = params.timeoutMs ?? 0;
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
   for (const [index, startOptions] of startOptionsCandidates.entries()) {
+    params.assertCurrent?.();
     const desktopGeneration =
       params.desktopGeneration ??
       (isManagedCodexDesktopCommand(startOptions.command)
@@ -1021,7 +1022,7 @@ async function startInitializedCodexAppServerClient(params: {
             params.abandonSignal,
           )
         : undefined);
-    const assertDesktopGenerationCurrent = () => {
+    const assertStartupCurrent = () => {
       params.assertCurrent?.();
       if (params.abandonSignal?.aborted) {
         throw new CodexAppServerStartupError("aborted", "codex app-server initialize aborted");
@@ -1061,7 +1062,7 @@ async function startInitializedCodexAppServerClient(params: {
         agentDir: params.agentDir,
         pluginConfig: params.pluginConfig,
         ...(desktopGeneration ? { desktopGeneration } : {}),
-        assertCurrent: assertDesktopGenerationCurrent,
+        assertCurrent: assertStartupCurrent,
         ownsIsolatedCodexHome,
       });
     } catch (error) {
@@ -1102,14 +1103,14 @@ async function startInitializedCodexAppServerClient(params: {
       }
       throw new Error("Codex app-server runtime artifact does not match verified inference");
     }
-    assertDesktopGenerationCurrent();
+    assertStartupCurrent();
     let starting: Promise<CodexAppServerClient> | undefined;
     let client: CodexAppServerClient;
     try {
       client = await withCodexAppServerAcquireDeadline(
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         (starting = CodexAppServerClient.start(startOptions, () => {
-          assertDesktopGenerationCurrent();
+          assertStartupCurrent();
           resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt);
         })),
         params.abandonSignal,
@@ -1154,7 +1155,7 @@ async function startInitializedCodexAppServerClient(params: {
     }
 
     try {
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
     } catch (error) {
       client.close();
       throw error;
@@ -1193,7 +1194,7 @@ async function startInitializedCodexAppServerClient(params: {
     });
 
     try {
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
       await withCodexAppServerAcquireDeadline(
         resolveRemainingAcquireTimeout(timeoutMs, acquireStartedAt),
         applyCodexAppServerAuthProfile({
@@ -1204,6 +1205,7 @@ async function startInitializedCodexAppServerClient(params: {
           authRequirement: params.authRequirement,
           startOptions,
           config: params.config,
+          assertCurrent: assertStartupCurrent,
           ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
         }),
         params.abandonSignal,
@@ -1211,7 +1213,7 @@ async function startInitializedCodexAppServerClient(params: {
       if (runtimeArtifactModule && runtimeArtifact) {
         runtimeArtifactModule.bindCodexAppServerRuntimeArtifact(client, runtimeArtifact);
       }
-      assertDesktopGenerationCurrent();
+      assertStartupCurrent();
       const fenceKey = resolveCodexNativeConfigFenceKey({ client });
       if (fenceKey) {
         client.setThreadSessionRequestGuard(async (options) => {
