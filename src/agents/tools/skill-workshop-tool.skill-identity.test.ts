@@ -101,7 +101,8 @@ it.each([
         });
         const proposalId = (proposed.details as { id: string }).id;
         const stored = await inspectSkillProposal(proposalId, {
-          workspaceDir: state.workspaceDir,
+          config: {},
+          agentId: "main",
           env: state.env,
         });
         expect(stored?.record.target).toMatchObject({
@@ -158,7 +159,8 @@ it("keeps an existing skill name through proposal revision and apply", async () 
       });
       const proposalId = (updated.details as { id: string }).id;
       const proposed = await inspectSkillProposal(proposalId, {
-        workspaceDir: state.workspaceDir,
+        config: {},
+        agentId: "main",
         env: state.env,
       });
       expect(readProposalFrontmatter(proposed?.content ?? "")?.name).toBe("alpha-guide");
@@ -169,7 +171,8 @@ it("keeps an existing skill name through proposal revision and apply", async () 
         proposal_content: `${proposed?.content}\nVerify the saved outcome.\n`,
       });
       const revision = await inspectSkillProposal(proposalId, {
-        workspaceDir: state.workspaceDir,
+        config: {},
+        agentId: "main",
         env: state.env,
       });
       expect(readProposalFrontmatter(revision?.content ?? "")?.name).toBe("alpha-guide");
