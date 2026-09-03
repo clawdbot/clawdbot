@@ -5,6 +5,7 @@ import { buildCatalogSessionKey } from "./catalog-key.ts";
 import {
   resolveSessionPreferredFace,
   resolveSessionPreferredFaceForKey,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
   sessionNavigationTarget,
@@ -87,6 +88,24 @@ describe("sessionNavigationTarget", () => {
     ).toEqual({
       href: "/chat/research/telegram/12345",
       options: { pathname: "/chat/research/telegram/12345" },
+    });
+  });
+
+  it("builds a shareable expanded-dashboard destination", () => {
+    const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
+    const target = sessionNavigationTarget({
+      face: "dashboard",
+      sessionKey,
+      fallbackAgentId: "main",
+      dashboardExpanded: true,
+    });
+
+    expect(target.href).toBe(
+      `/dashboard/main/12345678?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
+    );
+    expect(target.options).toEqual({
+      pathname: "/dashboard/main/12345678",
+      search: `?${SESSION_DASHBOARD_EXPANDED_PARAM}=expanded`,
     });
   });
 

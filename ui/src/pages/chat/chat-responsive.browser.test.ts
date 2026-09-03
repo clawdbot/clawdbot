@@ -1237,125 +1237,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("centers the face switch while the identity trail truncates", async () => {
-    const page = await openBrowserPage(800, 180);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
-          <div class="chat-pane__header chat-pane__header--centered" style="width: 720px;">
-            <div class="chat-pane__header-leading">
-              <div class="chat-pane__crumbs">
-                <span class="chat-pane__session-title">
-                  <span class="chat-pane__session-title-text">A deliberately long session title that must yield to the centered face switch</span>
-                </span>
-              </div>
-            </div>
-            <div class="chat-pane__header-center">
-              <div class="chat-pane__face-switch">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-              </div>
-              <wa-dropdown class="chat-pane__sharing-menu">
-                <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
-              </wa-dropdown>
-            </div>
-            <div class="chat-pane__header-trailing">
-              <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">A</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">B</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">C</button>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
-        const headerElement = header as HTMLElement;
-        const style = getComputedStyle(headerElement);
-        const rect = headerElement.getBoundingClientRect();
-        const faceRect = headerElement
-          .querySelector<HTMLElement>(".chat-pane__face-switch")!
-          .getBoundingClientRect();
-        const title = headerElement.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
-        const contentWidth =
-          headerElement.clientWidth -
-          Number.parseFloat(style.paddingLeft) -
-          Number.parseFloat(style.paddingRight);
-        return {
-          contentCenter: rect.left + Number.parseFloat(style.paddingLeft) + contentWidth / 2,
-          faceCenter: faceRect.left + faceRect.width / 2,
-          titleClientWidth: title.clientWidth,
-          titleScrollWidth: title.scrollWidth,
-        };
-      });
-
-      expect(Math.abs(geometry.faceCenter - geometry.contentCenter)).toBeLessThanOrEqual(0.5);
-      expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
-  it("keeps a non-manager draft indicator out of the face switch width", async () => {
-    const page = await openBrowserPage(800, 180);
-    try {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
-          <div class="chat-pane__header chat-pane__header--centered" style="width: 720px;">
-            <div class="chat-pane__header-leading"></div>
-            <div class="chat-pane__header-center">
-              <div class="chat-pane__face-switch">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-              </div>
-              <span class="chat-pane__draft-indicator" title="Draft">👻</span>
-            </div>
-            <div class="chat-pane__header-trailing"></div>
-          </div>
-        </body></html>`,
-      );
-
-      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
-        const headerElement = header as HTMLElement;
-        const style = getComputedStyle(headerElement);
-        const headerRect = headerElement.getBoundingClientRect();
-        const faceRect = headerElement
-          .querySelector<HTMLElement>(".chat-pane__face-switch")!
-          .getBoundingClientRect();
-        const draftStyle = getComputedStyle(
-          headerElement.querySelector<HTMLElement>(".chat-pane__draft-indicator")!,
-        );
-        const contentWidth =
-          headerElement.clientWidth -
-          Number.parseFloat(style.paddingLeft) -
-          Number.parseFloat(style.paddingRight);
-        return {
-          contentCenter: headerRect.left + Number.parseFloat(style.paddingLeft) + contentWidth / 2,
-          draftPosition: draftStyle.position,
-          faceCenter: faceRect.left + faceRect.width / 2,
-        };
-      });
-
-      expect(geometry.draftPosition).toBe("absolute");
-      expect(Math.abs(geometry.faceCenter - geometry.contentCenter)).toBeLessThanOrEqual(0.5);
-    } finally {
-      await closeBrowserPage(page);
-    }
-  });
-
   it("keeps a constrained no-face header to one flex gap", async () => {
     const page = await openBrowserPage(360, 180);
     try {
@@ -1410,10 +1291,8 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     const page = await openBrowserPage(1100, 240);
     try {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      const boardCss = readStyleSheet("ui/src/styles/chat/board.css");
-      const settingsControlsCss = readStyleSheet("ui/src/styles/settings-controls.css");
       await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${settingsControlsCss}\n${splitViewCss}\n${boardCss}</style></head><body>
+        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
           <div class="chat-split-view__cell" style="width: 320px;">
             <div class="chat-pane__header">
               <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle" type="button">N</button>
@@ -1428,20 +1307,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
               <button class="chat-pane__workspace-chip" type="button">
                 ${iconSvg()}<span>openclaw-workspace</span>
               </button>
-              <div class="chat-pane__face-switch chat-pane__face-switch--split">
-                <div class="settings-segmented">
-                  <button class="settings-segmented__btn" type="button">Chat</button>
-                  <button class="settings-segmented__btn settings-segmented__btn--active" type="button">Split</button>
-                  <button class="settings-segmented__btn" type="button">Dashboard</button>
-                </div>
-                <wa-dropdown class="chat-pane__dock-caret">
-                  <button
-                    slot="trigger"
-                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__dock-caret-trigger"
-                    type="button"
-                  >B</button>
-                </wa-dropdown>
-              </div>
               <wa-dropdown class="chat-pane__sharing-menu">
                 <button class="btn btn--ghost btn--icon chat-icon-btn chat-pane__sharing-trigger" type="button">S</button>
               </wa-dropdown>
@@ -1469,7 +1334,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       const selectors = [
         "openclaw-session-owner-chip",
         ".chat-side-panel-toggle",
-        ".chat-pane__dock-caret",
         ".chat-pane__sharing-menu",
         ".chat-pane__branches-menu",
         ".chat-pane__gateway-menu",

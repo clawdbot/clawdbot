@@ -11,8 +11,8 @@ const MAX_HEIGHT = 800;
 function isSlotId(value: unknown): value is SidebarSlotId {
   return (
     value === "browser" ||
-    value === "chat" ||
     value === "companion" ||
+    value === "dashboard" ||
     value === "desktop" ||
     value === "detail" ||
     value === "discussion" ||

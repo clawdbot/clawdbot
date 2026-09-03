@@ -257,7 +257,7 @@ describe("chat sidebar region", () => {
       "tasks",
       "desktop",
       "discussion",
-      "chat",
+      "dashboard",
     ];
     await region.updateComplete;
 
@@ -273,7 +273,7 @@ describe("chat sidebar region", () => {
       "Tasks",
       "Desktop",
       "Discussion",
-      "Board chat",
+      "Dashboard",
     ]);
 
     const browserMenuItem = Array.from(
@@ -293,7 +293,7 @@ describe("chat sidebar region", () => {
     expect(browserEmptyItem?.querySelector('path[d="M2 12h20"]')).not.toBeNull();
   });
 
-  it("expands, restores, and minimizes without closing tabs", async () => {
+  it("expands, collapses, and minimizes without closing tabs", async () => {
     const region = await createRegion();
     root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
     root(region).querySelector<HTMLButtonElement>(".side-panel__minimize")?.click();
@@ -302,7 +302,9 @@ describe("chat sidebar region", () => {
 
     region.layout = setSidebarExpanded(region.layout, true);
     await region.updateComplete;
-    root(region).querySelector<HTMLButtonElement>(".side-panel__expand")?.click();
+    const collapse = root(region).querySelector<HTMLButtonElement>(".side-panel__expand");
+    expect(collapse?.getAttribute("aria-label")).toBe("Collapse");
+    collapse?.click();
     expect(region.callbacks?.setExpanded).toHaveBeenLastCalledWith(false);
   });
 

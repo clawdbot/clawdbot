@@ -12,6 +12,7 @@ import {
 } from "../../lib/sessions/catalog-key.ts";
 import {
   findUiSessionRow,
+  SESSION_DASHBOARD_EXPANDED_PARAM,
   SESSION_FACE_PREFERENCE_PARAM,
   SESSION_NAVIGATION_KEY_PARAM,
 } from "../../lib/sessions/route-navigation.ts";
@@ -39,6 +40,16 @@ import {
 import type { ChatRouteData, SessionRouteCandidate } from "./session-route-data.ts";
 
 export type { ChatRouteData, SessionChatRouteData } from "./session-route-data.ts";
+
+function sessionRouteHints(location: RouteLocation, face: BoardFace) {
+  return {
+    ...draftRouteDataFromLocation(location),
+    ...(face === "dashboard" &&
+    new URLSearchParams(location.search).get(SESSION_DASHBOARD_EXPANDED_PARAM) === "expanded"
+      ? { dashboardExpanded: true as const }
+      : {}),
+  };
+}
 
 function isPreferenceDerivedFace(location: RouteLocation): boolean {
   return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
@@ -214,7 +225,7 @@ function resolvedSessionRouteData(params: {
   return {
     kind: "session",
     sessionKey: params.row.key,
-    ...draftRouteDataFromLocation(params.location),
+    ...sessionRouteHints(params.location, face),
     face,
     ...(params.shortId && params.shortId.length > 8 ? { shortId: params.shortId } : {}),
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
@@ -252,7 +263,7 @@ function resolvedMainSessionRouteData(params: {
     kind: "session",
     sessionKey: params.row.key,
     agentId: params.target.agentId,
-    ...draftRouteDataFromLocation(params.location),
+    ...sessionRouteHints(params.location, face),
     face,
     ...(canonicalLocation ? { canonicalLocation, canonicalLocationSource: params.location } : {}),
   };
@@ -307,7 +318,7 @@ export async function loadChatRoute(
       kind: "session",
       sessionKey: buildCatalogSessionKey(catalogKey, target.agentId),
       agentId: target.agentId,
-      ...draftRouteDataFromLocation(routeLocation),
+      ...sessionRouteHints(routeLocation, resolvedFace),
       face: resolvedFace,
       // Non-null only on a preference-derived open, where it always at least drops the
       // marker from the URL.
@@ -341,7 +352,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey,
-      ...draftRouteDataFromLocation(routeLocation),
+      ...sessionRouteHints(routeLocation, face),
       face,
       ...(canonicalLocation && canonicalLocation.search !== routeLocation.search
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -439,7 +450,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: target.sessionKey,
-      ...draftRouteDataFromLocation(routeLocation),
+      ...sessionRouteHints(routeLocation, face),
       face,
       ...(canonicalLocation
         ? { canonicalLocation, canonicalLocationSource: routeLocation }
@@ -458,7 +469,7 @@ export async function loadChatRoute(
     return {
       kind: "session",
       sessionKey: cached.sessionKey,
-      ...draftRouteDataFromLocation(routeLocation),
+      ...sessionRouteHints(routeLocation, face),
       face,
       ...(target.shortId.length > 8 ? { shortId: target.shortId } : {}),
       ...(canonicalLocationChanged
