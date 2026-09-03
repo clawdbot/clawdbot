@@ -27,6 +27,7 @@ import {
   normalizeOptionalDir,
   normalizePreparedModelRuntimeInput,
   ownerKey,
+  getPublishedPreparedModelRuntimeSnapshot,
   preparedModelRuntimeConfigsMatch,
   publishPreparedModelRuntimeOwnerBatch,
   publishModelRuntimeSnapshot,
@@ -165,23 +166,11 @@ export async function loadPreparedModelRuntimeSnapshot(
 export function getPreparedModelRuntimeSnapshot(
   rawInput: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeSnapshot | undefined {
-  if (pendingModelRuntimeReplacement) {
-    return undefined;
-  }
-  const input = normalizePreparedModelRuntimeInput(rawInput);
-  const owner = resolvePublishedOwner(owners, input, {
-    allowConfiguredWorkspaceFallback:
-      rawInput.workspaceDir === undefined ||
-      rawInput.agentId === undefined ||
-      rawInput.runtimePluginSelections === undefined,
-  });
-  if (!owner?.snapshot || owner.needsRefresh || owner.pending) {
-    return undefined;
-  }
-  if (input.readOnly && !preparedModelRuntimeConfigsMatch(owner.input.config, input.config)) {
-    return undefined;
-  }
-  return owner.snapshot;
+  return getPublishedPreparedModelRuntimeSnapshot(
+    owners,
+    rawInput,
+    pendingModelRuntimeReplacement !== undefined,
+  );
 }
 
 /** Publishes one owner from an explicit startup/activation lifecycle boundary. */
@@ -786,5 +775,3 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
       },
     };
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

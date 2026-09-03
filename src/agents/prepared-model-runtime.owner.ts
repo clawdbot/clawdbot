@@ -375,6 +375,30 @@ export function resolvePublishedOwner(
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
+export function getPublishedPreparedModelRuntimeSnapshot(
+  owners: Map<string, PreparedModelRuntimeOwner>,
+  rawInput: PreparedModelRuntimeInput,
+  replacementPending: boolean,
+): PreparedModelRuntimeSnapshot | undefined {
+  if (replacementPending) {
+    return undefined;
+  }
+  const input = normalizePreparedModelRuntimeInput(rawInput);
+  const owner = resolvePublishedOwner(owners, input, {
+    allowConfiguredWorkspaceFallback:
+      rawInput.workspaceDir === undefined ||
+      rawInput.agentId === undefined ||
+      rawInput.runtimePluginSelections === undefined,
+  });
+  if (!owner?.snapshot || owner.needsRefresh || owner.pending) {
+    return undefined;
+  }
+  if (input.readOnly && !preparedModelRuntimeConfigsMatch(owner.input.config, input.config)) {
+    return undefined;
+  }
+  return owner.snapshot;
+}
+
 export function hasSameLifecycleInput(
   left: PreparedModelRuntimeInput,
   right: PreparedModelRuntimeInput,
