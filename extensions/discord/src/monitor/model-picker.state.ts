@@ -6,6 +6,7 @@ import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 import { parseStrictInteger, parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
+import { sliceCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { decodeCustomIdComponent, encodeCustomIdComponent } from "../custom-id-codec.js";
 import type { ComponentData } from "../internal/discord.js";
 
@@ -362,7 +363,7 @@ function computeAlphaBuckets(sortedItems: string[]): DiscordModelPickerBucket[] 
 
   // Bucket ids enter URI-encoded Discord custom ids, so the prefix must never
   // be a lone UTF-16 surrogate when an identifier starts with an astral character.
-  const firstLetter = (value: string): string => (Array.from(value)[0] ?? "").toLowerCase();
+  const firstLetter = (value: string): string => sliceCodePoints(value, 0, 1).toLowerCase();
   const firstItem = expectDefined(sortedItems.at(0), "non-empty sorted model picker items");
   const allSamePrefix = sortedItems.every((item) => firstLetter(item) === firstLetter(firstItem));
   if (allSamePrefix) {
