@@ -986,7 +986,7 @@ describe("agent event handler", () => {
     }
   });
 
-  it.each(["native", "dispatch", "abort"] as const)(
+  it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
     "bounds connection snapshots until %s completion without losing the terminal reply",
     (terminal) => {
       vi.useFakeTimers();
@@ -1028,7 +1028,7 @@ describe("agent event handler", () => {
       const sessionKey = "agent:main:backpressured";
       registerChatRun(chatRunState, runId, sessionKey, runId);
       const chunks = Array.from({ length: 24 }, (_, i) => `[${i}]${"abc🚀".repeat(64)}`);
-      const expected = chunks.join("");
+      let expected = chunks.join("");
 
       try {
         let text = "";
@@ -1044,7 +1044,42 @@ describe("agent event handler", () => {
         // socket with an unfinished write must not retain every historical prefix.
         expect(nodeSendToSession.mock.calls.length).toBeGreaterThan(chunks.length);
         expect(frames.length).toBeLessThan(6);
-        if (terminal === "native") {
+        if (terminal === "retry" || terminal === "clearRun" || terminal === "clear") {
+          expect(broadcaster.getBufferedAmount(client.connId)).toBeGreaterThan(
+            socket.bufferedAmount,
+          );
+          if (terminal === "retry") {
+            emitAgentEvent(
+              handler,
+              runId,
+              "assistant",
+              { text: `${expected} failed tail` },
+              { seq: 49 },
+            );
+            emitAgentEvent(
+              handler,
+              runId,
+              "lifecycle",
+              { phase: "error", error: "retryable failure" },
+              { seq: 50 },
+            );
+          } else if (terminal === "clearRun") {
+            chatRunState.clearRun(runId);
+          } else {
+            chatRunState.clear();
+            registerChatRun(chatRunState, runId, sessionKey, runId);
+          }
+          expect(broadcaster.getBufferedAmount(client.connId)).toBe(socket.bufferedAmount);
+          expected = "successor reply";
+          emitAgentEvent(
+            handler,
+            runId,
+            "assistant",
+            { text: expected, delta: expected },
+            { seq: 51 },
+          );
+          emitLifecycleEnd(handler, runId, 52);
+        } else if (terminal === "native") {
           emitAgentEvent(handler, runId, "item", answerCandidate("answer", expected, "selected"), {
             seq: chunks.length * 2 + 1,
           });
@@ -1092,7 +1127,7 @@ describe("agent event handler", () => {
             message: { content: [{ type: "text", text: expected }] },
           },
         });
-        if (terminal !== "abort") {
+        if (terminal === "native" || terminal === "dispatch") {
           expect(
             frames
               .filter((f) => f.event === "agent" && f.payload.stream === "assistant")

@@ -1,3 +1,4 @@
+import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -13,18 +14,18 @@ type PeerSocket = {
   bufferedAmount: number;
   close: () => void;
   terminate: () => void;
-  send: (wire: string, callback?: () => void) => void;
+  send: (wire: string, callback?: (error?: Error) => void) => void;
 };
 
 function createPeer(connId: string, completeImmediately = false) {
-  const callbacks: Array<() => void> = [];
+  const callbacks: Array<(error?: Error) => void> = [];
   const frames: Frame[] = [];
   const socket: PeerSocket = {
     readyState: WebSocket.OPEN,
     bufferedAmount: 0,
     close: vi.fn(),
     terminate: vi.fn(),
-    send: vi.fn((wire: string, callback?: () => void) => {
+    send: vi.fn((wire: string, callback?: (error?: Error) => void) => {
       frames.push(JSON.parse(wire) as Frame);
       if (completeImmediately) {
         callback?.();
@@ -39,7 +40,7 @@ function createPeer(connId: string, completeImmediately = false) {
     connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
     usesSharedGatewayAuth: false,
   };
-  return { client, socket, frames, complete: () => callbacks.shift()?.() };
+  return { client, socket, frames, complete: (error?: Error) => callbacks.shift()?.(error) };
 }
 
 function createBufferedPeer(connId: string, bufferedAmount: number) {
@@ -74,8 +75,8 @@ describe("connection live-text delivery", () => {
       clients: new Set([slow.client, fast.client]),
       onBroadcast,
     });
-    const group = {};
-    const other = {};
+    const group = new AbortController().signal;
+    const other = new AbortController().signal;
     const agent = { liveText: { group, coalesce: { key: "agent", merge: mergeText } } };
     const chat = { liveText: { group, coalesce: { key: "chat", merge: replaceText } } };
     broadcast("agent", text("A", "A"), agent);
@@ -114,7 +115,7 @@ describe("connection live-text delivery", () => {
       payload: text("X", "X"),
     });
     slow.complete();
-    broadcast("chat", text("next run"), { liveText: { group: {} } });
+    broadcast("chat", text("next run"), { liveText: { group: new AbortController().signal } });
     expect(slow.frames.at(-1)?.seq).toBe(7);
   });
 
@@ -148,7 +149,7 @@ describe("connection live-text delivery", () => {
     });
     const opts = {
       liveText: {
-        group: {},
+        group: new AbortController().signal,
         isCurrent: () => current,
         coalesce: { key: "text", merge: mergeText },
       },
@@ -184,10 +185,90 @@ describe("connection live-text delivery", () => {
     expect(peer.frames).toHaveLength(1);
   });
 
+  it("releases a retired group's reservations before a held writer admits its successor", () => {
+    const first = createBufferedPeer("retirement-0", MAX_BUFFERED_BYTES - 16384);
+    const peers = [
+      first,
+      ...Array.from({ length: 31 }, (_, index) =>
+        createBufferedPeer(`retirement-${index + 1}`, MAX_BUFFERED_BYTES - 16384),
+      ),
+    ];
+    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+      clients: new Set(peers.map((peer) => peer.client)),
+    });
+    const retired = new AbortController();
+    const sibling = new AbortController();
+    const coalesce = { key: "text", merge: replaceText };
+    broadcast("tick", {});
+    broadcast("chat", text("retired".repeat(1024)), {
+      liveText: { group: retired.signal, coalesce },
+    });
+    const retiredBytes = getBufferedAmount(first.client.connId)! - first.socket.bufferedAmount;
+    broadcast("chat", text("sibling".repeat(256)), {
+      liveText: { group: sibling.signal, coalesce },
+    });
+    broadcast("tick", { text: "written".repeat(1200) });
+    const before = getBufferedAmount(first.client.connId)!;
+    expect(before).toBeGreaterThan(MAX_BUFFERED_BYTES);
+    expect(first.socket.bufferedAmount).toBeLessThan(MAX_BUFFERED_BYTES);
+
+    retired.abort();
+    for (const peer of peers) {
+      expect(getBufferedAmount(peer.client.connId)).toBe(before - retiredBytes);
+      expect(getBufferedAmount(peer.client.connId)).toBeGreaterThan(peer.socket.bufferedAmount);
+    }
+    // A captured retired group still carries its abort terminal, but no old progress.
+    broadcast("chat", text("aborted"), { liveText: { group: retired.signal } });
+    broadcast("chat", text("stale"), { liveText: { group: retired.signal, coalesce } });
+    broadcast("chat", text("successor final"));
+    for (const peer of peers) {
+      expect(peer.frames.map(({ seq }) => seq)).toEqual([1, 2, 3, 4]);
+      peer.socket.bufferedAmount = 0;
+      for (let index = 0; index < 5; index += 1) {
+        peer.complete();
+      }
+      expect(peer.frames.slice(2).map(({ payload }) => payload.text)).toEqual([
+        "aborted",
+        "successor final",
+        "sibling".repeat(256),
+      ]);
+      expect(peer.frames.map(({ seq }) => seq)).toEqual([1, 2, 3, 4, 5]);
+      expect(peer.socket.close).not.toHaveBeenCalled();
+      expect(peer.socket.terminate).not.toHaveBeenCalled();
+    }
+    sibling.abort();
+  });
+
+  it.each(["drain", "send error", "socket replacement"] as const)(
+    "detaches retirement callbacks after %s releases the queue",
+    (release) => {
+      const peer = createPeer("cleanup");
+      const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
+        clients: new Set([peer.client]),
+      });
+      const owner = new AbortController();
+      broadcast("tick", {});
+      broadcast("chat", text("pending"), {
+        liveText: { group: owner.signal, coalesce: { key: "text", merge: replaceText } },
+      });
+      expect(getBufferedAmount(peer.client.connId)).toBeGreaterThan(0);
+      if (release === "socket replacement") {
+        peer.client.socket = createPeer("replacement").client.socket;
+      } else {
+        peer.complete(release === "send error" ? new Error("connection closed") : undefined);
+      }
+      expect(getBufferedAmount(peer.client.connId)).toBe(0);
+      expect(getEventListeners(owner.signal, "abort")).toHaveLength(0);
+      owner.abort();
+      peer.complete();
+      expect(peer.frames).toHaveLength(release === "drain" ? 2 : 1);
+    },
+  );
+
   it("does not merge a revoked owner's pending delta into its replacement", () => {
     const peer = createPeer("replacement");
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
-    const group = {};
+    const group = new AbortController().signal;
     const coalesce = { key: "agent", merge: mergeText };
     let current = true;
     const original = { liveText: { group, coalesce, isCurrent: () => current } };
@@ -218,7 +299,10 @@ describe("connection live-text delivery", () => {
     const recipients = new Set([peer.client.connId]);
     const opts = {
       sessionSubscriptionVerified: true,
-      liveText: { group: {}, coalesce: { key: "agent", merge: mergeText } },
+      liveText: {
+        group: new AbortController().signal,
+        coalesce: { key: "agent", merge: mergeText },
+      },
     };
     broadcastToConnIds("agent", text("A", "A"), recipients, opts);
     broadcastToConnIds("agent", text("AB", "B"), recipients, opts);
@@ -231,7 +315,7 @@ describe("connection live-text delivery", () => {
   it("shares transport capacity with pending replacements before either queue fills", () => {
     const peer = createBufferedPeer("shared-budget", MAX_BUFFERED_BYTES - 8192);
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
-    const group = {};
+    const group = new AbortController().signal;
     const opts = { liveText: { group, coalesce: { key: "first", merge: replaceText } } };
     broadcast("tick", {});
     broadcast("chat", text("A".repeat(4096)), opts);
@@ -255,7 +339,12 @@ describe("connection live-text delivery", () => {
     const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
       clients: new Set([peer.client]),
     });
-    const opts = { liveText: { group: {}, coalesce: { key: "text", merge: replaceText } } };
+    const opts = {
+      liveText: {
+        group: new AbortController().signal,
+        coalesce: { key: "text", merge: replaceText },
+      },
+    };
     broadcast("tick", {});
     broadcast("chat", text("A".repeat(4096)), opts);
     const large = getBufferedAmount(peer.client.connId)!;
@@ -281,7 +370,7 @@ describe("connection live-text delivery", () => {
       const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
         clients: new Set([peer.client]),
       });
-      const group = {};
+      const group = new AbortController().signal;
       const payloads = [text('first "🦞"'), text("second\n\\")];
       const stateVersion = { presence: 7, health: 3 };
       const reservedBytes = payloads.reduce(
@@ -336,7 +425,10 @@ describe("connection live-text delivery", () => {
       const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
       broadcast("tick", {});
       broadcast("chat", text("A".repeat(4096)), {
-        liveText: { group: {}, coalesce: { key: "text", merge: replaceText } },
+        liveText: {
+          group: new AbortController().signal,
+          coalesce: { key: "text", merge: replaceText },
+        },
       });
       broadcast("tick", { text: "B".repeat(4096) });
       expect(peer.frames).toHaveLength(2);
@@ -364,7 +456,7 @@ describe("connection live-text delivery", () => {
     (coalesce) => {
       const peer = createBufferedPeer("backlogged", MAX_BUFFERED_BYTES - 4096);
       const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
-      const group = {};
+      const group = new AbortController().signal;
       const payload = text("x".repeat(3072));
       broadcast("tick", {});
       for (const key of ["first", "second"]) {
@@ -390,7 +482,7 @@ describe("connection live-text delivery", () => {
   it("flushes the affected group instead of retaining more than the existing byte limit", () => {
     const peer = createPeer("bounded");
     const { broadcast } = createGatewayBroadcaster({ clients: new Set([peer.client]) });
-    const group = {};
+    const group = new AbortController().signal;
     const payload = text("x".repeat(MAX_BUFFERED_BYTES / 2));
     broadcast("tick", {});
     broadcast("chat", payload, {

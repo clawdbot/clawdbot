@@ -523,15 +523,10 @@ export function createAgentEventHandler({
     isCurrent?: () => boolean,
   ): GatewayBroadcastOpts["liveText"] => {
     const run = coalesce ? chatRunState.getOrCreate(runId) : chatRunState.runs.get(runId);
-    const group = run && (coalesce ? (run.liveTextGroup ??= {}) : run.liveTextGroup);
+    const group =
+      run && (coalesce ? (run.liveTextGroup ??= new AbortController()) : run.liveTextGroup);
     return group
-      ? {
-          group,
-          coalesce,
-          isCurrent: coalesce
-            ? () => run?.liveTextGroup === group && isCurrent?.() !== false
-            : undefined,
-        }
+      ? { group: group.signal, coalesce, isCurrent: coalesce ? isCurrent : undefined }
       : undefined;
   };
 

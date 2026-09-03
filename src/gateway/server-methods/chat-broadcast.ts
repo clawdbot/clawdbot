@@ -119,7 +119,7 @@ export function broadcastChatTerminal(params: ChatBroadcastParams & ChatTerminal
     seq,
     ...terminal,
   };
-  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup;
+  const group = params.context.chatRunState?.runs.get(params.runId)?.liveTextGroup?.signal;
   params.context.broadcast("chat", payload, {
     ...(group ? { liveText: { group } } : {}),
     sessionKeys: resolveChatSessionKeys({

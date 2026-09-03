@@ -562,7 +562,7 @@ function broadcastChatAborted(
     stopReason?: string;
     partialText?: string;
     errorMessage?: string;
-    liveTextGroup?: object;
+    liveTextGroup?: AbortSignal;
   },
 ) {
   const { runId, sessionKey, stopReason, partialText } = params;
@@ -661,7 +661,7 @@ export function abortChatRunById(
   }
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
-  const liveTextGroup = ops.chatRunState.runs.get(runId)?.liveTextGroup;
+  const liveTextGroup = ops.chatRunState.runs.get(runId)?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   ops.chatRunState.getOrCreate(runId).abortMarker = createChatAbortMarker();
   if (stopReason) {

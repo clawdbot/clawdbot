@@ -17,7 +17,7 @@ export type GatewayBroadcastOpts = {
   stateVersion?: GatewayBroadcastStateVersion;
   /** Private live-text ownership; omitting coalesce flushes this group's progress. */
   liveText?: {
-    group: object;
+    group: AbortSignal;
     isCurrent?: () => boolean;
     coalesce?: { key: string; merge: (previous: unknown, next: unknown) => unknown };
   };

@@ -223,7 +223,7 @@ function frameWithSequence(base: FrameBase, seq: number, payload = base.payloadF
 }
 
 type PendingLiveText = {
-  group: object;
+  group: AbortSignal;
   key: string;
   payload: unknown;
   bytes: number;
@@ -235,7 +235,7 @@ type ClientDelivery = {
   inFlight: number;
   draining: boolean;
   bytes: number;
-  groups: Map<object, Map<string, PendingLiveText>>;
+  groups: Map<AbortSignal, { entries: Map<string, PendingLiveText>; retire: () => void }>;
   pending: Set<PendingLiveText>;
 };
 
@@ -262,6 +262,9 @@ export function createGatewayBroadcaster(params: {
   const deliveryFor = (client: GatewayWsClient) => {
     let state = deliveries.get(client);
     if (!state || state.socket !== client.socket) {
+      if (state) {
+        clearPending(state);
+      }
       state = {
         socket: client.socket,
         inFlight: 0,
@@ -279,11 +282,17 @@ export function createGatewayBroadcaster(params: {
   const takePending = (state: ClientDelivery, entry: PendingLiveText) => {
     state.pending.delete(entry);
     const group = state.groups.get(entry.group)!;
-    group.delete(entry.key);
-    if (!group.size) {
+    group.entries.delete(entry.key);
+    if (!group.entries.size) {
+      entry.group.removeEventListener("abort", group.retire);
       state.groups.delete(entry.group);
     }
     state.bytes -= entry.bytes;
+  };
+  const clearPending = (state: ClientDelivery) => {
+    for (const entry of state.pending) {
+      takePending(state, entry);
+    }
   };
   const isCurrent = (predicate?: () => boolean) => {
     try {
@@ -292,7 +301,7 @@ export function createGatewayBroadcaster(params: {
       return false;
     }
   };
-  const drain = (state: ClientDelivery, group?: object) => {
+  const drain = (state: ClientDelivery, group?: AbortSignal) => {
     if (state.draining) {
       return;
     }
@@ -331,6 +340,7 @@ export function createGatewayBroadcaster(params: {
       // Delivery is queued here so process-local handlers run after websocket fanout returns.
       queuePluginSessionsChanged(payload);
     }
+    const live = opts?.liveText;
     if (params.clients.size === 0) {
       return;
     }
@@ -430,7 +440,8 @@ export function createGatewayBroadcaster(params: {
           continue;
         }
       }
-      if (retained && !isCurrent(opts?.liveText?.isCurrent)) {
+      // Retirement releases progress without suppressing its captured abort terminal.
+      if ((retained && !isCurrent(live?.isCurrent)) || (live?.coalesce && live.group.aborted)) {
         continue;
       }
       if (!outboundEventLogged) {
@@ -452,7 +463,6 @@ export function createGatewayBroadcaster(params: {
         });
       }
       const state = deliveryFor(c);
-      const live = opts?.liveText;
       if (live && !live.coalesce) {
         drain(state, live.group);
       }
@@ -486,7 +496,7 @@ export function createGatewayBroadcaster(params: {
         continue;
       }
       if (!retained && live?.coalesce && state.inFlight > 0) {
-        let previous = state.groups.get(live.group)?.get(live.coalesce.key);
+        let previous = state.groups.get(live.group)?.entries.get(live.coalesce.key);
         if (previous && !isCurrent(previous.isCurrent)) {
           takePending(state, previous);
           previous = undefined;
@@ -517,9 +527,20 @@ export function createGatewayBroadcaster(params: {
                   base,
                 }),
             };
-            const group = state.groups.get(live.group) ?? new Map();
-            group.set(entry.key, entry);
-            state.groups.set(live.group, group);
+            let group = state.groups.get(live.group);
+            if (!group) {
+              const entries = new Map<string, PendingLiveText>();
+              const retire = () => {
+                // Release only this generation; written frames remain socket-owned.
+                for (const pending of entries.values()) {
+                  takePending(state, pending);
+                }
+              };
+              group = { entries, retire };
+              state.groups.set(live.group, group);
+              live.group.addEventListener("abort", retire, { once: true });
+            }
+            group.entries.set(entry.key, entry);
             state.pending.add(entry);
             state.bytes += bytes;
             continue;
@@ -580,9 +601,7 @@ export function createGatewayBroadcaster(params: {
           log.error(`broadcast send failed conn=${c.connId}: ${formatErrorMessage(err)}`, {
             event,
           });
-          state.pending.clear();
-          state.groups.clear();
-          state.bytes = 0;
+          clearPending(state);
           state.socket.terminate();
         } else {
           drain(state);
