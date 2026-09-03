@@ -848,18 +848,21 @@ response remains authoritative even if it contains no visible models; HTTP
 `401` and `403` return an empty catalog rather than exposing fallback models.
 
 <Note>
-The current bundled harness is `@openai/codex` `0.151.0`. A live `model/list`
-probe against the official `0.151.0` app-server verified this public subset of
+The current bundled harness is `@openai/codex` `0.153.1`. A live `model/list`
+probe against the official `0.153.1` app-server verified this public subset of
 picker rows:
 
 | Model id        | Input modalities | Reasoning efforts                    |
 | --------------- | ---------------- | ------------------------------------ |
-| `gpt-5.4`       | text, image      | low, medium, high, xhigh             |
-| `gpt-5.4-mini`  | text, image      | low, medium, high, xhigh             |
 | `gpt-5.5`       | text, image      | low, medium, high, xhigh             |
 | `gpt-5.6-luna`  | text, image      | low, medium, high, xhigh, max        |
 | `gpt-5.6-sol`   | text, image      | low, medium, high, xhigh, max, ultra |
 | `gpt-5.6-terra` | text, image      | low, medium, high, xhigh, max, ultra |
+
+The same probe with `includeHidden: true` also returned `gpt-6-astra` with
+text and image input and reasoning levels from `low` through `ultra`, including
+`max`. This release supports explicit API selection of that hidden model
+without making it a default or a normal picker choice.
 
 Available model IDs, input modalities, and reasoning efforts remain
 account-scoped. Run `/codex models` after starting or upgrading the gateway to
