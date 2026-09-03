@@ -7,6 +7,7 @@ import { WebSocket } from "ws";
 import { afterAll, describe, expect, it } from "vitest";
 import { GatewayClient } from "../src/gateway/client.js";
 import { buildDeviceAuthPayloadV3 } from "../src/gateway/device-auth.js";
+import { connectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
