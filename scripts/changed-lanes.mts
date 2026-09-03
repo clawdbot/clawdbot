@@ -212,7 +212,11 @@ export function detectChangedLanes(
       continue;
     }
 
-    if (PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath)) {
+    // Test leaves exercise contracts; shared helpers and suites can affect their consumers.
+    if (
+      PUBLIC_EXTENSION_CONTRACT_RE.test(changedPath) &&
+      !/\.(?:test|spec)\.[cm]?[jt]sx?$/u.test(changedPath)
+    ) {
       lanes.core = true;
       lanes.coreTests = true;
       lanes.extensions = true;

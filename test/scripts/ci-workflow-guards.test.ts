@@ -4049,6 +4049,55 @@ NODE
     expect(workflow.jobs["security-fast"].needs).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "composes dedicated contract coverage before precise planning (build=%s)",
+    (buildImpact) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        changedPaths: [buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts"],
+        changedPlannerSource: `
+        export const createChangedNodeTestShards = (_paths, options = {}) => {
+          console.log("dedicated-coverage:" + JSON.stringify(options.dedicatedContractShards ?? null));
+          return ${
+            buildImpact
+              ? "[]"
+              : `[{ checkName: "changed-boundary", shardName: "changed-boundary",
+            configs: ["test/vitest/vitest.boundary.config.ts"], requiresDist: false,
+            runner: "ubuntu-24.04" }]`
+          };
+        };
+        export const createChangedExtensionFallbackShards = () => { throw new Error("Unexpected broad fallback"); };
+        export const hasBuildArtifactAffectingChange = () => ${buildImpact};
+        export const hasSqliteSessionLifecycleAffectingChange = () => false;
+      `,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const dedicated = ["plugin", "channel"].flatMap((family) => {
+        expect(manifest.outputs[`run_${family}_contracts_shards`]).toBe("true");
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs[`${family}_contracts_matrix`], family),
+        ).include;
+        expect(rows).toHaveLength(1);
+        return rows.flatMap((row: { groups: unknown[] }) => row.groups);
+      });
+      expect(dedicated).toHaveLength(4);
+      const coverage = expectDefined(
+        manifest.output.split("\n").find((line) => line.startsWith("dedicated-coverage:")),
+        "precise planner coverage input",
+      );
+      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual(dedicated);
+      const nodeRows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
+      ).include;
+      expect(nodeRows).toEqual(
+        buildImpact ? [] : [expect.objectContaining({ shard_name: "changed-boundary" })],
+      );
+      expect(manifest.outputs.run_build_artifacts).toBe(String(buildImpact));
+      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(buildImpact));
+    },
+  );
+
   it.each([
     ["push", "blacksmith", false],
     ["pull_request", "github", false],
