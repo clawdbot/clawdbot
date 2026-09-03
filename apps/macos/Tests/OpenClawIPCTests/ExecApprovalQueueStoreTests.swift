@@ -247,6 +247,31 @@ struct ExecApprovalQueueStoreTests {
         try #require(await self.waitUntil { store.requests.isEmpty })
     }
 
+    @Test func `expiry keeps its deadline when the main actor delays task startup`() async {
+        // The child owns the actor stall so parallel suites keep their own deadlines.
+        await #expect(processExitsWith: .success) {
+            try await ExecApprovalQueueStoreTests.checkDelayedExpiry()
+        }
+    }
+
+    private static func checkDelayedExpiry() async throws {
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [ApprovalFixtureRequest(id: "delayed-expiry-task", expiresOffsetMs: 3000)]
+        })
+        let store = ExecApprovalQueueStore(gateway: fixture.gateway)
+        defer { store.stop() }
+
+        await store.refresh()
+        let request = try #require(store.requests.first)
+        // Hold the actor past the published deadline before the queued expiry task can start.
+        Self.blockUntilExpiry(request.expiresAtMs)
+        try #require(await Self().waitUntil { store.requests.isEmpty })
+    }
+
+    private static func blockUntilExpiry(_ expiresAtMs: Int) {
+        Thread.sleep(until: Date(timeIntervalSince1970: Double(expiresAtMs) / 1000))
+    }
+
     @Test func `explicit decision policy excludes allow always and blocks unavailable decisions`() async {
         let fixture = ApprovalGatewayFixture(initialRequests: {
             [
