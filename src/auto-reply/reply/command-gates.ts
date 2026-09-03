@@ -117,6 +117,7 @@ export function rejectNonOwnerCommand(
     return rejectUnauthorizedCommand(params, commandLabel);
   }
   const hint = formatCommandOwnerHint({
+    cfg: params.cfg,
     channel: params.command.channel,
     id: params.command.senderId,
   });

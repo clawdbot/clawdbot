@@ -82,7 +82,7 @@ describe("update.run current owner authority", () => {
           reason: "owner_required",
           ackDelivered: false,
           message: expect.stringContaining(
-            "openclaw config set commands.ownerAllowFrom '[\"slack:owner\"]'",
+            `openclaw config set commands.ownerAllowFrom '${JSON.stringify(change === "revoked" ? ["slack:owner"] : ["replacement", "slack:owner"])}'`,
           ),
         });
         expect(adoptUpdateCampaignMock).not.toHaveBeenCalled();
@@ -109,7 +109,7 @@ describe("update.run current owner authority", () => {
       reason: "owner_required",
       ackDelivered: true,
       message: expect.stringContaining(
-        "openclaw config set commands.ownerAllowFrom '[\"slack:owner\"]'",
+        'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
       ),
     });
     expect(runGatewayUpdateMock).not.toHaveBeenCalled();
@@ -119,7 +119,7 @@ describe("update.run current owner authority", () => {
     expect(sendGatewayLifecycleNoticeMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         message: expect.stringContaining(
-          "openclaw config set commands.ownerAllowFrom '[\"slack:owner\"]'",
+          'openclaw config set commands.ownerAllowFrom \'["replacement","slack:owner"]\'',
         ),
       }),
     );

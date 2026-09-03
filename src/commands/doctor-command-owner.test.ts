@@ -61,7 +61,7 @@ describe("command owner health", () => {
     () => {
       vi.stubEnv("OPENCLAW_PROFILE", "owner-proof");
       const id = "@o'brien$(printf injected) --profile decoy:example.org";
-      const hint = formatCommandOwnerHint({ channel: "matrix", id });
+      const hint = formatCommandOwnerHint({ cfg: {}, channel: "matrix", id });
       const command = hint.slice(hint.indexOf("`") + 1, hint.lastIndexOf("`"));
       const args = execFileSync(
         "/bin/sh",
@@ -82,6 +82,42 @@ describe("command owner health", () => {
       ]);
     },
   );
+
+  it.each([
+    { name: "no owners", owners: [], expected: ["telegram:123"] },
+    {
+      name: "existing owners and duplicates",
+      owners: ["slack:owner", "telegram:123", "slack:owner", "*", "telegram:*"],
+      expected: ["slack:owner", "telegram:123"],
+    },
+    {
+      name: "a new owner alongside existing owners",
+      owners: ["slack:owner"],
+      expected: ["slack:owner", "telegram:123"],
+    },
+  ])("preserves command owners in the hint with $name", ({ owners, expected }) => {
+    expect(
+      formatCommandOwnerHint({
+        cfg: { commands: { ownerAllowFrom: owners } },
+        channel: "telegram",
+        id: "123",
+      }),
+    ).toBe(
+      `Ask the operator to run \`openclaw config set commands.ownerAllowFrom '${JSON.stringify(expected)}'\` in a terminal to make this sender a command owner.`,
+    );
+  });
+
+  it("asks the operator to add the sender when config is unavailable", () => {
+    expect(formatCommandOwnerHint({ channel: "telegram", id: "123" })).toBe(
+      "Ask the operator to add `telegram:123` to `commands.ownerAllowFrom`.",
+    );
+  });
+
+  it("keeps internal Gateway ownership guidance", () => {
+    expect(formatCommandOwnerHint({ cfg: {}, channel: "webchat", id: "123" })).toBe(
+      "Ask the operator to grant this Gateway client operator.admin access.",
+    );
+  });
 
   it("does not warn when command owners are configured", () => {
     noteCommandOwnerHealth({ commands: { ownerAllowFrom: ["telegram:123"] } });

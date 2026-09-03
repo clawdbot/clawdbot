@@ -238,7 +238,8 @@ export const updateHandlers: GatewayRequestHandlers = {
     const noticeAttemptId = randomUUID();
     let ownsUpdateOutcome = false;
     let adoptedCampaignId: string | undefined;
-    const ownerRequiredMessage = `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ channel: params.requester?.channel, id: params.requester?.senderId })}`;
+    const ownerRequiredMessage = () =>
+      `Only the OpenClaw owner can start an update from chat. ${formatCommandOwnerHint({ cfg: context.getRuntimeConfig(), channel: params.requester?.channel, id: params.requester?.senderId })}`;
     const refuseNonOwner = () => {
       const requester = params.requester;
       // Only external chat identities are revocable here; internal or channel-less
@@ -256,7 +257,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       respond(true, {
         ok: false,
         code: "owner_required",
-        message: ownerRequiredMessage,
+        message: ownerRequiredMessage(),
         ackDelivered,
         result: { status: "error", reason: "owner_required" },
       });
@@ -445,7 +446,7 @@ export const updateHandlers: GatewayRequestHandlers = {
             // Recheck after the awaited acknowledgement, immediately before the effect.
             if (refuseNonOwner()) {
               if (ackDelivered) {
-                await notify("failed", ownerRequiredMessage);
+                await notify("failed", ownerRequiredMessage());
               }
               return;
             }
@@ -551,7 +552,7 @@ export const updateHandlers: GatewayRequestHandlers = {
         // Recheck after the awaited acknowledgement, immediately before the effect.
         if (refuseNonOwner()) {
           if (ackDelivered) {
-            await notify("failed", ownerRequiredMessage);
+            await notify("failed", ownerRequiredMessage());
           }
           return;
         }

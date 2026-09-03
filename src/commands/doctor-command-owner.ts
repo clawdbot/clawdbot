@@ -43,6 +43,7 @@ export function formatCommandOwnerFromChannelSender(params: {
 
 /** Gives admitted senders an operator-run command without granting owner authority. */
 export function formatCommandOwnerHint(params: {
+  cfg?: OpenClawConfig;
   channel?: string | null;
   id?: string | null;
 }): string {
@@ -56,10 +57,12 @@ export function formatCommandOwnerHint(params: {
   if (!owner) {
     return "Ask the operator to set commands.ownerAllowFrom to your channel user id.";
   }
-  const owners = JSON.stringify([owner]).replaceAll(
-    "'",
-    process.platform === "win32" ? "''" : "'\\''",
-  );
+  if (!params.cfg) {
+    return `Ask the operator to add \`${owner}\` to \`commands.ownerAllowFrom\`.`;
+  }
+  const owners = JSON.stringify([
+    ...new Set([...resolveConfiguredCommandOwners(params.cfg), owner]),
+  ]).replaceAll("'", process.platform === "win32" ? "''" : "'\\''");
   const command = formatCliCommand("openclaw config set commands.ownerAllowFrom");
   return `Ask the operator to run \`${command} '${owners}'\` in a terminal to make this sender a command owner.`;
 }
