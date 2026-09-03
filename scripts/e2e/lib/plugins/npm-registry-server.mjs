@@ -32,7 +32,8 @@ function normalizeUpstreamRegistry(raw) {
 const upstreamRegistry = normalizeUpstreamRegistry(
   process.env.OPENCLAW_NPM_REGISTRY_UPSTREAM || process.env.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_URL,
 );
-const mergeUpstream = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM === "1";
+const upstreamMergeMode = process.env.OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM;
+const mergeUpstream = upstreamMergeMode === "1" || upstreamMergeMode === "versions";
 const distTagOverrides = new Map(
   (process.env.OPENCLAW_NPM_REGISTRY_DIST_TAGS ?? "")
     .split(",")
@@ -206,12 +207,17 @@ async function metadataWithPublishedVersions(entry, baseUrl) {
     );
   }
   const published = metadataForProxy(await upstreamMetadata.get(entry.packageName), baseUrl);
+  // Baseline installs keep published tags; candidate installs select each local
+  // package's release while retaining published versions for older dependencies.
+  const distTags =
+    upstreamMergeMode === "versions"
+      ? { ...published["dist-tags"], ...local["dist-tags"] }
+      : { ...local["dist-tags"], ...published["dist-tags"] };
   return {
     ...published,
     ...local,
     "dist-tags": {
-      ...local["dist-tags"],
-      ...published["dist-tags"],
+      ...distTags,
       ...Object.fromEntries(distTagOverrides),
     },
     versions: { ...published.versions, ...local.versions },

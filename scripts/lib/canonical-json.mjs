@@ -1,5 +1,5 @@
 const ASCII_JSON_PATTERN = /^[\x20-\x7e]+\n$/u;
-const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
+export const compareAscii = (left, right) => (left < right ? -1 : left > right ? 1 : 0);
 
 function fail(message) {
   throw new Error(message);
