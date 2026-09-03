@@ -253,7 +253,7 @@ describe("devices inventory rendering", () => {
         expect(
           meter.querySelector(".device-resource__label")?.textContent?.includes(` · ${age}`),
         ).toBe(!connected);
-        expect(meter.getAttribute("title")?.includes(`last known at ${age}`)).toBe(!connected);
+        expect(meter.getAttribute("title")?.includes(`last known ${age}`)).toBe(!connected);
       }
     },
   );

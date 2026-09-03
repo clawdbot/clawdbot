@@ -57,11 +57,11 @@
   background: var(--bg-hover);
 }
 
-/* Fixed tracks keep the three meters aligned across rows whose controls
-   column differs in width; the 640px rule switches to fractional tracks. */
+/* Tracks cap at 160px so meters align across rows, but shrink together when a
+   wide controls column narrows the body above the 640px rung. */
 .device-resources {
   display: grid;
-  grid-template-columns: repeat(3, 160px);
+  grid-template-columns: repeat(3, minmax(0, 160px));
   gap: var(--space-4);
   margin-top: var(--space-1);
 }

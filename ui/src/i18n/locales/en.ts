@@ -691,7 +691,7 @@ export const en: TranslationMap & {
       copyDeviceId: "Copy device ID",
       deviceIdCopied: "Device ID copied",
       removeAction: "Remove…",
-      lastKnown: "last known at {time}",
+      lastKnown: "last known {time}",
       deviceIdLabel: "Device ID",
       remoteIpLabel: "Remote IP",
       scopesLabel: "Scopes",
