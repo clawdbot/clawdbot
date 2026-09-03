@@ -52,6 +52,14 @@ const CLAUDE_CLI_DEFAULT_ARGS = [
   "--verbose",
   "--setting-sources",
   "user",
+  // Allowlist over Claude Code's built-in tool set. OpenClaw exposes its own
+  // filesystem/exec/browser tools over MCP, so the built-ins are duplicates that
+  // sit outside OpenClaw's approval and sandbox policy. `Skill` is kept because
+  // OpenClaw injects its skills as a Claude Code plugin (--plugin-dir) and they
+  // are invoked through the native Skill tool.
+  // NOTE: `--tools ""` cannot be used here — it disables MCP tools as well.
+  "--tools",
+  "Skill",
   "--allowedTools",
   "mcp__openclaw__*",
   "--disallowedTools",
@@ -221,8 +229,11 @@ export function buildAnthropicCliBackend(
       reseedFromRawTranscriptWhenUncompacted: true,
       freshSessionRecovery: "invalidated-only",
       sessionIdFields: [...CLAUDE_CLI_SESSION_ID_FIELDS],
-      systemPromptFileArg: "--append-system-prompt-file",
-      systemPromptMode: "append",
+      // Replace rather than append: appending keeps Claude Code's harness prompt
+      // alive next to OpenClaw's, which made the agent answer end users out of
+      // character (e.g. "I don't have image access in this CLI context").
+      systemPromptFileArg: "--system-prompt-file",
+      systemPromptMode: "replace",
       systemPromptWhen: "always",
       clearEnv: [...CLAUDE_CLI_CLEAR_ENV],
       serialize: true,
