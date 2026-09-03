@@ -42,6 +42,9 @@ export function resolveLineDurableReplyOptions(params: {
     // Requiring reconciliation is what makes core hand this send a durable intent
     // id, which is the retry key LINE answers with 409 when a replayed part was
     // already accepted. Without it an interrupted send stays unresolved forever.
+    // It also makes the send `required` rather than best-effort, so a queue write
+    // that fails now fails the reply instead of sending it live and unrecorded:
+    // an unrecorded push is exactly the one a replay would duplicate.
     requiredCapabilities: deriveDurableFinalDeliveryRequirements({
       payload: params.payload,
       reconcileUnknownSend: true,

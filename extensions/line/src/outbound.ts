@@ -429,10 +429,11 @@ async function reconcileLineUnknownSend(
   if (plans.length === 0) {
     // A push records itself before the dispatch marker that brings a delivery
     // here at all (send.ts), so an empty record does not mean nothing was sent:
-    // it means this delivery never carried a recorder, which is what core does
-    // when the send needed a capability this adapter does not declare. Those
-    // pushes went out under keys LINE will not deduplicate, so replaying them
-    // would deliver a second copy. Refuse instead.
+    // it means this delivery never carried a recorder. Core withholds the queue
+    // id from a send it cannot key one-to-one — a batch, or one needing a
+    // capability this adapter does not declare — and those pushes went out under
+    // keys LINE will not deduplicate, so replaying them would deliver a second
+    // copy. Refuse instead.
     return {
       status: "unresolved",
       error: "LINE delivery carried no durable record, so a replay could not be deduplicated",
