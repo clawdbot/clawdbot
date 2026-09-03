@@ -84,18 +84,6 @@ const STRUCTURAL_STYLES = new Set<MarkdownStyle>([
   "heading_6",
 ]);
 
-function sortStyleSpans(spans: MarkdownStyleSpan[]): MarkdownStyleSpan[] {
-  return [...spans].toSorted((a, b) => {
-    if (a.start !== b.start) {
-      return a.start - b.start;
-    }
-    if (a.end !== b.end) {
-      return b.end - a.end;
-    }
-    return (STYLE_RANK.get(a.style) ?? 0) - (STYLE_RANK.get(b.style) ?? 0);
-  });
-}
-
 type TextRange = { start: number; end: number };
 
 function mergeRanges(ranges: readonly TextRange[]): TextRange[] {
@@ -217,35 +205,32 @@ export function renderMarkdownWithMarkers(
   const annotationBoundaries = [
     ...new Set(annotated.flatMap((span) => [span.start, span.end])),
   ].toSorted((a, b) => a - b);
-  const styled = sortStyleSpans(
-    projected.styles
-      .filter((span) => Boolean(styleMarkers[span.style]))
-      .flatMap((span) => {
-        if (STRUCTURAL_STYLES.has(span.style)) {
-          return [span];
-        }
-        return subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
-          splitAtBoundaries(piece, annotationBoundaries),
-        );
-      }),
-  );
-
   const boundaries = new Set<number>();
   boundaries.add(0);
   boundaries.add(text.length);
 
   const startsAt = new Map<number, MarkdownStyleSpan[]>();
-  for (const span of styled) {
-    if (span.start === span.end) {
+  for (const span of projected.styles) {
+    if (!styleMarkers[span.style]) {
       continue;
     }
-    boundaries.add(span.start);
-    boundaries.add(span.end);
-    const bucket = startsAt.get(span.start);
-    if (bucket) {
-      bucket.push(span);
-    } else {
-      startsAt.set(span.start, [span]);
+    const pieces = STRUCTURAL_STYLES.has(span.style)
+      ? [span]
+      : subtractRanges(span, dominantAnnotationRanges).flatMap((piece) =>
+          splitAtBoundaries(piece, annotationBoundaries),
+        );
+    for (const piece of pieces) {
+      if (piece.start === piece.end) {
+        continue;
+      }
+      boundaries.add(piece.start);
+      boundaries.add(piece.end);
+      const bucket = startsAt.get(piece.start);
+      if (bucket) {
+        bucket.push(piece);
+      } else {
+        startsAt.set(piece.start, [piece]);
+      }
     }
   }
   for (const spans of startsAt.values()) {

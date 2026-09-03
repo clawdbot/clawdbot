@@ -534,6 +534,7 @@ Private/internal destinations stay blocked unless you explicitly opt in.
 
 - Default: `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork` unset, so private/internal/special-use destinations stay blocked. Legacy alias `allowPrivateNetwork` still accepted.
 - Opt-in: set `dangerouslyAllowPrivateNetwork: true` to allow those destinations.
+- `browser.ssrfPolicy.blockedHostnames` denies exact hosts and wildcard subdomains before DNS and any allow rule, including private-network exceptions. `*.example.com` does not block the apex `example.com`; add both to block the entire domain. An empty or absent list adds no denials. `tools.web.fetch.ssrfPolicy.blockedHostnames` provides the same policy for guarded fetches, including redirects.
 - In strict mode, use wildcard-aware `allowedHostnames` entries for patterns like `*.example.com` and exact host exceptions, including otherwise-blocked names like `localhost`.
 - Direct navigation requests are preflight checked. During the action and bounded post-action grace, guarded Playwright interactions (click, coordinate click, hover, drag, scroll, select, press, type, form fill, and evaluate) intercept policy-denied top-level and subframe document loads before HTTP request bytes, then best-effort re-check the final `http(s)` URL.
 - Before each fresh managed Chrome launch, OpenClaw best-effort disables network prediction, suppressing Chromium's observed speculative preconnect for those denied loads. This is defense in depth, not a policy boundary: a browser reused across a control-service restart and other browser backends may not share the hardening. Page routing remains request-level interception, not a network firewall: redirect hops, a popup's first request, Service Worker traffic, page code that runs after the bounded guard window, and some background/subresource paths can bypass it. Final-URL checks remain detection/quarantine defense; complete prevention requires owner-side egress isolation or a policy-enforcing proxy.
@@ -765,7 +766,7 @@ The Control UI generates device identity with pure-JS Ed25519, so pairing works 
 ## Deployment and host trust
 
 - Full-disk encryption on the gateway host; prefer a dedicated OS user account for the Gateway if the host is shared.
-- Published package dependency lock: source checkouts use `pnpm-lock.yaml`; the published `openclaw` npm package and OpenClaw-owned npm plugin packages include `npm-shrinkwrap.json` so installs use the reviewed transitive dependency graph from the release instead of resolving a fresh graph at install time. This is a supply-chain hardening and release reproducibility boundary, not a sandbox - see [npm shrinkwrap](/gateway/security/dependency-locking).
+- Published package dependencies: `pnpm-lock.yaml` is the reviewed source dependency graph. Plugin packages bundle runtime dependencies by default; native-heavy plugins resolve them at install time from exact-pinned direct dependencies, and the root `openclaw` package also resolves dependencies at install time. Root and plugin tarballs ship neither `npm-shrinkwrap.json` nor `package-lock.json`. See [Dependency locking](/gateway/security/dependency-locking).
 - Secure file operations: OpenClaw uses `@openclaw/fs-safe` for root-bounded file access, atomic writes, archive extraction, temp workspaces, and secret-file helpers. Optional native acceleration defaults **off**; set `OPENCLAW_FS_SAFE_NATIVE_MODE=auto` to use an installed platform binding or `require` to fail closed when native support is unavailable. Details: [Secure file operations](/gateway/security/secure-file-operations).
 - Shared Slack workspace risk: if everyone in Slack can message the bot, the core risk is delegated tool authority - any allowed sender can induce tool calls (`exec`, browser, network/file tools) within the agent's policy, prompt/content injection from one sender can affect shared state/devices/outputs, and if the shared agent has sensitive credentials/files, any allowed sender can potentially drive exfiltration via tool usage. Use separate agents/gateways with minimal tools for team workflows; keep personal-data agents private.
 - Company-shared agent (acceptable pattern): fine when everyone using the agent is in the same trust boundary (for example one company team) and the agent is strictly business-scoped. Run it on a dedicated machine/VM/container, use a dedicated OS user + dedicated browser/profile/accounts, and do not sign that runtime into personal Apple/Google accounts or personal password-manager/browser profiles. Mixing personal and company identities on the same runtime collapses the separation and increases personal-data exposure risk.
@@ -891,10 +892,10 @@ For phone-number-based channels, consider running the assistant on a separate nu
 
 ## Secret scanning
 
-CI runs the pre-commit `detect-private-key` hook over the repository. If it fails, remove or rotate the committed key material, then reproduce locally:
+CI runs the in-repo `scripts/detect-private-keys.mts` scanner over every tracked regular file except colocated `*.test.ts` fixtures and the iOS Fastfile; pull requests run the base branch's copy of the scanner and fail if the base branch lacks it. The local `detect-private-key` pre-commit hook runs the same scanner over the text files pre-commit hands it. If CI fails, remove or rotate the committed key material, then reproduce locally:
 
 ```bash
-pre-commit run --all-files detect-private-key
+node scripts/detect-private-keys.mts
 ```
 
 ## Reporting security issues

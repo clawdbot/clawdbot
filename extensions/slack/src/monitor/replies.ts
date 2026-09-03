@@ -41,6 +41,7 @@ import {
   resolveSlackReplyBlockResolution,
   resolveSlackReplyBlocks,
 } from "../reply-blocks.js";
+import { resolveSlackReplyThreadTs } from "../thread-ts.js";
 import type { SlackEventScope } from "./event-scope.js";
 import {
   createSlackResponseUrlBudget,
@@ -118,17 +119,6 @@ function resolveSlackMediaHookSpokenText(payload: ReplyPayload): string | undefi
   return spokenText?.trim() || undefined;
 }
 
-export function resolveDeliveredSlackReplyThreadTs(params: {
-  replyToMode: "off" | "first" | "all" | "batched";
-  payloadReplyToId?: string;
-  replyThreadTs?: string;
-}): string | undefined {
-  // Keep reply tags opt-in: when replyToMode is off, explicit reply tags
-  // must not force threading.
-  const inlineReplyToId = params.replyToMode === "off" ? undefined : params.payloadReplyToId;
-  return inlineReplyToId ?? params.replyThreadTs;
-}
-
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -167,10 +157,11 @@ export async function deliverReplies(params: {
     if (payload.isReasoning === true) {
       continue;
     }
-    const threadTs = resolveDeliveredSlackReplyThreadTs({
+    const threadTs = resolveSlackReplyThreadTs({
       replyToMode: params.replyToMode,
-      payloadReplyToId: payload.replyToId,
-      replyThreadTs: params.replyThreadTs,
+      replyToId: payload.replyToId,
+      threadId: params.replyThreadTs,
+      replyToCurrent: payload.replyToCurrent,
     });
     const reply = resolveSendableOutboundReplyParts(payload);
     const textRaw =

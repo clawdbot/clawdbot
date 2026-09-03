@@ -441,9 +441,10 @@ describe("renderUsage", () => {
     props.callbacks.filters.onQueryDraftChange = onQueryDraftChange;
 
     render(renderUsage(props), container);
-    const option = [...container.querySelectorAll<HTMLElement>(".usage-filter-option")].find(
+    const option = [...container.querySelectorAll("wa-dropdown-item")].find(
       (item) => item.textContent?.trim() === "clear",
-    );
+    )!;
+    option.checked = true;
     option
       ?.closest("wa-dropdown")
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));

@@ -881,7 +881,11 @@ export async function handleControlUiHttpRequest(
     const assistantAgentId = resolvedIdentity?.agentId;
     const avatarProjection =
       config && resolvedIdentity
-        ? resolveGatewayAssistantAvatar({ cfg: config, identity: resolvedIdentity })
+        ? resolveGatewayAssistantAvatar({
+            cfg: config,
+            identity: resolvedIdentity,
+            httpBasePath: basePath,
+          })
         : { avatar: identity.avatar, resolution: null };
     const avatarMeta = controlUiAvatarResolutionMeta(avatarProjection.resolution);
     sendJson(res, 200, {
@@ -989,7 +993,14 @@ export async function handleControlUiHttpRequest(
     : rel && !rel.endsWith("/")
       ? rel
       : `${rel}index.html`;
-  const fileRel = requested || "index.html";
+  let fileRel: string;
+  try {
+    // Decode the artifact name once, after route ownership and before path validation.
+    fileRel = decodeURIComponent(requested);
+  } catch {
+    respondControlUiNotFound(res);
+    return true;
+  }
   if (!isSafeRelativePath(fileRel)) {
     respondControlUiNotFound(res);
     return true;
@@ -1025,19 +1036,20 @@ export async function handleControlUiHttpRequest(
       safeFile = resolveSafeControlUiFile(retained.rootRealPath, retained.filePath, true);
     }
   }
-  if (safeFile && path.basename(safeFile.path) !== "index.html") {
-    // Filesystem clocks may lead this host; validators cannot postdate message
-    // origination or a future date would 304 later replacements (mirrors
-    // resolveByteResponse in http-byte-range.ts).
+  // An index alias still owns document preparation when its physical target has
+  // another name. Preserve existing aliases that resolve to a canonical index too.
+  if (
+    safeFile &&
+    path.basename(fileRel) !== "index.html" &&
+    path.basename(safeFile.path) !== "index.html"
+  ) {
+    // Future filesystem clocks must not make later replacements look unmodified;
+    // clamp to response origination as in resolveByteResponse.
     const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
-    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
-      fs.closeSync(safeFile.fd);
-      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
-      return true;
-    }
     const representation = resolveOpenedControlUiRepresentation({
       req,
       sourceFile: safeFile,
+      contentPath: fileRel,
       precompressed: immutableAsset,
       openPrecompressedFile: (compressedPath) =>
         resolveSafeControlUiFile(servingRootReal, compressedPath, rejectRepresentationHardlinks),
@@ -1046,9 +1058,15 @@ export async function handleControlUiHttpRequest(
       respondControlUiNotAcceptable(res);
       return true;
     }
+    // Negotiation failures precede preconditions; release the selected representation on 304.
+    if (isControlUiFileUnmodified(req, lastModifiedMs)) {
+      fs.closeSync(representation.bodyFile.fd);
+      respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
+      return true;
+    }
     if (req.method === "HEAD") {
       try {
-        respondHeadForControlUiFile(res, representation.contentPath, {
+        respondHeadForControlUiFile(res, fileRel, {
           immutable: immutableAsset,
           encoding: representation.encoding,
           contentLength: representation.bodyFile.size,
@@ -1060,7 +1078,7 @@ export async function handleControlUiHttpRequest(
       }
     }
     const body = await readAndCloseControlUiFile(representation.bodyFile);
-    await serveControlUiAsset(res, representation.contentPath, body, {
+    await serveControlUiAsset(res, fileRel, body, {
       immutable: immutableAsset,
       encoding: representation.encoding,
       lastModifiedMs,
@@ -1092,7 +1110,7 @@ export async function handleControlUiHttpRequest(
           respondControlUiNotAcceptable(res);
           return true;
         }
-        respondHeadForControlUiFile(res, safeFile.path, {
+        respondHeadForControlUiFile(res, "index.html", {
           encoding: encoding === "identity" ? undefined : encoding,
         });
         return true;

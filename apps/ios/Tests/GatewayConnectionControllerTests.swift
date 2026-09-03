@@ -2679,10 +2679,13 @@ private func waitUntil(
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayB, agentID: "work").isEmpty)
         _ = GatewaySettingsStore.setActiveGateway(stableID: gatewayA)
         appModel.selectedAgentId = "main"
-        #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "main") == [
+        var expectedPrefixed = ownerlessPrefixed
+        expectedPrefixed.agentId = "main"
+        let cachedSessions = await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "main")
+        #expect(cachedSessions == [
             session,
             matchingBare,
-            ownerlessPrefixed,
+            expectedPrefixed,
         ])
         appModel.selectedAgentId = "work"
         #expect(await appModel.loadCachedChatSessions(gatewayID: gatewayA, agentID: "work") == [workGlobal])

@@ -973,6 +973,7 @@ describe("tasks gateway handlers", () => {
     expect(cancelSessionMock).toHaveBeenCalledWith({
       cfg: {},
       sessionKey: "agent:codex:acp:child",
+      agentId: "codex",
       reason: "operator requested stop",
       expectedRunId: "run-cancel-acp-gateway",
     });

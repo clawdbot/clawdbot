@@ -48,18 +48,21 @@ export function useChatAbortRegistryFixture() {
     });
   });
   afterEach(async () => {
-    await settleSubagentRegistryPersistenceWork();
-    resetSubagentRegistryForTests({ persist: false });
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    schedulerTesting.reset();
-    resetTaskRegistryControlRuntimeForTests();
-    await cleanupSessionStateForTest({ stateDir });
-    testing.setDepsForTest();
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    await rm(stateDir, { recursive: true, force: true });
-    env.restore();
+    try {
+      await settleSubagentRegistryPersistenceWork();
+      resetSubagentRegistryForTests({ persist: false });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      schedulerTesting.reset();
+      resetTaskRegistryControlRuntimeForTests();
+      await cleanupSessionStateForTest({ stateDir });
+      testing.setDepsForTest();
+      clearConfigCache();
+      clearRuntimeConfigSnapshot();
+      await rm(stateDir, { recursive: true, force: true });
+    } finally {
+      env.restore();
+    }
   });
 
   return {

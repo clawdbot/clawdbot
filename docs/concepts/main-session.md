@@ -28,6 +28,27 @@ menu); Home is where you talk to it. Sessions that fork off the main
 conversation appear under **Threads**, group chats under **Groups**, and
 coding/CLI sessions under **Coding**.
 
+### Talk to Home while working
+
+Select **Talk to your Home agent** in the sidebar footer (or press
+`Cmd/Ctrl+Shift+H`) to open Home beside your current page. The assistant
+sidebar can dock on the right or bottom.
+It follows the agent selected in the sidebar's agent switcher, so there is one
+place to change agents. **Ask OpenClaw** remains a separate system-care
+conversation in the same sidebar.
+
+The dock uses your real Home conversation, including its history, tools,
+approvals, and message queue. **Open Home full page** opens that conversation
+in the main area and temporarily hides its dock to avoid duplicate composers.
+
+Expand **Working on** to inspect the small reference snapshot accompanying your
+next message: the current page and, when available, the work session, workspace,
+and visible file path. Select text in the work area and use **Attach selected
+text** to include a bounded excerpt. Use **Remove work context** to send without
+the snapshot. It becomes part of the sent message and remains unchanged through
+queueing and retries; slash commands do not include it. References do not grant
+the Home agent additional access to another agent's sessions or files.
+
 ## What flows into the main session
 
 The main session is not just a chat log; it is the place where your agent's

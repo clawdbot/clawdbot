@@ -1,13 +1,12 @@
 // Check Extension Package Tsc Boundary tests cover check extension package tsc boundary script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  appendBoundedStepOutput,
   cleanupCanaryArtifactsForExtensions,
   formatBoundaryCheckSuccessSummary,
   formatSlowCompileSummary,
@@ -23,7 +22,6 @@ import {
   isProcessAlive,
   waitForChildClose,
   waitForDead,
-  waitForFile,
   waitForPidFile,
 } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
@@ -141,14 +139,6 @@ describe("check-extension-package-tsc-boundary", () => {
       ),
     ).rejects.toMatchObject({ kind: "timeout", fullOutput: expect.stringContaining(diagnostic) });
   });
-  it("keeps a bounded tail of captured step output", () => {
-    const first = appendBoundedStepOutput({ text: "", truncatedChars: 0 }, "abcdef", 5);
-    const second = appendBoundedStepOutput(first, "ghij", 5);
-
-    expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
-    expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
-  });
-
   it("removes stale canary artifacts across extensions", () => {
     const { rootDir } = createTempExtensionRoot();
     const { canaryPath, tsconfigPath } = writeCanaryArtifacts(rootDir);
@@ -534,7 +524,7 @@ describe("check-extension-package-tsc-boundary", () => {
 
   it.skipIf(process.platform === "win32")(
     "cleans active async node step descendants before forwarding parent SIGTERM",
-    async () => {
+    async ({ signal }) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-extension-tsc-signal-"));
       tempRoots.add(root);
       const childPidPath = path.join(root, "child.pid");
@@ -564,18 +554,28 @@ describe("check-extension-package-tsc-boundary", () => {
       ].join("");
       const runnerScript = [
         `import { runNodeStepAsync } from ${JSON.stringify(scriptUrl)};`,
+        // Exercise cold startup beyond the former two-second readiness deadline.
+        "await new Promise((resolve) => setTimeout(resolve, 3100));",
         `try { await runNodeStepAsync('parent-signal-step-group', ['--eval', ${JSON.stringify(
           parentScript,
         )}], 60_000); } catch { if (process.exitCode !== 143) process.exitCode = 1; }`,
       ].join("\n");
 
+      const readiness = fs.watch(root);
+      const runnerEnded = new AbortController();
+      const readinessSignal = AbortSignal.any([signal, runnerEnded.signal]);
       try {
         runner = spawn(process.execPath, ["--input-type=module", "-e", runnerScript], {
           cwd: process.cwd(),
           stdio: ["ignore", "ignore", "pipe"],
         });
+        runner.once("exit", () => runnerEnded.abort(new Error("Runner exited before readiness")));
+        runner.once("error", (error) => runnerEnded.abort(error));
 
-        await waitForFile(readyPath, 2_000);
+        // Startup uses the test deadline; cleanup deadlines begin after SIGTERM.
+        while (!fs.existsSync(readyPath) || !fs.existsSync(childPidPath)) {
+          await once(readiness, "change", { signal: readinessSignal });
+        }
         childPid = await waitForPidFile(childPidPath, 2_000);
         expect(isProcessAlive(childPid)).toBe(true);
 
@@ -587,6 +587,7 @@ describe("check-extension-package-tsc-boundary", () => {
         });
         await waitForDead(childPid, 2_000);
       } finally {
+        readiness.close();
         if (runner?.pid && isProcessAlive(runner.pid)) {
           runner.kill("SIGKILL");
         }

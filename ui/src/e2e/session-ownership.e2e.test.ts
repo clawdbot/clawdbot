@@ -158,7 +158,7 @@ suite.define(() => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const currentPage = await context.newPage();
     page = currentPage;
-    await routeAvatarFixtures(context, currentPage, [
+    await routeAvatarFixtures(currentPage, [
       { id: "profile-ada", background: "#3f6f76", label: "A" },
       { id: "profile-bob", background: "#985b42", label: "B" },
     ]);
@@ -279,7 +279,7 @@ suite.define(() => {
     });
     const currentPage = await context.newPage();
     page = currentPage;
-    await routeAvatarFixtures(context, currentPage, [
+    await routeAvatarFixtures(currentPage, [
       { id: "profile-patrick", background: "#27496d", label: "P" },
       { id: "profile-ada", background: "#3f6f76", label: "A" },
       { id: "profile-bob", background: "#985b42", label: "B" },

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
@@ -85,6 +86,12 @@ suite.define(() => {
       expect(backBox.y).toBeGreaterThanOrEqual(menuBox.y);
       expect(backBox.y + backBox.height).toBeLessThanOrEqual(menuBox.y + menuBox.height);
       await captureUiProof(suite, page, "mobile-sidebar-session-menu-after-group-drilldown.png");
+    } catch (error) {
+      await captureControlUiE2eFailureDiagnostics(page, {
+        error: error instanceof Error ? error : new Error(String(error)),
+        label: "mobile-sidebar-session-menu",
+      });
+      throw error;
     } finally {
       await context.close();
     }

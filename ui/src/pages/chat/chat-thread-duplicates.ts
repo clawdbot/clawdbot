@@ -96,7 +96,6 @@ function collapseDuplicateDisplaySignature(parts: TextOnlyMessageParts): string 
 export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[] {
   const collapsed: PreparedChatItem[] = [];
   let previousParts: TextOnlyMessageParts = null;
-  let previousSignature: string | null = null;
   let previousSourceKey: string | null = null;
   let previousSourceIsUnprovenImport = false;
 
@@ -104,7 +103,6 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
     if (item.kind !== "message") {
       collapsed.push(item);
       previousParts = null;
-      previousSignature = null;
       previousSourceKey = null;
       previousSourceIsUnprovenImport = false;
       continue;
@@ -116,7 +114,6 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
     const role = normalizeRoleForGrouping(normalized.role).toLowerCase();
     const pending = isPendingSendMessage(item.message);
     const parts = pending ? null : textOnlyMessageParts(normalized, role);
-    const signature = collapseDuplicateDisplaySignature(parts);
     const identity = readChatThreadMessageIdentity(item.message);
     const sourceKey = pending ? null : collapseDuplicateSourceKey(identity, role);
     const sourceIsUnprovenImport =
@@ -134,24 +131,26 @@ export function prepareMessagesForGrouping(items: ChatItem[]): PreparedChatItem[
       if (!parts?.senderLabel) {
         collapsed[collapsed.length - 1] = prepared;
         previousParts = parts;
-        previousSignature = signature;
       }
       continue;
     }
+    // Distinct transcript identities cannot collapse. Compare full display text
+    // only for adjacent candidates whose source and role still permit a replay.
     if (
-      signature &&
-      previousSignature === signature &&
       previous?.kind === "message" &&
       !sourceIsUnprovenImport &&
       !previousSourceIsUnprovenImport &&
-      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey)
+      !(sourceKey && previousSourceKey && sourceKey !== previousSourceKey) &&
+      parts?.role === previousParts?.role
     ) {
-      previous.item.duplicateCount = (previous.item.duplicateCount ?? 1) + 1;
-      continue;
+      const signature = collapseDuplicateDisplaySignature(parts);
+      if (signature && signature === collapseDuplicateDisplaySignature(previousParts)) {
+        previous.item.duplicateCount = (previous.item.duplicateCount ?? 1) + 1;
+        continue;
+      }
     }
     collapsed.push(prepared);
     previousParts = parts;
-    previousSignature = signature;
     previousSourceKey = sourceKey;
     previousSourceIsUnprovenImport = sourceIsUnprovenImport;
   }

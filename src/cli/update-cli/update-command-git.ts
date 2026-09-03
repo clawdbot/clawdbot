@@ -6,15 +6,17 @@ import type { UpdateChannel } from "../../infra/update-channels.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
 import {
   createGlobalInstallEnv,
+  verifyPackageUpdateRecovery,
   resolveGlobalInstallTarget,
   resolveNpmLifecyclePolicyGate,
 } from "../../infra/update-global.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import { runGatewayUpdate, type UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { splitShellArgs } from "../../utils/shell-argv.js";
-import { createUpdateProgress, printResult } from "./progress.js";
+import { createUpdateProgress } from "./progress.js";
 import {
   checkTargetDatabaseSchemas,
   formatSchemaRefusalLines,
@@ -28,11 +30,10 @@ import {
   resolveGitInstallDir,
   resolveGlobalManager,
   runUpdateStep,
-  type UpdateCommandOptions,
+  UpdatePreMutationError,
 } from "./shared.js";
 import {
   resolvePreparedGatewayUpdatePolicy,
-  UpdateCommandAbort,
   type PreManagedServiceStop,
 } from "./update-command-service.js";
 
@@ -127,21 +128,21 @@ export function createBeforeGitMutation(params: {
   shouldRestart: boolean;
   stopManagedService: (roots: readonly string[]) => Promise<void>;
   getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
-  markSchemaRefusalAfterStop: () => void;
+  switchToGit: boolean;
 }): BeforeGitMutation {
   return async (target) => {
     if (target?.metadataUnreadable) {
-      defaultRuntime.error(
+      throw new UpdatePreMutationError(
+        "target-metadata-preflight",
         `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
       );
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
     }
     const preStopSchemas = checkTargetDatabaseSchemas(target?.schemaVersions);
     if (hasSchemaRefusal(preStopSchemas)) {
-      defaultRuntime.error(formatSchemaRefusalLines(preStopSchemas).join("\n"));
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(preStopSchemas).join("\n"),
+      );
     }
     await params.stopManagedService(params.roots);
     const preManagedServiceStop = params.getPreManagedServiceStop();
@@ -150,11 +151,19 @@ export function createBeforeGitMutation(params: {
       preManagedServiceStop?.serviceEnv ?? process.env,
     );
     if (hasSchemaRefusal(postStopSchemas)) {
-      params.markSchemaRefusalAfterStop();
-      defaultRuntime.error(formatSchemaRefusalLines(postStopSchemas).join("\n"));
-      throw new UpdateCommandAbort();
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(postStopSchemas).join("\n"),
+      );
     }
-    return resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
+    // Git's deferred prepare phase owns the task suspension. Once mutation
+    // starts, only a verified recovery may re-enable persistent autostart.
+    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
+    // A candidate checkout cannot own the service until its global exposure
+    // succeeds. Finalization refreshes and activates the verified installation.
+    return params.switchToGit
+      ? { allowGatewayServiceRepair: false, allowGatewayActivation: false }
+      : resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
   };
 }
 
@@ -167,9 +176,6 @@ export async function updateGitInstall(params: {
   progress: ReturnType<typeof createUpdateProgress>["progress"];
   channel: UpdateChannel;
   tag: string;
-  showProgress: boolean;
-  opts: UpdateCommandOptions;
-  stop: () => void;
   devTarget?: DevUpdateTarget;
   beforeGitMutation?: BeforeGitMutation;
   allowGatewayServiceRepair: boolean;
@@ -198,18 +204,18 @@ export async function updateGitInstall(params: {
   // Package-to-Git updates must settle package-manager policy before cloning or
   // updating the checkout; carry this exact decision into the later install.
   if (npmLifecycleGate.error) {
-    const result: UpdateRunResult = {
+    defaultRuntime.error(npmLifecycleGate.error);
+    return {
       status: "error",
       mode: "git",
-      root: updateRoot,
+      root: params.root,
       reason: "npm lifecycle policy preflight",
+      recovery: await (params.installKind === "git"
+        ? readCurrentGitUpdateRecovery(params.root)
+        : verifyPackageUpdateRecovery(params.root)),
       steps: [],
       durationMs: Date.now() - params.startedAt,
     };
-    params.stop();
-    defaultRuntime.error(npmLifecycleGate.error);
-    defaultRuntime.exit(1);
-    return result;
   }
 
   const checkout = params.switchToGit
@@ -224,18 +230,17 @@ export async function updateGitInstall(params: {
   updateRoot = checkout?.checkoutDir ?? updateRoot;
 
   if (cloneStep && cloneStep.exitCode !== 0) {
-    const result: UpdateRunResult = {
+    return {
       status: "error",
       mode: "git",
-      root: updateRoot,
+      root: params.root,
       reason: cloneStep.name,
+      recovery: await (params.installKind === "git"
+        ? readCurrentGitUpdateRecovery(params.root)
+        : verifyPackageUpdateRecovery(params.root)),
       steps: [cloneStep],
       durationMs: Date.now() - params.startedAt,
     };
-    params.stop();
-    printResult(result, { ...params.opts, hideSteps: params.showProgress });
-    defaultRuntime.exit(1);
-    return result;
   }
 
   const updateResult = await runGatewayUpdate({
@@ -279,6 +284,7 @@ export async function updateGitInstall(params: {
       ...updateResult,
       status: packageUpdate.failedStep ? "error" : "ok",
       reason: packageUpdate.failedStep?.name,
+      recovery: packageUpdate.recovery,
       steps,
       durationMs: Date.now() - params.startedAt,
     };

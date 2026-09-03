@@ -14,7 +14,10 @@ import { isRecord } from "./record-shared.mjs";
 const CANDIDATE_MANIFEST_FILE = "full-release-candidate.json";
 const CANDIDATE_PRODUCER_WORKFLOW_PATH =
   ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml";
-const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
+const FULL_RELEASE_WORKFLOW_PATHS = new Set([
+  ".github/workflows/full-release-validation.yml",
+  ".github/workflows/full-release-artifacts.yml",
+]);
 const MAX_CANDIDATE_ARCHIVE_BYTES = 1024 * 1024;
 const MAX_CANDIDATES_TO_EVALUATE = 5;
 const MAX_CANDIDATE_MANIFEST_BYTES = 32 * 1024;
@@ -141,7 +144,7 @@ function trustedWorkflowRun(value, candidate, request) {
     positiveInteger(value.run_attempt) === undefined ||
     value.head_sha !== request.toolingSha ||
     value.event !== "workflow_dispatch" ||
-    workflowPath(value.path) !== FULL_RELEASE_WORKFLOW_PATH ||
+    !FULL_RELEASE_WORKFLOW_PATHS.has(workflowPath(value.path)) ||
     (!active && !terminal) ||
     value.repository?.full_name !== request.repository ||
     value.head_repository?.full_name !== request.repository ||
@@ -378,7 +381,7 @@ function validateCandidateWorkflowRun(run, binding, options = {}) {
     run.event !== "workflow_dispatch" ||
     binding.producer.workflowPath !== CANDIDATE_PRODUCER_WORKFLOW_PATH ||
     binding.publisher.workflowPath !== CANDIDATE_PRODUCER_WORKFLOW_PATH ||
-    workflowPath(run.path) !== FULL_RELEASE_WORKFLOW_PATH ||
+    !FULL_RELEASE_WORKFLOW_PATHS.has(workflowPath(run.path)) ||
     run.repository?.full_name !== binding.producer.repository ||
     run.head_repository?.full_name !== binding.producer.repository ||
     binding.publisher.runId !== binding.producer.runId ||

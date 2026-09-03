@@ -20,23 +20,29 @@ import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.json"
 
 const sha = "a".repeat(40);
 
-function runWatcher(ghScript: string, headSha = sha, options: string[] = []) {
+function runWatcher(
+  ghScript: string,
+  headSha = sha,
+  options: string[] = [],
+  clock: "poll" | "wall" = "poll",
+) {
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
     const ghPath = join(binDir, "gh");
     writeFileSync(ghPath, ghScript);
     chmodSync(ghPath, 0o755);
     const clockPath = join(binDir, "poll-clock.mjs");
-    // Advance only polling sleep; real elapsed time still bounds GitHub child reads.
+    // Evidence fixtures advance polling only, independent of fake gh startup cost.
+    // Deadline coverage explicitly retains the real clock and child timeout.
     // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
     writeFileSync(
       clockPath,
       `import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const realNow = Date.now;
+  const now = ${clock === "wall" ? "Date.now" : "() => 0"};
   const realSleep = timers.setTimeout;
   let waitedMs = 0;
-  Date.now = () => realNow() + waitedMs;
+  Date.now = () => now() + waitedMs;
   timers.setTimeout = async (milliseconds, value, options) => {
     const result = await realSleep(0, value, options);
     waitedMs += milliseconds;
@@ -94,6 +100,7 @@ function replayPlaceholder(
     merged?: boolean;
     watchTimeout?: number;
     delayFirstAlias?: boolean;
+    clock?: "poll" | "wall";
     afterAliasScan?: unknown;
   } = {},
 ) {
@@ -145,7 +152,10 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 console.log(JSON.stringify(value));
 `,
       placeholderFixture.run.head_sha,
-      evidence.watchTimeout === undefined ? [] : ["--timeout", String(evidence.watchTimeout)],
+      evidence.watchTimeout === undefined
+        ? []
+        : ["--timeout", String(evidence.watchTimeout), "--interval", String(evidence.watchTimeout)],
+      evidence.clock,
     );
     return { ...result, calls: readFileSync(calls, "utf8") };
   });
@@ -356,6 +366,7 @@ esac
     it("bounds a slow alias read by the remaining watcher deadline", async () => {
       const result = await replayPlaceholder(structuredClone(placeholderFixture), {
         delayFirstAlias: true,
+        clock: "wall",
       });
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
       expect(result.stdout).toContain("pending=1");

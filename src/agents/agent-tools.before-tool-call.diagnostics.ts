@@ -63,59 +63,68 @@ const MAX_PENDING_TERMINAL_PRESENTATIONS = 1024;
 const LOOP_WARNING_BUCKET_SIZE = 10;
 const MAX_LOOP_WARNING_KEYS = 256;
 const MAX_TERMINAL_PRESENTATION_CHARS = 2_000;
-const pendingTerminalPresentationByToolCall = new Map<
-  string,
-  {
-    observer: ToolOutcomeObserver;
-    tool: AnyAgentTool;
-    toolParams: unknown;
-    toolCallOrdinal?: number;
-  }
->();
+type ToolTerminalPresentationProjector = (
+  result: Awaited<ReturnType<AnyAgentTool["execute"]>>,
+) => string | undefined;
+type PreparedToolTerminalPresentation = {
+  observer?: ToolOutcomeObserver;
+  toolName: string;
+  project?: ToolTerminalPresentationProjector;
+  toolCallOrdinal?: number;
+};
+const pendingTerminalPresentationByToolCall = new Map<string, PreparedToolTerminalPresentation>();
 
-export function resolveToolTerminalPresentation(params: {
-  tool: AnyAgentTool;
-  toolParams: unknown;
-  result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
-}): string | undefined {
-  try {
-    const presentationTool = getBeforeToolCallSourceTool(params.tool) ?? params.tool;
-    const text = getToolTerminalPresentation(presentationTool)?.(
-      params.toolParams,
-      params.result,
-    )?.text.trim();
-    if (!text) {
-      return undefined;
-    }
-    return truncateUtf16Safe(redactToolDetail(text), MAX_TERMINAL_PRESENTATION_CHARS);
-  } catch (err) {
-    log.warn(
-      `terminal tool presentation failed: tool=${params.tool.name || "tool"} error=${String(err)}`,
-    );
-    return undefined;
-  }
-}
-
-export function rememberPendingTerminalPresentation(params: {
+export function prepareToolTerminalPresentation({
+  ctx,
+  tool,
+  toolParams,
+  toolCallId,
+  toolCallOrdinal,
+}: {
   ctx?: HookContext;
   tool: AnyAgentTool;
   toolParams: unknown;
   toolCallId?: string;
   toolCallOrdinal?: number;
-}): void {
-  if (!params.toolCallId || !params.ctx?.onToolOutcome) {
+}): PreparedToolTerminalPresentation | undefined {
+  const toolName = tool.name;
+  const observer = toolCallId ? ctx?.onToolOutcome : undefined;
+  const formatter = getToolTerminalPresentation(getBeforeToolCallSourceTool(tool) ?? tool);
+  if (!formatter && !observer) {
+    return undefined;
+  }
+  let project: ToolTerminalPresentationProjector | undefined;
+  if (formatter) {
+    // Retain isolated formatter inputs, not the executable tool or its hook context.
+    const formatterParams = observer ? structuredClone(toolParams) : toolParams;
+    project = (result) => {
+      try {
+        const text = formatter(formatterParams, result)?.text.trim();
+        return text
+          ? truncateUtf16Safe(redactToolDetail(text), MAX_TERMINAL_PRESENTATION_CHARS)
+          : undefined;
+      } catch (err) {
+        log.warn(
+          `terminal tool presentation failed: tool=${toolName || "tool"} error=${String(err)}`,
+        );
+        return undefined;
+      }
+    };
+  }
+  return { observer, toolName, project, toolCallOrdinal };
+}
+
+export function rememberPendingTerminalPresentation(
+  prepared: PreparedToolTerminalPresentation | undefined,
+  runId: string | undefined,
+  toolCallId: string | undefined,
+): void {
+  if (!prepared?.observer || !toolCallId) {
     return;
   }
-  const key = buildAdjustedParamsKey({
-    runId: params.ctx.runId,
-    toolCallId: params.toolCallId,
-  });
-  pendingTerminalPresentationByToolCall.set(key, {
-    observer: params.ctx.onToolOutcome,
-    tool: params.tool,
-    toolParams: structuredClone(params.toolParams),
-    toolCallOrdinal: params.toolCallOrdinal,
-  });
+  // Publish after raw observation succeeds so failed observers own no pending result.
+  const key = buildAdjustedParamsKey({ runId, toolCallId });
+  pendingTerminalPresentationByToolCall.set(key, prepared);
   pruneMapToMaxSize(pendingTerminalPresentationByToolCall, MAX_PENDING_TERMINAL_PRESENTATIONS);
 }
 
@@ -141,19 +150,11 @@ export function finalizeToolTerminalPresentation(params: {
   }
   const toolCallOrdinal = pending?.toolCallOrdinal ?? params.toolCallOrdinal;
   observer({
-    toolName: pending?.tool.name || params.toolName || "tool",
+    toolName: pending?.toolName || params.toolName || "tool",
     argsHash: "",
     resultHash: "",
     ...(toolCallOrdinal !== undefined ? { toolCallOrdinal } : {}),
-    terminalPresentation: params.isError
-      ? undefined
-      : pending
-        ? resolveToolTerminalPresentation({
-            tool: pending.tool,
-            toolParams: pending.toolParams,
-            result: params.result,
-          })
-        : undefined,
+    terminalPresentation: params.isError ? undefined : pending?.project?.(params.result),
     presentationOnly: true,
   });
 }

@@ -53,7 +53,7 @@ function resolveCdpConnectRetryDelayMs(attempt: number): number {
   return 250 + attempt * 250;
 }
 
-function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
+export function hasCachedPlaywrightBrowserConnection(cdpUrl: string): boolean {
   return cachedByCdpUrl.has(normalizeCdpUrl(cdpUrl));
 }
 

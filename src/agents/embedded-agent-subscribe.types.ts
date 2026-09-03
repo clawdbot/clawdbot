@@ -22,6 +22,7 @@ import type {
   ToolProgressDetailMode,
   ToolResultFormat,
 } from "./embedded-agent-subscribe.shared-types.js";
+import type { PreparedProviderFailoverOwner } from "./failover/provider-patterns.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSession } from "./sessions/index.js";
@@ -109,6 +110,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    */
   suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
+  /** Prepared endpoint ownership can differ from the assistant's provider route ID. */
+  providerOwner?: PreparedProviderFailoverOwner;
   compactionCountOwner?: EmbeddedRunAttemptInternalParams["compactionCountOwner"];
   onContextAccountingEvent?: EmbeddedRunAttemptInternalParams["onContextAccountingEvent"];
   sessionPersistence?: EmbeddedRunAttemptParams["sessionPersistence"];

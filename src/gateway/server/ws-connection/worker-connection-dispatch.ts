@@ -49,6 +49,11 @@ import {
   validateWorkerInferenceCancelParams,
   validateWorkerInferenceStartParams,
 } from "../../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WORKER_SKILL_WORKSHOP_FEATURE,
+  validateWorkerSkillWorkshopParams,
+  type WorkerSkillWorkshopParams,
+} from "../../../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import type { WorkerConnectionIdentity } from "../../worker-environments/connection-identity.js";
 import {
   workerInferenceError,
@@ -95,8 +100,9 @@ export type WorkerConnectionService = {
   >;
   executeSessionTool?: (
     identity: WorkerConnectionIdentity,
-    toolName: "sessions_spawn" | "sessions_send" | "github_publish" | "portal",
+    toolName: "sessions_spawn" | "sessions_send" | "github_publish" | "portal" | "skill_workshop",
     request:
+      | WorkerSkillWorkshopParams
       | WorkerSessionsSpawnParams
       | WorkerSessionsSendParams
       | WorkerGitHubPublishParams
@@ -299,15 +305,19 @@ export async function dispatchWorkerRequest(params: {
     params.request.method === WORKER_PROTOCOL_METHODS[3] ||
     params.request.method === WORKER_PROTOCOL_METHODS[4] ||
     params.request.method === WORKER_PROTOCOL_METHODS[5] ||
-    params.request.method === WORKER_PROTOCOL_METHODS[6]
+    params.request.method === WORKER_PROTOCOL_METHODS[6] ||
+    params.request.method === "worker.skill-workshop"
   ) {
     const isGitHubPublish = params.request.method === WORKER_PROTOCOL_METHODS[5];
+    const isSkillWorkshop = params.request.method === "worker.skill-workshop";
     const isPortal = params.request.method === WORKER_PROTOCOL_METHODS[6];
-    const requiredFeature = isPortal
-      ? WORKER_PORTAL_PROTOCOL_FEATURE
-      : isGitHubPublish
-        ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
-        : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
+    const requiredFeature = isSkillWorkshop
+      ? WORKER_SKILL_WORKSHOP_FEATURE
+      : isPortal
+        ? WORKER_PORTAL_PROTOCOL_FEATURE
+        : isGitHubPublish
+          ? WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE
+          : WORKER_SESSION_TOOLS_PROTOCOL_FEATURE;
     if (!params.identity.protocolFeatures.includes(requiredFeature)) {
       rejectWorkerRequest({ ...params, reason: "method-not-allowed" });
       return;
@@ -317,28 +327,33 @@ export async function dispatchWorkerRequest(params: {
       return;
     }
     const isSpawn = params.request.method === WORKER_PROTOCOL_METHODS[3];
-    const requestValid = isPortal
-      ? validateWorkerPortalParams(params.request.params)
-      : isSpawn
-        ? validateWorkerSessionsSpawnParams(params.request.params)
-        : isGitHubPublish
-          ? validateWorkerGitHubPublishParams(params.request.params)
-          : validateWorkerSessionsSendParams(params.request.params);
+    const requestValid = isSkillWorkshop
+      ? validateWorkerSkillWorkshopParams(params.request.params)
+      : isPortal
+        ? validateWorkerPortalParams(params.request.params)
+        : isSpawn
+          ? validateWorkerSessionsSpawnParams(params.request.params)
+          : isGitHubPublish
+            ? validateWorkerGitHubPublishParams(params.request.params)
+            : validateWorkerSessionsSendParams(params.request.params);
     if (!requestValid) {
       params.respond(false, undefined, workerProtocolError("invalid-frame"));
       return;
     }
     const outcome = await service.executeSessionTool(
       params.identity,
-      isPortal
-        ? "portal"
-        : isSpawn
-          ? "sessions_spawn"
-          : isGitHubPublish
-            ? "github_publish"
-            : "sessions_send",
+      isSkillWorkshop
+        ? "skill_workshop"
+        : isPortal
+          ? "portal"
+          : isSpawn
+            ? "sessions_spawn"
+            : isGitHubPublish
+              ? "github_publish"
+              : "sessions_send",
       // SAFETY: The selected tool's matching protocol validator accepted these request params.
       params.request.params as
+        | WorkerSkillWorkshopParams
         | WorkerSessionsSpawnParams
         | WorkerSessionsSendParams
         | WorkerGitHubPublishParams

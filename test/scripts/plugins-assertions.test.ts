@@ -804,68 +804,110 @@ ${command}
     }
   });
 
-  it("recomputes proxied content length after fetch decodes the response", async () => {
-    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-");
-    const portFile = path.join(root, "port");
-    const tarballPath = path.join(root, "demo-plugin.tgz");
-    const upstreamBody = JSON.stringify({ payload: "x".repeat(1_000) });
-    const compressedBody = gzipSync(upstreamBody);
-    writeFileSync(tarballPath, "fixture package archive", "utf8");
+  it.each([false, true])(
+    "projects upstream tarballs per request origin without changing external URLs (merged=%s)",
+    async (merged) => {
+      const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-proxy-");
+      const portFile = path.join(root, "port");
+      const tarballPath = path.join(root, "demo-plugin.tgz");
+      const packageName = merged ? "@openclaw/demo-plugin-npm" : "upstream-package";
+      const externalTarball = "https://external.invalid/upstream-package.tgz";
+      let upstreamRequests = 0;
+      writeFileSync(tarballPath, "fixture package archive", "utf8");
 
-    const upstream = createServer((_request, response) => {
-      response.writeHead(200, {
-        "content-encoding": "gzip",
-        "content-length": String(compressedBody.length),
-        "content-type": "application/json",
+      const upstream = createServer((request, response) => {
+        upstreamRequests += 1;
+        const compressedBody = gzipSync(
+          JSON.stringify({
+            name: packageName,
+            payload: "x".repeat(1_000),
+            versions: {
+              "0.9.0": {
+                name: packageName,
+                version: "0.9.0",
+                dist: {
+                  tarball: `http://${request.headers.host}/upstream-package/-/package.tgz?download=1`,
+                },
+              },
+              "0.8.0": {
+                name: packageName,
+                version: "0.8.0",
+                dist: { tarball: externalTarball },
+              },
+            },
+          }),
+        );
+        response.writeHead(200, {
+          "content-encoding": "gzip",
+          "content-length": String(compressedBody.length),
+          "content-type": "application/json",
+        });
+        response.end(compressedBody);
       });
-      response.end(compressedBody);
-    });
-    await new Promise<void>((resolve) => {
-      upstream.listen(0, "127.0.0.1", resolve);
-    });
-    const upstreamAddress = upstream.address();
-    if (!upstreamAddress || typeof upstreamAddress === "string") {
-      throw new Error("expected upstream registry address");
-    }
+      await new Promise<void>((resolve) => {
+        upstream.listen(0, "127.0.0.1", resolve);
+      });
+      const upstreamAddress = upstream.address();
+      if (!upstreamAddress || typeof upstreamAddress === "string") {
+        throw new Error("expected upstream registry address");
+      }
 
-    const child = spawn(
-      process.execPath,
-      [
-        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
-        portFile,
-        "@openclaw/demo-plugin-npm",
-        "1.0.0",
-        tarballPath,
-      ],
-      {
-        cwd: process.cwd(),
-        env: {
-          ...process.env,
-          OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+      const child = spawn(
+        process.execPath,
+        [
+          "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+          portFile,
+          "@openclaw/demo-plugin-npm",
+          "1.0.0",
+          tarballPath,
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            OPENCLAW_NPM_REGISTRY_UPSTREAM: `http://127.0.0.1:${upstreamAddress.port}`,
+            OPENCLAW_NPM_REGISTRY_MERGE_UPSTREAM: merged ? "1" : "",
+          },
+          stdio: ["ignore", "pipe", "pipe"],
         },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+      );
 
-    try {
-      const port = await waitForPortFile(portFile);
-      const response = await requestFixtureRegistry(port, "/upstream-package");
+      try {
+        const port = await waitForPortFile(portFile);
+        for (const host of [`192.0.2.2:${port}`, `192.0.2.3:${port}`]) {
+          const response = await requestFixtureRegistry(
+            port,
+            `/${encodeURIComponent(packageName)}`,
+            { host },
+          );
+          const metadata = JSON.parse(response.body);
 
-      expect(response.statusCode).toBe(200);
-      expect(response.body).toBe(upstreamBody);
-      expect(response.contentLength).toBe(String(Buffer.byteLength(upstreamBody)));
-    } finally {
-      if (child.exitCode === null) {
-        child.kill();
-        await new Promise((resolve) => {
-          child.once("close", resolve);
+          expect(response.statusCode).toBe(200);
+          expect(metadata.versions["0.9.0"].dist.tarball).toBe(
+            `http://${host}/upstream-package/-/package.tgz?download=1`,
+          );
+          expect(metadata.versions["0.8.0"].dist.tarball).toBe(externalTarball);
+          if (merged) {
+            expect(new URL(metadata.versions["1.0.0"].dist.tarball).origin).toBe(`http://${host}`);
+          }
+          if (!merged) {
+            expect(response.contentLength).toBe(String(Buffer.byteLength(response.body)));
+          }
+        }
+        expect(upstreamRequests).toBe(merged ? 1 : 2);
+      } finally {
+        if (child.exitCode === null) {
+          child.kill();
+          await new Promise((resolve) => {
+            child.once("close", resolve);
+          });
+        }
+        await new Promise<void>((resolve) => {
+          upstream.close(() => resolve());
         });
       }
-      await new Promise<void>((resolve) => {
-        upstream.close(() => resolve());
-      });
-    }
-  });
+    },
+  );
 
   it("streams proxied npm tarballs without buffering a content length", async () => {
     const root = autoCleanupTempDirs.make("openclaw-plugin-npm-fixture-tarball-proxy-");
@@ -1466,7 +1508,9 @@ ${command}
         env: {
           ...process.env,
           HOME: home,
+          OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
           OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+          OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
         },
       });
 
@@ -1489,6 +1533,9 @@ ${command}
       writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
         installRecords: {},
       });
+      writeJson(path.join(home, ".openclaw", "openclaw.json"), {
+        plugins: { entries: { "demo-plugin-tgz": { enabled: false } } },
+      });
 
       const result = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
         encoding: "utf8",
@@ -1501,6 +1548,47 @@ ${command}
 
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("managed install path still exists after uninstall");
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("allows the pre-marker uninstall contract only for frozen-target validation", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugins-assertions-"));
+    const home = path.join(root, "home");
+    const scratchRoot = path.join(root, "scratch");
+    const removedInstallPath = path.join(home, ".openclaw", "extensions", "demo-plugin-tgz");
+
+    try {
+      writeJson(path.join(scratchRoot, "plugins2-uninstalled.json"), { plugins: [] });
+      writeFileSync(
+        path.join(scratchRoot, "plugins2-install-path.txt"),
+        removedInstallPath,
+        "utf8",
+      );
+      writeJson(path.join(home, ".openclaw", "plugins", "installs.json"), {
+        installRecords: {},
+      });
+
+      const baseEnv = {
+        ...process.env,
+        HOME: home,
+        OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
+        OPENCLAW_PLUGINS_TMP_DIR: scratchRoot,
+        OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
+      };
+      const current = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: baseEnv,
+      });
+      const frozen = spawnSync(process.execPath, [ASSERTIONS_SCRIPT, "plugin-tgz-removed"], {
+        encoding: "utf8",
+        env: { ...baseEnv, OPENCLAW_ALLOW_FROZEN_TARGET_SCENARIO_OMISSIONS: "1" },
+      });
+
+      expect(current.status).not.toBe(0);
+      expect(current.stderr).toContain("exact disabled uninstall marker missing");
+      expect(frozen.status).toBe(0);
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

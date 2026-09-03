@@ -128,6 +128,7 @@ export type SkillEligibilityContext = {
 export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 4;
 
 export type SkillSnapshot = {
+  librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
   prompt: string;
   /** Complete eligible sync identities, including skills hidden from the model prompt. */
   skills: Array<{

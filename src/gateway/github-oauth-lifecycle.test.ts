@@ -25,6 +25,9 @@ import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 
 const mocks = vi.hoisted(() => ({
+  assertCli: vi.fn(),
+  clearVerificationCache: vi.fn(),
+  verifyCredential: vi.fn(),
   requestDeviceCode: vi.fn(),
   pollDeviceToken: vi.fn(),
   refreshToken: vi.fn(),
@@ -39,6 +42,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../agents/github-oauth-client.js", () => ({
+  clearGitHubCredentialVerificationCache: mocks.clearVerificationCache,
+  verifyGitHubCredential: mocks.verifyCredential,
   requestGitHubOAuthDeviceCode: mocks.requestDeviceCode,
   pollGitHubOAuthDeviceToken: mocks.pollDeviceToken,
   refreshGitHubOAuthToken: mocks.refreshToken,
@@ -69,6 +74,12 @@ vi.mock("./github-tool-identity-config.js", () => ({
   updateGitHubToolIdentityConfig: mocks.updateConfig,
 }));
 
+vi.mock("./github-cli-preflight.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./github-cli-preflight.js")>();
+  return { ...actual, assertGitHubCliAvailable: mocks.assertCli };
+});
+
+import { GitHubCliUnavailableError } from "./github-cli-preflight.js";
 import {
   createGitHubOAuthLifecycle,
   installActiveGitHubOAuthLifecycle,
@@ -278,6 +289,29 @@ afterEach(async () => {
 });
 
 describe("GitHub OAuth authorization lifecycle", () => {
+  it.each(["system", "agent"] as const)(
+    "rejects a missing GitHub CLI before requesting a %s device code",
+    async (scope) => {
+      mocks.assertCli.mockImplementationOnce(() => {
+        throw new GitHubCliUnavailableError();
+      });
+      const lifecycle = createLifecycle();
+
+      await expect(startAuthorization(lifecycle, scope)).rejects.toThrow(
+        "GitHub CLI (`gh`) is required on the Gateway host. Install it and retry.",
+      );
+      expect(mocks.requestDeviceCode).not.toHaveBeenCalled();
+      expect(listGitHubDeviceAuthorizationRecords()).toEqual([]);
+    },
+  );
+
+  it("clears verified GitHub credentials when the lifecycle stops", async () => {
+    const lifecycle = createLifecycle();
+    expect(mocks.clearVerificationCache).not.toHaveBeenCalled();
+    await lifecycle.stop();
+    expect(mocks.clearVerificationCache).toHaveBeenCalledOnce();
+  });
+
   it.each(["system", "agent"] as const)(
     "records an exact %s-scope CAS snapshot and delays the initial poll",
     async (scope) => {
@@ -492,31 +526,38 @@ describe("GitHub OAuth authorization lifecycle", () => {
     expect(readGitHubDeviceAuthorizationRecord(started.requestId)).toBeUndefined();
   });
 
-  it("fences profile installation when cancellation wins before commit", async () => {
-    const lifecycle = createLifecycle();
-    const started = await startAuthorization(lifecycle, "system");
-    const installStarted = deferred<void>();
-    const continueInstall = deferred<void>();
-    mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
-    mocks.installProfile.mockImplementationOnce(async ({ token, commitConfig }) => {
-      installedTokens.push(token);
-      installStarted.resolve();
-      await continueInstall.promise;
-      await commitConfig(ACCOUNT);
-      return ACCOUNT;
-    });
-    await advanceToPoll(started.requestId);
+  it.each(["cancellation", "expiry"] as const)(
+    "fences profile installation when %s wins before commit",
+    async (race) => {
+      const lifecycle = createLifecycle();
+      const started = await startAuthorization(lifecycle, "system");
+      const installStarted = deferred<void>();
+      const continueInstall = deferred<void>();
+      mocks.pollDeviceToken.mockResolvedValue({ status: "authorized", tokens: TOKENS });
+      mocks.installProfile.mockImplementationOnce(async ({ token, commitConfig }) => {
+        installedTokens.push(token);
+        installStarted.resolve();
+        await continueInstall.promise;
+        await commitConfig(ACCOUNT);
+        return ACCOUNT;
+      });
+      await advanceToPoll(started.requestId);
 
-    const result = lifecycle.pollAuthorization(started.requestId);
-    await installStarted.promise;
-    expect(lifecycle.cancelAuthorization(started.requestId)).toBe(true);
-    continueInstall.resolve();
+      const result = lifecycle.pollAuthorization(started.requestId);
+      await installStarted.promise;
+      if (race === "cancellation") {
+        expect(lifecycle.cancelAuthorization(started.requestId)).toBe(true);
+      } else {
+        vi.setSystemTime(readGitHubDeviceAuthorizationRecord(started.requestId)!.expiresAtMs);
+      }
+      continueInstall.resolve();
 
-    await expect(result).resolves.toEqual({ status: "failed", reason: "setup_failed" });
-    expect(selectedIdentity("system")).toBeUndefined();
-    expect(inspectGitHubOAuthRecord(NEW_PROFILE)).toEqual({ state: "missing" });
-    expect(mocks.removeProfile).toHaveBeenCalledOnce();
-  });
+      await expect(result).resolves.toEqual({ status: "failed", reason: "setup_failed" });
+      expect(selectedIdentity("system")).toBeUndefined();
+      expect(inspectGitHubOAuthRecord(NEW_PROFILE)).toEqual({ state: "missing" });
+      expect(mocks.removeProfile).toHaveBeenCalledOnce();
+    },
+  );
 
   it("reports cancellation as too late once the config commit starts", async () => {
     const lifecycle = createLifecycle();

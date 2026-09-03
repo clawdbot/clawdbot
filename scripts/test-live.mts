@@ -1,5 +1,6 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import { createPnpmRunnerSpawnSpec, type PnpmRunnerParams } from "./pnpm-runner.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./run-vitest.mts";
@@ -158,25 +159,22 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let timedOut = false;
 
   const spawnParams = buildTestLiveSpawnParams(env);
-  const { child, completion } = spawnOwnedVitestProcess(
-    createPnpmRunnerSpawnSpec({
+  const { child, completion } = spawnOwnedVitestProcess({
+    ...createPnpmRunnerSpawnSpec({
       pnpmArgs: buildTestLivePnpmArgs(args),
       ...spawnParams,
     }),
-  );
-  let forwardedSignal: NodeJS.Signals | null = null;
-  const teardownChildCleanup = installVitestProcessGroupCleanup({
+    homeMode: resolveVitestHomeSelection(buildTestLivePnpmArgs(args), { env }),
+  });
+  const childCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
 
   const teardown = () => {
     clearInterval(heartbeat);
-    teardownChildCleanup();
+    childCleanup.teardown();
   };
 
   const noteOutput = () => {
@@ -223,6 +221,7 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   completion.finally(teardown).then(
     ({ code, signal }) => {
+      const forwardedSignal = childCleanup.getForwardedSignal();
       if (forwardedSignal) {
         process.kill(process.pid, forwardedSignal);
         return;

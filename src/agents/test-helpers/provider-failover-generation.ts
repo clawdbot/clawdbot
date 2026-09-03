@@ -17,7 +17,6 @@ export function withPreparedFailoverProviders<T>(providerIds: string[], run: () 
   }
   return withPluginRuntimeGenerationScope(
     {
-      config: {},
       metadataSnapshot: createPluginMetadataSnapshot({
         manifestRegistry: makeRegistry(
           providerIds.map((id) => ({ id, channels: [], providers: [id] })),

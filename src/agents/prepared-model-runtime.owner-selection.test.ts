@@ -175,6 +175,38 @@ describe("prepared model runtime owner selection", () => {
     lease.release();
   });
 
+  it.each(["static", undefined] as const)(
+    "keeps isolated executable catalogs separate from live discovery (%s)",
+    async (catalogMode) => {
+      const discovered = { id: "live-only", name: "Live catalog row", provider: "custom" };
+      mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
+        entries: [discovered],
+        routeVariants: [discovered],
+      });
+      const lease = await acquireReadOnlyPreparedModelRuntime(
+        {
+          config: {},
+          agentDir: state.agentDir("isolated-probe-agent"),
+          workspaceDir: state.workspaceDir,
+          loadRuntimePlugins: true,
+        },
+        undefined,
+        catalogMode,
+      );
+      try {
+        expect(lease.snapshot.modelCatalog.entries.map(({ id }) => id)).toEqual(
+          catalogMode === "static" ? [] : [discovered.id],
+        );
+        expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledTimes(
+          catalogMode === "static" ? 0 : 1,
+        );
+      } finally {
+        lease.release();
+      }
+      expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(0);
+    },
+  );
+
   it("publishes provider selections kept on the core runtime by request parameters", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {
@@ -688,6 +720,11 @@ describe("prepared model runtime owner selection", () => {
 
     expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
+    expect(
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.map(
+        ([params]) => params.configuredHarnessRuntimes,
+      ),
+    ).toEqual([["codex"], ["codex"], ["codex"], ["codex"]]);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(2);
     expect(mocks.prepareStaticCatalog).toHaveBeenCalledTimes(2);
     expect(mocks.resolveStaticCatalogModel).toHaveBeenCalledTimes(2);

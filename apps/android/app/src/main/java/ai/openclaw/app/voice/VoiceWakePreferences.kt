@@ -161,6 +161,7 @@ internal object VoiceWakePhraseMatcher {
       Character.UnicodeScript.MYANMAR,
       Character.UnicodeScript.THAI,
       -> true
+
       else -> false
     }
 

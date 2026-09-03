@@ -1,8 +1,12 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.js";
-import type { CreateSessionMcpRuntime } from "./agent-bundle-mcp-runtime-shared.js";
+import {
+  SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS,
+  type CreateSessionMcpRuntime,
+} from "./agent-bundle-mcp-runtime-shared.js";
 import type { SessionMcpRuntime, SessionMcpRuntimeManager } from "./agent-bundle-mcp-types.js";
 import { testing as resolverTesting } from "./mcp-connection-resolver.js";
 
@@ -64,6 +68,14 @@ function createManager(createRuntime?: CreateSessionMcpRuntime) {
   return manager;
 }
 
+function requesterParams(requesterSenderId: string) {
+  return {
+    ...params,
+    requesterSenderId,
+    cfg: { mcp: { servers: { scoped: { transport: "streamable-http" as const } } } },
+  };
+}
+
 function holdFactory() {
   const started = createDeferred<SessionMcpRuntime>();
   const released = createDeferred();
@@ -94,6 +106,7 @@ afterEach(async () => {
   }
   await Promise.all(managers.splice(0).map((manager) => manager.disposeAll()));
   resolverTesting.setMcpServerConnectionResolversForTest();
+  resolverTesting.setMcpConnectionRevalidateMsForTest();
 });
 
 describe("MCP manager creation ownership", () => {
@@ -108,6 +121,63 @@ describe("MCP manager creation ownership", () => {
 
     expect(manager.listRuntimeKeys()).toEqual([]);
   });
+
+  it.each(["static", "requester"] as const)(
+    "keeps the native idle timer outside %s requesting turns across disposal",
+    async (entrypoint) => {
+      const turnContext = new AsyncLocalStorage<string>();
+      const pendingInputContext = new AsyncLocalStorage<string>();
+      const readContext = () => ({
+        turn: turnContext.getStore(),
+        pendingInput: pendingInputContext.getStore(),
+      });
+      const timerContexts: ReturnType<typeof readContext>[] = [];
+      const factoryContexts: ReturnType<typeof readContext>[] = [];
+      const nativeSetInterval = globalThis.setInterval;
+      const intervalSpy = vi.spyOn(globalThis, "setInterval").mockImplementation((...args) => {
+        if (args[1] === SESSION_MCP_RUNTIME_SWEEP_INTERVAL_MS) {
+          timerContexts.push(readContext());
+        }
+        return nativeSetInterval(...args);
+      });
+      const manager = createSessionMcpRuntimeManager({
+        createRuntime(input) {
+          factoryContexts.push(readContext());
+          return createRuntimeFixture(input);
+        },
+      });
+      managers.push(manager);
+      resolverTesting.setMcpServerConnectionResolversForTest([
+        { serverName: "scoped", resolve: async () => ({ url: "https://mcp.example.test/scoped" }) },
+      ]);
+
+      try {
+        for (const turn of ["first turn", "later turn"]) {
+          const pendingInput = `${turn} input`;
+          await turnContext.run(turn, () =>
+            pendingInputContext.run(pendingInput, async () => {
+              if (entrypoint === "static") {
+                await manager.getOrCreate(params);
+              } else {
+                await manager.getOrCreateRequesterScoped({
+                  ...params,
+                  requesterSenderId: "sender",
+                  cfg: { mcp: { servers: { scoped: { transport: "streamable-http" } } } },
+                });
+              }
+              expect(readContext()).toEqual({ turn, pendingInput });
+            }),
+          );
+          expect(factoryContexts.splice(0)).toEqual([{ turn, pendingInput }]);
+          expect(timerContexts.splice(0)).toEqual([{ turn: undefined, pendingInput: undefined }]);
+          await manager.disposeAll();
+        }
+      } finally {
+        await manager.disposeAll();
+        intervalSpy.mockRestore();
+      }
+    },
+  );
 
   it.each(["session", "all"] as const)(
     "drains late creation during %s disposal without publishing or clearing a successor",
@@ -273,5 +343,62 @@ describe("MCP manager creation ownership", () => {
     expect(nextRuntime.dispose).not.toHaveBeenCalled();
     expect(manager.listSessionIds()).toEqual([params.sessionId]);
     expect(manager.resolveSessionId(params.sessionKey)).toBe(params.sessionId);
+  });
+
+  it("does not queue cap eviction behind active requester work", async () => {
+    let nowMs = 100_000;
+    const resolutionStarted = createDeferred();
+    const releaseResolution = createDeferred();
+    releaseHeldWork.push(() => releaseResolution.resolve());
+    const secondRuntimeCreated = createDeferred();
+    let senderACalls = 0;
+    resolverTesting.setMcpConnectionRevalidateMsForTest(1);
+    resolverTesting.setMcpServerConnectionResolversForTest([
+      {
+        serverName: "scoped",
+        resolve: async ({ requesterSenderId }) => {
+          if (requesterSenderId === "sender-a" && ++senderACalls === 2) {
+            resolutionStarted.resolve();
+            await releaseResolution.promise;
+          }
+          return { url: `https://mcp.example.test/${requesterSenderId}` };
+        },
+      },
+    ]);
+    const createRuntime = vi.fn<CreateSessionMcpRuntime>((input) => {
+      const runtime = createRuntimeFixture(input);
+      if (input.requesterScope?.requesterSenderId === "sender-b") {
+        secondRuntimeCreated.resolve();
+      }
+      return runtime;
+    });
+    const manager = createSessionMcpRuntimeManager({
+      createRuntime,
+      now: () => nowMs,
+      enableIdleSweepTimer: false,
+      maxIdleRequesterRuntimesPerSession: 1,
+    });
+    managers.push(manager);
+
+    const first = expectDefined(
+      (await manager.getOrCreateRequesterScoped(requesterParams("sender-a")))?.runtime,
+      "first requester runtime",
+    );
+    nowMs += 2;
+    const refreshed = manager.getOrCreateRequesterScoped(requesterParams("sender-a"));
+    await resolutionStarted.promise;
+    const competing = manager.getOrCreateRequesterScoped(requesterParams("sender-b"));
+    await secondRuntimeCreated.promise;
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    releaseResolution.resolve();
+
+    expect((await refreshed)?.runtime).toBe(first);
+    await competing;
+    expect(first.dispose).not.toHaveBeenCalled();
+    expect(manager.listRuntimeKeys()).toEqual([
+      expect.stringContaining('"requesterSenderId":"sender-a"'),
+    ]);
   });
 });

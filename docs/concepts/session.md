@@ -61,6 +61,11 @@ visible to Bob.
 | `per-channel-peer`         | Isolate by channel + sender (recommended)                |
 | `per-account-channel-peer` | Isolate by account + channel + sender                    |
 
+Slack Agent View and Assistant View DMs are the exception: each visible root gets
+its own `:thread:<rootTs>` session on top of the base that `dmScope` selects, so
+those conversations stay isolated even under `main`. See
+[Agent View DMs](/channels/slack#agent-view-dms).
+
 <Tip>
 If the same person contacts you from multiple channels, use
 `session.identityLinks` to map their identities to one canonical peer id so
@@ -68,6 +73,17 @@ they share a session.
 </Tip>
 
 Verify your setup with `openclaw security audit`.
+
+## Retired channel docking
+
+Channel docking and manual cross-channel reply focus have been removed. The
+`/dock-*` commands no longer move a session's reply destination to another
+channel.
+
+Use `session.identityLinks` to associate a person's identities for DM session
+routing, or [thread-bound sessions](/tools/subagents#thread-bound-sessions) to
+keep a supported conversation attached to a subagent. These are separate
+features; neither restores manual cross-channel docking.
 
 ## Group and room routing
 

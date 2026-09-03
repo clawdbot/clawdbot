@@ -3,8 +3,9 @@ import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { devNull } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
@@ -291,18 +292,17 @@ describe("run-opengrep.sh", () => {
     },
   );
 
-  it.each([
-    { shape: "merge", branch: "main", depth: 2, passes: true },
-    { shape: "linear", branch: "feature", depth: 2, passes: true },
-    { shape: "merge without parents", branch: "main", depth: 1, passes: false },
-    { shape: "linear without base", branch: "feature", depth: 1, passes: false },
-  ])(
-    "prepares and scans a shallow $shape checkout without unrelated base fetches",
-    ({ branch, depth, passes }) => {
-      const source = createTempDir("openclaw-opengrep-source-");
+  describe("shallow checkout preparation", () => {
+    const sourceDirs = useAutoCleanupTempDirTracker(afterAll);
+    let source: string;
+    let staleBase: string;
+
+    beforeAll(() => {
+      source = sourceDirs.make("openclaw-opengrep-source-");
       git(source, "init", "-q", "--initial-branch=main");
       git(source, "config", "user.email", "test@example.com");
       git(source, "config", "user.name", "Test User");
+      git(source, "config", "uploadpack.allowFilter", "true");
       copyRunOpengrepFiles(source);
       for (const name of ["ensure-base-commit", "git-owner"]) {
         fs.cpSync(`.github/actions/${name}`, path.join(source, ".github/actions", name), {
@@ -312,7 +312,7 @@ describe("run-opengrep.sh", () => {
       writeFile(path.join(source, "security/opengrep/precise.yml"), "rules: []\n");
       git(source, "add", ".");
       git(source, "commit", "-qm", "base");
-      const staleBase = git(source, "rev-parse", "HEAD");
+      staleBase = git(source, "rev-parse", "HEAD");
       git(source, "switch", "-q", "-c", "feature");
       writeFile(path.join(source, "src/pr.ts"), "export const pr = true;\n");
       git(source, "add", ".");
@@ -322,59 +322,81 @@ describe("run-opengrep.sh", () => {
       git(source, "add", ".");
       git(source, "commit", "-qm", "main only");
       git(source, "merge", "--no-ff", "feature", "-m", "synthetic merge");
+    });
 
-      const repo = createTempDir("openclaw-opengrep-shallow-");
-      git(
-        source,
-        "clone",
-        "--quiet",
-        "--no-local",
-        `--depth=${depth}`,
-        "--branch",
-        branch,
-        source,
-        repo,
-      );
-      expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
-      const hasPayloadBase =
-        spawnSync("git", ["cat-file", "-e", `${staleBase}^{commit}`], { cwd: repo }).status === 0;
-      expect(hasPayloadBase).toBe(branch === "feature" && depth === 2);
-      const { argsPath, binDir } = installOpengrepStub(repo);
-      const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
-      const result = runChangedPathsWorkflow(repo, staleBase, {
-        ...process.env,
-        PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        RUNNER_OS:
-          process.platform === "win32"
-            ? "Windows"
-            : process.platform === "darwin"
-              ? "macOS"
-              : "Linux",
-        GIT_CONFIG_GLOBAL: devNull,
-        GIT_CONFIG_NOSYSTEM: "1",
-        GIT_ALLOW_PROTOCOL: "",
-        GIT_TRACE2_EVENT: trace,
-      });
-      const fetches = fs
-        .readFileSync(trace, "utf8")
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line))
-        .filter((event) => event.event === "cmd_name" && event.name === "fetch");
-      if (!passes) {
-        expect(result.status, result.stderr).not.toBe(0);
-        expect(result.stdout).toContain("Base commit still unavailable");
-        expect(fetches).toHaveLength(5);
-        expect(fs.existsSync(argsPath)).toBe(false);
-        return;
-      }
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(fetches).toEqual([]);
-      const args = fs.readFileSync(argsPath, "utf8");
-      expect(args).toContain("src/pr.ts");
-      expect(args).not.toContain("src/main-only.ts");
-    },
-  );
+    it.each([
+      { shape: "merge", branch: "main", depth: 2, partial: false, passes: true },
+      { shape: "partial merge", branch: "main", depth: 2, partial: true, passes: true },
+      { shape: "linear", branch: "feature", depth: 2, partial: false, passes: true },
+      { shape: "merge without parents", branch: "main", depth: 1, partial: false, passes: false },
+      { shape: "linear without base", branch: "feature", depth: 1, partial: false, passes: false },
+    ])(
+      "prepares and scans a shallow $shape checkout without unrelated base fetches",
+      ({ branch, depth, partial, passes }) => {
+        const repo = createTempDir("openclaw-opengrep-shallow-");
+        git(
+          source,
+          "clone",
+          "--quiet",
+          "--no-local",
+          `--depth=${depth}`,
+          ...(partial ? ["--filter=blob:none"] : []),
+          "--branch",
+          branch,
+          source,
+          repo,
+        );
+        expect(git(repo, "rev-parse", "--is-shallow-repository")).toBe("true");
+        if (partial) {
+          expect(git(repo, "config", "--get", "remote.origin.promisor")).toBe("true");
+        }
+        // Probe local storage only: resolving a missing object in a partial clone can fetch it.
+        const localObjects = git(
+          repo,
+          "cat-file",
+          "--batch-all-objects",
+          "--batch-check=%(objectname)",
+        );
+        expect(localObjects.split("\n").includes(staleBase)).toBe(
+          branch === "feature" && depth === 2,
+        );
+        const { argsPath, binDir } = installOpengrepStub(repo);
+        const trace = path.join(createTempDir("openclaw-opengrep-trace-"), "git.jsonl");
+        const result = runChangedPathsWorkflow(repo, staleBase, {
+          ...process.env,
+          PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+          RUNNER_OS:
+            process.platform === "win32"
+              ? "Windows"
+              : process.platform === "darwin"
+                ? "macOS"
+                : "Linux",
+          GIT_CONFIG_GLOBAL: devNull,
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_ALLOW_PROTOCOL: "",
+          GIT_TRACE2_EVENT: trace,
+        });
+        const fetches = fs
+          .readFileSync(trace, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+          .filter((event) => event.event === "cmd_name" && event.name === "fetch");
+        if (!passes) {
+          expect(result.status, result.stderr).not.toBe(0);
+          expect(result.stdout).toContain("Base commit still unavailable");
+          expect(fetches).toHaveLength(5);
+          expect(fs.existsSync(argsPath)).toBe(false);
+          return;
+        }
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(fetches).toEqual([]);
+        const args = fs.readFileSync(argsPath, "utf8");
+        expect(args).toContain("src/pr.ts");
+        expect(args).not.toContain("src/main-only.ts");
+      },
+    );
+  });
 });
 
 describe("OpenGrep GitHub SARIF uploads", () => {

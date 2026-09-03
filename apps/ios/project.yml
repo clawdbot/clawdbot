@@ -1,5 +1,6 @@
 name: OpenClaw
 options:
+  preGenCommand: node ../../scripts/prepare-apple-mermaid.mjs
   bundleIdPrefix: ai.openclawfoundation
   deploymentTarget:
     iOS: "18.0"
@@ -17,7 +18,7 @@ packages:
     path: ../swabble
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 151.0.0
+    exactVersion: 152.0.0
 
 schemes:
   OpenClaw:
@@ -395,6 +396,10 @@ targets:
       - path: Tests
         excludes:
           - Logic
+      - path: ../macos/Tests/OpenClawIPCTests/GatewayWebSocketTestSupport.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:

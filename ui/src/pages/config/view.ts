@@ -10,6 +10,7 @@ import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { renderNotificationsSection } from "./notifications-section.ts";
 import { renderSetupSection } from "./setup.ts";
@@ -35,6 +36,8 @@ import {
   toggleSensitivePathReveal,
 } from "./view-state.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+registerSettingsEnglish();
 
 export { createConfigViewState } from "./view-state.ts";
 export type { ConfigProps, ConfigViewState } from "./view-types.ts";

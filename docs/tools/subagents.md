@@ -10,7 +10,7 @@ sidebarTitle: "Sub-agents"
 
 Sub-agents are background agent runs spawned from an existing agent run.
 Each one runs in its own session (`agent:<agentId>:subagent:<uuid>`) and,
-when finished, **announces** its result back to the requester chat channel.
+by default, **announces** its result back to the requester for review.
 Every sub-agent run is tracked as a [background task](/automation/tasks).
 
 Goals:
@@ -66,9 +66,16 @@ These commands work on channels with persistent thread bindings. See
 
 ### Spawn behavior
 
-Agents start background sub-agents with the `sessions_spawn` tool.
-Completions return as internal parent-session events; the parent/requester
-agent decides whether a user-facing update is needed.
+Agents start background sub-agents with the `sessions_spawn` tool. Follow the
+completion path described in the accepted receipt:
+
+- Ordinary announcing runs return an internal completion event to the requester,
+  which reviews the result and decides whether a user-facing update is needed.
+- [Swarm collectors](/tools/swarm) return results through explicit collection,
+  not completion notifications.
+- Thread-bound session runs with a deliverable bound route reply directly to that
+  thread, without a separate parent announcement.
+- Caller-managed quiet runs send no completion notification.
 
 When [execution identity auditing](/gateway/audit#run-identity-inspection) is
 enabled, each native or ACP child receives a new immutable identity context.
@@ -82,9 +89,9 @@ explicitly unsupported even though the ACP spawn and child are observable.
 <AccordionGroup>
   <Accordion title="Non-blocking, push-based completion">
     - `sessions_spawn` returns a run id after startup is accepted, without waiting for the child task to finish. Spawns from an OpenClaw cloud worker can first wait for child provisioning and node enrollment.
-    - On completion, the sub-agent reports back to the parent/requester session.
-    - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets the completion event arrive as the next model-visible message.
-    - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
+    - Announcing sub-agents report back to the parent/requester session on completion.
+    - Agent turns that need those announced results should call `sessions_yield` when available. That ends the current turn and lets the completion event arrive as the next model-visible message. Collectors instead require explicit result collection.
+    - Announced completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; check status on-demand only when debugging.
     - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
@@ -92,13 +99,15 @@ explicitly unsupported even though the ACP spawn and child are observable.
   <Accordion title="Completion delivery">
     - OpenClaw hands completions back to the requester session through an `agent` turn with a stable idempotency key.
     - If the requester run is still active, OpenClaw first tries to wake/steer that run instead of starting a second visible reply path.
-    - If an active requester cannot be woken, OpenClaw falls back to a requester-agent handoff with the same completion context instead of dropping the announce.
-    - A successful parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed.
+    - If an active requester cannot accept steering, including a busy CLI run, the handoff waits in the same session lane and starts after the current turn releases its claim. A failed wake does not start a competing turn or discard the completion.
+    - A successful in-session parent handoff completes sub-agent delivery even when the parent decides no visible user update is needed. External completion delivery requires a confirmed send, not merely an answer saved in the requester transcript.
     - Native sub-agents do not get the message tool. They return plain assistant text to the parent/requester agent; human-visible replies stay owned by the parent/requester agent's normal delivery policy.
-    - If direct handoff cannot be used, delivery falls back to queue routing. A queued completion remains `session_queued`, rather than delivered, until the durable queue settles.
+    - Queue acceptance is not delivery. If direct handoff cannot be used, delivery falls back to queue routing; the completion remains `session_queued`, rather than delivered, until the durable queue settles.
     - Automatic completion delivery retries for up to 30 minutes, starting around 15 seconds and capping the backoff at 5 minutes. Permanent failure or deadline expiry leaves the successful child task visibly blocked instead of discarding its result.
+    - Missing or empty external delivery receipts remain unconfirmed and follow that bounded retry policy. An adapter-reported unconfirmed send remains ambiguous, never intentional suppression. Empty requester output still uses the existing completion fallback; it is not an outbound-hook cancellation. A confirmed message-tool send to the requester still counts as delivery.
+    - If an outbound hook intentionally suppresses a completion, the child can remain completed while its task delivery is marked `failed` with the suppression reason. OpenClaw does not retry or start another requester turn to bypass that decision. Inspect the task error and hook policy before manually retrying.
     - Blocked canonical results are retained for 7 days. Operators can retry or intentionally dismiss them from the Tasks page or with `openclaw tasks retry` / `openclaw tasks dismiss`; retry can duplicate a visible result after an ambiguous provider acknowledgement.
-    - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's resolved route (`lastChannel` / `lastTo` / `lastAccountId`) so direct delivery still works.
+    - Delivery keeps the resolved requester route: thread-bound or conversation-bound completion routes win when available. If the completion origin only provides a channel, OpenClaw fills the missing target/account from the requester session's recorded delivery context so direct delivery still works.
 
   </Accordion>
   <Accordion title="Completion handoff metadata">
@@ -106,6 +115,7 @@ explicitly unsupported even though the ACP spawn and child are observable.
     internal context (not user-authored text) and includes:
 
     - `Result` — the latest visible `assistant` reply text from the child. Tool/toolResult output is not promoted into child results. Terminal failed runs do not reuse captured reply text.
+    - `Model route change` — when the terminal producer proves that fallback changed the requested model, one bounded and redacted route fact is carried separately from `Result`. Local and nested parents preserve it in their update. External channel parents keep it as private orchestration context, and raw direct-delivery fallback sends only `Result`.
     - `Status` — `completed; ready for parent review` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
     - A review instruction telling the requester agent to verify the result before deciding whether the original task is done.
@@ -141,9 +151,9 @@ replacement for writing a clear task prompt.
 
 ## Tool: `sessions_spawn`
 
-Starts a sub-agent run with `deliver: false` on the global `subagent` lane,
-then runs an announce step and posts the announce reply to the requester
-chat channel.
+Starts a sub-agent run on the global `subagent` lane. Ordinary one-shot runs
+use `deliver: false` and return through an announce step; collectors, quiet
+runs, and direct thread replies use the completion paths above.
 
 Availability depends on the caller's effective tool policy. The built-in
 `coding` and `messaging` profiles include `sessions_spawn`,
@@ -158,7 +168,7 @@ session to confirm the effective tool list.
 **Defaults:**
 
 - **Model:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.model` (or per-agent `agents.entries.*.subagents.model`). ACP runtime spawns use the same configured subagent model when present; otherwise the ACP harness keeps its own default. An explicit `sessions_spawn.model` still wins.
-- **Thinking:** native sub-agents inherit the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
+- **Thinking:** native sub-agents inherit the caller's active turn, including one-shot thinking overrides, unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.entries.*.subagents.thinking`). ACP runtime spawns also apply `agents.defaults.models["provider/model"].params.thinking` for the selected model. An explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** pass `runTimeoutSeconds` to set a timeout for a specific native, ACP, or visible sub-agent run. When omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` if configured; otherwise it falls back to `0` (no timeout). An explicit `0` disables the timeout for that run.
 - **Process lifetime:** a detached OpenClaw sub-agent has its own run lifecycle. A background task created inside an external CLI backend is different: it shares the parent CLI subprocess and stops if that parent reaches `agents.defaults.timeoutSeconds`.
 - **Task delivery:** native sub-agents receive their delegated task in a `[Subagent Task]` message appended after any forked history. Inherited task envelopes are context, not the current child's assignment. The sub-agent system prompt carries runtime rules and routing context, not a hidden duplicate of the task.
@@ -245,6 +255,9 @@ In `prefer` mode, hidden sub-agents are for internal legwork that the user does 
 <ParamField path="cleanup" type='"delete" | "keep"' default="keep">
   `"delete"` archives the session immediately after announce (still keeps the transcript via rename).
 </ParamField>
+<ParamField path="expectsCompletionMessage" type="boolean" default="true">
+  Set `false` for fire-and-forget children. When the child finishes, OpenClaw skips the completion handoff to the requester (no announce or steer turn), records the delivery as not required, and still runs child cleanup. Inspect such children with `subagents` or `sessions_history`. `collect: true` always uses `false`.
+</ParamField>
 <ParamField path="sandbox" type='"inherit" | "require"' default="inherit">
   `require` rejects the spawn unless the target child runtime is sandboxed.
 </ParamField>
@@ -299,12 +312,13 @@ because they already have control meanings.
 
 ## Tool: `sessions_yield`
 
-Ends the current model turn and waits for runtime events, primarily
-sub-agent completion events, to arrive as the next message. Use it after
-spawning required child work when the requester cannot produce a final
-answer until those completions arrive.
+Ends the current model turn and waits for announced child completion events
+to arrive as the next message. Use it when the requester needs results from
+announcing children before answering. It does not collect Swarm results:
+collectors require `agents_wait`, or an awaited `agents.run()` in OpenClaw
+Code Mode, and do not send completion notifications.
 
-`sessions_yield` is the waiting primitive. Do not replace it with polling
+`sessions_yield` is the waiting primitive for announced completions. Do not replace it with polling
 loops over `subagents`, `sessions_list`, `sessions_history`, shell
 `sleep`, or process polling just to detect child completion.
 
@@ -432,7 +446,7 @@ See [Configuration reference](/gateway/configuration-reference) and
   Block `sessions_spawn` calls that omit `agentId` (forces explicit profile selection). Per-agent override: `agents.entries.*.subagents.requireAgentId`.
 </ParamField>
 <ParamField path="agents.defaults.subagents.announceTimeoutMs" type="number" default="120000">
-  Per-call timeout for gateway `agent` announce delivery attempts. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Transient retries can make the total announce wait longer than one configured timeout.
+  Timeout for gateway `agent` announce delivery attempts. Once a handoff is accepted, waiting for the parent session's turn does not consume this budget; the timer starts again when execution begins. Values are positive integer milliseconds and are clamped to the platform-safe timer maximum. Queue waits and transient retries can make total delivery time longer than one configured timeout.
 </ParamField>
 
 If the requester session is sandboxed, `sessions_spawn` rejects targets
@@ -462,6 +476,9 @@ remain spawnable while inheriting defaults.
 - Auto-archive applies equally to depth-1 and depth-2 sessions.
 - Browser cleanup is separate from archive cleanup: tracked browser tabs/processes are best-effort closed when the run finishes, even if the transcript/session record is kept.
 
+The `subagent_ended` plugin hook is best-effort. Hook execution or plugin runtime
+loading failures are logged and do not abort sub-agent cleanup.
+
 ## Nested sub-agents
 
 By default, sub-agents cannot spawn their own sub-agents
@@ -478,7 +495,7 @@ worker sub-sub-agents.
         maxChildrenPerAgent: 5, // max active children per agent session (default: 5, range 1-20)
         maxConcurrent: 8, // global concurrency lane cap (default: 8)
         runTimeoutSeconds: 900, // default timeout for sessions_spawn (0 = no timeout)
-        announceTimeoutMs: 120000, // per-call gateway announce timeout
+        announceTimeoutMs: 120000, // gateway announce timeout, excluding accepted queue waits
       },
     },
   },
@@ -553,6 +570,7 @@ fallbacks. Fully isolated auth per agent is not supported yet.
 Sub-agents report back via an announce step:
 
 - The announce step runs inside the sub-agent session (not the requester session).
+- Runs spawned with `expectsCompletionMessage: false` skip the announce step entirely; the run registry records their delivery as not required.
 - An exact `ANNOUNCE_SKIP` response suppresses announce output.
 - For completion-required runs, an exact child `NO_REPLY` response or no output is a missing deliverable handed to the requester/parent for visible representation or retry; it is not credited as silent delivery.
 - Optional, duplicate, already-visible, or otherwise non-required paths may use exact `NO_REPLY` for intentional silence.

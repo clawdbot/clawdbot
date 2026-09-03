@@ -25,6 +25,10 @@ import type {
 } from "./server-methods/types.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { isSessionCreatorProfile, prepareSessionCreatorProfile } from "./session-creator.js";
+import {
+  isRequiredSessionTargetMethod,
+  isSessionProfileDependentMethod,
+} from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -42,8 +46,6 @@ import {
 } from "./session-sharing-policy.js";
 import { loadCachedSessionSharingSnapshot } from "./session-sharing-snapshot-cache.js";
 import {
-  isRequiredSessionTargetMethod,
-  isSessionProfileDependentMethod,
   resolveDirectIncognitoTargets,
   resolveDirectSessionTargets,
   resolveSessionMutationTargets,
@@ -71,6 +73,7 @@ const AGENT_RUN_START_METHODS = new Set([
   "sessions.send",
   "sessions.steer",
   "talk.client.create",
+  "talk.client.toolCall",
   "talk.session.create",
   "tools.invoke",
   "wake",

@@ -2,7 +2,7 @@
  * Tests Windows spawn compatibility helpers.
  */
 import { spawnSync } from "node:child_process";
-import { link, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -21,7 +21,7 @@ describe("resolveWindowsSpawnProgram", () => {
     async () => {
       const dir = await createTempDir("openclaw-windows-spawn-env-case-");
       const executable = path.join(dir, "mixed-env-tool.MiXeD");
-      await link(process.execPath, executable);
+      await copyFile(process.execPath, executable);
       const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
 
       const program = resolveWindowsSpawnProgram({
@@ -43,16 +43,45 @@ describe("resolveWindowsSpawnProgram", () => {
     },
   );
 
-  it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
-    expect(() =>
-      resolveWindowsSpawnProgram({
-        command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+  it.each(["node script.js", "pnpm exec tool", '"C:\\tools\\pnpm.cmd" exec tool'])(
+    "rejects command strings with inline arguments on Windows: %s",
+    (command) => {
+      expect(() =>
+        resolveWindowsSpawnProgram({
+          command,
+          platform: "win32",
+          env: {},
+          execPath: "C:\\node\\node.exe",
+        }),
+      ).toThrow("Windows spawn command must be an executable path only");
+    },
+  );
+
+  it.each(["pnpm checkout", "node tools"])(
+    "preserves an existing launcher path inside %s on Windows",
+    async (directory) => {
+      const root = await realpath(await createTempDir("openclaw-windows-spawn-test-"));
+      const dir = path.join(root, directory);
+      await mkdir(dir);
+      const launcher = path.join(dir, "launcher.js");
+      await writeFile(launcher, "process.exit(0);\n", "utf8");
+
+      const program = resolveWindowsSpawnProgram({
+        command: launcher,
         platform: "win32",
         env: {},
-        execPath: "C:\\node\\node.exe",
-      }),
-    ).toThrow("Windows spawn command must be an executable path only");
-  });
+        execPath: process.execPath,
+      });
+
+      expect(materializeWindowsSpawnProgram(program, ["--version"])).toEqual({
+        command: process.execPath,
+        argv: [launcher, "--version"],
+        resolution: "node-entrypoint",
+        shell: undefined,
+        windowsHide: true,
+      });
+    },
+  );
 
   it("allows executable paths with spaces on Windows", () => {
     const resolved = resolveWindowsSpawnProgram({

@@ -22,7 +22,6 @@ import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import { preparePublishedModelCatalogOwnerIdentity } from "./prepared-model-catalog-owner.js";
 import { copyPreparedModelRuntimeAuthBindings } from "./prepared-model-runtime-auth.js";
 import {
-  startSerializedSnapshotBuild,
   startSerializedSnapshotBuildBatch,
   type PreparedModelRuntimeBuildResult,
 } from "./prepared-model-runtime.build.js";
@@ -39,6 +38,27 @@ import type {
   PreparedModelRuntimeReplacement,
   PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.types.js";
+
+const ownersBySnapshot = new WeakMap<PreparedModelRuntimeSnapshot, PreparedModelRuntimeOwner>();
+
+export function resolvePreparedModelRuntimeOwnerBySnapshot(
+  snapshot: PreparedModelRuntimeSnapshot,
+): PreparedModelRuntimeOwner | undefined {
+  return ownersBySnapshot.get(snapshot);
+}
+
+function publishPreparedModelRuntimeOwnerSnapshot(
+  owner: PreparedModelRuntimeOwner,
+  snapshot: PreparedModelRuntimeSnapshot,
+): PreparedModelRuntimeSnapshot {
+  const published = stampPreparedModelRuntimeSnapshotConfig(snapshot, owner.input.config);
+  if (owner.snapshot) {
+    ownersBySnapshot.delete(owner.snapshot);
+  }
+  owner.snapshot = published;
+  ownersBySnapshot.set(published, owner);
+  return published;
+}
 
 export type {
   PreparedModelRuntimeInput,
@@ -61,7 +81,7 @@ export function prepareModelRuntimeOwner(
 ): PreparedModelRuntimeOwner {
   // Preparation precedes async discovery: auth may supersede the first build, or a new
   // preparation whose previous snapshot is still attached. Neither snapshot owns these facts.
-  return Object.assign(existing ?? { generation: 0, needsRefresh: true }, {
+  return Object.assign(existing ?? { generation: 0, needsRefresh: true, catalogStale: false }, {
     input,
     catalogOwner: preparePublishedModelCatalogOwnerIdentity(input),
     environmentFingerprint: effectiveEnvironmentFingerprint(input),
@@ -243,7 +263,7 @@ export function advancePreparedModelRuntimeOwnerConfig(
   if (owner.snapshot) {
     // Existing leases retain their immutable snapshot. New readers receive the same prepared
     // generation with only its planner-approved, model-neutral config stamp advanced.
-    owner.snapshot = stampPreparedModelRuntimeSnapshotConfig(owner.snapshot, config);
+    publishPreparedModelRuntimeOwnerSnapshot(owner, owner.snapshot);
   }
 }
 
@@ -455,6 +475,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
   owners: Map<string, PreparedModelRuntimeOwner>;
   agentBuildCompletions: Map<string, Promise<void>>;
   buildTimeoutMs: number;
+  includeCredentialProviders?: boolean;
   isPublicationCurrent?: () => boolean;
   isBuildCurrent?: () => boolean;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
@@ -483,6 +504,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
       catalogMode: owner.catalogMode,
       input,
       catalogOwner: owner.catalogOwner,
+      inventoryOwner: owner,
       pluginGeneration: owner.pendingPluginGeneration,
       prepareInboundPluginRegistry: owner.provenance === "configured",
       isGenerationCurrent,
@@ -539,6 +561,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               catalogMode,
               params.onBuildStats,
               params.pluginMetadataSnapshot,
+              params.includeCredentialProviders,
             );
             for (const candidate of currentGroup) {
               if (params.registerEntriesAfterBuildStart === true) {
@@ -587,11 +610,7 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
             `prepared model runtime snapshot missing after auth refresh for ${candidate.input.agentDir}`,
           );
         }
-        const snapshot = stampPreparedModelRuntimeSnapshotConfig(
-          result.snapshot,
-          candidate.owner.input.config,
-        );
-        candidate.owner.snapshot = snapshot;
+        const snapshot = publishPreparedModelRuntimeOwnerSnapshot(candidate.owner, result.snapshot);
         results.set(candidate.owner, { ...result, snapshot });
         candidate.owner.pluginGeneration = result.pluginGeneration;
         candidate.owner.needsRefresh = false;
@@ -633,17 +652,23 @@ export async function publishModelRuntimeSnapshot(
   owner.pluginGeneration = undefined;
   owner.pendingPluginGeneration = reusablePluginGeneration;
   const generation = owner.generation;
-  const build = startSerializedSnapshotBuild(
-    {
-      input,
-      catalogOwner: owner.catalogOwner,
-      isGenerationCurrent: () => owner.generation === generation && owners.get(key) === owner,
-      prepareInboundPluginRegistry: provenance === "configured",
-      pluginGeneration: reusablePluginGeneration,
-    },
+  const isGenerationCurrent = () => owner.generation === generation && owners.get(key) === owner;
+  const build = startSerializedSnapshotBuildBatch(
+    [
+      {
+        input,
+        catalogOwner: owner.catalogOwner,
+        inventoryOwner: owner,
+        isGenerationCurrent,
+        isBuildCurrent: isGenerationCurrent,
+        prepareInboundPluginRegistry: provenance === "configured",
+        pluginGeneration: reusablePluginGeneration,
+      },
+    ],
     agentBuildCompletions,
     buildTimeoutMs,
     catalogMode,
+    undefined,
     pluginMetadataSnapshot,
   );
   owner.buildCompletion = build.completion;
@@ -655,14 +680,13 @@ export async function publishModelRuntimeSnapshot(
   owners.set(key, owner);
   const publication = (async () => {
     try {
-      const result = await build.pending;
+      const result = (await build.pending)[0]!;
       if (owner.generation !== generation || owners.get(key) !== owner) {
         throw new PreparedModelRuntimePublicationSupersededError(
           `prepared model runtime publication was superseded for ${input.agentDir}`,
         );
       }
-      const snapshot = stampPreparedModelRuntimeSnapshotConfig(result.snapshot, owner.input.config);
-      owner.snapshot = snapshot;
+      const snapshot = publishPreparedModelRuntimeOwnerSnapshot(owner, result.snapshot);
       owner.pluginGeneration = result.pluginGeneration;
       owner.pendingPluginGeneration = undefined;
       owner.pending = undefined;

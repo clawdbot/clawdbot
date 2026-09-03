@@ -32,7 +32,6 @@ import {
   areUiSessionKeysEquivalent,
   resolveUiSessionNavigationParentKey,
 } from "../../../lib/sessions/session-key.ts";
-import { renderChatPanePlacement } from "./chat-pane-placement.ts";
 
 export type ChatPaneHeaderAction = "reveal" | "copy-path" | "copy-branch";
 
@@ -76,10 +75,8 @@ type ChatPaneHeaderProps = {
   presence?: TemplateResult | typeof nothing;
   faceControl?: TemplateResult | typeof nothing;
   sharingControl?: TemplateResult | typeof nothing;
+  placementControl?: TemplateResult | typeof nothing;
   sessionMenuAction: TemplateResult | typeof nothing;
-  placementMoving?: boolean;
-  placementMoveDisabledReason?: string;
-  placementReclaimDisabledReason?: string;
   nativeGateways?: NativeGatewaysCapability | null;
   gatewaysSnapshot?: NativeGatewaysSnapshot | null;
   onboarding?: boolean;
@@ -90,8 +87,6 @@ type ChatPaneHeaderProps = {
   onMenuOpenChange: (open: boolean) => void;
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
-  onPlacementMove?: () => void;
-  onPlacementReclaim?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
   onOpenSplitView?: () => void;
   onSplitDown?: (paneId: string) => void;
@@ -108,46 +103,9 @@ function revealLabel(platform: string | null): string {
   }
   return t("chat.sessionHeader.revealFileManager");
 }
-
-function pathBasename(value: string): string {
-  const trimmed = value.replace(/[\\/]+$/, "");
-  return trimmed.split(/[\\/]/).pop() || trimmed;
-}
-
 function branchRelativeTime(updatedAt: string | undefined): string {
   const timestamp = updatedAt ? Date.parse(updatedAt) : Number.NaN;
   return Number.isFinite(timestamp) ? formatRelativeTimestamp(timestamp, { fallback: "" }) : "";
-}
-
-export function resolveChatPaneWorkspace(params: {
-  session: GatewaySessionRow | undefined;
-  agentWorkspace?: string;
-  worktreePath?: string | null;
-}): { root: string | null; label: string | null } {
-  const row = params.session;
-  if (!row) {
-    return { root: null, label: null };
-  }
-  // Exec-node sessions live on another machine: gateway-local facts would
-  // hand the user a path for the wrong host, so only execCwd may name them.
-  // Cloud-worker sessions keep their gateway-local checkout (workers sync
-  // against it), so local facts stay correct there.
-  // Mirror the gateway's loadSessionFileRoot order (spawned workspace before
-  // spawned cwd) so copy-path and the chip tooltip name the same directory
-  // sessions.files.reveal opens.
-  const root = row.execNode
-    ? row.execCwd?.trim() || null
-    : row.spawnedWorkspaceDir?.trim() ||
-      row.spawnedCwd?.trim() ||
-      params.worktreePath?.trim() ||
-      (!row.worktree ? params.agentWorkspace?.trim() : "") ||
-      null;
-  const label = row.worktree?.repoRoot
-    ? pathBasename(row.worktree.repoRoot)
-    : root
-      ? pathBasename(root)
-      : null;
-  return { root, label };
 }
 
 export function resolveChatPaneParentSession(
@@ -426,195 +384,213 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
   const copied = props.copiedAction === "copy-path" || props.copiedAction === "copy-branch";
   const drawerLabel = props.navDrawerOpen ? t("nav.collapse") : t("nav.expand");
   const compactSessionActions = props.narrow && props.sessionMenuAction !== nothing;
+  const hasFaceControl = props.faceControl !== undefined && props.faceControl !== nothing;
 
   return html`
-    <div class="chat-pane__header" @mousedown=${beginNativeWindowDrag}>
-      ${props.mergedChrome
-        ? html`<openclaw-tooltip .content=${drawerLabel}>
-            <button
-              class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-              type="button"
-              aria-label=${drawerLabel}
-              aria-expanded=${String(Boolean(props.navDrawerOpen))}
-              @click=${(event: MouseEvent) => {
-                window.dispatchEvent(
-                  new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                    detail: { trigger: event.currentTarget as HTMLElement },
-                  }),
-                );
-              }}
-            >
-              ${icons.menu}
-            </button>
-          </openclaw-tooltip>`
+    <div
+      class="chat-pane__header ${hasFaceControl ? "chat-pane__header--centered" : ""}"
+      @mousedown=${beginNativeWindowDrag}
+    >
+      <div class="chat-pane__header-leading">
+        ${props.mergedChrome
+          ? html`<openclaw-tooltip .content=${drawerLabel}>
+              <button
+                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+                type="button"
+                aria-label=${drawerLabel}
+                aria-expanded=${String(Boolean(props.navDrawerOpen))}
+                @click=${(event: MouseEvent) => {
+                  window.dispatchEvent(
+                    new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                      detail: { trigger: event.currentTarget as HTMLElement },
+                    }),
+                  );
+                }}
+              >
+                ${icons.menu}
+              </button>
+            </openclaw-tooltip>`
+          : nothing}
+        ${props.session?.incognito
+          ? html`<span
+              class="chat-pane__incognito"
+              role="img"
+              aria-label=${t("chat.sessionHeader.incognito")}
+              title=${t("chat.sessionHeader.incognito")}
+              >${icons.lock}</span
+            >`
+          : nothing}
+        ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
+        ${renderStandalonePersonLink(
+          renderSessionOwnerChip(
+            props.showOwnerChip ? props.session?.owner?.actor : undefined,
+            "header",
+            props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
+            props.ownerViewing,
+          ),
+          props.showOwnerChip
+            ? personActivityLink(
+                props.session?.owner?.actor.identity?.type === "profile"
+                  ? props.session.owner.actor.identity.id
+                  : undefined,
+                props.personActivity,
+              )
+            : null,
+        )}
+        ${props.showOwnerChip && props.session?.participants?.length
+          ? html`<openclaw-viewer-facepile
+              class="chat-pane__participants"
+              .staticParticipants=${props.session.participants}
+              .totalCount=${props.session.participantCount}
+              .maxVisible=${4}
+              .personActivity=${props.personActivity}
+              variant="session"
+            ></openclaw-viewer-facepile>`
+          : nothing}
+        ${props.placementControl ?? nothing} ${props.presence ?? nothing}
+      </div>
+      ${hasFaceControl
+        ? html`<div class="chat-pane__header-center">
+            ${props.faceControl} ${props.sharingControl ?? nothing}
+          </div>`
         : nothing}
-      ${props.session?.incognito
-        ? html`<span
-            class="chat-pane__incognito"
-            role="img"
-            aria-label=${t("chat.sessionHeader.incognito")}
-            title=${t("chat.sessionHeader.incognito")}
-            >${icons.lock}</span
-          >`
-        : nothing}
-      ${renderIdentityCrumbs(props, copied, copyPathLabel, copyBranchLabel)}
-      ${renderStandalonePersonLink(
-        renderSessionOwnerChip(
-          props.showOwnerChip ? props.session?.owner?.actor : undefined,
-          "header",
-          props.session?.owner?.assignedAt !== undefined ? "owned" : "created",
-          props.ownerViewing,
-        ),
-        props.showOwnerChip
-          ? personActivityLink(
-              props.session?.owner?.actor.identity?.type === "profile"
-                ? props.session.owner.actor.identity.id
-                : undefined,
-              props.personActivity,
-            )
-          : null,
-      )}
-      ${props.showOwnerChip && props.session?.participants?.length
-        ? html`<openclaw-viewer-facepile
-            class="chat-pane__participants"
-            .staticParticipants=${props.session.participants}
-            .totalCount=${props.session.participantCount}
-            .maxVisible=${4}
-            .personActivity=${props.personActivity}
-            variant="session"
-          ></openclaw-viewer-facepile>`
-        : nothing}
-      ${renderChatPanePlacement(props)} ${props.presence ?? nothing} ${props.faceControl ?? nothing}
-      ${props.sharingControl ?? nothing}
-      ${!props.catalog && props.branches.length > 1
-        ? html`
-            <wa-dropdown
-              class="chat-pane__branches-menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                const leafEntryId = event.detail.item.value;
-                const branch = props.branches.find(
-                  (candidate) => candidate.leafEntryId === leafEntryId,
-                );
-                if (leafEntryId && branch && !branch.active && !props.branchSwitchDisabledReason) {
-                  props.onBranchSelect(leafEntryId);
-                }
-              }}
-            >
-              <button
-                slot="trigger"
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
-                type="button"
-                ?disabled=${Boolean(props.branchSwitchDisabledReason)}
-                title=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
-                aria-label=${t("chat.sessionHeader.branches")}
+      <div class="chat-pane__header-trailing">
+        ${hasFaceControl ? nothing : (props.sharingControl ?? nothing)}
+        ${!props.catalog && props.branches.length > 1
+          ? html`
+              <wa-dropdown
+                class="chat-pane__branches-menu"
+                placement="bottom-end"
+                @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+                  const leafEntryId = event.detail.item.value;
+                  const branch = props.branches.find(
+                    (candidate) => candidate.leafEntryId === leafEntryId,
+                  );
+                  if (
+                    leafEntryId &&
+                    branch &&
+                    !branch.active &&
+                    !props.branchSwitchDisabledReason
+                  ) {
+                    props.onBranchSelect(leafEntryId);
+                  }
+                }}
               >
-                ${icons.gitBranch}
-              </button>
-              ${props.branches.map((branch) => {
-                const relativeTime = branchRelativeTime(branch.updatedAt);
-                return html`
-                  <wa-dropdown-item
-                    class="chat-pane__branch-item"
-                    value=${branch.leafEntryId}
-                    ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
-                    data-active=${branch.active ? "true" : "false"}
-                  >
-                    <span class="chat-pane__branch-copy">
-                      <span class="chat-pane__branch-headline"
-                        >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
-                      >
-                      <span class="chat-pane__branch-meta"
-                        >${t(
-                          branch.messageCount === 1
-                            ? "chat.sessionHeader.oneMessage"
-                            : "chat.sessionHeader.messages",
-                          { count: String(branch.messageCount) },
-                        )}${relativeTime ? ` · ${relativeTime}` : ""}</span
-                      >
-                    </span>
-                    ${branch.active
-                      ? html`<span
-                          class="chat-pane__branch-active"
-                          aria-label=${t("chat.sessionHeader.activeBranch")}
-                          >${icons.check}</span
-                        >`
-                      : nothing}
-                  </wa-dropdown-item>
-                `;
-              })}
-            </wa-dropdown>
-          `
-        : nothing}
-      ${renderGatewayPicker(props)}
-      <div class="chat-pane__actions">
-        ${compactSessionActions ? nothing : props.panelActions}
-        ${compactSessionActions ? nothing : props.discussionAction}
-        ${props.catalog || compactSessionActions
-          ? nothing
-          : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
-            ${props.sessionRailAction}`}
-        ${props.onOpenSplitView && !compactSessionActions
-          ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
-                type="button"
-                aria-label=${t("chat.splitView.open")}
-                @click=${props.onOpenSplitView}
-              >
-                ${icons.columns2}
-              </button>
-            </openclaw-tooltip>`
+                <button
+                  slot="trigger"
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__branches-trigger"
+                  type="button"
+                  ?disabled=${Boolean(props.branchSwitchDisabledReason)}
+                  title=${props.branchSwitchDisabledReason ?? t("chat.sessionHeader.branches")}
+                  aria-label=${t("chat.sessionHeader.branches")}
+                >
+                  ${icons.gitBranch}
+                </button>
+                ${props.branches.map((branch) => {
+                  const relativeTime = branchRelativeTime(branch.updatedAt);
+                  return html`
+                    <wa-dropdown-item
+                      class="chat-pane__branch-item"
+                      value=${branch.leafEntryId}
+                      ?disabled=${branch.active || Boolean(props.branchSwitchDisabledReason)}
+                      data-active=${branch.active ? "true" : "false"}
+                    >
+                      <span class="chat-pane__branch-copy">
+                        <span class="chat-pane__branch-headline"
+                          >${branch.headline || t("chat.sessionHeader.untitledBranch")}</span
+                        >
+                        <span class="chat-pane__branch-meta"
+                          >${t(
+                            branch.messageCount === 1
+                              ? "chat.sessionHeader.oneMessage"
+                              : "chat.sessionHeader.messages",
+                            { count: String(branch.messageCount) },
+                          )}${relativeTime ? ` · ${relativeTime}` : ""}</span
+                        >
+                      </span>
+                      ${branch.active
+                        ? html`<span
+                            class="chat-pane__branch-active"
+                            aria-label=${t("chat.sessionHeader.activeBranch")}
+                            >${icons.check}</span
+                          >`
+                        : nothing}
+                    </wa-dropdown-item>
+                  `;
+                })}
+              </wa-dropdown>
+            `
           : nothing}
-        ${!props.narrow && props.onSplitDown
-          ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
-                type="button"
-                aria-label=${t("chat.splitView.splitDown")}
-                @click=${() => props.onSplitDown?.(props.paneId)}
-              >
-                ${icons.panelBottomOpen}
-              </button>
-            </openclaw-tooltip>`
-          : nothing}
-        ${!props.narrow && props.onSplitRight
-          ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
-                type="button"
-                aria-label=${t("chat.splitView.splitRight")}
-                @click=${() => props.onSplitRight?.(props.paneId)}
-              >
-                ${icons.panelRightOpen}
-              </button>
-            </openclaw-tooltip>`
-          : nothing}
-        ${props.onClosePane
-          ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
-                type="button"
-                aria-label=${t("chat.splitView.closePane")}
-                @click=${() => props.onClosePane?.(props.paneId)}
-              >
-                ${icons.x}
-              </button>
-            </openclaw-tooltip>`
-          : nothing}
-        ${props.mergedChrome && !compactSessionActions
-          ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
-                type="button"
-                aria-label=${t("chat.openCommandPalette")}
-                @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
-              >
-                ${icons.search}
-              </button>
-            </openclaw-tooltip>`
-          : nothing}
-        ${props.sessionMenuAction}
+        ${renderGatewayPicker(props)}
+        <div class="chat-pane__actions">
+          ${compactSessionActions ? nothing : props.panelActions}
+          ${compactSessionActions ? nothing : props.discussionAction}
+          ${props.catalog || compactSessionActions
+            ? nothing
+            : html`${props.diffAction} ${props.backgroundTasksAction} ${props.workspaceAction}
+              ${props.sessionRailAction}`}
+          ${props.onOpenSplitView && !compactSessionActions
+            ? html`<openclaw-tooltip .content=${t("chat.splitView.open")}>
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-open-split-view"
+                  type="button"
+                  aria-label=${t("chat.splitView.open")}
+                  @click=${props.onOpenSplitView}
+                >
+                  ${icons.columns2}
+                </button>
+              </openclaw-tooltip>`
+            : nothing}
+          ${!props.narrow && props.onSplitDown
+            ? html`<openclaw-tooltip .content=${t("chat.splitView.splitDown")}>
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-down"
+                  type="button"
+                  aria-label=${t("chat.splitView.splitDown")}
+                  @click=${() => props.onSplitDown?.(props.paneId)}
+                >
+                  ${icons.panelBottomOpen}
+                </button>
+              </openclaw-tooltip>`
+            : nothing}
+          ${!props.narrow && props.onSplitRight
+            ? html`<openclaw-tooltip .content=${t("chat.splitView.splitRight")}>
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__split-right"
+                  type="button"
+                  aria-label=${t("chat.splitView.splitRight")}
+                  @click=${() => props.onSplitRight?.(props.paneId)}
+                >
+                  ${icons.panelRightOpen}
+                </button>
+              </openclaw-tooltip>`
+            : nothing}
+          ${props.onClosePane
+            ? html`<openclaw-tooltip .content=${t("chat.splitView.closePane")}>
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__close-pane"
+                  type="button"
+                  aria-label=${t("chat.splitView.closePane")}
+                  @click=${() => props.onClosePane?.(props.paneId)}
+                >
+                  ${icons.x}
+                </button>
+              </openclaw-tooltip>`
+            : nothing}
+          ${props.mergedChrome && !compactSessionActions
+            ? html`<openclaw-tooltip .content=${t("chat.openCommandPalette")}>
+                <button
+                  class="btn btn--ghost btn--icon chat-icon-btn chat-pane__palette-open"
+                  type="button"
+                  aria-label=${t("chat.openCommandPalette")}
+                  @click=${() => window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT))}
+                >
+                  ${icons.search}
+                </button>
+              </openclaw-tooltip>`
+            : nothing}
+          ${props.sessionMenuAction}
+        </div>
       </div>
     </div>
   `;

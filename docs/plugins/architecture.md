@@ -144,6 +144,8 @@ Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstra
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
 
+Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
+
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership
@@ -155,6 +157,8 @@ The snapshot and lookup table keep repeated startup decisions on the fast path:
 - startup auto-enable decisions
 
 Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
+
+Each plugin service startup attempt owns one cleanup operation, including failed starts. Hot replacement uses a five-second cleanup deadline; a timeout revokes the old service's capabilities and rejects the replacement. Final Gateway shutdown still joins pending cleanup during its separate five-second grace, without invoking the service's stop handler again.
 
 The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 

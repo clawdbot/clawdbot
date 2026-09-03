@@ -501,6 +501,7 @@ export function createReplyAgentRestartRecoveryController(
     clear: clearRestartRecoveryDeliveryClaim,
     isArmed: isRestartRecoveryArmed,
   } = createReplyRestartRecoveryClaimController({
+    lifecycleGeneration: replyOperation.lifecycleGeneration,
     admissionRunId:
       normalizeOptionalString(sessionCtx.MessageSid) ??
       normalizeOptionalString(sessionCtx.MessageSidFull),

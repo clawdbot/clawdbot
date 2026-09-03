@@ -10,6 +10,10 @@ import {
   SessionPermissionModeSchema,
 } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import {
+  SkillResourceDeliverySchema,
+  type SkillResourceDelivery,
+} from "../../packages/gateway-protocol/src/schema/skill-resources.js";
+import {
   type WorkerConnectParams,
   type WorkerConnectRequestFrame,
   WorkerConnectRequestFrameSchema,
@@ -28,6 +32,10 @@ import {
   WorkerInferenceModelRefSchema,
   WorkerInferenceOptionsSchema,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  WorkerSkillWorkshopBindingSchema,
+  type WorkerSkillWorkshopBinding,
+} from "../../packages/gateway-protocol/src/schema/worker-skill-workshop.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import {
@@ -59,6 +67,8 @@ type WorkerLaunchPermissionContext =
   | { permissionMode?: never; workerContainmentRoot?: never };
 
 type WorkerLaunchAssignment = WorkerLaunchPermissionContext & {
+  skillAuthoring?: WorkerSkillWorkshopBinding;
+  skillResources?: SkillResourceDelivery;
   /** Host placement namespace used for worker-local policy, hooks, and audit attribution. */
   agentId: string;
   operationalRunInstance: OperationalRunInstanceRef;
@@ -193,12 +203,32 @@ function parseAssignment(value: unknown): WorkerLaunchAssignment | undefined {
         "liveEvents",
         "toolAuthority",
       ],
-      ["systemPrompt", "browser", "computer", "permissionMode", "workerContainmentRoot"],
+      [
+        "systemPrompt",
+        "browser",
+        "computer",
+        "permissionMode",
+        "workerContainmentRoot",
+        "skillResources",
+        "skillAuthoring",
+      ],
     )
   ) {
     return undefined;
   }
   const hasPermissionMode = Object.hasOwn(value, "permissionMode");
+  if (
+    value.skillAuthoring !== undefined &&
+    !Value.Check(WorkerSkillWorkshopBindingSchema, value.skillAuthoring)
+  ) {
+    return undefined;
+  }
+  if (
+    value.skillResources !== undefined &&
+    !Value.Check(SkillResourceDeliverySchema, value.skillResources)
+  ) {
+    return undefined;
+  }
   const hasContainmentRoot = Object.hasOwn(value, "workerContainmentRoot");
   if (
     hasPermissionMode !== hasContainmentRoot ||

@@ -7,18 +7,10 @@ import {
   SESSIONS_PAGE_DEFAULT_LIMIT,
   type SessionArchivedFilter,
   type SessionListOptions,
-  type SessionListSnapshot,
 } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 
 export type SessionsRouteData = {
-  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
-  gateway: ApplicationContext["gateway"];
-  gatewaySnapshot: ApplicationContext["gateway"]["snapshot"];
-  sessions: ApplicationContext["sessions"];
-  result: SessionListSnapshot["result"];
-  loading: boolean;
-  error: string | null;
   expandedSessionKey: string | null;
   statusFilter: SessionArchivedFilter;
 };
@@ -70,8 +62,6 @@ async function loadSessionsRoute(
   context: ApplicationContext,
   location: RouteLocation,
 ): Promise<SessionsRouteData> {
-  const gateway = context.gateway;
-  const gatewaySnapshot = gateway.snapshot;
   const sessions = context.sessions;
   const options = routeOptions(location);
   const query = sessionsPageListQuery(context, {
@@ -81,23 +71,16 @@ async function loadSessionsRoute(
     statusFilter: options.statusFilter,
     deepLinkSessionKey: options.expandedSessionKey,
   });
-  let snapshot = sessions.listSnapshot(query);
+  const snapshot = sessions.listSnapshot(query);
   await Promise.all([
     !snapshot.result && !snapshot.loading
       ? sessions.refreshList({ ...query, force: true })
       : undefined,
     context.runtimeConfig.ensureLoaded().catch(() => undefined),
   ]);
-  snapshot = sessions.listSnapshot(query);
-  return {
-    gateway,
-    gatewaySnapshot,
-    sessions,
-    result: snapshot.result,
-    loading: snapshot.loading,
-    error: snapshot.error,
-    ...options,
-  };
+  // Prefetch into the managed query owner. The page may already be subscribed
+  // when this loader finishes, so route data must not republish a list snapshot.
+  return options;
 }
 
 export const page = definePage({

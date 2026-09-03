@@ -3,7 +3,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resetLogger, setLoggerOverride } from "../logging.js";
+import {
+  flushLogger,
+  getChildLogger,
+  getResolvedLoggerSettings,
+  resetLogger,
+  setLoggerOverride,
+} from "./logger.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const metadataBoundaries = [
@@ -51,6 +57,26 @@ describe("readConfiguredLogTail", () => {
     redactSensitiveLinesMock.mockClear();
     resetLogger();
     setLoggerOverride(null);
+  });
+
+  it("tails configured rolling placeholders through the real file logger", async () => {
+    const { readConfiguredLogTail } = await import("./log-tail.js");
+    const tempDir = tempDirs.make("openclaw-log-tail-");
+    setLoggerOverride({
+      file: path.join(tempDir, "openclaw-YYYY-MM-DD.log"),
+      level: "info",
+    });
+
+    getChildLogger({ module: "log-tail" }).warn({ reason: "disabled" }, "rolling log record");
+    await flushLogger();
+
+    const result = await readConfiguredLogTail();
+
+    expect(result.lines).toEqual([expect.stringContaining("rolling log record")]);
+    for (const file of [result.file, getResolvedLoggerSettings().file]) {
+      expect(path.dirname(file)).toBe(tempDir);
+      expect(path.basename(file)).toMatch(/^openclaw-\d{4}-\d{2}-\d{2}\.log$/);
+    }
   });
 
   it("applies redaction once per request across all returned lines", async () => {
@@ -183,7 +209,10 @@ describe("readConfiguredLogTail", () => {
     "rethrows $code from the $boundary boundary",
     async ({ boundary, code }) => {
       const tempDir = tempDirs.make("openclaw-log-tail-");
-      const configured = path.join(tempDir, "openclaw-2026-01-22.log");
+      const configured = path.join(
+        tempDir,
+        boundary === "final stat" ? "configured.log" : "openclaw-2026-01-22.log",
+      );
       const candidate = path.join(tempDir, "openclaw-2026-01-21.log");
       const error = Object.assign(new Error(`${code} injected`), { code });
       const realStat = fs.stat.bind(fs);

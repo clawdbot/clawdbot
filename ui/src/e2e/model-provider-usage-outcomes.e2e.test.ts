@@ -37,7 +37,7 @@ function providerUsageResponses(usageStatus: unknown) {
 }
 
 suite.define(() => {
-  it("shows a visible warning when the provider usage request fails", async () => {
+  it("shows usage request failures with no configured providers", async () => {
     await suite.withPage(
       {
         locale: "en-US",
@@ -52,13 +52,13 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
-        await page.locator('[data-provider-id="openai"]').waitFor();
         await expect
           .poll(async () => (await gateway.getRequests("usage.status")).length)
           .toBeGreaterThan(0);
         await expect
           .poll(() => page.locator(".settings-page").textContent())
           .toContain(unavailableMessage);
+        expect(await page.locator("[data-provider-id]").count()).toBe(0);
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
           await page.screenshot({
