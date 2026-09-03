@@ -379,6 +379,11 @@ async function main(): Promise<number> {
   let gateway: ChildProcess | undefined;
   let consoleStream = "";
   let gatewaySpawnError: Error | undefined;
+  let gatewayExit: { code: number | null; signal: NodeJS.Signals | null } | undefined;
+  let markGatewayStdioClosed: () => void = () => {};
+  const gatewayStdioClosed = new Promise<void>((resolve) => {
+    markGatewayStdioClosed = resolve;
+  });
   try {
     gateway = spawn(
       process.execPath,
@@ -408,11 +413,27 @@ async function main(): Promise<number> {
       gatewaySpawnError = error;
       consoleStream += `spawn failed: ${String(error)}`;
     });
+    // A Gateway that spawns successfully but dies during startup never emits
+    // `error` — it emits `exit`/`close`. Without observing those, the readiness
+    // loop below would sit out its full deadline before reporting a failure it
+    // already knew about. `exit` fires as soon as the process is gone; `close`
+    // fires once its stdio is drained, which is when `consoleStream` is
+    // complete enough to print.
+    gateway.once("exit", (code, signal) => {
+      gatewayExit ??= { code, signal };
+    });
+    gateway.once("close", (code, signal) => {
+      gatewayExit ??= { code, signal };
+      markGatewayStdioClosed();
+    });
 
     const deadline = Date.now() + 180_000;
     let ready = false;
     while (Date.now() < deadline) {
       if (gatewaySpawnError) {
+        break;
+      }
+      if (gatewayExit !== undefined || gateway.exitCode !== null) {
         break;
       }
       try {
@@ -430,6 +451,16 @@ async function main(): Promise<number> {
     if (!ready) {
       if (gatewaySpawnError) {
         console.log(`  gateway spawn failed: ${String(gatewaySpawnError)}`);
+      }
+      if (gatewayExit !== undefined || gateway.exitCode !== null) {
+        // Give the already-dead child a bounded moment to flush its stdio so the
+        // buffered diagnostics printed below are the whole story.
+        await Promise.race([gatewayStdioClosed, delay(5_000)]);
+        const exitCode = gatewayExit?.code ?? gateway.exitCode;
+        const exitSignal = gatewayExit?.signal ?? gateway.signalCode;
+        console.log(
+          `  gateway exited before readiness: code=${String(exitCode)} signal=${String(exitSignal)}`,
+        );
       }
       console.log(redact(consoleStream).trim().split("\n").slice(-20).join("\n"));
       return 1;
