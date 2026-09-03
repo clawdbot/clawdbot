@@ -302,6 +302,25 @@ Each select keeps its prompt and any overflow options together in that text.
 Prompts and overflow option names remain complete; only native quick-reply button
 labels are shortened to LINE's 20-character limit.
 
+The options an `ask_user` question offers become tappable controls on the same Flex
+card, and a tap answers the question directly. LINE carries the option index the
+Gateway assigned rather than the label, so a choice the Gateway no longer lists
+renders no control instead of a tap that answers the wrong option. The eligible
+shape is one single-select, non-secret question offering two to four distinct
+options — the same bound Telegram, Discord and Slack use; anything else stays
+readable text that a typed reply still answers. **Other…** is a control too: it puts
+the question on its free-text path without answering it, so the next thing typed
+becomes the answer.
+
+A card holds at most four controls. A two- or three-option question therefore shows
+**Other…** alongside its options; a four-option one spends all four controls on the
+options, and **Other…** falls back into the card's text under `Actions:` — the typed
+route still works and the text still says so.
+
+LINE cannot edit a message it already delivered, so the controls stay on screen after
+the question ends. A tap that arrives then is answered with `That question was already
+answered.` rather than silently doing nothing.
+
 ```json5
 {
   action: "send",
