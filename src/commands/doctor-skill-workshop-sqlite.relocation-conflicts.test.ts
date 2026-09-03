@@ -310,6 +310,64 @@ describe("doctor Skill Workshop SQLite relocation conflicts and recovery", () =>
     ).resolves.toEqual({ changes: [], warnings: [], detected: 0, migrated: 0 });
   });
 
+  it("stales an adoption when the destination is a different skill", async () => {
+    const workspaceDir = await fs.realpath(
+      await tempDirs.make("openclaw-workshop-unverified-adoption-workspace-"),
+    );
+    const legacySkillDir = path.join(workspaceDir, "skills", "verified-adoption");
+    const destination = path.join(
+      resolveWorkshopSkillsDir({}, "main", testState.env),
+      "verified-adoption",
+    );
+    const expectedContent =
+      "---\nname: verified-adoption\ndescription: Verified procedure\n---\n\n# Verified\n";
+    const destinationContent =
+      "---\nname: unrelated-skill\ndescription: Unrelated procedure\n---\n\n# Unrelated\n";
+    const now = "2026-09-01T00:00:00.000Z";
+    const record: SkillProposalRecord = {
+      schema: SKILL_WORKSHOP_SCHEMA,
+      id: "verified-adoption-20260901-1234567890",
+      kind: "create",
+      status: "applied",
+      title: "Create Verified Adoption",
+      description: "Verified procedure",
+      createdAt: now,
+      updatedAt: now,
+      createdBy: "skill-workshop",
+      proposedVersion: "v1",
+      draftFile: "PROPOSAL.md",
+      draftHash: hashSkillProposalContent(expectedContent),
+      target: {
+        skillName: "verified-adoption",
+        skillKey: "verified-adoption",
+        skillDir: legacySkillDir,
+        skillFile: path.join(legacySkillDir, "SKILL.md"),
+        source: "openclaw-workspace",
+      },
+      scan: { state: "clean", scannedAt: now, critical: 0, warn: 0, info: 0, findings: [] },
+      appliedAt: now,
+    };
+    await fs.mkdir(destination, { recursive: true });
+    await fs.writeFile(path.join(destination, "SKILL.md"), destinationContent, "utf8");
+    seedLegacyV15ProposalRows(testState.env, [{ record, workspaceDir, claimReleasedTime: null }]);
+
+    const result = await migrateLegacySkillWorkshopProposals({ config: {}, env: testState.env });
+
+    expect(result.changes.join("\n")).toContain(
+      "Relocated 0 Skill Workshop skills, retargeted 0 proposals, marked 1 stale",
+    );
+    await expect(fs.readFile(path.join(destination, "SKILL.md"), "utf8")).resolves.toBe(
+      destinationContent,
+    );
+    await expect(readSkillProposalRecord(record.id, { env: testState.env })).resolves.toMatchObject(
+      {
+        status: "stale",
+        statusReason: expect.stringContaining("identity mismatch"),
+        target: { skillDir: legacySkillDir, skillFile: record.target.skillFile },
+      },
+    );
+  });
+
   it("adopts a skill moved before its proposal persistence and converges on rerun", async () => {
     const workspaceDir = await fs.realpath(
       await tempDirs.make("openclaw-workshop-relocation-failure-workspace-"),

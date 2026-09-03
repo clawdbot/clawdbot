@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listAgentIds } from "../agents/agent-scope.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isMissingPathError } from "../infra/errors.js";
@@ -9,7 +8,6 @@ import { removePathWithinRoot } from "../infra/fs-safe-remove.js";
 import { pathExists, root, type Root } from "../infra/fs-safe.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { isPathInside } from "../infra/path-guards.js";
-import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { readSkillFrontmatterSafe } from "../skills/loading/local-loader.js";
 import { resolveSkillDiscoveryLimits } from "../skills/loading/skill-root-discovery.js";
 import { resolveWorkshopSkillsDir } from "../skills/workshop/skills-root.js";
@@ -31,10 +29,13 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import { openExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db.js";
 import {
-  inferWorkspaceOwnerAgentId,
   listLegacyCollectionBackupRoots,
   migrateLegacyCollectionBackups,
 } from "./doctor-skill-workshop-collection-backups.js";
+import {
+  inferOwnerAgentId,
+  verifyRelocationDestination,
+} from "./doctor-skill-workshop-relocation.js";
 
 const WORKSHOP_DIR = "skill-workshop";
 const PROPOSALS_DIR = `${WORKSHOP_DIR}/proposals`;
@@ -272,8 +273,20 @@ async function planWorkshopRelocation(
       continue;
     }
     if (!sourceStat) {
-      // The move is durable before metadata persistence; on rerun, adopt the existing destination.
+      // The move is durable before metadata persistence; on rerun, adopt only its verified destination.
       if (await pathExists(target.skillFile)) {
+        if (
+          !(await verifyRelocationDestination({
+            record,
+            destinationSkillDir: target.skillDir,
+            destinationSkillFile: target.skillFile,
+            config,
+          }))
+        ) {
+          plan.staleReason =
+            "Skill Workshop could not adopt the relocated skill: destination identity mismatch (content hash or frontmatter name/key); the proposal is stale.";
+          continue;
+        }
         movesByKey.set(moveKey, {
           source: plan.source,
           destination: target.skillDir,
@@ -451,38 +464,6 @@ async function relocateLegacyWorkshopTargets(
     migratedBackupRoots: backupMigration.migrated,
     warnings: backupMigration.warnings,
   };
-}
-
-type OwnerAgentInference = {
-  ownerAgentId?: string;
-  unconfiguredOwnerAgentId?: string;
-};
-
-function inferOwnerAgentId(params: {
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  record: SkillProposalRecord;
-  workspaceDir: string;
-  rowOwnerAgentId?: string | null;
-}): OwnerAgentInference {
-  let ownerAgentId: string | undefined;
-  if (params.rowOwnerAgentId) {
-    ownerAgentId = normalizeAgentId(params.rowOwnerAgentId);
-  } else if (params.record.origin?.agentId) {
-    ownerAgentId = normalizeAgentId(params.record.origin.agentId);
-  } else if (params.record.origin?.sessionKey) {
-    const sessionAgentId = parseAgentSessionKey(params.record.origin.sessionKey)?.agentId;
-    if (sessionAgentId) {
-      ownerAgentId = normalizeAgentId(sessionAgentId);
-    }
-  }
-  ownerAgentId ??= inferWorkspaceOwnerAgentId(params.config, params.env, params.workspaceDir);
-  if (!ownerAgentId) {
-    return {};
-  }
-  return listAgentIds(params.config).includes(ownerAgentId)
-    ? { ownerAgentId }
-    : { unconfiguredOwnerAgentId: ownerAgentId };
 }
 
 async function readLegacyRollback(
