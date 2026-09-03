@@ -566,8 +566,13 @@ retires the previous bundle.
 the migrated JSON files. It also moves applied legacy Workshop creates into
 `workshop-skills`, retargets eligible pending creates, and marks outside updates
 stale. Doctor infers each legacy proposal's owner from its row, origin metadata,
-or a unique workspace owner. Ambiguous ownership stays in place and becomes
-stale.
+or a unique workspace owner. Ambiguous ownership, or an owner that is no
+longer in the agent roster, stays in place and becomes stale.
+Legacy collection backups move under the owner agent's backup root together
+with their post-cleanup snapshot, so `restore_collection` keeps working. A
+backup whose snapshot lists skills that were never Workshop-owned is kept as
+history only, its legacy root stays in place, and restore reports that reason
+instead of writing user-owned skills into the Workshop directory.
 Skills that were symlinked into a workspace stay where they are as workspace
 skills; Doctor marks their proposals stale instead of moving them.
 
