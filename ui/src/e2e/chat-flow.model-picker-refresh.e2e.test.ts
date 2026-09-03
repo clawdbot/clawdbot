@@ -148,6 +148,17 @@ suite.define(() => {
       const configureModels = picker
         .getByRole("button", { name: "Configure models", exact: true })
         .first();
+      await expect
+        .poll(() =>
+          configureModels.evaluate((button) => {
+            const heading = button.closest<HTMLElement>("[data-chat-model-provider]");
+            if (!heading) {
+              return Number.POSITIVE_INFINITY;
+            }
+            return heading.getBoundingClientRect().right - button.getBoundingClientRect().right;
+          }),
+        )
+        .toBeLessThanOrEqual(11);
       await configureModels.hover();
       const configureModelsTooltip = page.locator("wa-tooltip[open]").filter({
         hasText: "Configure models",
