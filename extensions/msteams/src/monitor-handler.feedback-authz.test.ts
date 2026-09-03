@@ -13,10 +13,17 @@ const feedbackReflectionMockState = vi.hoisted(() => ({
 const channelInboundMockState = vi.hoisted(() => ({
   recordChannelFeedbackEvent: vi.fn(async () => true),
 }));
+const feedbackHookMockState = vi.hoisted(() => ({
+  emitMSTeamsAIFeedbackHook: vi.fn(() => true),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>()),
   recordChannelFeedbackEvent: channelInboundMockState.recordChannelFeedbackEvent,
+}));
+
+vi.mock("./feedback-hook.js", () => ({
+  emitMSTeamsAIFeedbackHook: feedbackHookMockState.emitMSTeamsAIFeedbackHook,
 }));
 
 vi.mock("./monitor-handler/message-handler.js", () => ({
@@ -60,6 +67,7 @@ function createRuntimeStub(readAllowFromStore: ReturnType<typeof vi.fn>): Plugin
         resolveAgentRoute: ({ peer }: { peer: { kind: string; id: string } }) => ({
           sessionKey: `msteams:${peer.kind}:${peer.id}`,
           agentId: "default",
+          accountId: "default",
         }),
       },
       session: {
@@ -147,6 +155,7 @@ describe("msteams feedback invoke authz", () => {
     feedbackReflectionMockState.runFeedbackReflection.mockReset();
     feedbackReflectionMockState.runFeedbackReflection.mockResolvedValue(undefined);
     channelInboundMockState.recordChannelFeedbackEvent.mockClear();
+    feedbackHookMockState.emitMSTeamsAIFeedbackHook.mockClear();
   });
 
   it("records feedback for an allowlisted DM sender", async () => {
@@ -183,6 +192,19 @@ describe("msteams feedback invoke authz", () => {
             agentId: "default",
             conversationId: "a:personal-chat",
           },
+        });
+        expect(feedbackHookMockState.emitMSTeamsAIFeedbackHook).toHaveBeenCalledWith({
+          sessionKey: "msteams:direct:owner-aad",
+          accountId: "default",
+          agentId: "default",
+          occurredAt: undefined,
+          providerActivityId: "invoke-like",
+          providerConversationId: "a:personal-chat",
+          providerTargetActivityId: "bot-msg-1",
+          actorId: "owner-aad",
+          actorName: "Owner",
+          reaction: "like",
+          comment: "allowed feedback",
         });
       },
     });
@@ -245,6 +267,7 @@ describe("msteams feedback invoke authz", () => {
       },
       assertResult: async () => {
         expect(channelInboundMockState.recordChannelFeedbackEvent).not.toHaveBeenCalled();
+        expect(feedbackHookMockState.emitMSTeamsAIFeedbackHook).not.toHaveBeenCalled();
         expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
       },
     });
