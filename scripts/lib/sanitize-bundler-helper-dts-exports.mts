@@ -132,9 +132,7 @@ export function sanitizeBundlerHelperDtsExports(sourceText: string): {
       node.exportClause &&
       ts.isNamedExports(node.exportClause)
     ) {
-      const elements = node.exportClause.elements;
-      for (let index = 0; index < elements.length; index += 1) {
-        const element = elements[index]!;
+      for (const element of node.exportClause.elements) {
         const localName = exportElementLocalName(element);
         if (!isBundlerHelperName(localName)) {
           continue;
@@ -164,7 +162,7 @@ export function sanitizeBundlerHelperDtsExports(sourceText: string): {
   ts.forEachChild(sourceFile, visit);
 
   let next = sourceText;
-  for (const edit of edits.sort((left, right) => right.start - left.start)) {
+  for (const edit of edits.toSorted((left, right) => right.start - left.start)) {
     next = `${next.slice(0, edit.start)}${next.slice(edit.end)}`;
   }
   return { sourceText: next, removed };
