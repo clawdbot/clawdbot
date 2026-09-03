@@ -11,11 +11,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { GatewayServer } from "../../../src/gateway/server.js";
-import { getActiveGatewayRootWorkCount } from "../../../src/process/gateway-work-admission.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../src/test-utils/openclaw-test-state.js";
+import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import {
   canRunPlaywrightChromium,
@@ -24,6 +24,7 @@ import {
   startControlUiE2eServer,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
+import { closeControlUiE2eBrowserContext } from "./control-ui-e2e-suite.test-support.ts";
 
 const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
@@ -528,15 +529,19 @@ async function createBrowserPage(
 }
 
 async function closeContext(context: BrowserContext): Promise<void> {
+  await closeControlUiE2eBrowserContext(context);
   openContexts.delete(context);
-  await context.close();
 }
 
-async function closeConnectedContext(context: BrowserContext): Promise<void> {
-  await closeContext(context);
-  // UI requests intentionally outlive socket teardown. Drain their admitted work
-  // before another browser interaction so lazy handler imports cannot starve it.
-  await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+async function closeOpenContexts(): Promise<void> {
+  const [first, ...remaining] = openContexts;
+  if (!first) {
+    return;
+  }
+  await runQaGatewayFixture(
+    () => closeContext(first),
+    ...remaining.map((context) => () => closeContext(context)),
+  );
 }
 
 async function captureChromiumScreenshot(page: Page, fileName: string): Promise<void> {
@@ -714,20 +719,14 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
   }, 120_000);
 
   afterAll(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-    const cleanupResults = await Promise.allSettled([
-      browser?.close(),
-      proxy?.close(),
-      gateway?.cleanup(),
-      allowedUi?.close(),
-      rejectedUi?.close(),
-    ]);
-    expect(
-      cleanupResults
-        .filter((result) => result.status === "rejected")
-        .map((result) => String(result.reason)),
-    ).toEqual([]);
+    await runQaGatewayFixture(
+      closeOpenContexts,
+      () => browser?.close(),
+      () => proxy?.close(),
+      () => gateway?.cleanup(),
+      () => allowedUi?.close(),
+      () => rejectedUi?.close(),
+    );
 
     const cleanup = {
       gatewayPortClosed: gateway ? await isPortClosed("127.0.0.1", gateway.port) : true,
@@ -744,10 +743,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     });
   }, 30_000);
 
-  afterEach(async () => {
-    await Promise.all([...openContexts].map((context) => context.close().catch(() => {})));
-    openContexts.clear();
-  });
+  afterEach(closeOpenContexts);
 
   it("preserves a 64-bit identifier through a real Gateway form save", async () => {
     const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
@@ -836,12 +832,10 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     console.info(`[real-config-id-proof] ${JSON.stringify(proof)}`);
     await captureChromiumScreenshot(connected.page, "02-real-config-id-after.png");
     expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
+    await closeContext(connected.context);
   });
 
   it("connects through the trusted path and rejects the untrusted proxy path", async () => {
-    // A connected shell starts bootstrap RPCs that can outlive context teardown.
-    // Keep it last so those requests cannot starve the next browser interaction.
     const rejected = await createBrowserPage(allowedUi.baseUrl, proxy.untrustedUrl);
     const expectedReason = "trusted_proxy_missing_header_x-forwarded-proto";
     await waitForVisibleFailure(rejected.page, "unauthorized");
@@ -890,7 +884,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     expect(trustedEvidence.gatewayResult?.recoveryScope).not.toContain(trustedProxyUser);
     await captureChromiumScreenshot(connected.page, "01-trusted-proxy-connected.png");
     expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
+    await closeContext(connected.context);
 
     await writeFile(
       path.join(artifactDir, "trusted-proxy-behavior.json"),
@@ -994,7 +988,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     console.info(`[gateway-credential-rescope-proof] ${JSON.stringify(proof)}`);
     expect(connected.errors).toEqual([]);
-    await closeConnectedContext(connected.context);
+    await closeContext(connected.context);
   });
 
   it("confirms gatewayUrl, accepts the allowed origin, and rejects an unlisted origin", async () => {
@@ -1028,7 +1022,7 @@ describeControlUiE2e("Control UI real auth transports E2E", () => {
     );
     await captureChromiumScreenshot(allowed.page, "03-allowed-origin-connected.png");
     expect(allowed.errors).toEqual([]);
-    await closeConnectedContext(allowed.context);
+    await closeContext(allowed.context);
 
     await writeFile(
       path.join(artifactDir, "allowed-origins-behavior.json"),

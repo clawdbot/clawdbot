@@ -13,9 +13,9 @@ import "./session-menu.ts";
 import "./sidebar-agent-card.ts";
 import "./sidebar-attention.ts";
 import { createIdleImport } from "../lib/idle-import.ts";
+import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import { showToast } from "../lib/toast.ts";
@@ -55,6 +55,13 @@ import {
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import {
+  COMMUNITY_INVITE_KEY,
+  type CommunityInviteState,
+  dismissCommunityInvite as persistCommunityInviteDismissal,
+  readCommunityInviteState,
+  resolveCommunityInviteVisibility,
+} from "./community-invite-state.ts";
 import { icons } from "./icons.ts";
 import {
   lobsterPetSeed,
@@ -147,6 +154,23 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
+  @state() private communityInviteVisible = false;
+  private communityInviteEligible = false;
+  private communityInviteCardLoaded = false;
+  private readonly communityInviteCardImport = createIdleImport(
+    () => import("./community-invite-card.ts"),
+    () => {
+      this.communityInviteCardLoaded = true;
+      if (this.isConnected && this.communityInviteEligible) {
+        this.communityInviteVisible = true;
+      }
+    },
+  );
+  private readonly communityInviteStorageChanged = (event: StorageEvent) => {
+    if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
+      this.syncCommunityInviteState(readCommunityInviteState());
+    }
+  };
 
   // Catalog rows are non-startup content. Load their renderer through the same
   // idle boundary as other sidebar chrome, then repaint when the chunk arrives.
@@ -180,6 +204,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
+    this.communityInviteCardImport.dispose();
+    window.removeEventListener("storage", this.communityInviteStorageChanged);
     super.disconnectedCallback();
   }
 
@@ -293,11 +319,29 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
       SIDEBAR_HIDDEN_SESSION_CATALOGS_CHANGED_EVENT,
       this.hiddenSessionCatalogsChanged,
     );
+    window.addEventListener("storage", this.communityInviteStorageChanged);
+    this.syncCommunityInviteState(readCommunityInviteState());
+    this.communityInviteCardImport.schedule();
     // The decorative pet's large module stays out of startup and upgrades in place.
     // Its first visit is at least 15 seconds after load, so idle loading cannot miss one.
     lobsterPetImport.schedule();
     this.catalogRendererImport.schedule();
   }
+
+  private syncCommunityInviteState(inviteState: CommunityInviteState | null) {
+    this.communityInviteEligible =
+      resolveCommunityInviteVisibility({
+        dismissedAtMs: inviteState === null ? null : inviteState.dismissedAtMs,
+      }) === "visible";
+    this.communityInviteVisible = this.communityInviteEligible && this.communityInviteCardLoaded;
+  }
+
+  private readonly dismissCommunityInvite = () => {
+    const dismissedState = persistCommunityInviteDismissal();
+    if (dismissedState?.dismissedAtMs !== undefined) {
+      this.syncCommunityInviteState(dismissedState);
+    }
+  };
 
   protected override firstUpdated() {
     requestAnimationFrame(() => requestAnimationFrame(() => this.classList.add("sidebar-r")));
@@ -547,7 +591,12 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
                   className: "sidebar-session-error sidebar-session-catalog-error",
                 })}
           </div>
-          <div class="sidebar-shell__footer">
+          <div class="sidebar-shell__invite">
+            ${this.communityInviteVisible
+              ? html`<openclaw-community-invite-card
+                  .onDismiss=${this.dismissCommunityInvite}
+                ></openclaw-community-invite-card>`
+              : nothing}
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(
@@ -560,6 +609,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               .gatewayVersion=${this.gatewayVersion}
               .onVisitsDisabled=${this.refreshAppearanceSettings}
             ></openclaw-lobster-pet>
+          </div>
+          <div class="sidebar-shell__footer">
             ${this.devGitBranch
               ? html`<openclaw-tooltip .content=${this.devGitBranch}>
                   <div class="sidebar-footer-branch">

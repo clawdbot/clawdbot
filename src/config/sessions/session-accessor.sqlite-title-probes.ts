@@ -53,77 +53,91 @@ function readTitleProbeChunk(
   sessionIds: readonly string[],
 ): Map<string, SessionTranscriptTitleProbe> {
   const db = getTitleProbeKysely(database);
+  // Materialize lifecycle facts before joining preview rows: SQLite otherwise
+  // repeats the boundary scan for every message in the head and tail.
+  const windows = db.with(
+    (cte) => cte("title_windows").materialized(),
+    (query) =>
+      query
+        .selectFrom("session_windows as window")
+        .leftJoin(
+          "session_transcript_index_state as state",
+          "state.session_id",
+          "window.session_id",
+        )
+        .leftJoin(
+          "transcript_rewrite_watermarks as rewrite",
+          "rewrite.session_id",
+          "window.session_id",
+        )
+        .select((eb) => [
+          "window.session_id",
+          "state.active_message_count",
+          "state.indexed_seq",
+          "state.needs_rebuild",
+          "rewrite.generation",
+          eb
+            .selectFrom("transcript_events as latest")
+            .select("latest.seq")
+            .whereRef("latest.session_id", "=", "window.session_id")
+            .orderBy("latest.seq", "desc")
+            .limit(1)
+            .as("latest_seq"),
+          eb
+            .selectFrom("session_transcript_active_events as boundary")
+            .innerJoin("transcript_events as boundary_event", (join) =>
+              join
+                .onRef("boundary_event.session_id", "=", "boundary.session_id")
+                .onRef("boundary_event.seq", "=", "boundary.event_seq"),
+            )
+            .select("boundary_event.event_json")
+            .whereRef("boundary.session_id", "=", "window.session_id")
+            .where("boundary.message_position", "is", null)
+            // Excluding latest-reset sessions prevents pre-reset text from leaking.
+            .where(sqliteTranscriptBoundaryEventType(), "in", ["reset", "compaction"])
+            .orderBy("boundary.active_position", "desc")
+            .limit(1)
+            .as("latest_boundary_json"),
+        ])
+        .where("window.session_id", "in", sessionIds),
+  );
+  const titleRows = windows.with("title_edges", (query) => {
+    // CROSS JOIN keeps SQLite's outer loop on the selected windows. Separate
+    // ranges seek the message index instead of scanning every session message.
+    const edge = query
+      .selectFrom("title_windows as window")
+      .crossJoin("session_transcript_active_events as active")
+      .innerJoin("transcript_events as event", (join) =>
+        join
+          .onRef("event.session_id", "=", "active.session_id")
+          .onRef("event.seq", "=", "active.event_seq"),
+      )
+      .select(["window.session_id", "active.message_position", "event.event_json"])
+      .whereRef("active.session_id", "=", "window.session_id")
+      .where("active.message_position", "is not", null);
+    return edge
+      .where("active.message_position", "<", SESSION_TITLE_PROBE_MESSAGES)
+      .unionAll(
+        edge.where("active.message_position", ">=", (eb) =>
+          eb.fn<number>("max", [
+            eb.val(SESSION_TITLE_PROBE_MESSAGES),
+            eb("window.active_message_count", "-", SESSION_TITLE_PROBE_MESSAGES),
+          ]),
+        ),
+      );
+  });
   const rows = runSqliteDeferredTransactionSync(
     database.db,
     () =>
       executeSqliteQuerySync(
         database.db,
-        db
-          .selectFrom("session_windows as window")
-          .leftJoin(
-            "session_transcript_index_state as state",
-            "state.session_id",
-            "window.session_id",
-          )
-          .leftJoin(
-            "transcript_rewrite_watermarks as rewrite",
-            "rewrite.session_id",
-            "window.session_id",
-          )
-          .leftJoin("session_transcript_active_events as active", (join) =>
-            join
-              .onRef("active.session_id", "=", "window.session_id")
-              .on("active.message_position", "is not", null)
-              .on((eb) =>
-                eb.or([
-                  eb("active.message_position", "<", SESSION_TITLE_PROBE_MESSAGES),
-                  eb(
-                    "active.message_position",
-                    ">=",
-                    eb("state.active_message_count", "-", SESSION_TITLE_PROBE_MESSAGES),
-                  ),
-                ]),
-              ),
-          )
-          .leftJoin("transcript_events as event", (join) =>
-            join
-              .onRef("event.session_id", "=", "active.session_id")
-              .onRef("event.seq", "=", "active.event_seq"),
-          )
-          .select((eb) => [
-            "window.session_id",
-            "state.active_message_count",
-            "state.indexed_seq",
-            "state.needs_rebuild",
-            "rewrite.generation",
-            "active.message_position",
-            "event.event_json",
-            eb
-              .selectFrom("transcript_events as latest")
-              .select("latest.seq")
-              .whereRef("latest.session_id", "=", "window.session_id")
-              .orderBy("latest.seq", "desc")
-              .limit(1)
-              .as("latest_seq"),
-            eb
-              .selectFrom("session_transcript_active_events as boundary")
-              .innerJoin("transcript_events as boundary_event", (join) =>
-                join
-                  .onRef("boundary_event.session_id", "=", "boundary.session_id")
-                  .onRef("boundary_event.seq", "=", "boundary.event_seq"),
-              )
-              .select("boundary_event.event_json")
-              .whereRef("boundary.session_id", "=", "window.session_id")
-              .where("boundary.message_position", "is", null)
-              // excluding latest-reset sessions prevents pre-reset text from leaking.
-              .where(sqliteTranscriptBoundaryEventType(), "in", ["reset", "compaction"])
-              .orderBy("boundary.active_position", "desc")
-              .limit(1)
-              .as("latest_boundary_json"),
-          ])
-          .where("window.session_id", "in", sessionIds)
+        titleRows
+          .selectFrom("title_windows as window")
+          .leftJoin("title_edges as edge", "edge.session_id", "window.session_id")
+          .selectAll("window")
+          .select(["edge.message_position", "edge.event_json"])
           .orderBy("window.session_id", "asc")
-          .orderBy("active.message_position", "asc"),
+          .orderBy("edge.message_position", "asc"),
       ).rows,
     { databaseLabel: database.path, operationLabel: "sessions.list.title-probes" },
   );

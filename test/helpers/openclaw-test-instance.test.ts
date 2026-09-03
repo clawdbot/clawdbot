@@ -9,7 +9,7 @@ import path from "node:path";
 import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   hasUnjoinedWork,
   runManagedCommand,
@@ -22,7 +22,7 @@ import { withEnvAsync } from "../../src/test-utils/env.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
-import { isProcessAlive, waitForDead } from "./process-wait.js";
+import { isProcessAlive, waitForDead, waitForFile } from "./process-wait.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
@@ -199,7 +199,7 @@ recordFixtureProcess(process.pid);
       path.join(distDir, "index.mjs"),
       `
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 ${processReceipt}
 const tracePath = process.env.OPENCLAW_FAKE_GATEWAY_TRACE;
@@ -221,6 +221,32 @@ const env = Object.fromEntries(["HOME", "OPENCLAW_CONFIG_PATH", "OPENCLAW_GATEWA
 appendFileSync(tracePath, JSON.stringify({ argv, config: JSON.parse(readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8")), cwd: process.cwd(), env, pid: process.pid, port }) + "\\n");
 const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[attempt - 1] || "ready";
 if (kind === "cli-json") {
+  if (argv[1] === "overflow-close") {
+    const splitCodePoint = Buffer.from([0xf0, 0x9f, 0xa6, 0x8a]);
+    const releasePath = tracePath + ".overflow-release";
+    const first = Buffer.concat([
+      Buffer.alloc(Number(argv[0]) - 2, 0x61),
+      splitCodePoint.subarray(0, 2),
+    ]);
+    await new Promise((resolve) => process.stdout.write(first, resolve));
+    writeFileSync(tracePath + ".overflow-ready", "");
+    const releaseDeadline = Date.now() + 5_000;
+    while (!existsSync(releasePath)) {
+      if (Date.now() >= releaseDeadline) throw new Error("overflow release timed out");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await new Promise((resolve) =>
+      process.stdout.end(
+        Buffer.concat([
+          splitCodePoint.subarray(2),
+          Buffer.from("\\ntrailing overflow output\\n"),
+        ]),
+        resolve,
+      ),
+    );
+    setInterval(() => {}, 1_000);
+    await new Promise(() => {});
+  }
   const json = JSON.stringify({ first: "complete", payload: "é".repeat(Number(argv[0])), providerCredentialPresent: Object.hasOwn(process.env, "OPENAI_API_KEY"), last: "complete" });
   await Promise.all([
     new Promise((resolve) => process.stdout.write(json, resolve)),
@@ -351,28 +377,48 @@ function createGatewayProcessState(
 }
 
 describe("openclaw test instance", () => {
-  it.each(["complete", "overflow"] as const)(
+  it.each(["complete", "overflow", "overflow-close"] as const)(
     "owns complete CLI JSON and diagnostic tails (%s)",
     async (mode) => {
       await withEnvAsync({ OPENAI_API_KEY: "ambient-provider-fixture" }, async () => {
-        const { instance, readAttempts } = await createFakeGateway("cli-json");
+        const { instance, tracePath, readAttempts } = await createFakeGateway(
+          "cli-json",
+          1_000,
+          1_500,
+        );
         // The command must not merge a removed credential back from its parent.
         delete instance.env.OPENAI_API_KEY;
         const characters =
-          mode === "complete" ? 160 * 1024 : resolveMaxOutputBytes(undefined, "stdout") / 2;
+          mode === "complete"
+            ? 160 * 1024
+            : mode === "overflow-close"
+              ? resolveMaxOutputBytes(undefined, "stdout")
+              : resolveMaxOutputBytes(undefined, "stdout") / 2;
         const command = trackOperation(instance.cli([String(characters), mode]));
-        if (mode === "overflow") {
-          const outcome = await command.then(
+        if (mode !== "complete") {
+          const outcomePromise = command.then(
             (result) => ({
               code: result.code,
               stdoutBytes: Buffer.byteLength(result.stdout),
             }),
             (error: unknown) => error,
           );
+          if (mode === "overflow-close") {
+            await waitForFile(`${tracePath}.overflow-ready`, 5_000);
+            await fs.writeFile(`${tracePath}.overflow-release`, "");
+          }
+          const outcome = await outcomePromise;
           if (!(outcome instanceof Error)) {
             throw new Error(`Expected command output overflow failure: ${JSON.stringify(outcome)}`);
           }
           expect(outcome.message).toContain("command stdout exceeded capture limit");
+          if (mode === "overflow") {
+            expect(outcome.message).toContain('"last":"complete"');
+          } else {
+            expect(outcome.message).toContain(String.fromCodePoint(0x1f98a));
+            expect(outcome.message).toContain("trailing overflow output");
+            expect(outcome.message).not.toContain("\uFFFD");
+          }
           expect(Buffer.byteLength(outcome.message)).toBeLessThan(600 * 1024);
         } else {
           const result = await command;
@@ -768,9 +814,9 @@ describe("openclaw test instance", () => {
     }
   });
 
-  it.each(["refuse", "late-refuse"])(
+  it.for(["refuse", "late-refuse"])(
     "restarts one %s refusal with identical launch state and owns the ready child",
-    async (refusalAction) => {
+    async (refusalAction, { signal: testSignal }) => {
       const control = refusalAction === "late-refuse" ? await createGatewayControl() : undefined;
       const { instance, readAttempts } = await createFakeGateway(
         `${refusalAction},ready`,
@@ -778,6 +824,13 @@ describe("openclaw test instance", () => {
         1_500,
         control,
       );
+      // This case owns refusal/retry ordering, not deadline expiry. Keep native
+      // bootstrap and HTTP gates real without charging them to the policy clock.
+      testSignal.throwIfAborted();
+      const fixtureTime = Date.now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+      const restoreClock = () => clock.mockRestore();
+      testSignal.addEventListener("abort", restoreClock, { once: true });
       const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
       if (control) {
         control.observers.onLaunch = () => {
@@ -805,6 +858,8 @@ describe("openclaw test instance", () => {
         }
         await startup;
       } finally {
+        restoreClock();
+        testSignal.removeEventListener("abort", restoreClock);
         control?.unblock();
         await Promise.allSettled([startup]);
       }
@@ -852,7 +907,7 @@ describe("openclaw test instance", () => {
 
   it.runIf(process.platform !== "win32")(
     "preserves an eligible refusal when its startup deadline expires during stdio drain",
-    async () => {
+    async ({ signal: testSignal }) => {
       const startupBudgetMs = 500;
       const control = await createGatewayControl();
       const { instance, tracePath, readAttempts } = await createFakeGateway(
@@ -861,6 +916,13 @@ describe("openclaw test instance", () => {
         1_500,
         control,
       );
+      // Start policy time only after the native leader has exited with stdio held.
+      // OS/module bootstrap must not turn this drain case into a readiness timeout.
+      const now = Date.now.bind(Date);
+      const fixtureTime = now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+      const restoreClock = () => clock.mockRestore();
+      testSignal.addEventListener("abort", restoreClock, { once: true });
       const exited = createDeferred<{
         code: number | null;
         signal: NodeJS.Signals | null;
@@ -886,13 +948,17 @@ describe("openclaw test instance", () => {
         if (!firstExit) {
           throw new Error("startup settled before the fixture leader exited");
         }
-        // The startup clock precedes leader exit. Holding stdio for a full budget
-        // after that event expires retry admission without measuring cold launch time.
+        const drainingPid = Number(await fs.readFile(`${tracePath}.draining-pid`, "utf8"));
+        expect(instance.child?.stderr.closed).toBe(false);
+        expect(isProcessAlive(drainingPid)).toBe(true);
+        const drainStartedAt = now();
+        clock.mockImplementation(() => fixtureTime + now() - drainStartedAt);
+        // The real drain now consumes the unchanged startup budget while cleanup
+        // retains its separate allowance and ownership of the inherited pipe.
         const admissionExpiredAt = firstExit.at + startupBudgetMs;
         while (Date.now() < admissionExpiredAt) {
           await delay(admissionExpiredAt - Date.now());
         }
-        const drainingPid = Number(await fs.readFile(`${tracePath}.draining-pid`, "utf8"));
         expect(instance.child?.stderr.closed).toBe(false);
         expect(isProcessAlive(drainingPid)).toBe(true);
         expect(startupSettled).toBe(false);
@@ -907,6 +973,8 @@ describe("openclaw test instance", () => {
         expect(instance.child).toBeUndefined();
         await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
       } finally {
+        restoreClock();
+        testSignal.removeEventListener("abort", restoreClock);
         await fs.writeFile(`${tracePath}.draining-release`, "");
         await Promise.allSettled([startup]);
       }
@@ -1281,23 +1349,35 @@ describe("openclaw test instance", () => {
     expect(testing.formatLogs(exact, [])).not.toContain("output truncated");
   });
 
-  it("terminates UTF-8 log trimming within the byte cap", { timeout: 15_000 }, async () => {
-    const cases = [
-      { chunks: ["€a", "b"], limit: 4, expected: "ab" },
-      { chunks: ["old", "recent"], limit: 8, expected: "ldrecent" },
-      { chunks: ["€abc"], limit: 4, expected: "abc" },
-      { chunks: ["😀a", "b"], limit: 5, expected: "ab" },
-      { chunks: ["😀a"], limit: 1, expected: "a" },
-      { chunks: ["😀"], limit: 1, expected: "" },
-      { chunks: ["😀"], limit: 3, expected: "" },
-      { chunks: ["€"], limit: 2, expected: "" },
-      { chunks: ["a", "€"], limit: 3, expected: "€" },
-    ];
-    // A synchronous regression must be killed and joined outside the Vitest event loop.
-    const script = `
+  describe("UTF-8 log trimming", () => {
+    let exerciseTrimming: () => Promise<void>;
+    let stopTrimming: (() => Promise<void>) | undefined;
+
+    afterEach(async () => {
+      await stopTrimming?.();
+    });
+
+    // Use the existing fixture-hook budget for TS bootstrap. Neither trimming
+    // deadline starts until the real helper reaches its held HTTP request.
+    beforeEach(async ({ signal }) => {
+      const cases = [
+        { chunks: ["€a", "b"], limit: 4, expected: "ab" },
+        { chunks: ["old", "recent"], limit: 8, expected: "ldrecent" },
+        { chunks: ["€abc"], limit: 4, expected: "abc" },
+        { chunks: ["😀a", "b"], limit: 5, expected: "ab" },
+        { chunks: ["😀a"], limit: 1, expected: "a" },
+        { chunks: ["😀"], limit: 1, expected: "" },
+        { chunks: ["😀"], limit: 3, expected: "" },
+        { chunks: ["€"], limit: 2, expected: "" },
+        { chunks: ["a", "€"], limit: 3, expected: "€" },
+      ];
+      const control = await createGatewayControl();
+      // A synchronous regression must be killed and joined outside the Vitest event loop.
+      const script = `
       import assert from "node:assert/strict";
       import { testing } from ${JSON.stringify(new URL("./openclaw-test-instance.ts", import.meta.url).href)};
-      process.stderr.write("loaded actual log helper; starting UTF-8 cases\\n");
+      process.stderr.write("loaded actual log helper; waiting to start UTF-8 cases\\n");
+      await (await fetch(${JSON.stringify(`${control.url}/wait`)})).text();
       for (const { chunks, limit, expected } of JSON.parse(process.argv[1])) {
         const log = testing.createBoundedStringLog(limit);
         for (const chunk of chunks) {
@@ -1310,12 +1390,40 @@ describe("openclaw test instance", () => {
       }
       process.stdout.write("UTF-8 cases completed");
     `;
-    const { stdout } = await promisify(execFile)(
-      process.execPath,
-      ["--import", "tsx", "--input-type=module", "--eval", script, JSON.stringify(cases)],
-      { timeout: 10_000, killSignal: "SIGKILL", encoding: "utf8" },
-    );
-    expect(stdout).toBe("UTF-8 cases completed");
+      const completed = promisify(execFile)(
+        process.execPath,
+        ["--import", "tsx", "--input-type=module", "--eval", script, JSON.stringify(cases)],
+        { signal, encoding: "utf8" },
+      );
+      const closed = new Promise<void>((resolve) => {
+        completed.child.once("close", () => resolve());
+      });
+      stopTrimming = async () => {
+        completed.child.kill("SIGKILL");
+        await closed;
+      };
+      exerciseTrimming = async () => {
+        // Arm the anti-hang deadline after importing the real helper, before releasing it.
+        const { stdout } = await withTestTimeout(
+          control.release().then(() => completed),
+          10_000,
+          "UTF-8 log trimming did not complete after loading the actual helper",
+        );
+        expect(stdout).toBe("UTF-8 cases completed");
+      };
+      await trackOperation(
+        Promise.race([
+          control.reached,
+          completed.then(() => {
+            throw new Error("log helper child exited before reaching the trimming gate");
+          }),
+        ]),
+      );
+    });
+
+    it("terminates UTF-8 log trimming within the byte cap", { timeout: 15_000 }, async () => {
+      await trackOperation(exerciseTrimming());
+    });
   });
 
   it("fails startup waits immediately after signaled gateway exits", async () => {

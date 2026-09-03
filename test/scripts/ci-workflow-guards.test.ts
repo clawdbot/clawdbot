@@ -1594,7 +1594,8 @@ function runProtocolSinceFixture(checkout: string, baseSha: string) {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
-  task?: "guards" | "test-types";
+  task?: "guards" | "npm-lock" | "test-types";
+  checkoutBase?: string;
 }): {
   calls: string[];
   output: string;
@@ -1632,9 +1633,9 @@ function runCheckShardFixture(options: {
       FORMAT_CHECK: "false",
       HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
       HOSTED_RUNNER_STRIPES: "true",
+      CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PNPM_CALLS: callsPath,
-      PR_BASE_SHA: "",
       TASK: options.task ?? "guards",
     },
   });
@@ -1700,7 +1701,6 @@ function runDependencyCheckFixture(options: {
         HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
         PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
         PNPM_CALLS: callsPath,
-        PR_BASE_SHA: "",
         TASK: "dependencies",
       },
     });
@@ -9140,17 +9140,74 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     const checkShardStep = parsedWorkflow.jobs["check-shard"].steps.find(
       (step: WorkflowStep) => step.name === "Run check shard",
     );
-    expect(parsedWorkflow.jobs["check-shard"].env.CHECKOUT_BASE_SHA).toBe(
-      "${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
-    expect(checkShardStep.env.PR_BASE_SHA).toBe(
-      "${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
     expect(checkShardStep.run).not.toContain("--checkout-git");
     expect(checkShardStep.run).toContain(
-      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"',
+      'test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"',
     );
   });
+
+  it.each([
+    { job: "check-shard", task: "prod-types", events: [] },
+    {
+      job: "checks-fast-core",
+      task: "baseline-ratchets",
+      events: ["pull_request", "push", "workflow_dispatch"],
+    },
+    {
+      job: "checks-fast-core",
+      task: "release-lint-core-1",
+      events: ["pull_request", "push", "workflow_dispatch"],
+    },
+    { job: "checks-fast-core", task: "ci-routing", events: [] },
+  ])("prepares the frozen diff base for $job/$task at checkout", ({ job, task, events }) => {
+    const expression = readCiWorkflow().jobs[job].env?.CHECKOUT_BASE_SHA;
+    const base = "c".repeat(40);
+    expect(typeof expression).toBe("string");
+    for (const eventName of ["pull_request", "push", "workflow_dispatch"] as const) {
+      expect(
+        evaluateWorkflowExpression(expression, {
+          eventName,
+          repository: "openclaw/openclaw",
+          runAttempt: 1,
+          matrix: { task },
+          preflightOutputs: { diff_base_revision: base },
+        }),
+        eventName,
+      ).toBe(events.includes(eventName) ? base : "");
+    }
+  });
+
+  it.each([
+    { label: "manual run", checkoutBase: "", changedScript: true },
+    { label: "target without changed checks", checkoutBase: "c".repeat(40), changedScript: false },
+  ])("keeps the full npm-lock sweep for $label", ({ checkoutBase, changedScript }) => {
+    const result = runCheckShardFixture({
+      task: "npm-lock",
+      frozenTarget: false,
+      checkoutBase,
+      scripts: ["deps:npm-lock:check", ...(changedScript ? ["deps:npm-lock:check:changed"] : [])],
+    });
+    expect(result.status, result.output).toBe(0);
+    expect(result.calls).toEqual(["deps:npm-lock:check"]);
+  });
+
+  it.each([false, true])(
+    "preserves absent npm-lock capability handling (historical=%s)",
+    (historical) => {
+      const result = runCheckShardFixture({
+        task: "npm-lock",
+        frozenTarget: historical,
+        scripts: [],
+      });
+      expect(result.status, result.output).toBe(historical ? 0 : 1);
+      expect(result.calls).toEqual([]);
+      expect(result.output).toContain(
+        historical
+          ? "[skip] historical target predates the transient npm lock contract"
+          : "Current CI targets must provide the deps:npm-lock:check package script.",
+      );
+    },
+  );
 
   it("runs temp path guardrails in the hosted guard shard", () => {
     const requiredScripts = ["check:doctor-deprecation-registry", "check:coercion-helpers"];
@@ -9631,7 +9688,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           LINT_GO_ENV: goEnvPath,
           OPENCLAW_LOCAL_CHECK: "0",
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          PR_BASE_SHA: "",
           RELEASE_GATE: releaseGate ? "true" : "false",
           RUN_CONTROL_UI_I18N: "false",
           RUNNER_PROFILE: profile,
@@ -9771,7 +9827,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           CHECKOUT_KIND: "linux-node",
           CHECKOUT_BASE_SHA: String(checkoutBase),
           CHECKOUT_TOKEN: "fixture-checkout-token",
-          PR_BASE_SHA: eventName === "pull_request" ? base : "",
         },
       });
       expect(report.code, report.output).toBe(0);
@@ -9792,7 +9847,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             ? [
                 "scripts/report-test-temp-creations.mjs",
                 "--base",
-                baseRef,
+                base,
                 "--head",
                 "HEAD",
                 "--no-merge-base",
@@ -9802,7 +9857,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       } else {
         expect(consumers.filter(({ tool }) => tool === "pnpm").map(({ args }) => args)).toEqual([
           needsBase
-            ? ["deps:npm-lock:check:changed", "--base", baseRef, "--head", "HEAD"]
+            ? ["deps:npm-lock:check:changed", "--base", base, "--head", "HEAD"]
             : ["deps:npm-lock:check"],
         ]);
       }
@@ -9830,9 +9885,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       contents: "read",
       "pull-requests": "read",
     });
-    expect(checksFastJob.env.CHECKOUT_BASE_SHA).toBe(
-      "${{ (matrix.task == 'baseline-ratchets' || matrix.task == 'bundled-protocol' || startsWith(matrix.task, 'release-lint-')) && needs.preflight.outputs.diff_base_revision || '' }}",
-    );
     expect(checkout.env.CHECKOUT_SHA).toBe("${{ needs.preflight.outputs.checkout_revision }}");
     expect(releaseGateMerge.if).toBe(
       "(matrix.task == 'baseline-ratchets' || startsWith(matrix.task, 'release-lint-')) && github.event_name == 'workflow_dispatch' && inputs.release_gate",
@@ -11219,6 +11271,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "--",
         ":(glob)ui/src/**/*.e2e.test.ts",
         "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+        "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
       ],
       { encoding: "utf8" },
     )
@@ -11302,6 +11355,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(config.test?.include).toEqual([
       "ui/src/**/*.e2e.test.ts",
       "extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts",
+      "extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts",
     ]);
     expect(projects.map((project) => project.test.name)).toEqual([
       "ui-e2e-bundled",
@@ -11833,6 +11887,19 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const proofUpload = uiE2eRealGateway.steps[proofUploadIndex];
     const realGatewayIndex = uiE2eRealGateway.steps.indexOf(realGatewayStep);
+    const realGatewayBuild = expectDefined(
+      uiE2eRealGateway.steps.find(
+        (step: WorkflowStep) => step.name === "Build Control UI bundle for real-Gateway tests",
+      ),
+      "real-Gateway runtime and Control UI build",
+    );
+    expect(realGatewayBuild.run.trim().split("\n")).toEqual([
+      "pnpm build qaRuntime",
+      "pnpm ui:build",
+    ]);
+    expect(realGatewayBuild.if).toBeUndefined();
+    expect(realGatewayBuild["continue-on-error"]).toBeUndefined();
+    expect(uiE2eRealGateway.steps.indexOf(realGatewayBuild)).toBeLessThan(realGatewayIndex);
     expect(realGatewayStep.env).toEqual({
       OPENCLAW_CAPTURE_UI_PROOF:
         "${{ github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof && '1' || '0' }}",

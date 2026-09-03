@@ -499,6 +499,15 @@ export const en: TranslationMap & {
     retry: "Retry",
     stylesFailed: "Styles failed to load, so the page may look broken.",
   },
+  communityInvite: {
+    cardLabel: "Join the OpenClaw community on Discord",
+    artAlt: "A lobster beside the Discord mark on a lit seafloor pedestal",
+    title: "Come build with us",
+    body: "Ask anything, show what you're making, and find out what everyone else is building.",
+    bodyGreeting: "Or just say hi.",
+    action: "Join us on Discord",
+    dismissForever: "Dismiss and don't show again",
+  },
   updates: {
     adminRequired: "Administrator access is required to change update settings or start an update.",
     campaign: {
@@ -3910,7 +3919,7 @@ export const en: TranslationMap & {
       noOtherTabs: "No other tabs",
       resize: "Resize",
       autoHeight: "Auto height",
-      remove: "Remove",
+      remove: "Delete",
       needsApproval: "Needs approval",
       needsApprovalDetail: "This widget requested additional access.",
       networkAccess: "Network origins",

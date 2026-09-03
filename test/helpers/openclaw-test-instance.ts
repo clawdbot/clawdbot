@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
 import type { Readable } from "node:stream";
+import { StringDecoder } from "node:string_decoder";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   BUILD_STAMP_FILE,
@@ -738,6 +739,8 @@ async function runCommand(params: {
   const maxStdoutBytes = resolveMaxOutputBytes(undefined, "stdout");
   const outputLimit = new AbortController();
   const readStdout = () => finalizeCapturedOutput(stdout, "head", true).toString("utf8");
+  const stdoutDiagnostic = createBoundedStringLog();
+  const stdoutDiagnosticDecoder = new StringDecoder("utf8");
   const stderr = createBoundedStringLog();
   let child!: ChildProcess;
   try {
@@ -758,6 +761,7 @@ async function runCommand(params: {
         child.stderr?.setEncoding("utf8");
         child.stdout?.on("data", (chunk) => {
           appendCapturedOutput(stdout, chunk, maxStdoutBytes, "head");
+          appendLogChunk(stdoutDiagnostic, stdoutDiagnosticDecoder.write(chunk));
           if (stdout.truncatedBytes > 0) {
             outputLimit.abort();
           }
@@ -766,6 +770,7 @@ async function runCommand(params: {
       },
     });
   } catch (error) {
+    appendLogChunk(stdoutDiagnostic, stdoutDiagnosticDecoder.end());
     const message = hasErrnoCode(error, "ETIMEDOUT")
       ? `command timed out after ${params.timeoutMs}ms: ${params.args.join(" ")}`
       : stdout.truncatedBytes > 0
@@ -773,7 +778,7 @@ async function runCommand(params: {
         : error instanceof Error
           ? error.message
           : String(error);
-    throw new Error(`${message}\n${formatLogs([readStdout()], stderr)}`, { cause: error });
+    throw new Error(`${message}\n${formatLogs(stdoutDiagnostic, stderr)}`, { cause: error });
   }
   return {
     code: child.exitCode,

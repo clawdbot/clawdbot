@@ -198,7 +198,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
   private rowKeys: readonly string[] = [];
   private rowIndexesByKey = new Map<string, number>();
-  private messageRowKeysById = new Map<string, string>();
+  private messageRowKeysById: ReadonlyMap<string, string> = new Map();
   private focusedRowKey: string | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
   private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
@@ -405,7 +405,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
     this.measureRowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
-    this.messageRowKeysById.clear();
+    this.messageRowKeysById = new Map();
     this.focusedRowKey = null;
     this.pendingScrollOffset = null;
   }
@@ -514,7 +514,7 @@ export class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatT
   }
 
   syncMessageRows(messageRowKeysById: ReadonlyMap<string, string>): void {
-    this.messageRowKeysById = new Map(messageRowKeysById);
+    this.messageRowKeysById = messageRowKeysById;
   }
 
   revealMessage(messageId: string): boolean {

@@ -1093,6 +1093,8 @@
   "ui/src/components/catalog-session-menu.ts",
   "ui/src/components/cloud-worker-stop.ts",
   "ui/src/components/command-palette-contract.ts",
+  "ui/src/components/community-invite-card.ts",
+  "ui/src/components/community-invite-state.ts",
   "ui/src/components/config-form.numeric.ts",
   "ui/src/components/connect-command.ts",
   "ui/src/components/copy-button.ts",
@@ -1287,6 +1289,7 @@
   "ui/src/lib/plugin-activation.ts",
   "ui/src/lib/plugins/index.ts",
   "ui/src/lib/presence-users.ts",
+  "ui/src/lib/product-links.ts",
   "ui/src/lib/scroll-behavior.ts",
   "ui/src/lib/select-options.ts",
   "ui/src/lib/session-display.ts",
@@ -1507,6 +1510,7 @@
   "ui/src/styles/chat/message-layout.css",
   "ui/src/styles/chat/text.css",
   "ui/src/styles/chat/working-indicator.css",
+  "ui/src/styles/community-invite-card.css",
   "ui/src/styles/lobster-pet.css"
  ],
  "new": [
