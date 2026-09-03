@@ -27,11 +27,11 @@ export type ResponsesContinuationStatus =
   | "request_changed";
 
 function jsonValuesEqual(left: object, right: object): boolean {
-  // Round-trip first so stable key ordering retains JSON's omitted/undefined wire semantics.
-  return (
-    stableStringify(JSON.parse(JSON.stringify(left) as string)) ===
-    stableStringify(JSON.parse(JSON.stringify(right) as string))
-  );
+  // Normalize the left side first to preserve serialization errors and toJSON ordering.
+  const leftJson = JSON.stringify(left) as string;
+  const normalizedLeft = stableStringify(JSON.parse(leftJson));
+  const rightJson = JSON.stringify(right) as string;
+  return leftJson === rightJson || normalizedLeft === stableStringify(JSON.parse(rightJson));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {
