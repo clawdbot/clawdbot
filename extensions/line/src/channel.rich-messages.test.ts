@@ -164,8 +164,12 @@ describe("LINE rich-message boundaries", () => {
       "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=0",
       "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
     ]);
+    // altText is the whole message in the notification and the chat list, so a
+    // question that only ever renders as a card still has to say what it asks.
+    expect((line.flexMessage as { altText?: string } | undefined)?.altText).toBe(
+      "Which environment?",
+    );
   });
-
 
   it.each([
     { name: "exact byte limit", character: "x", extraBytes: 0, fits: true },

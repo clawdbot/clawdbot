@@ -242,9 +242,12 @@ export function renderLinePresentation(
 
   const lineData = isRecord(payload.channelData?.line) ? payload.channelData.line : {};
   const title = presentation.title || "Choose an option";
+  // The card's own heading can be generic, but altText is the whole message in
+  // the notification and the chat list, so it carries the words being asked.
+  const altText = presentation.title || cardBody[0] || title;
   const flexMessage = hasCard
     ? {
-        altText: title,
+        altText,
         contents: createActionCard(title, cardBody.join("\n") || "Choose an option.", buttons),
       }
     : undefined;
