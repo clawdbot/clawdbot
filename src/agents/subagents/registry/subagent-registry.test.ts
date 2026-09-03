@@ -2784,6 +2784,9 @@ describe("subagent registry seam flow", () => {
       expect(run?.waitExpiryObservedAt).toBe(startedAt + 1_000);
       expect(run?.waitExpiryAnnouncedAt).toEqual(expect.any(Number));
     });
+    expect(mocks.runSubagentAnnounceFlow.mock.calls).toEqual(
+      expect.arrayContaining([[expect.objectContaining({ deliveryPhase: "wait-expiry" })]]),
+    );
   });
 
   it.each([

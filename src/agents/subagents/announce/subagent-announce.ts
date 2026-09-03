@@ -187,6 +187,8 @@ export async function runSubagentAnnounceFlow(params: {
   label?: string;
   outcome?: SubagentRunOutcome;
   announceType?: SubagentAnnounceType;
+  /** Distinguishes a provisional wake from the later terminal delivery. */
+  deliveryPhase?: "wait-expiry";
   expectsCompletionMessage?: boolean;
   spawnMode?: SpawnSubagentMode;
   wakeOnDescendantSettle?: boolean;
@@ -316,10 +318,13 @@ export async function runSubagentAnnounceFlow(params: {
       // Best-effort only.
     }
 
-    const announceId = buildAnnounceIdFromChildRun({
+    const baseAnnounceId = buildAnnounceIdFromChildRun({
       childSessionKey: params.childSessionKey,
       childRunId: params.childRunId,
     });
+    const announceId = params.deliveryPhase
+      ? `${baseAnnounceId}:${params.deliveryPhase}`
+      : baseAnnounceId;
 
     if (
       params.wakeOnDescendantSettle === true &&

@@ -124,6 +124,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
         deliver: !params.requesterIsSubagent,
         bestEffortDeliver: params.bestEffortDeliver,
         internalEvents: params.internalEvents,
+        idempotencyKey: params.directIdempotencyKey,
         ...(params.requesterIsSubagent
           ? {}
           : {
@@ -304,6 +305,23 @@ describe("subagent announce timeout config", () => {
       (call) => call.method === "agent" && call.expectFinal === true,
     );
     expect(directAgentCall?.timeoutMs).toBe(120_000);
+  });
+
+  it("gives a provisional wait-expiry wake a distinct delivery identity", async () => {
+    await runAnnounceFlowForTest("run-phased-delivery", {
+      outcome: { status: "timeout", disposition: "still-running" },
+      deliveryPhase: "wait-expiry",
+    });
+    const provisionalKey = findFinalDirectAgentCall()?.params?.idempotencyKey;
+
+    gatewayCalls.length = 0;
+    await runAnnounceFlowForTest("run-phased-delivery");
+    const terminalKey = findFinalDirectAgentCall()?.params?.idempotencyKey;
+
+    expect(provisionalKey).toBe(
+      "announce:v1:agent:main:subagent:worker:run-phased-delivery:wait-expiry",
+    );
+    expect(terminalKey).toBe("announce:v1:agent:main:subagent:worker:run-phased-delivery");
   });
 
   it("honors configured announce timeout for direct announce agent call", async () => {
