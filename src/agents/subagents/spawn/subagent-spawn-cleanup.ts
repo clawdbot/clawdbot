@@ -1,7 +1,10 @@
 import { promises as fs } from "node:fs";
 import type { callGateway } from "../../../gateway/call.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  getGatewayRestartDrainSignal,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
@@ -74,13 +77,17 @@ export async function cleanupProvisionalSession(
 async function waitForProvisionalSessionDeletion(
   childSessionKey: string,
   options?: SessionCleanupOptions,
+  shouldRetry?: () => boolean,
 ): Promise<boolean> {
   let deleted = false;
-  await retrySubagentCleanup(async () => {
-    const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
-    deleted = outcome === "deleted";
-    return outcome !== "failed";
-  });
+  await retrySubagentCleanup(
+    async () => {
+      const outcome = await requestProvisionalSessionCleanup(childSessionKey, options);
+      deleted = outcome === "deleted";
+      return outcome !== "failed";
+    },
+    { shouldRetry },
+  );
   return deleted;
 }
 
@@ -88,10 +95,25 @@ function transferProvisionalSessionDeletion(
   childSessionKey: string,
   options: SessionCleanupOptions,
 ): void {
-  void runWithGatewayIndependentRootWorkContinuation(
-    () => waitForProvisionalSessionDeletion(childSessionKey, options),
-    "subagents:accepted-run-cleanup",
-  ).catch((error: unknown) => {
+  // A transferred deletion may outlive its caller, but it must not retain root work
+  // across a Gateway restart or beyond one control-call deadline.
+  const stopSignal = AbortSignal.any([
+    getGatewayRestartDrainSignal(),
+    AbortSignal.timeout(options.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS),
+  ]);
+  void runWithGatewayIndependentRootWorkContinuation(async () => {
+    const stopped = new Promise<void>((resolve) => {
+      if (stopSignal.aborted) {
+        resolve();
+        return;
+      }
+      stopSignal.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await Promise.race([
+      waitForProvisionalSessionDeletion(childSessionKey, options, () => !stopSignal.aborted),
+      stopped,
+    ]);
+  }, "subagents:accepted-run-cleanup").catch((error: unknown) => {
     defaultRuntime.log(`[warn] accepted subagent cleanup continuation failed: ${String(error)}`);
   });
 }
