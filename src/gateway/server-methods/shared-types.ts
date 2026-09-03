@@ -22,7 +22,6 @@ import type { SystemAgentApprovalRequestPayload } from "../../infra/system-agent
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginRuntimeCore } from "../../plugins/runtime/types-core.js";
 import type { SystemAgentOperation } from "../../system-agent/operation-types.js";
-import type { WizardSession } from "../../wizard/session.js";
 import type { AgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-identity-token.js";
 import type { InternalAgentTurnFacadeFactory } from "../agent-turn/internal-facade.types.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
@@ -55,6 +54,7 @@ import type {
   PreparedGatewayModelCatalog,
 } from "../server-model-catalog.types.js";
 import type { DedupeEntry } from "../server-shared.js";
+import type { GatewayWizardSessionTracker } from "../server-wizard-sessions.js";
 import type { GatewayEventLoopHealth } from "../server/event-loop-health.js";
 import type { SessionObserverService } from "../session-observer-contract.js";
 import type { TerminalLaunchResolution } from "../terminal/launch.js";
@@ -229,6 +229,7 @@ type GatewayKernelContext = {
     agentId?: string;
     agentDir?: string;
     readOnly?: boolean;
+    refreshFullCatalog?: boolean;
     workspaceDir?: string;
   }) => Promise<GatewayModelCatalogSnapshot>;
   readPreparedGatewayModelCatalog?: (params?: {
@@ -264,10 +265,13 @@ type GatewayKernelContext = {
     sessionKey?: string,
   ) => ChatRunEntry | undefined;
   dedupe: Map<string, DedupeEntry>;
-  wizardSessions: Map<string, WizardSession>;
+  wizardSessions: GatewayWizardSessionTracker["wizardSessions"];
+  trackWizardSession: GatewayWizardSessionTracker["trackWizardSession"];
+  findOwnedWizardSession: GatewayWizardSessionTracker["findOwnedWizardSession"];
   systemAgentSessions: Map<string, GatewaySystemAgentSession>;
   findRunningWizard: () => string | null;
   purgeWizardSession: (id: string) => void;
+  handleWizardDisconnect: GatewayWizardSessionTracker["handleWizardDisconnect"];
   wizardRunner: (
     opts: import("../../commands/onboard-types.js").OnboardOptions,
     runtime: import("../../runtime.js").RuntimeEnv,

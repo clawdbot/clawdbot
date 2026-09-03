@@ -1,6 +1,5 @@
 // Shared execution helpers keep the public dispatcher small and reviewable.
 import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
-import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import type { ConfigSetOptions } from "../cli/config-set-input.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -576,7 +575,6 @@ export async function executeSetDefaultModel(
       const initialVerification = await verifyInferenceConfig({
         config: stagedConfig,
         runtime: ctx.runtime,
-        requireExecutionOwner: true,
         ...(targetAgentId ? { agentId: targetAgentId } : {}),
       });
       if (!initialVerification.ok) {
@@ -612,23 +610,16 @@ export async function executeSetDefaultModel(
               );
             }
             ctx.assertPersistentApply?.();
-            let latestBinding: SystemAgentVerifiedInferenceBinding | undefined;
             const latestVerification = await verifyInferenceConfig({
               config: sourceConfig,
               runtime: ctx.runtime,
-              requireExecutionOwner: true,
+              bindSession: true,
               ...(targetAgentId ? { agentId: targetAgentId } : {}),
-              ...(opts.onVerifiedInferenceChanged
-                ? {
-                    onVerifiedExecution: (
-                      _auth: AgentExecutionAuthBinding,
-                      binding: SystemAgentVerifiedInferenceBinding,
-                    ) => {
-                      latestBinding = binding;
-                    },
-                  }
-                : {}),
             });
+            const latestBinding: SystemAgentVerifiedInferenceBinding | undefined =
+              latestVerification.ok && "binding" in latestVerification
+                ? latestVerification.binding
+                : undefined;
             if (!latestVerification.ok) {
               throw new Error(
                 `The requested model no longer passes live inference at the config commit boundary, so it was not saved. ${latestVerification.error} Review concurrent configuration changes and retry.`,

@@ -15,7 +15,7 @@ const suite = createControlUiE2eSuite({
 // Browser contexts preserve test isolation; keep one process warm for this file.
 suite.define(() => {
   it.each(["config.changed", "chat.metadata.changed"])(
-    "recovers the retained composer after %s without reloading",
+    "reloads the model catalog after %s",
     async (event) => {
       await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
         const model = { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" };
@@ -52,25 +52,24 @@ suite.define(() => {
         const startupCount = (await gateway.getRequests("chat.startup")).length;
         const socketCount = await gateway.getSocketCount();
 
-        await gateway.deferNext("chat.metadata");
-        await gateway.setMethodResponse("chat.metadata", {
-          commands: [],
+        await gateway.deferNext("models.list");
+        await gateway.setMethodResponse("models.list", {
           models: [{ ...model, available: true }],
         });
         await gateway.emitGatewayEvent(event, {});
-        await gateway.waitForRequest("chat.metadata");
+        await gateway.waitForRequest("models.list");
         expect(await textarea.isDisabled()).toBe(true);
-        await gateway.resolveDeferred("chat.metadata");
+        await gateway.resolveDeferred("models.list");
         await expect.poll(() => textarea.isDisabled()).toBe(false);
         await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
-        expect(await gateway.getRequests("models.list")).toHaveLength(0);
+        expect(await gateway.getRequests("models.list")).toHaveLength(2);
         expect(await gateway.getSocketCount()).toBe(socketCount);
       });
     },
   );
 
-  it("refreshes the configured usable catalog after advertised chat metadata", async () => {
+  it("shows the configured usable catalog from models.list", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         agentModel: "openai/gpt-5.3-codex-spark",
@@ -98,6 +97,18 @@ suite.define(() => {
           },
           "chat.metadata": {
             commands: [],
+            models: [
+              { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
+              {
+                id: "gpt-5.3-codex-spark",
+                name: "GPT-5.3 Codex Spark",
+                provider: "codex",
+                available: false,
+                unavailableReason: "missing-auth",
+              },
+            ],
+          },
+          "models.list": {
             models: [
               { id: "gpt-5.5", name: "GPT-5.5", provider: "openai", available: true },
               {
@@ -138,8 +149,7 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.metadata");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
       const providers = composer.locator(
@@ -268,7 +278,7 @@ suite.define(() => {
         });
       }
       await options.first().click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-setup");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
     });
   });
 
@@ -368,7 +378,7 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(1);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
 
       await gateway.deferNext("chat.startup", { sessionKey: "agent:other:main" });
       await navigateToControlUiSession(page, "agent:other:main");
@@ -411,11 +421,11 @@ suite.define(() => {
           activeComposer().locator('[data-chat-model-option="openai/work-model"]').count(),
         )
         .toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
     });
   });
 
-  it("keeps startup models visible and retries discovery when the picker reopens", async () => {
+  it("reads the current catalog each time the picker opens", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const startupModel = {
         id: "startup-model",
@@ -442,6 +452,7 @@ suite.define(() => {
                 },
               },
               { models: [startupModel, discoveredModel] },
+              { models: [startupModel, discoveredModel] },
             ],
           },
         },
@@ -449,11 +460,11 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-model-select="true"]').click();
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expect.poll(() => composer.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/startup-model"]').isVisible())
@@ -462,7 +473,7 @@ suite.define(() => {
       await composer.locator('[data-chat-model-select="true"]').click();
       await composer.locator('[data-chat-model-select="true"]').click();
 
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
       await expect
         .poll(() =>
           composer.locator('[data-chat-model-option="anthropic/discovered-model"]').isVisible(),
@@ -476,7 +487,7 @@ suite.define(() => {
     });
   });
 
-  it("retires an empty picker snapshot when the Gateway reconnects", async () => {
+  it("replaces an empty catalog after the Gateway reconnects", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const routedModel = {
         id: "gpt-5.6-luna",
@@ -495,7 +506,7 @@ suite.define(() => {
             ],
           },
           "models.list": {
-            sequence: [{ models: [] }, { models: [routedModel] }],
+            sequence: [{ models: [] }, { models: [routedModel] }, { models: [routedModel] }],
           },
         },
       });
@@ -505,7 +516,6 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
-      await pickerTrigger.click();
       await gateway.waitForRequest("models.list");
       await expect
         .poll(() => composer.locator("[data-chat-model-catalog-state]").textContent())
@@ -521,8 +531,6 @@ suite.define(() => {
           path: `${artifactDir}/01-empty-catalog-before-reconnect.png`,
         });
       }
-      await pickerTrigger.click();
-
       const startupCount = (await gateway.getRequests("chat.startup")).length;
       await gateway.setOnline(false);
       await expect.poll(() => pickerTrigger.getAttribute("aria-disabled")).toBe("true");
@@ -533,7 +541,7 @@ suite.define(() => {
         .toBe(1);
 
       await pickerTrigger.click();
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);
@@ -548,10 +556,8 @@ suite.define(() => {
     });
   });
 
-  it("refreshes a successful account catalog after the picker cooldown", async () => {
+  it("reads a successful account catalog on each picker open", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
-      const initialTime = new Date("2026-08-21T12:00:00Z");
-      await page.clock.setFixedTime(initialTime);
       const existingModel = {
         id: "gpt-5.6-luna",
         name: "GPT-5.6 Luna",
@@ -577,6 +583,7 @@ suite.define(() => {
             sequence: [
               { models: [existingModel] },
               { models: [existingModel, newlyAvailableModel] },
+              { models: [existingModel, newlyAvailableModel] },
             ],
           },
         },
@@ -587,8 +594,9 @@ suite.define(() => {
 
       const composer = page.locator(".agent-chat__input");
       const pickerTrigger = composer.locator('[data-chat-model-select="true"]');
+      await gateway.waitForRequest("models.list");
       await pickerTrigger.click();
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').isVisible())
         .toBe(true);
@@ -605,18 +613,8 @@ suite.define(() => {
       }
 
       await pickerTrigger.click();
-      await page.clock.setFixedTime(new Date(initialTime.getTime() + 60_000 + 1));
       await pickerTrigger.click();
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(1);
-      await expect
-        .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-terra"]').count())
-        .toBe(0);
-
-      await pickerTrigger.click();
-      await page.clock.setFixedTime(new Date(initialTime.getTime() + 5 * 60_000 + 1));
-      await pickerTrigger.click();
-
-      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(3);
       await expect
         .poll(() => composer.locator('[data-chat-model-option="openai/gpt-5.6-terra"]').isVisible())
         .toBe(true);
@@ -629,7 +627,7 @@ suite.define(() => {
       }
       for (const request of await gateway.getRequests("models.list")) {
         expect(request.params).toEqual(
-          expect.objectContaining({ agentId: "main", refresh: true, view: "configured" }),
+          expect.objectContaining({ agentId: "main", view: "configured" }),
         );
       }
     });

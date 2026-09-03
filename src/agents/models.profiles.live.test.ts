@@ -12,7 +12,7 @@ import { coerceSecretRef, type SecretInput } from "../config/types.secrets.js";
 import { parseLiveCsvFilter } from "../media-generation/live-test-helpers.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import {
-  discoverAuthStorage,
+  discoverAuthStorageFacts,
   discoverModels,
   normalizeDiscoveredAgentModel,
 } from "./agent-model-discovery.js";
@@ -1692,18 +1692,22 @@ describeLive("live models (profile keys)", () => {
         }
         logProgress("[live-models] loading auth storage");
         const authStorage = await withLiveStageTimeout(
-          Promise.resolve().then(() =>
-            discoverAuthStorage(agentDir, {
-              config: cfg,
-              env: process.env,
-              externalCli: externalCliDiscoveryForProviders({ cfg, providers: providerList ?? [] }),
-              ...(providerList
-                ? {
-                    skipExternalAuthProfiles: true,
-                    syntheticAuthProviderRefs: [],
-                  }
-                : {}),
-            }),
+          Promise.resolve().then(
+            () =>
+              discoverAuthStorageFacts(agentDir, {
+                config: cfg,
+                env: process.env,
+                externalCli: externalCliDiscoveryForProviders({
+                  cfg,
+                  providers: providerList ?? [],
+                }),
+                ...(providerList
+                  ? {
+                      skipExternalAuthProfiles: true,
+                      syntheticAuthProviderRefs: [],
+                    }
+                  : {}),
+              }).authStorage,
           ),
           "[live-models] load auth storage",
         );

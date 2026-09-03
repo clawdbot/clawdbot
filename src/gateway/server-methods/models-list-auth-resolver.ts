@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "../../agents/agent-auth-credential-modes.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { resolveExternalCliAuthScopeFromConfig } from "../../agents/auth-profiles/external-cli-scope.js";
 import type { RuntimeAuthMaterialization } from "../../agents/auth-profiles/runtime-materializations.js";
@@ -12,7 +12,6 @@ import {
 } from "../../agents/model-auth-availability.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import {
-  createOpenAIModelRoutesResolver,
   openAIModelCatalogRoutePolicy,
   resolveModelCatalogIdentityKey,
 } from "../../agents/openai-model-routes.js";
@@ -37,11 +36,10 @@ export function createModelsListAuthResolver(params: {
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
   preparedAuthStore: AuthProfileStore;
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedProviderAuth?: PreparedProviderAuth;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
   workspaceDir: string;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
 }): ModelAuthAvailabilityResolver {
   const agentDir = resolveAgentDir(params.cfg, params.agentId);
   return createModelAuthAvailabilityResolver({
@@ -51,17 +49,15 @@ export function createModelsListAuthResolver(params: {
     workspaceDir: params.workspaceDir,
     env: process.env,
     metadataSnapshot: params.metadataSnapshot,
-    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedProviderAuth: params.preparedProviderAuth,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
     preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete,
-    skipSetupProviderFallback: true,
     syntheticAuthProviderRefs: listEnabledSyntheticAuthProviderRefs(
       params.metadataSnapshot,
       params.cfg,
     ),
     externalCliProviderIds: resolveExternalCliAuthScopeFromConfig(params.cfg)?.providerIds ?? [],
     preparedRuntimeAuthStore: params.preparedAuthStore,
-    routeResolverFactory: params.routeResolverFactory,
   });
 }
 
@@ -102,10 +98,8 @@ export function createModelsListEntryEvaluator(params: {
         authResolver: params.authResolver,
         evaluation,
         cfg: params.cfg,
-        agentId: params.agentId,
         metadataSnapshot: params.metadataSnapshot,
         provider: entry.provider,
-        modelId: entry.id,
       });
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
@@ -114,6 +108,7 @@ export function createModelsListEntryEvaluator(params: {
         (outcome) =>
           outcome.status === "auth-rejected" &&
           outcome.rejectionScope !== "catalog" &&
+          resolved.evidence !== "runtime" &&
           normalizeProviderId(outcome.provider) === provider &&
           (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
       )

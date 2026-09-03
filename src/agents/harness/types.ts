@@ -535,6 +535,8 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  /** Runtime binding used for native catalog discovery; no OpenClaw credential is handed off. */
+  runtime?: string;
   configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
 };
 
@@ -543,14 +545,6 @@ type AgentHarnessModelCatalogCapability = {
   loadModelCatalog?(
     params: AgentHarnessModelCatalogParams,
   ): Promise<readonly import("../model-catalog.types.js").ModelCatalogEntry[]>;
-  /**
-   * Reads current, secret-free native account evidence for this exact catalog scope/model.
-   * No I/O or discovery here. Missing/stale/disposed evidence returns undefined; this is
-   * picker metadata only, never execution authorization or a host-route credential.
-   */
-  readModelCatalogReadiness?(
-    params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-  ): { accountType: string } | undefined;
 };
 
 /**

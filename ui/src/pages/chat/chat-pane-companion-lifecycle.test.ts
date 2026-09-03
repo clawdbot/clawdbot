@@ -30,7 +30,9 @@ describe("chat pane companion connection lifecycle", () => {
         case "chat.startup":
           return { messages: [], sessionId: "session-current", hasMore: false, totalMessages: 0 };
         case "chat.metadata":
-          return { commands: [], models, swarmEnabled: false };
+          return { commands: [], swarmEnabled: false };
+        case "models.list":
+          return { models };
         default:
           throw new Error(`Unexpected gateway request: ${method}`);
       }
@@ -87,7 +89,6 @@ describe("chat pane companion connection lifecycle", () => {
 
     pane.connectedClient = client;
     pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "connected" });
-    expect(state.chatModelsLoading).toBe(true);
     expect(threads.view("agent:main:other", "main").draft).toBe("other draft");
     await threads.hydrate(
       "agent:main:current",
@@ -107,9 +108,10 @@ describe("chat pane companion connection lifecycle", () => {
       failedQuestion: null,
       pendingQuestion: null,
     });
-    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
+    // Model rows arrive through the deferred models.list read, not chat.metadata.
+    await vi.waitFor(() => expect(state.chatModelCatalog).toEqual(models));
+    expect(state.chatModelsLoading).toBe(false);
     expect(consoleError).not.toHaveBeenCalled();
-    expect(state.chatModelCatalog).toEqual(models);
     expect(state.chatModelCatalogError).toBeNull();
     expect(getChatHistoryLoadState(state).phase).toBe("committed");
     expect(state.chatError).toBeNull();

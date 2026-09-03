@@ -9,6 +9,7 @@ const storeMocks = vi.hoisted(() => ({
 
 const credentialMocks = vi.hoisted(() => ({
   resolveAgentCredentialMapFromStore: vi.fn(() => ({})),
+  resolveProviderAuthFacts: vi.fn(() => ({})),
 }));
 
 const discoveryCoreMocks = vi.hoisted(() => ({
@@ -96,8 +97,11 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
 
     const { credentials } = resolveAgentDiscoveryAuthFacts("/tmp/openclaw-agent", {
       ambientCredentials: {
-        fireworks: { type: "api_key", key: "ambient-key" },
-        "claude-cli": { type: "api_key", key: "synthetic-key" },
+        credentials: {
+          fireworks: { type: "api_key", key: "ambient-key" },
+          anthropic: { type: "api_key", key: "synthetic-key" },
+        },
+        providerAuth: { anthropic: { mode: "oauth", runtime: "claude-cli" } },
       },
       env: {},
       readOnly: true,
@@ -105,7 +109,7 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
 
     expect(credentials).toEqual({
       fireworks: { type: "api_key", key: "agent-key" },
-      "claude-cli": { type: "api_key", key: "synthetic-key" },
+      anthropic: { type: "api_key", key: "synthetic-key" },
     });
     expect(discoveryCoreMocks.addEnvBackedAgentCredentials).not.toHaveBeenCalled();
     expect(syntheticAuthMocks.resolveRuntimeSyntheticAuthProviderRefs).not.toHaveBeenCalled();
@@ -153,8 +157,28 @@ describe("resolveAgentDiscoveryAuthFacts external CLI scoping", () => {
         authoritativeSyntheticAuthProviderRefs: ["claude-cli"],
         resolveSyntheticAuth,
       }),
-    ).toEqual({});
+    ).toEqual({ credentials: {}, providerAuth: {} });
     expect(resolveSyntheticAuth).toHaveBeenCalledWith("claude-cli");
+  });
+
+  it("records native runtime auth under its canonical provider", () => {
+    const nativeAuth = {
+      apiKey: "native-login-marker",
+      source: "native login",
+      mode: "oauth" as const,
+      runtime: "codex",
+    };
+
+    expect(
+      resolveAmbientAgentCredentialsForDiscovery({
+        config: {},
+        syntheticAuthProviderRefs: ["openai"],
+        resolveSyntheticAuth: () => nativeAuth,
+      }),
+    ).toEqual({
+      credentials: { openai: { type: "api_key", key: nativeAuth.apiKey } },
+      providerAuth: { openai: { mode: "oauth", runtime: "codex" } },
+    });
   });
 
   it.each(["oauth", "token"] as const)(

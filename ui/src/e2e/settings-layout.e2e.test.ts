@@ -72,7 +72,6 @@ const settingsRowRoutes = [
   "agents",
   "ai-agents",
   "labs",
-  "model-setup",
   "model-providers",
   "mcp",
   "memory",
@@ -101,7 +100,6 @@ const mobileStandaloneSettingsPageRoutes = [
 
 const mobileGeometryCases = [
   { route: "appearance", contentSelector: ".settings-page" },
-  { route: "model-setup", contentSelector: ".model-setup" },
   { route: "memory", contentSelector: ".memory-page__panel .settings-page" },
   { route: "plugins", contentSelector: ".settings-page" },
 ] as const satisfies ReadonlyArray<{ route: RouteId; contentSelector: string }>;

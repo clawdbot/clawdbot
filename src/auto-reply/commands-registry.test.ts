@@ -1,5 +1,6 @@
 /** Tests command registry definitions, native specs, aliases, and argument menus. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listProviderChannelLoginChoices } from "../plugins/provider-login-options.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
@@ -231,6 +232,18 @@ describe("commands registry", () => {
     expect(command.textAliases).toEqual(["/login"]);
     expect(command.nativeName).toBe("login");
     expect(command.nativeProviders).toEqual(["discord", "slack", "telegram"]);
+    const providerArg = command.args?.[0];
+    expect(providerArg?.preferAutocomplete).toBe(true);
+    expect(
+      providerArg
+        ? resolveCommandArgChoices({ command, arg: providerArg, provider: "discord" })
+        : [],
+    ).toEqual(
+      listProviderChannelLoginChoices().map((choice) => ({
+        value: choice.command,
+        label: choice.label,
+      })),
+    );
 
     expect(nativeNameSet(listNativeCommandSpecs()).has("login")).toBe(false);
     for (const provider of ["discord", "slack"] as const) {
@@ -505,7 +518,9 @@ describe("commands registry", () => {
         if (choices.length === 0) {
           continue;
         }
-        expect(choices.length).toBeLessThanOrEqual(25);
+        if (!arg.preferAutocomplete) {
+          expect(choices.length).toBeLessThanOrEqual(25);
+        }
         for (const choice of choices) {
           expect(choice.label.length).toBeGreaterThan(0);
           expect(choice.label.length).toBeLessThanOrEqual(100);

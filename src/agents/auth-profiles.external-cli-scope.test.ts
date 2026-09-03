@@ -77,7 +77,6 @@ describe("external CLI auth scope", () => {
 
     expect(scope?.providerIds).toEqual([
       "anthropic",
-      "codex-app-server",
       "elevenlabs",
       "minimax-portal",
       "openai",

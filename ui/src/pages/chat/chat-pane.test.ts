@@ -713,7 +713,9 @@ describe("chat pane initialization", () => {
     const request = createGatewayRequestMock(async (method) => {
       switch (method) {
         case "chat.metadata":
-          return { commands: [], models, swarmEnabled: false };
+          return { commands: [], swarmEnabled: false };
+        case "models.list":
+          return { models };
         case "models.authStatus":
           return authStatus;
         default:
@@ -756,10 +758,10 @@ describe("chat pane initialization", () => {
       }
     ).willUpdate(new Map([["sessionKey", "main"]]));
 
-    expect(state.chatModelsLoading).toBe(true);
-    await vi.waitFor(() => expect(state.chatModelsLoading).toBe(false));
+    // Model rows arrive through the deferred models.list read, not chat.metadata.
+    await vi.waitFor(() => expect(state.chatModelCatalog).toEqual(models));
+    expect(state.chatModelsLoading).toBe(false);
     expect(consoleError).not.toHaveBeenCalled();
-    expect(state.chatModelCatalog).toEqual(models);
     expect(state.chatModelCatalogError).toBeNull();
     expect(state.modelAuthStatusResult).toEqual(authStatus);
     expect(state.sessionKey).toBe(canonicalSessionKey);

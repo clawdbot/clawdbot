@@ -81,6 +81,9 @@ function setPageGateway(
   page.gateway.applySnapshot(snapshot(client, connected), { initial: false, sourceChanged });
 }
 
+const mainModelsList = { view: "configured", agentId: "main" };
+const workerModelsList = { view: "configured", agentId: "worker" };
+
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((next) => {
@@ -376,16 +379,12 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(models));
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenCalledWith("models.list", mainModelsList);
   });
 
-  it("caches separate configured model catalogs for the default and worker agents", async () => {
-    const defaultModels = [
-      { id: "default-model", name: "Default account model", provider: "openai" },
-    ];
-    const workerModels = [
-      { id: "worker-model", name: "Worker private model", provider: "anthropic" },
-    ];
+  it("re-reads the configured model catalog for each selected agent", async () => {
+    const defaultModels = [{ id: "default-model", name: "Default model", provider: "openai" }];
+    const workerModels = [{ id: "worker-model", name: "Worker model", provider: "anthropic" }];
     const request = vi.fn(async (_method: string, params?: { agentId?: string }) => ({
       models: params?.agentId === "worker" ? workerModels : defaultModels,
     }));
@@ -403,19 +402,16 @@ describe("AgentsPage gateway lifecycle", () => {
 
     page.agentsSelectedId = "main";
     page.loadActivePanelData();
-    expect(page.chatModelCatalog).toEqual(defaultModels);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "chat.metadata", { agentId: "main" });
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "worker" });
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(defaultModels));
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", mainModelsList);
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", workerModelsList);
+    expect(request).toHaveBeenNthCalledWith(3, "models.list", mainModelsList);
   });
 
   it("rejects a stale default-agent catalog after switching to a worker agent", async () => {
-    const defaultModels = [
-      { id: "default-model", name: "Default account model", provider: "openai" },
-    ];
-    const workerModels = [
-      { id: "worker-model", name: "Worker private model", provider: "anthropic" },
-    ];
+    const defaultModels = [{ id: "default-model", name: "Default model", provider: "openai" }];
+    const workerModels = [{ id: "worker-model", name: "Worker model", provider: "anthropic" }];
     const defaultResult = deferred<{ models: ModelCatalogEntry[] }>();
     const request = vi.fn((_method: string, params?: { agentId?: string }) =>
       params?.agentId === "worker"
@@ -438,16 +434,20 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalog).toEqual(workerModels);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "worker" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", workerModelsList);
   });
 
-  it("re-reads a cached model catalog when the picker asks for a refresh", async () => {
+  it("reads the model catalog when the picker opens and refreshes on retry", async () => {
     const oldModels = [{ id: "old", name: "Old Model", alias: "opus", provider: "anthropic" }];
     const nextModels = [{ id: "new", name: "Opus 4.8", alias: "opus", provider: "anthropic" }];
+    const refreshedModels = [
+      { id: "refreshed", name: "Opus 4.9", alias: "opus", provider: "anthropic" },
+    ];
     const request = vi
       .fn()
       .mockResolvedValueOnce({ models: oldModels })
-      .mockResolvedValueOnce({ models: nextModels });
+      .mockResolvedValueOnce({ models: nextModels })
+      .mockResolvedValueOnce({ models: refreshedModels });
     const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
     page.routeData = { panel: "overview" } as AgentsRouteData;
     setPageGateway(page, { request } as unknown as GatewayBrowserClient);
@@ -456,14 +456,13 @@ describe("AgentsPage gateway lifecycle", () => {
     page.loadActivePanelData();
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(oldModels));
 
-    // Without refresh the per-agent cache answers; provider-key changes would
-    // stay invisible for the connection lifetime.
     page.ensureModelCatalog();
-    expect(request).toHaveBeenCalledTimes(1);
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", mainModelsList);
 
     page.ensureModelCatalog({ refresh: true });
-    await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
-    expect(request).toHaveBeenCalledTimes(2);
+    await waitForFast(() => expect(page.chatModelCatalog).toEqual(refreshedModels));
+    expect(request.mock.calls[2]?.[1]).toMatchObject({ refresh: true });
   });
 
   it("rejects an old-client model catalog after the Gateway client changes", async () => {
@@ -518,7 +517,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalog).toEqual(nextModels);
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", mainModelsList);
   });
 
   it("refreshes a settled model catalog after a same-client reconnect", async () => {
@@ -545,7 +544,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.chatModelCatalog).toEqual(nextModels));
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", mainModelsList);
   });
 
   it("surfaces a rejected agent-scoped metadata RPC and retries without marking an empty catalog loaded", async () => {
@@ -571,7 +570,7 @@ describe("AgentsPage gateway lifecycle", () => {
 
     expect(page.chatModelCatalogError).toBeNull();
     expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(2, "chat.metadata", { agentId: "main" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", mainModelsList);
   });
 
   it("requests the selected agent's implicit default cron job before the first 50 unrelated jobs", async () => {

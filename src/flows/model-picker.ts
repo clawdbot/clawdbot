@@ -27,7 +27,10 @@ import {
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../agents/model-selection.js";
-import { openAIModelCatalogRoutePolicy } from "../agents/openai-model-routes.js";
+import {
+  modelCatalogLogicalKey,
+  openAIModelCatalogRoutePolicy,
+} from "../agents/openai-model-routes.js";
 import { loadPreparedModelCatalogSnapshot } from "../agents/prepared-model-catalog.js";
 import { loadStaticManifestCatalogRowsForList } from "../commands/models/list.manifest-catalog.js";
 import { formatTokenK } from "../commands/models/shared.js";
@@ -252,7 +255,7 @@ async function resolvePickerLogicalCatalog(params: {
   const sourceOrder = new Map<string, number>();
   for (const entry of params.catalog) {
     const key =
-      openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogEntryKey(entry);
+      openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);
     if (!sourceOrder.has(key)) {
       sourceOrder.set(key, sourceOrder.size);
     }
@@ -286,9 +289,9 @@ async function resolvePickerLogicalCatalog(params: {
   // supplements. Logical projection must not replace that order with display sorting.
   return catalog.toSorted((left, right) => {
     const leftKey =
-      openAIModelCatalogRoutePolicy.resolveIdentity(left)?.key ?? modelCatalogEntryKey(left);
+      openAIModelCatalogRoutePolicy.resolveIdentity(left)?.key ?? modelCatalogLogicalKey(left);
     const rightKey =
-      openAIModelCatalogRoutePolicy.resolveIdentity(right)?.key ?? modelCatalogEntryKey(right);
+      openAIModelCatalogRoutePolicy.resolveIdentity(right)?.key ?? modelCatalogLogicalKey(right);
     return (
       (sourceOrder.get(leftKey) ?? Number.MAX_SAFE_INTEGER) -
       (sourceOrder.get(rightKey) ?? Number.MAX_SAFE_INTEGER)
@@ -441,11 +444,6 @@ async function resolveLiteralPrefixProviderIds(params: {
   return ids;
 }
 
-function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
-  const normalizedRef = normalizeModelRef(entry.provider, entry.id);
-  return modelKey(normalizedRef.provider, normalizedRef.model);
-}
-
 async function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -465,7 +463,7 @@ async function addModelSelectOption(params: {
   resolveModelRouteRuntime: ModelRouteRuntimeResolver;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
-  const key = modelCatalogEntryKey(params.entry);
+  const key = modelCatalogLogicalKey(params.entry);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
@@ -1101,7 +1099,7 @@ export async function promptDefaultModel(
       ? filteredModels.find((entry) => matchesPreferredProvider?.(entry.provider))
       : undefined;
   const firstPreferredModelKey = firstPreferredModel
-    ? modelCatalogEntryKey(firstPreferredModel)
+    ? modelCatalogLogicalKey(firstPreferredModel)
     : undefined;
   let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
   if (!allowKeep && firstPreferredModelKey) {

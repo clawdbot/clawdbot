@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
-  discoverAuthStorage,
+  discoverAuthStorageFacts,
   discoverModels,
   discoverModelsFromCapturedSources,
 } from "./agent-model-discovery.js";
@@ -45,7 +45,7 @@ describe("discoverModels", () => {
     try {
       const createRegistry = (agentDir: string) =>
         discoverModelsFromCapturedSources(
-          discoverAuthStorage(agentDir, { skipCredentials: true }),
+          discoverAuthStorageFacts(agentDir, { skipCredentials: true }).authStorage,
           {
             includePluginCatalogs: true,
             modelsJsonContents: "not valid json",
@@ -69,7 +69,7 @@ describe("discoverModels", () => {
   it("clears cached find results when the agent model registry refreshes", () => {
     const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-"));
     writeModelsJson(agentDir, "old-model");
-    const authStorage = discoverAuthStorage(agentDir, { skipCredentials: true });
+    const authStorage = discoverAuthStorageFacts(agentDir, { skipCredentials: true }).authStorage;
     const registry = discoverModels(authStorage, agentDir, { normalizeModels: false });
 
     expect(registry.find("custom", "new-model")).toBeUndefined();
@@ -79,6 +79,37 @@ describe("discoverModels", () => {
 
     expect(registry.getAll().some((model) => model.id === "new-model")).toBe(true);
     expect(registry.find("custom", "new-model")?.id).toBe("new-model");
+  });
+
+  it("loads prepared static provider configs without rereading models.json", () => {
+    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-agent-models-static-"));
+    fs.writeFileSync(path.join(agentDir, "models.json"), "not valid json");
+    const registry = discoverModels(
+      discoverAuthStorageFacts(agentDir, { skipCredentials: true }).authStorage,
+      agentDir,
+      {
+        modelsJsonContents: null,
+        staticProviderConfigs: {
+          openai: {
+            baseUrl: "https://chatgpt.com/backend-api/codex",
+            api: "openai-chatgpt-responses",
+            models: [
+              {
+                id: "curated-model",
+                name: "Curated Model",
+                reasoning: false,
+                input: ["text"],
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                maxTokens: 1,
+              },
+            ],
+          },
+        },
+      },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("openai", "curated-model")?.name).toBe("Curated Model");
   });
 
   it("preserves authored OpenAI Completions while normalizing models.json entries", () => {
@@ -119,7 +150,7 @@ describe("discoverModels", () => {
         },
       },
     } as unknown as OpenClawConfig;
-    const authStorage = discoverAuthStorage(agentDir, { skipCredentials: true });
+    const authStorage = discoverAuthStorageFacts(agentDir, { skipCredentials: true }).authStorage;
     const registry = discoverModels(authStorage, agentDir, { config });
 
     expect(registry.find("openai", "gpt-5.5")?.api).toBe("openai-completions");

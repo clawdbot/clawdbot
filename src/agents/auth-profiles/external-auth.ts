@@ -149,12 +149,11 @@ function resolveAllowedExternalCliAuthProfiles(params: {
 }): ProviderExternalAuthProfile[] {
   const env = params.env ?? process.env;
   const explicitProfileIds = resolveExplicitProfileIds(params.externalCli?.externalCliProfileIds);
-  const cliProfiles =
-    externalCliSync.resolveExternalCliAuthProfiles?.(params.store, {
-      allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
-      providerIds: params.externalCli?.externalCliProviderIds,
-      profileIds: explicitProfileIds,
-    }) ?? [];
+  const cliProfiles = externalCliSync.resolveExternalCliAuthProfiles(params.store, {
+    allowKeychainPrompt: params.externalCli?.allowKeychainPrompt,
+    providerIds: params.externalCli?.externalCliProviderIds,
+    profileIds: explicitProfileIds,
+  });
   return cliProfiles.flatMap((profile) =>
     isExternalAuthProfileAllowed(
       profile,

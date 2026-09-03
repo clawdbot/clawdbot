@@ -34,6 +34,9 @@
   ],
   "name": "Codex",
   "description": "Codex app-server harness and native session catalog.",
+  "providers": ["openai"],
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "syntheticAuthRefs": ["openai"],
   "cliCommands": [
     {
       "name": "codex",
@@ -63,8 +66,9 @@
       }
     }
   },
+  "enabledByDefault": true,
   "activation": {
-    "onStartup": false,
+    "onStartup": true,
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [

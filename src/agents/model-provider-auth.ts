@@ -278,17 +278,14 @@ export function createProviderAuthChecker(params: {
       cfg: params.cfg ?? {},
       authStore,
       preparedRuntimeAuthStore: params.preparedAuth?.authStore,
-      preparedRuntimeAuthModes: params.preparedAuth?.authModes,
+      preparedProviderAuth: params.preparedAuth?.providerAuth,
       metadataSnapshot: params.metadataSnapshot,
       agentDir,
       workspaceDir: params.workspaceDir,
       env: params.env,
-      skipSetupProviderFallback: true,
       allowPreparedRuntimeAuth:
-        params.allowPreparedRuntimeAuth === true ||
-        (params.discoverExternalCliAuth !== false && params.allowPluginSyntheticAuth !== false),
+        params.allowPreparedRuntimeAuth === true || params.allowPluginSyntheticAuth !== false,
       syntheticAuthProviderRefs: runtimeAuthLookup.syntheticAuthProviderRefs,
-      ...(params.discoverExternalCliAuth === false ? {} : { externalCliProviderIds: ["openai"] }),
     });
     return modelAuthResolver;
   };

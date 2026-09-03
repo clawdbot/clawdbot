@@ -244,7 +244,7 @@ describe("ModelProvidersPage usage convergence", () => {
     await vi.waitFor(() => expect(requestCount(harness.request, "sessions.usage")).toBe(1));
 
     const releaseCoreRefresh = harness.deferNextAuthStatus();
-    const refresh = page.refresh({ force: true });
+    const refresh = page.refresh("discover");
     expect(firstUsageSignal?.aborted).toBe(true);
     expect(firstCostSignal?.aborted).toBe(true);
 

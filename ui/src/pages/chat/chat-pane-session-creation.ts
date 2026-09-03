@@ -10,6 +10,7 @@ import {
   areUiSessionKeysEquivalent,
   resolveAgentIdFromSessionKey,
 } from "../../lib/sessions/session-key.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import { cloneChatAttachmentsForIndependentOwner } from "./attachment-payload-store.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
@@ -61,7 +62,9 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       };
     }
     return params.modelSetupRequired
-      ? createChatModelSetupBanner(() => this.context.navigate("model-setup"))
+      ? createChatModelSetupBanner(() =>
+          this.context.navigate("model-providers", MODELS_CONNECT_NAVIGATION),
+        )
       : undefined;
   }
 

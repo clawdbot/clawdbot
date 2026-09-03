@@ -14,6 +14,7 @@ import {
 } from "../agents/auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
+  readPersistedAuthProfileStateRaw,
   readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStoreRaw,
   writePersistedAuthProfileStateRaw,
@@ -49,6 +50,7 @@ import {
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairLegacyAuthProfileStores,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
 import {
@@ -2595,6 +2597,35 @@ describe("maybeRepairOpenAICodexAuthConfig", () => {
 });
 
 describe("legacy OpenAI auth profiles through the canonical migration owner", () => {
+  it("merges legacy provider auth-order aliases into canonical orders deterministically", () => {
+    const result = maybeRepairOpenAICodexAuthConfig({
+      auth: {
+        profiles: {
+          "claude-cli:work": { provider: "claude-cli", mode: "oauth" },
+          "google-gemini-cli:work": { provider: "google-gemini-cli", mode: "oauth" },
+        },
+        order: {
+          "claude-cli": ["claude-cli:work"],
+          anthropic: ["anthropic:default"],
+          "google-gemini-cli": ["google-gemini-cli:work"],
+          codex: ["codex:default"],
+          "codex-cli": ["codex-cli:other"],
+          openai: [],
+        },
+      },
+    });
+
+    expect(result.config.auth?.order).toEqual({
+      anthropic: ["anthropic:work", "anthropic:default"],
+      google: ["google:work"],
+      openai: [],
+    });
+    expect(result.config.auth?.profiles).toEqual({
+      "anthropic:work": { provider: "anthropic", mode: "oauth" },
+      "google:work": { provider: "google", mode: "oauth" },
+    });
+  });
+
   it("collects the store-derived legacy OpenAI Codex profile id map", async () => {
     const state = await makeTestState();
     await writeLegacyAuthProfilesJson(state, {
@@ -2666,6 +2697,90 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       "openai:default": { accountId: "peter-account" },
       "openai:chatgpt-default": { accountId: "kate-account" },
     });
+  });
+
+  it("repairs legacy provider ids and rotation state in an existing SQLite auth store", async () => {
+    const state = await makeTestState();
+    writePersistedAuthProfileStoreRaw(
+      {
+        version: 1,
+        profiles: {
+          "claude-cli:work": { provider: "claude-cli", mode: "oauth", access: "claude" },
+          "google-gemini-cli:work": {
+            provider: "google-gemini-cli",
+            mode: "oauth",
+            access: "google",
+          },
+          "openai:codex-cli": { provider: "openai", mode: "api_key", key: "openai" },
+        },
+        order: {
+          "claude-cli": ["claude-cli:work"],
+          "google-gemini-cli": ["google-gemini-cli:work"],
+          "openai-codex": ["openai:codex-cli"],
+        },
+        lastGood: {
+          "claude-cli": "claude-cli:work",
+          "google-gemini-cli": "google-gemini-cli:work",
+        },
+        usageStats: {
+          "claude-cli:work": { failures: 1 },
+          "google-gemini-cli:work": { failures: 2 },
+        },
+      },
+      state.agentDir(),
+    );
+    writePersistedAuthProfileStateRaw(
+      {
+        version: 1,
+        order: { codex: ["codex:default"] },
+        lastGood: { codex: "codex:default" },
+        usageStats: { "codex:default": { failures: 3 } },
+      },
+      state.agentDir(),
+    );
+
+    const profileIdMap = collectOpenAICodexAuthProfileStoreIdMap({ cfg: {}, env: state.env });
+    expect(profileIdMap.get("claude-cli:work")).toBe("anthropic:work");
+    expect(profileIdMap.get("google-gemini-cli:work")).toBe("google:work");
+    expect(profileIdMap.get("openai:codex-cli")).toBe("openai:cli-default");
+    expect(profileIdMap.get("codex:default")).toBe("openai:default");
+
+    const result = maybeRepairLegacyAuthProfileStores({
+      cfg: {},
+      env: state.env,
+      profileIdMap,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toMatchObject({
+      profiles: {
+        "anthropic:work": { provider: "anthropic" },
+        "google:work": { provider: "google" },
+        "openai:cli-default": { provider: "openai" },
+      },
+      order: {
+        anthropic: ["anthropic:work"],
+        google: ["google:work"],
+        openai: ["openai:cli-default"],
+      },
+      lastGood: {
+        anthropic: "anthropic:work",
+        google: "google:work",
+      },
+      usageStats: {
+        "anthropic:work": { failures: 1 },
+        "google:work": { failures: 2 },
+      },
+    });
+    expect(readPersistedAuthProfileStateRaw(state.agentDir())).toMatchObject({
+      order: { openai: ["openai:default"] },
+      lastGood: { openai: "openai:default" },
+      usageStats: { "openai:default": { failures: 3 } },
+    });
+    expect(result.changes).toHaveLength(1);
+    expect(
+      maybeRepairLegacyAuthProfileStores({ cfg: {}, env: state.env, profileIdMap }).changes,
+    ).toEqual([]);
   });
 
   it("migrates config-only legacy OAuth accounts and their selected SQLite session", async () => {

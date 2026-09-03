@@ -283,7 +283,6 @@ vi.mock("../plugins/providers.js", () => ({
 }));
 
 const cliCredentialMocks = vi.hoisted(() => ({
-  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
   readMiniMaxCliCredentialsCached: vi.fn<(options?: unknown) => OAuthCredential | null>(() => null),
 }));
 
@@ -292,7 +291,6 @@ vi.mock("./cli-credentials.js", () => cliCredentialMocks);
 beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   resolveProviderDeprecatedAuthProfileIdsMock.mockClear();
-  cliCredentialMocks.readCodexCliCredentialsCached.mockReset().mockReturnValue(null);
   cliCredentialMocks.readMiniMaxCliCredentialsCached.mockReset().mockReturnValue(null);
 });
 
@@ -876,7 +874,6 @@ describe("getApiKeyForModelCore", () => {
       },
     );
 
-    expect(cliCredentialMocks.readCodexCliCredentialsCached).toHaveBeenCalled();
     expect(cliCredentialMocks.readMiniMaxCliCredentialsCached).not.toHaveBeenCalled();
   });
 

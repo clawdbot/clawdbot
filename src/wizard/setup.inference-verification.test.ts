@@ -6,7 +6,7 @@ import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ActivateSetupInferenceDeps } from "../system-agent/setup-inference-core.js";
-import { verifySetupInferenceConfig } from "../system-agent/setup-inference-verify.js";
+import { verifySetupInferenceConfig } from "../system-agent/setup-inference.js";
 import type { WizardPrompter } from "./prompts.js";
 
 const mocks = vi.hoisted(() => ({

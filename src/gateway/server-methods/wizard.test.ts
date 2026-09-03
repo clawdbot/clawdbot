@@ -56,13 +56,7 @@ afterEach(() => {
 function createWizardContext(
   wizardRunner: NonNullable<GatewayRequestHandlerOptions["context"]>["wizardRunner"],
 ) {
-  const wizardSessions = new Map();
-  return {
-    wizardSessions,
-    wizardRunner,
-    findRunningWizard: () => undefined,
-    purgeWizardSession: (sessionId: string) => wizardSessions.delete(sessionId),
-  };
+  return { ...createWizardSessionTracker(), wizardRunner };
 }
 
 function readSuccessfulResponse(respond: ReturnType<typeof vi.fn>): Record<string, unknown> {
@@ -85,9 +79,9 @@ async function invokeWizard(
 }
 
 async function cancelWizardSessions(
-  sessions: Map<string, import("../../wizard/session.js").WizardSession>,
+  sessions: ReturnType<typeof createWizardSessionTracker>["wizardSessions"],
 ) {
-  for (const session of sessions.values()) {
+  for (const { session } of sessions.values()) {
     session.cancel();
     await whenAdmittedWizardSessionSettled(session);
   }
@@ -111,7 +105,7 @@ describe("wizard session lookup", () => {
       client: null,
       isWebchatConnect: () => false,
       respond,
-      context: { wizardSessions: new Map() } as never,
+      context: createWizardSessionTracker() as never,
     } as GatewayRequestHandlerOptions);
 
     expect(respond).toHaveBeenCalledOnce();
@@ -238,7 +232,7 @@ describe("wizard setup ownership", () => {
     } as never);
     expect(admittedRespond.mock.calls[0]?.[1]).toMatchObject({ status: "running" });
     const session = expectDefined(
-      [...tracker.wizardSessions.values()][0],
+      [...tracker.wizardSessions.values()][0]?.session,
       "admitted classic setup session",
     );
     session.cancel();
@@ -284,7 +278,7 @@ describe("wizard setup ownership", () => {
     } finally {
       runnerSettled.resolve();
       const session = expectDefined(
-        [...tracker.wizardSessions.values()][0],
+        [...tracker.wizardSessions.values()][0]?.session,
         "active classic setup session",
       );
       await whenAdmittedWizardSessionSettled(session);
@@ -374,7 +368,7 @@ describe("wizard setup ownership", () => {
       });
       runnerSettled.resolve();
       const session = expectDefined(
-        tracker.wizardSessions.get(sessionId),
+        tracker.wizardSessions.get(sessionId)?.session,
         "cancelled setup session",
       );
       await expect(whenAdmittedWizardSessionSettled(session)).rejects.toBe(releaseError);
@@ -503,7 +497,7 @@ describe("wizard setup ownership", () => {
       const [, start] = startRespond.mock.calls[0] ?? [];
       expect(start).toMatchObject({ status: "running" });
       admittedSession = expectDefined(
-        tracker.wizardSessions.get(start.sessionId),
+        tracker.wizardSessions.get(start.sessionId)?.session,
         "admitted classic setup session",
       );
 

@@ -65,15 +65,24 @@ export function createPreparedPluginGeneration(params: {
   pluginMetadataSnapshot: PreparedModelRuntimePluginGeneration["pluginMetadataSnapshot"];
   preparedStaticProviderCatalog: PreparedModelRuntimePluginGeneration["preparedStaticProviderCatalog"];
   providerStaticModels: PreparedModelRuntimePluginGeneration["providerStaticModels"];
+  nativeHarnessRuntimes: PreparedModelRuntimePluginGeneration["nativeHarnessRuntimes"];
   preferBuiltPluginArtifacts?: boolean;
   reusablePluginGeneration?: PreparedModelRuntimePluginGeneration;
   runtimePluginRegistry: PreparedModelRuntimePluginGeneration["pluginRegistry"];
 }): PreparedModelRuntimePluginGeneration {
   const reusable = params.reusablePluginGeneration;
+  const nativeHarnessRuntimes = params.nativeHarnessRuntimes ?? [];
+  const reusableNativeHarnessRuntimes = reusable?.nativeHarnessRuntimes ?? [];
+  const nativeHarnessRuntimesMatch =
+    nativeHarnessRuntimes.length === reusableNativeHarnessRuntimes.length &&
+    nativeHarnessRuntimes.every(
+      (runtime, index) => runtime === reusableNativeHarnessRuntimes[index],
+    );
   if (reusable) {
     if (
       params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot &&
-      params.runtimePluginRegistry === reusable.pluginRegistry
+      params.runtimePluginRegistry === reusable.pluginRegistry &&
+      nativeHarnessRuntimesMatch
     ) {
       return reusable;
     }
@@ -84,6 +93,7 @@ export function createPreparedPluginGeneration(params: {
       mediaCapabilityProviders: params.mediaCapabilityProviders,
       messageToolCatalog: params.messageToolCatalog,
       preparedStaticProviderCatalog: params.preparedStaticProviderCatalog,
+      nativeHarnessRuntimes: params.nativeHarnessRuntimes,
     });
     if (params.pluginMetadataSnapshot === reusable.pluginMetadataSnapshot) {
       derivedGenerationBases.set(derived, reusable);
@@ -105,6 +115,9 @@ export function createPreparedPluginGeneration(params: {
       : {}),
     ...(params.preparedStaticProviderCatalog
       ? { preparedStaticProviderCatalog: params.preparedStaticProviderCatalog }
+      : {}),
+    ...(nativeHarnessRuntimes.length > 0
+      ? { nativeHarnessRuntimes: Object.freeze([...nativeHarnessRuntimes]) }
       : {}),
     ...(params.catalogMode === "live"
       ? { providerStaticModels: Object.freeze([...(params.providerStaticModels ?? [])]) }
@@ -140,6 +153,7 @@ export async function buildPreparedPluginModelCatalog(params: {
           input,
           snapshot,
           pluginRegistry,
+          nativeHarnessRuntimes: params.pluginGeneration.nativeHarnessRuntimes,
         })
       : snapshot;
   });

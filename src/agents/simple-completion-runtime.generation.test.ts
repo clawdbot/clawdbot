@@ -93,7 +93,7 @@ beforeEach(() => {
       agentDir: "/tmp/openclaw-agent",
       workspaceDir: "/tmp/runtime-workspace",
       config: {},
-      authModes: {},
+      providerAuth: {},
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [] },
@@ -271,7 +271,7 @@ it("acquires the canonical manifest-derived utility model selection", async () =
       ],
       agentDir: "/tmp/canonical-agent",
     }),
-    expect.objectContaining({ catalogMode: "static", pluginMetadataSnapshot: metadataSnapshot }),
+    expect.objectContaining({ pluginMetadataSnapshot: metadataSnapshot }),
   );
   expect(result).toMatchObject({
     selection: {

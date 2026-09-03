@@ -391,7 +391,6 @@ describe("prepared provider auth state", () => {
       expect.objectContaining({
         cfg,
         allowPreparedRuntimeAuth: true,
-        externalCliProviderIds: ["openai"],
         syntheticAuthProviderRefs: [],
       }),
     );

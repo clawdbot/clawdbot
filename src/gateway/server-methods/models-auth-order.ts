@@ -125,7 +125,6 @@ export const modelsAuthOrderHandlers: GatewayRequestHandlers = {
       void Promise.all([
         refreshActiveProviderAuthRuntimeSnapshot(),
         refreshPreparedModelRuntimeSnapshots(cfg, {
-          catalogMode: "static",
           allowGatewaySubagentBinding: true,
           agentIds: new Set([scope.agentId]),
           pluginMetadataSnapshot: preparedSnapshot.metadataSnapshot,

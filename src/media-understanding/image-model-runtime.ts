@@ -216,24 +216,20 @@ export async function resolveImageRuntime(
         snapshot: params.preparedModelRuntime as PreparedModelRuntimeSnapshot,
         release: () => {},
       }
-    : await acquireAgentRunPreparedModelRuntime(
-        {
-          agentDir: params.agentDir,
-          ...(params.agentId ? { agentId: params.agentId } : {}),
-          config: params.cfg ?? {},
-          ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
-          loadRuntimePlugins: true,
-          runtimePluginSelections: [
-            {
-              provider: resolvedRef.provider,
-              modelId: resolvedRef.model,
-              ...(params.agentId ? { agentId: params.agentId } : {}),
-            },
-          ],
-        },
-        // The request already chose a model; full inventory discovery must stay outside setup.
-        { catalogMode: "static" },
-      );
+    : await acquireAgentRunPreparedModelRuntime({
+        agentDir: params.agentDir,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+        config: params.cfg ?? {},
+        ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
+        loadRuntimePlugins: true,
+        runtimePluginSelections: [
+          {
+            provider: resolvedRef.provider,
+            modelId: resolvedRef.model,
+            ...(params.agentId ? { agentId: params.agentId } : {}),
+          },
+        ],
+      });
   let leaseRetained = false;
   const retainLease = (resolved: PreparedImageRuntime): ResolvedImageRuntime => {
     leaseRetained = true;

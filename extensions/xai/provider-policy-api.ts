@@ -4,22 +4,17 @@ import type {
   ProviderThinkingProfile,
 } from "openclaw/plugin-sdk/plugin-entry";
 import { resolveXaiCatalogEntry } from "./model-definitions.js";
-import {
-  isXaiFrontierModelId,
-  isXaiGrok46ModelId,
-  normalizeXaiModelId,
-  resolveXaiOAuthAutoModelId,
-} from "./model-id.js";
+import { isXaiFrontierModelId, isXaiGrok46ModelId, normalizeXaiModelId } from "./model-id.js";
 import { isXaiProviderId } from "./provider-id.js";
 
 export function resolveThinkingProfile(
   ctx: ProviderDefaultThinkingPolicyContext,
 ): ProviderThinkingProfile {
-  // OAuth catalog rows keep the "auto" alias id and carry the provider-selected
-  // target in params.canonicalModelId. Judge that concrete target here too.
-  const rawModelId = resolveXaiOAuthAutoModelId(ctx.modelId, ctx.params);
-  const modelId = normalizeXaiModelId(rawModelId.trim().toLowerCase());
-  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning;
+  const modelId = normalizeXaiModelId(ctx.modelId.trim().toLowerCase());
+  // grok-latest is xAI's floating alias for the current Grok 4.3 family; it stays unpinned.
+  const isGrok43 =
+    modelId === "grok-latest" || modelId === "grok-4.3" || modelId.startsWith("grok-4.3-");
+  const reasoning = ctx.reasoning ?? resolveXaiCatalogEntry(modelId)?.reasoning ?? isGrok43;
   if (!isXaiProviderId(ctx.provider) || !reasoning) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }
@@ -32,8 +27,6 @@ export function resolveThinkingProfile(
       defaultLevel: "high",
     };
   }
-  const isGrok43 =
-    modelId === "grok-latest" || modelId === "grok-4.3" || modelId.startsWith("grok-4.3-");
   if (!isGrok43) {
     return { levels: [{ id: "off" }], defaultLevel: "off" };
   }

@@ -55,7 +55,6 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   includeManifestModelCatalogProviders?: boolean;
   includeSyntheticAuthProviders?: boolean;
@@ -245,4 +244,15 @@ export async function prepareProviderStaticCatalog(params: {
     providers: Object.freeze([...params.providers]),
     entries: Object.freeze(entries),
   });
+}
+
+/** Adapts prepared provider results into the in-memory registry source used by static snapshots. */
+export function resolvePreparedProviderStaticConfigs(
+  prepared: PreparedProviderStaticCatalog | undefined,
+): Record<string, ModelProviderConfig> {
+  const providers: Record<string, ModelProviderConfig> = {};
+  for (const { provider, result } of prepared?.entries ?? []) {
+    Object.assign(providers, normalizePluginDiscoveryResult({ provider, result }));
+  }
+  return providers;
 }

@@ -39,7 +39,7 @@ describe("prepared model runtime auth store", () => {
     expect(loadDurable).toHaveBeenCalledOnce();
   });
 
-  it("avoids durable reads when no external runtime overlay exists", () => {
+  it("returns the durable store when no external runtime overlay exists", () => {
     const loadDurable = vi.fn(() => ({ version: 1, profiles: {} }));
 
     expect(
@@ -47,7 +47,7 @@ describe("prepared model runtime auth store", () => {
         loadDurable,
         loadPublished: () => ({ version: 1, profiles: {} }),
       }),
-    ).toBeUndefined();
-    expect(loadDurable).not.toHaveBeenCalled();
+    ).toEqual({ version: 1, profiles: {} });
+    expect(loadDurable).toHaveBeenCalledOnce();
   });
 });

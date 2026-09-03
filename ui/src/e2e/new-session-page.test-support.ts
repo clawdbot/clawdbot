@@ -20,6 +20,7 @@ const NEW_SESSION_FEATURE_METHODS = [
   "agent.wait",
   "chat.metadata",
   "chat.startup",
+  "models.list",
   "sessions.create",
   "sessions.dispatch",
 ] as const;

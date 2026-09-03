@@ -13,6 +13,11 @@ const OPENAI_ACCOUNT_WIZARD_GROUP = {
   groupLabel: "OpenAI",
   groupHint: "ChatGPT/Codex sign-in or API key",
 } as const;
+const CODEX_API_KEY_IMPORT = {
+  migrationProviderId: "codex",
+  itemId: "auth:openai:api-key",
+  credentialKind: "api_key",
+} as const;
 
 export function createOpenAIProvider(): ProviderPlugin {
   return {
@@ -56,6 +61,7 @@ export function createOpenAIProvider(): ProviderPlugin {
         kind: "api_key",
         label: OPENAI_API_KEY_LABEL,
         hint: "Use your OpenAI API key directly",
+        credentialImport: CODEX_API_KEY_IMPORT,
         run: noopAuth,
         wizard: {
           choiceId: "openai-api-key",

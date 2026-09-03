@@ -488,13 +488,12 @@ describe("gateway startup benchmark script", () => {
     const startupTrace: Record<string, number> = {};
 
     testing.collectStartupTrace(
-      "[gateway] startup trace: sidecars.model-runtime-build agentCount=12 workspaceGroupCount=2 configuredFactsGroupCount=2 catalogSourceCount=0 credentialGroupCount=1 catalogGroupCount=0 runtimeRegistryCount=2 sourceConcurrencyLimitCount=2 fullCatalogConcurrencyLimitCount=1",
+      "[gateway] startup trace: sidecars.model-runtime-build agentCount=12 workspaceGroupCount=2 configuredFactsGroupCount=2 credentialGroupCount=1 runtimeRegistryCount=2 fullCatalogConcurrencyLimitCount=1",
       startupTrace,
     );
 
     expect(startupTrace["sidecars.model-runtime-build.agentCount"]).toBe(12);
     expect(startupTrace["sidecars.model-runtime-build.configuredFactsGroupCount"]).toBe(2);
-    expect(startupTrace["sidecars.model-runtime-build.catalogGroupCount"]).toBe(0);
     expect(startupTrace["sidecars.model-runtime-build.runtimeRegistryCount"]).toBe(2);
   });
 

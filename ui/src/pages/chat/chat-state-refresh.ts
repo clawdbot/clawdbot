@@ -49,7 +49,6 @@ type ChatStartupMetadataHandler = (
 type ChatMetadataBinding = {
   client: GatewayBrowserClient;
   scope: { agentId?: string; sessionKey: string };
-  version: number;
   isCurrent: () => boolean;
   unsubscribe: () => void;
 };
@@ -58,9 +57,6 @@ const metadataBindings = new WeakMap<ChatPageHost, ChatMetadataBinding>();
 export function retireChatMetadataRequests(host: ChatPageHost): void {
   metadataBindings.get(host)?.unsubscribe();
   metadataBindings.delete(host);
-  host.chatModelCatalog = [];
-  host.chatModelCatalogError = null;
-  host.chatModelsLoading = false;
 }
 
 function scheduleChatMetadataRefresh(callback: () => void) {
@@ -118,25 +114,23 @@ export function applyChatAgentOwnerTransition(
   host.chatAvatarReason = null;
   host.modelAuthStatusResult = null;
   host.modelAuthStatusError = null;
+  host.chatModelCatalog = [];
+  host.chatModelCatalogError = null;
+  host.chatModelsLoading = false;
   // Global chats retain their session key across agent selection. Replace agent-owned
   // bindings now so their old fences reject later publications.
   void refreshChatMetadata(host);
+  void loadChatModelCatalog(host);
   void refreshChatModelAuthStatus(host).finally(() => host.requestUpdate?.());
   void host.loadAssistantIdentity();
   host.requestUpdate?.();
 }
 
 function applyChatMetadataResult(
-  host: ChatPageHost,
   client: GatewayBrowserClient,
   agentId: string | null | undefined,
   result: ChatMetadataResult,
 ): void {
-  const models = Array.isArray(result.models) ? result.models : undefined;
-  if (models) {
-    host.chatModelCatalog = models;
-    host.chatModelCatalogError = null;
-  }
   // Missing commands keep the built-ins: commands.list uses the same server builder and fails too.
   applyRemoteSlashCommandsResult({
     client,
@@ -162,7 +156,6 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   const binding: ChatMetadataBinding = {
     client,
     scope,
-    version: 0,
     isCurrent: () =>
       metadataBindings.get(host) === binding &&
       host.connected &&
@@ -176,19 +169,11 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
       }
       if (update.type === "invalidated") {
         void refreshChatMetadata(host);
+        void loadChatModelCatalog(host);
         return;
       }
-      if (update.type === "loading") {
-        binding.version += 1;
-        host.chatModelsLoading = host.chatModelCatalog.length === 0;
-        host.chatModelCatalogError = null;
-      } else {
-        host.chatModelsLoading = false;
-        if (update.type === "result") {
-          applyChatMetadataResult(host, client, scope.agentId, update.result);
-        } else {
-          host.chatModelCatalogError = formatUiError(update.error);
-        }
+      if (update.type === "result") {
+        applyChatMetadataResult(client, scope.agentId, update.result);
       }
       host.requestUpdate?.();
     }),
@@ -196,7 +181,7 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
   metadataBindings.set(host, binding);
   const cached = peekChatMetadata(client, scope);
   if (cached) {
-    applyChatMetadataResult(host, client, scope.agentId, cached);
+    applyChatMetadataResult(client, scope.agentId, cached);
   }
   return binding;
 }
@@ -244,47 +229,45 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, opts?: { re
   }
 }
 
-export async function refreshChatModelCatalogOnDemand(host: ChatPageHost): Promise<void> {
-  if (!host.client || !host.connected) {
+export async function loadChatModelCatalog(
+  host: ChatPageHost,
+  opts: { refreshSessionList?: boolean } = {},
+): Promise<void> {
+  const client = host.client;
+  if (!client || !host.connected) {
     return;
   }
-  const binding = bindChatMetadata(host);
-  if (!binding) {
-    return;
-  }
-  const {
-    client,
-    scope: { agentId },
-  } = binding;
-  const version = binding.version;
-  const ownsRequest = () => binding.isCurrent() && binding.version === version;
+  const connectionEpoch = host.connectionEpoch;
+  const agentId = resolveChatAgentId(host);
+  const requestVersion = host.modelCatalogRequestVersion + 1;
+  host.modelCatalogRequestVersion = requestVersion;
+  const ownsRequest = () =>
+    host.client === client &&
+    host.connected &&
+    host.connectionEpoch === connectionEpoch &&
+    host.modelCatalogRequestVersion === requestVersion &&
+    resolveChatAgentId(host) === agentId;
   host.chatModelsLoading = host.chatModelCatalog.length === 0;
   host.chatModelCatalogError = null;
   host.requestUpdate?.();
   try {
-    await loadModelCatalog(client, {
-      agentId: agentId ?? "",
-      refreshIfDue: true,
-      rejectOnFailure: true,
-    });
-    if (binding.isCurrent()) {
-      await refreshChatMetadata(host);
-      // Full model discovery can complete after the session projection used at mount time.
-      // Refresh through the normal session owner so thinking/context metadata converges without
-      // letting the UI guess which provider- or runtime-specific levels are valid.
-      await refreshCurrentChatSessionList(host).catch(() => undefined);
+    const result = await loadModelCatalog(client, { agentId: agentId ?? "" });
+    if (ownsRequest()) {
+      host.chatModelCatalog = result.models;
+      host.chatModelCatalogError = null;
+      if (opts.refreshSessionList) {
+        // An explicit refresh can change session model metadata; converge through the session owner.
+        void refreshCurrentChatSessionList(host).catch(() => undefined);
+      }
     }
   } catch (error) {
     if (ownsRequest()) {
-      // Keep the startup/prepared snapshot usable while recording the failed
-      // discovery. Reopening the picker starts another uncached load.
       host.chatModelCatalogError = formatUiError(error);
     }
-  } finally {
-    if (ownsRequest()) {
-      host.chatModelsLoading = false;
-      host.requestUpdate?.();
-    }
+  }
+  if (ownsRequest()) {
+    host.chatModelsLoading = false;
+    host.requestUpdate?.();
   }
 }
 
@@ -448,6 +431,7 @@ export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {
     }
     void Promise.allSettled([
       refreshChatAvatar(host),
+      loadChatModelCatalog(host),
       ...(!opts?.startup ? [refreshChatMetadata(host)] : []),
     ]).finally(() => host.requestUpdate?.());
   });

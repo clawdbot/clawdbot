@@ -70,16 +70,12 @@ export async function detectSetupMigrationSources(params: {
   config: OpenClawConfig;
   runtime: RuntimeEnv;
 }): Promise<SetupMigrationDetection[]> {
-  const [
-    { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProviders },
-    { createMigrationLogger },
-    { resolveStateDir },
-  ] = await Promise.all([
-    loadMigrationProviderRuntimeModule(),
-    loadMigrationContextModule(),
-    loadConfigPathsModule(),
-  ]);
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
+  const [{ resolvePluginMigrationProviders }, { createMigrationLogger }, { resolveStateDir }] =
+    await Promise.all([
+      loadMigrationProviderRuntimeModule(),
+      loadMigrationContextModule(),
+      loadConfigPathsModule(),
+    ]);
   const stateDir = resolveStateDir();
   const logger = createMigrationLogger(params.runtime);
   const detections: SetupMigrationDetection[] = [];
@@ -275,12 +271,7 @@ async function resolveSetupMigrationProvider(params: {
   providerId: string;
   baseConfig: OpenClawConfig;
 }): Promise<{ provider: MigrationProviderPlugin; baseConfig: OpenClawConfig }> {
-  const { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProvider } =
-    await loadMigrationProviderRuntimeModule();
-  ensureStandaloneMigrationProviderRegistryLoaded({
-    cfg: params.baseConfig,
-    providerId: params.providerId,
-  });
+  const { resolvePluginMigrationProvider } = await loadMigrationProviderRuntimeModule();
   const existing = resolvePluginMigrationProvider({
     providerId: params.providerId,
     cfg: params.baseConfig,

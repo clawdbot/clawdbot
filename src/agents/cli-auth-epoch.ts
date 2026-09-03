@@ -8,12 +8,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureAuthProfileStore, loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
-import {
-  readCodexCliCredentialsCached,
-  readGeminiCliCredentialsCached,
-  type CodexCliCredential,
-  type GeminiCliCredential,
-} from "./cli-credentials.js";
+import { readGeminiCliCredentialsCached } from "./cli-credentials.js";
 import {
   resolveCliExecutableIdentity,
   type CliExecutableIdentity,
@@ -27,14 +22,12 @@ import {
 import type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 
 type CliAuthEpochDeps = {
-  readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
   readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
   ensureAuthProfileStore: typeof ensureAuthProfileStore;
   loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
 };
 
 const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
-  readCodexCliCredentialsCached,
   readGeminiCliCredentialsCached,
   ensureAuthProfileStore,
   loadAuthProfileStoreForRuntime,
@@ -93,21 +86,6 @@ function encodeOAuthIdentity(credential: {
     credential.projectId ?? null,
     credential.accountId ?? null,
   ]);
-}
-
-function encodeCodexCredential(credential: CodexCliCredential): string {
-  return encodeOAuthIdentity(credential);
-}
-
-function encodeGeminiCredential(credential: GeminiCliCredential): string {
-  // Delegate to the shared OAuth-identity encoder. The Gemini CLI reader
-  // lifts the Google-account identity (sub, email) off the openid id_token
-  // onto the credential, so the encoder fingerprints the user through stable,
-  // non-secret identity fields — matching the Claude/Codex OAuth contract.
-  // When the id_token is absent (older logins, scope omitted), the encoder
-  // falls back to a provider-keyed constant, the same identity-less behavior
-  // the Claude CLI OAuth branch tolerates.
-  return encodeOAuthIdentity(credential);
 }
 
 function encodeAuthProfileCredential(credential: AuthProfileCredential): string {
@@ -169,40 +147,21 @@ function encodeAuthProfileEpochPart(
   return `profile:${authProfileId}:${credentialHash}`;
 }
 
+// Gemini CLI is the only backend whose local login OpenClaw still fingerprints directly.
+// Its reader lifts the Google-account identity off the id_token, so the shared OAuth
+// encoder keys the user by stable, non-secret fields.
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
-  switch (provider) {
-    case "codex-cli": {
-      const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
-        ttlMs: 5000,
-        allowKeychainPrompt: false,
-      });
-      return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
-    }
-    case "google-gemini-cli": {
-      const credential = cliAuthEpochDeps.readGeminiCliCredentialsCached({
-        ttlMs: 5000,
-      });
-      return credential ? hashCliAuthEpochPart(encodeGeminiCredential(credential)) : undefined;
-    }
-    default:
-      return undefined;
+  if (provider !== GEMINI_CLI_PROVIDER_ID) {
+    return undefined;
   }
+  const credential = cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs: 5000 });
+  return credential ? hashCliAuthEpochPart(encodeOAuthIdentity(credential)) : undefined;
 }
 
 function getLocalCliCredential(provider: string): AuthProfileCredential | undefined {
-  switch (provider) {
-    case "codex-cli":
-      return (
-        cliAuthEpochDeps.readCodexCliCredentialsCached({
-          ttlMs: 0,
-          allowKeychainPrompt: false,
-        }) ?? undefined
-      );
-    case "google-gemini-cli":
-      return cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs: 0 }) ?? undefined;
-    default:
-      return undefined;
-  }
+  return provider === GEMINI_CLI_PROVIDER_ID
+    ? (cliAuthEpochDeps.readGeminiCliCredentialsCached({ ttlMs: 0 }) ?? undefined)
+    : undefined;
 }
 
 function getAuthProfileCredential(

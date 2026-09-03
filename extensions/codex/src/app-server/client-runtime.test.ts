@@ -115,6 +115,18 @@ describe("Codex app-server client runtime", () => {
     );
   });
 
+  it("does not install an OpenClaw refresh handler for native clients", () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const addRequestHandler = vi.spyOn(harness.client, "addRequestHandler");
+    ensureCodexAppServerClientRuntime(harness.client, {
+      agentDir: "/tmp/agent",
+      authMode: "native",
+    });
+
+    expect(addRequestHandler).not.toHaveBeenCalled();
+  });
+
   it("rejects ChatGPT refresh on a prepared API-key client", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

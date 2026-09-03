@@ -972,6 +972,33 @@ describe("ModelRegistry models.json auth", () => {
     expect(registry.getError()).toBeUndefined();
     expect(registry.find("zai", "glm-5.1")).toBeUndefined();
   });
+
+  it("ignores generated plugin catalogs for deferred plugins until they are activated", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "llama-cpp", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          "llama-cpp": {
+            baseUrl: "http://127.0.0.1:19432/v1",
+            api: "openai-completions",
+            models: [{ id: "gemma-4-e4b-it-q4_k_m", name: "Gemma 4 E4B" }],
+          },
+        },
+      },
+    });
+
+    const metadataSnapshot = {
+      ...pluginOwnerSnapshot("llama-cpp", "llama-cpp"),
+      plugins: [{ id: "llama-cpp", activation: { onStartup: false } }],
+    };
+    const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath, {
+      pluginMetadataSnapshot: metadataSnapshot,
+    });
+
+    expect(registry.find("llama-cpp", "gemma-4-e4b-it-q4_k_m")).toBeUndefined();
+  });
 });
 
 describe("ModelRegistry OAuth provider ownership", () => {

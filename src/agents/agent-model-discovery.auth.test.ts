@@ -6,10 +6,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { describe, expect, it, vi } from "vitest";
 import {
   resolveAgentCredentialMapFromStore,
-  resolveUsableAgentCredentialModes,
+  resolveProviderAuthFacts,
 } from "./agent-auth-credentials.js";
 import { addEnvBackedAgentCredentials } from "./agent-auth-discovery-core.js";
-import { discoverAuthStorage } from "./agent-model-discovery.js";
+import { discoverAuthStorageFacts } from "./agent-model-discovery.js";
 import type { AuthProfileStore } from "./auth-profiles.js";
 import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 
@@ -68,7 +68,7 @@ function writeAuthProfilesSqlite(agentDir: string, store: AuthProfileStore): voi
   writePersistedAuthProfileStoreRaw(store, agentDir);
 }
 
-describe("discoverAuthStorage", () => {
+describe("discoverAuthStorageFacts", () => {
   it("converts runtime auth profiles into agent discovery credentials", () => {
     const credentials = resolveAgentCredentialMapFromStore({
       version: 1,
@@ -107,17 +107,17 @@ describe("discoverAuthStorage", () => {
     expect(codexCredential?.type).toBe("oauth");
     expect(codexCredential?.access).toBe("oauth-access");
     expect(codexCredential?.refresh).toBe("oauth-refresh");
-    expect(resolveUsableAgentCredentialModes(credentials)).toEqual({
-      anthropic: "api_key",
-      openai: "oauth",
-      openrouter: "api_key",
+    expect(resolveProviderAuthFacts(credentials)).toEqual({
+      anthropic: { mode: "api_key" },
+      openai: { mode: "oauth" },
+      openrouter: { mode: "api_key" },
     });
     expect(
-      resolveUsableAgentCredentialModes({
+      resolveProviderAuthFacts({
         bearer: { type: "token", token: "runtime-token", expires: Date.now() + 60_000 },
         expired: { type: "token", token: "expired-token", expires: Date.now() - 1 },
       }),
-    ).toEqual({ bearer: "token" });
+    ).toEqual({ bearer: { mode: "token" } });
   });
 
   it("drops runtime auth profiles with out-of-range expiry values", () => {
@@ -219,13 +219,13 @@ describe("discoverAuthStorage", () => {
           },
         },
       });
-      const authStorage = discoverAuthStorage(agentDir, {
+      const authStorage = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
         config: {
           auth: { order: { openai: ["openai:key", "openai:oauth"] } },
         },
-      });
+      }).authStorage;
 
       expect(authStorage.get("openai")).toEqual({
         type: "api_key",
@@ -286,7 +286,7 @@ describe("discoverAuthStorage", () => {
     expect(discoveryCredentials.openrouter?.type).toBe("api_key");
     expect(discoveryCredentials.anthropic?.type).toBe("api_key");
     expect(discoveryCredentials.expired).toBeUndefined();
-    expect(resolveUsableAgentCredentialModes(discoveryCredentials)).toEqual({});
+    expect(resolveProviderAuthFacts(discoveryCredentials)).toEqual({});
   });
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
@@ -302,15 +302,15 @@ describe("discoverAuthStorage", () => {
         },
       });
 
-      const readOnlyStorage = discoverAuthStorage(agentDir, {
+      const readOnlyStorage = discoverAuthStorageFacts(agentDir, {
         readOnly: true,
         skipExternalAuthProfiles: true,
         env: {},
-      });
-      const runtimeStorage = discoverAuthStorage(agentDir, {
+      }).authStorage;
+      const runtimeStorage = discoverAuthStorageFacts(agentDir, {
         skipExternalAuthProfiles: true,
         env: {},
-      });
+      }).authStorage;
 
       expect(readOnlyStorage.hasAuth("fixture-ref-provider")).toBe(true);
       expect(runtimeStorage.hasAuth("fixture-ref-provider")).toBe(false);
@@ -346,11 +346,11 @@ describe("discoverAuthStorage", () => {
           },
         });
 
-        const storage = discoverAuthStorage(agentDir, {
+        const storage = discoverAuthStorageFacts(agentDir, {
           inheritedAuthDir,
           skipExternalAuthProfiles: true,
           env: {},
-        });
+        }).authStorage;
 
         expect(storage.get("inherited-provider")).toEqual({
           type: "api_key",

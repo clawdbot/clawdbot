@@ -1,9 +1,4 @@
-import type { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import type {
-  loadAuthProfileStoreForRuntime,
-  updateAuthProfileStoreWithLock,
-} from "../agents/auth-profiles/store.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
+import type { loadAuthProfileStoreForRuntime } from "../agents/auth-profiles/store.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
 import type {
@@ -20,7 +15,6 @@ import type {
 } from "../plugins/provider-auth-choices.js";
 import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
-import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
@@ -30,22 +24,14 @@ import type {
   SetupInferenceManualProvider,
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
-import { resolveSetupInferenceCandidateBrandId } from "./setup-inference-brand.js";
-import type {
-  captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
 /**
- * Inference is the one required onboarding step (docs/cli/setup.md
- * "Setup bootstrap"). This module gives structured clients (macOS app) the
- * same ladder the conversation uses, with one hard guarantee: a candidate is
- * persisted as the default model only after a real completion round-trips.
- * A failing candidate must never leave config pointing at a broken model.
+ * Inference is the one required onboarding step (docs/cli/setup.md "Setup bootstrap").
+ * Structured clients (macOS app) and the CLI share one ladder with one guarantee: a
+ * candidate becomes the default model only after a real completion round-trips.
  */
 export const SETUP_INFERENCE_TEST_TIMEOUT_MS = 90_000;
 
@@ -98,7 +84,7 @@ export type SetupInferenceDetection = {
   /** Interactive provider-owned browser and device-code sign-in methods. */
   authOptions: SetupInferenceAuthOption[];
   /** Provider-owned app-guided local model setup methods. */
-  prepareOptions?: SetupInferencePrepareOption[];
+  prepareOptions: SetupInferencePrepareOption[];
   /** Curated tools clients can offer when no existing AI access is detected. */
   recommendedInstalls: SetupRecommendedInstall[];
   /** Resolved workspace the setup apply would use (display + default). */
@@ -130,40 +116,9 @@ export type ActivateSetupInferenceResult =
     }
   | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
-/**
- * The config commit may have happened, so callers must verify current setup
- * instead of treating this like a definitive candidate failure and retrying.
- */
-export class SetupInferenceActivationIndeterminateError extends Error {
-  override name = "SetupInferenceActivationIndeterminateError";
-}
-
-export class SetupInferenceActivationUnavailableError extends Error {
-  override name = "SetupInferenceActivationUnavailableError";
-}
-
-/**
- * The live-tested owner no longer matches current config. Activation maps this
- * to `{ ok: false, status: "auth" }` so the guided-onboarding ladder can move
- * to its next candidate instead of crashing the CLI.
- */
-export class SetupInferenceOwnerDriftError extends Error {
-  override name = "SetupInferenceOwnerDriftError";
-}
-
 export type VerifySetupInferenceResult =
-  | {
-      ok: true;
-      modelRef: string;
-      latencyMs: number;
-      authProfiles?: ProviderAuthResult["profiles"];
-    }
-  | {
-      ok: false;
-      status: SetupInferenceFailureStatus;
-      error: string;
-      authProfiles?: ProviderAuthResult["profiles"];
-    };
+  | { ok: true; modelRef: string; latencyMs: number }
+  | { ok: false; status: SetupInferenceFailureStatus; error: string };
 
 export type CompleteSetupInferenceResult =
   | { ok: true; modelRef: string; latencyMs: number; text: string }
@@ -209,7 +164,7 @@ export type ActivateSetupInferenceParams = {
       typeof import("../config/runtime-write-application.js").createRuntimeConfigWriteApplication
     >,
   ) => void;
-  deps?: ActivateSetupInferenceDeps;
+  deps?: SetupInferenceDeps;
 };
 
 export class SetupInferenceCancelledError extends Error {
@@ -257,38 +212,17 @@ type SetupInferenceRunEmbeddedAgent = (
   },
 ) => ReturnType<typeof import("../agents/embedded-agent.js").runEmbeddedAgent>;
 
-export type ActivateSetupInferenceDeps = {
+/** Injection points for the boundaries the confirmation turn crosses. */
+export type SetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
   runEmbeddedAgent?: SetupInferenceRunEmbeddedAgent;
   runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
+  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
+  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
+  resolvePluginProviders?: typeof resolvePluginProvidersCore;
+  enablePluginInConfig?: typeof enablePluginInConfig;
   ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
   transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
-  refreshPluginRegistryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").refreshPluginRegistryAfterConfigMutation;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-  updateAuthProfileStoreWithLock?: typeof updateAuthProfileStoreWithLock;
-  loadPersistedAuthProfileStore?: typeof loadPersistedAuthProfileStore;
-  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
-  ensureAuthProfileStore?: typeof import("../agents/auth-profiles/store.js").ensureAuthProfileStore;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
-  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
-  captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  readPersistedInstalledPluginIndexInstallRecords?: typeof import("../plugins/installed-plugin-index-records.js").readPersistedInstalledPluginIndexInstallRecords;
-  markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
-  clearLoadInstalledPluginIndexInstallRecordsCache?: typeof import("../plugins/installed-plugin-index-records.js").clearLoadInstalledPluginIndexInstallRecordsCache;
-  clearPluginMetadataLifecycleCaches?: typeof import("../plugins/plugin-metadata-lifecycle.js").clearPluginMetadataLifecycleCaches;
-  invalidatePluginRuntimeDiscoveryAfterConfigMutation?: typeof import("../plugins/registry-refresh.js").invalidatePluginRuntimeDiscoveryAfterConfigMutation;
-  disposeOpenClawAgentDatabaseByPath?: typeof import("../state/openclaw-agent-db.js").disposeOpenClawAgentDatabaseByPath;
-  createTempDir?: () => Promise<string>;
-  removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
 };
 
@@ -356,7 +290,13 @@ export function resolveCandidatePresentation(
       entry.choiceId === candidate.kind ||
       entry.deprecatedChoiceIds?.includes(candidate.kind) === true,
   );
-  const brandId = resolveSetupInferenceCandidateBrandId(candidate, choice?.providerId);
+  // Built-in CLI detection kinds are runtime identities, not display brands.
+  const brandId =
+    candidate.kind === "claude-cli"
+      ? "claude"
+      : candidate.kind === "codex-cli"
+        ? "openai"
+        : choice?.providerId?.trim() || candidate.modelRef.split("/", 1)[0]?.trim();
   return {
     ...(brandId ? { brandId } : {}),
     ...(choice?.icon ? { icon: choice.icon } : {}),

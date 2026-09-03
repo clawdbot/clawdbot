@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  invalidateChatMetadataStore,
-  beginChatMetadataPublication,
-} from "../../lib/chat/chat-metadata-store.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import { contextWith, deferred, renderControl } from "./model-control.test-support.ts";
 import { NewSessionModelControl } from "./model-control.ts";
 
@@ -135,6 +132,30 @@ describe("new-session model runtime", () => {
     expect(request).toHaveBeenCalledOnce();
     expect(request.mock.calls.some(([method]) => method === "sessions.catalog.list")).toBe(false);
     expect(container.querySelector("[data-chat-model-target-group]")).toBeNull();
+  });
+
+  it("does not reload a ready catalog when the picker opens", async () => {
+    const fast = { id: "fast", name: "Fast", provider: "openai" };
+    const { context, request } = contextWith([fast]);
+    const control = new NewSessionModelControl(() => undefined);
+
+    control.load(context, "main", true);
+    await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector('[data-chat-model-option="openai/fast"]'),
+      ).not.toBeNull(),
+    );
+    request.mockClear();
+
+    const container = renderControl(control, context);
+    const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__model-picker");
+    picker!.open = true;
+
+    expect(request).not.toHaveBeenCalled();
+    expect(
+      renderControl(control, context).querySelector('[data-chat-model-option="openai/fast"]'),
+    ).not.toBeNull();
   });
 
   it("preserves a browser preference when an older server omits thinking profiles", async () => {
@@ -531,7 +552,7 @@ describe("new-session model runtime", () => {
     expect([...options].every((option) => option.dataset.chatModelSetup === "true")).toBe(true);
     expect(container.textContent).toContain("No models available");
     container.querySelector<HTMLButtonElement>('[data-chat-model-setup="true"]')?.click();
-    expect(navigate).toHaveBeenCalledWith("model-setup");
+    expect(navigate).toHaveBeenCalledWith("model-providers", MODELS_CONNECT_NAVIGATION);
   });
 
   it("keeps a successful empty catalog explicit when its refresh fails", async () => {
@@ -568,34 +589,6 @@ describe("new-session model runtime", () => {
     expect(container.textContent).not.toContain("GPT-5.6 Luna");
   });
 
-  it("updates a verified-empty catalog when shared chat metadata publishes models", async () => {
-    const { context, request } = contextWith([]);
-    const control = new NewSessionModelControl(() => undefined);
-
-    control.load(context, "main", true);
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector('[data-chat-model-catalog-state="ready"]'),
-      ).not.toBeNull(),
-    );
-    expect(renderControl(control, context).textContent).toContain("No models available");
-
-    beginChatMetadataPublication(context.gateway.snapshot.client!, { agentId: "main" }).publish({
-      commands: [],
-      models: [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
-    });
-
-    await vi.waitFor(() =>
-      expect(
-        renderControl(control, context).querySelector(
-          '[data-chat-model-option="openai/gpt-5.6-luna"]',
-        ),
-      ).not.toBeNull(),
-    );
-    expect(renderControl(control, context).textContent).not.toContain("No models available");
-    expect(request).toHaveBeenCalledOnce();
-  });
-
   it("treats a disconnected stale all-cold catalog as offline and non-authoritative", async () => {
     const coldModels: ModelCatalogEntry[] = [
       {
@@ -621,7 +614,7 @@ describe("new-session model runtime", () => {
     } as unknown as ApplicationContext;
     (context.gateway as { snapshot: ApplicationContext["gateway"]["snapshot"] }).snapshot =
       offlineContext.gateway.snapshot;
-    invalidateChatMetadataStore(context.gateway.snapshot.client!);
+    control.load(offlineContext, "main", true, { agent });
 
     const container = renderControl(control, offlineContext, "main", agent);
     expect(container.querySelector('[data-chat-model-catalog-state="offline"]')).not.toBeNull();
@@ -813,7 +806,6 @@ describe("new-session model runtime", () => {
     );
 
     request.mockReturnValueOnce(reconnect.promise);
-    invalidateChatMetadataStore(context.gateway.snapshot.client!);
     control.invalidate(false);
     control.load(context, "main", true);
 

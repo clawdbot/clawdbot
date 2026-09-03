@@ -1,5 +1,4 @@
 // Legacy runtime agent config migrations for memory, heartbeat, sandbox, and runtime policy keys.
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
@@ -25,14 +24,9 @@ import {
   modelEntryWithRuntimePolicy,
   selectedCanonicalModelRefsForRuntimePolicy,
 } from "./legacy-runtime-model-policy.js";
-import { listLegacyRuntimeModelProviderAliases } from "./legacy-runtime-model-providers.js";
+import { resolveLegacyCliRuntimeAlias } from "./legacy-runtime-model-providers.js";
 
 const CHANNEL_HEARTBEAT_KEYS = new Set(["showOk", "showAlerts", "useIndicator"]);
-
-type LegacyAgentRuntimeIntent = {
-  provider: string;
-  runtime: string;
-};
 
 const LEGACY_MEMORY_SEARCH_FIELD_MAPPINGS = [
   { legacyKey: "chunkSize", parentKey: "chunking", canonicalKey: "tokens" },
@@ -636,27 +630,12 @@ function removeLegacyAgentRuntimePolicy(
   }
 }
 
-function resolveLegacyAgentRuntimeIntent(raw: unknown): LegacyAgentRuntimeIntent | undefined {
-  const record = getRecord(raw);
-  if (!record) {
-    return undefined;
-  }
-  const runtime = typeof record.id === "string" ? record.id.trim().toLowerCase() : "";
-  if (!runtime || runtime === "auto" || runtime === "openclaw") {
-    return undefined;
-  }
-  const alias = listLegacyRuntimeModelProviderAliases().find(
-    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
-  );
-  return alias ? { provider: alias.provider, runtime: alias.runtime } : undefined;
-}
-
 function preserveLegacyWholeAgentRuntimePolicy(
   container: Record<string, unknown>,
   pathLabel: string,
   changes: string[],
 ): void {
-  const intent = resolveLegacyAgentRuntimeIntent(container.agentRuntime);
+  const intent = resolveLegacyCliRuntimeAlias(getRecord(container.agentRuntime)?.id);
   if (!intent) {
     return;
   }

@@ -112,7 +112,6 @@ async function coldRuntime(clients: SharedGatewayAuthClient[] = []) {
   );
   activateSecretsRuntimeSnapshotWithSource(initial, config);
   await refreshPreparedModelRuntimeSnapshots(requireRuntimeConfig(), {
-    catalogMode: "static",
     gatewayLifecycle: true,
   });
   expect(

@@ -20,15 +20,16 @@ import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/for
 import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
-import type {
-  DefaultModelSelection,
-  ModelPickerEntry,
-  ModelProviderCard,
-  ModelProviderLogoutTarget,
-  ProviderOption,
+import {
+  classifyModelProviderCard,
+  type DefaultModelSelection,
+  type ModelPickerEntry,
+  type ModelProviderCard,
+  type ModelProviderAccessOption,
+  type ModelProviderLogoutTarget,
 } from "./data.ts";
 import { renderDefaultModels } from "./default-models-view.ts";
-import { hasVerifiedProvider, renderProviderStatus } from "./view-status.ts";
+import { renderProviderStatus } from "./view-status.ts";
 
 export type ModelProviderRowMessage = {
   kind: "success" | "error";
@@ -45,7 +46,6 @@ type ModelProvidersViewProps = {
   supplementalLoading: boolean;
   updatedAt: number | null;
   costDays: number;
-  credentialAgentLabel: string;
   cards: ModelProviderCard[];
   configuredModels: ModelPickerEntry[];
   defaultModels: DefaultModelSelection;
@@ -54,8 +54,6 @@ type ModelProvidersViewProps = {
   fastMode: FastMode | undefined;
   fastModeOverridden: boolean;
   configBusy: boolean;
-  quickAddSupported: boolean;
-  unconfiguredProviders: ProviderOption[];
   canMutate: boolean;
   mutationBlockedReason: string | null;
   /** Usage never converged before the retry budget ran out; cards lack usage. */
@@ -67,9 +65,7 @@ type ModelProvidersViewProps = {
   keyEditorProvider: string | null;
   keyDraft: string;
   pendingLogoutProvider: string | null;
-  addProviderOpen: boolean;
-  addProviderId: string;
-  addProviderKey: string;
+  providerLoginBusy: boolean;
   onRefresh: () => void;
   onOpenKeyEditor: (provider: string) => void;
   onCloseKeyEditor: () => void;
@@ -80,10 +76,7 @@ type ModelProvidersViewProps = {
   onRequestLogout: (provider: string) => void;
   onCancelLogout: () => void;
   onLogout: (cardId: string, targets: ModelProviderLogoutTarget[]) => void;
-  onAddProviderToggle: () => void;
-  onAddProviderIdChange: (provider: string) => void;
-  onAddProviderKeyChange: (value: string) => void;
-  onAddProvider: () => void;
+  onLogin: (cardId: string, option: ModelProviderAccessOption) => void;
   onPrimaryChange: (model: string) => void;
   onFallbackChange: (model: string | null) => void;
   onUtilityChange: (model: string | null) => void;
@@ -131,11 +124,17 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   if (!cost || (cost.totalTokens === 0 && cost.totalCost === 0)) {
     return nothing;
   }
+  const costUnavailable = cost.totalCost === 0 && cost.missingCostEntries > 0;
+  const incompleteCost = cost.totalCost > 0 && cost.missingCostEntries > 0;
   return html`
     <div class="model-providers__local-cost">
       <div class="provider-usage-billing-row">
         <span>${t("modelProviders.localCost", { days: String(costDays) })}</span>
-        <strong>${formatCost(cost.totalCost)}</strong>
+        <strong title=${incompleteCost ? t("modelProviders.costIncomplete") : nothing}
+          >${costUnavailable
+            ? t("modelProviders.costUnavailable")
+            : formatCost(cost.totalCost)}</strong
+        >
       </div>
       <div class="model-providers__local-cost-detail">
         ${t("modelProviders.localCostDetail", {
@@ -147,16 +146,33 @@ function renderLocalCost(card: ModelProviderCard, costDays: number) {
   `;
 }
 
-function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
+function renderCredentialSummary(card: ModelProviderCard) {
   const oauthCount = card.profiles.filter((profile) => profile.type === "oauth").length;
   const tokenCount = card.profiles.filter((profile) => profile.type === "token").length;
   const apiProfileCount = card.profiles.filter((profile) => profile.type === "api_key").length;
+  const unavailableMessage = classifyModelProviderCard(card).message;
   const parts = [];
-  if (oauthCount > 0) {
-    parts.push(t("modelProviders.credentials.oauth", { count: String(oauthCount) }));
+  if (unavailableMessage) {
+    parts.push(unavailableMessage);
+  } else if (oauthCount > 0) {
+    parts.push(
+      t(
+        oauthCount === 1
+          ? "modelProviders.credentials.oauthOne"
+          : "modelProviders.credentials.oauthMany",
+        { count: String(oauthCount) },
+      ),
+    );
   }
   if (tokenCount > 0) {
-    parts.push(t("modelProviders.credentials.tokenProfiles", { count: String(tokenCount) }));
+    parts.push(
+      t(
+        tokenCount === 1
+          ? "modelProviders.credentials.tokenOne"
+          : "modelProviders.credentials.tokenMany",
+        { count: String(tokenCount) },
+      ),
+    );
   }
   if (card.apiKey?.source === "config") {
     parts.push(t("modelProviders.credentials.configKey"));
@@ -167,14 +183,27 @@ function renderCredentialSummary(card: ModelProviderCard, agentLabel: string) {
         : t("modelProviders.credentials.envKey"),
     );
   } else if (apiProfileCount > 0) {
-    parts.push(t("modelProviders.credentials.profileKey", { count: String(apiProfileCount) }));
+    parts.push(
+      t(
+        apiProfileCount === 1
+          ? "modelProviders.credentials.profileKeyOne"
+          : "modelProviders.credentials.profileKeyMany",
+        { count: String(apiProfileCount) },
+      ),
+    );
   }
+  if (parts.length === 0 && card.runtimeLabels.length === 0) {
+    return nothing;
+  }
+  const runtimeOnly = parts.length === 0;
   return html`
     <div class="model-providers__credentials">
-      <span>${t("modelProviders.credentials.label", { agent: agentLabel })}</span>
-      <strong
-        >${parts.length > 0 ? parts.join(" · ") : t("modelProviders.credentials.none")}</strong
+      <span
+        >${runtimeOnly
+          ? t("modelProviders.credentials.runtime")
+          : t("modelProviders.credentials.label")}</span
       >
+      <strong>${runtimeOnly ? card.runtimeLabels.join(" · ") : parts.join(" · ")}</strong>
     </div>
   `;
 }
@@ -263,7 +292,7 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
   const credentialProviders = card.credentialProviderIds.length
     ? card.credentialProviderIds
     : [card.id];
-  const isConfigured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+  const isConfigured = classifyModelProviderCard(card).configured;
   const canLogout = card.logoutTargets.length > 0;
   const probeBusy = Boolean(props.busy[`probe:${card.id}`]);
   const keyBusy = Boolean(props.busy[`key:${card.id}`]);
@@ -277,6 +306,26 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
     : blocked;
   return html`
     <div class="model-providers__card-actions">
+      ${card.accessOptions.map(
+        (option) => html`
+          <button
+            class="btn btn--sm"
+            aria-label=${t(
+              option.mode === "login"
+                ? "modelSetup.unavailable.signIn"
+                : "modelProviders.setup.action",
+              { provider: option.label },
+            )}
+            ?disabled=${mutationDisabled || props.providerLoginBusy}
+            title=${blocked}
+            @click=${() => props.onLogin(card.id, option)}
+          >
+            ${option.mode === "setup"
+              ? t("modelProviders.setup.action", { provider: option.label })
+              : t("modelSetup.unavailable.signIn", { provider: option.label })}
+          </button>
+        `,
+      )}
       ${isConfigured
         ? html`
             <button
@@ -355,6 +404,10 @@ function renderProviderActions(card: ModelProviderCard, props: ModelProvidersVie
 function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewProps) {
   const models = modelsText(card);
   const message = props.messages[`key:${card.id}`] ?? props.messages[card.id];
+  const hasUsage = Boolean(
+    card.usage ||
+    (card.localCost && (card.localCost.totalTokens > 0 || card.localCost.totalCost > 0)),
+  );
   return html`
     <div
       class="settings-row settings-row--stacked model-providers__row"
@@ -365,9 +418,7 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderBrandIcon(card.id, { className: "model-providers__icon" })}
           <div class="settings-row__text">
             <span class="settings-row__title">${card.displayName}</span>
-            <span class="settings-row__desc"
-              >${card.id}${models ? html` · ${models}` : nothing}</span
-            >
+            ${models ? html`<span class="settings-row__desc">${models}</span>` : nothing}
           </div>
         </div>
         <div class="settings-row__control">
@@ -375,100 +426,27 @@ function renderProviderRow(card: ModelProviderCard, props: ModelProvidersViewPro
           ${renderProviderStatus(card)}
         </div>
       </div>
-      ${renderCredentialSummary(card, props.credentialAgentLabel)}
-      <div
-        class="model-providers__global-metrics"
-        aria-busy=${props.supplementalLoading ? "true" : "false"}
-      >
-        <div class="model-providers__global-metrics-title">${t("modelProviders.globalUsage")}</div>
-        ${card.usage
-          ? renderProviderUsageDetails(card.usage)
-          : html`<div class="model-providers__no-stats">
-              ${t(props.supplementalLoading ? "common.loading" : "modelProviders.noStats")}
-            </div>`}
-        ${renderLocalCost(card, props.costDays)}
-      </div>
+      ${renderCredentialSummary(card)}
+      ${hasUsage
+        ? html`<div
+            class="model-providers__global-metrics"
+            aria-busy=${props.supplementalLoading ? "true" : "false"}
+          >
+            <div class="model-providers__global-metrics-title">
+              ${t("modelProviders.globalUsage")}
+            </div>
+            ${card.usage ? renderProviderUsageDetails(card.usage) : nothing}
+            ${renderLocalCost(card, props.costDays)}
+          </div>`
+        : nothing}
       ${renderProviderActions(card, props)} ${renderKeyEditor(card, props)}
       ${renderProbeResult(props.probeResults[card.id])} ${renderMutationMessage(message)}
     </div>
   `;
 }
 
-function renderAddProvider(props: ModelProvidersViewProps) {
-  const busy = Boolean(props.busy.add);
-  const disabled = configMutationDisabled(props) || busy;
-  const rows = html`
-    ${props.unconfiguredProviders.length === 0
-      ? renderSettingsEmpty(t("modelProviders.add.none"))
-      : nothing}
-    ${props.addProviderOpen
-      ? html`
-          <div class="settings-row settings-row--stacked">
-            <div class="model-providers__add-form">
-              <label class="field">
-                <span>${t("modelProviders.add.provider")}</span>
-                <select
-                  class="settings-select"
-                  .value=${props.addProviderId}
-                  ?disabled=${disabled}
-                  @change=${(event: Event) =>
-                    props.onAddProviderIdChange((event.target as HTMLSelectElement).value)}
-                >
-                  <option value="">${t("modelProviders.add.selectProvider")}</option>
-                  ${props.unconfiguredProviders.map(
-                    (provider) =>
-                      html`<option value=${provider.id}>${provider.displayName}</option>`,
-                  )}
-                </select>
-              </label>
-              <label class="field">
-                <span>${t("modelProviders.apiKey.label")}</span>
-                <input
-                  type="password"
-                  autocomplete="off"
-                  placeholder=${t("modelProviders.apiKey.placeholder")}
-                  .value=${props.addProviderKey}
-                  ?disabled=${disabled}
-                  @input=${(event: Event) =>
-                    props.onAddProviderKeyChange((event.target as HTMLInputElement).value)}
-                />
-              </label>
-              <button
-                class="btn primary"
-                ?disabled=${disabled || !props.addProviderId || !props.addProviderKey.trim()}
-                @click=${props.onAddProvider}
-              >
-                ${props.busy.add ? t("modelProviders.saving") : t("modelProviders.add.save")}
-              </button>
-            </div>
-            ${renderMutationMessage(props.messages.add)}
-          </div>
-        `
-      : nothing}
-  `;
-  return renderSettingsSection(
-    {
-      title: t("modelProviders.add.title"),
-      description: t("modelProviders.add.subtitle"),
-      actions: html`
-        <button
-          class="btn btn--sm"
-          ?disabled=${busy ||
-          (!props.addProviderOpen &&
-            (configMutationDisabled(props) || props.unconfiguredProviders.length === 0))}
-          title=${props.mutationBlockedReason ?? ""}
-          @click=${props.onAddProviderToggle}
-        >
-          ${props.addProviderOpen ? t("common.cancel") : t("modelProviders.add.action")}
-        </button>
-      `,
-    },
-    rows,
-  );
-}
-
 function renderModelReadiness(props: ModelProvidersViewProps) {
-  const signedIn = props.cards.some(hasVerifiedProvider);
+  const signedIn = props.cards.some((card) => classifyModelProviderCard(card).verified);
   return html`
     <div class="model-providers__setup" data-model-readiness="model-required">
       ${renderSettingsSection(
@@ -611,7 +589,6 @@ export function renderModelProviders(props: ModelProvidersViewProps) {
       },
       providerRows,
     )}
-    ${props.quickAddSupported ? renderAddProvider(props) : nothing}
     ${props.providerUsageStalled
       ? html`<div class="callout warning" role="status">${t("usage.providerUsage.stalled")}</div>`
       : nothing}

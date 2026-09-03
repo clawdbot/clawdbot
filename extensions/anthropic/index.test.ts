@@ -1373,6 +1373,29 @@ describe("anthropic provider replay hooks", () => {
     }
   });
 
+  it("marks setup-token prompts as sensitive for remote wizard clients", async () => {
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+    const setupTokenAuth = provider.auth.find((entry) => entry.id === "setup-token");
+    if (!setupTokenAuth) {
+      throw new Error("expected Anthropic setup-token auth method");
+    }
+    const text = vi.fn(async () => ANTHROPIC_SETUP_TOKEN);
+
+    await setupTokenAuth.run({
+      config: {},
+      env: {},
+      opts: {},
+      runtime: createRuntimeEnv(),
+      prompter: createTestWizardPrompter({ text }),
+      secretInputMode: "plaintext",
+      isRemote: true,
+      openUrl: vi.fn(),
+      oauth: { createVpsAwareHandlers: vi.fn() },
+    });
+
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ sensitive: true }));
+  });
+
   it.each([
     {
       name: "preflights non-interactive setup-token input without writing credentials",

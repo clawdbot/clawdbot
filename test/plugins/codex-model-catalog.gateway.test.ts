@@ -8,7 +8,6 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import codexPlugin from "../../extensions/codex/index.js";
-import { createAgentHarnessCatalogEvaluator } from "../../src/agents/harness/model-catalog-readiness.js";
 import type { AgentHarness } from "../../src/agents/harness/types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import {
@@ -207,14 +206,6 @@ describe("models.list native account catalog", () => {
               expect(rows[0]).not.toHaveProperty("api");
               expect(rows[0]).not.toHaveProperty("baseUrl");
               expect(result.models[0]).not.toHaveProperty("nativeRuntime");
-              const readiness = (cfg = config) =>
-                harness.readModelCatalogReadiness?.({
-                  ...scope,
-                  config: cfg,
-                  provider: "openai",
-                  modelId: "synthetic-opaque",
-                });
-              expect(readiness()).toEqual({ accountType: "apiKey" });
               const configured = (cfg = config) =>
                 listModels({
                   ...scope,
@@ -258,16 +249,14 @@ describe("models.list native account catalog", () => {
                   JSON.stringify({ method: "account/updated", params: { authMode: null } }),
                 );
               }
-              await expect.poll(() => readiness()).toBeUndefined();
-              expect((await configured()).models[0]?.available).toBe(false);
+              await expect.poll(async () => (await configured()).models[0]?.available).toBe(false);
               for (const observed of [
                 {
                   value: { type: "chatgpt", email: "synthetic@example.test", planType: "plus" },
-                  mode: "chatgpt",
                   available: true,
                 },
-                { value: null, mode: undefined, available: false },
-                { value: { type: "apiKey" }, mode: "apiKey", available: true },
+                { value: null, available: false },
+                { value: { type: "apiKey" }, available: true },
               ]) {
                 account = observed.value;
                 const refreshed = await listModels({
@@ -279,9 +268,6 @@ describe("models.list native account catalog", () => {
                   refresh: true,
                 });
                 expect(refreshed.models[0]?.available).toBe(observed.available);
-                expect(readiness()).toEqual(
-                  observed.mode ? { accountType: observed.mode } : undefined,
-                );
               }
               const hostRoutes: OpenClawConfig["models"][] = [
                 {
@@ -330,35 +316,15 @@ describe("models.list native account catalog", () => {
                   cfg: hostConfig,
                   catalog: rows,
                   view: "configured",
+                  refresh: true,
                 });
-                expect(readiness(hostConfig)).toEqual({ accountType: "apiKey" });
                 expect(host.models[0]?.available, `host route ${routeIndex}`).toBe(false);
               }
               expect(requests).not.toContain("account/login/start");
               for (const socket of server.clients) {
                 socket.close();
               }
-              await expect.poll(() => readiness()).toBeUndefined();
-              expect((await configured()).models[0]?.available).toBe(false);
-              expect(
-                createAgentHarnessCatalogEvaluator(scope)(rows[0]!, {
-                  availability: true,
-                  selectedAuthMode: "oauth",
-                  evidence: "runtime",
-                  routeResolution: null,
-                }).availability,
-              ).toBe(false);
-              const hostRow = { ...rows[0]! };
-              delete hostRow.nativeRuntime;
-              const hostEvidence = {
-                availability: true,
-                selectedAuthMode: "oauth",
-                evidence: "runtime" as const,
-                routeResolution: null,
-              };
-              expect(createAgentHarnessCatalogEvaluator(scope)(hostRow, hostEvidence)).toBe(
-                hostEvidence,
-              );
+              await expect.poll(async () => (await configured()).models[0]?.available).toBe(false);
               const replacement = createEmptyPluginRegistry();
               setActivePluginRegistry(replacement);
               expect((await configured()).models[0]?.available).toBe(false);

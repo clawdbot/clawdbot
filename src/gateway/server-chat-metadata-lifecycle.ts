@@ -30,7 +30,6 @@ export async function createGatewayChatMetadataLifecycle(params: {
               await import("../agents/prepared-model-runtime.js");
             await refreshPreparedModelRuntimeSnapshots(params.getConfig(), {
               gatewayLifecycle: true,
-              catalogMode: "static",
               allowGatewaySubagentBinding: true,
             });
           },

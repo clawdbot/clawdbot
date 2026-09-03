@@ -161,6 +161,8 @@ export type GatewayReloadHandlerParams = {
   getState: () => GatewayHotReloadState;
   setState: (state: GatewayHotReloadState) => void;
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
+  /** Publishes model-derived chat projections before config application settles. */
+  refreshChatMetadata?: () => Promise<void>;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
   pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;

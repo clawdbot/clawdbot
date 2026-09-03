@@ -49,7 +49,7 @@ import {
   collectBlockedLegacyOpenAICodexProviderPlan,
   type BlockedLegacyOpenAICodexProviderPlan,
 } from "./legacy-config-migrations.runtime.models.js";
-import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.refs.js";
+import { rewriteKnownModelRefs } from "./legacy-config-migrations.runtime.models.ref-rewriters.js";
 import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 
 export function resolveKnownModelRefMigrationTarget(

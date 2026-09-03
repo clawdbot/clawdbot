@@ -2581,9 +2581,7 @@ describe("startGatewayPostAttachRuntime", () => {
             agentCount: number;
             workspaceGroupCount: number;
             configuredFactsGroupCount: number;
-            catalogSourceCount: number;
             credentialGroupCount: number;
-            catalogGroupCount: number;
             runtimeRegistryCount: number;
             configuredRuntimeModelCount: number;
             generatedCatalogPluginCount: number;
@@ -2595,9 +2593,7 @@ describe("startGatewayPostAttachRuntime", () => {
             ambientCredentialsMs: number;
             agentFactsMs: number;
             configuredProjectionMs: number;
-            catalogSourceMs: number;
             registryMs: number;
-            sourceConcurrencyLimit: number;
             fullCatalogConcurrencyLimit: number;
           }) => void;
         }
@@ -2606,9 +2602,7 @@ describe("startGatewayPostAttachRuntime", () => {
       agentCount: 12,
       workspaceGroupCount: 2,
       configuredFactsGroupCount: 2,
-      catalogSourceCount: 0,
       credentialGroupCount: 1,
-      catalogGroupCount: 0,
       runtimeRegistryCount: 12,
       configuredRuntimeModelCount: 2,
       generatedCatalogPluginCount: 0,
@@ -2620,9 +2614,7 @@ describe("startGatewayPostAttachRuntime", () => {
       ambientCredentialsMs: 10,
       agentFactsMs: 5,
       configuredProjectionMs: 15,
-      catalogSourceMs: 0,
       registryMs: 30,
-      sourceConcurrencyLimit: 2,
       fullCatalogConcurrencyLimit: 1,
     });
 
@@ -2632,9 +2624,7 @@ describe("startGatewayPostAttachRuntime", () => {
         ["agentCount", 12],
         ["workspaceGroupCount", 2],
         ["configuredFactsGroupCount", 2],
-        ["catalogSourceCount", 0],
         ["credentialGroupCount", 1],
-        ["catalogGroupCount", 0],
         ["runtimeRegistryCount", 12],
         ["configuredRuntimeModelCount", 2],
         ["generatedCatalogPluginCount", 0],
@@ -2646,9 +2636,7 @@ describe("startGatewayPostAttachRuntime", () => {
         ["ambientCredentialsMs", 10],
         ["agentFactsMs", 5],
         ["configuredProjectionMs", 15],
-        ["catalogSourceMs", 0],
         ["registryMs", 30],
-        ["sourceConcurrencyLimitCount", 2],
         ["fullCatalogConcurrencyLimitCount", 1],
       ],
     });

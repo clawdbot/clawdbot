@@ -283,7 +283,6 @@ process.on("message", async (message) => {
     } else if (message?.action === "replace") {
       await preparedRuntime.refreshPreparedModelRuntimeSnapshots(replacementConfig, {
         gatewayLifecycle: true,
-        catalogMode: "static",
         allowGatewaySubagentBinding: true,
       });
     } else if (message?.action === "close") {

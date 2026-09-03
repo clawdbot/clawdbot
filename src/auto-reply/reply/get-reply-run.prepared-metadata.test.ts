@@ -110,7 +110,7 @@ describe("runPreparedReply prepared metadata", () => {
           { provider: "selected", modelId: "model", runtime: "selected-harness" },
         ],
       },
-      { catalogMode: "static", pluginGeneration },
+      { pluginGeneration },
     );
     expect(admissionSnapshot).toBe(metadataSnapshot);
     expect(executionSnapshot).toBe(metadataSnapshot);

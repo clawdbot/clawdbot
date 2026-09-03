@@ -52,6 +52,7 @@ import {
 import { repairToolUseResultPairing } from "../session-transcript-repair.js";
 import type { SessionModelUsageSink } from "../sessions/compaction/runtime.js";
 import type { ExtensionAPI, ExtensionContext } from "../sessions/index.js";
+import type { ResolvedRequestAuth } from "../sessions/model-registry.js";
 import { recordSessionModelUsage } from "../sessions/session-model-usage.js";
 import { extractToolCallsFromAssistant, extractToolResultId } from "../tool-call-id.js";
 import {
@@ -294,17 +295,6 @@ type ModelRegistryWithRequestAuthLookup = {
     model: NonNullable<ExtensionContext["model"]>,
   ) => Promise<ResolvedRequestAuth>;
 };
-
-type ResolvedRequestAuth =
-  | {
-      ok: true;
-      apiKey?: string;
-      headers?: Record<string, string>;
-    }
-  | {
-      ok: false;
-      error: string;
-    };
 
 /**
  * Resolve model credentials. Returns auth details on success or a cancel reason on failure.

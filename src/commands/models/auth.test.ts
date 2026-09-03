@@ -4,6 +4,10 @@ import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coerc
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  getRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
+} from "../../config/runtime-write-application.js";
 import type { ProviderPlugin } from "../../plugins/types.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
@@ -17,6 +21,7 @@ type ResolvePluginProvidersCall = {
   activate?: boolean;
   config?: unknown;
   includeUntrustedWorkspacePlugins?: boolean;
+  onlyPluginIds?: string[];
   providerRefs?: string[];
   workspaceDir?: string;
 };
@@ -74,6 +79,11 @@ const mocks = vi.hoisted(() => ({
   })),
   writeSecretStoreEntry: vi.fn(),
   deleteSecretStoreEntry: vi.fn(),
+  tryImportProviderCredential: vi.fn(),
+}));
+
+vi.mock("./auth-credential-import.js", () => ({
+  tryImportProviderCredential: mocks.tryImportProviderCredential,
 }));
 
 vi.mock("../../secrets/store/secret-store.js", () => ({
@@ -150,6 +160,7 @@ vi.mock("../../plugins/providers.runtime.js", () => ({
 }));
 
 vi.mock("../../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: () => undefined,
   resolvePluginSetupProviderCore: mocks.resolvePluginSetupProviderCore,
   resolvePluginSetupRegistry: mocks.resolvePluginSetupRegistry,
 }));
@@ -181,6 +192,8 @@ vi.mock("../../infra/remote-env.js", () => ({
 
 vi.mock("../../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
+  isGatewayClientRequestError: (value: unknown) =>
+    value instanceof Error && value.name === "GatewayClientRequestError",
 }));
 
 vi.mock("../../plugins/provider-oauth-flow.js", () => ({
@@ -389,6 +402,8 @@ describe("modelsAuthLoginCommand", () => {
     });
     mocks.removeProviderAuthProfilesWithLock.mockReset();
     mocks.removeProviderAuthProfilesWithLock.mockResolvedValue({ version: 1, profiles: {} });
+    mocks.tryImportProviderCredential.mockReset();
+    mocks.tryImportProviderCredential.mockResolvedValue(undefined);
 
     mocks.resolveDefaultAgentId.mockReturnValue("main");
     mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/main");
@@ -464,6 +479,79 @@ describe("modelsAuthLoginCommand", () => {
     return originalConfig;
   }
 
+  function useXaiOAuthLogin(profileId = "xai:owner") {
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId,
+          credential: {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-access",
+            refresh: "xai-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({ id: "xai", label: "xAI", run: runProviderAuth }),
+    ]);
+  }
+
+  function loginWithXai(agent?: string) {
+    return runModelsAuthLoginFlowCore({
+      provider: "xai",
+      method: "oauth",
+      ...(agent ? { agent } : {}),
+      credentialOnly: true,
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter: mocks.createClackPrompter(),
+    });
+  }
+
+  it("saves model-setup provider sign-in and sets its default without inference", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    useXaiOAuthLogin();
+    runProviderAuth.mockReset();
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "xai:owner",
+          credential: {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-access",
+            refresh: "xai-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      configPatch: { agents: { defaults: { model: { primary: "xai/grok-4.6" } } } },
+      defaultModel: "xai/grok-4.6",
+    });
+
+    const result = await runModelsAuthLoginFlowCore({
+      provider: "xai",
+      method: "oauth",
+      credentialOnly: true,
+      setDefault: true,
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter: mocks.createClackPrompter(),
+    });
+
+    expect(result.defaultModel).toBe("xai/grok-4.6");
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
+    expect(currentConfig.agents?.defaults?.model).toEqual({ primary: "xai/grok-4.6" });
+    expect(currentConfig.agents?.defaults?.modelPolicy).toEqual({
+      allow: ["xai/grok-4.6", "xai/*"],
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    fetchMock.mockRestore();
+  });
+
   it("runs plugin-owned openai login", async () => {
     const runtime = createRuntime();
 
@@ -496,10 +584,138 @@ describe("modelsAuthLoginCommand", () => {
       "Tip: Codex-capable models can use native Codex web search. Configure the `web_search` tool with `openclaw configure --section web`. Docs: https://docs.openclaw.ai/tools/web",
     );
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "main" },
       timeoutMs: 3000,
     });
+    expect(mocks.callGateway).toHaveBeenCalledOnce();
+  });
+
+  it("fails visibly when login cannot update the auth profile order", async () => {
+    const runtime = createRuntime();
+    currentConfig = {
+      auth: {
+        order: {
+          openai: ["openai:old-login"],
+        },
+      },
+    };
+    mocks.promoteAuthProfileInOrder.mockResolvedValueOnce(null);
+
+    await expect(modelsAuthLoginCommand({ provider: "openai" }, runtime)).rejects.toThrow(
+      "The auth profile was saved, but its order could not be updated because the auth store is busy. Wait a moment, then retry the login.",
+    );
+
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai",
+      profileId: "openai:user@example.com",
+      createIfMissing: true,
+      createFromOrder: ["openai:old-login"],
+    });
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalledWith(
+      expect.stringContaining("Auth profile: openai:user@example.com"),
+    );
+  });
+
+  it("executes only the manifest owner selected by a remote login choice", async () => {
+    const runtime = createRuntime();
+    const workspaceAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "collision-provider:workspace",
+          credential: {
+            type: "oauth",
+            provider: "collision-provider",
+            access: "workspace-access",
+            refresh: "workspace-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+    });
+    const selectedAuth = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "collision-provider:selected",
+          credential: {
+            type: "oauth",
+            provider: "collision-provider",
+            access: "selected-access",
+            refresh: "selected-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+    });
+    const workspaceProvider = {
+      ...createProvider({
+        id: "collision-provider",
+        run: workspaceAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+      pluginId: "aaa-workspace-shadow",
+    };
+    const selectedProvider = {
+      ...createProvider({
+        id: "collision-provider",
+        run: selectedAuth as ProviderPlugin["auth"][number]["run"],
+      }),
+      pluginId: "selected-login-owner",
+    };
+    mocks.resolvePluginProvidersCore.mockImplementation(
+      (params: ResolvePluginProvidersCall | undefined) =>
+        params?.onlyPluginIds?.[0] === "selected-login-owner"
+          ? [selectedProvider]
+          : [workspaceProvider, selectedProvider],
+    );
+    mocks.resolvePluginSetupProviderCore.mockImplementation(
+      (params: { pluginIds?: readonly string[] }) =>
+        params.pluginIds?.[0] === "selected-login-owner" ? undefined : workspaceProvider,
+    );
+
+    await runModelsAuthLoginFlowCore({
+      provider: "collision-provider",
+      method: "oauth",
+      ownerPluginId: "selected-login-owner",
+      config: currentConfig,
+      runtime,
+      prompter: mocks.createClackPrompter(),
+    });
+
+    const providerResolution = readMockCallArg(
+      mocks.resolvePluginProvidersCore,
+    ) as ResolvePluginProvidersCall;
+    expect(providerResolution.onlyPluginIds).toEqual(["selected-login-owner"]);
+    expect(providerResolution.providerRefs).toBeUndefined();
+    expect(mocks.resolvePluginSetupProviderCore).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginIds: ["selected-login-owner"] }),
+    );
+    expect(workspaceAuth).not.toHaveBeenCalled();
+    expect(selectedAuth).toHaveBeenCalledOnce();
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledWith(
+      expect.objectContaining({ profileId: "collision-provider:selected" }),
+    );
+  });
+
+  it("fails closed when the selected manifest owner is unavailable", async () => {
+    mocks.resolvePluginProvidersCore.mockReturnValue([]);
+
+    await expect(
+      runModelsAuthLoginFlowCore({
+        provider: "collision-provider",
+        method: "oauth",
+        ownerPluginId: "missing-login-owner",
+        config: currentConfig,
+        runtime: createRuntime(),
+        prompter: mocks.createClackPrompter(),
+      }),
+    ).rejects.toThrow('Provider login plugin "missing-login-owner" is unavailable');
+
+    expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledOnce();
+    expect(runProviderAuth).not.toHaveBeenCalled();
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).not.toHaveBeenCalled();
   });
 
   it("persists a provider-minted Copilot token through the protected store", async () => {
@@ -589,10 +805,13 @@ describe("modelsAuthLoginCommand", () => {
 
     expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "main" },
       timeoutMs: 3000,
     });
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Provider login succeeded, but the running Gateway could not refresh its models. Restart the Gateway, then run /models.",
+    );
   });
 
   it("creates store order for relogin when configured profiles would shadow the new profile", async () => {
@@ -864,10 +1083,187 @@ describe("modelsAuthLoginCommand", () => {
         .agentDir,
     ).toBe("/tmp/openclaw/agents/coder");
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "coder" },
       timeoutMs: 3000,
     });
+  });
+
+  it("uses an imported CLI credential before starting interactive login", async () => {
+    const runtime = createRuntime();
+    const runInteractiveLogin = vi.fn();
+    const refreshAuthState = vi.fn(async () => "refreshed" as const);
+    currentConfig = {
+      auth: {
+        profiles: {
+          "openai:default": { provider: "openai", mode: "api_key" },
+        },
+        order: { openai: ["openai:default"] },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-fable-5" },
+          modelPolicy: { allow: ["anthropic/claude-fable-5"] },
+        },
+      },
+    };
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [
+          {
+            id: "device-code",
+            label: "Device login",
+            kind: "device_code",
+            credentialImport: {
+              migrationProviderId: "codex",
+              itemId: "auth:openai",
+              credentialKind: "oauth",
+            },
+            run: runInteractiveLogin,
+          },
+        ],
+      },
+    ]);
+    mocks.tryImportProviderCredential.mockResolvedValue({
+      profileId: "openai:account-owner",
+      provider: "openai",
+      mode: "oauth",
+      configUpdated: false,
+    });
+
+    const result = await runModelsAuthLoginFlowCore({
+      provider: "openai",
+      method: "device-code",
+      config: currentConfig,
+      runtime,
+      prompter: mocks.createClackPrompter(),
+      credentialOnly: true,
+      refreshAuthState,
+    });
+
+    expect(runInteractiveLogin).not.toHaveBeenCalled();
+    expect(mocks.promoteAuthProfileInOrder).toHaveBeenCalledWith({
+      agentDir: "/tmp/openclaw/agents/main",
+      provider: "openai",
+      profileId: "openai:account-owner",
+      createIfMissing: true,
+      createFromOrder: ["openai:default"],
+    });
+    expect(mocks.promoteAuthProfileInOrder.mock.invocationCallOrder[0]).toBeLessThan(
+      refreshAuthState.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+    expect(refreshAuthState).toHaveBeenCalledWith("main");
+    expect(result.profiles).toEqual([
+      { profileId: "openai:account-owner", provider: "openai", mode: "oauth" },
+    ]);
+    expect(result.imported).toBe(true);
+    expect(result.modelAccess).toBe("enabled");
+    expect(currentConfig.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-fable-5",
+    });
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-fable-5",
+      "openai/*",
+    ]);
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Auth profile: openai:account-owner (openai/oauth, imported)",
+    );
+    expect(runtime.log).toHaveBeenCalledWith(
+      "Tip: Codex-capable models can use native Codex web search. Configure the `web_search` tool with `openclaw configure --section web`. Docs: https://docs.openclaw.ai/tools/web",
+    );
+  });
+
+  it("explains a non-importable CLI sign-in before continuing interactive login", async () => {
+    const runInteractiveLogin = vi.fn().mockResolvedValue({
+      profiles: [
+        {
+          profileId: "openai:new",
+          credential: { type: "oauth", provider: "openai", access: "access" },
+        },
+      ],
+    });
+    const prompter = {
+      note: vi.fn(async () => {}),
+      select: vi.fn(),
+    };
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [
+          {
+            id: "device-code",
+            label: "Device login",
+            kind: "device_code",
+            credentialImport: {
+              migrationProviderId: "codex",
+              itemId: "auth:openai",
+              credentialKind: "oauth",
+            },
+            run: runInteractiveLogin,
+          },
+        ],
+      },
+    ]);
+    mocks.tryImportProviderCredential.mockResolvedValue({
+      unavailableReason: "The existing CLI sign-in cannot be imported safely.",
+    });
+
+    await runModelsAuthLoginFlowCore({
+      provider: "openai",
+      method: "device-code",
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter,
+    });
+
+    expect(prompter.note).toHaveBeenCalledWith(
+      "The existing CLI sign-in cannot be imported safely.",
+      "Existing CLI sign-in",
+    );
+    expect(runInteractiveLogin).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a CLI credential imported for another provider", async () => {
+    const runInteractiveLogin = vi.fn();
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      {
+        id: "openai",
+        label: "OpenAI",
+        auth: [
+          {
+            id: "device-code",
+            label: "Device login",
+            kind: "device_code",
+            credentialImport: {
+              migrationProviderId: "codex",
+              itemId: "auth:openai",
+              credentialKind: "oauth",
+            },
+            run: runInteractiveLogin,
+          },
+        ],
+      },
+    ]);
+    mocks.tryImportProviderCredential.mockResolvedValue({
+      profileId: "anthropic:wrong-owner",
+      provider: "anthropic",
+      mode: "oauth",
+      configUpdated: false,
+    });
+
+    await expect(
+      runModelsAuthLoginFlowCore({
+        provider: "openai",
+        method: "device-code",
+        config: currentConfig,
+        runtime: createRuntime(),
+        prompter: mocks.createClackPrompter(),
+      }),
+    ).rejects.toThrow('Credential import for provider "openai" returned provider "anthropic".');
+    expect(runInteractiveLogin).not.toHaveBeenCalled();
   });
 
   it("forwards an app-owned cancellation signal to provider auth", async () => {
@@ -884,6 +1280,29 @@ describe("modelsAuthLoginCommand", () => {
     });
 
     expect((readMockCallArg(runProviderAuth) as AuthRunCall).signal).toBe(abortController.signal);
+  });
+
+  it("locks remote cancellation before persistence and uses the caller-owned refresh", async () => {
+    const runtime = createRuntime();
+    const beforePersistentEffect = vi.fn(async () => undefined);
+    const refreshAuthState = vi.fn(async () => "refreshed" as const);
+
+    await runModelsAuthLoginFlowCore({
+      provider: "openai",
+      method: "oauth",
+      config: currentConfig,
+      runtime,
+      prompter: mocks.createClackPrompter(),
+      beforePersistentEffect,
+      refreshAuthState,
+    });
+
+    expect(beforePersistentEffect).toHaveBeenCalledOnce();
+    expect(refreshAuthState).toHaveBeenCalledWith("main");
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(beforePersistentEffect.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.upsertAuthProfileAfterLoginWithLock.mock.invocationCallOrder[0] ?? Infinity,
+    );
   });
 
   it("does not persist credentials returned after app-owned cancellation", async () => {
@@ -1040,10 +1459,6 @@ describe("modelsAuthLoginCommand", () => {
           },
         },
         replaceDefaultModels: true,
-        notes: [
-          "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-          "Existing Anthropic auth profiles are kept for rollback.",
-        ],
       };
     });
     mocks.resolvePluginProvidersCore.mockReturnValue([
@@ -1084,13 +1499,7 @@ describe("modelsAuthLoginCommand", () => {
       "claude-cli/claude-opus-4-6": { alias: "Opus" },
       "openai/gpt-5.2": {},
     });
-    expect(note).toHaveBeenCalledWith(
-      [
-        "Claude CLI auth detected; switched Anthropic model selection to the local Claude CLI backend.",
-        "Existing Anthropic auth profiles are kept for rollback.",
-      ].join("\n"),
-      "Provider notes",
-    );
+    expect(note).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith("Default model set to claude-cli/claude-sonnet-4-6");
   });
 
@@ -1430,10 +1839,245 @@ describe("modelsAuthLoginCommand", () => {
       }),
     );
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "main" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "main" },
       timeoutMs: 3000,
     });
+  });
+
+  it("keeps credential-only login from applying provider setup config", async () => {
+    currentConfig = {
+      agents: { defaults: { modelPolicy: { allow: [] } } },
+      messages: { responsePrefix: "concurrent-edit" },
+    };
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "openai:user@example.com",
+          credential: {
+            type: "oauth",
+            provider: "openai",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      configPatch: { messages: { responsePrefix: "provider-stale" } },
+      defaultModel: "openai/gpt-5.5",
+    });
+
+    await runModelsAuthLoginFlowCore({
+      provider: "openai",
+      method: "oauth",
+      credentialOnly: true,
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter: mocks.createClackPrompter(),
+    });
+
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(currentConfig.messages?.responsePrefix).toBe("concurrent-edit");
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
+  });
+
+  it("enables every model from an explicitly authorized provider without changing the default", async () => {
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          modelPolicy: { allow: ["openai/gpt-5.6-sol", "xai/reasoning/*"] },
+        },
+      },
+    };
+    runProviderAuth.mockResolvedValueOnce({
+      profiles: [
+        {
+          profileId: "xai:owner",
+          credential: {
+            type: "oauth",
+            provider: "xai",
+            access: "xai-access",
+            refresh: "xai-refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+      ],
+      configPatch: { agents: { defaults: { model: { primary: "xai/grok-4.6" } } } },
+      defaultModel: "xai/grok-4.6",
+    });
+    mocks.resolvePluginProvidersCore.mockReturnValue([
+      createProvider({ id: "xai", label: "xAI", run: runProviderAuth }),
+    ]);
+
+    const result = await runModelsAuthLoginFlowCore({
+      provider: "xai",
+      method: "oauth",
+      credentialOnly: true,
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter: mocks.createClackPrompter(),
+    });
+
+    expect(result.modelAccess).toBe("enabled");
+    expect(currentConfig.agents?.defaults?.model).toEqual({ primary: "openai/gpt-5.6-sol" });
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.6-sol",
+      "xai/reasoning/*",
+      "xai/*",
+    ]);
+    expect(currentConfig.agents?.defaults).not.toHaveProperty("models");
+  });
+
+  it("waits for the running Gateway to apply the enabled provider policy", async () => {
+    currentConfig = {
+      agents: {
+        defaults: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } },
+      },
+    };
+    useXaiOAuthLogin();
+    let settleApplication: ((status: RuntimeConfigWriteApplicationStatus) => void) | undefined;
+    mocks.updateConfig.mockImplementationOnce(
+      async (
+        mutator: (cfg: OpenClawConfig) => OpenClawConfig,
+        options: { writeOptions?: object },
+      ) => {
+        lastUpdatedConfig = mutator(currentConfig);
+        currentConfig = lastUpdatedConfig;
+        const application = getRuntimeConfigWriteApplication(options.writeOptions ?? {});
+        const claim = application?.claim();
+        settleApplication = claim?.settle;
+        return lastUpdatedConfig;
+      },
+    );
+
+    let completed = false;
+    const login = loginWithXai().then((result) => {
+      completed = true;
+      return result;
+    });
+    await vi.waitFor(() => expect(settleApplication).toBeTypeOf("function"));
+
+    expect(completed).toBe(false);
+    settleApplication?.("applied");
+    await expect(login).resolves.toMatchObject({ modelAccess: "enabled" });
+  });
+
+  it("keeps an existing provider wildcard without rewriting config", async () => {
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          modelPolicy: { allow: ["openai/gpt-5.6-sol", "xai/*"] },
+        },
+      },
+    };
+    useXaiOAuthLogin();
+
+    const result = await loginWithXai();
+
+    expect(result.modelAccess).toBe("already-visible");
+    expect(mocks.updateConfig).not.toHaveBeenCalled();
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.6-sol",
+      "xai/*",
+    ]);
+  });
+
+  it("updates an agent-owned model policy instead of widening other agents", async () => {
+    currentConfig = {
+      agents: {
+        list: [
+          { id: "main", modelPolicy: { allow: ["openai/gpt-5.6-sol"] } },
+          { id: "coder", modelPolicy: { allow: ["anthropic/claude-fable-5"] } },
+        ],
+      },
+    };
+    mocks.resolveDefaultAgentId.mockReturnValue("coder");
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/coder");
+    useXaiOAuthLogin("xai:coder");
+
+    const result = await loginWithXai("coder");
+
+    expect(result.modelAccess).toBe("enabled");
+    expect(currentConfig.agents?.list?.[0]?.modelPolicy?.allow).toEqual(["openai/gpt-5.6-sol"]);
+    expect(currentConfig.agents?.list?.[1]?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-fable-5",
+      "xai/*",
+    ]);
+  });
+
+  it("updates a keyed agent-owned model policy", async () => {
+    currentConfig = {
+      agents: {
+        defaults: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } },
+        entries: {
+          main: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } },
+          coder: { modelPolicy: { allow: ["anthropic/claude-fable-5"] } },
+        },
+      },
+    };
+    mocks.resolveDefaultAgentId.mockReturnValue("coder");
+    mocks.resolveAgentDir.mockReturnValue("/tmp/openclaw/agents/coder");
+    useXaiOAuthLogin("xai:coder");
+
+    const result = await loginWithXai("coder");
+
+    expect(result.modelAccess).toBe("enabled");
+    expect(currentConfig.agents?.entries?.main?.modelPolicy?.allow).toEqual(["openai/gpt-5.6-sol"]);
+    expect(currentConfig.agents?.entries?.coder?.modelPolicy?.allow).toEqual([
+      "anthropic/claude-fable-5",
+      "xai/*",
+    ]);
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.6-sol"]);
+  });
+
+  it("materializes legacy model visibility into the current policy", async () => {
+    currentConfig = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.6-sol" },
+          models: { "openai/gpt-5.6-sol": {} },
+        },
+      },
+    };
+    useXaiOAuthLogin();
+
+    const result = await loginWithXai();
+
+    expect(result.modelAccess).toBe("enabled");
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual([
+      "openai/gpt-5.6-sol",
+      "xai/*",
+    ]);
+  });
+
+  it("keeps saved credentials and reports when model policy adoption fails", async () => {
+    currentConfig = {
+      agents: {
+        defaults: { modelPolicy: { allow: ["openai/gpt-5.6-sol"] } },
+      },
+    };
+    mocks.updateConfig.mockRejectedValueOnce(new Error("config changed"));
+    useXaiOAuthLogin();
+    const note = vi.fn(async () => {});
+
+    const result = await runModelsAuthLoginFlowCore({
+      provider: "xai",
+      method: "oauth",
+      credentialOnly: true,
+      config: currentConfig,
+      runtime: createRuntime(),
+      prompter: { ...mocks.createClackPrompter(), note },
+    });
+
+    expect(result.modelAccess).toBe("failed");
+    expect(mocks.upsertAuthProfileAfterLoginWithLock).toHaveBeenCalledOnce();
+    expect(note).toHaveBeenCalledWith(
+      "Signed in to xai, but OpenClaw could not enable its models. Retry this sign-in after the current config change finishes.",
+      "Model access",
+    );
+    expect(currentConfig.agents?.defaults?.modelPolicy?.allow).toEqual(["openai/gpt-5.6-sol"]);
   });
 
   it("writes pasted Anthropic setup-tokens and logs the preference note", async () => {
@@ -1480,8 +2124,8 @@ describe("modelsAuthLoginCommand", () => {
       agentDir: "/tmp/openclaw/agents/coder",
     });
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "coder" },
       timeoutMs: 3000,
     });
   });
@@ -1593,8 +2237,8 @@ describe("modelsAuthLoginCommand", () => {
     });
     expect(runtime.log).toHaveBeenCalledWith("Auth profile: openai:manual (openai/api_key)");
     expect(mocks.callGateway).toHaveBeenCalledWith({
-      method: "models.authStatus",
-      params: { refresh: true, agentId: "coder" },
+      method: "models.authRefresh",
+      params: { operation: "login", agentId: "coder" },
       timeoutMs: 3000,
     });
   });

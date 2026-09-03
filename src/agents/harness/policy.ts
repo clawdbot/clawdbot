@@ -8,15 +8,16 @@ import {
   type EmbeddedAgentRuntime,
   normalizeOptionalAgentRuntimeId,
 } from "../agent-runtime-id.js";
+import { resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../model-runtime-policy.js";
 import { resolveOpenAIImplicitAgentRuntime } from "../openai-routing.js";
 
-/**
- * Effective runtime policy for selecting the agent harness that should execute a turn.
- */
+/** Who chose the runtime: operator config, an implicit default, or the credentials in use. */
+export type AgentHarnessRuntimeSource = "model" | "provider" | "implicit" | "auth";
+
 export type AgentHarnessPolicy = {
   runtime: EmbeddedAgentRuntime;
-  runtimeSource?: "model" | "provider" | "implicit";
+  runtimeSource?: AgentHarnessRuntimeSource;
   forcedByEnvironment?: true;
 };
 
@@ -52,6 +53,17 @@ export function resolveAgentHarnessPolicy(params: {
       runtimeSource,
       ...(configured.forcedByEnvironment ? { forcedByEnvironment: true } : {}),
     };
+  }
+  // Credentials chose this runtime, not the provider's default route. Check native
+  // login first so model surfaces can distinguish a logged-in CLI from an unavailable one.
+  const cliRuntime = resolveCliRuntimeExecutionProvider({
+    provider: params.provider ?? "",
+    cfg: params.config,
+    agentId: params.agentId,
+    modelId: params.modelId,
+  });
+  if (cliRuntime) {
+    return { runtime: cliRuntime, runtimeSource: "auth" };
   }
   const openAIImplicitRuntime = resolveOpenAIImplicitAgentRuntime({
     provider: params.provider,

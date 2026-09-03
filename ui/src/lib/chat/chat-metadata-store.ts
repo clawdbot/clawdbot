@@ -7,11 +7,7 @@ import type {
   CommandsListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ModelCatalogEntry } from "../../api/types.ts";
-
-export type ChatMetadataResult = CommandsListResult & {
-  models?: ModelCatalogEntry[];
-};
+export type ChatMetadataResult = CommandsListResult;
 
 type ChatMetadataUpdate =
   | { type: "invalidated" }

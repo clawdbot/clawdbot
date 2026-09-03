@@ -24,120 +24,6 @@
   "providerCatalogEntry": "./provider-discovery.ts",
   "modelCatalog": {
     "providers": {
-      "claude-cli": {
-        "models": [
-          {
-            "id": "claude-opus-5",
-            "name": "Claude Opus 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-5",
-            "name": "Claude Sonnet 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-fable-5-1",
-            "name": "Claude Fable 5.1 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-fable-5",
-            "name": "Claude Fable 5 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 1000000,
-            "contextWindows": [
-              { "id": "200k", "label": "200K", "contextWindow": 200000 },
-              { "id": "1m", "label": "1M", "contextWindow": 1000000 }
-            ],
-            "contextWindowDefault": "1m",
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-8",
-            "name": "Claude Opus 4.8 (Claude CLI)",
-            "status": "deprecated",
-            "replacedBy": "claude-opus-5",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-7",
-            "name": "Claude Opus 4.7 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 2576, "preferredSidePx": 2576, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-sonnet-4-6",
-            "name": "Claude Sonnet 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          },
-          {
-            "id": "claude-opus-4-6",
-            "name": "Claude Opus 4.6 (Claude CLI)",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "mediaInput": {
-              "image": { "maxSidePx": 1568, "preferredSidePx": 1568, "tokenMode": "provider" }
-            },
-            "contextWindow": 200000,
-            "maxTokens": 128000
-          }
-        ]
-      },
       "anthropic": {
         "baseUrl": "https://api.anthropic.com",
         "api": "anthropic-messages",
@@ -281,7 +167,6 @@
       }
     },
     "discovery": {
-      "claude-cli": "static",
       "anthropic": "refreshable"
     }
   },

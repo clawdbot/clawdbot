@@ -67,6 +67,7 @@
       "provider": "longcat",
       "method": "api-key",
       "choiceId": "longcat-api-key",
+      "appGuidedSecret": true,
       "choiceLabel": "LongCat API key",
       "groupId": "longcat",
       "groupLabel": "LongCat",

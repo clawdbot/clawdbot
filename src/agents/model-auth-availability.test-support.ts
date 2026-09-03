@@ -1,42 +1,19 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type {
-  ProviderModelRouteCandidate,
-  ProviderModelRouteResolution,
-} from "../plugin-sdk/provider-model-types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { ProviderModelRouteResolution } from "../plugin-sdk/provider-model-types.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   createModelAuthAvailabilityResolver,
   type ModelAuthAvailabilityRef,
 } from "./model-auth-availability.js";
-import type { createOpenAIModelRoutesResolver } from "./openai-model-routes.js";
+import { dualRoutes, openAIModelRoutesMock } from "./openai-model-routes.test-support.js";
 
-export const platformRoute = {
-  api: "openai-responses",
-  baseUrl: "https://api.openai.com/v1",
-  authRequirement: "api-key",
-  requestTransportOverrides: "none",
-  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-} satisfies ProviderModelRouteCandidate;
-
-export const subscriptionRoute = {
-  api: "openai-chatgpt-responses",
-  baseUrl: "https://chatgpt.com/backend-api/codex",
-  authRequirement: "subscription",
-  requestTransportOverrides: "none",
-  runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
-} satisfies ProviderModelRouteCandidate;
-
-export const dualRoutes = {
-  kind: "routes",
-  defaultRuntimeId: "codex",
-  routes: [platformRoute, subscriptionRoute],
-} satisfies ProviderModelRouteResolution;
-
-export function routeResolverFactory(resolution: ProviderModelRouteResolution | null) {
-  return (() => () => resolution) as typeof createOpenAIModelRoutesResolver;
-}
+export {
+  dualRoutes,
+  platformRoute,
+  subscriptionRoute,
+} from "./openai-model-routes.test-support.js";
 
 export function authStore(
   profiles: Record<string, unknown> = {},
@@ -57,16 +34,16 @@ export function evaluate(params: {
   store?: AuthProfileStore;
   preparedRuntimeAuthStore?: AuthProfileStore;
   syntheticAuthProviderRefs?: readonly string[];
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedProviderAuth?: PreparedProviderAuth;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
 }) {
+  openAIModelRoutesMock.resolution = params.resolution ?? dualRoutes;
   return createModelAuthAvailabilityResolver({
     cfg: (params.cfg ?? {}) as OpenClawConfig,
     authStore: params.store ?? authStore(),
     env: params.env ?? {},
-    routeResolverFactory: routeResolverFactory(params.resolution ?? dualRoutes),
     syntheticAuthProviderRefs: params.syntheticAuthProviderRefs,
-    preparedRuntimeAuthModes: params.preparedRuntimeAuthModes,
+    preparedProviderAuth: params.preparedProviderAuth,
     preparedRuntimeAuthStore: params.preparedRuntimeAuthStore,
     preparedRuntimeAuthMaterializations: params.preparedRuntimeAuthMaterializations,
   }).evaluateModelAuth("openai", params.ref);

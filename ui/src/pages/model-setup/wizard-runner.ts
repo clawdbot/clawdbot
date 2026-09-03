@@ -13,6 +13,8 @@ import {
   wizardStateFromResult,
 } from "./state.ts";
 
+const WIZARD_RELEASE_POLL_MS = 250;
+
 export type ModelSetupWizardStartMethod =
   | "openclaw.setup.auth.start"
   | "openclaw.setup.prepare.start"
@@ -112,6 +114,10 @@ export class ModelSetupWizardRunner {
           },
           { timeoutMs: null },
         )
+        .then((result) => {
+          session.sessionId = result.sessionId;
+          return result;
+        })
         .catch((error: unknown): WizardStartResult => {
           if (!isSetupAdmissionBusyError(error)) {
             throw error;
@@ -157,7 +163,9 @@ export class ModelSetupWizardRunner {
     }
   }
 
-  async cancel(options: { settleActiveRequest?: boolean } = {}): Promise<void> {
+  async cancel(
+    options: { settleActiveRequest?: boolean; waitForRelease?: boolean } = {},
+  ): Promise<void> {
     const session = this.session;
     if (!options.settleActiveRequest) {
       session?.abortController.abort();
@@ -165,7 +173,7 @@ export class ModelSetupWizardRunner {
     this.session = null;
     this.setState({ phase: "idle" });
     if (session) {
-      await this.cancelSession(session);
+      await this.cancelSession(session, options.waitForRelease);
     }
   }
 
@@ -296,15 +304,36 @@ export class ModelSetupWizardRunner {
     this.setState({ phase: "error", message });
   }
 
-  private async cancelSession(session: WizardSession): Promise<void> {
+  private async cancelSession(session: WizardSession, waitForRelease = false): Promise<void> {
     try {
-      const result = await session.client.request<WizardStatusResult>(
+      let result = await session.client.request<WizardStatusResult>(
         "wizard.cancel",
         { sessionId: session.sessionId },
         { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
       );
+      if (waitForRelease) {
+        while (result.status === "running") {
+          // A commit-locked wizard cannot cancel, but the card must stay busy until
+          // a later cancel observes terminal state and releases shared admission.
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, WIZARD_RELEASE_POLL_MS);
+          });
+          result = await session.client.request<WizardStatusResult>(
+            "wizard.cancel",
+            { sessionId: session.sessionId },
+            { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+          );
+        }
+      }
       if (result.status === "cancelled" || result.status === "error") {
         this.reportTerminalResult(session, { done: true, ...result });
+        // Cancel acknowledges immediately, while terminal status waits for the
+        // Gateway runner and its shared setup admission to finish releasing.
+        await session.client.request<WizardStatusResult>(
+          "wizard.status",
+          { sessionId: session.sessionId },
+          { timeoutMs: MODEL_SETUP_AUTH_START_TIMEOUT_MS },
+        );
       }
     } catch {
       // The Gateway may already have completed or purged the session.

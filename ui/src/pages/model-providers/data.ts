@@ -27,18 +27,24 @@ type ModelProviderAuthSummary = {
   kind: ModelProviderAuthKind;
   profileCount: number;
   expiryLabel?: string;
+  unavailableMessage?: string;
 };
 
 type ModelProviderLocalCost = {
   totalCost: number;
   totalTokens: number;
   sessionCount: number;
+  missingCostEntries: number;
 };
 
 export type ModelProviderLogoutTarget = {
   provider: string;
   profileIds: string[];
 };
+
+export type ModelProviderAccessOption = NonNullable<
+  NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number]["accessOptions"]
+>[number];
 
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
@@ -47,9 +53,10 @@ export type ModelProviderCard = {
   configKey?: string;
   configAuthMode?: string;
   apiKeySupported?: boolean;
+  accessOptions: ModelProviderAccessOption[];
   /** Provider ids that own credentials merged into this card. */
   credentialProviderIds: string[];
-  /** Saved OAuth/token profiles eligible for targeted logout. */
+  /** Saved profiles eligible for targeted logout. */
   logoutTargets: ModelProviderLogoutTarget[];
   displayName: string;
   auth?: ModelProviderAuthSummary;
@@ -58,11 +65,22 @@ export type ModelProviderCard = {
   hasConfigApiKey: boolean;
   modelCount: number;
   availableModelCount: number;
+  runtimeAvailableModelCount: number;
+  runtimeLabels: string[];
   catalogStatus?: ModelCatalogProviderOutcome["status"];
   /** Live provider-reported usage (quota windows, billing, cost history). */
   usage?: ProviderUsageSnapshot;
   /** Locally-computed session spend for the requested window. */
   localCost?: ModelProviderLocalCost;
+};
+
+export type ModelProviderCardState = {
+  status: "auth" | "denied" | "unavailable" | "ready" | "not-set-up" | "available" | "configured";
+  sortTier: "active" | "inactive";
+  verified: boolean;
+  /** Provider holds a credential, regardless of whether the catalog verified it. */
+  configured: boolean;
+  message?: string;
 };
 
 type ModelProviderCardsInput = {
@@ -101,6 +119,62 @@ function authKindForProvider(provider: ModelAuthStatusProvider): ModelProviderAu
   }
 }
 
+export function classifyModelProviderCard(card: ModelProviderCard): ModelProviderCardState {
+  const configured = card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
+  if (card.catalogStatus === "auth-rejected") {
+    return { status: "denied", sortTier: "inactive", verified: false, configured };
+  }
+  if (card.auth?.unavailableMessage) {
+    return {
+      status: "unavailable",
+      sortTier: "inactive",
+      verified: false,
+      configured,
+      message: card.auth.unavailableMessage,
+    };
+  }
+  if (card.auth?.kind === "expired" || card.auth?.kind === "missing") {
+    return { status: "auth", sortTier: "inactive", verified: false, configured };
+  }
+  if (card.auth?.kind === "expiring") {
+    return { status: "auth", sortTier: "active", verified: false, configured };
+  }
+  const hasActiveAuth = card.auth?.kind === "ok" || card.auth?.kind === "api-key";
+  if (card.catalogStatus === "unavailable") {
+    return {
+      status: "unavailable",
+      sortTier: hasActiveAuth ? "active" : "inactive",
+      verified: false,
+      configured,
+    };
+  }
+  const verified = card.catalogStatus === "ready" || card.runtimeAvailableModelCount > 0;
+  if (verified) {
+    return {
+      status: card.availableModelCount > 0 ? "ready" : "available",
+      sortTier: "active",
+      verified: true,
+      configured,
+    };
+  }
+  return {
+    status: configured ? "configured" : "not-set-up",
+    sortTier: hasActiveAuth ? "active" : "inactive",
+    verified: false,
+    configured,
+  };
+}
+
+function compareProviderCards(left: ModelProviderCard, right: ModelProviderCard): number {
+  const leftTier = classifyModelProviderCard(left).sortTier;
+  const rightTier = classifyModelProviderCard(right).sortTier;
+  return (
+    Number(rightTier === "active") - Number(leftTier === "active") ||
+    left.displayName.localeCompare(right.displayName) ||
+    left.id.localeCompare(right.id)
+  );
+}
+
 function findDraft(drafts: CardDraft[], ids: string[]): CardDraft | undefined {
   return drafts.find((draft) => ids.some((id) => draft.ids.has(id)));
 }
@@ -118,9 +192,12 @@ function ensureDraft(drafts: CardDraft[], id: string, displayName: string): Card
       profiles: [],
       credentialProviderIds: [],
       logoutTargets: [],
+      accessOptions: [],
       hasConfigApiKey: false,
       modelCount: 0,
       availableModelCount: 0,
+      runtimeAvailableModelCount: 0,
+      runtimeLabels: [],
     },
     hasModelAuth: false,
   };
@@ -156,21 +233,31 @@ function addLogoutTarget(
 
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
- * has model-provider auth, catalog models (the default models.list view only contains
- * configured or auth-backed entries), a live usage snapshot, or recorded
- * local spend. Model presence alone is enough: a configured API-key provider
- * with a broken credential reports available=false and no auth row, and the
- * page must surface that state rather than hide the provider.
+ * has an auth row, explicit provider config, a live usage snapshot, or recorded
+ * local spend. Catalog rows and outcomes only decorate those providers. They
+ * never turn the provider universe into configured accounts.
+ * Manifest capabilities decorate qualified cards; Connect owns providers that
+ * have no configured or observed state yet.
  */
 export function buildModelProviderCards(input: ModelProviderCardsInput): ModelProviderCard[] {
   const drafts: CardDraft[] = [];
   const apiKeyCapabilities = new Map<string, boolean>();
+  const accessOptionsByProvider = new Map<string, ModelProviderAccessOption[]>();
   for (const capability of input.authStatus?.providerCapabilities ?? []) {
     const id = canonicalProviderId(capability.provider);
     if (!id) {
       continue;
     }
     apiKeyCapabilities.set(id, apiKeyCapabilities.get(id) === true || capability.apiKeySupported);
+    if (capability.accessOptions?.length) {
+      const accessOptions = accessOptionsByProvider.get(id) ?? [];
+      for (const option of capability.accessOptions) {
+        if (!accessOptions.some((candidate) => candidate.id === option.id)) {
+          accessOptions.push(option);
+        }
+      }
+      accessOptionsByProvider.set(id, accessOptions);
+    }
   }
 
   for (const provider of input.configProviderIds ?? []) {
@@ -223,6 +310,14 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     draft.card.modelCount += 1;
     if (entry.available === true) {
       draft.card.availableModelCount += 1;
+      const runtimeId = normalizeProviderId(entry.agentRuntime?.id ?? "");
+      if (runtimeId && runtimeId !== "auto" && runtimeId !== "openclaw") {
+        draft.card.runtimeAvailableModelCount += 1;
+        const label = providerDisplayLabel(runtimeId);
+        if (!draft.card.runtimeLabels.includes(label)) {
+          draft.card.runtimeLabels.push(label);
+        }
+      }
     }
   }
 
@@ -273,10 +368,21 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
   for (const provider of listEffectiveModelAuthProviders(input.authStatus?.providers ?? [])) {
     const draft = findDraft(drafts, [canonicalProviderId(provider.provider)]);
     if (draft) {
+      const unresolvedApiKey = provider.profiles.find(
+        (profile) =>
+          profile.type === "api_key" &&
+          profile.reasonCode === "unresolved_ref" &&
+          profile.secretRef,
+      );
       draft.card.auth = {
         kind: authKindForProvider(provider),
         profileCount: provider.profiles.length,
         ...(provider.expiry?.label ? { expiryLabel: provider.expiry.label } : {}),
+        ...(unresolvedApiKey?.secretRef
+          ? {
+              unavailableMessage: `API key reference not found: ${unresolvedApiKey.secretRef.source} ${unresolvedApiKey.secretRef.id}`,
+            }
+          : {}),
       };
     }
   }
@@ -305,6 +411,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
       totalCost: entry.totals.totalCost,
       totalTokens: entry.totals.totalTokens,
       sessionCount: entry.count,
+      missingCostEntries: entry.totals.missingCostEntries,
     };
     const current = draft.card.localCost;
     draft.card.localCost = current
@@ -312,6 +419,7 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
           totalCost: current.totalCost + addition.totalCost,
           totalTokens: current.totalTokens + addition.totalTokens,
           sessionCount: current.sessionCount + addition.sessionCount,
+          missingCostEntries: current.missingCostEntries + addition.missingCostEntries,
         }
       : addition;
   }
@@ -322,19 +430,19 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
         draft.hasModelAuth ||
         (input.configProviderIds ?? []).some((id) => canonicalProviderId(id) === draft.card.id) ||
         Boolean(draft.card.usage) ||
-        draft.card.modelCount > 0 ||
-        Boolean(draft.card.catalogStatus) ||
         (draft.card.localCost?.totalTokens ?? 0) > 0,
     )
     .map((draft) => {
       const apiKeySupported = apiKeyCapabilities.get(draft.card.id);
+      const accessOptions = accessOptionsByProvider.get(draft.card.id);
       return Object.assign(
         {},
         draft.card,
+        accessOptions ? { accessOptions } : {},
         apiKeySupported === undefined ? {} : { apiKeySupported },
       );
     })
-    .toSorted((a, b) => a.displayName.localeCompare(b.displayName));
+    .toSorted(compareProviderCards);
 }
 
 export type DefaultModelSelection = {
@@ -436,23 +544,4 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       utilityModel: typeof defaults?.utilityModel === "string" ? defaults.utilityModel : null,
     },
   };
-}
-
-export type ProviderOption = { id: string; displayName: string };
-
-type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
-
-export function buildUnconfiguredProviderOptions(
-  capabilities: ModelProviderCapability[] | undefined,
-  configuredProviderIds: Iterable<string>,
-): ProviderOption[] {
-  const configured = new Set(Array.from(configuredProviderIds, canonicalProviderId));
-  const options = new Map<string, ProviderOption>();
-  for (const capability of capabilities ?? []) {
-    const id = canonicalProviderId(capability.provider);
-    if (capability.quickApiKeySetup && id && !configured.has(id) && !options.has(id)) {
-      options.set(id, { id, displayName: providerDisplayLabel(id) });
-    }
-  }
-  return [...options.values()].toSorted((a, b) => a.displayName.localeCompare(b.displayName));
 }

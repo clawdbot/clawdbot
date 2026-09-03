@@ -1,4 +1,7 @@
 // Qa Lab plugin module implements auth behavior.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyAuthProfileConfig,
@@ -6,7 +9,6 @@ import {
   isKnownEnvApiKeyMarker,
   isNonSecretApiKeyMarker,
   normalizeOptionalSecretInput,
-  readCodexCliCredentialsCached,
   resolveEnvApiKey,
   validateAnthropicSetupToken,
 } from "openclaw/plugin-sdk/provider-auth";
@@ -270,11 +272,26 @@ export async function stageQaLiveApiKeyProfiles(params: {
   return next;
 }
 
+// QA only needs to know whether a portable Codex login exists; the Codex plugin owns real
+// credential reads, and the keychain is never consulted for an isolated QA agent.
+function hasCodexCliAuthFile(codexHome = path.join(os.homedir(), ".codex")): boolean {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(path.join(codexHome, "auth.json"), "utf8"));
+    if (!parsed || typeof parsed !== "object") {
+      return false;
+    }
+    const auth = parsed as { tokens?: { access_token?: unknown }; OPENAI_API_KEY?: unknown };
+    return Boolean(auth.tokens?.access_token) || typeof auth.OPENAI_API_KEY === "string";
+  } catch {
+    return false;
+  }
+}
+
 export function assertQaLiveCodexAuthAvailable(params: {
   cfg: OpenClawConfig;
   providerIds: readonly string[];
   env?: NodeJS.ProcessEnv;
-  readCodexCredentials?: typeof readCodexCliCredentialsCached;
+  hasCodexCliAuth?: (codexHome?: string) => boolean;
 }): void {
   const env = params.env ?? process.env;
   if (!qaLiveRequiresCodexAuth({ cfg: params.cfg, providerIds: params.providerIds, env })) {
@@ -286,14 +303,8 @@ export function assertQaLiveCodexAuthAvailable(params: {
   ) {
     return;
   }
-  const readCodexCredentials = params.readCodexCredentials ?? readCodexCliCredentialsCached;
   const codexHome = env.CODEX_HOME?.trim();
-  const codexCredential = readCodexCredentials({
-    ...(codexHome ? { codexHome } : {}),
-    allowKeychainPrompt: false,
-    ttlMs: 5_000,
-  });
-  if (codexCredential) {
+  if ((params.hasCodexCliAuth ?? hasCodexCliAuthFile)(codexHome || undefined)) {
     return;
   }
   throw new Error(

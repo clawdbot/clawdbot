@@ -1,7 +1,11 @@
 import { html, nothing } from "lit";
 import { renderSettingsStatus } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
-import type { ModelProviderAuthKind, ModelProviderCard } from "./data.ts";
+import {
+  classifyModelProviderCard,
+  type ModelProviderAuthKind,
+  type ModelProviderCard,
+} from "./data.ts";
 
 const AUTH_KIND_I18N: Record<ModelProviderAuthKind, string> = {
   ok: "modelProviders.status.ok",
@@ -35,52 +39,24 @@ function renderAuthStatus(card: ModelProviderCard) {
   `;
 }
 
-function hasProviderCredentials(card: ModelProviderCard): boolean {
-  return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
-}
-
-export function hasVerifiedProvider(card: ModelProviderCard): boolean {
-  return (
-    card.catalogStatus === "ready" &&
-    card.auth?.kind !== "expired" &&
-    card.auth?.kind !== "missing" &&
-    card.auth?.kind !== "expiring"
-  );
-}
+const PROVIDER_STATUS_BADGES = {
+  denied: { kind: "danger", label: "modelProviders.status.denied" },
+  ready: { kind: "ok", label: "modelProviders.status.ready" },
+  "not-set-up": { kind: "muted", label: "modelProviders.status.notSetUp" },
+  available: { kind: "muted", label: "modelProviders.status.ok" },
+  configured: { kind: "muted", label: "modelProviders.status.configured" },
+} as const;
 
 export function renderProviderStatus(card: ModelProviderCard) {
-  if (
-    card.auth?.kind === "expired" ||
-    card.auth?.kind === "missing" ||
-    card.auth?.kind === "expiring"
-  ) {
+  const state = classifyModelProviderCard(card);
+  if (state.status === "auth") {
     return renderAuthStatus(card);
   }
-  if (card.catalogStatus === "auth-rejected") {
-    return renderSettingsStatus({ kind: "danger", label: t("modelProviders.status.denied") });
+  if (state.status === "unavailable") {
+    return html`<span title=${state.message ?? t("common.failed")}
+      >${renderSettingsStatus({ kind: "warn", label: t("common.failed") })}</span
+    >`;
   }
-  if (card.catalogStatus === "unavailable") {
-    return renderSettingsStatus({
-      kind: "warn",
-      label: t("common.failed"),
-    });
-  }
-  if (!hasProviderCredentials(card)) {
-    return renderAuthStatus(card);
-  }
-  if (hasVerifiedProvider(card) && card.availableModelCount > 0) {
-    return renderSettingsStatus({
-      kind: "ok",
-      label: t("modelProviders.status.ready"),
-    });
-  }
-  return hasVerifiedProvider(card)
-    ? renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.ok"),
-      })
-    : renderSettingsStatus({
-        kind: "muted",
-        label: t("modelProviders.status.configured"),
-      });
+  const badge = PROVIDER_STATUS_BADGES[state.status];
+  return renderSettingsStatus({ kind: badge.kind, label: t(badge.label) });
 }

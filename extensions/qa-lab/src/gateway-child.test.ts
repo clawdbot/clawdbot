@@ -1320,7 +1320,7 @@ describe("buildQaRuntimeEnv", () => {
         env: {
           OPENCLAW_LIVE_CODEX_API_KEY: "qa-live-direct-codex-key",
         },
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });
@@ -1333,7 +1333,7 @@ describe("buildQaRuntimeEnv", () => {
         env: {
           CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
         },
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).toThrow("QA live-frontier cannot run Codex-backed OpenAI models");
   });
@@ -1355,7 +1355,7 @@ describe("buildQaRuntimeEnv", () => {
         env: {
           CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
         },
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });
@@ -1369,7 +1369,7 @@ describe("buildQaRuntimeEnv", () => {
           CODEX_HOME: path.join(os.tmpdir(), "missing-openclaw-codex-home"),
           OPENCLAW_QA_FORCE_RUNTIME: "codex",
         },
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).toThrow("QA live-frontier cannot run Codex-backed OpenAI models");
   });
@@ -1383,7 +1383,7 @@ describe("buildQaRuntimeEnv", () => {
           OPENCLAW_LIVE_OPENAI_KEY: "qa-live-codex-fallback-key",
           OPENCLAW_QA_FORCE_RUNTIME: "codex",
         },
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });
@@ -1425,7 +1425,7 @@ describe("buildQaRuntimeEnv", () => {
         cfg,
         providerIds: ["openai"],
         env: {},
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });
@@ -1469,7 +1469,7 @@ describe("buildQaRuntimeEnv", () => {
         cfg,
         providerIds: ["openai"],
         env,
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });
@@ -1508,7 +1508,7 @@ describe("buildQaRuntimeEnv", () => {
         cfg,
         providerIds: ["openai"],
         env: {},
-        readCodexCredentials: () => null,
+        hasCodexCliAuth: () => false,
       }),
     ).not.toThrow();
   });

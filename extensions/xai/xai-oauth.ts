@@ -15,7 +15,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { sleep } from "openclaw/plugin-sdk/runtime-env";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { applyXaiOAuthConfig, XAI_OAUTH_DEFAULT_MODEL_REF } from "./onboard.js";
+import { applyXaiOAuthConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
 const PROVIDER_ID = "xai";
@@ -586,7 +586,10 @@ async function noteXaiDeviceCode(
       title: "xAI OAuth",
       code: deviceCode.userCode,
       expiresInMinutes,
-      message: "Enter this one-time code on the xAI sign-in page.",
+      message: [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        `URL: ${deviceCode.verificationUriComplete ?? deviceCode.verificationUri}`,
+      ].join("\n"),
     });
     return;
   }
@@ -642,7 +645,7 @@ export async function loginXaiDeviceCode(ctx: ProviderAuthContext): Promise<Prov
     progress.stop("xAI OAuth complete");
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
-      defaultModel: XAI_OAUTH_DEFAULT_MODEL_REF,
+      defaultModel: XAI_DEFAULT_MODEL_REF,
       access: tokens.accessToken,
       refresh: tokens.refreshToken,
       expires: tokens.expires,

@@ -83,7 +83,6 @@ describe("Gateway context cache remote proof", () => {
         await import("../agents/prepared-model-runtime.js");
       await refreshPreparedModelRuntimeSnapshots(warmConfig, {
         gatewayLifecycle: true,
-        catalogMode: "static",
         defaultWorkspaceDir: process.cwd(),
         allowGatewaySubagentBinding: true,
       });

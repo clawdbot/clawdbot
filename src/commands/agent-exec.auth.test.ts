@@ -71,13 +71,11 @@ describe("agent exec stored auth", () => {
             profileIds = Object.keys(
               ensureAuthProfileStore(undefined, {
                 allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
               }).profiles,
             );
             runtimeProfileIds = Object.keys(
               loadAuthProfileStoreForRuntime(undefined, {
                 allowKeychainPrompt: false,
-                externalCliProviderIds: ["openai"],
               }).profiles,
             );
             const { sanitizeHostExecEnv } = await import("../infra/host-env-security.js");

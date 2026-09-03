@@ -1,3 +1,4 @@
+import { CODEX_APP_SERVER_AUTH_MARKER } from "openclaw/plugin-sdk/agent-runtime";
 // Openai provider module implements model/runtime integration.
 import type {
   ProviderResolveDynamicModelContext,
@@ -922,6 +923,11 @@ export function buildOpenAIProvider(): ProviderPlugin {
           return null;
         }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
+        // Codex owns native account discovery and model listing. Do not send its non-secret
+        // handoff marker to the OpenAI HTTP catalog, which would report a false auth rejection.
+        if (auth.apiKey === CODEX_APP_SERVER_AUTH_MARKER && !auth.profileId) {
+          return null;
+        }
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =
             await import("openclaw/plugin-sdk/provider-auth-runtime");

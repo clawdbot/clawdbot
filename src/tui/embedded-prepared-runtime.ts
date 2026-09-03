@@ -8,7 +8,7 @@ export class EmbeddedPreparedModelRuntimeHost {
   publish(config: OpenClawConfig): void {
     // The runtime layer synchronously stales the prior generation and coalesces queued requests.
     // Invoke it immediately so overlapping config writes retain those latest-wins semantics.
-    this.ready = refreshPreparedModelRuntimeSnapshots(config, { catalogMode: "static" });
+    this.ready = refreshPreparedModelRuntimeSnapshots(config);
   }
 
   async waitUntilReady(): Promise<void> {

@@ -112,9 +112,12 @@ type GatewayRequestContextParams = {
   registerToolEventRecipient: GatewayRequestContext["registerToolEventRecipient"];
   dedupe: GatewayRequestContext["dedupe"];
   wizardSessions: GatewayRequestContext["wizardSessions"];
+  trackWizardSession: GatewayRequestContext["trackWizardSession"];
+  findOwnedWizardSession: GatewayRequestContext["findOwnedWizardSession"];
   systemAgentSessions: GatewayRequestContext["systemAgentSessions"];
   findRunningWizard: GatewayRequestContext["findRunningWizard"];
   purgeWizardSession: GatewayRequestContext["purgeWizardSession"];
+  handleWizardDisconnect: GatewayRequestContext["handleWizardDisconnect"];
   getRuntimeSnapshot: GatewayRequestContext["getRuntimeSnapshot"];
   getEventLoopHealth?: GatewayRequestContext["getEventLoopHealth"];
   startChannel: GatewayRequestContext["startChannel"];
@@ -440,9 +443,12 @@ export function createGatewayRequestContext(
     registerToolEventRecipient: params.registerToolEventRecipient,
     dedupe: params.dedupe,
     wizardSessions: params.wizardSessions,
+    trackWizardSession: params.trackWizardSession,
+    findOwnedWizardSession: params.findOwnedWizardSession,
     systemAgentSessions: params.systemAgentSessions,
     findRunningWizard: params.findRunningWizard,
     purgeWizardSession: params.purgeWizardSession,
+    handleWizardDisconnect: params.handleWizardDisconnect,
     getRuntimeSnapshot: params.getRuntimeSnapshot,
     getEventLoopHealth: params.getEventLoopHealth,
     getConfigReloaderHotReloadStatus: params.getConfigReloaderHotReloadStatus,

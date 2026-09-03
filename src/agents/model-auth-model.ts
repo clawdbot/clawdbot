@@ -1,7 +1,6 @@
 /**
  * Model-level auth diagnostics and request-header preparation.
  */
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   getRuntimeConfigSnapshot,
@@ -20,7 +19,6 @@ import {
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
-import * as cliCredentials from "./cli-credentials.js";
 import {
   CUSTOM_LOCAL_AUTH_MARKER,
   isNonSecretApiKeyMarker,
@@ -94,13 +92,6 @@ export function resolveModelAuthMode(
   const envKey = authConfig.resolveConfigAwareEnvApiKey(cfg, resolved, options?.workspaceDir);
   if (envKey?.apiKey) {
     return envKey.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
-  }
-
-  if (
-    normalizeProviderId(resolved) === "codex" &&
-    cliCredentials.readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth";
   }
 
   if (authConfig.hasUsableCustomProviderApiKey(cfg, resolved)) {

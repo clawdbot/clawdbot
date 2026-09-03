@@ -1561,6 +1561,59 @@ describe("loadPluginManifestRegistry", () => {
     ]);
   });
 
+  it("keeps only closed channel-login manifest declarations", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "channel-login-auth",
+      providerAuthChoices: [
+        {
+          provider: "valid",
+          method: "oauth",
+          choiceId: "valid-oauth",
+          channelLogin: { aliases: ["valid-login"], default: true },
+        },
+        {
+          provider: "unknown-field",
+          method: "oauth",
+          choiceId: "unknown-field-oauth",
+          channelLogin: { prompts: ["text"] },
+        },
+        {
+          provider: "bad-alias",
+          method: "oauth",
+          choiceId: "bad-alias-oauth",
+          channelLogin: { aliases: ["valid", 42] },
+        },
+        {
+          provider: "bad-default",
+          method: "oauth",
+          choiceId: "bad-default-oauth",
+          channelLogin: { default: "yes" },
+        },
+      ],
+      configSchema: { type: "object" },
+    });
+
+    const registry = loadSingleCandidateRegistry({
+      idHint: "channel-login-auth",
+      rootDir: dir,
+      origin: "bundled",
+    });
+
+    expect(registry.plugins[0]?.providerAuthChoices).toEqual([
+      expect.objectContaining({
+        choiceId: "valid-oauth",
+        channelLogin: { aliases: ["valid-login"], default: true },
+      }),
+      expect.objectContaining({ choiceId: "unknown-field-oauth" }),
+      expect.objectContaining({ choiceId: "bad-alias-oauth" }),
+      expect.objectContaining({ choiceId: "bad-default-oauth" }),
+    ]);
+    for (const invalid of registry.plugins[0]?.providerAuthChoices?.slice(1) ?? []) {
+      expect(invalid).not.toHaveProperty("channelLogin");
+    }
+  });
+
   it("preserves model catalog metadata from plugin manifests", () => {
     const dir = makeTempDir();
     writeManifest(dir, {

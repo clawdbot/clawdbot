@@ -532,7 +532,6 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
   }
   await refreshPreparedModelRuntimeSnapshots(params.getConfig ?? params.cfg, {
     gatewayLifecycle: true,
-    catalogMode: "static",
     allowGatewaySubagentBinding: true,
     ...(params.isCurrent ? { isPublicationCurrent: params.isCurrent } : {}),
     ...(params.pluginMetadataSnapshot
@@ -546,9 +545,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
               ["agentCount", stats.agentCount],
               ["workspaceGroupCount", stats.workspaceGroupCount],
               ["configuredFactsGroupCount", stats.configuredFactsGroupCount],
-              ["catalogSourceCount", stats.catalogSourceCount],
               ["credentialGroupCount", stats.credentialGroupCount],
-              ["catalogGroupCount", stats.catalogGroupCount],
               ["runtimeRegistryCount", stats.runtimeRegistryCount],
               ["configuredRuntimeModelCount", stats.configuredRuntimeModelCount],
               ["generatedCatalogPluginCount", stats.generatedCatalogPluginCount],
@@ -560,9 +557,7 @@ async function publishConfiguredModelRuntimeSnapshots(params: {
               ["ambientCredentialsMs", stats.ambientCredentialsMs],
               ["agentFactsMs", stats.agentFactsMs],
               ["configuredProjectionMs", stats.configuredProjectionMs],
-              ["catalogSourceMs", stats.catalogSourceMs],
               ["registryMs", stats.registryMs],
-              ["sourceConcurrencyLimitCount", stats.sourceConcurrencyLimit],
               ["fullCatalogConcurrencyLimitCount", stats.fullCatalogConcurrencyLimit],
             ]),
         }

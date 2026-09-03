@@ -1,7 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 
@@ -12,14 +11,10 @@ export type PublishedModelCatalogOwnerCandidate = Readonly<{
   agentDir: string;
   workspaceDir?: string;
   config: OpenClawConfig;
-  observationConfig: OpenClawConfig;
-  authModes: PreparedAgentCredentialModes;
+  providerAuth: PreparedProviderAuth;
   authStore?: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
-  /** Registry owned by this prepared generation; omitted from read-only builds. */
-  pluginRegistry?: PluginRegistry;
-  /** Reports whether this exact lifecycle generation is still published. */
-  isCurrent: () => boolean;
+  oauthRefreshProviderIds: readonly string[];
   modelCatalog: ModelCatalogSnapshot;
 }>;
 
@@ -29,11 +24,9 @@ export type ResolvedPublishedModelCatalogOwner = Readonly<{
   agentDir: string;
   workspaceDir: string;
   config: OpenClawConfig;
-  observationConfig: OpenClawConfig;
-  authModes: PreparedAgentCredentialModes;
+  providerAuth: PreparedProviderAuth;
   authStore: AuthProfileStore;
   metadataSnapshot: PluginMetadataSnapshot;
-  pluginRegistry?: PluginRegistry;
-  isCurrent: () => boolean;
+  oauthRefreshProviderIds: readonly string[];
   modelCatalog: ModelCatalogSnapshot;
 }>;

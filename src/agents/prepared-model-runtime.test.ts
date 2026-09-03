@@ -4,6 +4,7 @@ import {
   cleanupPreparedModelRuntimeHarness,
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
+  buildPreparedFullCatalogForTest,
 } from "./prepared-model-runtime.test-harness.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -16,6 +17,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import * as harnessRuntimes from "./harness-runtimes.js";
+import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
 import { prepareWorkspacePluginRegistries } from "./prepared-model-runtime.inbound-registry.js";
 import {
@@ -121,13 +123,68 @@ describe("prepared model runtime snapshots", () => {
         runtimePluginSelections: [{ provider: "selected", modelId: "model" }],
       },
       {
-        catalogMode: "static",
         pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
       },
     );
 
     expect(lease.snapshot.metadataSnapshot).toBe(mocks.pluginMetadataSnapshot);
     lease.release();
+  });
+
+  it("starts one live gateway discovery at generation birth without delaying publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const discovery = createDeferred<ModelCatalogSnapshot>();
+    mocks.runPreparedModelCatalogWorker.mockReturnValueOnce(discovery.promise);
+
+    const publication = refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce());
+    await publication;
+
+    const snapshot = getPreparedModelRuntimeSnapshot({
+      agentId: "default",
+      agentDir: state.agentDir("default"),
+      config: {},
+    });
+    expect(snapshot?.readFullModelCatalog?.()).toBeUndefined();
+
+    await activateStandalonePreparedModelRuntime({
+      agentDir: state.agentDir("standalone-no-discovery"),
+      config: {},
+      readOnly: true,
+    });
+    expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce();
+
+    discovery.resolve({ entries: [], routeVariants: [] });
+    await expect(snapshot?.loadFullModelCatalog?.()).resolves.toEqual({
+      entries: [],
+      routeVariants: [],
+    });
+  });
+
+  it("serializes birth discovery for owners sharing one agent directory", async () => {
+    const agentDir = state.agentDir("shared-discovery");
+    mocks.configuredAgentIds = ["agent-a", "agent-b"];
+    mocks.configuredAgentDirs.set("agent-a", agentDir);
+    mocks.configuredAgentDirs.set("agent-b", agentDir);
+    const firstDiscovery = createDeferred<ModelCatalogSnapshot>();
+    let active = 0;
+    let peak = 0;
+    mocks.runPreparedModelCatalogWorker.mockImplementation(async () => {
+      active += 1;
+      peak = Math.max(peak, active);
+      if (active === 1) {
+        await firstDiscovery.promise;
+      }
+      active -= 1;
+      return { entries: [], routeVariants: [] };
+    });
+
+    await refreshPreparedModelRuntimeSnapshots({}, { gatewayLifecycle: true });
+    await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledOnce());
+    firstDiscovery.resolve({ entries: [], routeVariants: [] });
+    await vi.waitFor(() => expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(2));
+
+    expect(peak).toBe(1);
   });
 
   it("keeps an isolated setup probe exact after a gateway replacement", async () => {
@@ -164,7 +221,7 @@ describe("prepared model runtime snapshots", () => {
       runtimePluginSelections: [{ provider: "openai", modelId: "gpt-5.6", runtime: "codex" }],
     });
     await Promise.resolve();
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
 
     await refreshPreparedModelRuntimeSnapshots({
       agents: { defaults: { model: "openai/gpt-5.5" } },
@@ -231,29 +288,11 @@ describe("prepared model runtime snapshots", () => {
       agentDir: state.agentDir("standalone-build-race"),
       config: {},
     };
-    const finishFirstBuildGate = createDeferred();
-    let finishFirstBuild!: () => void;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
-      finishFirstBuild = () => finishFirstBuildGate.resolve();
-      await finishFirstBuildGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
-    });
-
-    let activation: ReturnType<typeof activateStandalonePreparedModelRuntime> | undefined;
-    try {
-      activation = activateStandalonePreparedModelRuntime(input);
-      await vi.waitFor(() => expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce());
-      markPreparedModelRuntimeSnapshotsStale("test in-flight standalone publication");
-      finishFirstBuild();
-
-      const published = await activation;
-      expect(published).toBeDefined();
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-      await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(published);
-    } finally {
-      finishFirstBuildGate.resolve();
-      await Promise.allSettled([activation]);
-    }
+    const published = await activateStandalonePreparedModelRuntime(input);
+    expect(published).toBeDefined();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.runPreparedModelCatalogWorker).not.toHaveBeenCalled();
+    await expect(prepareModelRuntimeSnapshot(input)).resolves.toBe(published);
   });
 
   it("loads runtime plugins before discovering an immutable generation", async () => {
@@ -296,40 +335,31 @@ describe("prepared model runtime snapshots", () => {
       env,
     });
 
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      config,
-      state.agentDir("explicit-env"),
-      expect.objectContaining({ env }),
-    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.discoverAuthStorage).toHaveBeenCalledWith(
       state.agentDir("explicit-env"),
       expect.objectContaining({ env }),
     );
-    expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ env }),
+    expect(mocks.createPreparedModelCatalogWorkerInput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentFacts: expect.objectContaining({ env }),
+      }),
     );
+    expect(mocks.buildPreparedModelCatalogSnapshot).not.toHaveBeenCalled();
   });
 
   it("keeps provider catalog outcomes on the published live snapshot", async () => {
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (...args: unknown[]) => {
-      const options = args[2] as {
-        onProviderCatalogOutcome?: (outcome: {
-          provider: string;
-          status: "ready" | "auth-rejected" | "unavailable";
-        }) => void;
-      };
-      options.onProviderCatalogOutcome?.({ provider: "openai", status: "auth-rejected" });
-      return { agentDir: state.agentDir("provider-outcome-agent"), wrote: false };
+    mocks.runPreparedModelCatalogWorker.mockResolvedValueOnce({
+      entries: [],
+      routeVariants: [],
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
     });
-
     const snapshot = await publishPreparedModelRuntimeSnapshot({
       config: {},
       agentDir: state.agentDir("provider-outcome-agent"),
     });
-
-    expect(snapshot.modelCatalog.providerOutcomes).toEqual([
-      { provider: "openai", status: "auth-rejected" },
-    ]);
+    const full = await snapshot.loadFullModelCatalog!();
+    expect(full.providerOutcomes).toEqual([{ provider: "openai", status: "auth-rejected" }]);
   });
 
   it("limits live discovery to the selected agent's models and authenticated providers", async () => {
@@ -368,11 +398,12 @@ describe("prepared model runtime snapshots", () => {
       agentDir: state.agentDir("selected-provider-scope"),
     });
 
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      config,
-      state.agentDir("selected-provider-scope"),
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
+    expect(mocks.createPreparedModelCatalogWorkerInput).toHaveBeenCalledWith(
       expect.objectContaining({
-        providerDiscoveryProviderIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
+        agentFacts: expect.objectContaining({
+          providerIds: ["anthropic", "custom", "openai", "selected-runtime", "vllm"],
+        }),
       }),
     );
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledWith(
@@ -381,7 +412,7 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("captures static provider-hook rows in the same lifecycle generation", async () => {
-    mocks.loadStaticCatalog.mockResolvedValueOnce([
+    mocks.loadStaticCatalog.mockResolvedValue([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -396,11 +427,12 @@ describe("prepared model runtime snapshots", () => {
       },
     ]);
 
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
+    const input = {
       config: {},
       agentDir: state.agentDir("static-catalog"),
       workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
-    });
+    };
+    const snapshot = await publishPreparedModelRuntimeSnapshot(input);
 
     expect(mocks.loadStaticCatalog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -410,7 +442,7 @@ describe("prepared model runtime snapshots", () => {
         workspaceDir: "/tmp/prepared-model-runtime-static-workspace",
       }),
     );
-    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
+    expect(structuredClone((await buildPreparedFullCatalogForTest(input)).staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
@@ -485,8 +517,7 @@ describe("prepared model runtime snapshots", () => {
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "openai", modelId: "gpt-5.4", model: runtimeModel },
     ]);
-    expect(snapshot.modelCatalog.entries).toEqual([]);
-    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
+    expect(structuredClone(snapshot.modelCatalog.entries)).toEqual([
       {
         provider: "openai",
         id: "gpt-5.4",
@@ -518,7 +549,7 @@ describe("prepared model runtime snapshots", () => {
       contextWindow: 128_000,
       maxTokens: 8_192,
     };
-    mocks.loadStaticCatalog.mockResolvedValueOnce([
+    mocks.loadStaticCatalog.mockResolvedValue([
       {
         ...runtimeModel,
         baseUrl: "https://provider-static.example.test/v1",
@@ -526,22 +557,23 @@ describe("prepared model runtime snapshots", () => {
     ]);
     mocks.resolveStaticCatalogModel.mockReturnValueOnce(runtimeModel);
 
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
+    const input = {
       config: { agents: { defaults: { model: { primary: "nvidia/nemotron-static" } } } },
       agentDir: state.agentDir("configured-static"),
       workspaceDir: "/tmp/prepared-model-runtime-configured-static-workspace",
-    });
+    };
+    const snapshot = await publishPreparedModelRuntimeSnapshot(input);
 
     expect(snapshot.configuredRuntimeModels).toEqual([
       { provider: "nvidia", modelId: "nemotron-static", model: runtimeModel },
     ]);
-    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
+    expect(structuredClone((await buildPreparedFullCatalogForTest(input)).staticEntries)).toEqual([
       {
         provider: "nvidia",
         id: "nemotron-static",
         name: "Nemotron Static",
         api: "openai-completions",
-        baseUrl: "https://integrate.api.nvidia.com/v1",
+        baseUrl: "https://provider-static.example.test/v1",
         contextWindow: 128_000,
         reasoning: false,
         input: ["text"],
@@ -586,7 +618,7 @@ describe("prepared model runtime snapshots", () => {
   });
 
   it("omits provider runtime APIs outside the catalog contract", async () => {
-    mocks.loadStaticCatalog.mockResolvedValueOnce([
+    mocks.loadStaticCatalog.mockResolvedValue([
       {
         provider: "custom",
         id: "custom-static",
@@ -601,12 +633,10 @@ describe("prepared model runtime snapshots", () => {
       },
     ]);
 
-    const snapshot = await publishPreparedModelRuntimeSnapshot({
-      config: {},
-      agentDir: state.agentDir("unsupported-api"),
-    });
+    const input = { config: {}, agentDir: state.agentDir("unsupported-api") };
+    await publishPreparedModelRuntimeSnapshot(input);
 
-    expect(structuredClone(snapshot.modelCatalog.staticEntries)).toEqual([
+    expect(structuredClone((await buildPreparedFullCatalogForTest(input)).staticEntries)).toEqual([
       {
         provider: "custom",
         id: "custom-static",
@@ -774,15 +804,12 @@ describe("prepared model runtime snapshots", () => {
 
     expect(second).toBe(first);
     expect(Object.isFrozen(first)).toBe(true);
-    expect(first.authModes).toEqual({ custom: "api_key" });
-    expect(Object.isFrozen(first.authModes)).toBe(true);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    expect(first.providerAuth).toEqual({ custom: { mode: "api_key" } });
+    expect(Object.isFrozen(first.providerAuth)).toBe(true);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     expect(mocks.discoverAuthStorage).toHaveBeenCalledTimes(1);
     expect(mocks.resolveAmbientCredentials).toHaveBeenCalledTimes(1);
     expect(mocks.discoverModels).toHaveBeenCalledTimes(1);
-    expect(mocks.buildPreparedModelCatalogSnapshot).toHaveBeenCalledWith(
-      expect.objectContaining({ authCredentials: mocks.authStorage.getAll() }),
-    );
     const firstStores = first.createStores();
     const secondStores = first.createStores();
     expect(secondStores.authStorage).not.toBe(firstStores.authStorage);
@@ -822,7 +849,7 @@ describe("prepared model runtime snapshots", () => {
         externalCli?: unknown;
       };
       expect(discoveryOptions.externalCli).toBeUndefined();
-      expect(snapshot.authModes.openai).toBe(expected);
+      expect(snapshot.providerAuth.openai?.mode).toBe(expected);
     },
   );
 
@@ -834,7 +861,7 @@ describe("prepared model runtime snapshots", () => {
     const fromEquivalentClone = await prepareModelRuntimeSnapshot({ config: {}, agentDir });
 
     expect(fromEquivalentClone).toBe(first);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("reuses read-only owners for equivalent config clones but rejects projections", async () => {
@@ -921,11 +948,7 @@ describe("prepared model runtime snapshots", () => {
     });
 
     expect(snapshot.config).toBe(explicitConfig);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledWith(
-      explicitConfig,
-      expect.any(String),
-      expect.any(Object),
-    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("rebuilds a standalone owner when its explicit config changes", async () => {
@@ -938,12 +961,7 @@ describe("prepared model runtime snapshots", () => {
     const snapshot = await prepareModelRuntimeSnapshot({ config: secondConfig, agentDir });
 
     expect(snapshot.config).toBe(secondConfig);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenLastCalledWith(
-      secondConfig,
-      agentDir,
-      expect.any(Object),
-    );
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("keeps each standalone activation bound to its published generation", async () => {
@@ -991,7 +1009,7 @@ describe("prepared model runtime snapshots", () => {
     await expect(prepareModelRuntimeSnapshot(input)).resolves.toMatchObject({
       workspaceDir: input.workspaceDir,
     });
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(3);
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
   });
 
   it("skips a queued config generation superseded before its build starts", async () => {
@@ -1003,7 +1021,7 @@ describe("prepared model runtime snapshots", () => {
     const latest = refreshPreparedModelRuntimeSnapshots(latestConfig);
     await Promise.all([first, latest]);
 
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     await expect(
       prepareModelRuntimeSnapshot({
         agentDir: state.agentDir("default"),
@@ -1022,10 +1040,10 @@ describe("prepared model runtime snapshots", () => {
     await refreshPreparedModelRuntimeSnapshots(initialConfig);
     const finishLatestBuildGate = createDeferred();
     let finishLatestBuild: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, targetDir) => {
+    mocks.prepareStaticCatalog.mockImplementationOnce(async () => {
       finishLatestBuild = () => finishLatestBuildGate.resolve();
       await finishLatestBuildGate.promise;
-      return { agentDir: String(targetDir), wrote: false };
+      return { entries: [] };
     });
 
     let skipped: ReturnType<typeof refreshPreparedModelRuntimeSnapshots> | undefined;

@@ -640,7 +640,6 @@ export async function prepareCronRunContext(params: {
         }),
       },
       {
-        catalogMode: "static",
         ...(publishedRuntime
           ? { pluginGeneration: publishedRuntime.pluginGeneration }
           : { pluginMetadataSnapshot: modelOwner.metadataSnapshot }),

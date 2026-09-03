@@ -10,7 +10,6 @@ import {
   buildPreparedModelCatalogSnapshot,
   findModelCatalogEntry,
   loadManifestModelCatalog,
-  modelSupportsDocument,
   modelSupportsVision,
 } from "./model-catalog.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
@@ -481,6 +480,7 @@ describe("prepared model catalog builder", () => {
           discovery,
           modelIds: ["manifest-model"],
         }),
+        includeProviderPluginAugmentation: false,
       });
 
       expect(snapshot.entries).toMatchObject([
@@ -765,6 +765,5 @@ describe("prepared model catalog builder", () => {
       input: ["text", "image", "document"],
     };
     expect(modelSupportsVision(entry)).toBe(true);
-    expect(modelSupportsDocument(entry)).toBe(true);
   });
 });

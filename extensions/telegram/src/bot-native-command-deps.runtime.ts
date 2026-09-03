@@ -1,10 +1,6 @@
 import { dispatchChannelInboundTurn } from "openclaw/plugin-sdk/channel-inbound";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 // Telegram plugin module implements bot native command deps behavior.
-import type {
-  ModelsAuthLoginFlowOptions,
-  ModelsAuthLoginFlowResult,
-} from "openclaw/plugin-sdk/provider-auth-login-flow-runtime";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { listSkillCommandsForAgents } from "openclaw/plugin-sdk/skill-commands-runtime";
 import type { TelegramBotDeps } from "./bot-deps.js";
@@ -20,7 +16,6 @@ export type TelegramNativeCommandDeps = Pick<
   | "syncTelegramMenuCommands"
 > & {
   dispatchChannelInboundTurn?: typeof dispatchChannelInboundTurn;
-  runModelsAuthLoginFlow?: (opts: ModelsAuthLoginFlowOptions) => Promise<ModelsAuthLoginFlowResult>;
   sendMessageTelegram: typeof import("./send.js").sendMessageTelegram;
 };
 
@@ -41,11 +36,6 @@ export const defaultTelegramNativeCommandDeps: TelegramNativeCommandDeps & {
   },
   get syncTelegramMenuCommands() {
     return syncTelegramMenuCommands;
-  },
-  async runModelsAuthLoginFlow(opts) {
-    const { runModelsAuthLoginFlow } =
-      await import("openclaw/plugin-sdk/provider-auth-login-flow-runtime");
-    return await runModelsAuthLoginFlow(opts);
   },
   async editMessageTelegram(...args) {
     const { editMessageTelegram } = await loadTelegramSendModule();

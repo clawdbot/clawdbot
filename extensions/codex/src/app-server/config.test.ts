@@ -13,6 +13,7 @@ import {
   isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
+  resolveCodexAppServerHomeScope,
   resolveCodexAppServerStartOptionsForAgent,
   resolveCodexAppServerUserHomeDir,
   resolveCodexSupervisionAppServerRuntimeOptions,
@@ -50,6 +51,21 @@ describe("withMcpElicitationsApprovalPolicy", () => {
         skill_approval: false,
       },
     });
+  });
+});
+
+describe("resolveCodexAppServerHomeScope", () => {
+  it("uses the native user home for an unconfigured native route", () => {
+    expect(resolveCodexAppServerHomeScope({ appServer: {}, nativeAuth: true })).toBe("user");
+  });
+
+  it("keeps an explicit agent home authoritative", () => {
+    expect(
+      resolveCodexAppServerHomeScope({
+        appServer: { homeScope: "agent" },
+        nativeAuth: true,
+      }),
+    ).toBe("agent");
   });
 });
 

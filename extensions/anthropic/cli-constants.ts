@@ -70,18 +70,11 @@ export const CLAUDE_CLI_CLEAR_ENV = [
   "OTEL_TRACES_EXPORTER",
 ] as const;
 
-/** Default Claude CLI model ref for agent defaults and live tests. */
-export const CLAUDE_CLI_DEFAULT_MODEL_REF = `${CLAUDE_CLI_BACKEND_ID}/claude-opus-5`;
-/** Provider-relative model id for Anthropic runtime-policy resolution. */
-const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID = CLAUDE_CLI_DEFAULT_MODEL_REF.slice(
-  CLAUDE_CLI_BACKEND_ID.length + 1,
-);
-/** Canonical model ref routed to the Claude CLI backend by Anthropic setup. */
-export const CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF = `anthropic/${CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_ID}`;
-/** Default Claude CLI models allowed when setup seeds the model allowlist. */
-export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers[
-  CLAUDE_CLI_BACKEND_ID
-].models.map(({ id }) => `${CLAUDE_CLI_BACKEND_ID}/${id}`);
+/** Default model ref for Claude CLI setup and live tests; the runtime is resolved, not spelled. */
+export const CLAUDE_CLI_DEFAULT_MODEL_REF = "anthropic/claude-opus-5";
+/** Default Anthropic models allowed when Claude CLI setup seeds the model allowlist. */
+export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS =
+  manifest.modelCatalog.providers.anthropic.models.map(({ id }) => `anthropic/${id}`);
 
 /**
  * Claude CLI model ids probed when detecting an existing CLI route, canonical
@@ -90,7 +83,7 @@ export const CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS = manifest.modelCatalog.providers
  * default would stop advertising session creation after a default bump.
  */
 export const CLAUDE_CLI_ROUTE_PROBE_MODEL_IDS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
-  ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1),
+  ref.slice("anthropic/".length),
 );
 
 /** Provider-owned aliases shared by setup, pricing, and native CLI selectors. */

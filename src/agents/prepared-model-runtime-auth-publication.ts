@@ -217,7 +217,7 @@ export class PreparedModelRuntimeAuthPublicationOwner {
         owner: PreparedModelRuntimeOwner;
         input: PreparedModelRuntimeOwner["input"];
       }>,
-      includeCredentialProviders: boolean,
+      profileSetChanged: boolean,
     ) => Promise<void>;
     publishOwners: (owners: readonly PreparedModelRuntimeOwner[]) => void;
     commit?: () => void;

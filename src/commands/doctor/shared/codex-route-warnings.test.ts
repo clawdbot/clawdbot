@@ -2936,6 +2936,64 @@ describe("collectCodexRouteWarnings", () => {
     expect(store.main?.agentRuntimeOverride).toBe("codex");
   });
 
+  it("migrates Claude and Gemini session routes and the legacy Claude session field", () => {
+    const store: Record<string, SessionEntry> = {
+      claude: {
+        sessionId: "claude-openclaw",
+        updatedAt: 1,
+        modelProvider: "claude-cli",
+        model: "claude-sonnet-4-6",
+        providerOverride: "claude-cli",
+        modelOverride: "claude-cli/claude-opus-4-7",
+        claudeCliSessionId: "claude-native",
+      },
+      google: {
+        sessionId: "google-openclaw",
+        updatedAt: 2,
+        modelProvider: "google-gemini-cli",
+        model: "gemini-3-flash-preview",
+        providerOverride: "google-gemini-cli",
+        modelOverride: "google-gemini-cli/gemini-3-pro-preview",
+      },
+      codex: {
+        sessionId: "codex-openclaw",
+        updatedAt: 3,
+        modelProvider: "codex",
+        model: "gpt-5.6-sol",
+        agentHarnessId: "codex-cli",
+      },
+    };
+
+    const result = repairCodexSessionStoreRoutes({ store, now: 123 });
+
+    expect(result).toEqual({ changed: true, sessionKeys: ["claude", "google", "codex"] });
+    expect(store.claude).toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+      providerOverride: "anthropic",
+      modelOverride: "claude-opus-4-7",
+      cliSessionBindings: { "claude-cli": { sessionId: "claude-native" } },
+      updatedAt: 123,
+    });
+    expect(store.claude?.claudeCliSessionId).toBeUndefined();
+    expect(store.google).toMatchObject({
+      modelProvider: "google",
+      model: "gemini-3-flash-preview",
+      providerOverride: "google",
+      modelOverride: "gemini-3.1-pro-preview",
+      updatedAt: 123,
+    });
+    expect(store.codex).toMatchObject({
+      modelProvider: "openai",
+      agentHarnessId: "codex",
+      updatedAt: 123,
+    });
+    expect(repairCodexSessionStoreRoutes({ store, now: 456 })).toEqual({
+      changed: false,
+      sessionKeys: [],
+    });
+  });
+
   it("treats slash model ids as raw for custom providers while migrating legacy pairs", () => {
     const store: Record<string, SessionEntry> = {
       custom: {

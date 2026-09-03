@@ -81,7 +81,7 @@ describe("sendGatewayCronFailureAlert presentation", () => {
                 type: "buttons",
                 buttons: [
                   {
-                    label: "Log in to Codex",
+                    label: "Sign in to OpenAI",
                     action: { type: "command", command: "/login codex" },
                   },
                 ],
@@ -105,7 +105,7 @@ describe("sendGatewayCronFailureAlert presentation", () => {
                   type: "buttons",
                   buttons: [
                     {
-                      label: "Log in to Codex",
+                      label: "Sign in to OpenAI",
                       action: { type: "command", command: "/login codex" },
                     },
                   ],

@@ -41,9 +41,6 @@ export const formatTag = (tag: string, rich: boolean) => {
   if (tag === "configured") {
     return theme.accent(tag);
   }
-  if (tag === "missing") {
-    return theme.error(tag);
-  }
   if (tag.startsWith("fallback#")) {
     return theme.warn(tag);
   }

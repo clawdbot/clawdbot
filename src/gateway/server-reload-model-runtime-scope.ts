@@ -31,7 +31,6 @@ export function refreshModelRuntimeAfterHotReload(params: {
   isPublicationCurrent?: () => boolean;
 }): Promise<void> {
   return refreshPreparedModelRuntimeSnapshots(params.config, {
-    catalogMode: "static",
     ...(params.isPublicationCurrent ? { isPublicationCurrent: params.isPublicationCurrent } : {}),
     allowGatewaySubagentBinding: true,
     ...(params.agentIds ? { agentIds: params.agentIds } : {}),

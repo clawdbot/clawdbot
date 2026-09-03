@@ -32,6 +32,7 @@ import {
 } from "../../lib/chat/thinking.ts";
 import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -254,7 +255,8 @@ async function executeModel(
     try {
       const [sessions, models] = await Promise.all([
         listSessions(context, selectedAgentListScope(sessionKey, context)),
-        modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+        modelCatalog ??
+          (agentId ? loadModelCatalog(client, { agentId }).then((r) => r.models) : []),
       ]);
       const { session, defaults } = resolveCommandSessionState(context, sessionKey, sessions);
       const model = session?.model || defaults?.model || "default";
@@ -735,27 +737,13 @@ async function loadThinkingCommandState(
   const agentId = resolveSelectedAgentId(sessionKey, context);
   const [sessions, models] = await Promise.all([
     listSessions(context, selectedAgentListScope(sessionKey, context)),
-    modelCatalog ? Promise.resolve(modelCatalog) : loadModelCatalog(client, agentId),
+    modelCatalog ?? (agentId ? loadModelCatalog(client, { agentId }).then((r) => r.models) : []),
   ]);
   const state = resolveCommandSessionState(context, sessionKey, sessions);
   return {
     ...state,
     models,
   };
-}
-
-async function loadModelCatalog(
-  client: GatewayBrowserClient,
-  agentId: string | undefined,
-): Promise<ModelCatalogEntry[]> {
-  if (!agentId) {
-    return [];
-  }
-  const result = await client.request<{ models: ModelCatalogEntry[] }>("models.list", {
-    agentId,
-    view: "configured",
-  });
-  return result?.models ?? [];
 }
 
 function resolveCommandMessage(

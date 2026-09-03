@@ -64,6 +64,42 @@ wa-select.settings-select wa-option::part(checked-icon) {
   color: color-mix(in srgb, var(--text) 80%, var(--accent));
 }
 
+/* Host display rules beat the UA hidden rule on custom elements. */
+wa-select.settings-select wa-option[hidden] {
+  display: none;
+}
+
+.picker-select__search {
+  position: sticky;
+  top: -6px;
+  z-index: 1;
+  margin: -6px -6px 6px;
+  padding: 6px;
+  border-bottom: 1px solid var(--overlay-border);
+  background: var(--bg-elevated);
+}
+
+.picker-select__search-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 8px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: calc(var(--radius-md) - 4px);
+  background: color-mix(in srgb, var(--bg) 80%, var(--bg-elevated) 20%);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--control-ui-text-sm);
+  outline: none;
+}
+
+.picker-select__search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border) 45%);
+}
+
+.picker-select__search-input::placeholder {
+  color: var(--muted);
+}
+
 .picker-select [slot="start"] {
   display: inline-flex;
   align-items: center;

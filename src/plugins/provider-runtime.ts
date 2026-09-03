@@ -907,6 +907,7 @@ export function resolveProviderSyntheticAuthWithPlugin(params: {
           env: params.env,
           onlyPluginIds: discoveryPluginIds,
           discoveryEntriesOnly: true,
+          includeSyntheticAuthProviders: true,
         })
       : []
   ).find((provider) => matchesAnyProviderPluginRef(provider, providerRefs));

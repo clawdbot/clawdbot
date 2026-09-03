@@ -5,6 +5,7 @@ import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
+import { detectAmbientInferenceBackends } from "../commands/onboard-inference-ambient.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
 import {
@@ -29,6 +30,12 @@ import {
   resolveSetupInferenceWorkspace,
   toProviderAutoSetupKind,
 } from "./setup-inference-core.js";
+
+const SETUP_INFERENCE_DETECTION_TIMEOUT_MS = 30_000;
+
+let inFlightDetection:
+  | { agentId: string | undefined; promise: Promise<SetupInferenceDetection> }
+  | undefined;
 
 function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
@@ -269,4 +276,76 @@ export async function detectSetupInference(
     ...(configuredModel ? { configuredModel } : {}),
     setupComplete: Boolean(configuredModel),
   };
+}
+
+/** Ambient env keys still count when native or plugin discovery runs past the deadline. */
+function withAmbientCandidates(
+  detection: SetupInferenceDetection,
+  env: NodeJS.ProcessEnv,
+): SetupInferenceDetection {
+  const existing = new Set(
+    detection.candidates.map((candidate) => `${candidate.kind}\0${candidate.modelRef}`),
+  );
+  const ambient = detectAmbientInferenceBackends(env)
+    .filter((candidate) => !existing.has(`${candidate.kind}\0${candidate.modelRef}`))
+    .map((candidate) =>
+      Object.assign(
+        candidate,
+        { recommended: false as const },
+        resolveCandidatePresentation(candidate, []),
+      ),
+    );
+  return ambient.length === 0
+    ? detection
+    : { ...detection, candidates: [...detection.candidates, ...ambient] };
+}
+
+/**
+ * Gateway entry: one detection at a time per owner, bounded so a stalled native probe
+ * answers with the partial signal instead of holding the request open.
+ */
+export async function detectSetupInferenceIsolated(
+  options: { agentId?: string; timeoutMs?: number } = {},
+): Promise<SetupInferenceDetection> {
+  const agentId = options.agentId?.trim() || undefined;
+  if (inFlightDetection) {
+    if (inFlightDetection.agentId === agentId) {
+      return await inFlightDetection.promise;
+    }
+    // Native provider discovery is process-global: serialize different owners.
+    await inFlightDetection.promise.catch(() => undefined);
+    return await detectSetupInferenceIsolated(options);
+  }
+  const timeoutMs = options.timeoutMs ?? SETUP_INFERENCE_DETECTION_TIMEOUT_MS;
+  let partial: SetupInferenceDetection | undefined;
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<SetupInferenceDetection>((resolve, reject) => {
+    timer = setTimeout(() => {
+      setupInferenceLog.warn(
+        `Setup inference detection timed out after ${timeoutMs}ms; using partial signal if available.`,
+      );
+      if (partial) {
+        resolve(withAmbientCandidates(partial, process.env));
+        return;
+      }
+      reject(
+        new Error(
+          `AI access detection did not finish after ${timeoutMs / 1_000}s. This Gateway may still be checking — try again.`,
+        ),
+      );
+    }, timeoutMs);
+    timer.unref();
+  });
+  const current = Promise.race([
+    detectSetupInference({ onPartial: (detection) => (partial = detection) }, agentId),
+    deadline,
+  ]).finally(() => clearTimeout(timer));
+  inFlightDetection = { agentId, promise: current };
+  try {
+    return await current;
+  } finally {
+    if (inFlightDetection?.promise === current) {
+      inFlightDetection = undefined;
+    }
+  }
 }

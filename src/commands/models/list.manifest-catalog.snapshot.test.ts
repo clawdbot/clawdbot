@@ -13,11 +13,7 @@ import {
   createSyncSuiteTempRootTracker,
   mkdirSafeDir,
 } from "../../plugins/test-helpers/fs-fixtures.js";
-import {
-  loadManifestCatalogRowsForList,
-  loadStaticManifestCatalogRowsForList,
-  resolveManifestCatalogCoverageForList,
-} from "./list.manifest-catalog.js";
+import { loadStaticManifestCatalogRowsForList } from "./list.manifest-catalog.js";
 
 const tempRoots = createSyncSuiteTempRootTracker("manifest-catalog");
 
@@ -174,40 +170,9 @@ function withoutManifestIo<T>(fixture: ReturnType<typeof prepareFixture>, run: (
   return output;
 }
 
-function coverage(fixture: ReturnType<typeof prepareFixture>) {
-  const result = resolveManifestCatalogCoverageForList({
-    ...fixture,
-    providerIds: new Set([
-      " FIXTURE-PROVIDER ",
-      "fixture-alias",
-      "fixture-direct",
-      "fixture-workspace",
-      "fixture-disabled",
-      "missing",
-      " ",
-    ]),
-  });
-  return {
-    owned: [...result.ownedProviderIds].toSorted(),
-    complete: [...result.completeProviderIds].toSorted(),
-  };
-}
-
-const expectedCoverage = {
-  owned: ["fixture-alias", "fixture-direct", "fixture-provider", "fixture-workspace"],
-  complete: ["fixture-alias", "fixture-direct", "fixture-provider"],
-};
-
 describe("model-list prepared manifest snapshot", () => {
-  it("resolves coverage from the prepared snapshot without manifest I/O", () => {
-    const fixture = prepareFixture();
-    expect(withoutManifestIo(fixture, () => coverage(fixture))).toEqual(expectedCoverage);
-  });
-
-  it.each([
-    ["all", loadManifestCatalogRowsForList],
-    ["static", loadStaticManifestCatalogRowsForList],
-  ] as const)("loads %s provider and alias rows without manifest I/O", (_selection, loadRows) => {
+  it("loads static provider and alias rows without manifest I/O", () => {
+    const loadRows = loadStaticManifestCatalogRowsForList;
     const fixture = prepareFixture();
     for (const providerFilter of [
       " FIXTURE-PROVIDER ",
@@ -237,54 +202,40 @@ describe("model-list prepared manifest snapshot", () => {
     }
   });
 
-  it.each([
-    { mutation: "change", first: "coverage" },
-    { mutation: "change", first: "alias" },
-    { mutation: "remove", first: "coverage" },
-    { mutation: "remove", first: "alias" },
-  ] as const)(
-    "keeps prepared ownership and rows after $mutation, reading $first first",
-    ({ mutation, first }) => {
-      const fixture = prepareFixture();
-      const owner = fixture.metadataSnapshot.byPluginId.get("catalog-owner");
-      if (!owner) {
-        throw new Error("missing fixture catalog owner");
-      }
-      if (mutation === "remove") {
-        fs.unlinkSync(owner.manifestPath);
-      } else {
-        fs.writeFileSync(
-          owner.manifestPath,
-          JSON.stringify({
-            id: owner.id,
-            configSchema: { type: "object" },
-            providers: [],
-          }),
-        );
-      }
-      for (const surface of first === "coverage" ? ["coverage", "alias"] : ["alias", "coverage"]) {
-        const result = withoutManifestIo(fixture, () =>
-          surface === "coverage"
-            ? coverage(fixture)
-            : loadManifestCatalogRowsForList({ ...fixture, providerFilter: "fixture-alias" }).map(
-                (row) => row.ref,
-              ),
-        );
-        expect
-          .soft(result)
-          .toEqual(surface === "coverage" ? expectedCoverage : ["fixture-alias/tiny-model"]);
-      }
-      const broad = withoutManifestIo(fixture, () =>
-        loadManifestCatalogRowsForList(fixture).map((row) => row.ref),
+  it.each(["change", "remove"] as const)("keeps prepared rows after manifest %s", (mutation) => {
+    const fixture = prepareFixture();
+    const owner = fixture.metadataSnapshot.byPluginId.get("catalog-owner");
+    if (!owner) {
+      throw new Error("missing fixture catalog owner");
+    }
+    if (mutation === "remove") {
+      fs.unlinkSync(owner.manifestPath);
+    } else {
+      fs.writeFileSync(
+        owner.manifestPath,
+        JSON.stringify({
+          id: owner.id,
+          configSchema: { type: "object" },
+          providers: [],
+        }),
       );
-      expect(broad).toEqual([
-        "fixture-direct/tiny-model",
-        "fixture-disabled/tiny-model",
-        "fixture-provider/tiny-model",
-        "fixture-workspace/tiny-model",
-      ]);
-    },
-  );
+    }
+    const alias = withoutManifestIo(fixture, () =>
+      loadStaticManifestCatalogRowsForList({ ...fixture, providerFilter: "fixture-alias" }).map(
+        (row) => row.ref,
+      ),
+    );
+    expect(alias).toEqual(["fixture-alias/tiny-model"]);
+    const broad = withoutManifestIo(fixture, () =>
+      loadStaticManifestCatalogRowsForList(fixture).map((row) => row.ref),
+    );
+    expect(broad).toEqual([
+      "fixture-direct/tiny-model",
+      "fixture-disabled/tiny-model",
+      "fixture-provider/tiny-model",
+      "fixture-workspace/tiny-model",
+    ]);
+  });
 
   it.each<[string, NonNullable<OpenClawConfig["plugins"]>, string, boolean]>([
     ["global disable", { enabled: false }, "fixture-alias", false],
@@ -309,20 +260,11 @@ describe("model-list prepared manifest snapshot", () => {
         cfg: { ...fixture.cfg, plugins: { ...fixture.cfg.plugins, ...plugins } },
       };
       withoutManifestIo(fixture, () => {
-        const result = resolveManifestCatalogCoverageForList({
-          ...params,
-          providerIds: new Set([provider]),
-        });
-        expect(result.ownedProviderIds).toEqual(new Set(enabled ? [provider] : []));
-        expect(result.completeProviderIds).toEqual(result.ownedProviderIds);
-        for (const loadRows of [
-          loadManifestCatalogRowsForList,
-          loadStaticManifestCatalogRowsForList,
-        ]) {
-          expect(loadRows({ ...params, providerFilter: provider }).map((row) => row.ref)).toEqual(
-            enabled ? [`${provider}/tiny-model`] : [],
-          );
-        }
+        expect(
+          loadStaticManifestCatalogRowsForList({ ...params, providerFilter: provider }).map(
+            (row) => row.ref,
+          ),
+        ).toEqual(enabled ? [`${provider}/tiny-model`] : []);
       });
     },
   );

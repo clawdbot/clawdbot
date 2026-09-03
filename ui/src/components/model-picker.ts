@@ -31,6 +31,9 @@ type ModelPickerParams = {
   onChange: (value: string) => void;
 };
 
+// A search row earns its space once the list outgrows one listbox screen.
+const SEARCHABLE_OPTION_FLOOR = 8;
+
 export function renderModelPicker(params: ModelPickerParams) {
   let customValue = "__openclaw_custom_model__";
   const values = new Set([params.value, ...params.options.map((option) => option.value)]);
@@ -53,6 +56,7 @@ export function renderModelPicker(params: ModelPickerParams) {
         title: params.title,
         placement: params.placement,
         className: `model-picker__select ${params.className ?? ""}`,
+        searchable: options.length > SEARCHABLE_OPTION_FLOOR,
         onOpen: params.onOpen,
         renderLeading: (option) =>
           option.provider

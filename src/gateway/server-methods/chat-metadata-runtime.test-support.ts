@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import {
-  resolveUsableAgentCredentialModes,
+  resolveProviderAuthFacts,
   type AgentCredentialMap,
 } from "../../agents/agent-auth-credentials.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
@@ -36,9 +36,8 @@ export function createChatMetadataOwner(
     workspaceDir: `/tmp/${id}/workspace`,
     activeProjectKeys: [],
     config,
-    observationConfig: config,
-    isCurrent: () => true,
-    authModes: resolveUsableAgentCredentialModes(credentials),
+    providerAuth: resolveProviderAuthFacts(credentials),
+    oauthRefreshProviderIds: [],
     metadataSnapshot: createPluginMetadataSnapshotFixture(),
     allowGatewaySubagentBinding: false,
     modelCatalog: {

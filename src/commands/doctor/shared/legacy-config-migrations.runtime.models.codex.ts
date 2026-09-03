@@ -8,11 +8,9 @@ import {
   legacyCodexProviderIdentityKey,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
-import {
-  MODEL_REF_CANONICALIZATION_MESSAGE,
-  hasOwnDefinedProperty,
-  scanKnownModelRefs,
-} from "./legacy-config-migrations.runtime.models.refs.js";
+import { MODEL_REF_CANONICALIZATION_MESSAGE } from "./legacy-config-migrations.runtime.models.ref-rewriters.js";
+import { hasOwnDefinedProperty } from "./legacy-config-migrations.runtime.models.ref-slots.js";
+import { scanKnownModelRefs } from "./legacy-config-migrations.runtime.models.ref-walkers.js";
 import { visitAgentConfigScopes } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 

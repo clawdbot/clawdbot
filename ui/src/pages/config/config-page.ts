@@ -808,7 +808,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       this.systemInfoGatewaySource === gatewaySource &&
       this.context.gateway.snapshot.client === client &&
       this.context.agentSelection.state.selectedId === agentId;
-    const promise = loadModelCatalog(client, { agentId, preparedOnly: true, rejectOnFailure: true })
+    const promise = loadModelCatalog(client, { agentId, preparedOnly: true })
       .then(({ models }) => {
         if (isCurrent()) {
           this.sessionObserverModels = models;
@@ -819,7 +819,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       })
       .catch(() => {
         if (isCurrent()) {
-          this.resetSessionObserverModels(true);
+          this.sessionObserverModelsUnavailable = true;
         }
       })
       .finally(() => {

@@ -241,7 +241,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("does not synthesize manifest entry providers for runtime-discovered catalogs", () => {
+  it("synthesizes curated manifest entry providers for runtime-discovered catalogs", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -251,13 +251,16 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       },
     });
 
-    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
-      [],
-    );
+    const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: "token-plan",
+      pluginId: "token-plan",
+    });
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("does not synthesize manifest entry providers for refreshable catalogs", () => {
+  it("synthesizes curated manifest entry providers for refreshable catalogs", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["token-plan"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -267,9 +270,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       },
     });
 
-    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toStrictEqual(
-      [],
-    );
+    expect(resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true })).toHaveLength(1);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
@@ -305,7 +306,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     expect(mocks.resolvePluginProvidersCore).toHaveBeenCalledOnce();
   });
 
-  it("keeps static manifest entries available for mixed runtime-catalog plugins", () => {
+  it("keeps all curated manifest entries available for mixed runtime-catalog plugins", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -317,11 +318,11 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
     const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
 
-    expect(providers.map((provider) => provider.id)).toEqual(["xiaomi"]);
+    expect(providers.map((provider) => provider.id)).toEqual(["xiaomi", "xiaomi-token-plan"]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
-  it("counts mixed static manifest entries for entries-only complete coverage", () => {
+  it("counts all mixed manifest entries for entries-only discovery", () => {
     const entryProvider = createProvider({ id: "deepseek", mode: "static" });
     mocks.loadSource.mockReturnValue(entryProvider);
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["deepseek", "xiaomi"]);
@@ -338,10 +339,13 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
     const providers = resolvePluginDiscoveryProvidersRuntime({
       discoveryEntriesOnly: true,
-      requireCompleteDiscoveryEntryCoverage: true,
     });
 
-    expect(providers.map((provider) => provider.id)).toEqual(["xiaomi", "deepseek"]);
+    expect(providers.map((provider) => provider.id)).toEqual([
+      "xiaomi",
+      "xiaomi-token-plan",
+      "deepseek",
+    ]);
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 
@@ -662,7 +666,7 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     });
   });
 
-  it("does not expose runtime-only manifest model catalogs as static discovery entries", () => {
+  it("exposes runtime-only manifest model catalogs as curated discovery entries", () => {
     mocks.resolveDiscoveredProviderPluginIds.mockReturnValue(["xiaomi-token-plan"]);
     mocks.loadPluginMetadataSnapshot.mockReturnValue({
       index: { plugins: [] },
@@ -674,7 +678,8 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
 
     const providers = resolvePluginDiscoveryProvidersRuntime({ discoveryEntriesOnly: true });
 
-    expect(providers).toStrictEqual([]);
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ id: "xiaomi-token-plan", pluginId: "xiaomi-token-plan" });
     expect(mocks.resolvePluginProvidersCore).not.toHaveBeenCalled();
   });
 

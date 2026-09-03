@@ -78,7 +78,7 @@ describe("prepared model runtime config stamps", () => {
     await expect(loadPreparedModelRuntimeAuth(advanced, { providerIds: [] })).resolves.toEqual(
       loadedAuth,
     );
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+    expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
     await expect(
       loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
     ).resolves.toMatchObject({ config: nextConfig });
@@ -127,7 +127,7 @@ describe("prepared model runtime config stamps", () => {
       supplierReady.resolve();
       await Promise.all([stalePublication, nextPublication]);
 
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledOnce();
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
       await expect(
         prepareModelRuntimeSnapshot({
           agentId: "default",
@@ -179,7 +179,7 @@ describe("prepared model runtime config stamps", () => {
       await reader;
       await refreshPreparedModelRuntimeSnapshots(nextConfig, { gatewayLifecycle: true });
 
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
+      expect(mocks.ensureOpenClawModelsJson).not.toHaveBeenCalled();
       await expect(
         prepareModelRuntimeSnapshot({
           agentId: "default",
@@ -198,41 +198,26 @@ describe("prepared model runtime config stamps", () => {
     }
   });
 
-  it("keeps an in-flight auth publication on the advanced stamp", async () => {
+  it("keeps the advanced config stamp during an in-flight auth publication", async () => {
     const initialConfig = {};
-    const nextConfig = { gateway: { reload: { mode: "hot" as const } } };
+    const advancedConfig = { gateway: { reload: { mode: "hot" as const } } };
     await refreshPreparedModelRuntimeSnapshots(initialConfig, { gatewayLifecycle: true });
-    const finishAuthRefreshGate = createDeferred();
-    let finishAuthRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      finishAuthRefresh = () => finishAuthRefreshGate.resolve();
-      await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
+
+    mocks.mutationListener?.({
+      agentDir: state.agentDir("default"),
+      affectsInheritedStores: false,
+      profileSetChanged: true,
     });
+    advancePreparedModelRuntimeConfig(advancedConfig);
 
-    try {
-      mocks.mutationListener?.({ affectsInheritedStores: true });
-      await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
-      mocks.configuredAgentDirs.set("default", "/tmp/later-agent");
-      advancePreparedModelRuntimeConfig(nextConfig);
-      finishAuthRefreshGate.resolve();
-
-      const snapshot = await prepareModelRuntimeSnapshot({
+    await expect(
+      prepareModelRuntimeSnapshot({
         agentId: "default",
         agentDir: state.agentDir("default"),
         inheritedAuthDir: state.agentDir("default"),
-        config: nextConfig,
-      });
-      expect(resolvePublishedModelCatalogOwner(snapshot)).toMatchObject({
-        agentId: "default",
-        workspaceDir: "/tmp/unused-workspace",
-        config: nextConfig,
-      });
-      expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(2);
-    } finally {
-      finishAuthRefreshGate.resolve();
-      await Promise.allSettled([loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })]);
-    }
+        config: advancedConfig,
+      }),
+    ).resolves.toMatchObject({ config: advancedConfig });
   });
 });
 

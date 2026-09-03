@@ -18,6 +18,7 @@ import "../../styles/chat/composer.css";
 import "../../styles/new-session.css";
 import { renderChatImageLightbox } from "../chat/components/chat-image-lightbox.ts";
 import { renderWelcomeState } from "../chat/components/chat-welcome.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 import { ConnectMachineSetupState, renderConnectMachineDialog } from "./connect-machine-dialog.ts";
@@ -439,7 +440,7 @@ export class NewSessionPage extends OpenClawLightDomElement {
       hideSecondaryContent: this.submission.visibility === "incognito",
       fadeSecondaryContent: this.submission.message.trim().length > 0,
       modelSetupRequired: this.submission.requiresModelSetup(),
-      onModelSetup: () => this.context?.navigate("model-setup"),
+      onModelSetup: () => this.context?.navigate("model-providers", MODELS_CONNECT_NAVIGATION),
       sessions: this.context?.sessions.state.result,
       sessionKey: buildAgentMainSessionKey({
         agentId: this.place.agentId || "main",

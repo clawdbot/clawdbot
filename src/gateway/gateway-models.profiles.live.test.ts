@@ -17,7 +17,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { installTestEnv } from "../../test/test-env.js";
-import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import { buildPortableAuthProfileStoreForAgentCopy } from "../agents/auth-profiles/portability.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
@@ -5186,17 +5186,18 @@ async function loadAuthBackedLiveModelRegistry(params: {
     "[all-models] load auth profiles",
   );
   const authStorage = await withGatewayLiveSetupTimeout(
-    Promise.resolve().then(() =>
-      discoverAuthStorage(params.agentDir, {
-        config: params.cfg,
-        env: process.env,
-        ...(params.providerList
-          ? {
-              skipExternalAuthProfiles: true,
-              syntheticAuthProviderRefs: [],
-            }
-          : {}),
-      }),
+    Promise.resolve().then(
+      () =>
+        discoverAuthStorageFacts(params.agentDir, {
+          config: params.cfg,
+          env: process.env,
+          ...(params.providerList
+            ? {
+                skipExternalAuthProfiles: true,
+                syntheticAuthProviderRefs: [],
+              }
+            : {}),
+        }).authStorage,
     ),
     "[all-models] load auth storage",
   );
@@ -5480,7 +5481,6 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
       detectClaudeLoginState: async () => ({ credentials: false }),
-      readCodexCliCredentials: () => null,
       readGeminiCliCredentials: () => null,
     },
   });
@@ -6916,7 +6916,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       const hostStore = ensureAuthProfileStore(agentDir, {
         allowKeychainPrompt: false,
       });
-      const authStorage = discoverAuthStorage(agentDir);
+      const authStorage = discoverAuthStorageFacts(agentDir).authStorage;
       const modelRegistry = discoverModels(authStorage, agentDir);
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;

@@ -367,6 +367,7 @@ export function createTestChatPane(params: {
     chatMessages: [],
     chatModelCatalog: [],
     chatModelCatalogError: null,
+    modelCatalogRequestVersion: 0,
     chatModelsLoading: false,
     chatQueue: [],
     chatRunId: null,

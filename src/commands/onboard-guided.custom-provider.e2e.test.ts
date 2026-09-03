@@ -164,6 +164,7 @@ async function runCustomSetup(scenario: Scenario) {
       recommendedInstalls: [],
       manualProviders: [],
       authOptions: [],
+      prepareOptions: [],
       workspace,
       setupComplete: true,
     },

@@ -4,6 +4,7 @@ import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { MODELS_CONNECT_NAVIGATION } from "../model-providers/location.ts";
 import { performCustodianAgentHandoff } from "./custodian-navigation.ts";
 import {
   createCustodianSessionId,
@@ -426,7 +427,7 @@ export class CustodianSessionStore {
 
   openModelSetup(): void {
     this.revokeNavigationAuthority();
-    this.context?.navigate("model-setup");
+    this.context?.navigate("model-providers", MODELS_CONNECT_NAVIGATION);
   }
 
   private emit(): void {

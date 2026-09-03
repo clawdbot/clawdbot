@@ -38,9 +38,12 @@ import {
   inspectPersistedSharedAuthProfileStateRaw,
   inspectPersistedSharedAuthProfileStoreRaw,
   readPersistedAuthProfileStateRaw,
+  readPersistedAuthProfileStoreRaw,
   readPersistedSharedAuthProfileStateRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
+  writePersistedAuthProfileStateRaw,
+  writePersistedAuthProfileStoreRaw,
   type AuthProfileDatabase,
 } from "../agents/auth-profiles/sqlite.js";
 import { coerceAuthProfileState } from "../agents/auth-profiles/state.js";
@@ -52,6 +55,10 @@ import type {
 } from "../agents/auth-profiles/types.js";
 import { resolveLegacyInheritedAuthAgentDir } from "../agents/legacy-inherited-auth-dir.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
+import {
+  PROVIDER_AUTH_ALIAS_MAP,
+  resolveCanonicalProviderAuthId,
+} from "../agents/provider-auth-aliases.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -1427,6 +1434,52 @@ function isLegacyOpenAICodexProfileId(profileId: string): boolean {
   return profileId.trim().toLowerCase().startsWith(`${LEGACY_OPENAI_CODEX_PROVIDER_ID}:`);
 }
 
+function legacyAuthProfileTarget(
+  profileId: string,
+): { provider: string; suffix: string } | undefined {
+  if (profileId === "openai:codex-cli") {
+    return { provider: OPENAI_PROVIDER_ID, suffix: "default" };
+  }
+  const separator = profileId.indexOf(":");
+  if (separator <= 0) {
+    return undefined;
+  }
+  const provider = profileId.slice(0, separator).trim().toLowerCase();
+  const canonicalProvider =
+    PROVIDER_AUTH_ALIAS_MAP[provider as keyof typeof PROVIDER_AUTH_ALIAS_MAP];
+  return canonicalProvider
+    ? { provider: canonicalProvider, suffix: profileId.slice(separator + 1).trim() || "default" }
+    : undefined;
+}
+
+function isLegacyAuthProfileId(profileId: string): boolean {
+  return legacyAuthProfileTarget(profileId) !== undefined;
+}
+
+function collectLegacyAuthProfileIdsFromRotationState(
+  raw: unknown,
+  addProfileIds: (profileIds: Iterable<string>) => void,
+): void {
+  if (!isRecord(raw)) {
+    return;
+  }
+  if (isRecord(raw.order)) {
+    for (const values of Object.values(raw.order)) {
+      if (Array.isArray(values)) {
+        addProfileIds(values.filter((value): value is string => typeof value === "string"));
+      }
+    }
+  }
+  if (isRecord(raw.lastGood)) {
+    addProfileIds(
+      Object.values(raw.lastGood).filter((value): value is string => typeof value === "string"),
+    );
+  }
+  if (isRecord(raw.usageStats)) {
+    addProfileIds(Object.keys(raw.usageStats));
+  }
+}
+
 function canonicalOpenAIProfileSuffix(profileId: string): string {
   return profileId.slice(profileId.indexOf(":") + 1).trim() || "default";
 }
@@ -1448,6 +1501,84 @@ function allocateOpenAIProfileId(legacyProfileId: string, occupied: Set<string>)
     if (!occupied.has(candidate)) {
       occupied.add(candidate);
       return candidate;
+    }
+  }
+}
+
+function allocateCanonicalAuthProfileId(
+  legacyProfileId: string,
+  occupied: Set<string>,
+): string | undefined {
+  const target = legacyAuthProfileTarget(legacyProfileId);
+  if (!target) {
+    return undefined;
+  }
+  const direct = `${target.provider}:${target.suffix}`;
+  if (!occupied.has(direct)) {
+    occupied.add(direct);
+    return direct;
+  }
+  const cli = `${target.provider}:cli-${target.suffix}`;
+  if (!occupied.has(cli)) {
+    occupied.add(cli);
+    return cli;
+  }
+  for (let index = 2; ; index += 1) {
+    const candidate = `${cli}-${index}`;
+    if (!occupied.has(candidate)) {
+      occupied.add(candidate);
+      return candidate;
+    }
+  }
+}
+
+function ensureLegacyAuthProfileIdMap(
+  auth: Record<string, unknown> | undefined,
+  profileIdMap: Map<string, string>,
+): void {
+  if (!auth) {
+    return;
+  }
+  const occupied = new Set<string>();
+  const profiles = isRecord(auth.profiles) ? auth.profiles : undefined;
+  for (const profileId of Object.keys(profiles ?? {})) {
+    if (!isLegacyAuthProfileId(profileId)) {
+      occupied.add(profileId);
+    }
+  }
+  const order = isRecord(auth.order) ? auth.order : undefined;
+  for (const values of Object.values(order ?? {})) {
+    if (Array.isArray(values)) {
+      for (const value of values) {
+        if (typeof value === "string" && !isLegacyAuthProfileId(value)) {
+          occupied.add(value);
+        }
+      }
+    }
+  }
+  const legacyIds = new Set<string>();
+  for (const profileId of Object.keys(profiles ?? {})) {
+    if (isLegacyAuthProfileId(profileId)) {
+      legacyIds.add(profileId);
+    }
+  }
+  for (const values of Object.values(order ?? {})) {
+    if (Array.isArray(values)) {
+      for (const value of values) {
+        if (typeof value === "string" && isLegacyAuthProfileId(value)) {
+          legacyIds.add(value);
+        }
+      }
+    }
+  }
+  for (const profileId of [...legacyIds].toSorted()) {
+    if (!profileIdMap.has(profileId)) {
+      const mapped = profileId.startsWith(`${LEGACY_OPENAI_CODEX_PROVIDER_ID}:`)
+        ? allocateOpenAIProfileId(profileId, occupied)
+        : allocateCanonicalAuthProfileId(profileId, occupied);
+      if (mapped) {
+        profileIdMap.set(profileId, mapped);
+      }
     }
   }
 }
@@ -1568,6 +1699,7 @@ function canonicalizeOpenAIAuthOrder(
   const existingCanonicalOrder = Array.isArray(order[OPENAI_PROVIDER_ID])
     ? [...(order[OPENAI_PROVIDER_ID] as unknown[])]
     : [];
+  const canonicalOrderPresent = Object.hasOwn(order, OPENAI_PROVIDER_ID);
   const legacyOrder = Array.isArray(order[LEGACY_OPENAI_CODEX_PROVIDER_ID])
     ? (order[LEGACY_OPENAI_CODEX_PROVIDER_ID] as unknown[])
     : [];
@@ -1624,10 +1756,206 @@ function canonicalizeOpenAIAuthOrder(
     );
   if (rewritten.length > 0) {
     order[OPENAI_PROVIDER_ID] = rewritten;
+  } else if (canonicalOrderPresent) {
+    order[OPENAI_PROVIDER_ID] = [];
   } else if (OPENAI_PROVIDER_ID in order) {
     delete order[OPENAI_PROVIDER_ID];
   }
   return changed || rewritten.some((entry, index) => entry !== canonicalOrder[index]);
+}
+
+function canonicalizeLegacyProviderAuthOrder(
+  auth: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): boolean {
+  if (!isRecord(auth.order)) {
+    return false;
+  }
+  const order = auth.order;
+  let changed = false;
+  const aliasesByTarget = new Map<string, string[]>();
+  for (const [alias, target] of Object.entries(PROVIDER_AUTH_ALIAS_MAP)) {
+    const aliases = aliasesByTarget.get(target) ?? [];
+    aliases.push(alias);
+    aliasesByTarget.set(target, aliases);
+  }
+  for (const [target, aliases] of aliasesByTarget) {
+    const canonicalPresent = Object.hasOwn(order, target);
+    const legacyEntries = aliases.flatMap((alias) =>
+      Array.isArray(order[alias]) ? [order[alias] as unknown[]] : [],
+    );
+    if (!canonicalPresent && legacyEntries.length === 0) {
+      continue;
+    }
+    const canonicalOrder =
+      canonicalPresent && Array.isArray(order[target]) ? [order[target] as unknown[]] : [];
+    const source =
+      canonicalPresent && canonicalOrder[0]?.length === 0
+        ? canonicalOrder
+        : [...legacyEntries, ...canonicalOrder];
+    const rewritten = source
+      .flat()
+      .map((entry) => {
+        if (typeof entry !== "string") {
+          return entry;
+        }
+        return profileIdMap.get(entry) ?? entry;
+      })
+      .filter(
+        (entry, index, entries) => typeof entry !== "string" || entries.indexOf(entry) === index,
+      );
+    for (const alias of aliases) {
+      if (Object.hasOwn(order, alias)) {
+        delete order[alias];
+        changed = true;
+      }
+    }
+    if (!canonicalPresent || !isDeepStrictEqual(order[target], rewritten)) {
+      order[target] = rewritten;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function canonicalizeLegacyAuthProfileEntries(
+  profiles: Record<string, unknown>,
+  profileIdMap: ReadonlyMap<string, string>,
+): boolean {
+  const next: Record<string, unknown> = {};
+  let changed = false;
+  for (const [profileId, rawProfile] of Object.entries(profiles)) {
+    const mappedProfileId = profileIdMap.get(profileId) ?? profileId;
+    const rawProvider = isRecord(rawProfile) ? rawProfile.provider : undefined;
+    const provider =
+      typeof rawProvider === "string" ? resolveCanonicalProviderAuthId(rawProvider) : undefined;
+    const profile =
+      isRecord(rawProfile) && provider && provider !== rawProvider
+        ? { ...rawProfile, provider }
+        : rawProfile;
+    next[mappedProfileId] = profile;
+    changed ||= mappedProfileId !== profileId || profile !== rawProfile;
+  }
+  if (!changed) {
+    return false;
+  }
+  for (const key of Object.keys(profiles)) {
+    delete profiles[key];
+  }
+  for (const [key, value] of Object.entries(next)) {
+    profiles[key] = value;
+  }
+  return true;
+}
+
+function canonicalizeLegacyAuthRotationState(
+  auth: Record<string, unknown>,
+  profileIdMap: Map<string, string>,
+): boolean {
+  let changed = canonicalizeLegacyProviderAuthOrder(auth, profileIdMap);
+  if (isRecord(auth.usageStats)) {
+    changed = renameMappedProfileIdKeys(auth.usageStats, profileIdMap) || changed;
+  }
+  if (isRecord(auth.lastGood)) {
+    const next: Record<string, unknown> = {};
+    for (const [provider, profileId] of Object.entries(auth.lastGood)) {
+      const canonicalProvider = resolveCanonicalProviderAuthId(provider);
+      const canonicalProfileId =
+        typeof profileId === "string" ? (profileIdMap.get(profileId) ?? profileId) : profileId;
+      if (!Object.hasOwn(next, canonicalProvider) || provider === canonicalProvider) {
+        next[canonicalProvider] = canonicalProfileId;
+      }
+      changed ||= canonicalProvider !== provider || canonicalProfileId !== profileId;
+    }
+    if (!isDeepStrictEqual(auth.lastGood, next)) {
+      auth.lastGood = next;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+/** Canonicalize legacy provider/profile ids in already-SQLite auth stores. */
+export function maybeRepairLegacyAuthProfileStores(params: {
+  cfg: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  profileIdMap: ReadonlyMap<string, string>;
+}): { changes: string[]; warnings: string[] } {
+  const env = params.env ?? process.env;
+  const candidates = listAuthProfileRepairCandidates(params.cfg, env);
+  const targets = new Map<string, string | undefined>();
+  targets.set(resolveSharedAuthStorePath(env), undefined);
+  for (const candidate of candidates) {
+    if (candidate.agentDir) {
+      targets.set(resolveAuthProfileDatabasePath(candidate.agentDir), candidate.agentDir);
+    }
+  }
+  const changes: string[] = [];
+  const warnings: string[] = [];
+  for (const [databasePath, agentDir] of targets) {
+    const storeInspection = agentDir
+      ? inspectPersistedAuthProfileStoreRaw(agentDir)
+      : inspectPersistedSharedAuthProfileStoreRaw(env);
+    const stateInspection = agentDir
+      ? inspectPersistedAuthProfileStateRaw(agentDir)
+      : inspectPersistedSharedAuthProfileStateRaw(env);
+    if (storeInspection.status === "unreadable" || stateInspection.status === "unreadable") {
+      warnings.push(
+        `Skipped legacy auth-profile repair for ${shortenHomePath(databasePath)} because the SQLite auth payload is unreadable.`,
+      );
+      continue;
+    }
+    if (storeInspection.status !== "readable" && stateInspection.status !== "readable") {
+      continue;
+    }
+    try {
+      const changed = runAuthProfileWriteTransaction(
+        agentDir,
+        (database) => {
+          const storeRaw = readPersistedAuthProfileStoreRaw(agentDir, database);
+          const stateRaw = readPersistedAuthProfileStateRaw(agentDir, database);
+          let storeChanged = false;
+          let stateChanged = false;
+          if (isRecord(storeRaw) && isRecord(storeRaw.profiles)) {
+            const profileChanged = canonicalizeLegacyAuthProfileEntries(
+              storeRaw.profiles,
+              params.profileIdMap,
+            );
+            const rotationChanged = canonicalizeLegacyAuthRotationState(
+              storeRaw,
+              new Map(params.profileIdMap),
+            );
+            storeChanged = profileChanged || rotationChanged;
+          }
+          if (isRecord(stateRaw)) {
+            stateChanged = canonicalizeLegacyAuthRotationState(
+              stateRaw,
+              new Map(params.profileIdMap),
+            );
+          }
+          if (storeChanged) {
+            writePersistedAuthProfileStoreRaw(storeRaw, agentDir, database);
+          }
+          if (stateChanged) {
+            writePersistedAuthProfileStateRaw(stateRaw, agentDir, database);
+          }
+          return storeChanged || stateChanged;
+        },
+        { env, ...(agentDir ? {} : { sharedStoreWrite: true }) },
+      );
+      if (changed) {
+        changes.push(
+          `Canonicalized legacy auth providers, profile ids, order, lastGood, and usageStats in ${shortenHomePath(databasePath)}.`,
+        );
+      }
+    } catch (error) {
+      warnings.push(
+        `Failed to repair legacy auth profiles in ${shortenHomePath(databasePath)}: ${String(error)}`,
+      );
+    }
+  }
+  clearRuntimeAuthProfileStoreSnapshots();
+  return { changes, warnings };
 }
 
 function renameMappedProfileIdKeys(
@@ -1695,6 +2023,7 @@ export function maybeRepairOpenAICodexAuthConfig(
   const root = config as Record<string, unknown>;
   const auth = isRecord(root.auth) ? root.auth : undefined;
   const profileIdMap = new Map<string, string>(options?.profileIdMap);
+  ensureLegacyAuthProfileIdMap(auth, profileIdMap);
   let changed = false;
   if (isRecord(auth?.profiles)) {
     const rewrite = canonicalizeOpenAIProfileEntries(auth.profiles, { profileIdMap });
@@ -1705,7 +2034,11 @@ export function maybeRepairOpenAICodexAuthConfig(
   }
   if (auth) {
     const orderChanged = canonicalizeOpenAIAuthOrder(auth, profileIdMap);
-    changed ||= orderChanged;
+    const legacyOrderChanged = canonicalizeLegacyProviderAuthOrder(auth, profileIdMap);
+    const profileChanged = isRecord(auth.profiles)
+      ? canonicalizeLegacyAuthProfileEntries(auth.profiles, profileIdMap)
+      : false;
+    changed ||= orderChanged || legacyOrderChanged || profileChanged;
   }
   if (profileIdMap.size > 0 && rewriteMappedAuthProfileRefs(config, profileIdMap)) {
     changed = true;
@@ -1735,13 +2068,21 @@ function canonicalizeLegacyOpenAIAuthStore(
   // Config-only and store-only profiles must keep the collision decision made before import.
   const effectiveProfileIdMap = new Map([...profileIdMap, ...rewrite.profileIdMap]);
   const rotation = canonicalizeOpenAIAuthRotationState(raw, effectiveProfileIdMap);
+  const genericProfileChange = canonicalizeLegacyAuthProfileEntries(
+    raw.profiles,
+    effectiveProfileIdMap,
+  );
+  const genericRotationChange = canonicalizeLegacyAuthRotationState(raw, effectiveProfileIdMap);
   if (isRecord(stateRaw)) {
     canonicalizeOpenAIAuthRotationState(stateRaw, effectiveProfileIdMap);
+    canonicalizeLegacyAuthRotationState(stateRaw, effectiveProfileIdMap);
   }
   if (rewrite.profileIdMap.size > 0) {
     replaceMappedProfileId(raw, rewrite.profileIdMap);
   }
-  return rewrite.changed || rotation ? rewrite.profileIdMap.size : null;
+  return rewrite.changed || rotation || genericProfileChange || genericRotationChange
+    ? Math.max(rewrite.profileIdMap.size, genericProfileChange ? 1 : 0)
+    : null;
 }
 
 function canonicalizeOpenAIAuthRotationState(
@@ -1863,7 +2204,7 @@ function recoverArchivedOpenAICodexAuthProfileIdMap(params: {
   return recovered;
 }
 
-/** Collects collision-safe OpenAI profile ids across config, SQLite, and legacy agent stores. */
+/** Collects collision-safe legacy profile ids across config, SQLite, and legacy agent stores. */
 export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -1875,7 +2216,7 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
   const candidates = listAuthProfileRepairCandidates(params.cfg, env);
   const addProfileIds = (profileIds: Iterable<string>): void => {
     for (const profileId of profileIds) {
-      if (isLegacyOpenAICodexProfileId(profileId)) {
+      if (isLegacyAuthProfileId(profileId)) {
         legacyProfileIds.add(profileId);
       } else {
         occupiedProfileIds.add(profileId);
@@ -1883,11 +2224,18 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
     }
   };
   addProfileIds(Object.keys(params.cfg.auth?.profiles ?? {}));
+  collectLegacyAuthProfileIdsFromRotationState({ order: params.cfg.auth?.order }, addProfileIds);
   for (const candidate of candidates) {
     const persistedStore = candidate.agentDir
       ? loadPersistedAuthProfileStore(candidate.agentDir)
       : loadPersistedSharedAuthProfileStore(env);
     addProfileIds(Object.keys(persistedStore?.profiles ?? {}));
+    collectLegacyAuthProfileIdsFromRotationState(
+      candidate.agentDir
+        ? readPersistedAuthProfileStateRaw(candidate.agentDir)
+        : readPersistedSharedAuthProfileStateRaw(env),
+      addProfileIds,
+    );
     if (!fs.existsSync(candidate.authPath)) {
       continue;
     }
@@ -1898,7 +2246,12 @@ export function collectOpenAICodexAuthProfileStoreIdMap(params: {
     addProfileIds(Object.keys(raw.profiles));
   }
   for (const profileId of [...legacyProfileIds].toSorted((a, b) => a.localeCompare(b))) {
-    profileIdMap.set(profileId, allocateOpenAIProfileId(profileId, occupiedProfileIds));
+    const mapped = profileId.startsWith(`${LEGACY_OPENAI_CODEX_PROVIDER_ID}:`)
+      ? allocateOpenAIProfileId(profileId, occupiedProfileIds)
+      : allocateCanonicalAuthProfileId(profileId, occupiedProfileIds);
+    if (mapped) {
+      profileIdMap.set(profileId, mapped);
+    }
   }
   for (const [legacyProfileId, canonicalProfileId] of recoverArchivedOpenAICodexAuthProfileIdMap({
     candidates,

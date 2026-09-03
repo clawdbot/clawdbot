@@ -433,7 +433,7 @@ describe("ModelSetupPage catalog icons", () => {
     );
   });
 
-  it("keeps an incomplete provider setup visible instead of claiming success", async () => {
+  it("reports saved provider setup without claiming model activation", async () => {
     const { context, client, request } = createContext();
     request.mockImplementation(async (method: string) => {
       if (method === "openclaw.setup.prepare.start") {
@@ -461,10 +461,10 @@ describe("ModelSetupPage catalog icons", () => {
 
     await waitForFast(() => {
       expect(page.textContent).toContain(
-        "llama.cpp did not expose a usable local model. Review the setup result, then retry.",
+        "llama.cpp setup is saved. Available models will update automatically; your default is unchanged.",
       );
     });
-    expect(page.textContent).not.toContain("llama-cpp/persisted-before-verification");
+    expect(page.textContent).toContain("persisted-before-verification");
     expect(page.textContent).not.toContain("Connection verified");
     expect(request).not.toHaveBeenCalledWith(
       "openclaw.setup.activate.start",

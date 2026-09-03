@@ -1,7 +1,5 @@
-import { createRouter, type RouteLocation } from "@openclaw/uirouter";
-import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SystemAgentSetupDetectResult } from "../../api/types.ts";
+import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
+import { describe, expect, it } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { page } from "./route.ts";
 
@@ -11,45 +9,60 @@ const location: RouteLocation = {
   hash: "",
 };
 
-describe("model setup route", () => {
-  it("keys loader data by the first-run query", () => {
-    const context = {
-      agentSelection: { state: { selectedId: "main" } },
-    } as ApplicationContext;
+async function loadRedirect(current: RouteLocation, basePath = "") {
+  const loader = page.loader;
+  if (!loader) {
+    throw new Error("model setup redirect loader missing");
+  }
+  const context = { basePath } as ApplicationContext;
+  return await loader(context, {
+    location: current,
+    signal: new AbortController().signal,
+    shouldRun: () => true,
+    revalidating: false,
+    deps: page.loaderDeps?.(context, current) ?? "",
+    cause: "navigation",
+  } satisfies RouteLoaderOptions);
+}
 
-    expect(page.loaderDeps?.(context, location)).toBe("");
-    expect(page.loaderDeps?.(context, { ...location, search: "?firstRun=1" })).toBe("?firstRun=1");
+describe("model setup compatibility route", () => {
+  it("keys redirects by query and hash state", () => {
+    const context = { basePath: "" } as ApplicationContext;
+    expect(page.loaderDeps?.(context, location)).toBe("\u0000");
+    expect(
+      page.loaderDeps?.(context, { ...location, search: "?firstRun=1", hash: "#candidate" }),
+    ).toBe("?firstRun=1\u0000#candidate");
   });
 
-  it("settles navigation without waiting for provider detection", async () => {
-    const detected = createDeferred<SystemAgentSetupDetectResult>();
-    const request = vi.fn(() => detected.promise);
-    const context = {
-      gateway: {
-        snapshot: {
-          client: { request },
-          phase: "connected",
-          hello: {
-            auth: { role: "operator", scopes: ["operator.admin"] },
-            features: { methods: ["openclaw.setup.detect"] },
-          },
-        },
+  it.each([
+    {
+      name: "ordinary setup",
+      current: { ...location, search: "?provider=xai", hash: "#candidate" },
+      basePath: "",
+      expected: {
+        pathname: "/settings/model-providers",
+        search: "?provider=xai&view=connect",
+        hash: "#candidate",
       },
-      agentSelection: { state: { selectedId: "main" } },
-    } as unknown as ApplicationContext;
-    const router = createRouter({ routes: [{ ...page, component: () => null }] });
-    const navigation = router.navigate("model-setup", context);
-    try {
-      await vi.waitFor(() => expect(router.getState().matches[0]?.status).toBe("success"));
-    } finally {
-      detected.resolve({
-        candidates: [],
-        manualProviders: [],
-        workspace: "",
-        setupComplete: false,
-      });
-      await navigation;
-      router.stop();
-    }
+    },
+    {
+      name: "first run under a base path",
+      current: {
+        pathname: "/ui/settings/model-setup",
+        search: "?firstRun=1&bootstrapProfile=owner",
+        hash: "#resume",
+      },
+      basePath: "/ui",
+      expected: {
+        pathname: "/ui/settings/model-providers",
+        search: "?firstRun=1&bootstrapProfile=owner&view=connect",
+        hash: "#resume",
+      },
+    },
+  ])("redirects $name into the Models connect view", async ({ current, basePath, expected }) => {
+    await expect(loadRedirect(current, basePath)).resolves.toEqual({
+      type: "redirect",
+      location: expected,
+    });
   });
 });

@@ -167,6 +167,7 @@ export type {
 } from "./plugin-registration.types.js";
 export type {
   ProviderAuthContext,
+  ProviderCredentialImport,
   ProviderAuthMethod,
   ProviderAuthMethodNonInteractiveContext,
   ProviderAuthResult,

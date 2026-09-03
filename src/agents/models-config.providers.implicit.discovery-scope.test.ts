@@ -220,11 +220,10 @@ describe("resolveImplicitProviders startup discovery scope", () => {
       config: {},
       env: state.env,
       providerDiscoveryProviderIds: ["openai", "anthropic"],
-      staticCatalogProviderIds: ["anthropic"],
     });
 
     expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({
-      providers: [anthropic],
+      providers: [openai, anthropic],
     });
     expect(prepared.providers).toEqual([openai, anthropic]);
   });
@@ -244,7 +243,6 @@ describe("resolveImplicitProviders startup discovery scope", () => {
         }),
       },
       providerDiscoveryProviderIds: ["byteplus-plan"],
-      staticCatalogProviderIds: ["byteplus-plan"],
     });
 
     expect(mocks.prepareProviderStaticCatalog).toHaveBeenCalledWith({ providers: [byteplus] });

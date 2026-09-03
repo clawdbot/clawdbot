@@ -314,6 +314,32 @@ function normalizeManifestHttpsUrl(value: unknown): string | undefined {
   }
 }
 
+function normalizeProviderChannelLogin(
+  value: unknown,
+): PluginManifestProviderAuthChoice["channelLogin"] | undefined {
+  if (
+    !isRecord(value) ||
+    Object.keys(value).some((key) => key !== "aliases" && key !== "default")
+  ) {
+    return undefined;
+  }
+  if ("default" in value && typeof value.default !== "boolean") {
+    return undefined;
+  }
+  if (
+    "aliases" in value &&
+    (!Array.isArray(value.aliases) ||
+      value.aliases.some((alias) => typeof alias !== "string" || !alias.trim()))
+  ) {
+    return undefined;
+  }
+  const aliases = normalizeTrimmedStringList(value.aliases);
+  return {
+    ...(aliases.length > 0 ? { aliases } : {}),
+    ...(value.default === true ? { default: true } : {}),
+  };
+}
+
 export function normalizeProviderAuthChoices(
   value: unknown,
 ): PluginManifestProviderAuthChoice[] | undefined {
@@ -358,6 +384,7 @@ export function normalizeProviderAuthChoices(
       entry.appGuidedAuth === "oauth" || entry.appGuidedAuth === "device-code"
         ? entry.appGuidedAuth
         : undefined;
+    const channelLogin = normalizeProviderChannelLogin(entry.channelLogin);
     const onboardingScopes = normalizeTrimmedStringList(entry.onboardingScopes).filter(
       (scope): scope is PluginManifestOnboardingScope =>
         scope === "text-inference" || scope === "image-generation" || scope === "music-generation",
@@ -386,6 +413,7 @@ export function normalizeProviderAuthChoices(
       ...(appGuidedSecret ? { appGuidedSecret: true } : {}),
       ...(appGuidedActionLabel ? { appGuidedActionLabel } : {}),
       ...(appGuidedAuth ? { appGuidedAuth } : {}),
+      ...(channelLogin ? { channelLogin } : {}),
       ...(onboardingScopes.length > 0 ? { onboardingScopes } : {}),
     });
   }

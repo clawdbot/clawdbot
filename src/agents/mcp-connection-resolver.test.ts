@@ -388,7 +388,6 @@ describe("mcp connection resolver helpers", () => {
       await expect(gatewayReload.applyHotReload(reloadPlan, nextConfig)).resolves.toBe("applied");
       expect(refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
         allowGatewaySubagentBinding: true,
-        catalogMode: "static",
       });
       expect(refreshContextWindowCache).toHaveBeenCalledWith(nextConfig);
       expect(requestRecoveryRestart).not.toHaveBeenCalled();

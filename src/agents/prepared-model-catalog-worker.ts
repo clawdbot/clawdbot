@@ -8,7 +8,7 @@ import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { WorkerTaskPool } from "../infra/worker-task-pool.js";
 import { resolveInstalledManifestRegistryIndexFingerprint } from "../plugins/manifest-registry-installed.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import { cloneAuthProfileStore } from "./auth-profiles/clone.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -51,14 +51,14 @@ export type PreparedModelWorkerResult =
       generationFingerprint: string;
       snapshot: ModelCatalogSnapshot;
       authStore: AuthProfileStore;
-      authModes: PreparedAgentCredentialModes;
+      providerAuth: PreparedProviderAuth;
     }>
   | Readonly<{
       status: "ok";
       kind: "auth-refresh";
       generationFingerprint: string;
       authStore: AuthProfileStore;
-      authModes: PreparedAgentCredentialModes;
+      providerAuth: PreparedProviderAuth;
     }>
   | Readonly<{
       status: "generation-mismatch";
@@ -67,9 +67,8 @@ export type PreparedModelWorkerResult =
     }>
   | Readonly<{ status: "failed"; error: string }>;
 
-// Cold source/plugin loading can take well over a minute. Three minutes preserves exact full-view
-// discovery while bounding a wedged provider; expiry rejects and never returns partial results.
-const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 180_000;
+// The child may cold-load plugin code before discovery; bound that work without blocking ordinary reads.
+const PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS = 60_000;
 const PREPARED_MODEL_CATALOG_WORKER_GENERATION_POLL_MS = 25;
 
 class PreparedModelCatalogGenerationMismatchError extends Error {
@@ -174,6 +173,7 @@ export function createPreparedModelCatalogWorkerInput(params: {
 }
 
 type PreparedModelCatalogWorker = Readonly<{
+  close: () => Promise<void>;
   loadAuth: (scope: PreparedModelRuntimeAuthScope) => Promise<PreparedModelRuntimeAuth>;
   loadCatalog: () => Promise<ModelCatalogSnapshot>;
 }>;
@@ -287,6 +287,7 @@ export function createPreparedModelCatalogWorker(params: {
   };
 
   return {
+    close: () => stop(superseded()),
     loadCatalog: async () => {
       const message = await request({ kind: "catalog" });
       if (message.kind !== "catalog") {
@@ -295,7 +296,7 @@ export function createPreparedModelCatalogWorker(params: {
       const modelCatalog = markPreparedModelCatalogFull(message.snapshot);
       setPreparedModelFullCatalogAuth(modelCatalog, {
         authStore: message.authStore,
-        authModes: message.authModes,
+        providerAuth: message.providerAuth,
       });
       return modelCatalog;
     },
@@ -314,7 +315,7 @@ export function createPreparedModelCatalogWorker(params: {
       if (message.kind !== "auth-refresh") {
         throw new Error("prepared model auth refresh worker returned a catalog result");
       }
-      return { authStore: message.authStore, authModes: message.authModes };
+      return { authStore: message.authStore, providerAuth: message.providerAuth };
     },
   };
 }

@@ -129,7 +129,7 @@ export async function continueClaudeSession(
       // packaged default may not be routed or allowed in an existing config.
       const model =
         resolveClaudeCliRoutedModelId(config, adoptingAgentId) ??
-        CLAUDE_CLI_DEFAULT_MODEL_REF.slice(`${CLAUDE_CLI_BACKEND_ID}/`.length);
+        CLAUDE_CLI_DEFAULT_MODEL_REF.slice("anthropic/".length);
       const marker = {
         sourceThreadId: threadId,
         ...(hostId !== CLAUDE_LOCAL_SESSION_HOST_ID ? { sourceHostId: hostId } : {}),

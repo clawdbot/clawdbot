@@ -3,10 +3,7 @@
  */
 import { resolveClaudeFable5ModelIdentity } from "@openclaw/llm-core";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isDiagnosticFlagEnabled } from "../infra/diagnostic-flags.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -26,8 +23,9 @@ import type {
   ModelInputType,
 } from "./model-catalog.types.js";
 import { resolveCatalogOwnedModelCompat } from "./model-compat-catalog.js";
-import { modelKey, createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import { createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
 import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import { modelCatalogLogicalKey } from "./openai-model-routes.js";
 import type { AuthStorageData, ModelRegistry } from "./sessions/index.js";
 
 const log = createSubsystemLogger("model-catalog");
@@ -58,7 +56,11 @@ type DiscoveredModel = {
   baseUrl?: string;
 };
 
-export type BuildPreparedModelCatalogParams = {
+function persistedModelToEntry(model: DiscoveredModel): ModelCatalogEntry {
+  return modelCatalogRowToEntry(model);
+}
+
+type BuildPreparedModelCatalogParams = {
   agentDir: string;
   authCredentials: Readonly<AuthStorageData>;
   config: OpenClawConfig;
@@ -75,13 +77,14 @@ type ManifestModelCatalogCacheEntry = {
   snapshot: PluginMetadataSnapshot;
   rows: ModelCatalogEntry[];
 };
+// Manifest rows are process-stable per config generation; ordinary catalog reads reuse them.
 let manifestModelCatalogCache = new WeakMap<OpenClawConfig, ManifestModelCatalogCacheEntry>();
 const loadModelSuppression = createLazyPromise(() => import("./model-suppression.js"));
 const loadProviderApiKeyResolver = createLazyPromise(
   () => import("./models-config.providers.secrets.js"),
 );
 
-export function resetModelCatalogBuilderCacheForTest() {
+export function resetModelCatalogBuilderStateForTest() {
   manifestModelCatalogCache = new WeakMap();
   hasLoggedModelCatalogError = false;
 }
@@ -108,11 +111,6 @@ export function createPreparedModelCatalogProviderNormalizer(
     }
     return aliases.get(normalizedProvider) ?? normalizedProvider;
   };
-}
-
-function catalogEntryDedupeKey(provider: string, id: string): string {
-  const normalizedProvider = normalizeProviderId(provider);
-  return normalizeLowercaseStringOrEmpty(modelKey(normalizedProvider, id));
 }
 
 function mergeCatalogCompat(
@@ -277,11 +275,9 @@ function mergeCatalogEntries(
     preserveBaseName?: boolean;
   },
 ): void {
-  const indexByKey = new Map(
-    models.map((entry, index) => [catalogEntryDedupeKey(entry.provider, entry.id), index]),
-  );
+  const indexByKey = new Map(models.map((entry, index) => [modelCatalogLogicalKey(entry), index]));
   for (const entry of entries) {
-    const key = catalogEntryDedupeKey(entry.provider, entry.id);
+    const key = modelCatalogLogicalKey(entry);
     const existingIndex = indexByKey.get(key);
     if (existingIndex === undefined) {
       models.push(entry);
@@ -307,7 +303,7 @@ function mergeCatalogEntries(
 
 function catalogRouteVariantKey(entry: ModelCatalogEntry): string {
   return [
-    catalogEntryDedupeKey(entry.provider, entry.id),
+    modelCatalogLogicalKey(entry),
     entry.api ?? "",
     normalizeCatalogRouteBaseUrl(entry.baseUrl) ?? "",
   ].join("\u0000");
@@ -408,7 +404,7 @@ export function loadManifestModelCatalog(params: {
       plugin.modelCatalog?.providers ?? {},
     )) {
       providerCatalog.models.forEach((model, providerOrder) => {
-        const key = catalogEntryDedupeKey(provider, model.id);
+        const key = modelCatalogLogicalKey({ provider, id: model.id });
         if (!providerOrderByKey.has(key)) {
           providerOrderByKey.set(key, providerOrder);
         }
@@ -417,7 +413,7 @@ export function loadManifestModelCatalog(params: {
   }
   const rows = plan.rows.map((row) => {
     const entry = modelCatalogRowToEntry(row);
-    const providerOrder = providerOrderByKey.get(catalogEntryDedupeKey(row.provider, row.id));
+    const providerOrder = providerOrderByKey.get(modelCatalogLogicalKey(row));
     if (providerOrder !== undefined) {
       entry.providerOrder = providerOrder;
     }
@@ -499,7 +495,7 @@ export async function buildPreparedModelCatalogSnapshot(
       const modelParams =
         entry?.params && typeof entry.params === "object" ? entry.params : undefined;
       const compat = entry?.compat && typeof entry.compat === "object" ? entry.compat : undefined;
-      const model = {
+      const model = persistedModelToEntry({
         id,
         name,
         provider,
@@ -512,7 +508,7 @@ export async function buildPreparedModelCatalogSnapshot(
         input,
         ...(modelParams ? { params: modelParams } : {}),
         compat,
-      } satisfies ModelCatalogEntry;
+      });
       models.push(model);
     }
     // Gateway startup may publish registry rows without runtime augmentation.
@@ -530,19 +526,28 @@ export async function buildPreparedModelCatalogSnapshot(
       config: cfg,
       selection: "supplemental",
     });
-    const supplementalManifestKeys = new Set(
-      supplementalManifestPlan.rows.map((entry) => catalogEntryDedupeKey(entry.provider, entry.id)),
+    const dynamicManifestKeys = new Set(
+      supplementalManifestPlan.entries.flatMap((entry) =>
+        entry.discovery === "runtime" || entry.discovery === "refreshable"
+          ? entry.rows.map(modelCatalogLogicalKey)
+          : [],
+      ),
     );
     const runtimeDiscoveryProviders = new Set(
       supplementalManifestPlan.entries.flatMap((entry) =>
-        entry.discovery === "runtime" ? [normalizeProviderId(entry.provider)] : [],
+        entry.discovery === "runtime" || entry.discovery === "refreshable"
+          ? [normalizeProviderId(entry.provider)]
+          : [],
       ),
     );
-    // Runtime declarations describe possible models, not account entitlement.
-    // Only live registry or refreshed rows may publish those provider models.
-    const manifestModels = declaredManifestModels.filter((entry) =>
-      supplementalManifestKeys.has(catalogEntryDedupeKey(entry.provider, entry.id)),
-    );
+    const manifestModels =
+      params.includeProviderPluginAugmentation === false
+        ? declaredManifestModels
+        : declaredManifestModels.filter(
+            (entry) => !dynamicManifestKeys.has(modelCatalogLogicalKey(entry)),
+          );
+    // Manifest rows are the curated baseline for static publication. Live discovery overlays the
+    // same logical rows and prunes runtime-owned rows absent from the account response.
     mergeCatalogRouteVariants(routeVariants, manifestModels);
     mergeCatalogEntries(models, manifestModels);
     logStage("manifest-models-merged", `entries=${models.length}`);
@@ -587,23 +592,23 @@ export async function buildPreparedModelCatalogSnapshot(
         },
       });
       if (supplemental.length > 0) {
-        // Explicitly configured rows are user-authorized even when live
-        // discovery omits them; normalize both sets to preserve their routes.
+        // Explicitly configured rows remain visible when live discovery omits them. Other
+        // runtime-owned manifest rows must be present in the account response first.
         const accountVisibleModelKeys = new Set(
           [...models, ...configuredModels].map((entry) =>
-            catalogEntryDedupeKey(entry.provider, normalizeModelId(entry.provider, entry.id)),
+            modelCatalogLogicalKey({
+              provider: entry.provider,
+              id: normalizeModelId(entry.provider, entry.id),
+            }),
           ),
         );
         const normalizedSupplemental: ModelCatalogEntry[] = [];
         for (const entry of supplemental) {
           const provider = normalizeProvider(entry.provider);
           const id = normalizeModelId(provider, entry.id);
-          // Account-discovered providers own the visible model set. Synthetic
-          // metadata can enrich an available or explicitly configured model,
-          // but must never advertise a model the account did not discover.
           if (
             runtimeDiscoveryProviders.has(normalizeProviderId(provider)) &&
-            !accountVisibleModelKeys.has(catalogEntryDedupeKey(provider, id))
+            !accountVisibleModelKeys.has(modelCatalogLogicalKey({ provider, id }))
           ) {
             continue;
           }
@@ -661,11 +666,4 @@ export async function buildPreparedModelCatalogSnapshot(
  */
 export function modelSupportsVision(entry: ModelCatalogEntry | undefined): boolean {
   return modelCatalogEntrySupportsInput(entry, "image");
-}
-
-/**
- * Check if a model supports native document/PDF input based on its catalog entry.
- */
-export function modelSupportsDocument(entry: ModelCatalogEntry | undefined): boolean {
-  return modelCatalogEntrySupportsInput(entry, "document");
 }

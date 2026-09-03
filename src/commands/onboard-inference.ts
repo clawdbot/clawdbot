@@ -4,10 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { resolveAgentConfig } from "../agents/agent-scope-config.js";
-import {
-  readCodexCliCredentialsCached,
-  readGeminiCliCredentialsCached,
-} from "../agents/cli-credentials.js";
+import { readGeminiCliCredentialsCached } from "../agents/cli-credentials.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
@@ -42,7 +39,6 @@ export {
 type DetectInferenceBackendsDeps = {
   probeLocalCommand?: typeof probeLocalCommand;
   detectClaudeLoginState?: typeof detectClaudeLoginState;
-  readCodexCliCredentials?: () => { type: string } | null;
   readGeminiCliCredentials?: () => { type: string } | null;
   detectCodexLoginState?: typeof detectCodexLoginState;
   randomInt?: (maxExclusive: number) => number;
@@ -61,23 +57,6 @@ type DetectNativeCodexAppServerOptions = {
   platform?: NodeJS.Platform;
   probeLocalCommand?: typeof probeLocalCommand;
 };
-
-function detectCliCredentialState(params: {
-  probe: LocalCommandProbe;
-  hasStoredCredentials: boolean;
-  platform: NodeJS.Platform;
-}): boolean | undefined {
-  if (!params.probe.found) {
-    return undefined;
-  }
-  if (params.hasStoredCredentials) {
-    return true;
-  }
-  // On macOS both CLIs may keep their login in the keychain, which we must not
-  // read here (it can trigger a password prompt). Missing file creds is only a
-  // definitive logout signal elsewhere.
-  return params.platform === "darwin" ? undefined : false;
-}
 
 type CliAuthKind = "api-key" | "chatgpt-subscription" | "claude-subscription" | "token";
 type CliLoginState = {
@@ -301,9 +280,6 @@ export async function detectInferenceBackends(
   const env = options.env ?? process.env;
   const platform = options.platform ?? process.platform;
   const probe = options.deps?.probeLocalCommand ?? probeLocalCommand;
-  const readCodex =
-    options.deps?.readCodexCliCredentials ??
-    (() => readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 60_000 }));
   const readGemini =
     options.deps?.readGeminiCliCredentials ??
     (() => readGeminiCliCredentialsCached({ ttlMs: 60_000 }));
@@ -364,30 +340,12 @@ export async function detectInferenceBackends(
     });
   }
   if (codexProbe.found && !codexProbe.timedOut) {
-    const codexCredential = readCodex();
     const loginState: CliLoginState = options.deps?.detectCodexLoginState
       ? { credentials: await options.deps.detectCodexLoginState(probe, codexProbe.command) }
       : ((await readCodexNativeLoginState(codexProbe.command, env)) ??
-        (options.deps?.readCodexCliCredentials
-          ? {
-              credentials: detectCliCredentialState({
-                probe: codexProbe,
-                hasStoredCredentials: codexCredential !== null,
-                platform,
-              }),
-              ...(codexCredential?.type === "oauth"
-                ? { authKind: "chatgpt-subscription" as const }
-                : {}),
-            }
-          : await classifyCodexLoginStatus(probe, codexProbe.command)));
+        (await classifyCodexLoginStatus(probe, codexProbe.command)));
     const credentials = loginState.credentials;
-    // Promote only prompt-free ChatGPT OAuth tokens. Status-only logins may be metered;
-    // keychain-only ChatGPT users conservatively stay usable in the fallback tier.
-    if (
-      credentials === true &&
-      loginState.authKind === "chatgpt-subscription" &&
-      codexCredential?.type === "oauth"
-    ) {
+    if (credentials === true && loginState.authKind === "chatgpt-subscription") {
       subscriptionPromotionEligibleCliKinds.add("codex-cli");
     }
     cliCandidates.push({

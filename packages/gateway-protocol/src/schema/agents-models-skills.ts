@@ -39,6 +39,7 @@ const GatewayAgentRuntimeSchema = closedObject({
     Type.Literal("model"),
     Type.Literal("provider"),
     Type.Literal("implicit"),
+    Type.Literal("auth"),
     Type.Literal("session"),
     Type.Literal("session-key"),
   ]),
@@ -302,6 +303,12 @@ export const ModelsListParamsSchema = Type.Object(
 /** Reads model-provider credential health for one configured agent. */
 export const ModelsAuthStatusParamsSchema = closedObject({
   refresh: Type.Optional(Type.Boolean()),
+  agentId: Type.Optional(Type.String()),
+});
+
+/** Rebuilds Gateway auth state after one durable credential or selection mutation. */
+export const ModelsAuthRefreshParamsSchema = closedObject({
+  operation: Type.Union([Type.Literal("login"), Type.Literal("logout"), Type.Literal("update")]),
   agentId: Type.Optional(Type.String()),
 });
 
@@ -1431,6 +1438,7 @@ export type ModelChoice = Static<typeof ModelChoiceSchema>;
 export type ModelsListParams = Static<typeof ModelsListParamsSchema>;
 export type ModelCatalogProviderOutcome = Static<typeof ModelCatalogProviderOutcomeSchema>;
 export type ModelsListResult = Static<typeof ModelsListResultSchema>;
+export type ModelsAuthRefreshParams = Static<typeof ModelsAuthRefreshParamsSchema>;
 export type ModelsAuthStatusParams = Static<typeof ModelsAuthStatusParamsSchema>;
 export type ModelsAuthLogoutParams = Static<typeof ModelsAuthLogoutParamsSchema>;
 export type ModelsAuthOrderSetParams = Static<typeof ModelsAuthOrderSetParamsSchema>;

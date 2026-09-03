@@ -9,12 +9,7 @@ import {
   XAI_BASE_URL,
   XAI_DEFAULT_MODEL_ID,
 } from "./model-definitions.js";
-import { XAI_OAUTH_AUTO_MODEL_ID } from "./model-id.js";
-
 export const XAI_DEFAULT_MODEL_REF = `xai/${XAI_DEFAULT_MODEL_ID}`;
-// OAuth resolves this stable ref against xAI's authenticated catalog and
-// remote default setting. API-key setup stays on the pinned default above.
-export const XAI_OAUTH_DEFAULT_MODEL_REF = `xai/${XAI_OAUTH_AUTO_MODEL_ID}`;
 
 function createXaiPresetAppliers(primaryModelRef: string) {
   return createModelCatalogPresetAppliers<["openai-completions" | "openai-responses"]>({
@@ -30,7 +25,6 @@ function createXaiPresetAppliers(primaryModelRef: string) {
 }
 
 const xaiPresetAppliers = createXaiPresetAppliers(XAI_DEFAULT_MODEL_REF);
-const xaiOAuthPresetAppliers = createXaiPresetAppliers(XAI_OAUTH_DEFAULT_MODEL_REF);
 
 function pruneRetiredXaiBuiltinModels(cfg: OpenClawConfig): OpenClawConfig {
   const provider = cfg.models?.providers?.xai;
@@ -68,5 +62,5 @@ export function applyXaiConfig(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 export function applyXaiOAuthConfig(cfg: OpenClawConfig): OpenClawConfig {
-  return xaiOAuthPresetAppliers.applyConfig(pruneRetiredXaiBuiltinModels(cfg), "openai-responses");
+  return applyXaiConfig(cfg);
 }

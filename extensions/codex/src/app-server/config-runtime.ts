@@ -68,15 +68,16 @@ import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 /**
- * Sole owner of the app-server home-scope decision. Ordinary harness connections
- * default to the isolated agent home; the supervision connection owns the operator's
- * native Codex home on local transports. Auth handoffs must read the scope from here
- * (or from resolved start options) because a prepared login on a native home rewrites
- * the account Codex CLI and Desktop share.
+ * Sole owner of the app-server home-scope decision. Prepared agent auth uses the
+ * isolated agent home; native auth and supervision use the operator's Codex home.
+ * Auth handoffs must read the scope from here because a prepared login on a native
+ * home rewrites the account Codex CLI and Desktop share.
  */
 export function resolveCodexAppServerHomeScope(params: {
   appServer: CodexPluginConfig["appServer"];
   connectionScope?: "harness" | "supervision";
+  /** Native Codex login owns the home; no OpenClaw credential is handed off. */
+  nativeAuth?: boolean;
 }): CodexAppServerHomeScope {
   const configured = params.appServer?.homeScope;
   if (configured) {
@@ -85,7 +86,9 @@ export function resolveCodexAppServerHomeScope(params: {
   return params.connectionScope === "supervision" &&
     resolveTransport(params.appServer?.transport) !== "websocket"
     ? "user"
-    : "agent";
+    : params.nativeAuth === true
+      ? "user"
+      : "agent";
 }
 
 export function resolveCodexAppServerRuntimeOptions(
@@ -96,6 +99,7 @@ export function resolveCodexAppServerRuntimeOptions(
     sessionPermissionMode?: "read-only" | "guarded" | "workspace" | "full";
     modelProvider?: string;
     model?: string;
+    nativeAuth?: boolean;
     config?: ProviderAuthAliasConfig;
     env?: NodeJS.ProcessEnv;
     agentDir?: string;
@@ -113,7 +117,10 @@ export function resolveCodexAppServerRuntimeOptions(
   const pluginConfig = readCodexPluginConfig(params.pluginConfig);
   const config = pluginConfig.appServer ?? {};
   const transport = resolveTransport(config.transport);
-  const homeScope = resolveCodexAppServerHomeScope({ appServer: config });
+  const homeScope = resolveCodexAppServerHomeScope({
+    appServer: config,
+    nativeAuth: params.nativeAuth,
+  });
   if (transport !== "stdio" && pluginConfig.sessionCatalog?.homes?.length) {
     throw new Error(
       "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",

@@ -9,7 +9,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { discoverAuthStorage, discoverModels } from "../agent-model-discovery.js";
+import { discoverAuthStorageFacts, discoverModels } from "../agent-model-discovery.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
@@ -206,7 +206,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
     if (current) {
       return current;
     }
-    const authStorage = discovery.discoverAuthStorage(input.agentDir);
+    const authStorage = discovery.discoverAuthStorageFacts(input.agentDir).authStorage;
     const modelRegistry = discovery.discoverModels(authStorage, input.agentDir, {
       ...(input.config ? { config: input.config } : {}),
       ...(workspaceDir ? { workspaceDir } : {}),
@@ -220,7 +220,7 @@ vi.mock("../prepared-model-runtime.js", async () => {
       ...(workspaceDir ? { workspaceDir } : {}),
       activeProjectKeys: [],
       config: input.config ?? {},
-      authModes: {},
+      providerAuth: {},
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       allowGatewaySubagentBinding: false,
       modelCatalog: { entries: [], routeVariants: [] },
@@ -243,7 +243,11 @@ vi.mock("../prepared-model-runtime.js", async () => {
 });
 
 vi.mock("../agent-model-discovery.js", () => ({
-  discoverAuthStorage: vi.fn(() => ({ mocked: true })),
+  discoverAuthStorageFacts: vi.fn(() => ({
+    authStorage: { mocked: true },
+    store: { version: 1, profiles: {} },
+    credentials: {},
+  })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
 }));
 
@@ -307,7 +311,7 @@ beforeEach(() => {
   clearRuntimeAuthProfileStoreSnapshots();
   resetMockDiscoverModels(discoverModels);
   vi.mocked(discoverModels).mockClear();
-  vi.mocked(discoverAuthStorage).mockClear();
+  vi.mocked(discoverAuthStorageFacts).mockClear();
   resolveRuntimeSyntheticAuthProviderRefsMock.mockReset();
   resolveRuntimeSyntheticAuthProviderRefsMock.mockReturnValue([]);
   resolveRuntimeExternalAuthProviderRefsMock.mockReset();
@@ -733,7 +737,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -769,7 +773,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(2);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(2);
     expect(discoverModels).toHaveBeenCalledTimes(2);
   });
 
@@ -805,7 +809,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -874,7 +878,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -956,7 +960,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -982,7 +986,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -1000,7 +1004,7 @@ describe("resolveModel", () => {
 
     expectResolvedModel(first);
     expectResolvedModel(second);
-    expect(discoverAuthStorage).toHaveBeenCalledTimes(1);
+    expect(discoverAuthStorageFacts).toHaveBeenCalledTimes(1);
     expect(discoverModels).toHaveBeenCalledTimes(1);
   });
 
@@ -1020,7 +1024,7 @@ describe("resolveModel", () => {
       provider: "openrouter",
       id: "openrouter/auto",
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1056,7 +1060,7 @@ describe("resolveModel", () => {
       includeRuntimeDiscovery: true,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1104,9 +1108,8 @@ describe("resolveModel", () => {
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
       config: cfg,
-      observationConfig: cfg,
-      isCurrent: () => true,
-      authModes: {},
+      providerAuth: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [
@@ -1138,7 +1141,6 @@ describe("resolveModel", () => {
   });
 
   it("falls back when an opaque prepared handle has no model facts", async () => {
-    const config = {};
     resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
       makeMistralCatalogModel({ input: ["text"] }),
     );
@@ -1148,10 +1150,9 @@ describe("resolveModel", () => {
       agentDir: state.agentDir(),
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
+      config: {},
+      providerAuth: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshotFixture(),
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
@@ -1183,16 +1184,14 @@ describe("resolveModel", () => {
 
   it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    const config = {};
     const preparedModelRuntime = {
       catalogOwner: undefined,
       agentDir: state.agentDir(),
       activeProjectKeys: [],
       allowGatewaySubagentBinding: false,
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
+      config: {},
+      providerAuth: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot,
       modelCatalog: { entries: [], routeVariants: [] },
       configuredRuntimeModels: [],
@@ -1249,7 +1248,7 @@ describe("resolveModel", () => {
       workspaceDir: undefined,
       metadataSnapshot,
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1310,7 +1309,7 @@ describe("resolveModel", () => {
     );
     expect(prepareProviderDynamicModel).toHaveBeenCalled();
     expect(runProviderDynamicModel).toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1604,7 +1603,7 @@ describe("resolveModel", () => {
         modelId: "anthropic/claude-haiku-4-5",
       }),
     );
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1658,7 +1657,7 @@ describe("resolveModel", () => {
       args: ["--port", "18080"],
       healthUrl: "http://127.0.0.1:18080/health",
     });
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 
@@ -1774,7 +1773,7 @@ describe("resolveModel", () => {
     expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
     expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(resolveBundledProviderStaticCatalogModelMock).not.toHaveBeenCalled();
-    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
 

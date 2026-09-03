@@ -1,9 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { createServer, type Server } from "node:http";
-import {
-  readCodexCliCredentialsCached,
-  resolveOpenAICodexAuthIdentity,
-} from "openclaw/plugin-sdk/provider-auth";
 import { REALTIME_VOICE_AGENT_CONSULT_TOOL } from "openclaw/plugin-sdk/realtime-voice";
 import type { Page } from "playwright";
 import { describe, expect, it } from "vitest";
@@ -180,15 +176,7 @@ async function resolveLiveOAuthProfile(): Promise<
       throw error;
     }
   }
-  // The live probe may run while an older local OpenClaw profile awaits Doctor.
-  // Codex CLI OAuth proves the same bearer/account wire without changing runtime fallback rules.
-  const credential = readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 0 });
-  if (!credential) {
-    return undefined;
-  }
-  const accountId =
-    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
-  return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
+  return undefined;
 }
 
 async function listen(server: Server): Promise<string> {

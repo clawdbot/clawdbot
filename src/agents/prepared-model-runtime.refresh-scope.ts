@@ -140,7 +140,6 @@ export function resolveSafeRefreshAgentIds(
       !input ||
       !owner.snapshot ||
       owner.needsRefresh ||
-      owner.catalogMode !== (options.catalogMode ?? "live") ||
       (options.pluginMetadataSnapshot &&
         owner.snapshot.metadataSnapshot !== options.pluginMetadataSnapshot) ||
       ownerKey({ ...owner.input, config: input.config }) !== ownerKey(input)

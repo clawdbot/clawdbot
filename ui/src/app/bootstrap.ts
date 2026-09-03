@@ -29,6 +29,7 @@ import { parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import { createWorkboardCapability } from "../lib/workboard/capability.ts";
 import { loadChatObserverDisplayPreference } from "../pages/chat/chat-observer-display.ts";
 import { sendSessionObserverVisibility } from "../pages/chat/chat-observer.ts";
+import { MODELS_FIRST_RUN_NAVIGATION } from "../pages/model-providers/location.ts";
 import {
   isDefaultChatLanding,
   startModelSetupFirstRunRedirectAfterLocation,
@@ -548,8 +549,8 @@ export function bootstrapApplication(): ApplicationRuntime {
             ? {
                 redirect: () =>
                   history.replace({
-                    ...locationForRoute("model-setup", basePath),
-                    search: "?firstRun=1",
+                    ...locationForRoute("model-providers", basePath),
+                    ...MODELS_FIRST_RUN_NAVIGATION,
                   }),
                 onInitialDecision: () => resolveInitialFirstRunDecision?.(),
               }

@@ -1,7 +1,16 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { resolveAgentDir, resolveDefaultAgentId } from "../agent-scope-config.js";
+import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import {
+  publishPreparedProviderAuthFacts,
+  resetPreparedProviderAuthFactsForTest,
+} from "../prepared-provider-auth-facts.js";
 import { resolveAgentHarnessPolicy as resolveAgentHarnessPolicyBase } from "./policy.js";
+
+const factsAgentDir = (cfg: OpenClawConfig = {}) =>
+  resolveAgentDir(cfg, resolveDefaultAgentId(cfg));
 
 function resolveAgentHarnessPolicy(
   params: Parameters<typeof resolveAgentHarnessPolicyBase>[0],
@@ -28,6 +37,11 @@ function openAIProviderConfig(overrides: Record<string, unknown>): OpenClawConfi
 }
 
 describe("resolveAgentHarnessPolicy", () => {
+  afterEach(() => {
+    cliBackendsTesting.resetDepsForTest();
+    resetPreparedProviderAuthFactsForTest();
+  });
+
   it.each([
     {
       name: "official Responses route",
@@ -86,6 +100,67 @@ describe("resolveAgentHarnessPolicy", () => {
         env: {},
       }),
     ).toEqual({ runtime: "codex", runtimeSource: "provider" });
+  });
+
+  it("marks an implicit CLI runtime selected by auth as auth", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [
+        {
+          id: "claude-cli",
+          modelProvider: "anthropic",
+          pluginId: "anthropic",
+          config: { command: "claude" },
+        },
+      ],
+    });
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "anthropic",
+        modelId: "claude-sonnet-4-6",
+        config: {
+          auth: {
+            profiles: {
+              "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
+      }),
+    ).toEqual({ runtime: "claude-cli", runtimeSource: "auth" });
+  });
+
+  it("marks an implicit OpenAI native runtime selected by auth as auth", () => {
+    publishPreparedProviderAuthFacts(factsAgentDir(), {
+      openai: { mode: "oauth", runtime: "codex" },
+    });
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.6-sol",
+        config: {},
+        env: {},
+      }),
+    ).toEqual({ runtime: "codex", runtimeSource: "auth" });
+  });
+
+  it("keeps a model runtime pin labeled as model", () => {
+    const config = openAIProviderConfig({});
+    config.agents = {
+      defaults: {
+        models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+      },
+    };
+
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config,
+        env: {},
+      }),
+    ).toEqual({ runtime: "codex", runtimeSource: "model" });
   });
 
   it.each(["default", "auto"] as const)(

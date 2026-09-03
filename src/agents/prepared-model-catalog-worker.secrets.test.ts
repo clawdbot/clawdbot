@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { access } from "node:fs/promises";
 import { createServer } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createConfigIoContext } from "../config/io.context.js";
@@ -21,7 +22,7 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-s
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
 import { resolveUsableCustomProviderApiKey } from "./model-auth-provider-config.js";
-import * as modelsConfig from "./models-config.js";
+import { loadPersistedPluginModelCatalogsReadOnly } from "./plugin-model-catalog.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
 import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
 import {
@@ -299,16 +300,6 @@ module.exports = {
         // Workers inherit neither the parent's source snapshot nor its WeakMap resolution facts.
         clearRuntimeConfigSnapshot();
         clearRuntimeAuthProfileStoreSnapshots();
-        const plans: Array<Awaited<ReturnType<typeof modelsConfig.planOpenClawModelsJsonSource>>> =
-          [];
-        const plan = modelsConfig.planOpenClawModelsJsonSource;
-        vi.spyOn(modelsConfig, "planOpenClawModelsJsonSource").mockImplementation(
-          async (...args) => {
-            const result = await plan(...args);
-            plans.push(result);
-            return result;
-          },
-        );
         const result = await runPreparedModelCatalogWorkerRequest(serialized, {
           kind: "catalog",
         });
@@ -362,18 +353,10 @@ module.exports = {
             ]),
           },
         });
-        expect(plans).toHaveLength(1);
-        const catalog = plans[0]!.pluginCatalogs.find((entry) => entry.pluginId === provider);
-        if (!catalog) {
-          throw new Error("Expected the provider-owned writable catalog");
-        }
-        expect(JSON.parse(catalog.contents)).toMatchObject({
-          providers: { [provider]: { apiKey: loader ? value : NON_ENV_SECRETREF_MARKER } },
-        });
-        expect(JSON.stringify(plans)).not.toContain("discoveryApiKey");
-        if (!loader && value !== NON_ENV_SECRETREF_MARKER) {
-          expect(JSON.stringify(plans).includes(value)).toBe(false);
-        }
+        await expect(access(`${state.agentDir()}/models.json`)).resolves.toBeUndefined();
+        expect(loadPersistedPluginModelCatalogsReadOnly(state.agentDir())).toEqual([
+          expect.objectContaining({ pluginId: provider }),
+        ]);
         if (alternativeFingerprint !== undefined) {
           expect(serialized.generationFingerprint).not.toBe(alternativeFingerprint);
         }
@@ -385,4 +368,21 @@ module.exports = {
       }
     },
   );
+
+  it("keeps a read-only catalog source free of persistence writes", async () => {
+    const agentDir = state.agentDir();
+    const prepared = await prepareWorkspaceBuildGroup(
+      [{ agentId: "main", agentDir, config: {}, env: state.env, skipCredentials: true }],
+      "static",
+    );
+    await prepareAgentCatalogSource(
+      prepared.agentFacts[0]!,
+      prepared.pluginGeneration,
+      "static",
+      false,
+    );
+
+    await expect(access(`${agentDir}/models.json`)).rejects.toThrow();
+    expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
+  });
 });

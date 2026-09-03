@@ -143,7 +143,6 @@ function resolveBtwAuthProfileStore(params: {
   if (isOpenAIProvider(params.provider)) {
     return {
       store: ensureAuthProfileStore(params.agentDir, {
-        externalCliProviderIds: ["openai"],
         allowKeychainPrompt: false,
       }),
       ignoreAutoPreferredProfile: false,

@@ -164,7 +164,6 @@ async function createLifecycle(getConfig: () => OpenClawConfig = () => config) {
 async function publishOwner(ownerConfig: OpenClawConfig = config): Promise<void> {
   await refreshPreparedModelRuntimeSnapshots(ownerConfig, {
     gatewayLifecycle: true,
-    catalogMode: "live",
     allowGatewaySubagentBinding: true,
   });
 }

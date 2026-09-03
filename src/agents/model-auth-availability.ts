@@ -5,7 +5,6 @@ import {
   normalizeProviderIdForAuth,
 } from "@openclaw/model-catalog-core/provider-id";
 import { hasNonEmptyString as hasSecret } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -19,7 +18,7 @@ import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import { hasUsableOAuthCredential } from "./auth-profiles/credential-state.js";
 import {
   listExternalCliSyncProviderIds,
@@ -50,6 +49,7 @@ import {
   isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./auth-profiles/usage-state.js";
+import { resolveInlineProviderApiKeyUsageId } from "./auth-profiles/usage.js";
 import {
   listProviderEnvAuthLookupKeys,
   resolveProviderEnvAuthLookupMaps,
@@ -65,7 +65,6 @@ import {
 } from "./model-auth-provider-config.js";
 import { resolveManagedSecretRefRuntimeProviderAuth } from "./model-auth-runtime-config.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
-import { resolveCliRuntimeExecutionProvider } from "./model-runtime-aliases.js";
 import {
   createOpenAIModelRoutesResolver,
   resolveConfiguredOpenAIAuthMode,
@@ -120,9 +119,7 @@ export type ModelAuthAvailabilityEvaluation = {
 export type ModelAuthAvailabilityResolver = {
   providerDiscoveryProviderIds: readonly string[];
   preparedSyntheticAuthComplete: boolean;
-  resolvePreparedRuntimeAuthMode(
-    provider: string,
-  ): PreparedAgentCredentialModes[string] | undefined;
+  resolvePreparedRuntimeAuthMode(provider: string): PreparedProviderAuth[string] | undefined;
   evaluateModelAuth(
     provider: string,
     ref?: ModelAuthAvailabilityRef,
@@ -138,24 +135,14 @@ export function applyCliRuntimeModelAuthAvailability(params: {
   authResolver: ModelAuthAvailabilityResolver;
   evaluation: ModelAuthAvailabilityEvaluation;
   cfg: OpenClawConfig;
-  agentId?: string;
   metadataSnapshot?: PluginMetadataSnapshot;
   provider: string;
-  modelId?: string;
 }): ModelAuthAvailabilityEvaluation {
-  if (
-    params.evaluation.routeResolution !== null ||
-    normalizeProviderId(params.provider) === "openai"
-  ) {
+  if (params.evaluation.routeResolution !== null) {
     return params.evaluation;
   }
-  const runtimeProvider = resolveCliRuntimeExecutionProvider({
-    provider: params.provider,
-    cfg: params.cfg,
-    agentId: params.agentId,
-    modelId: params.modelId,
-    metadataSnapshot: params.metadataSnapshot,
-  });
+  const preparedAuth = params.authResolver.resolvePreparedRuntimeAuthMode(params.provider);
+  const runtimeProvider = preparedAuth?.runtime;
   if (
     !runtimeProvider ||
     normalizeProviderId(runtimeProvider) === normalizeProviderId(params.provider)
@@ -183,14 +170,14 @@ export function applyCliRuntimeModelAuthAvailability(params: {
       };
     }
   }
-  const runtimeAuthMode = params.authResolver.resolvePreparedRuntimeAuthMode(runtimeProvider);
+  const runtimeAuth = preparedAuth;
   // The prepared native-runtime result is authoritative for this route. Provider
   // credentials cannot prove that the separately authenticated CLI is usable.
-  return runtimeAuthMode
+  return runtimeAuth
     ? {
         availability: true,
         routeResolution: null,
-        selectedAuthMode: runtimeAuthMode,
+        selectedAuthMode: runtimeAuth.mode,
         evidence: "runtime",
       }
     : params.authResolver.preparedSyntheticAuthComplete
@@ -205,12 +192,10 @@ type CreateModelAuthAvailabilityResolverParams = {
   env?: NodeJS.ProcessEnv;
   syntheticAuthProviderRefs?: readonly string[];
   metadataSnapshot?: PluginMetadataSnapshot;
-  skipSetupProviderFallback?: boolean;
   externalCliProviderIds?: readonly string[];
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   allowPreparedRuntimeAuth?: boolean;
   preparedRuntimeAuthStore?: AuthProfileStore;
-  preparedRuntimeAuthModes?: PreparedAgentCredentialModes;
+  preparedProviderAuth?: PreparedProviderAuth;
   preparedRuntimeAuthMaterializations?: readonly RuntimeAuthMaterialization[];
   preparedSyntheticAuthComplete?: boolean;
 };
@@ -366,15 +351,7 @@ export function createModelAuthAvailabilityResolver(
   const synthetic = new Set(
     (params.syntheticAuthProviderRefs ?? []).map(normalizeProviderIdForAuth),
   );
-  if (
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model)?.split("/", 1)[0] === "codex"
-  ) {
-    synthetic.add("codex");
-  }
-  const resolveRoutes = (params.routeResolverFactory ?? createOpenAIModelRoutesResolver)({
-    config: params.cfg,
-    env,
-  });
+  const resolveRoutes = createOpenAIModelRoutesResolver({ config: params.cfg, env });
   const envCache = new Map<string, ReturnType<typeof resolveProviderEnvAuthEvidence>>();
   const orderCache = new Map<string, AuthProfileOrderResolution>();
   const normalizeProvider = (provider: string) => {
@@ -623,12 +600,9 @@ export function createModelAuthAvailabilityResolver(
     // Config-backed inline provider keys have no auth profile, so a recorded
     // billing/auth cooldown must hide them from browse availability the same way
     // it blocks their resolution — otherwise a cooled key still looks usable.
-    // Mirrors resolveInlineProviderApiKeyUnusableUntil, but reads the cooldown
-    // via usage-state primitives so this hot browse path stays independent of
-    // the auth-profiles usage module that many callers mock in tests.
     const inlineUsageStats = isAuthCooldownBypassedForProvider(provider)
       ? undefined
-      : store.usageStats?.[`inline-api-key:${normalizeProviderId(provider)}`];
+      : store.usageStats?.[resolveInlineProviderApiKeyUsageId(provider)];
     const inlineKeyUnusableUntil = inlineUsageStats
       ? resolveProfileUnusableUntil(inlineUsageStats)
       : null;
@@ -715,13 +689,12 @@ export function createModelAuthAvailabilityResolver(
         evidence: "aws-sdk",
       };
     }
-    const preparedRuntimeAuthMode =
-      params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)] ??
-      params.preparedRuntimeAuthModes?.[normalizeProvider(provider)];
-    if (preparedRuntimeAuthMode) {
+    const preparedProviderAuth =
+      params.preparedProviderAuth?.[normalizeProviderIdForAuth(provider)];
+    if (preparedProviderAuth) {
       return {
-        availability: modeAllowed(provider, target, preparedRuntimeAuthMode),
-        selectedAuthMode: preparedRuntimeAuthMode,
+        availability: modeAllowed(provider, target, preparedProviderAuth.mode),
+        selectedAuthMode: preparedProviderAuth.mode,
         evidence: "runtime",
       };
     }
@@ -741,10 +714,6 @@ export function createModelAuthAvailabilityResolver(
         evidence: "environment",
       };
     }
-    const hasCompatibleCodexSyntheticAuth =
-      provider === OPENAI_PROVIDER_ID &&
-      synthetic.has("codex") &&
-      (target.authRequirement === "subscription" || target.api === OPENAI_CODEX_RESPONSES_API);
     const hasDeclaredSyntheticAuth =
       synthetic.has(normalizeProviderIdForAuth(provider)) ||
       synthetic.has(normalizeProvider(provider));
@@ -757,7 +726,7 @@ export function createModelAuthAvailabilityResolver(
     ) {
       return { availability: true, evidence: "synthetic" };
     }
-    if (hasDeclaredSyntheticAuth || hasCompatibleCodexSyntheticAuth) {
+    if (hasDeclaredSyntheticAuth) {
       return params.preparedSyntheticAuthComplete
         ? { availability: false, evidence: "synthetic", unavailableReason: "missing-auth" }
         : { availability: undefined, evidence: "synthetic" };
@@ -1195,32 +1164,35 @@ export function createModelAuthAvailabilityResolver(
       explicitOrder: orderResolution.hasExplicitOrder,
       ...(policy.hasDirectFallback ? { fallback: policy.direct } : {}),
     });
-    const syntheticCodexOwnsAuth =
+    const nativeAuthRuntime =
       !modelLock &&
       !selectedConfiguredMode &&
       (policy.binding.kind === "none" ||
         (policy.binding.kind === "marker" && !policy.markerUsable)) &&
       sourcePlan.kind === "automatic" &&
       !sourcePlan.profiles.explicitOrder &&
-      (sourcePlan.profiles.kind === "empty" || sourcePlan.profiles.kind === "all-unavailable") &&
-      synthetic.has("codex") &&
+      (sourcePlan.profiles.kind === "empty" || sourcePlan.profiles.kind === "all-unavailable")
+        ? params.preparedProviderAuth?.[provider]?.runtime
+        : undefined;
+    const nativeAuthOwnsRoute =
+      nativeAuthRuntime !== undefined &&
       routeResolution.routes.every((route) =>
         route.runtimePolicy?.compatibleIds?.some(
-          (runtimeId) => runtimeId.trim().toLowerCase() === "codex",
+          (runtimeId) => runtimeId.trim().toLowerCase() === nativeAuthRuntime.trim().toLowerCase(),
         ),
       );
     const routeAuthDecision = selectOpenAIModelRouteAuth({
       resolution: routeResolution,
       sourcePlan,
       configuredAuthMode: automaticRouteAuthMode,
-      ...(syntheticCodexOwnsAuth ? { runtimeAuthOwner: { id: "codex" } } : {}),
-      ...(syntheticCodexOwnsAuth &&
+      ...(nativeAuthOwnsRoute ? { runtimeAuthOwner: { id: nativeAuthRuntime } } : {}),
+      ...(nativeAuthOwnsRoute &&
       resolveMergedModelProviderConfig(params.cfg, provider) === undefined
         ? { allowNativeAuthOnSingleRoute: true }
         : {}),
     });
-    if (routeAuthDecision.kind === "deferred" && syntheticCodexOwnsAuth) {
-      return { availability: undefined, routeResolution, evidence: "synthetic" };
+    if (routeAuthDecision.kind === "deferred" && nativeAuthOwnsRoute) {
+      return { availability: true, routeResolution, evidence: "runtime" };
     }
     if (routeAuthDecision.kind !== "selected") {
       const rejectedSource =
@@ -1276,21 +1248,6 @@ export function createModelAuthAvailabilityResolver(
       { ...ref, ...selectedRoute },
       policy.evaluation,
     );
-    const syntheticSubscriptionRoute = routeResolution.routes.find(
-      (route) => route.authRequirement === "subscription",
-    );
-    if (
-      syntheticCodexOwnsAuth &&
-      evaluation.availability !== true &&
-      synthetic.has("codex") &&
-      syntheticSubscriptionRoute
-    ) {
-      return {
-        availability: undefined,
-        routeResolution,
-        evidence: "synthetic",
-      };
-    }
     return {
       ...evaluation,
       availability:
@@ -1338,9 +1295,6 @@ export function createModelAuthAvailabilityResolver(
       addProviderDiscoveryProviderId(provider);
     }
   }
-  if (synthetic.has("codex")) {
-    addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
-  }
   return {
     providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
       left.localeCompare(right),
@@ -1348,12 +1302,11 @@ export function createModelAuthAvailabilityResolver(
     preparedSyntheticAuthComplete: params.preparedSyntheticAuthComplete === true,
     evaluateModelAuth,
     resolvePreparedRuntimeAuthMode: (provider) =>
-      params.preparedRuntimeAuthModes?.[normalizeProviderIdForAuth(provider)],
+      params.preparedProviderAuth?.[normalizeProviderIdForAuth(provider)],
     resolveProviderAuthAvailability,
     hasSyntheticAuth: (provider) =>
       synthetic.has(normalizeProviderIdForAuth(provider)) ||
       synthetic.has(normalizeProvider(provider)) ||
-      (normalizeProviderIdForAuth(provider) === OPENAI_PROVIDER_ID && synthetic.has("codex")) ||
       hasSyntheticLocalProviderAuthConfig({
         cfg: params.cfg,
         provider: normalizeProviderIdForAuth(provider),

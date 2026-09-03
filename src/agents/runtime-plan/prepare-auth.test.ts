@@ -453,6 +453,29 @@ describe("prepareAgentRuntimeAuthPlan", () => {
     expect(resolveAgentHarnessPreparedAuthSupport({ plan })).toEqual({ source: "harness" });
   });
 
+  it("routes openai/gpt-5.6-sol without a profile to native Codex auth", () => {
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "openai",
+      modelId: "gpt-5.6-sol",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      env: {},
+      harnessId: "codex",
+      harnessRuntime: "codex",
+      harnessAuthBootstrap: "harness",
+      authProfileStore: authStore({}),
+    });
+
+    expect(plan).toMatchObject({
+      harnessAuthProvider: "openai",
+      forwardedAuthProfileId: undefined,
+      deferredRouteSupport: {
+        requestTransportOverrides: "none",
+        runtimePolicy: { compatibleIds: ["openclaw", "codex"] },
+      },
+    });
+  });
+
   it("falls through an unusable env marker to an ordered API-key profile", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       ...openAIPlatformAuthFixture(),
@@ -960,9 +983,9 @@ describe("prepareAgentRuntimeAuthPlan", () => {
       config: providerConfig("xai", { auth: "api-key", apiKey: "xai-key" }),
       env: {},
       authProfileStore: authStore({
-        "xai:auto": apiKeyProfile("xai", "profile-key"),
+        "xai:grok-4.6": apiKeyProfile("xai", "profile-key"),
       }),
-      sessionAuthProfileId: "xai:auto",
+      sessionAuthProfileId: "xai:grok-4.6",
       sessionAuthProfileSource: "auto",
       harnessId: "native-remote",
       harnessRuntime: "native-remote",

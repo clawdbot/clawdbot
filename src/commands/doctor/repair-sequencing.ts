@@ -17,6 +17,7 @@ import { migrateLegacyTailscaleProfileIdentities } from "../../state/user-profil
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
+  maybeRepairLegacyAuthProfileStores,
   maybeRepairOpenAICodexAuthConfig,
 } from "../doctor-auth-flat-profiles.js";
 import { maybeRepairLegacyOAuthSidecarProfiles } from "../doctor-auth-oauth-sidecar.js";
@@ -364,6 +365,12 @@ export async function runDoctorRepairSequence(params: {
     });
   }
   appendRepairNotes(authProfileSqliteMigration);
+  const legacyAuthProfileStoreRepair = maybeRepairLegacyAuthProfileStores({
+    cfg: state.candidate,
+    env,
+    profileIdMap: openAICodexAuthProfileIdMap,
+  });
+  appendRepairNotes(legacyAuthProfileStoreRepair);
   const staleAuthOrderRepair = maybeRepairStaleConfiguredAuthOrders({
     cfg: state.candidate,
     env,
@@ -372,7 +379,8 @@ export async function runDoctorRepairSequence(params: {
   const authProfilesRepaired =
     legacyOAuthSidecarRepair.changes.length > 0 ||
     staleOAuthShadowRepair.changes.length > 0 ||
-    authProfileSqliteMigration.changes.length > 0;
+    authProfileSqliteMigration.changes.length > 0 ||
+    legacyAuthProfileStoreRepair.changes.length > 0;
 
   return {
     state,

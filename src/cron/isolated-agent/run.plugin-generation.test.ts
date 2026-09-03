@@ -116,7 +116,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
           { provider: "openai", modelId: "gpt-5.6-sol", agentId: "default" },
         ],
       },
-      { catalogMode: "static", pluginGeneration, abortSignal: dispatchAdmission.abortSignal },
+      { pluginGeneration, abortSignal: dispatchAdmission.abortSignal },
     );
     expect(embeddedRunGeneration === selectedGeneration).toBe(true);
     expect(release).toHaveBeenCalledOnce();

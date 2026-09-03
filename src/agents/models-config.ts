@@ -6,6 +6,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -31,6 +32,8 @@ import {
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { listCliRuntimeProviderIds } from "./cli-backends.js";
+import { isRetiredModelPickerProvider } from "./model-runtime-aliases.js";
 import {
   MODELS_JSON_STATE,
   type ModelsJsonReadyResult,
@@ -78,6 +81,29 @@ type PlannedOpenClawModelsJsonSource = Readonly<{
   modelsJsonContents: string | null;
   pluginCatalogs: readonly PersistedPluginModelCatalog[];
 }>;
+
+/** Returns providers that remain authoritative in generated models.json. */
+export function retireGeneratedModelsJsonProviders<T>(
+  providers: Readonly<Record<string, T>>,
+  params: {
+    configuredProviderIds: ReadonlySet<string>;
+    retiredProviderIds: ReadonlySet<string>;
+  },
+): Record<string, T> {
+  const configuredProviderIds = new Set([...params.configuredProviderIds].map(normalizeProviderId));
+  const retiredProviderIds = new Set([...params.retiredProviderIds].map(normalizeProviderId));
+  for (const providerId of Object.keys(providers)) {
+    if (isRetiredModelPickerProvider(providerId)) {
+      retiredProviderIds.add(normalizeProviderId(providerId));
+    }
+  }
+  return Object.fromEntries(
+    Object.entries(providers).filter(([providerId]) => {
+      const normalized = normalizeProviderId(providerId);
+      return configuredProviderIds.has(normalized) || !retiredProviderIds.has(normalized);
+    }),
+  );
+}
 
 function listPreparedPluginModelCatalogs(agentDir: string) {
   const { catalogs, warnings } = loadPersistedPluginModelCatalogs(agentDir);
@@ -185,6 +211,7 @@ if (process.env.VITEST || process.env.NODE_ENV === "test") {
 async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   agentDir: string;
   existingParsed: unknown;
+  config?: OpenClawConfig;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "owners">;
 }): Promise<unknown> {
@@ -192,6 +219,7 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
   const providers = isRecord(root.providers) ? { ...root.providers } : {};
   let changed = false;
   const pluginCatalogs = params.pluginCatalogs ?? listPreparedPluginModelCatalogs(params.agentDir);
+  const generatedProviderIdsByPlugin = new Map<string, Set<string>>();
   for (const { pluginId: catalogPluginId, contents } of pluginCatalogs) {
     let catalog: unknown;
     try {
@@ -216,12 +244,43 @@ async function mergeGeneratedPluginCatalogProvidersIntoExistingParsed(params: {
       }
       providers[providerId] = provider;
       changed = true;
+      const generated = generatedProviderIdsByPlugin.get(catalogPluginId) ?? new Set<string>();
+      generated.add(providerId);
+      generatedProviderIdsByPlugin.set(catalogPluginId, generated);
     }
   }
+  const configuredProviderIds = new Set(
+    Object.keys(params.config?.models?.providers ?? {}).map(normalizeProviderId),
+  );
+  const retiredProviderIds = new Set(
+    listCliRuntimeProviderIds({
+      config: params.config,
+      includeSetupRegistry: true,
+    }),
+  );
+  // A plugin that stops declaring a provider retires it. The generated catalog is the owner's
+  // current inventory; without this, providers it wrote in earlier releases outlive the plugin
+  // catalog forever and keep surfacing retired ids in every model list.
+  for (const providerId of Object.keys(providers)) {
+    const normalizedProviderId = normalizeProviderId(providerId);
+    const ownerPluginId = resolvePluginModelCatalogOwnerPluginId({
+      providerId,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    });
+    const generated = ownerPluginId ? generatedProviderIdsByPlugin.get(ownerPluginId) : undefined;
+    if (generated && !generated.has(providerId)) {
+      retiredProviderIds.add(normalizedProviderId);
+    }
+  }
+  const retiredProviders = retireGeneratedModelsJsonProviders(providers, {
+    configuredProviderIds,
+    retiredProviderIds,
+  });
+  changed ||= Object.keys(retiredProviders).length !== Object.keys(providers).length;
   if (!changed) {
     return params.existingParsed;
   }
-  return { ...root, providers };
+  return { ...root, providers: retiredProviders };
 }
 
 function materializePlannedPluginCatalogs(
@@ -371,6 +430,7 @@ async function prepareOpenClawModelsJsonSource(
     const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
       agentDir,
       existingParsed: existingModelsFile.parsed,
+      config: context.cfg,
       ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
     });
     const plan = await planOpenClawModelsJson({
@@ -450,6 +510,7 @@ export async function planOpenClawModelsJsonSource(
   const existingParsedForMerge = await mergeGeneratedPluginCatalogProvidersIntoExistingParsed({
     agentDir,
     existingParsed: existingModelsFile.parsed,
+    config: context.cfg,
     pluginCatalogs: existingPluginCatalogs,
     ...(pluginMetadataSnapshot ? { pluginMetadataSnapshot } : {}),
   });

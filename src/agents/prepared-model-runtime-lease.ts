@@ -24,7 +24,6 @@ import {
   preparedPluginGenerationReusesBase,
   preparedPluginGenerationSupportsSelections,
 } from "./prepared-model-runtime.plugin-generation.js";
-import type { PreparedModelRuntimeCatalogMode } from "./prepared-model-runtime.types.js";
 
 type PreparedModelRuntimeLeaseContext = {
   owners: Map<string, PreparedModelRuntimeOwner>;
@@ -51,7 +50,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   context: PreparedModelRuntimeLeaseContext,
   options: {
     retainIdleRunOwner?: boolean;
-    catalogMode?: PreparedModelRuntimeCatalogMode;
     pluginGeneration?: PreparedModelRuntimeOwner["pluginGeneration"];
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     abortSignal?: AbortSignal;
@@ -182,14 +180,12 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         // has an owner to rebind. Keep ordinary agent runs fail-closed at this ownership boundary.
       }
     }
-    // A static owner cannot satisfy explicit live discovery; publish a new exact generation.
     const ownerGenerationChanged =
-      (options.pluginGeneration !== undefined &&
-        !preparedPluginGenerationReusesBase(
-          existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
-          options.pluginGeneration,
-        )) ||
-      (options.catalogMode === "live" && existing?.catalogMode === "static");
+      options.pluginGeneration !== undefined &&
+      !preparedPluginGenerationReusesBase(
+        existing?.pending ? existing.pendingPluginGeneration : existing?.pluginGeneration,
+        options.pluginGeneration,
+      );
     if (existing?.pending && ownerGenerationChanged) {
       // Do not supersede active discovery. Wait for its owner to settle, then retry against
       // the published identity so same-generation callers still coalesce.
@@ -227,7 +223,6 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
             context.getBuildTimeoutMs(),
             undefined,
             provenance,
-            options.catalogMode,
             options.pluginGeneration,
             options.pluginMetadataSnapshot,
           ),

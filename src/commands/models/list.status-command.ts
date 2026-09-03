@@ -42,10 +42,7 @@ import {
 } from "../../agents/model-auth-env-vars.js";
 import { resolveEnvApiKey } from "../../agents/model-auth.js";
 import { resolveCliRuntimeExecutionProvider } from "../../agents/model-runtime-aliases.js";
-import {
-  modelCatalogLogicalKey,
-  resolveConfiguredModelPolicyAllow,
-} from "../../agents/model-selection-shared.js";
+import { resolveConfiguredModelPolicyAllow } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
@@ -55,8 +52,8 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
+import { modelCatalogLogicalKey } from "../../agents/openai-model-routes.js";
 import { OPENAI_PROVIDER_ID } from "../../agents/openai-routing.js";
-import { loadPreparedModelCatalogSnapshot } from "../../agents/prepared-model-catalog.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import {
   readUtilityModelSetting,
@@ -71,6 +68,7 @@ import {
 } from "../../config/model-input.js";
 import { parseModelPolicyWildcardRef } from "../../config/model-policy-ref.js";
 import { resolveMergedModelProviderConfig } from "../../config/model-provider-config.js";
+import { loadPreparedGatewayModelCatalogSnapshot } from "../../gateway/server-model-catalog.js";
 import { getShellEnvAppliedKeys, shouldEnableShellEnvFallback } from "../../infra/shell-env.js";
 import type { ProviderModelRouteCandidate } from "../../plugin-sdk/provider-model-types.js";
 import {
@@ -239,27 +237,12 @@ function parseOptionalPositiveIntegerOption(raw: unknown, label: string, fallbac
   return parsed;
 }
 
-function isCompletePluginMetadataSnapshot(value: unknown): value is PluginMetadataSnapshot {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const snapshot = value as Partial<PluginMetadataSnapshot>;
-  return (
-    typeof snapshot.policyHash === "string" &&
-    snapshot.index !== undefined &&
-    snapshot.manifestRegistry !== undefined
-  );
-}
-
 function installCommandPluginMetadataSnapshot(params: {
   snapshot: PluginMetadataSnapshot;
   config: Awaited<ReturnType<typeof loadModelsConfig>>;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): () => void {
-  if (!isCompletePluginMetadataSnapshot(params.snapshot)) {
-    return () => {};
-  }
   const current = getCurrentPluginMetadataSnapshot({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -487,14 +470,11 @@ export async function modelsStatusCommand(
       (raw) =>
         normalizeProviderId(resolveStatusModelRef(raw)?.provider ?? "") === OPENAI_PROVIDER_ID,
     );
-    // Match execution's read-only, provider-scoped Codex CLI overlay. This lets
-    // status select the same OpenAI subscription profile without scanning
-    // unrelated external CLIs or prompting the keychain.
+    // Status reads the normal OpenClaw store without prompting the keychain.
     const store = textUsesOpenAI
       ? ensureAuthProfileStore(agentDir, {
           allowKeychainPrompt: false,
           config: cfg,
-          externalCliProviderIds: [OPENAI_PROVIDER_ID],
           readOnly: true,
         })
       : ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
@@ -590,6 +570,9 @@ export async function modelsStatusCommand(
     );
     const createStatusAuthResolver = (
       authStore: Parameters<typeof createModelAuthAvailabilityResolver>[0]["authStore"],
+      preparedProviderAuth?: Parameters<
+        typeof createModelAuthAvailabilityResolver
+      >[0]["preparedProviderAuth"],
     ) =>
       createModelAuthAvailabilityResolver({
         cfg,
@@ -597,31 +580,20 @@ export async function modelsStatusCommand(
         agentDir,
         workspaceDir,
         env: process.env,
-        // A generic Codex runtime marker proves only that the harness can be
-        // contacted. It is not an OpenAI model credential.
-        syntheticAuthProviderRefs: [...syntheticAuthProviderRefs].filter(
-          (provider) => provider !== "codex",
-        ),
+        // A native runtime marker proves only that its owner can be contacted. It is not a
+        // provider model credential.
+        syntheticAuthProviderRefs: [...syntheticAuthProviderRefs],
+        ...(preparedProviderAuth ? { preparedProviderAuth } : {}),
         metadataSnapshot,
       });
-    let authResolver = createStatusAuthResolver(store);
-    // Status already owns the complete provider/auth use set. Carry it into the
-    // catalog owner so a read-only status does not discover every provider plugin.
-    const probedProvider = normalizeOptionalString(opts.probeProvider);
-    const providerDiscoveryProviderIds = [
-      ...new Set([
-        ...authResolver.providerDiscoveryProviderIds,
-        ...providersFromConfig,
-        ...providersFromModels,
-        ...(probedProvider ? [normalizeProviderId(probedProvider)] : []),
-      ]),
-    ].toSorted((left, right) => left.localeCompare(right));
-    const catalog = await loadPreparedModelCatalogSnapshot({
-      config: cfg,
+    // Status and Gateway models.list read the same prepared owner generation.
+    const catalogOwner = await loadPreparedGatewayModelCatalogSnapshot({
       agentId: workspaceAgentId,
-      providerDiscoveryProviderIds,
+      getConfig: () => cfg,
       readOnly: true,
     });
+    let authResolver = createStatusAuthResolver(store, catalogOwner.providerAuth);
+    const catalog = catalogOwner;
     const visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: catalog.entries,
@@ -767,12 +739,9 @@ export async function modelsStatusCommand(
       providers.map((provider) => normalizeProviderId(provider)),
     );
     const codexProvider = normalizeProviderId(OPENAI_PROVIDER_ID);
-    const codexProviderAlias = aliasMap[codexProvider] ?? codexProvider;
     let codexRuntimeAuthUsages = providerUses.filter((usage) => usage.usesCodexRuntimeAuth);
     if (codexRuntimeAuthUsages.length > 0) {
       syntheticProvidersToProbe.add(codexProvider);
-      syntheticProvidersToProbe.add(codexProviderAlias);
-      syntheticProvidersToProbe.add("codex");
     }
     for (const provider of syntheticProvidersToProbe) {
       const normalized = normalizeProviderId(provider);
@@ -799,14 +768,10 @@ export async function modelsStatusCommand(
         expiresAt: resolvedLocal.expiresAt,
       };
       syntheticAuthByProvider.set(normalized, syntheticAuth);
-      // The generic Codex token authenticates the local harness, not an
-      // OpenAI model route. Only provider-owned synthetic credentials may
-      // become concrete evaluator profiles.
-      if (normalized !== "codex") {
+      // Runtime-owned markers authenticate the native harness, not an OpenAI model route.
+      // Only provider-owned synthetic credentials may become concrete evaluator profiles.
+      if (resolvedLocal.runtime === undefined) {
         runtimeSyntheticAuthByProvider.set(normalized, syntheticAuth);
-      }
-      if (normalized !== "codex" && normalized === codexProviderAlias) {
-        syntheticAuthByProvider.set(codexProvider, syntheticAuth);
       }
     }
     const runtimeCredentialsByProvider = new Map(

@@ -50,7 +50,7 @@ async function resolveCandidates(params: {
     return [];
   }
   const [
-    { ensureStandaloneMigrationProviderRegistryLoaded, resolvePluginMigrationProviders },
+    { resolvePluginMigrationProviders },
     { resolveManifestContractRuntimePluginResolution },
     { createMigrationLogger },
     { resolveStateDir },
@@ -60,7 +60,6 @@ async function resolveCandidates(params: {
     loadMigrationContextModule(),
     loadConfigPathsModule(),
   ]);
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const installedIds = new Set(params.installedPluginIds);
   const providers = resolvePluginMigrationProviders({ cfg: params.config });
   const stateDir = resolveStateDir();

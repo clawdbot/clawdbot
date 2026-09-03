@@ -1637,7 +1637,6 @@ describe("managed reload transaction ownership", () => {
       result.configA,
       {
         gatewayLifecycle: true,
-        catalogMode: "static",
         allowGatewaySubagentBinding: true,
         pluginMetadataSnapshot,
       },
@@ -1671,7 +1670,6 @@ describe("managed reload transaction ownership", () => {
     expect(rebuiltWith).not.toBe(result.configA);
     expect(options).toEqual({
       gatewayLifecycle: true,
-      catalogMode: "static",
       allowGatewaySubagentBinding: true,
       pluginMetadataSnapshot,
     });
@@ -2087,7 +2085,6 @@ describe("gateway hot reload model state", () => {
     );
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
       allowGatewaySubagentBinding: true,
-      catalogMode: "static",
       agentIds: new Set(["alpha"]),
     });
   });
@@ -2118,7 +2115,6 @@ describe("gateway hot reload model state", () => {
     expect(hoisted.markPreparedModelRuntimeSnapshotsStale).toHaveBeenCalledOnce();
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
       allowGatewaySubagentBinding: true,
-      catalogMode: "static",
     });
     expect(heartbeatRunner.updateConfig).not.toHaveBeenCalled();
     expect(cron.stop).not.toHaveBeenCalled();
@@ -2508,7 +2504,6 @@ describe("gateway hot reload model state", () => {
     );
     expect(hoisted.refreshPreparedModelRuntimeSnapshots).toHaveBeenCalledWith(nextConfig, {
       allowGatewaySubagentBinding: true,
-      catalogMode: "static",
     });
     expect(hoisted.warmCurrentProviderAuthStateOffMainThread).toHaveBeenCalledWith(nextConfig);
   });
@@ -6034,6 +6029,9 @@ describe("gateway plugin hot reload handlers", () => {
         events.push(`channel:${targetEnv[envKey]}`);
         return new Map();
       }),
+      refreshChatMetadata: vi.fn(async () => {
+        events.push(`chat-metadata:${targetEnv[envKey]}`);
+      }),
       reloadPlugins,
     });
     try {
@@ -6064,6 +6062,7 @@ describe("gateway plugin hot reload handlers", () => {
         "lookup:candidate:old",
         "cron:candidate",
         "plugin:candidate",
+        "chat-metadata:candidate",
         "channel:candidate",
       ]);
       expect(targetEnv[envKey]).toBe("candidate");

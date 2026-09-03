@@ -151,7 +151,7 @@ describe("xai code_execution tool", () => {
     expect(mockFetch).toHaveBeenCalled();
     expect(firstFetchUrl(mockFetch)).toContain("api.x.ai/v1/responses");
     const body = parseFirstRequestBody(mockFetch);
-    expect(body.model).toBe("grok-4.3");
+    expect(body.model).toBe("grok-4.6");
     expect(body.store).toBe(false);
     expect(body.reasoning).toEqual({ effort: "low" });
     expect(body.max_turns).toBe(2);

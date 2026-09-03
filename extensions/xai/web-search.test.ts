@@ -577,8 +577,8 @@ describe("xai web search config resolution", () => {
   });
 
   it("uses default model when not specified", () => {
-    expect(resolveXaiWebSearchModel({})).toBe("grok-4.3");
-    expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4.3");
+    expect(resolveXaiWebSearchModel({})).toBe("grok-4.6");
+    expect(resolveXaiWebSearchModel(undefined)).toBe("grok-4.6");
   });
 
   it("uses a Grok-specific 60s default timeout while preserving overrides", () => {
@@ -609,7 +609,7 @@ describe("xai web search config resolution", () => {
 
     expect(firstFetchUrl(mockFetch)).toBe("https://api.x.ai/proxy/v1/responses");
     expect(firstFetchBody(mockFetch)).toMatchObject({
-      model: "grok-4.3",
+      model: "grok-4.6",
       store: false,
       reasoning: { effort: "low" },
       tools: [{ type: "web_search" }],
@@ -912,8 +912,8 @@ describe("xai provider models", () => {
     });
   });
 
-  it("keeps Grok 4.3 selectable with current bundled metadata", () => {
-    const expected = {
+  it("resolves curated rows and their aliases from the manifest", () => {
+    const grok43 = {
       id: "grok-4.3",
       reasoning: true,
       input: ["text", "image"],
@@ -921,25 +921,23 @@ describe("xai provider models", () => {
       maxTokens: 64_000,
       cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     };
-    expectCatalogEntry("grok-4.3", expected);
-    expectCatalogEntry("grok-4.3-latest", expected);
-    expectCatalogEntry("grok-latest", { ...expected, id: "grok-latest" });
-    expectCatalogEntry("grok-4-latest", {
-      ...expected,
-      id: "grok-4-latest",
-      input: ["text"],
-    });
+    expectCatalogEntry("grok-4.3", grok43);
+    expectCatalogEntry("grok-4.3-latest", grok43);
+    expectCatalogEntry("xai/GROK-4.3", grok43);
   });
 
-  it("keeps retired Grok fast slugs resolving for compatibility", () => {
-    expectCatalogEntry("grok-4-1-fast", {
-      id: "grok-4-1-fast",
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_000_000,
-      maxTokens: 64_000,
-      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
-    });
+  it("leaves ids outside the manifest to forward-compat defaults", () => {
+    for (const modelId of [
+      "grok-latest",
+      "grok-4-latest",
+      "grok-4-1-fast",
+      "grok-4-1-fast-reasoning",
+      "grok-4.20-reasoning",
+      "grok-3-mini-fast",
+      "grok-3",
+    ]) {
+      expect(resolveXaiCatalogEntry(modelId), modelId).toBeUndefined();
+    }
   });
 
   it("resolves Grok Build and its official code aliases", () => {
@@ -967,44 +965,6 @@ describe("xai provider models", () => {
       id: "grok-4.20-0309-non-reasoning",
       reasoning: false,
       contextWindow: 1_000_000,
-    });
-  });
-
-  it("keeps older Grok aliases resolving with current limits", () => {
-    expectCatalogEntry("grok-4-1-fast-reasoning", {
-      id: "grok-4-1-fast",
-      reasoning: true,
-      contextWindow: 1_000_000,
-      maxTokens: 64_000,
-    });
-    expectCatalogEntry("grok-4.20-reasoning", {
-      id: "grok-4.20-reasoning",
-      reasoning: true,
-      contextWindow: 1_000_000,
-      maxTokens: 30_000,
-    });
-  });
-
-  it("publishes the remaining Grok 3 family in the OpenClaw catalog", () => {
-    expectCatalogEntry("grok-3-mini-fast", {
-      id: "grok-3-mini-fast",
-      reasoning: true,
-      contextWindow: 1_000_000,
-      maxTokens: 64_000,
-    });
-    expectCatalogEntry("grok-3-fast", {
-      id: "grok-3-fast",
-      reasoning: false,
-      contextWindow: 1_000_000,
-      maxTokens: 64_000,
-    });
-    expectCatalogEntry("grok-3", {
-      id: "grok-3",
-      reasoning: false,
-      input: ["text"],
-      contextWindow: 1_000_000,
-      maxTokens: 64_000,
-      cost: { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
     });
   });
 

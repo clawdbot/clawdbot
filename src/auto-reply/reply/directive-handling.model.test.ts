@@ -75,6 +75,7 @@ vi.mock("../../agents/auth-profiles.js", () => {
     ensureAuthProfileStore: store,
     ensureAuthProfileStoreWithoutExternalProfiles: store,
     getRuntimeAuthProfileStoreSnapshot: store,
+    getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
     isProfileInCooldown: () => false,
     listProfilesForProvider: (_store: unknown, provider: string) =>
       Object.entries(authProfilesStoreMock.profiles)
@@ -185,6 +186,7 @@ vi.mock("../../agents/auth-profiles/store.js", () => {
     findPersistedAuthProfileCredential: ({ profileId }: { profileId: string }) =>
       authProfilesStoreMock.profiles[profileId],
     getRuntimeAuthProfileStoreSnapshot: store,
+    getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
     hasAnyAuthProfileStoreSource: () => Object.keys(authProfilesStoreMock.profiles).length > 0,
     loadAuthProfileStore: store,
     loadAuthProfileStoreForRuntime: store,
@@ -378,7 +380,7 @@ vi.mock("../../agents/prepared-model-catalog.js", () => {
     loadProviderScopedThinkingCatalog: loadModelCatalog,
     loadPreparedModelCatalogOwnerSnapshot: async () => {
       const entries = await loadModelCatalog();
-      return { modelCatalog: { entries, routeVariants: entries }, authModes: {} };
+      return { modelCatalog: { entries, routeVariants: entries }, providerAuth: {} };
     },
   };
 });
@@ -978,39 +980,6 @@ describe("/model chat UX", () => {
     expect(reply?.text).toContain("Use: /models <provider>");
     expect(reply?.text).toContain("Switch: /model <provider/model>");
     expect(stickyModelMock.persistBestEffort).not.toHaveBeenCalled();
-  });
-
-  it("passes workspace scope through the /model list browser alias", async () => {
-    await withWorkspaceAuthFixture(
-      {
-        pluginId: "workspace-model-list",
-        envVar: "WORKSPACE_MODEL_LIST_CREDENTIALS",
-        credentialMarker: "workspace-model-list-local-credentials",
-        source: "workspace model list credentials",
-      },
-      async (workspaceDir) => {
-        modelsCommandMock.delegateToActual = true;
-        const reply = await resolveModelInfoReply({
-          directives: parseInlineSessionDirectives("/model list"),
-          workspaceDir,
-          cfg: {
-            ...baseConfig(),
-            plugins: { allow: ["workspace-model-list"] },
-          } as unknown as OpenClawConfig,
-        });
-
-        expect(reply?.text).toContain("- anthropic");
-        expect(modelsCommandMock.resolveModelsCommandReply).toHaveBeenCalledWith(
-          expect.objectContaining({
-            commandBodyNormalized: "/models",
-            workspaceDir,
-            cfg: expect.objectContaining({
-              plugins: { allow: ["workspace-model-list"] },
-            }),
-          }),
-        );
-      },
-    );
   });
 
   it("shows active runtime model when different from selected model", async () => {

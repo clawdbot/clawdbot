@@ -109,7 +109,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
     ? loadEmbeddedRunAuthProfileStore({
         agentDir: params.agentDir,
         config: runParams.config,
-        externalCliProviderIds: [OPENAI_PROVIDER_ID],
+        externalCliProviderIds: [],
       })
     : initialPluginHarnessOwnsTransport
       ? ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir, {

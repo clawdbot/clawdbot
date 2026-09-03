@@ -19,13 +19,13 @@ import type { ModelCatalogEntry } from "./model-catalog.js";
 import {
   buildConfiguredModelCatalog,
   dedupeModelCatalogEntries,
-  modelCatalogLogicalKey,
 } from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
   type ModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
+import { modelCatalogLogicalKey } from "./openai-model-routes.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 export type ModelCatalogAuthChecker = (

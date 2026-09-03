@@ -48,7 +48,7 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
         provider: "anthropic",
         entry: {
           agentHarnessId: "codex",
-          agentRuntimeOverride: "claude-cli",
+          providerOverride: "claude-cli",
           modelSelectionLocked: true,
         },
       }),
@@ -83,6 +83,31 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
           entry: { ...entry, agentHarnessId },
         }),
       ).toBe("openclaw");
+    }
+  });
+
+  it("uses a stored CLI provider override for the next Anthropic turn", () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () =>
+        [
+          {
+            id: "claude-cli",
+            modelProvider: "anthropic",
+            config: { command: "claude" },
+            bundleMcp: false,
+          },
+        ] as never,
+    });
+
+    try {
+      expect(
+        resolveSessionRuntimeOverrideForProvider({
+          provider: "anthropic",
+          entry: { providerOverride: "claude-cli" },
+        }),
+      ).toBe("claude-cli");
+    } finally {
+      cliBackendsTesting.resetDepsForTest();
     }
   });
 });

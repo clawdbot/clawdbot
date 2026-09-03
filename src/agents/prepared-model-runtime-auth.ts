@@ -1,10 +1,10 @@
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 
 export type PreparedModelRuntimeAuth = Readonly<{
   authStore: AuthProfileStore;
-  authModes: PreparedAgentCredentialModes;
+  providerAuth: PreparedProviderAuth;
 }>;
 
 export type PreparedModelRuntimeAuthScope = Readonly<{
@@ -52,7 +52,7 @@ export function setPreparedModelRuntimeAuthLoader(
 }
 
 export async function loadPreparedModelRuntimeAuth(
-  snapshot: object & { authModes?: PreparedAgentCredentialModes },
+  snapshot: object & { providerAuth?: PreparedProviderAuth },
   scope: PreparedModelRuntimeAuthScope,
 ): Promise<PreparedModelRuntimeAuth | undefined> {
   const loader = authLoaderBySnapshot.get(snapshot);
@@ -60,7 +60,7 @@ export async function loadPreparedModelRuntimeAuth(
     return await loader(scope);
   }
   const authStore = authStoreBySnapshot.get(snapshot);
-  return authStore ? { authStore, authModes: snapshot.authModes ?? {} } : undefined;
+  return authStore ? { authStore, providerAuth: snapshot.providerAuth ?? {} } : undefined;
 }
 
 export function setPreparedModelRuntimeAuthMaterializations(

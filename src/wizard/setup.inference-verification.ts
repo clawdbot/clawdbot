@@ -35,38 +35,16 @@ export async function offerLiveModelVerification(params: {
       return { config: params.config, attempted: false, persisted: false, verified: false };
     }
   }
-  const [inference, authStore, agentDatabase] = await Promise.all([
-    import("../system-agent/setup-inference.js"),
-    import("../agents/auth-profiles/store.js"),
-    import("../state/openclaw-agent-db.js"),
-  ]);
-  const stagedEnv = params.stateDir
-    ? { ...process.env, OPENCLAW_STATE_DIR: params.stateDir }
-    : undefined;
+  const inference = await import("../system-agent/setup-inference.js");
+  // Sign-in saves the credential; the turn only confirms the route it produced.
   const verify = async (candidate: SetupModelAuthCandidate) => {
+    await candidate.persistAuthProfiles();
     const progress = params.prompter.progress(t("wizard.setup.testAiProgress"));
     const verification = withConsoleSubsystemsSuppressed(() =>
       inference.verifySetupInferenceConfig({
         // SAFETY: Canonical roster migration preserves typed config; this runtime view is never persisted.
         config: migratePersistedImplicitMainRoster(candidate.config).config as OpenClawConfig,
         runtime: params.runtime,
-        authProfiles: candidate.authProfiles,
-        ...(params.agentDir ? { agentDir: params.agentDir } : {}),
-        ...(params.stateDir
-          ? {
-              deps: {
-                updateAuthProfileStoreWithLock: async (updateParams) =>
-                  await authStore.updateAuthProfileStoreWithLock({
-                    ...updateParams,
-                    stateDir: params.stateDir,
-                  }),
-                disposeOpenClawAgentDatabaseByPath: (pathname) =>
-                  agentDatabase.disposeOpenClawAgentDatabaseByPath(pathname, {
-                    env: stagedEnv!,
-                  }),
-              },
-            }
-          : {}),
       }),
     );
     let result: Awaited<typeof verification>;
@@ -109,7 +87,6 @@ export async function offerLiveModelVerification(params: {
           modelRef: result.modelRef,
         };
       }
-      await candidate.persistAuthProfiles(result.authProfiles);
       const config = await params.writeConfig(candidate.config);
       return {
         config,
@@ -118,9 +95,6 @@ export async function offerLiveModelVerification(params: {
         verified: true,
         modelRef: result.modelRef,
       };
-    }
-    if (result.authProfiles) {
-      candidate.authProfiles = result.authProfiles;
     }
     if (params.opts.nonInteractive) {
       return { config: params.config, attempted: true, persisted: false, verified: false };

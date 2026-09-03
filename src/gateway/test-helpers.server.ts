@@ -560,7 +560,6 @@ export async function prepareGatewayReplyRuntimeForTest(options?: {
   const preparedRuntime = await import("../agents/prepared-model-runtime.js");
   await preparedRuntime.refreshPreparedModelRuntimeSnapshots(config, {
     gatewayLifecycle: true,
-    catalogMode: agentDiscoveryMock.enabled ? "live" : "static",
     allowGatewaySubagentBinding: true,
   });
   gatewayReplyRuntimePrepared = true;

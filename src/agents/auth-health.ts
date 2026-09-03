@@ -10,6 +10,7 @@ import {
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
 import {
   DEFAULT_OAUTH_REFRESH_MARGIN_MS,
   type AuthCredentialReasonCode,
@@ -35,6 +36,7 @@ type AuthProfileHealth = {
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
+  secretRef?: Pick<SecretRef, "source" | "id">;
   expiresAt?: number;
   remainingMs?: number;
   source: AuthProfileSource;
@@ -145,6 +147,21 @@ function buildProfileHealth(params: {
   const provider = normalizeProviderId(healthCredential.provider);
 
   if (healthCredential.type === "api_key") {
+    const keyRef =
+      coerceSecretRef(healthCredential.keyRef, cfg?.secrets?.defaults) ??
+      coerceSecretRef(healthCredential.key, cfg?.secrets?.defaults);
+    if (keyRef && !healthCredential.key?.trim()) {
+      return {
+        profileId,
+        provider,
+        type: "api_key",
+        status: "missing",
+        reasonCode: "unresolved_ref",
+        secretRef: { source: keyRef.source, id: keyRef.id },
+        source,
+        label,
+      };
+    }
     const eligibility = evaluateStoredCredentialEligibility({
       credential: healthCredential,
       now,

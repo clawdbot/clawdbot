@@ -24,7 +24,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
     if (options.request) {
       return options.request(method);
     }
-    return Promise.resolve({});
+    return Promise.resolve(method === "models.list" ? { models: [] } : {});
   });
   const client = { recoveryScope: "principal-a", recoveryScopeReady: true, request };
   const phase = options.phase ?? "connected";

@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { type Static, Type } from "typebox";
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
+import type { ModelProviderConfig } from "../../config/types.models.js";
 import type {
   AnthropicMessagesCompat,
   Api,
@@ -214,6 +215,9 @@ const ModelsConfigSchema = Type.Object({
 const validateModelsConfig = Compile(ModelsConfigSchema);
 
 type ModelsConfig = Static<typeof ModelsConfigSchema>;
+type PreparedStaticModelsConfig = {
+  providers: Readonly<Record<string, ModelProviderConfig>>;
+};
 type MaxTokensSource = "configured" | "discovered";
 
 function formatValidationPath(error: TLocalizedValidationError): string {
@@ -262,6 +266,7 @@ type ModelRegistryOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   sourceSnapshot?: ModelRegistry;
   workspaceDir?: string;
@@ -325,6 +330,7 @@ export class ModelRegistry {
   private modelsJsonPath: string | undefined;
   private modelsJsonContents: string | null | undefined;
   private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
+  private staticProviderConfigs: Readonly<Record<string, ModelProviderConfig>> | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
   private includePluginCatalogs = true;
   private baseCatalogSnapshot: ModelRegistryCatalogSnapshot | undefined;
@@ -359,6 +365,7 @@ export class ModelRegistry {
     this.modelsJsonPath = modelsJsonPath;
     this.modelsJsonContents = options.modelsJsonContents;
     this.pluginCatalogs = options.pluginCatalogs;
+    this.staticProviderConfigs = options.staticProviderConfigs;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
       ...(options.pluginMetadataSnapshot
         ? { pluginMetadataSnapshot: options.pluginMetadataSnapshot }
@@ -477,7 +484,14 @@ export class ModelRegistry {
       // Plugin catalog failures can return salvaged models; root failures return empty.
     }
 
-    let combined = [...customResult.models, ...capturedPluginResult.models];
+    const staticProviderModels = this.staticProviderConfigs
+      ? this.parseModels({ providers: this.staticProviderConfigs }, "discovered")
+      : [];
+    let combined = [
+      ...customResult.models,
+      ...staticProviderModels,
+      ...capturedPluginResult.models,
+    ];
 
     // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -502,6 +516,7 @@ export class ModelRegistry {
           catalogPluginId: pluginCatalog.pluginId,
           contents: pluginCatalog.contents,
           includePluginCatalogs: false,
+          isProviderAvailable: (providerId) => this.authStorage.hasAuth(providerId),
           requireGeneratedCatalog: true,
         },
       );
@@ -519,6 +534,7 @@ export class ModelRegistry {
       catalogPluginId?: string;
       contents?: string;
       includePluginCatalogs?: boolean;
+      isProviderAvailable?: (providerId: string) => boolean;
       requireGeneratedCatalog?: boolean;
     } = {
       includePluginCatalogs: true,
@@ -554,6 +570,7 @@ export class ModelRegistry {
               parsedCatalog: parsed,
               pluginMetadataSnapshot: this.pluginMetadataSnapshot,
               providers: config.providers,
+              isProviderAvailable: options.isProviderAvailable,
             })
           : config.providers;
       const configForUse = { ...config, providers };
@@ -651,7 +668,10 @@ export class ModelRegistry {
     }
   }
 
-  private parseModels(config: ModelsConfig, maxTokensSource: MaxTokensSource): Model[] {
+  private parseModels(
+    config: ModelsConfig | PreparedStaticModelsConfig,
+    maxTokensSource: MaxTokensSource,
+  ): Model[] {
     const models: Model[] = [];
 
     for (const [providerName, providerConfig] of Object.entries(config.providers)) {
@@ -674,7 +694,7 @@ export class ModelRegistry {
         // Project richer persisted metadata to runtime's text/image contract.
         // Unsupported-only rows are not runnable; explicit empty input stays valid.
         const runtimeInput = (modelDef.input ?? ["text"]).filter(
-          (input): input is "text" | "image" => input === "text" || input === "image",
+          (input: unknown): input is "text" | "image" => input === "text" || input === "image",
         );
         if ((modelDef.input?.length ?? 0) > 0 && runtimeInput.length === 0) {
           continue;

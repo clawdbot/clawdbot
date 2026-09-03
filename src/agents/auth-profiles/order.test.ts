@@ -347,6 +347,19 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual(["fixture-provider:oauth", "fixture-provider:key"]);
   });
 
+  it("does not keep a stale stored order authoritative when no matching profile remains", () => {
+    expect(
+      resolveAuthProfileOrderWithMetadata({
+        store: {
+          version: 1,
+          profiles: {},
+          order: { openai: ["openai:chatgpt-default"] },
+        },
+        provider: "openai",
+      }),
+    ).toStrictEqual({ profileIds: [], hasExplicitOrder: false });
+  });
+
   it.each([
     ["expired first", ["openai:expired", "openai:valid"]],
     ["valid first", ["openai:valid", "openai:expired"]],

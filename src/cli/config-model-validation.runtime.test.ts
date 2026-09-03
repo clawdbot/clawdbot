@@ -145,9 +145,6 @@ describe("config model validation with provider runtime", () => {
       });
       try {
         const prepared = lease.snapshot;
-        expect(prepared.modelCatalog.entries).not.toContainEqual(
-          expect.objectContaining({ provider: "pin-alpha", id: "exact-supported" }),
-        );
         const result = await resolveModelAsync(
           "pin-alpha",
           "exact-supported",
@@ -211,17 +208,22 @@ describe("config model validation with provider runtime", () => {
           errors: [expect.stringContaining(error)],
         });
         expect(imported("pin-unrelated")).toBe(false);
-        await expect(
-          prepareModelRuntimeSnapshot({
-            config,
-            agentId: "main",
-            agentDir: state.agentDir(),
-            workspaceDir: state.workspaceDir,
-            readOnly: true,
-            loadRuntimePlugins: true,
-            runtimePluginSelections: [{ provider: "pin-alpha", modelId, agentId: "main" }],
-          }),
-        ).rejects.toBeInstanceOf(PreparedModelRuntimeOwnerNotPublishedError);
+        const pendingSnapshot = prepareModelRuntimeSnapshot({
+          config,
+          agentId: "main",
+          agentDir: state.agentDir(),
+          workspaceDir: state.workspaceDir,
+          readOnly: true,
+          loadRuntimePlugins: true,
+          runtimePluginSelections: [{ provider: "pin-alpha", modelId, agentId: "main" }],
+        });
+        if (modelId === "resolution-error") {
+          await expect(pendingSnapshot).rejects.toThrow("fixture dynamic resolution failed");
+        } else {
+          await expect(pendingSnapshot).rejects.toBeInstanceOf(
+            PreparedModelRuntimeOwnerNotPublishedError,
+          );
+        }
       });
     },
   );
@@ -274,7 +276,6 @@ describe("config model validation with provider runtime", () => {
           config: blocked,
           touchedPaths: [["agents", "defaults", "model", "primary"]],
         });
-
         expect(result).toEqual({
           refsChecked: 1,
           refsTotal: 1,

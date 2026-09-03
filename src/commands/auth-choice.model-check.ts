@@ -63,7 +63,6 @@ export function resolveDefaultModelAuthStatus(
   const store = ensureAuthProfileStore(options?.agentDir, {
     allowKeychainPrompt: false,
     config,
-    ...(ref.provider === "openai" ? { externalCliProviderIds: ["openai"] } : {}),
     readOnly: true,
   });
   // Pending wizard credentials are transaction-local; include them without

@@ -5,17 +5,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import type { GatewayRequestContext } from "../gateway/server-methods/types.js";
 import { registerGatewayModelCatalogPrivateAccess } from "../gateway/server-model-catalog-auth.js";
-import {
-  loadGatewayModelCatalogSnapshot,
-  loadPreparedGatewayModelCatalogSnapshot,
-} from "../gateway/server-model-catalog.js";
+import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
-import { OPENAI_CODEX_DEFAULT_PROFILE_ID } from "./auth-profiles/constants.js";
-import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
+import { saveAuthProfileStore } from "./auth-profiles/store.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -44,15 +39,12 @@ import {
   DURABLE_AUTH_KEY,
   EXTERNAL_AUTH_PROFILE_ID,
   EXTERNAL_AUTH_PATH_ENV,
-  createJwtWithExp,
-  writeCodexAuth,
   writeFixturePlugin,
 } from "./prepared-model-catalog-worker.test-support.js";
+import * as preparedModelCatalog from "./prepared-model-catalog.js";
 import {
   getPreparedModelFullCatalogAuth,
-  getPreparedModelRuntimeAuthStore,
   loadPreparedModelRuntimeAuth,
-  setPreparedModelRuntimeAuthLoader,
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuildBatch } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
@@ -73,7 +65,6 @@ function createCatalogFixture(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
-    hydrateExternalCliProviderIds?: readonly string[];
     builtPluginVersion?: string;
   },
 ) {
@@ -135,15 +126,6 @@ function createCatalogFixture(
       },
     },
   ]);
-  const hydratedAuthStore = options?.hydrateExternalCliProviderIds
-    ? ensureAuthProfileStore(agentDir, {
-        allowKeychainPrompt: false,
-        config,
-        externalCliProviderIds: options.hydrateExternalCliProviderIds,
-        readOnly: true,
-        syncExternalCli: false,
-      })
-    : undefined;
   replacePersistedPluginModelCatalogs({
     agentDir,
     pluginCatalogWrites: {
@@ -160,14 +142,13 @@ function createCatalogFixture(
       }),
     },
   });
-  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
+  return { agentDir, config, env, marker, externalAuthPath, root, workspaceDir };
 }
 
 async function createStaticSnapshot(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
-    hydrateExternalCliProviderIds?: readonly string[];
     builtPluginVersion?: string;
     prepareInboundPluginRegistry?: boolean;
     readOnly?: boolean;
@@ -220,7 +201,6 @@ async function createStaticSnapshot(
     ],
     new Map(),
     30_000,
-    "static",
     undefined,
     providedMetadataSnapshot,
   ).pending;
@@ -333,7 +313,6 @@ describe("prepared model catalog worker boundary", () => {
       ],
       new Map(),
       30_000,
-      "static",
     );
     let snapshot: Awaited<typeof build.pending>[number]["snapshot"] | undefined;
     let driftedAgentDir: string | undefined;
@@ -345,11 +324,11 @@ describe("prepared model catalog worker boundary", () => {
       );
       const auth = getPreparedModelFullCatalogAuth(modelCatalog)!;
       const candidate = { ...snapshot, ...auth, modelCatalog };
-      const project = () =>
-        loadPreparedGatewayModelCatalogSnapshot({
-          getConfig: () => config,
-          loadPublishedPreparedModelCatalogOwnerSnapshot: async () => candidate,
-        });
+      vi.spyOn(
+        preparedModelCatalog,
+        "loadPublishedPreparedModelCatalogOwnerSnapshot",
+      ).mockImplementation(async () => candidate);
+      const project = () => loadPreparedGatewayModelCatalogSnapshot({ getConfig: () => config });
       const expectedOwner = { agentId: "main", agentDir, workspaceDir, catalogComplete: true };
       await expect(project()).resolves.toMatchObject(expectedOwner);
 
@@ -407,7 +386,6 @@ describe("prepared model catalog worker boundary", () => {
     const buildCounts: number[] = [];
     const options = {
       gatewayLifecycle: true,
-      catalogMode: "static" as const,
       onBuildStats: (stats: { agentCount: number }) => buildCounts.push(stats.agentCount),
     };
     const mainInput = { agentId: "main", agentDir: fixture.agentDir, config: initialConfig };
@@ -424,11 +402,16 @@ describe("prepared model catalog worker boundary", () => {
       authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:A" } } },
     });
 
+    // Publication birthed one discovery run per agent; join the sibling's too, so the held
+    // refresh below is worker run 3 and the only one in flight.
+    await sibling.loadFullModelCatalog!();
     fs.writeFileSync(`${fixture.marker}.hold`, "", "utf8");
     const inFlight = main.loadFullModelCatalog!({ refresh: true });
     void inFlight.catch(() => undefined);
     try {
-      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\n");
+      await expect
+        .poll(() => fs.readFileSync(fixture.marker, "utf8"))
+        .toBe("start\ndone\nstart\ndone\nstart\n");
       const nextConfig = {
         ...initialConfig,
         agents: {
@@ -459,18 +442,21 @@ describe("prepared model catalog worker boundary", () => {
       expect(refreshed).not.toBe(catalog);
       expect(retained.readFullModelCatalog!()).toBe(refreshed);
       expect(refreshed.entries).toContainEqual(
-        expect.objectContaining({ id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true" }),
+        expect.objectContaining({ id: "proof-refresh-3-sqlite-true-shared-true-unrelated-true" }),
       );
       fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
       await expect(loadPreparedModelRuntimeAuth(retained, authScope)).resolves.toMatchObject({
         authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
       });
+      // The scoped reload birthed run 4 for the replaced sibling; join it so the explicit
+      // refresh below is run 5.
+      const replaced = getPreparedModelRuntimeSnapshot({ ...siblingInput, config: nextConfig })!;
+      await replaced.loadFullModelCatalog!();
       await expect(retained.loadFullModelCatalog!({ refresh: true })).resolves.toMatchObject({
         entries: expect.arrayContaining([
-          expect.objectContaining({ id: "proof-refresh-3-sqlite-true-shared-true-unrelated-true" }),
+          expect.objectContaining({ id: "proof-refresh-5-sqlite-true-shared-true-unrelated-true" }),
         ]),
       });
-      const replaced = getPreparedModelRuntimeSnapshot({ ...siblingInput, config: nextConfig })!;
       await expect(loadPreparedModelRuntimeAuth(replaced, authScope)).resolves.toMatchObject({
         authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
       });
@@ -534,10 +520,10 @@ describe("prepared model catalog worker boundary", () => {
     );
     const syntheticAuthProbePath = path.join(fixture.root, "synthetic-auth-probes.txt");
 
-    expect(fixture.snapshot.authModes[HARNESS_ID]).toBe("api_key");
-    expect(fixture.snapshot.authModes[DISCOVERED_HARNESS_ID]).toBeUndefined();
-    expect(fixture.snapshot.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-    expect(fixture.snapshot.authModes[PROVIDER_ID]).toBeUndefined();
+    expect(fixture.snapshot.providerAuth[HARNESS_ID]).toEqual({ mode: "api_key" });
+    expect(fixture.snapshot.providerAuth[DISCOVERED_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.providerAuth[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fixture.snapshot.providerAuth[PROVIDER_ID]).toBeUndefined();
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
     await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
     fs.writeFileSync(syntheticAuthProbePath, "", "utf8");
@@ -550,10 +536,10 @@ describe("prepared model catalog worker boundary", () => {
       DISCOVERED_HARNESS_ID,
       MISSING_AUTH_HARNESS_ID,
     ]);
-    expect(fullAuth?.authModes[HARNESS_ID]).toBe("api_key");
-    expect(fullAuth?.authModes[DISCOVERED_HARNESS_ID]).toBe("api_key");
-    expect(fullAuth?.authModes[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
-    expect(fullAuth?.authModes[PROVIDER_ID]).toBe("oauth");
+    expect(fullAuth?.providerAuth[HARNESS_ID]).toEqual({ mode: "api_key" });
+    expect(fullAuth?.providerAuth[DISCOVERED_HARNESS_ID]).toEqual({ mode: "api_key" });
+    expect(fullAuth?.providerAuth[MISSING_AUTH_HARNESS_ID]).toBeUndefined();
+    expect(fullAuth?.providerAuth[PROVIDER_ID]).toEqual({ mode: "oauth" });
   });
 
   it("refreshes durable auth before provider hooks decide catalog membership", async () => {
@@ -662,14 +648,15 @@ describe("prepared model catalog worker boundary", () => {
       if (!fullAuth) {
         throw new Error("full catalog omitted prepared auth");
       }
-      return await loadPreparedGatewayModelCatalogSnapshot({
-        getConfig: () => config,
-        loadPublishedPreparedModelCatalogOwnerSnapshot: async () => ({
-          ...owner,
-          authModes: fullAuth.authModes,
-          authStore: fullAuth.authStore,
-        }),
-      });
+      vi.spyOn(
+        preparedModelCatalog,
+        "loadPublishedPreparedModelCatalogOwnerSnapshot",
+      ).mockImplementation(async () => ({
+        ...owner,
+        providerAuth: fullAuth.providerAuth,
+        authStore: fullAuth.authStore,
+      }));
+      return await loadPreparedGatewayModelCatalogSnapshot({ getConfig: () => config });
     };
     const projectModels = async () => {
       const projected = await project();
@@ -685,7 +672,10 @@ describe("prepared model catalog worker boundary", () => {
       } as unknown as GatewayRequestContext;
       return {
         projected,
-        result: await buildModelsListResult({ context, params: { view: "all" } }),
+        result: await buildModelsListResult({
+          source: { kind: "gateway", context },
+          params: { view: "all" },
+        }),
       };
     };
     const writeDurableProfile = (key?: string) =>
@@ -709,9 +699,7 @@ describe("prepared model catalog worker boundary", () => {
     const added = await projectModels();
     expect(added).toMatchObject({
       result: {
-        models: expect.arrayContaining([
-          expect.objectContaining({ id: "durable-model", available: true }),
-        ]),
+        models: [expect.objectContaining({ id: "durable-model", available: true })],
       },
       projected: {
         authStore: {
@@ -738,9 +726,11 @@ describe("prepared model catalog worker boundary", () => {
 
     writeDurableProfile();
     const removed = await projectModels();
-    expect(removed.result.models).toContainEqual(
-      expect.objectContaining({ id: "durable-model", available: false }),
-    );
+    expect(removed).toMatchObject({
+      result: {
+        models: [expect.objectContaining({ id: "durable-model", available: false })],
+      },
+    });
     expect(removed.projected.authStore).toBeDefined();
     expect(
       removed.projected.authStore?.profiles[`${DURABLE_AUTH_PROVIDER_ID}:default`],
@@ -795,152 +785,6 @@ describe("prepared model catalog worker boundary", () => {
       providerIds: [PROVIDER_ID],
     });
     expect(loggedOut?.authStore.profiles[EXTERNAL_AUTH_PROFILE_ID]).toBeUndefined();
-  });
-
-  it("makes a post-startup Codex login available to direct models.list", async () => {
-    // A developer's ambient OpenAI key would count as usable openai auth and
-    // mark the route available before the staged Codex login exists.
-    vi.stubEnv("OPENAI_API_KEY", undefined);
-    const codexHome = makeTempDir("openclaw-models-list-codex-");
-    const fixture = await createStaticSnapshot(0, { CODEX_HOME: codexHome });
-    const route = {
-      provider: "openai",
-      id: "gpt-5.4",
-      name: "GPT-5.4",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
-    };
-    const config = {
-      ...fixture.config,
-      agents: {
-        ...fixture.config.agents,
-        list: [
-          {
-            id: "main",
-            default: true,
-            agentDir: fixture.agentDir,
-            workspace: fixture.workspaceDir,
-          },
-        ],
-      },
-      plugins: {
-        ...fixture.config.plugins,
-        entries: {
-          ...fixture.config.plugins?.entries,
-          // This test proves auth-store refresh, not harness discovery. A live
-          // model/list against a developer's real Codex login would mark the
-          // route available before the staged auth.json exists.
-          codex: { config: { discovery: { enabled: false } } },
-        },
-      },
-    } satisfies OpenClawConfig;
-    const owner = Object.freeze({
-      ...fixture.snapshot,
-      config,
-      authStore: getPreparedModelRuntimeAuthStore(fixture.snapshot),
-      modelCatalog: { entries: [route], routeVariants: [route] },
-    });
-    setPreparedModelRuntimeAuthLoader(owner, async (providerIds) => {
-      const refreshed = await loadPreparedModelRuntimeAuth(fixture.snapshot, providerIds);
-      if (!refreshed) {
-        throw new Error("prepared auth refresh was unavailable");
-      }
-      return refreshed;
-    });
-    const listModels = async () => {
-      const loadSnapshot = async (
-        loadParams: Parameters<typeof loadGatewayModelCatalogSnapshot>[0],
-      ) =>
-        await loadGatewayModelCatalogSnapshot({
-          ...loadParams,
-          getConfig: () => config,
-          loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
-        });
-      registerGatewayModelCatalogPrivateAccess(loadSnapshot, {
-        loadDeferred: (loadParams) =>
-          loadPreparedGatewayModelCatalogSnapshot({
-            ...loadParams,
-            getConfig: () => config,
-            loadPublishedPreparedModelCatalogOwnerSnapshot: async () => owner,
-            refreshAuth: true,
-          }),
-        readPrepared: async () => undefined,
-      });
-      const context = {
-        getRuntimeConfig: () => config,
-        loadGatewayModelCatalogSnapshot: loadSnapshot,
-        logGateway: { debug: () => undefined },
-      } as unknown as GatewayRequestContext;
-      return await buildModelsListResult({ context, params: { view: "all", refresh: true } });
-    };
-
-    expect((await listModels()).models).toContainEqual(
-      expect.objectContaining({ id: "gpt-5.4", available: false }),
-    );
-    fs.writeFileSync(
-      path.join(codexHome, "auth.json"),
-      JSON.stringify({
-        auth_mode: "chatgpt",
-        tokens: {
-          access_token: createJwtWithExp(Math.floor(Date.now() / 1000) + 3600),
-          refresh_token: "post-startup-refresh-not-real",
-        },
-      }),
-      "utf8",
-    );
-
-    expect((await listModels()).models).toContainEqual(
-      expect.objectContaining({ id: "gpt-5.4", available: true }),
-    );
-    fs.rmSync(path.join(codexHome, "auth.json"));
-    expect((await listModels()).models).toContainEqual(
-      expect.objectContaining({ id: "gpt-5.4", available: false }),
-    );
-  });
-
-  it("refreshes and removes a Codex login that existed in the prepared generation", async () => {
-    const codexHome = makeTempDir("openclaw-prepared-codex-");
-    writeCodexAuth(codexHome, "startup");
-    const previousCodexHome = process.env.CODEX_HOME;
-    process.env.CODEX_HOME = codexHome;
-    let fixture: Awaited<ReturnType<typeof createStaticSnapshot>>;
-    try {
-      fixture = await createStaticSnapshot(0, {}, { hydrateExternalCliProviderIds: ["openai"] });
-    } finally {
-      if (previousCodexHome === undefined) {
-        delete process.env.CODEX_HOME;
-      } else {
-        process.env.CODEX_HOME = previousCodexHome;
-      }
-    }
-    const preparedStore = getPreparedModelRuntimeAuthStore(fixture.snapshot);
-    expect(fixture.hydratedAuthStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
-      type: "oauth",
-      refresh: "refresh-startup-not-real",
-    });
-    expect(preparedStore?.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
-      type: "oauth",
-      refresh: "refresh-startup-not-real",
-    });
-    expect(preparedStore && getRuntimeExternalCliProfileIds(preparedStore)).toEqual([
-      OPENAI_CODEX_DEFAULT_PROFILE_ID,
-    ]);
-
-    writeCodexAuth(codexHome, "rotated");
-    const rotated = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
-      providerIds: [],
-      profileIds: [OPENAI_CODEX_DEFAULT_PROFILE_ID],
-    });
-    expect(rotated?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toMatchObject({
-      type: "oauth",
-      refresh: "refresh-rotated-not-real",
-    });
-
-    fs.rmSync(path.join(codexHome, "auth.json"));
-    const loggedOut = await loadPreparedModelRuntimeAuth(fixture.snapshot, {
-      providerIds: ["openai"],
-    });
-    expect(loggedOut?.authStore.profiles[OPENAI_CODEX_DEFAULT_PROFILE_ID]).toBeUndefined();
   });
 
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
@@ -1033,6 +877,7 @@ describe("prepared model catalog worker boundary", () => {
         env: fixture.env,
         authStore,
         credentials: {},
+        providerAuth: {},
         providerIds: [PROVIDER_ID],
         configuredModelRefs: [],
         configuredRuntimeModels: [],

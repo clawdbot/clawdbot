@@ -391,7 +391,8 @@ describe("xAI OAuth", () => {
       title: "xAI OAuth",
       code: "ABCD-1234",
       expiresInMinutes: 15,
-      message: "Enter this one-time code on the xAI sign-in page.",
+      message:
+        "Open this URL in your LOCAL browser and enter the code below.\nURL: https://accounts.x.ai/oauth2/device?user_code=ABCD-1234",
     });
     expect(openUrl.mock.invocationCallOrder[0]).toBeLessThan(
       deviceCode.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
@@ -426,11 +427,11 @@ describe("xAI OAuth", () => {
       accountId: "acct-1",
       access: expect.any(String),
     });
-    expect(result.defaultModel).toBe("xai/auto");
+    expect(result.defaultModel).toBe("xai/grok-4.6");
     expect(result.configPatch?.agents?.defaults?.model).toEqual({
-      primary: "xai/auto",
+      primary: "xai/grok-4.6",
     });
-    expect(result.configPatch?.agents?.defaults?.models?.["xai/auto"]?.alias).toBe("Grok");
+    expect(result.configPatch?.agents?.defaults?.models?.["xai/grok-4.6"]?.alias).toBe("Grok");
     expect(progress.update).toHaveBeenCalledWith("Waiting for xAI device authorization...");
     expect(progress.stop).toHaveBeenCalledWith("xAI OAuth complete");
   });

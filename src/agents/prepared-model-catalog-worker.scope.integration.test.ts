@@ -95,7 +95,6 @@ describe("prepared model catalog worker plugin scope", () => {
         ],
         new Map(),
         30_000,
-        "static",
       ).pending
     )[0];
     if (!prepared) {
@@ -115,11 +114,9 @@ describe("prepared model catalog worker plugin scope", () => {
         agentDir,
         workspaceDir,
         config,
-        observationConfig: prepared.snapshot.observationConfig,
-        isCurrent: prepared.snapshot.isCurrent,
-        pluginRegistry: prepared.snapshot.pluginRegistry,
         catalogComplete: full,
-        authModes: prepared.snapshot.authModes,
+        providerAuth: prepared.snapshot.providerAuth,
+        oauthRefreshProviderIds: prepared.snapshot.oauthRefreshProviderIds,
         authStore,
         metadataSnapshot: prepared.snapshot.metadataSnapshot,
         authMaterializations: [],
@@ -128,13 +125,11 @@ describe("prepared model catalog worker plugin scope", () => {
     const loadGatewayModelCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] =
       async (params) => {
         const {
-          authModes: _authModes,
+          providerAuth: _providerAuth,
+          oauthRefreshProviderIds: _oauthRefreshProviderIds,
           authStore: _authStore,
           metadataSnapshot: _metadataSnapshot,
           authMaterializations: _authMaterializations,
-          observationConfig: _observationConfig,
-          isCurrent: _isCurrent,
-          pluginRegistry: _pluginRegistry,
           ...snapshot
         } = await projectSnapshot(params?.readOnly === false);
         return snapshot;

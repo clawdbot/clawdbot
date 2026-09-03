@@ -1,9 +1,12 @@
 /** Discovers agent runtime credentials from auth profiles, env, and synthetic providers. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ProviderSyntheticAuthResult } from "../plugins/provider-external-auth.types.js";
 import { resolveProviderSyntheticAuthWithPlugin } from "../plugins/provider-runtime.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import {
   resolveAgentCredentialMapFromStore,
+  resolveProviderAuthFacts,
   type AgentCredentialMap,
 } from "./agent-auth-credentials.js";
 import {
@@ -17,10 +20,11 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
 } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { resolveCanonicalProviderAuthId } from "./provider-auth-aliases.js";
 
 /** Options for discovering credentials without prompting for secret material. */
 export type DiscoverAuthStorageOptions = {
-  ambientCredentials?: Readonly<AgentCredentialMap>;
+  ambientCredentials?: AgentDiscoveryAuthFacts;
   externalCli?: ExternalCliAuthDiscovery;
   inheritedAuthDir?: string;
   preparedStore?: AuthProfileStore;
@@ -32,15 +36,25 @@ export type DiscoverAuthStorageOptions = {
 
 type AmbientAgentCredentialOptions = AgentDiscoveryAuthLookupOptions & {
   authoritativeSyntheticAuthProviderRefs?: Iterable<string>;
-  resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined;
+  canonicalProvider?: (provider: string) => string;
+  nativeRuntime?: (provider: string) => string | undefined;
+  resolveSyntheticAuth?: (provider: string) => ProviderSyntheticAuthResult | null | undefined;
   syntheticAuthProviderRefs?: Iterable<string>;
+};
+
+type AgentDiscoveryAuthFacts = {
+  credentials: AgentCredentialMap;
+  providerAuth: PreparedProviderAuth;
 };
 
 /** Resolves workspace/config/env-stable credentials independently of agent-local profiles. */
 export function resolveAmbientAgentCredentialsForDiscovery(
   options: AmbientAgentCredentialOptions = {},
-): AgentCredentialMap {
+): AgentDiscoveryAuthFacts {
   const credentials = addEnvBackedAgentCredentials({}, options);
+  const providerAuth: Record<string, PreparedProviderAuth[string]> = {
+    ...resolveProviderAuthFacts(credentials),
+  };
   const syntheticAuthProviderRefs =
     options.syntheticAuthProviderRefs ?? resolveRuntimeSyntheticAuthProviderRefs();
   const authoritativeSyntheticAuthProviderRefs = new Set(
@@ -86,23 +100,37 @@ export function resolveAmbientAgentCredentialsForDiscovery(
       continue;
     }
     const resolved = resolveSyntheticAuth(provider);
-    const apiKey = resolved?.apiKey?.trim();
+    if (!resolved) {
+      continue;
+    }
+    const apiKey = resolved.apiKey.trim();
     if (!apiKey) {
       continue;
     }
-    credentials[normalizedProvider || provider] = {
+    const canonicalProvider =
+      options.canonicalProvider?.(provider) ?? resolveCanonicalProviderAuthId(provider);
+    const runtime = resolved.runtime ?? options.nativeRuntime?.(provider);
+    credentials[canonicalProvider] = {
       type: "api_key",
       key: apiKey,
     };
+    providerAuth[canonicalProvider] = {
+      mode: resolved.mode === "api-key" ? "api_key" : resolved.mode,
+      ...(runtime ? { runtime } : {}),
+    };
   }
-  return credentials;
+  return { credentials, providerAuth: Object.freeze(providerAuth) };
 }
 
 /** Resolves the effective auth store and provider credentials for one discovery generation. */
 export function resolveAgentDiscoveryAuthFacts(
   agentDir: string,
   options?: DiscoverAuthStorageOptions,
-): { store: AuthProfileStore; credentials: AgentCredentialMap } {
+): {
+  store: AuthProfileStore;
+  credentials: AgentCredentialMap;
+  providerAuth: PreparedProviderAuth;
+} {
   const storeOptions = {
     allowKeychainPrompt: false,
     ...(options?.config ? { config: options.config } : {}),
@@ -121,11 +149,12 @@ export function resolveAgentDiscoveryAuthFacts(
           ...storeOptions,
           ...(options?.readOnly === true ? { readOnly: true } : {}),
         });
-  const credentials = resolveAgentCredentialMapFromStore(store, {
+  const storedCredentials = resolveAgentCredentialMapFromStore(store, {
     includeSecretRefPlaceholders: options?.readOnly === true,
     config: options?.config,
   });
-  const ambientCredentials =
+  const credentials = { ...storedCredentials };
+  const ambientAuth =
     options?.ambientCredentials ??
     resolveAmbientAgentCredentialsForDiscovery({
       config: options?.config,
@@ -133,12 +162,21 @@ export function resolveAgentDiscoveryAuthFacts(
       env: options?.env,
       syntheticAuthProviderRefs: options?.syntheticAuthProviderRefs,
     });
-  for (const [provider, credential] of Object.entries(ambientCredentials)) {
+  for (const [provider, credential] of Object.entries(ambientAuth.credentials)) {
     if (credentials[provider]) {
       continue;
     }
     // Ambient auth is a lifecycle-owned fallback. Agent-local profiles remain authoritative.
     credentials[provider] = credential;
   }
-  return { store, credentials };
+  const providerAuth: Record<string, PreparedProviderAuth[string]> = {
+    ...resolveProviderAuthFacts(credentials),
+  };
+  const storedProviders = new Set(Object.keys(storedCredentials));
+  for (const [provider, auth] of Object.entries(ambientAuth.providerAuth)) {
+    if (!storedProviders.has(provider)) {
+      providerAuth[provider] = auth;
+    }
+  }
+  return { store, credentials, providerAuth: Object.freeze(providerAuth) };
 }

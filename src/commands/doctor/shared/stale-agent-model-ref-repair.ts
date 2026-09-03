@@ -8,8 +8,10 @@ import {
   resolveAgentWorkspaceDir,
   tryResolveDefaultAgentId,
 } from "../../../agents/agent-scope.js";
+import { listCliRuntimeProviderIds } from "../../../agents/cli-backends.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../../agents/defaults.js";
 import { normalizeProviderId } from "../../../agents/model-selection.js";
+import { retireGeneratedModelsJsonProviders } from "../../../agents/models-config.js";
 import type { AgentModelConfig } from "../../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolvePluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
@@ -27,10 +29,6 @@ type StaleAgentModelRefRepair = {
 type RepairOptions = {
   env?: NodeJS.ProcessEnv;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
-  /** Test seam for the provider ids supplied by bundled or installed plugins. */
-  pluginProviderIds?: ReadonlySet<string>;
-  /** Test seam for provider ids already present in each agent's models.json. */
-  persistedProviderIdsByAgentId?: ReadonlyMap<string, ReadonlySet<string>>;
 };
 
 const DEFAULT_MODEL_REF = `${DEFAULT_PROVIDER}/${DEFAULT_MODEL}`;
@@ -49,40 +47,35 @@ function collectPluginProviderIds(
   cfg: OpenClawConfig,
   options: RepairOptions,
 ): { providerIds?: Set<string>; warnings: string[] } {
-  let providerIds: Set<string>;
-  if (options.pluginProviderIds) {
-    providerIds = new Set([...options.pluginProviderIds].map(normalizeProviderId).filter(Boolean));
-  } else {
-    const defaultAgentId = tryResolveDefaultAgentId(cfg);
-    const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
-    const snapshot =
-      options.pluginMetadataSnapshot ??
-      resolvePluginMetadataSnapshot({
-        config: cfg,
-        workspaceDir: workspaceDir ?? undefined,
-        env: options.env ?? process.env,
-        allowWorkspaceScopedCurrent: true,
-      });
-    if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
-      return {
-        warnings: [
-          "Skipped stale agent model reference repair because plugin discovery reported errors.",
-        ],
-      };
-    }
+  const providerIds = new Set<string>();
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
+  const workspaceDir = defaultAgentId ? resolveAgentWorkspaceDir(cfg, defaultAgentId) : undefined;
+  const snapshot =
+    options.pluginMetadataSnapshot ??
+    resolvePluginMetadataSnapshot({
+      config: cfg,
+      workspaceDir: workspaceDir ?? undefined,
+      env: options.env ?? process.env,
+      allowWorkspaceScopedCurrent: true,
+    });
+  if (snapshot.diagnostics.some((diagnostic) => diagnostic.level === "error")) {
+    return {
+      warnings: [
+        "Skipped stale agent model reference repair because plugin discovery reported errors.",
+      ],
+    };
+  }
 
-    providerIds = new Set<string>();
-    for (const owners of [
-      snapshot.owners.providers,
-      snapshot.owners.modelCatalogProviders,
-      snapshot.owners.setupProviders,
-      snapshot.owners.cliBackends,
-    ]) {
-      for (const providerId of owners.keys()) {
-        const normalized = normalizeProviderId(providerId);
-        if (normalized) {
-          providerIds.add(normalized);
-        }
+  for (const owners of [
+    snapshot.owners.providers,
+    snapshot.owners.modelCatalogProviders,
+    snapshot.owners.setupProviders,
+    snapshot.owners.cliBackends,
+  ]) {
+    for (const providerId of owners.keys()) {
+      const normalized = normalizeProviderId(providerId);
+      if (normalized) {
+        providerIds.add(normalized);
       }
     }
   }
@@ -106,22 +99,17 @@ function collectPluginProviderIds(
   return { providerIds, warnings: [] };
 }
 
+/**
+ * Reads one agent's generated models.json, retiring provider aliases that a CLI
+ * runtime now owns, and reports the providers it still persists.
+ */
 function collectPersistedProviderIds(params: {
   cfg: OpenClawConfig;
   agentId: string;
   env: NodeJS.ProcessEnv;
-  injected?: ReadonlyMap<string, ReadonlySet<string>>;
+  retiredProviderIds: ReadonlySet<string>;
+  changes: string[];
 }): { providerIds?: Set<string>; warning?: string } {
-  const injected = params.injected?.get(params.agentId);
-  if (injected) {
-    return {
-      providerIds: new Set([...injected].map(normalizeProviderId).filter(Boolean)),
-    };
-  }
-  if (params.injected) {
-    return { providerIds: new Set() };
-  }
-
   const modelsPath = path.join(
     resolveAgentDir(params.cfg, params.agentId, params.env),
     "models.json",
@@ -139,15 +127,25 @@ function collectPersistedProviderIds(params: {
   }
   try {
     const parsed = JSON.parse(raw) as { providers?: unknown };
-    if (
-      !parsed.providers ||
-      typeof parsed.providers !== "object" ||
-      Array.isArray(parsed.providers)
-    ) {
+    if (!isRecord(parsed.providers)) {
       return { providerIds: new Set() };
     }
+    let providers = parsed.providers;
+    const retained = retireGeneratedModelsJsonProviders(providers, {
+      configuredProviderIds: new Set(Object.keys(params.cfg.models?.providers ?? {})),
+      retiredProviderIds: params.retiredProviderIds,
+    });
+    if (Object.keys(retained).length !== Object.keys(providers).length) {
+      fs.writeFileSync(
+        modelsPath,
+        `${JSON.stringify({ ...parsed, providers: retained }, null, 2)}\n`,
+      );
+      fs.chmodSync(modelsPath, 0o600);
+      params.changes.push(`Removed stale generated model providers from ${modelsPath}.`);
+      providers = retained;
+    }
     return {
-      providerIds: new Set(Object.keys(parsed.providers).map(normalizeProviderId).filter(Boolean)),
+      providerIds: new Set(Object.keys(providers).map(normalizeProviderId).filter(Boolean)),
     };
   } catch {
     return {
@@ -277,12 +275,16 @@ export function repairStaleAgentModelRefs(
   const changes: string[] = [];
   const warnings = [...pluginProviders.warnings];
   const env = options.env ?? process.env;
+  const retiredProviderIds = new Set(
+    listCliRuntimeProviderIds({ config: cfg, env, includeSetupRegistry: true }),
+  );
   const persistedForAgent = (agentId: string): Set<string> | undefined => {
     const persisted = collectPersistedProviderIds({
       cfg,
       agentId,
       env,
-      injected: options.persistedProviderIdsByAgentId,
+      retiredProviderIds,
+      changes,
     });
     if (!persisted.providerIds) {
       if (persisted.warning) {

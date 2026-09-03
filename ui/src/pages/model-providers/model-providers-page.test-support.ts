@@ -1,10 +1,11 @@
 import { vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import type { DefaultModelSelection, ModelProviderLogoutTarget } from "./data.ts";
-import { EMPTY_MODEL_PROVIDERS_DATA, type ModelProvidersData } from "./load.ts";
-import type { ModelBehaviorConfig } from "./model-behavior.ts";
+import type { ModelProvidersData } from "./load.ts";
+import type { ModelBehaviorConfig } from "./page-mutations.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import "./model-providers-page.ts";
 
@@ -13,19 +14,17 @@ export type ModelProvidersPageTestElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   busy: Record<string, boolean>;
   data: ModelProvidersData | null;
-  addProvider: () => Promise<void>;
-  addProviderId: string;
-  addProviderKey: string;
-  addProviderOpen: boolean;
   defaultsDraft: (DefaultModelSelection & Partial<ModelBehaviorConfig>) | null;
-  keyDraft: string;
-  keyEditorProvider: string | null;
+  keyEditor: { provider: string; draft: string } | null;
   logout: (cardId: string, targets: ModelProviderLogoutTarget[]) => Promise<void>;
   messages: Record<string, { kind: "success" | "error"; text: string; warning?: string }>;
   pendingLogoutProvider: string | null;
+  providerLogin: {
+    start: (cardId: string, option: { id: string; label: string; mode: "login" }) => void;
+  };
   probe: (cardId: string, providers: string[]) => Promise<void>;
   probeResults: Record<string, ModelsProbeResult>;
-  refresh: (opts: { force: boolean }) => Promise<void>;
+  refresh: (mode: "discover" | "prepared" | "revalidate") => Promise<void>;
   routeData: ModelProvidersRouteData | undefined;
   requestUpdate: () => void;
   saveDefaults: () => Promise<void>;
@@ -56,7 +55,7 @@ export function createHarness(initialScopeId: string) {
   };
   let usageStatus: unknown = { updatedAt: 1, providers: [] };
   let usageStatusRejects = false;
-  const request = vi.fn(async (method: string): Promise<unknown> => {
+  const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
     switch (method) {
       case "models.authStatus": {
         if (pendingAuthStatus) {
@@ -67,9 +66,7 @@ export function createHarness(initialScopeId: string) {
         return {
           ts: 1,
           providers: [],
-          providerCapabilities: [
-            { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-          ],
+          providerCapabilities: [{ provider: "anthropic", apiKeySupported: true }],
         };
       }
       case "models.list":
@@ -87,8 +84,9 @@ export function createHarness(initialScopeId: string) {
         return {};
     }
   });
+  const client = { request } as unknown as GatewayBrowserClient;
   const snapshot: ApplicationGatewaySnapshot = {
-    client: { request } as unknown as GatewayBrowserClient,
+    client,
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
@@ -140,6 +138,11 @@ export function createHarness(initialScopeId: string) {
     save: vi.fn(async () => true),
     apply: vi.fn(async () => true),
     discardDraft: vi.fn(async () => undefined),
+    runExternalMutation: vi.fn(async <T>(task: (client: GatewayBrowserClient) => Promise<T>) => ({
+      ok: true as const,
+      value: await task(client),
+      refresh: { ok: true as const },
+    })),
     subscribe,
   };
   const context = {
@@ -182,6 +185,7 @@ export function createHarness(initialScopeId: string) {
       snapshot.phase = phase;
       gatewaySource.publish({ ...snapshot });
     },
+    emitEvent: (event: string, payload?: unknown) => gatewaySource.emitEvent(event, payload),
     setUsageStatus: (value: unknown) => {
       usageStatus = value;
     },
@@ -194,6 +198,7 @@ export function createHarness(initialScopeId: string) {
 export function publishableGateway(initial: ApplicationGatewaySnapshot) {
   let current = initial;
   const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   return {
     gateway: {
       get snapshot() {
@@ -203,11 +208,21 @@ export function publishableGateway(initial: ApplicationGatewaySnapshot) {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      subscribeEvents(listener: (event: GatewayEventFrame) => void) {
+        eventListeners.add(listener);
+        return () => eventListeners.delete(listener);
+      },
     },
     publish(next: ApplicationGatewaySnapshot) {
       current = next;
       for (const listener of listeners) {
         listener(next);
+      }
+    },
+    emitEvent(event: string, payload: unknown = {}) {
+      const frame = { event, payload } as GatewayEventFrame;
+      for (const listener of eventListeners) {
+        listener(frame);
       }
     },
   };
@@ -228,25 +243,13 @@ export function focusDocument(): void {
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
 }
 
-export function createEmptyModelProvidersRouteData(
-  context: ApplicationContext,
-): ModelProvidersRouteData {
-  // A loader completed before connection; the connected page now owns recovery.
-  return {
-    gateway: context.gateway,
-    gatewaySnapshot: { ...context.gateway.snapshot, phase: "stopped", client: null },
-    data: EMPTY_MODEL_PROVIDERS_DATA,
-    client: null,
-    agentId: context.agentSelection.state.selectedId,
-  };
-}
-
 export function appendPage(context: ApplicationContext) {
+  const provider = createApplicationContextProvider(context);
   const page = document.createElement(
     "openclaw-model-providers-page",
   ) as ModelProvidersPageTestElement;
   page.context = context;
-  page.routeData = createEmptyModelProvidersRouteData(context);
-  document.body.append(page);
+  provider.append(page);
+  document.body.append(provider);
   return page;
 }

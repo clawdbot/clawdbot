@@ -301,25 +301,22 @@ module.exports = {
           const lease =
             mode === "acquired"
               ? undefined
-              : await acquireAgentRunPreparedModelRuntime(
-                  {
-                    ...input,
-                    readOnly: mode === "empty",
-                    loadRuntimePlugins: mode === "borrowed",
-                    ...(mode === "borrowed"
-                      ? {
-                          runtimePluginSelections: [
-                            {
-                              provider: selected.providerId,
-                              modelId: "selected-model",
-                              agentId: "main",
-                            },
-                          ],
-                        }
-                      : {}),
-                  },
-                  { catalogMode: "static" },
-                );
+              : await acquireAgentRunPreparedModelRuntime({
+                  ...input,
+                  readOnly: mode === "empty",
+                  loadRuntimePlugins: mode === "borrowed",
+                  ...(mode === "borrowed"
+                    ? {
+                        runtimePluginSelections: [
+                          {
+                            provider: selected.providerId,
+                            modelId: "selected-model",
+                            agentId: "main",
+                          },
+                        ],
+                      }
+                    : {}),
+                });
           try {
             if (mode === "empty") {
               expect(lease?.snapshot.pluginRegistry).toBeUndefined();

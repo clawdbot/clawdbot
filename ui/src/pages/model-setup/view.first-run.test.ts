@@ -40,6 +40,7 @@ function mount(overrides: Partial<ModelSetupViewProps> = {}): HTMLDivElement {
     manualError: null,
     moreSignInOpen: false,
     firstRun: true,
+    embedded: false,
     iconUrls: {},
     onDetect: noop,
     onVerify: noop,

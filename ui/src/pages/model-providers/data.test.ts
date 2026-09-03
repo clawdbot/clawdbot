@@ -5,9 +5,10 @@ import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.t
 import {
   buildModelProviderCards,
   buildSelectableDefaultModels,
-  buildUnconfiguredProviderOptions,
+  classifyModelProviderCard,
   modelCatalogRef,
   readModelProviderConfig,
+  type ModelProviderCard,
 } from "./data.ts";
 
 function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string }) {
@@ -28,6 +29,23 @@ function authStatus(
 
 function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
   return expectDefined(cards[0], "first model provider card");
+}
+
+function providerCard(overrides: Partial<ModelProviderCard> = {}): ModelProviderCard {
+  return {
+    id: "test",
+    displayName: "Test",
+    profiles: [],
+    credentialProviderIds: [],
+    logoutTargets: [],
+    accessOptions: [],
+    hasConfigApiKey: false,
+    modelCount: 0,
+    availableModelCount: 0,
+    runtimeAvailableModelCount: 0,
+    runtimeLabels: [],
+    ...overrides,
+  };
 }
 
 function providerConfig(value: string): { apiKey: string } {
@@ -138,25 +156,42 @@ describe("buildModelProviderCards", () => {
     },
   );
 
-  it("keeps catalog providers, including ones whose models are all unavailable", () => {
+  it("uses catalog models to decorate configured providers without promoting catalog-only rows", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
+      configProviderIds: ["anthropic", "mistral"],
       models: [
-        catalogEntry({ provider: "anthropic", id: "anthropic/a", available: true }),
+        catalogEntry({
+          provider: "anthropic",
+          id: "anthropic/a",
+          available: true,
+          agentRuntime: { id: "claude-cli", source: "model" },
+        }),
         catalogEntry({ provider: "anthropic", id: "anthropic/b" }),
         catalogEntry({ provider: "mistral", id: "mistral/large" }),
       ],
     });
     expect(cards.map((card) => card.id)).toEqual(["anthropic", "mistral"]);
-    expect(cards[0]).toMatchObject({ modelCount: 2, availableModelCount: 1 });
-    // A configured API-key provider with a broken credential still shows up
-    // so the page can report its unavailable state.
+    expect(cards[0]).toMatchObject({
+      modelCount: 2,
+      availableModelCount: 1,
+      runtimeAvailableModelCount: 1,
+      runtimeLabels: ["Claude CLI"],
+    });
     expect(cards[1]).toMatchObject({ modelCount: 1, availableModelCount: 0 });
+
+    expect(
+      buildModelProviderCards({
+        ...EMPTY_INPUT,
+        models: [catalogEntry({ provider: "openrouter", available: true })],
+      }),
+    ).toEqual([]);
   });
 
-  it("keeps provider-owned catalog failures when no model rows are usable", () => {
+  it("keeps provider-owned catalog failures on configured cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
+      configProviderIds: ["openai"],
       providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
     });
 
@@ -172,32 +207,75 @@ describe("buildModelProviderCards", () => {
   it("propagates explicit API-key capability onto provider cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
+      configProviderIds: ["github-copilot"],
       models: [catalogEntry({ provider: "github-copilot", available: true })],
-      authStatus: authStatus(
-        [],
-        [{ provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false }],
-      ),
+      authStatus: authStatus([], [{ provider: "github-copilot", apiKeySupported: false }]),
     });
     expect(firstCard(cards).apiKeySupported).toBe(false);
+  });
+
+  it("keeps capability-only providers in Connect and decorates configured cards", () => {
+    const capability = {
+      provider: "xai",
+      apiKeySupported: true,
+      accessOptions: [{ id: "xai-oauth", label: "xAI OAuth", mode: "login" as const }],
+    };
+    expect(
+      buildModelProviderCards({
+        ...EMPTY_INPUT,
+        authStatus: authStatus([], [capability]),
+      }),
+    ).toEqual([]);
+
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus(
+        [
+          {
+            provider: "xai",
+            displayName: "xAI",
+            status: "ok",
+            profiles: [{ profileId: "xai:default", type: "oauth", status: "ok" }],
+          },
+        ],
+        [capability],
+      ),
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "xai",
+      apiKeySupported: true,
+      accessOptions: capability.accessOptions,
+    });
   });
 
   it("merges CLI alias auth rows into the canonical provider card", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
       models: [catalogEntry({ provider: "anthropic", available: true })],
-      authStatus: authStatus([
-        {
-          provider: "claude-cli",
-          displayName: "Claude",
-          status: "ok",
-          profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
-          usage: {
-            providerId: "anthropic",
-            windows: [{ label: "5h", usedPercent: 40 }],
-            plan: "Max",
+      authStatus: authStatus(
+        [
+          {
+            provider: "claude-cli",
+            displayName: "Claude",
+            status: "ok",
+            profiles: [{ profileId: "p1", type: "oauth", status: "ok" }],
+            usage: {
+              providerId: "anthropic",
+              windows: [{ label: "5h", usedPercent: 40 }],
+              plan: "Max",
+            },
           },
-        },
-      ]),
+        ],
+        [
+          {
+            provider: "anthropic",
+            apiKeySupported: true,
+            accessOptions: [{ id: "apiKey", label: "Anthropic API key", mode: "login" }],
+          },
+        ],
+      ),
     });
     expect(cards).toHaveLength(1);
     expect(firstCard(cards)).toMatchObject({
@@ -205,6 +283,7 @@ describe("buildModelProviderCards", () => {
       credentialProviderIds: ["claude-cli"],
       displayName: "Claude",
       auth: { kind: "ok", profileCount: 1 },
+      accessOptions: [{ id: "apiKey", label: "Anthropic API key", mode: "login" }],
     });
     expect(firstCard(cards).usage).toMatchObject({
       provider: "anthropic",
@@ -394,18 +473,128 @@ describe("buildModelProviderCards", () => {
       totalCost: 0.42,
       totalTokens: 150,
       sessionCount: 3,
+      missingCostEntries: 0,
     });
   });
 
-  it("sorts cards by display name", () => {
+  it("sorts providers with active access first, then by display name", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
-      models: [
-        catalogEntry({ provider: "openai", id: "openai/gpt", available: true }),
-        catalogEntry({ provider: "anthropic", id: "anthropic/claude", available: true }),
-      ],
+      authStatus: authStatus(
+        [
+          {
+            provider: "xai",
+            displayName: "xAI",
+            status: "ok",
+            profiles: [{ profileId: "xai:falcon", type: "oauth", status: "ok" }],
+          },
+          {
+            provider: "openai",
+            displayName: "OpenAI",
+            status: "expiring",
+            profiles: [{ profileId: "openai:falcon", type: "token", status: "expiring" }],
+          },
+          {
+            provider: "deepseek",
+            displayName: "DeepSeek",
+            status: "static",
+            profiles: [],
+            apiKey: { source: "env", envVar: "DEEPSEEK_API_KEY" },
+          },
+          {
+            provider: "mistral",
+            displayName: "Mistral",
+            status: "expired",
+            profiles: [{ profileId: "mistral:old", type: "token", status: "expired" }],
+          },
+          { provider: "cohere", displayName: "Cohere", status: "missing", profiles: [] },
+        ],
+        [
+          {
+            provider: "deepseek",
+            apiKeySupported: true,
+            quickApiKeySetup: false,
+          },
+          {
+            provider: "github-copilot",
+            apiKeySupported: false,
+            accessOptions: [{ id: "copilot", label: "GitHub Copilot", mode: "login" }],
+          },
+        ],
+      ),
     });
-    expect(cards.map((card) => card.id)).toEqual(["anthropic", "openai"]);
+    expect(cards.map((card) => card.id)).toEqual([
+      "deepseek",
+      "openai",
+      "xai",
+      "cohere",
+      "mistral",
+    ]);
+  });
+
+  it.each([
+    [
+      "healthy stored access",
+      providerCard({
+        auth: { kind: "ok", profileCount: 1 },
+        profiles: [{ profileId: "test:oauth", type: "oauth", status: "ok" }],
+      }),
+      { status: "configured", sortTier: "active", verified: false, configured: true },
+    ],
+    [
+      "catalog rejection over expiring access",
+      providerCard({ auth: { kind: "expiring", profileCount: 1 }, catalogStatus: "auth-rejected" }),
+      { status: "denied", sortTier: "inactive", verified: false, configured: false },
+    ],
+    [
+      "renewing static access",
+      providerCard({ auth: { kind: "expiring", profileCount: 1 } }),
+      { status: "auth", sortTier: "active", verified: false, configured: false },
+    ],
+    [
+      "expired access despite a stale runtime model",
+      providerCard({ auth: { kind: "expired", profileCount: 1 }, runtimeAvailableModelCount: 1 }),
+      { status: "auth", sortTier: "inactive", verified: false, configured: false },
+    ],
+    [
+      "verified native runtime",
+      providerCard({ runtimeAvailableModelCount: 1, availableModelCount: 1 }),
+      { status: "ready", sortTier: "active", verified: true, configured: false },
+    ],
+    [
+      "verified runtime without a visible model",
+      providerCard({ runtimeAvailableModelCount: 1 }),
+      { status: "available", sortTier: "active", verified: true, configured: false },
+    ],
+    [
+      "temporary provider failure with valid access",
+      providerCard({ auth: { kind: "api-key", profileCount: 0 }, catalogStatus: "unavailable" }),
+      { status: "unavailable", sortTier: "active", verified: false, configured: false },
+    ],
+    [
+      "unresolved API-key reference",
+      providerCard({
+        auth: {
+          kind: "missing",
+          profileCount: 1,
+          unavailableMessage: "API key reference not found: env OPENAI_API_KEY",
+        },
+      }),
+      {
+        status: "unavailable",
+        sortTier: "inactive",
+        verified: false,
+        configured: false,
+        message: "API key reference not found: env OPENAI_API_KEY",
+      },
+    ],
+    [
+      "unconfigured provider",
+      providerCard(),
+      { status: "not-set-up", sortTier: "inactive", verified: false, configured: false },
+    ],
+  ] as const)("classifies %s once for status and ordering", (_name, card, expected) => {
+    expect(classifyModelProviderCard(card)).toEqual(expected);
   });
 
   it("keeps API key provenance and config-only providers", () => {
@@ -424,8 +613,8 @@ describe("buildModelProviderCards", () => {
         },
       ]),
     });
-    expect(cards.map((card) => card.id)).toEqual(["mistral", "openai"]);
-    expect(cards[1]).toMatchObject({
+    expect(cards.map((card) => card.id)).toEqual(["openai", "mistral"]);
+    expect(firstCard(cards)).toMatchObject({
       apiKey: { source: "env", envVar: "OPENAI_API_KEY" },
       configKey: "OpenAI",
       configAuthMode: "api-key",
@@ -516,17 +705,5 @@ describe("model provider configuration data", () => {
         models: { providers: { OpenAI: { auth: "oauth" } } },
       }).providerAuthModes,
     ).toEqual({ OpenAI: "oauth" });
-  });
-
-  it("lists known providers that are not configured", () => {
-    const options = buildUnconfiguredProviderOptions(
-      [
-        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
-      ],
-      ["openai"],
-    );
-    expect(options).toEqual([{ id: "anthropic", displayName: "Anthropic" }]);
   });
 });

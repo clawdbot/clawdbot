@@ -1,10 +1,11 @@
 import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { resolveConfiguredEntries } from "./list.configured.js";
+import { createModelCatalogProviderAliasCanonicalizer } from "./provider-aliases.js";
 
 type ModelReferenceInspection = {
   ref: string;
@@ -78,7 +79,15 @@ export function inspectConfiguredModelReferences(
   const { inspect, snapshot } = createModelReferenceInspector(params);
   // `inspect` returns a fresh object per call, so tagging it in place avoids a
   // per-entry spread copy without sharing state between entries.
-  return resolveConfiguredEntries(params.cfg, snapshot).entries.map((entry) =>
+  const canonicalizer = createModelCatalogProviderAliasCanonicalizer({
+    cfg: params.cfg,
+    metadataSnapshot: snapshot,
+  });
+  return resolveConfiguredModelEntries({
+    cfg: params.cfg,
+    allowPluginNormalization: false,
+    canonicalizeRef: canonicalizer.ref,
+  }).entries.map((entry) =>
     Object.assign(inspect(entry.ref), {
       active: [...entry.tags].some((tag) => tag !== "configured"),
     }),

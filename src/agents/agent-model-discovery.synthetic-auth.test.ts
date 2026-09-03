@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resolveManifestNativeHarness } from "./prepared-model-runtime.synthetic-auth.js";
 
 const resolveRuntimeSyntheticAuthProviderRefs = vi.hoisted(() => vi.fn(() => ["claude-cli"]));
 
@@ -82,10 +84,38 @@ describe("agent model discovery synthetic auth", () => {
           providerConfig: undefined,
         },
       });
-      expect(credentials["claude-cli"]).toEqual({
+      expect(credentials.anthropic).toEqual({
         type: "api_key",
         key: "claude-cli-access-token",
       });
     });
+  });
+
+  it("does not enumerate synthetic auth for plugins that are not startup-active", () => {
+    const metadataSnapshot = createPluginMetadataSnapshotFixture({
+      plugins: [
+        {
+          id: "anthropic",
+          providers: ["anthropic"],
+          syntheticAuthRefs: ["anthropic"],
+          activation: { onStartup: true },
+        },
+        {
+          id: "llama-cpp",
+          providers: ["llama-cpp"],
+          syntheticAuthRefs: ["llama-cpp"],
+          activation: { onStartup: false },
+        },
+      ],
+    });
+
+    expect(
+      resolveManifestNativeHarness({
+        config: {},
+        env: {},
+        metadataSnapshot,
+        resolveRuntimes: false,
+      }).providerIds,
+    ).toEqual(["anthropic"]);
   });
 });

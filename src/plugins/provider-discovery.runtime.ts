@@ -165,7 +165,6 @@ function prepareManifestCatalogDiscovery(
     for (const entry of plan.entries) {
       if (entry.discovery === "runtime" || entry.discovery === "refreshable") {
         runtimeManifestCatalogPluginIds.add(plugin.id);
-        continue;
       }
       if (!includeProviders || entry.rows.length === 0) {
         continue;
@@ -195,7 +194,6 @@ function resolveProviderDiscoveryEntryPlugins(params: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: string[];
   includeUntrustedWorkspacePlugins?: boolean;
-  requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
   includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
@@ -243,16 +241,8 @@ function resolveProviderDiscoveryEntryPlugins(params: {
     entryPluginIds,
     runtimeManifestCatalogPluginIds,
   };
-  const entriesOnlyComplete =
-    new Set([...entryPluginIds, ...manifestEntryPluginIds]).size === pluginIdSet.size;
   if (entryRecords.length === 0) {
     return result;
-  }
-  if (
-    params.requireCompleteDiscoveryEntryCoverage &&
-    !(params.discoveryEntriesOnly === true ? entriesOnlyComplete : complete)
-  ) {
-    return { ...result, providers: [], complete: false };
   }
   const providers: ProviderPlugin[] = [];
   for (const manifest of entryRecords) {

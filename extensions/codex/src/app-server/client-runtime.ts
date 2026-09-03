@@ -11,7 +11,7 @@ import { withTimeout } from "./timeout.js";
 
 type ClientRuntimeContext = Omit<CodexAppServerAuthProfileLookup, "agentDir"> & {
   agentDir: string;
-  authMode?: "prepared-api-key" | "profile";
+  authMode?: "prepared-api-key" | "profile" | "native";
   onAuthRefreshFailure?: () => void;
 };
 
@@ -149,44 +149,46 @@ export function ensureCodexAppServerClientRuntime(
     runtime.protectedThreads.clear();
     runtime.sessionMetadata.clear();
   });
-  client.addRequestHandler(async (request) => {
-    if (request.method !== "account/chatgptAuthTokens/refresh") {
-      return undefined;
-    }
-    if (runtime.context.authMode === "prepared-api-key") {
-      throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
-    }
-    const previousAccountId =
-      isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
-        ? request.params.previousAccountId.trim() || undefined
-        : undefined;
-    try {
-      const tokens = await withTimeout(
-        refreshCodexAppServerAuthTokens({
-          agentDir: runtime.context.agentDir,
-          authProfileId: runtime.context.authProfileId,
-          ...(previousAccountId ? { previousAccountId } : {}),
-          ...(runtime.context.authProfileStore
-            ? { authProfileStore: runtime.context.authProfileStore }
-            : {}),
-          config: runtime.context.config,
-        }),
-        CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
-        "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
-      );
-      if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
-        throw new Error(
-          "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
-        );
+  if (context.authMode !== "native") {
+    client.addRequestHandler(async (request) => {
+      if (request.method !== "account/chatgptAuthTokens/refresh") {
+        return undefined;
       }
-      return { ...tokens };
-    } catch (error) {
-      // Failed refresh leaves Codex holding its old account. Detach the cached
-      // process before another acquisition; existing leases can finish safely.
-      runtime.context.onAuthRefreshFailure?.();
-      throw error;
-    }
-  });
+      if (runtime.context.authMode === "prepared-api-key") {
+        throw new Error("ChatGPT token refresh is unavailable for prepared Codex API-key auth.");
+      }
+      const previousAccountId =
+        isJsonObject(request.params) && typeof request.params.previousAccountId === "string"
+          ? request.params.previousAccountId.trim() || undefined
+          : undefined;
+      try {
+        const tokens = await withTimeout(
+          refreshCodexAppServerAuthTokens({
+            agentDir: runtime.context.agentDir,
+            authProfileId: runtime.context.authProfileId,
+            ...(previousAccountId ? { previousAccountId } : {}),
+            ...(runtime.context.authProfileStore
+              ? { authProfileStore: runtime.context.authProfileStore }
+              : {}),
+            config: runtime.context.config,
+          }),
+          CODEX_EXTERNAL_AUTH_REFRESH_TIMEOUT_MS,
+          "Codex app-server ChatGPT token refresh timed out before its external-auth deadline. Retry the request; if it persists, sign in again with OpenClaw.",
+        );
+        if (previousAccountId && tokens.chatgptAccountId !== previousAccountId) {
+          throw new Error(
+            "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
+          );
+        }
+        return { ...tokens };
+      } catch (error) {
+        // Failed refresh leaves Codex holding its old account. Detach the cached
+        // process before another acquisition; existing leases can finish safely.
+        runtime.context.onAuthRefreshFailure?.();
+        throw error;
+      }
+    });
+  }
   client.addNotificationHandler((notification) => {
     if (notification.method === "account/rateLimits/updated") {
       mergeCodexRateLimitsUpdate(client, notification.params);

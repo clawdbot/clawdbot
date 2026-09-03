@@ -1,6 +1,80 @@
 import { html, nothing } from "lit";
+import { t } from "../i18n/index.ts";
 import "./web-awesome-select.ts";
 import "../styles/select-picker.css";
+
+type PickerOptionElement = HTMLElement & { label: string; value: string; disabled: boolean };
+// wa-select keeps a private current-option pointer; arrow keys from the search
+// input hand it the first visible match so navigation skips filtered rows.
+type PickerSelectElement = HTMLElement & { setCurrentOption?: (option: Element) => void };
+function pickerOptions(select: Element): PickerOptionElement[] {
+  return [...select.querySelectorAll<PickerOptionElement>("wa-option")];
+}
+
+function visiblePickerOptions(select: Element): PickerOptionElement[] {
+  return pickerOptions(select).filter((option) => !option.hidden && !option.disabled);
+}
+
+// Filtering only hides rows: toggling `disabled` would make wa-select drop the
+// current selection while the query is open.
+function filterPickerOptions(input: HTMLInputElement): void {
+  const select = input.closest("wa-select");
+  if (!select) {
+    return;
+  }
+  const query = input.value.trim().toLocaleLowerCase();
+  for (const option of pickerOptions(select)) {
+    const haystack = `${option.label} ${option.value} ${option.textContent}`.toLocaleLowerCase();
+    option.hidden = Boolean(query) && !haystack.includes(query);
+  }
+}
+
+function resetPickerSearch(select: HTMLElement): void {
+  const input = select.querySelector<HTMLInputElement>(".picker-select__search-input");
+  if (input && input.value) {
+    input.value = "";
+    filterPickerOptions(input);
+  }
+}
+
+function handlePickerSearchKeydown(event: KeyboardEvent): void {
+  const input = event.currentTarget as HTMLInputElement;
+  const select = input.closest<PickerSelectElement>("wa-select");
+  if (!select) {
+    return;
+  }
+  if (event.key === "Escape" && input.value) {
+    input.value = "";
+    filterPickerOptions(input);
+    event.preventDefault();
+    event.stopPropagation();
+    return;
+  }
+  if (event.key === "Enter") {
+    event.preventDefault();
+    event.stopPropagation();
+    // wa-select commits options on mouseup, not click.
+    visiblePickerOptions(select)[0]?.dispatchEvent(
+      new MouseEvent("mouseup", { bubbles: true, composed: true }),
+    );
+    return;
+  }
+  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    const options = visiblePickerOptions(select);
+    const target = event.key === "ArrowDown" ? options[0] : options.at(-1);
+    if (target) {
+      event.preventDefault();
+      event.stopPropagation();
+      select.setCurrentOption?.(target);
+    }
+    return;
+  }
+  // wa-select's document keydown treats printable keys as type-to-select and
+  // cancels them; keep typing inside the search box.
+  if (event.key.length === 1 || event.key === "Backspace") {
+    event.stopPropagation();
+  }
+}
 
 export type PickerOption = {
   value: string;
@@ -19,6 +93,7 @@ export type PickerParams<Option extends PickerOption> = {
   className?: string;
   title?: string;
   placement?: "top" | "bottom";
+  searchable?: boolean;
   onOpen?: () => void;
   onChange: (value: string) => void;
   onChangeTarget?: (value: string, select: HTMLElement) => void;
@@ -52,6 +127,11 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
       .value=${params.value}
       ?disabled=${params.disabled}
       @wa-show=${() => params.onOpen?.()}
+      @wa-after-show=${(event: Event) =>
+        (event.currentTarget as HTMLElement)
+          .querySelector<HTMLInputElement>(".picker-select__search-input")
+          ?.focus()}
+      @wa-after-hide=${(event: Event) => resetPickerSearch(event.currentTarget as HTMLElement)}
       @change=${(event: Event) => {
         const value = (event.currentTarget as HTMLElement & { value?: unknown }).value;
         const option = typeof value === "string" && options.find((entry) => entry.value === value);
@@ -66,6 +146,21 @@ export function renderPicker<Option extends PickerOption>(params: PickerParams<O
     >
       <span slot="label" class="settings-control__sr-label">${params.label}</span>
       ${leading(options.find((option) => option.value === params.value))}
+      ${params.searchable
+        ? html`<div class="picker-select__search">
+            <input
+              class="picker-select__search-input"
+              type="search"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder=${t("common.search")}
+              aria-label=${t("common.search")}
+              @input=${(event: InputEvent) =>
+                filterPickerOptions(event.currentTarget as HTMLInputElement)}
+              @keydown=${handlePickerSearchKeydown}
+            />
+          </div>`
+        : nothing}
       ${options.map(
         (option) => html`
           <wa-option

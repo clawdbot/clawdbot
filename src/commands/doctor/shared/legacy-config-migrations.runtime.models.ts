@@ -7,7 +7,14 @@ import { materializeModelPolicyAllowlist } from "../../../config/model-policy-al
 import { isModelThinkingFormat } from "../../../config/types.models.js";
 import * as catalog from "./legacy-config-migrations.runtime.models.catalog.js";
 import * as codex from "./legacy-config-migrations.runtime.models.codex.js";
-import * as refs from "./legacy-config-migrations.runtime.models.refs.js";
+import {
+  rewriteKnownModelRefs,
+  setRecordEntry,
+} from "./legacy-config-migrations.runtime.models.ref-rewriters.js";
+import {
+  collectLegacyDefaultModelAllowRefs,
+  migrateExplicitDefaultModelAllowPolicy,
+} from "./legacy-config-migrations.runtime.models.refs.js";
 import * as vllm from "./legacy-config-migrations.runtime.models.vllm.js";
 import { visitAgentEntries } from "./legacy-config-record-shared.js";
 
@@ -106,7 +113,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
     describe: "Canonicalize retired and noncanonical model refs",
     legacyRules: codex.MODEL_REF_CANONICALIZATION_RULES,
     apply: (raw, changes) => {
-      const rewritten = refs.rewriteKnownModelRefs(raw, "config", changes);
+      const rewritten = rewriteKnownModelRefs(raw, "config", changes);
       const rewrittenRecord = getRecord(rewritten.value);
       if (!rewritten.changed || !rewrittenRecord) {
         return;
@@ -115,7 +122,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         delete raw[key];
       }
       for (const [key, value] of Object.entries(rewrittenRecord)) {
-        refs.setRecordEntry(raw, key, value);
+        setRecordEntry(raw, key, value);
       }
     },
   }),
@@ -127,7 +134,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         path: ["agents", "defaults", "models"],
         message:
           'Legacy agents.defaults.models restricts model overrides; run "openclaw doctor --fix" to migrate valid refs to agents.defaults.modelPolicy.allow.',
-        match: (_value, root) => refs.collectLegacyDefaultModelAllowRefs(root) !== null,
+        match: (_value, root) => collectLegacyDefaultModelAllowRefs(root) !== null,
       },
       {
         path: ["agents", "defaults", "models"],
@@ -136,7 +143,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_MODELS = [
         match: (_value, root) => materializeModelPolicyAllowlist(root).kind === "deferred",
       },
     ],
-    apply: refs.migrateExplicitDefaultModelAllowPolicy,
+    apply: migrateExplicitDefaultModelAllowPolicy,
   }),
   defineLegacyConfigMigration({
     id: "agents.defaults.models.vllm.params.qwenThinkingFormat->models.providers.vllm.models.compat.thinkingFormat",

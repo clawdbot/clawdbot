@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { PreparedModelRuntimeOwnerNotPublishedError } from "./prepared-model-runtime.errors.js";
+import { markPreparedModelCatalogFull } from "./prepared-model-runtime.full-catalog.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
 
 const manifestCatalogMock = vi.fn((..._args: unknown[]): Array<Record<string, unknown>> => []);
@@ -117,10 +118,10 @@ describe("loadProviderScopedThinkingCatalog", () => {
         input: ["text", "image"],
       };
       const completed: ModelCatalogSnapshot = { entries: [entry], routeVariants: [entry] };
+      markPreparedModelCatalogFull(completed);
       publishedSnapshotMock.mockImplementation((input: unknown) => ({
         config: (input as { config: unknown }).config,
-        modelCatalog: { entries: [], routeVariants: [] },
-        readFullModelCatalog: () => completed,
+        modelCatalog: completed,
       }));
       const { loadProviderScopedThinkingCatalog } = await import("./prepared-model-catalog.js");
       const catalog = await loadProviderScopedThinkingCatalog({
@@ -176,15 +177,13 @@ describe("loadProviderScopedThinkingCatalog", () => {
   });
 
   it("falls back to the scoped catalog while a published owner has the replaced config", async () => {
-    const config = { skills: { entries: { marker: { enabled: false } } } };
     preparedSnapshotMock.mockResolvedValue({
       catalogOwner: undefined,
       agentDir: "/tmp/model-catalog-test",
       activeProjectKeys: [],
-      config,
-      observationConfig: config,
-      isCurrent: () => true,
-      authModes: {},
+      config: { skills: { entries: { marker: { enabled: false } } } },
+      providerAuth: {},
+      oauthRefreshProviderIds: [],
       metadataSnapshot: createPluginMetadataSnapshot({
         config: {},
         manifestRegistry: { plugins: [], diagnostics: [] },

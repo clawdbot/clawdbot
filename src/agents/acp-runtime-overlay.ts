@@ -1,5 +1,6 @@
-/** Applies ACP session-key metadata overrides to agent runtime classification. */
 import { isAcpSessionKey } from "../routing/session-key.js";
+/** Applies ACP session-key metadata overrides to agent runtime classification. */
+import type { AgentHarnessRuntimeSource } from "./harness/policy.js";
 
 /**
  * Leaf type for agent runtime classification. Defined here so that
@@ -9,7 +10,7 @@ import { isAcpSessionKey } from "../routing/session-key.js";
  */
 export type AgentRuntimeMetadata = {
   id: string;
-  source: "implicit" | "model" | "provider" | "session" | "session-key";
+  source: AgentHarnessRuntimeSource | "session" | "session-key";
 };
 
 /**

@@ -31,7 +31,6 @@ import {
   prepareModelRuntimeSnapshot,
   PreparedModelRuntimeOwnerNotPublishedError,
   preparedModelRuntimeConfigsMatch,
-  refreshStalePreparedModelRuntimeCatalog,
   type PreparedModelRuntimeInput,
   type PreparedModelRuntimeSnapshot,
 } from "./prepared-model-runtime.js";
@@ -53,8 +52,8 @@ export type LoadPreparedModelCatalogParams = {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   providerDiscoveryProviderIds?: readonly string[];
-  /** Refreshes auth-stale inventory; true also rebuilds a fresh full catalog on writable reads. */
-  refreshFullCatalog?: boolean | "stale";
+  /** Rebuilds a completed full catalog instead of reusing this generation's cache. */
+  refreshFullCatalog?: boolean;
   /** Scoped read-only loads may run live discovery for the scoped providers only. */
   scopedLiveProviderDiscovery?: boolean;
   allowGatewaySubagentBinding?: boolean;
@@ -70,21 +69,15 @@ type PreparedModelCatalogConfigPolicy = "exact" | "published";
 async function materializeRequestedModelCatalog(
   snapshot: PreparedModelRuntimeSnapshot,
   readOnly: boolean | undefined,
-  refreshFullCatalog: LoadPreparedModelCatalogParams["refreshFullCatalog"],
+  refreshFullCatalog: boolean | undefined,
 ): Promise<PreparedModelRuntimeSnapshot> {
   if (!snapshot.loadFullModelCatalog) {
     return snapshot;
   }
-  // Inventory reads repair auth-stale content without making turn-path reads start discovery.
-  const staleCatalog =
-    refreshFullCatalog === "stale" || refreshFullCatalog === true
-      ? await refreshStalePreparedModelRuntimeCatalog(snapshot)
-      : undefined;
   const modelCatalog =
-    staleCatalog ??
-    (readOnly === true
-      ? snapshot.readFullModelCatalog?.()
-      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true }));
+    readOnly === true
+      ? undefined
+      : await snapshot.loadFullModelCatalog({ refresh: refreshFullCatalog === true });
   if (!modelCatalog) {
     return snapshot;
   }
@@ -94,7 +87,7 @@ async function materializeRequestedModelCatalog(
   }
   const materialized = Object.freeze({
     ...snapshot,
-    authModes: fullAuth.authModes,
+    providerAuth: fullAuth.providerAuth,
     modelCatalog,
   });
   setPreparedModelRuntimeAuthStore(materialized, fullAuth.authStore);
@@ -218,14 +211,6 @@ export function getPreparedModelCatalogSnapshot(
   params: LoadPreparedModelCatalogParams = {},
 ): ModelCatalogSnapshot | undefined {
   return getPreparedModelCatalogOwnerSnapshot(params)?.modelCatalog;
-}
-
-/** Returns the newest completed catalog for the current generation without starting discovery. */
-export function getAvailablePreparedModelCatalogSnapshot(
-  params: LoadPreparedModelCatalogParams = {},
-): ModelCatalogSnapshot | undefined {
-  const owner = getPreparedModelCatalogOwnerSnapshot(params);
-  return owner?.readFullModelCatalog?.() ?? owner?.modelCatalog;
 }
 
 async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
@@ -398,7 +383,7 @@ export async function loadProviderScopedThinkingCatalog(params: {
     const entries = normalizeThinkingCatalogProviders(augmented.entries);
     return params.requiredInputRoute !== undefined && !entryResolved(entries) ? [] : entries;
   };
-  const publishedCatalog = getAvailablePreparedModelCatalogSnapshot(scopedParams);
+  const publishedCatalog = getPreparedModelCatalogSnapshot(scopedParams);
   if (publishedCatalog && entryResolved(publishedCatalog.entries)) {
     return await augmentHarnessCatalog(publishedCatalog);
   }

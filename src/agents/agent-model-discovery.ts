@@ -1,6 +1,7 @@
 /** Discovers agent models and auth storage with provider/plugin normalization hooks. */
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { Model } from "../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -41,6 +42,7 @@ type DiscoverModelsOptions = {
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
+  staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   providerFilter?: string;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
   workspaceDir?: string;
@@ -140,6 +142,9 @@ function createOpenClawModelRegistry(
       ? { modelsJsonContents: options.modelsJsonContents }
       : {}),
     ...(options?.pluginCatalogs !== undefined ? { pluginCatalogs: options.pluginCatalogs } : {}),
+    ...(options?.staticProviderConfigs !== undefined
+      ? { staticProviderConfigs: options.staticProviderConfigs }
+      : {}),
   };
   const registry = ModelRegistry.create(authStorage, modelsJsonPath, registryOptions);
   const getAll = registry.getAll.bind(registry);
@@ -193,14 +198,6 @@ function createOpenClawModelRegistry(
   return registry;
 }
 
-/** Builds auth storage for model discovery without prompting for secrets. */
-export function discoverAuthStorage(
-  agentDir: string,
-  options?: DiscoverAuthStorageOptions,
-): AgentAuthStorage {
-  return discoverAuthStorageFacts(agentDir, options).authStorage;
-}
-
 /** Captures the effective profile store and its AuthStorage projection as one generation. */
 export function discoverAuthStorageFacts(
   agentDir: string,
@@ -209,15 +206,23 @@ export function discoverAuthStorageFacts(
   authStorage: AgentAuthStorage;
   store: import("./auth-profiles/types.js").AuthProfileStore;
   credentials: import("./agent-auth-credentials.js").AgentCredentialMap;
+  providerAuth: import("./agent-auth-credential-modes.js").PreparedProviderAuth;
 } {
   const facts =
     options?.skipCredentials === true
-      ? { store: { version: 1, profiles: {} }, credentials: {} }
+      ? {
+          store: { version: 1, profiles: {} },
+          credentials: {},
+          providerAuth: {},
+        }
       : resolveAgentDiscoveryAuthFacts(agentDir, options);
-  return { ...facts, authStorage: AuthStorage.inMemory(facts.credentials) };
+  return {
+    ...facts,
+    providerAuth: Object.freeze({ ...facts.providerAuth }),
+    authStorage: AuthStorage.inMemory(facts.credentials),
+  };
 }
 
-/** Creates the model registry used by agent model discovery. */
 /** Creates a model registry for one agent directory, optionally filtered and plugin-normalized. */
 export function discoverModels(
   authStorage: AgentAuthStorage,

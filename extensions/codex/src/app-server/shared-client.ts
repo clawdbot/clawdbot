@@ -783,7 +783,11 @@ async function acquireSharedCodexAppServerClient(
       agentDir,
       authProfileId: usesNativeAuth ? undefined : authProfileId,
       ...(authProfileStore ? { authProfileStore } : {}),
-      authMode: preparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
+      authMode: usesNativeAuth
+        ? "native"
+        : preparedAuth?.kind === "api-key"
+          ? "prepared-api-key"
+          : "profile",
       config: options?.config,
     });
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
@@ -1186,7 +1190,12 @@ async function startInitializedCodexAppServerClient(params: {
     ensureCodexAppServerClientRuntime(client, {
       agentDir: params.agentDir,
       authProfileId: params.authProfileId ?? undefined,
-      authMode: params.preparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
+      authMode:
+        params.authProfileId === null
+          ? "native"
+          : params.preparedAuth?.kind === "api-key"
+            ? "prepared-api-key"
+            : "profile",
       ...(params.authProfileStore ? { authProfileStore: params.authProfileStore } : {}),
       config: params.config,
       onAuthRefreshFailure: () => retireSharedCodexAppServerClientIfCurrent(client),

@@ -319,12 +319,9 @@ async function runEmbeddedAgentInternal(
       const preparedModelRuntimeLease = await (
         params.preparedModelRuntimeMode === "isolated-read-only"
           ? // Probe homes outlive only the attempt client, not independent live catalog clients.
-            acquireReadOnlyPreparedModelRuntime(preparedInput, laneController.abortSignal, "static")
+            acquireReadOnlyPreparedModelRuntime(preparedInput, laneController.abortSignal)
           : acquireAgentRunPreparedModelRuntime(preparedInput, {
               retainIdleRunOwner,
-              // Turns need only configured admission facts. Full live model inventory remains
-              // available through the snapshot's lazy control-plane loader.
-              catalogMode: "static",
               ...(params.pluginGeneration ? { pluginGeneration: params.pluginGeneration } : {}),
               abortSignal: laneController.abortSignal,
             })

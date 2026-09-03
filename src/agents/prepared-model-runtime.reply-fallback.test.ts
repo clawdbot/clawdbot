@@ -144,7 +144,6 @@ describe("prepared reply fallback ownership", () => {
       });
       await refreshPreparedModelRuntimeSnapshots(config, {
         gatewayLifecycle: true,
-        catalogMode: "static",
         allowGatewaySubagentBinding: true,
         pluginMetadataSnapshot: metadata,
       });

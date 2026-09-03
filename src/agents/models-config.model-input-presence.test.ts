@@ -241,6 +241,7 @@ describe("models config input presence", () => {
             env: {},
             authStore: options.authStore,
             credentials: {},
+            providerAuth: {},
             providerIds: [providerId],
             configuredModelRefs: [],
             configuredRuntimeModels: [],

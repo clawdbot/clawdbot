@@ -12,7 +12,8 @@ function hasCatalogApi(value: unknown): boolean {
   return typeof value === "string" && value.length > 0;
 }
 
-function isGeneratedPluginModelCatalog(value: unknown): value is Record<string, unknown> {
+/** Recognizes a payload this repo generated, keyed by its catalog stamp. */
+export function isGeneratedPluginModelCatalog(value: unknown): value is Record<string, unknown> {
   return isRecord(value) && value.generatedBy === PLUGIN_MODEL_CATALOG_GENERATED_BY;
 }
 

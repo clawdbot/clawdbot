@@ -3,7 +3,6 @@
 import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -25,7 +24,6 @@ import {
   resolveAuthProfileOrder,
   resolveOpenAICodexAuthIdentity,
 } from "openclaw/plugin-sdk/provider-auth";
-import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
@@ -62,7 +60,6 @@ import { isCodexAppServerNativeAuthProfile } from "./session-binding.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai";
-const CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS = [CODEX_APP_SERVER_AUTH_PROVIDER];
 const OPENAI_CODEX_DEFAULT_PROFILE_ID = "openai:default";
 const CODEX_HOME_ENV_VAR = "CODEX_HOME";
 const HOME_ENV_VAR = "HOME";
@@ -77,7 +74,6 @@ const CODEX_APP_SERVER_PREPARED_AUTH_ENV_VARS = [
 ];
 const CODEX_APP_SERVER_HOME_ENV_VARS = [CODEX_HOME_ENV_VAR, HOME_ENV_VAR];
 const CODEX_AUTH_JSON_FILENAME = "auth.json";
-const CODEX_HOME_DIRNAME = ".codex";
 const MAX_COMPUTER_USE_ARTIFACT_OWNERS = 128;
 const activeComputerUseArtifactReconciliations = new Map<
   string,
@@ -151,12 +147,6 @@ function assertNoUnimportedAgentCodexAuthFile(params: {
   // Ephemeral stdio starts cannot load this stale file, and the shared-client key
   // separates auth requirements plus fallback identities. Preserve the supported
   // stdio API-key login instead of turning a leftover file into a hard failure.
-  if (
-    params.authRequirement === "api-key" &&
-    resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: params.startOptions })
-  ) {
-    return;
-  }
   const message = resolveUnimportedAgentCodexAuthMessage(params);
   if (message) {
     throw new AgentHarnessPreflightError(message);
@@ -226,7 +216,6 @@ function ensureCodexAppServerAuthProfileStore(params: {
   return ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
     config: params.config,
-    externalCliProviderIds: CODEX_APP_SERVER_EXTERNAL_CLI_PROVIDER_IDS,
     ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
   });
 }
@@ -295,7 +284,7 @@ export async function resolveCodexAppServerPreparedAuthProfileSnapshot(params: {
   if (!credential || !isCodexAppServerAuthProfileCredential(credential)) {
     return undefined;
   }
-  const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
+  const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
     agentDir,
     authProfileId: profileId,
     authProfileStore: store,
@@ -483,10 +472,7 @@ export function resolveCodexAppServerFallbackApiKeyCacheKey(params: {
   if (params.startOptions.transport !== "stdio") {
     return undefined;
   }
-  return (
-    resolveCodexAppServerEnvApiKeyCacheKey(params) ??
-    resolveCodexCliAuthFileApiKeyCacheKey(params.baseEnv ?? process.env)
-  );
+  return resolveCodexAppServerEnvApiKeyCacheKey(params);
 }
 
 /** Secret-free cache identity for an API key already resolved by the runtime plan. */
@@ -511,14 +497,6 @@ function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
   hash.update("\0");
   hash.update(accessToken);
   return `token:sha256:${hash.digest("hex")}`;
-}
-
-function fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey: string): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:app-server-cli-auth-json-api-key:v1");
-  hash.update("\0");
-  hash.update(apiKey);
-  return `CODEX_AUTH_JSON:sha256:${hash.digest("hex")}`;
 }
 
 export { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
@@ -817,18 +795,6 @@ export async function applyCodexAppServerAuthProfile(params: {
     );
   }
   if (!loginParams) {
-    if (params.authRequirement !== "api-key" || params.startOptions?.transport !== "stdio") {
-      return;
-    }
-    const env = resolveCodexAppServerSpawnEnv(params.startOptions, process.env);
-    const fallbackLoginParams = await resolveCodexAppServerFallbackApiKeyLoginParams({
-      client: params.client,
-      env,
-      codexCliAuthEnv: process.env,
-    });
-    if (fallbackLoginParams) {
-      await params.client.request("account/login/start", fallbackLoginParams);
-    }
     return;
   }
   await params.client.request("account/login/start", loginParams);
@@ -877,35 +843,6 @@ class CodexAppServerAuthProfileUnavailableError extends Error {
   readonly code = "selected_auth_profile_unavailable";
 }
 
-async function resolveCodexAppServerAuthProfileLoginParams(params: {
-  agentDir: string;
-  authProfileId?: string;
-  authProfileStore?: AuthProfileStore;
-  config?: AuthProfileOrderConfig;
-}): Promise<CodexLoginAccountParams | undefined> {
-  const store = resolveCodexAppServerAuthProfileStore(params);
-  const profileId = resolveCodexAppServerAuthProfileId({
-    authProfileId: params.authProfileId,
-    store,
-    config: params.config,
-  });
-  const profile = profileId ? store.profiles[profileId] : undefined;
-  if (profileId && !profile) {
-    throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" was not found. Select an existing OpenAI profile or sign in again with OpenClaw, then retry.`,
-    );
-  }
-  if (profileId && profile && !isCodexAppServerAuthProfileCredential(profile)) {
-    throw new CodexAppServerAuthProfileUnavailableError(
-      `Codex app-server auth profile "${profileId}" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.`,
-    );
-  }
-  return await resolveCodexAppServerAuthProfileLoginParamsInternal({
-    ...params,
-    authProfileStore: store,
-  });
-}
-
 export async function refreshCodexAppServerAuthTokens(params: {
   agentDir: string;
   authProfileId?: string;
@@ -934,7 +871,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
       );
     }
   }
-  const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
+  const loginParams = await resolveCodexAppServerAuthProfileLoginParams({
     ...params,
     forceOAuthRefresh: true,
   });
@@ -955,7 +892,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   };
 }
 
-async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
+async function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
   authProfileStore?: AuthProfileStore;
@@ -1000,78 +937,6 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
     );
   }
   return loginParams;
-}
-
-async function resolveCodexAppServerFallbackApiKeyLoginParams(params: {
-  client: CodexAppServerClient;
-  env: NodeJS.ProcessEnv;
-  codexCliAuthEnv: NodeJS.ProcessEnv;
-}): Promise<CodexLoginAccountParams | undefined> {
-  const apiKey =
-    readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS) ??
-    (await readCodexCliAuthFileApiKey(params.codexCliAuthEnv));
-  if (!apiKey) {
-    return undefined;
-  }
-  const response = await params.client.request<CodexGetAccountResponse>("account/read", {
-    refreshToken: false,
-  });
-  if (response.account) {
-    return undefined;
-  }
-  return { type: "apiKey", apiKey };
-}
-
-function resolveCodexCliAuthFilePath(env: NodeJS.ProcessEnv): string {
-  const configuredCodexHome = env[CODEX_HOME_ENV_VAR]?.trim();
-  if (configuredCodexHome) {
-    return path.join(resolveHomeRelativePath(configuredCodexHome, env), CODEX_AUTH_JSON_FILENAME);
-  }
-  const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-  return path.join(home, CODEX_HOME_DIRNAME, CODEX_AUTH_JSON_FILENAME);
-}
-
-function resolveHomeRelativePath(value: string, env: NodeJS.ProcessEnv): string {
-  if (value === "~" || value.startsWith("~/") || value.startsWith("~\\")) {
-    const home = env[HOME_ENV_VAR]?.trim() || env.USERPROFILE?.trim() || os.homedir();
-    return path.join(home, value.slice(value === "~" ? 1 : 2));
-  }
-  return value;
-}
-
-function parseCodexCliAuthFileApiKey(raw: string): string | undefined {
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
-  if (!parsed || typeof parsed !== "object") {
-    return undefined;
-  }
-  const apiKey = (parsed as Record<string, unknown>).OPENAI_API_KEY;
-  return typeof apiKey === "string" && apiKey.trim() ? apiKey.trim() : undefined;
-}
-
-async function readCodexCliAuthFileApiKey(env: NodeJS.ProcessEnv): Promise<string | undefined> {
-  try {
-    return parseCodexCliAuthFileApiKey(
-      await readSecretFile(resolveCodexCliAuthFilePath(env), "Codex CLI auth file"),
-    );
-  } catch {
-    return undefined;
-  }
-}
-
-function resolveCodexCliAuthFileApiKeyCacheKey(env: NodeJS.ProcessEnv): string | undefined {
-  try {
-    const apiKey = parseCodexCliAuthFileApiKey(
-      fsSync.readFileSync(resolveCodexCliAuthFilePath(env), "utf8"),
-    );
-    return apiKey ? fingerprintCodexCliAuthFileApiKeyCacheKey(apiKey) : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 async function resolveLoginParamsForCredential(
@@ -1348,10 +1213,6 @@ function withClearedEnvironmentVariables(
     ...startOptions,
     clearEnv: [...clearEnv, ...missingEnvVars],
   };
-}
-
-function readFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): string | undefined {
-  return readFirstNonEmptyEnvEntry(env, keys)?.value;
 }
 
 function readFirstNonEmptyEnvEntry(

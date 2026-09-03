@@ -183,8 +183,6 @@ export function createCodexAppServerAgentHarness(
       modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
       return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
-    readModelCatalogReadiness: (params) =>
-      modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");

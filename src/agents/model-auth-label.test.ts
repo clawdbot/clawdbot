@@ -13,7 +13,6 @@ const mocks = vi.hoisted(() => ({
     () => null,
   ),
   resolveEnvApiKey: vi.fn<() => { apiKey: string; source: string } | null>(() => null),
-  readCodexCliCredentialsCached: vi.fn<(options?: unknown) => unknown>(() => null),
 }));
 
 vi.mock("./auth-profiles.js", () => ({
@@ -30,10 +29,6 @@ vi.mock("./model-auth.js", () => ({
   resolveEnvApiKey: mocks.resolveEnvApiKey,
 }));
 
-vi.mock("./cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: mocks.readCodexCliCredentialsCached,
-}));
-
 describe("resolveModelAuthLabel", () => {
   beforeEach(() => {
     mocks.ensureAuthProfileStore.mockReset();
@@ -48,8 +43,6 @@ describe("resolveModelAuthLabel", () => {
     mocks.resolveUsableCustomProviderApiKey.mockReturnValue(null);
     mocks.resolveEnvApiKey.mockReset();
     mocks.resolveEnvApiKey.mockReturnValue(null);
-    mocks.readCodexCliCredentialsCached.mockReset();
-    mocks.readCodexCliCredentialsCached.mockReturnValue(null);
   });
 
   it("does not include token value in label for token profiles", () => {
@@ -159,65 +152,6 @@ describe("resolveModelAuthLabel", () => {
     });
 
     expect(label).toBe("oauth (openai:user@example.com)");
-    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
-  });
-
-  it("shows codex cli auth for codex provider without auth profiles", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {},
-    } as never);
-    mocks.resolveAuthProfileOrder.mockReturnValue([]);
-    mocks.readCodexCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "openai",
-      access: "token",
-      refresh: "refresh",
-      expires: Date.now() + 60_000,
-    });
-
-    const label = resolveModelAuthLabel({
-      provider: "codex",
-      cfg: {},
-    });
-
-    expect(label).toBe("oauth (codex-cli)");
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
-  });
-
-  it("uses Codex CLI auth for Codex-backed OpenAI before env fallback", () => {
-    mocks.ensureAuthProfileStore.mockReturnValue({
-      version: 1,
-      profiles: {},
-    } as never);
-    mocks.resolveAuthProfileOrder.mockReturnValue([]);
-    mocks.readCodexCliCredentialsCached.mockReturnValue({
-      type: "oauth",
-      provider: "openai",
-      access: "token",
-      refresh: "refresh",
-      expires: Date.now() + 60_000,
-    });
-    mocks.resolveEnvApiKey.mockReturnValue({
-      apiKey: "env-key-placeholder",
-      source: "env: OPENAI_API_KEY",
-    });
-
-    const label = resolveModelAuthLabel({
-      provider: "openai",
-      cfg: {},
-      codexCliCredentialsHome: "/tmp/openclaw-agent/codex-home",
-    });
-
-    expect(label).toBe("oauth (codex-cli)");
-    expect(mocks.readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      codexHome: "/tmp/openclaw-agent/codex-home",
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    });
     expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
   });
 

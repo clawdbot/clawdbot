@@ -13,7 +13,6 @@ import {
   resolveAuthProfileOrder,
 } from "./auth-profiles.js";
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
-import { readCodexCliCredentialsCached } from "./cli-credentials.js";
 import {
   resolveEnvApiKey,
   resolveProviderEntryApiKeyProfileReference,
@@ -30,7 +29,6 @@ export function resolveModelAuthLabel(params: {
   sessionEntry?: Partial<Pick<SessionEntry, "authProfileOverride">>;
   agentDir?: string;
   workspaceDir?: string;
-  codexCliCredentialsHome?: string;
   includeExternalProfiles?: boolean;
   acceptedProviderIds?: readonly string[];
 }): string | undefined {
@@ -116,18 +114,6 @@ export function resolveModelAuthLabel(params: {
     return "unknown";
   }
 
-  if (
-    params.codexCliCredentialsHome &&
-    (providerKey === "openai" || providerKey === "codex") &&
-    readCodexCliCredentialsCached({
-      codexHome: params.codexCliCredentialsHome,
-      ttlMs: 5_000,
-      allowKeychainPrompt: false,
-    })
-  ) {
-    return "oauth (codex-cli)";
-  }
-
   const envKey = resolveEnvApiKey(providerKey, process.env, {
     config: params.cfg,
     workspaceDir: params.workspaceDir,
@@ -139,12 +125,6 @@ export function resolveModelAuthLabel(params: {
     return `api-key (${envKey.source})`;
   }
 
-  if (
-    providerKey === "codex" &&
-    readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
-  ) {
-    return "oauth (codex-cli)";
-  }
   if (providerKey === "claude-cli") {
     return "native (claude-cli)";
   }

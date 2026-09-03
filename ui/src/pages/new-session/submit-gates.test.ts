@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { peekChatMetadata } from "../../lib/chat/chat-metadata-store.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
 import { patchNewSessionPreference } from "./preferences.ts";
 
@@ -44,14 +43,11 @@ describe("DraftSubmissionFlow submit gates", () => {
         }),
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
-      await vi.waitFor(() =>
-        expect(
-          peekChatMetadata(context.gateway.snapshot.client!, { agentId: "main" })?.models,
-        ).toHaveLength(1),
-      );
       flow.setMessage("Start this session");
-      expect(flow.submitBlock()).toEqual(
-        message ? { gate: "model-unavailable", reason: message } : undefined,
+      await vi.waitFor(() =>
+        expect(flow.submitBlock()).toEqual(
+          message ? { gate: "model-unavailable", reason: message } : undefined,
+        ),
       );
       expect(flow.canSubmit()).toBe(message === undefined);
     },
@@ -145,7 +141,7 @@ describe("DraftSubmissionFlow submit gates", () => {
             resolveBranches = resolve;
           });
         }
-        return Promise.resolve({});
+        return method === "models.list" ? Promise.resolve({ models: [] }) : Promise.resolve({});
       },
     });
     const { context, flow } = fixture;
@@ -209,7 +205,9 @@ describe("DraftSubmissionFlow submit gates", () => {
               ],
               profiles: [],
             }
-          : {},
+          : method === "models.list"
+            ? { models: [{ id: "gpt-5.6-sol", name: "GPT-5.6 Sol", provider: "openai" }] }
+            : {},
     });
     await fixture.gateway.refreshCloudProfiles();
     await vi.waitFor(() => expect(fixture.place.devices()).toHaveLength(1));

@@ -315,8 +315,6 @@ export async function startCodexAttemptThread(params: {
             ensureCodexAppServerClientRuntime(activeStartupClient, {
               agentDir: params.agentDir,
               authProfileId: startupRuntimeAuthProfileId,
-              authMode:
-                params.startupPreparedAuth?.kind === "api-key" ? "prepared-api-key" : "profile",
               authProfileStore: startupRuntimeAuthProfileStore ?? attemptParams.authProfileStore,
               config: params.config,
             });

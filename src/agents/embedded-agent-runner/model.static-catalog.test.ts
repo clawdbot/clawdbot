@@ -365,7 +365,6 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       env: process.env,
       onlyPluginIds: ["google"],
       includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
     });
@@ -509,7 +508,6 @@ describe("resolveBundledProviderStaticCatalogModel", () => {
       env: process.env,
       onlyPluginIds: ["google"],
       includeUntrustedWorkspacePlugins: false,
-      requireCompleteDiscoveryEntryCoverage: true,
       discoveryEntriesOnly: true,
       includeManifestModelCatalogProviders: false,
       pluginMetadataSnapshot: metadataSnapshot,

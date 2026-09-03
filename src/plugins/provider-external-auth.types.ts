@@ -23,6 +23,8 @@ export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
   mode: Exclude<ModelProviderAuthMode, "aws-sdk">;
+  /** Runtime owner for native login markers that do not use a CLI backend registration. */
+  runtime?: string;
   expiresAt?: number;
 };
 

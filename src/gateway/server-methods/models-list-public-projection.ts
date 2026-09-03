@@ -10,22 +10,8 @@ import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.type
 import type { GatewayAgentRuntime } from "../../shared/session-types.js";
 import { projectWorkerPlacementAgentRuntime } from "../worker-environments/placement-session-runtime.js";
 
-type ModelsListEntry = Pick<
-  ModelChoice,
-  | "alias"
-  | "contextWindow"
-  | "contextWindowDefault"
-  | "contextWindows"
-  | "id"
-  | "input"
-  | "name"
-  | "provider"
-  | "reasoning"
-  | "tags"
-> & { available?: boolean; supportsTools?: boolean };
-
 /** Keeps concrete route, auth, cost, and provider parameters out of public model rows. */
-export function buildPublicModelProjection(entry: ModelCatalogEntry): ModelsListEntry {
+export function buildPublicModelProjection(entry: ModelCatalogEntry): ModelChoice {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
   return {
     id: entry.id,

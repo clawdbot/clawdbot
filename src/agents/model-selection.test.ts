@@ -22,7 +22,6 @@ import {
   normalizeProviderIdForAuth,
   modelKey,
   resolvePersistedOverrideModelRef,
-  resolvePersistedModelRef,
   resolvePersistedSelectedModelRef,
   resolveAllowedModelRef,
   resolveConfiguredModelRef,
@@ -538,60 +537,6 @@ describe("model-selection", () => {
     });
   });
 
-  describe("resolvePersistedModelRef", () => {
-    it.each([
-      {
-        name: "splits legacy combined refs when provider is not stored separately",
-        params: {
-          defaultProvider: "anthropic",
-          overrideModel: "ollama-beelink2/qwen2.5-coder:7b",
-        },
-        expected: {
-          provider: "ollama-beelink2",
-          model: "qwen2.5-coder:7b",
-        },
-      },
-      {
-        name: "preserves explicit runtime provider for vendor-prefixed model ids",
-        params: {
-          defaultProvider: "anthropic",
-          runtimeProvider: "openrouter",
-          runtimeModel: "anthropic/claude-haiku-4.5",
-        },
-        expected: {
-          provider: "openrouter",
-          model: "anthropic/claude-haiku-4.5",
-        },
-      },
-      {
-        name: "preserves explicit override provider ids without reparsing runtime semantics",
-        params: {
-          defaultProvider: "anthropic",
-          overrideProvider: "kimi-coding",
-          overrideModel: "kimi-code",
-        },
-        expected: {
-          provider: "kimi-coding",
-          model: "kimi-code",
-        },
-      },
-    ])("$name", ({ params, expected }) => {
-      expect(resolvePersistedModelRef(params)).toEqual(expected);
-    });
-
-    it("ignores malformed persisted model fields and tolerates a missing default provider", () => {
-      expect(
-        resolvePersistedModelRef({
-          defaultProvider: undefined,
-          runtimeProvider: { provider: "openai" },
-          runtimeModel: false,
-          overrideProvider: ["anthropic"],
-          overrideModel: 123,
-        }),
-      ).toBeNull();
-    });
-  });
-
   describe("resolvePersistedOverrideModelRef", () => {
     it.each([
       {
@@ -646,6 +591,18 @@ describe("model-selection", () => {
         expected: {
           provider: "anthropic",
           model: "claude-opus-4-6",
+        },
+      },
+      {
+        name: "preserves the explicit runtime provider for vendor-prefixed runtime models",
+        params: {
+          defaultProvider: "anthropic",
+          runtimeProvider: "openrouter",
+          runtimeModel: "anthropic/claude-haiku-4.5",
+        },
+        expected: {
+          provider: "openrouter",
+          model: "anthropic/claude-haiku-4.5",
         },
       },
       {

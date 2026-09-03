@@ -30,8 +30,15 @@ function clientWith(request: ReturnType<typeof vi.fn>): GatewayBrowserClient {
 
 function metadata(modelId: string): ChatMetadataResult {
   return {
-    commands: [],
-    models: [{ id: modelId, name: modelId, provider: "openai" }],
+    commands: [
+      {
+        name: modelId,
+        description: modelId,
+        source: "plugin",
+        scope: "text",
+        acceptsArgs: false,
+      },
+    ],
   };
 }
 

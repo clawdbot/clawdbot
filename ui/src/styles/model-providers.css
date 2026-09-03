@@ -153,14 +153,6 @@
   color: var(--muted);
 }
 
-.model-providers__add-form {
-  display: grid;
-  grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
-  align-items: end;
-  gap: 12px;
-  margin-top: 16px;
-}
-
 .model-providers__label-with-help {
   display: inline-flex;
   align-items: center;
@@ -262,10 +254,6 @@
 
   .model-providers__head > .settings-row__control {
     justify-content: flex-start;
-  }
-
-  .model-providers__add-form {
-    grid-template-columns: 1fr;
   }
 
   .model-providers__credentials,

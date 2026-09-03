@@ -35,6 +35,7 @@ import {
   normalizeProviderId,
 } from "./model-ref-shared.js";
 import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { modelCatalogLogicalKey } from "./openai-model-routes.js";
 
 export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/normalization-core/string-coerce";
 
@@ -1469,7 +1470,7 @@ export function resolveHooksGmailModel(
 }
 
 const DEFAULT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.modelPolicy.allow";
-const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
+export const AGENT_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.entries.*.modelPolicy.allow";
 export const LEGACY_MODEL_POLICY_ALLOW_CONFIG_PATH = "agents.defaults.models";
 
 function resolvePolicyAliasAgentId(
@@ -1643,13 +1644,6 @@ export type ModelVisibilityPolicy = {
     view?: "default" | "configured" | "all";
   }) => ModelCatalogEntry[];
 };
-
-/** Canonical logical identity shared by visibility and physical route rows. */
-export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
-  const provider = normalizeProviderId(entry.provider);
-  const model = splitTrailingAuthProfile(entry.id).model;
-  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
-}
 
 export function dedupeModelCatalogEntries(
   entries: readonly ModelCatalogEntry[],

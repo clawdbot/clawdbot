@@ -170,6 +170,9 @@ const mocks = vi.hoisted(() => {
     }),
     loadModelCatalog: vi.fn().mockResolvedValue([]),
     modelCatalogRouteVariants: undefined as unknown[] | undefined,
+    preparedProviderAuth: undefined as
+      | Record<string, { mode: "api_key" | "oauth" | "token"; runtime?: string }>
+      | undefined,
     openAIModelRouteOverride: undefined as ((params: unknown) => unknown) | undefined,
   };
 });
@@ -297,11 +300,14 @@ vi.mock("../../agents/harness/runtime-plugin.js", () => ({
 vi.mock("../../plugins/payload-verification.js", () => ({
   runPluginPayloadSmokeCheckForManifestRecords: mocks.runPluginPayloadSmokeCheckForManifestRecords,
 }));
-vi.mock("../../agents/prepared-model-catalog.js", () => ({
-  loadProviderScopedThinkingCatalog: vi.fn(async () => []),
-  loadPreparedModelCatalogSnapshot: async (...args: unknown[]) => {
+vi.mock("../../gateway/server-model-catalog.js", () => ({
+  loadPreparedGatewayModelCatalogSnapshot: async (...args: unknown[]) => {
     const entries = await mocks.loadModelCatalog(...args);
-    return { entries, routeVariants: mocks.modelCatalogRouteVariants ?? entries };
+    return {
+      entries,
+      routeVariants: mocks.modelCatalogRouteVariants ?? entries,
+      providerAuth: mocks.preparedProviderAuth ?? {},
+    };
   },
 }));
 vi.mock("../../agents/openai-model-routes.js", async (importOriginal) => {
@@ -432,6 +438,10 @@ async function withOpenAIStatusFixture<T>(
     profiles: typeof mocks.store.profiles;
     resolveEnvApiKey?: (provider: string) => { apiKey: string; source: string } | null;
     routeOverride?: (params: unknown) => unknown;
+    preparedProviderAuth?: Record<
+      string,
+      { mode: "api_key" | "oauth" | "token"; runtime?: string }
+    >;
     authOrder?: string[];
     providerAuth?: "api-key" | "aws-sdk" | "oauth" | "token";
     providerApiKey?: unknown;
@@ -455,6 +465,7 @@ async function withOpenAIStatusFixture<T>(
   const originalRouteOverride = mocks.openAIModelRouteOverride;
   const originalCatalogImpl = mocks.loadModelCatalog.getMockImplementation();
   const originalRouteVariants = mocks.modelCatalogRouteVariants;
+  const originalPreparedProviderAuth = mocks.preparedProviderAuth;
   const configuredModels = Object.fromEntries(
     [params.primary, ...(params.fallbacks ?? [])].map((model) => [model, {}]),
   );
@@ -498,6 +509,7 @@ async function withOpenAIStatusFixture<T>(
   });
   mocks.store.profiles = params.profiles;
   mocks.store.order = undefined;
+  mocks.preparedProviderAuth = params.preparedProviderAuth;
   mocks.resolveEnvApiKey.mockImplementation(params.resolveEnvApiKey ?? (() => null));
   const providerApiKey =
     typeof params.providerApiKey === "string" ? params.providerApiKey.trim() : "";
@@ -519,6 +531,7 @@ async function withOpenAIStatusFixture<T>(
     mocks.store.order = originalOrder;
     mocks.openAIModelRouteOverride = originalRouteOverride;
     mocks.modelCatalogRouteVariants = originalRouteVariants;
+    mocks.preparedProviderAuth = originalPreparedProviderAuth;
     if (originalCustomKeyImpl) {
       mocks.getCustomProviderApiKey.mockImplementation(originalCustomKeyImpl);
     } else {
@@ -741,7 +754,8 @@ describe("modelsStatusCommand auth overview", () => {
     });
     expect(mocks.loadModelCatalog.mock.calls.at(-1)?.[0]).toEqual(
       expect.objectContaining({
-        providerDiscoveryProviderIds: expect.arrayContaining(["anthropic", "openai"]),
+        agentId: "main",
+        getConfig: expect.any(Function),
         readOnly: true,
       }),
     );
@@ -1166,6 +1180,53 @@ describe("modelsStatusCommand auth overview", () => {
     ]);
     expect(localRuntime.exit).toHaveBeenCalledWith(1);
     expect(textRuntime.log.mock.calls.flat().join("\n")).not.toContain("set an API key env var");
+  });
+
+  it("reports an OpenAI model as available through native Codex login", async () => {
+    const previousRefs = mocks.resolveRuntimeSyntheticAuthProviderRefs.getMockImplementation();
+    const previousSynthetic = mocks.resolveProviderSyntheticAuthWithPlugin.getMockImplementation();
+    mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue(["codex", "openai"]);
+    mocks.resolveProviderSyntheticAuthWithPlugin.mockReturnValue({
+      apiKey: "codex-app-server",
+      source: "Codex CLI native auth",
+      mode: "oauth",
+      runtime: "codex",
+    });
+    const statusRuntime = createRuntime();
+    try {
+      await withOpenAIStatusFixture(
+        {
+          primary: "openai/gpt-5.6-sol",
+          profiles: {},
+          preparedProviderAuth: { openai: { mode: "oauth", runtime: "codex" } },
+          catalog: [
+            {
+              provider: "openai",
+              id: "gpt-5.6-sol",
+              name: "GPT-5.6 Sol",
+              api: "openai-chatgpt-responses",
+              baseUrl: "https://chatgpt.com/backend-api/codex",
+            },
+          ],
+        },
+        async () => modelsStatusCommand({}, statusRuntime as never),
+      );
+    } finally {
+      if (previousRefs) {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockImplementation(previousRefs);
+      } else {
+        mocks.resolveRuntimeSyntheticAuthProviderRefs.mockReturnValue([]);
+      }
+      if (previousSynthetic) {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockImplementation(previousSynthetic);
+      } else {
+        mocks.resolveProviderSyntheticAuthWithPlugin.mockReset();
+      }
+    }
+
+    const output = statusRuntime.log.mock.calls.flat().join("\n");
+    expect(output).toContain("openai via codex");
+    expect(output).toContain("status=usable");
   });
 
   it("reports usable Codex auth as unavailable when its harness plugin is quarantined", async () => {
@@ -1713,7 +1774,7 @@ describe("modelsStatusCommand auth overview", () => {
         kind: "synthetic",
         detail: "codex-app-server",
       });
-      expect(syntheticProbeProviders).toStrictEqual(["codex"]);
+      expect([...new Set(syntheticProbeProviders)]).toStrictEqual(["codex"]);
       expect(providers.map((entry) => entry.provider)).not.toContain("unused-synthetic");
     } finally {
       if (originalLoadConfig) {

@@ -26,14 +26,15 @@ const defaultDeps: PreparedAuthStoreDeps = {
 export function loadPreparedModelRuntimeAuthStore(
   input: PreparedModelRuntimeInput,
   deps: PreparedAuthStoreDeps = defaultDeps,
-): AuthProfileStore | undefined {
+): AuthProfileStore {
+  const durable = deps.loadDurable(input);
   const published = deps.loadPublished(input);
   if (
     !published ||
     (published.runtimeExternalProfileIds === undefined &&
       published.runtimeExternalProfileIdsAuthoritative !== true)
   ) {
-    return undefined;
+    return durable;
   }
-  return mergeAuthProfileStores(deps.loadDurable(input), published);
+  return mergeAuthProfileStores(durable, published);
 }

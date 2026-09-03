@@ -27,7 +27,11 @@ export const modelsHandlers: GatewayRequestHandlers = {
     }
     respond(
       true,
-      await buildModelsListResult({ context, agentId: resolved.agentId, params }),
+      await buildModelsListResult({
+        source: { kind: "gateway", context },
+        agentId: resolved.agentId,
+        params,
+      }),
       undefined,
     );
   },

@@ -116,7 +116,6 @@ describe("detectInferenceBackends", () => {
         platform: "linux",
         deps: {
           probeLocalCommand: probeDeps({ codex: true }),
-          readCodexCliCredentials: () => ({ type: "oauth", email: "saved@example.com" }),
         },
       });
 
@@ -135,7 +134,6 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ codex: true }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
 
@@ -170,7 +168,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({}),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
     expect(candidates).toEqual([]);
@@ -191,7 +188,6 @@ describe("detectInferenceBackends", () => {
           credentials: true,
           authKind: "claude-subscription",
         }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
       },
     });
@@ -215,7 +211,6 @@ describe("detectInferenceBackends", () => {
           credentials: true,
           authKind: "claude-subscription",
         }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => ({ type: "oauth" }),
         randomInt: () => 0,
       },
@@ -223,30 +218,29 @@ describe("detectInferenceBackends", () => {
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
       "existing-model",
       "claude-cli",
-      "codex-cli",
       "openai-api-key",
       "anthropic-api-key",
+      "codex-cli",
       "gemini-cli",
     ]);
     expect(candidates[0]?.modelRef).toBe("zai/glm-5.2");
     expect(candidates[0]?.detail).toBe("zai/glm-5.2 — already configured");
     expect(candidates[1]?.modelRef).toBe(CLAUDE_CLI_DEFAULT_MODEL_REF);
     expect(candidates[2]?.modelRef).toBe("openai/gpt-5.6-sol");
-    expect(candidates[3]?.modelRef).toBe("openai/gpt-5.6-sol");
-    expect(candidates[4]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
+    expect(candidates[3]?.modelRef).toBe(ANTHROPIC_API_DEFAULT_MODEL_REF);
+    expect(candidates[4]?.modelRef).toBe("openai/gpt-5.6-sol");
   });
 
-  it("ranks a logged-in Codex subscription before an OpenAI environment key", async () => {
+  it("keeps a logged-in Codex status alongside an OpenAI environment key", async () => {
     const candidates = await detectInferenceBackends({
       env: { OPENAI_API_KEY: "sk-x" },
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ codex: true }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
 
-    expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "openai-api-key"]);
+    expect(candidates.map((candidate) => candidate.kind)).toEqual(["openai-api-key", "codex-cli"]);
   });
 
   it("keeps status-only Codex login after env keys without verifiable OAuth tokens", async () => {
@@ -255,7 +249,6 @@ describe("detectInferenceBackends", () => {
       platform: "linux",
       deps: {
         probeLocalCommand: probeDeps({ codex: true }),
-        readCodexCliCredentials: () => null,
         detectCodexLoginState: async () => true,
       },
     });
@@ -367,15 +360,14 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
         readGeminiCliCredentials: () => null,
       },
     });
 
     expect(candidates.map((candidate) => candidate.kind)).toEqual([
       "existing-model",
-      "codex-cli",
       "openai-api-key",
+      "codex-cli",
       "gemini-cli",
       "claude-cli",
     ]);
@@ -397,7 +389,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({}),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
 
@@ -422,7 +413,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({}),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
 
@@ -438,7 +428,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true }),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => ({ type: "oauth" }),
       },
     });
     expect(candidates.map((candidate) => candidate.kind)).toEqual(["codex-cli", "claude-cli"]);
@@ -456,12 +445,15 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({ claude: true, codex: true, gemini: true }),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
         readGeminiCliCredentials: () => null,
       },
     });
 
     expect(candidates).toMatchObject([
+      {
+        kind: "codex-cli",
+        detail: "logged in",
+      },
       {
         kind: "gemini-cli",
         detail: "installed; login status unavailable",
@@ -469,10 +461,6 @@ describe("detectInferenceBackends", () => {
       {
         kind: "claude-cli",
         detail: "installed, not logged in — run `claude auth login`, then check again",
-      },
-      {
-        kind: "codex-cli",
-        detail: "installed, not logged in — run `codex login`, then check again",
       },
     ]);
     expect(
@@ -553,12 +541,15 @@ describe("detectInferenceBackends", () => {
         env: {},
         platform: "linux",
         deps: {
-          probeLocalCommand: probeDeps({ claude: true, codex: true }),
+          probeLocalCommand: async (command) => ({
+            command,
+            found: command === "claude" || command === "codex",
+            ...(command === "codex" ? { version: "Logged in using ChatGPT" } : {}),
+          }),
           detectClaudeLoginState: async () => ({
             credentials: true,
             authKind: "claude-subscription",
           }),
-          readCodexCliCredentials: () => ({ type: "oauth" }),
           randomInt: () => pick,
         },
       });
@@ -580,7 +571,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({ claude: true }),
         detectClaudeLoginState: async () => ({ credentials: undefined }),
-        readCodexCliCredentials: () => null,
       },
     });
     expect(candidates).toHaveLength(1);
@@ -669,14 +659,13 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({ [appCli]: true }),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
 
     expect(candidates).toHaveLength(1);
     expect(candidates[0]).toMatchObject({
       kind: "codex-cli",
-      detail: "installed",
+      detail: "logged in",
     });
   });
 
@@ -696,11 +685,10 @@ describe("detectInferenceBackends", () => {
           };
         },
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
 
-    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "installed" }]);
+    expect(candidates).toMatchObject([{ kind: "codex-cli", detail: "logged in" }]);
     expect(probed).toContain(chatGPTCli);
     expect(probed).not.toContain(legacyCodexCli);
   });
@@ -712,7 +700,6 @@ describe("detectInferenceBackends", () => {
       deps: {
         probeLocalCommand: probeDeps({}),
         detectClaudeLoginState: async () => ({ credentials: false }),
-        readCodexCliCredentials: () => null,
       },
     });
     expect(candidates).toEqual([]);

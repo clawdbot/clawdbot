@@ -12,6 +12,7 @@ import {
   parseLegacyCredentialEntry,
 } from "../../../agents/auth-profiles/persisted.js";
 import { isLegacyCodexProviderId } from "../../../config/legacy-codex-provider.js";
+import { getCliSessionBinding } from "../../../config/sessions/cli-session-binding.js";
 import {
   applySessionEntryReplacements,
   iterateDoctorSessionKeyBatches,
@@ -43,6 +44,7 @@ import type {
   CodexSessionRouteRepairSummary,
   SessionRouteRepairResult,
 } from "./codex-route-types.js";
+import { migrateLegacyRuntimeModelRef } from "./legacy-runtime-model-providers.js";
 
 function rewriteSessionModelPair(params: {
   entry: SessionEntry;
@@ -92,6 +94,82 @@ function rewriteSessionModelPair(params: {
       params.entry[params.modelKey] = canonicalModel;
       changed = true;
     }
+  }
+  const modelRefMigration =
+    model && (!provider || isLegacyRuntimeProvider(provider))
+      ? migrateLegacyRuntimeModelRef(model)
+      : null;
+  const rawRef = modelRefMigration ? model : provider ? `${provider}/${model ?? ""}` : model;
+  const migrated = modelRefMigration ?? (rawRef ? migrateLegacyRuntimeModelRef(rawRef) : null);
+  if (migrated) {
+    if (params.entry[params.providerKey] !== migrated.provider) {
+      params.entry[params.providerKey] = migrated.provider;
+      changed = true;
+    }
+    if (params.entry[params.modelKey] !== migrated.model) {
+      params.entry[params.modelKey] = migrated.model;
+      changed = true;
+    }
+    if (
+      params.entry.agentRuntimeOverride === undefined ||
+      normalizeRuntimeString(params.entry.agentRuntimeOverride) === "auto"
+    ) {
+      params.entry.agentRuntimeOverride = migrated.runtime;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function isLegacyRuntimeProvider(provider: string): boolean {
+  return ["anthropic", "claude-cli", "google", "google-gemini-cli"].includes(provider);
+}
+
+function isCodexSessionRoute(entry: SessionEntry): boolean {
+  const providers = [entry.modelProvider, entry.providerOverride]
+    .filter((provider): provider is string => typeof provider === "string")
+    .map((provider) => provider.trim().toLowerCase());
+  return (
+    providers.some((provider) => provider === "codex" || provider === "openai-codex") ||
+    [entry.model, entry.modelOverride].some(
+      (model) => typeof model === "string" && isOpenAICodexModelRef(model),
+    ) ||
+    normalizeRuntimeString(entry.agentRuntimeOverride) === "codex"
+  );
+}
+
+function migrateLegacyClaudeSessionField(entry: SessionEntry): boolean {
+  const legacySessionId = normalizeString(entry.claudeCliSessionId);
+  if (!legacySessionId) {
+    return false;
+  }
+  const binding = getCliSessionBinding(entry, "claude-cli");
+  if (!binding) {
+    const bindings = isRecord(entry.cliSessionBindings) ? entry.cliSessionBindings : {};
+    entry.cliSessionBindings = {
+      ...bindings,
+      "claude-cli": { sessionId: legacySessionId },
+    };
+  }
+  delete entry.claudeCliSessionId;
+  return true;
+}
+
+function normalizeCodexSessionHarness(entry: SessionEntry, knownCodexRoute = false): boolean {
+  if (!knownCodexRoute && !isCodexSessionRoute(entry)) {
+    return false;
+  }
+  let changed = false;
+  if (
+    entry.agentHarnessId?.trim().toLowerCase() === "codex-cli" ||
+    (knownCodexRoute && entry.agentHarnessId === undefined)
+  ) {
+    entry.agentHarnessId = "codex";
+    changed = true;
+  }
+  if (entry.agentRuntimeOverride?.trim().toLowerCase() === "codex-cli") {
+    entry.agentRuntimeOverride = "codex";
+    changed = true;
   }
   return changed;
 }
@@ -198,6 +276,8 @@ function repairCodexSessionStoreRoutes(params: {
     if (!entry || isValidAgentHarnessSessionStoreEntry(sessionKey, entry)) {
       continue;
     }
+    const normalizeLegacyCodexHarness = entry.agentHarnessId?.trim().toLowerCase() === "codex-cli";
+    const codexModelRoute = isCodexSessionRoute(entry);
     const changedRuntimeModelRoute = rewriteSessionModelPair({
       entry,
       providerKey: "modelProvider",
@@ -219,13 +299,17 @@ function repairCodexSessionStoreRoutes(params: {
     );
     const changedModelRoute =
       changedRuntimeModelRoute || changedOverrideModelRoute || changedProviderlessOverride;
+    const changedLegacyClaudeSession = migrateLegacyClaudeSessionField(entry);
     const changedFallbackNotice = clearStaleCodexFallbackNotice(
       entry,
       params.blockedModelIdentities,
     );
     const changedRuntimePins = changedModelRoute
-      ? preserveRepairedSessionRuntimeIntent(entry)
+      ? codexModelRoute
+        ? preserveRepairedSessionRuntimeIntent(entry)
+        : false
       : false;
+    const changedCodexHarness = normalizeCodexSessionHarness(entry, normalizeLegacyCodexHarness);
     // Providerless route repair first needs the legacy profile prefix; only the
     // auth migration owner's exact collision-aware map may rewrite its identity.
     const mappedAuthProfileId =
@@ -241,7 +325,9 @@ function repairCodexSessionStoreRoutes(params: {
       !changedModelRoute &&
       !changedFallbackNotice &&
       !changedRuntimePins &&
-      !changedAuthProfile
+      !changedAuthProfile &&
+      !changedLegacyClaudeSession &&
+      !changedCodexHarness
     ) {
       continue;
     }
@@ -330,8 +416,35 @@ function sessionEntryHasLegacyCodexRoute(
       )) ||
     (typeof entry.authProfileOverride === "string" &&
       authProfileIdMap?.has(entry.authProfileOverride)) ||
+    legacyRuntimeSessionPairRewrites(entry, blockedModelIdentities) ||
+    normalizeString(entry.claudeCliSessionId) !== undefined ||
+    (isCodexSessionRoute(entry) &&
+      (entry.agentHarnessId?.trim().toLowerCase() === "codex-cli" ||
+        entry.agentRuntimeOverride?.trim().toLowerCase() === "codex-cli")) ||
     hasRewritableFallbackNotice;
   return hasLegacyRoute;
+}
+
+/** The rewriter is the one owner of the pairing rules; ask it on a scratch copy. */
+function legacyRuntimeSessionPairRewrites(
+  entry: SessionEntry,
+  blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
+): boolean {
+  const scratch = structuredClone(entry);
+  return (
+    rewriteSessionModelPair({
+      entry: scratch,
+      providerKey: "modelProvider",
+      modelKey: "model",
+      blockedModelIdentities,
+    }) ||
+    rewriteSessionModelPair({
+      entry: scratch,
+      providerKey: "providerOverride",
+      modelKey: "modelOverride",
+      blockedModelIdentities,
+    })
+  );
 }
 
 function resolveVerifiedSessionAuthProfileIdMap(params: {

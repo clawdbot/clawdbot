@@ -54,7 +54,7 @@ describe("prepared reply dispatch runtime", () => {
       ),
     );
     mocks.discoverAuthStorage.mockImplementation((_dir, options) => ({
-      getAll: () => (options as DiscoverAuthStorageOptions).ambientCredentials,
+      getAll: () => (options as DiscoverAuthStorageOptions).ambientCredentials?.credentials ?? {},
       getOAuthProviders: () => [],
     }));
     mocks.configuredAgentIds = ["default"];
@@ -83,7 +83,6 @@ describe("prepared reply dispatch runtime", () => {
     );
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
     });
     const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
     const input = {
@@ -94,11 +93,10 @@ describe("prepared reply dispatch runtime", () => {
       runtimePluginSelections: [{ provider: "selected", modelId: "model", runtime: "openclaw" }],
     };
     const lease = await acquireAgentRunPreparedModelRuntime(input, {
-      catalogMode: "static",
       pluginGeneration: published.pluginGeneration,
     });
     expect(lease.snapshot.pluginRegistry === selectedRegistry).toBe(true);
-    expect(lease.snapshot.authModes.selected).toBe("api_key");
+    expect(lease.snapshot.providerAuth.selected).toEqual({ mode: "api_key" });
     expect(published.pluginGeneration.preparedStaticProviderCatalog?.providers).toBeUndefined();
     lease.release();
     const publishedRefresh = createDeferred();
@@ -110,7 +108,9 @@ describe("prepared reply dispatch runtime", () => {
     mocks.mutationListener?.({ affectsInheritedStores: true });
     await publishedRefresh.promise;
     unregister();
-    expect(getPreparedModelRuntimeSnapshot(input)?.authModes.selected).toBe("api_key");
+    expect(getPreparedModelRuntimeSnapshot(input)?.providerAuth.selected).toEqual({
+      mode: "api_key",
+    });
   });
 
   it("isolates selected run owners while retaining the published generation and lease lifetime", async () => {
@@ -153,7 +153,6 @@ describe("prepared reply dispatch runtime", () => {
     }));
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
       allowGatewaySubagentBinding: true,
       pluginMetadataSnapshot: createPluginMetadataSnapshot({
         config,
@@ -170,7 +169,6 @@ describe("prepared reply dispatch runtime", () => {
       runtimePluginSelections: [{ provider: "custom", modelId: "model", runtime }],
     });
     const options = {
-      catalogMode: "static" as const,
       pluginGeneration: published.pluginGeneration,
     };
     const leases = await Promise.all(
@@ -238,7 +236,6 @@ describe("prepared reply dispatch runtime", () => {
     });
     await refreshPreparedModelRuntimeSnapshots(firstConfig, {
       gatewayLifecycle: true,
-      catalogMode: "static",
       allowGatewaySubagentBinding: true,
       pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
     });
@@ -272,7 +269,6 @@ describe("prepared reply dispatch runtime", () => {
     let read: ReturnType<typeof loadPublishedGatewayReplyDispatchRuntime> | undefined;
     try {
       refresh = refreshPreparedModelRuntimeSnapshots(replacementConfig, {
-        catalogMode: "static",
         allowGatewaySubagentBinding: true,
         pluginMetadataSnapshot: mocks.pluginMetadataSnapshot as never,
       });
@@ -311,7 +307,6 @@ describe("prepared reply dispatch runtime", () => {
     const config = retainLegacyDefaultAgentId({ agents: { entries: { default: {} } } }, "default");
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
       allowGatewaySubagentBinding: true,
       defaultWorkspaceDir: "/tmp/gateway-launch-workspace",
     });
@@ -363,7 +358,6 @@ describe("prepared reply dispatch runtime", () => {
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
     });
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     const configuredRuntimeBefore = await loadPublishedGatewayReplyDispatchRuntime({
@@ -436,7 +430,6 @@ describe("prepared reply dispatch runtime", () => {
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(config, {
       gatewayLifecycle: true,
-      catalogMode: "static",
     });
     const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
     const workerRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
@@ -475,7 +468,6 @@ describe("prepared reply dispatch runtime", () => {
       {},
       {
         gatewayLifecycle: true,
-        catalogMode: "static",
       },
     );
     const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
@@ -504,7 +496,7 @@ describe("prepared reply dispatch runtime", () => {
     );
   });
 
-  it("aborts run admission without retaining an owner after auth publication", async () => {
+  it("aborts run admission during auth refresh without retaining an owner", async () => {
     mocks.configuredAgentIds = ["default"];
     const config = {};
     const input = {
@@ -514,45 +506,16 @@ describe("prepared reply dispatch runtime", () => {
       workspaceDir: "/tmp/dynamic-workspace",
     };
     await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
-    const testApi = getPreparedModelRuntimeTestApi();
-    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-    const finishAuthRefreshGate = createDeferred();
-    let finishAuthRefresh: (() => void) | undefined;
-    mocks.ensureOpenClawModelsJson.mockImplementationOnce(async (_config, agentDir) => {
-      finishAuthRefresh = () => finishAuthRefreshGate.resolve();
-      await finishAuthRefreshGate.promise;
-      return { agentDir: String(agentDir), wrote: false };
-    });
+    const ownerCount = getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest();
+    const abort = new AbortController();
+    mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
 
-    let admission: ReturnType<typeof acquireAgentRunPreparedModelRuntime> | undefined;
-    try {
-      mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
-      await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
-      const abort = new AbortController();
-      admission = acquireAgentRunPreparedModelRuntime(input, { abortSignal: abort.signal });
-      const observed = admission.then(
-        () => "resolved",
-        () => "rejected",
-      );
-      await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
-      abort.abort(new Error("request cancelled"));
-      await expect(admission).rejects.toMatchObject({ name: "AbortError" });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-
-      finishAuthRefreshGate.resolve();
-      await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
-      const lease = await acquireAgentRunPreparedModelRuntime(input);
-      expect(lease.snapshot).toMatchObject({ agentId: "default", agentDir: input.agentDir });
-      expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
-      lease.release();
-    } finally {
-      finishAuthRefreshGate.resolve();
-      await Promise.allSettled([
-        admission?.then((lease) => lease.release()),
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
-      ]);
-    }
+    const admission = acquireAgentRunPreparedModelRuntime(input, { abortSignal: abort.signal });
+    abort.abort(new Error("request cancelled"));
+    await expect(admission).rejects.toMatchObject({ name: "AbortError" });
+    expect(getPreparedModelRuntimeTestApi().getPreparedModelRuntimeOwnerCountForTest()).toBe(
+      ownerCount,
+    );
   });
 });
 

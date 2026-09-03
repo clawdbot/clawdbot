@@ -11,20 +11,18 @@ import {
 } from "../../agents/agent-scope.js";
 import { listCliRuntimeModelBackendBindings } from "../../agents/cli-backends.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
+import { resolveLegacyInheritedAuthDir } from "../../agents/legacy-inherited-auth-dir.js";
 import { resolveModelAuthLabel } from "../../agents/model-auth-label.js";
-import { loadPreparedModelCatalogSnapshotForBrowse } from "../../agents/model-catalog-browse.js";
 import {
   resolveLogicalModelCatalogEntryState,
   resolveLogicalVisibleModelCatalog,
   type ModelCatalogAuthChecker,
 } from "../../agents/model-catalog-visibility.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import { createProviderAuthChecker } from "../../agents/model-provider-auth.js";
 import { isRetiredModelPickerProvider } from "../../agents/model-runtime-aliases.js";
-import {
-  dedupeModelCatalogEntries,
-  modelCatalogLogicalKey,
-} from "../../agents/model-selection-shared.js";
+import { dedupeModelCatalogEntries } from "../../agents/model-selection-shared.js";
 import {
   buildModelAliasIndex,
   normalizeProviderId,
@@ -33,16 +31,20 @@ import {
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
 import { createModelVisibilityPolicy } from "../../agents/model-visibility-policy.js";
-import { openAIModelCatalogRoutePolicy } from "../../agents/openai-model-routes.js";
+import {
+  modelCatalogLogicalKey,
+  openAIModelCatalogRoutePolicy,
+} from "../../agents/openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-routing.js";
-import { PreparedModelCatalogConfigReplacedError } from "../../agents/prepared-model-catalog.errors.js";
 import * as preparedModelCatalog from "../../agents/prepared-model-catalog.js";
 import { getPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime-auth.js";
+import { loadPreparedModelRuntimeAuthStore } from "../../agents/prepared-model-runtime.auth-store.js";
 import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.types.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
@@ -164,26 +166,6 @@ export async function buildPreparedModelsProviderData(
   agentId?: string,
   options: { view?: "default" | "all"; workspaceDir?: string } = {},
 ): Promise<PreparedModelsProviderData> {
-  return buildPreparedDataForConfig(cfg, agentId, options).catch(async (error: unknown) => {
-    if (!(error instanceof PreparedModelCatalogConfigReplacedError)) {
-      throw error;
-    }
-    // Catalog, defaults, visibility, auth, aliases, and runtime choices share one config generation.
-    const { config } = await preparedModelCatalog.loadPublishedPreparedModelCatalogOwnerSnapshot({
-      config: cfg,
-      readOnly: true,
-      agentId,
-      workspaceDir: options.workspaceDir,
-    });
-    return buildPreparedDataForConfig(config, agentId, options);
-  });
-}
-
-async function buildPreparedDataForConfig(
-  cfg: OpenClawConfig,
-  agentId: string | undefined,
-  options: { view?: "default" | "all"; workspaceDir?: string },
-): Promise<PreparedModelsProviderData> {
   const runtimeNormalization = resolveRuntimeNormalization(cfg);
   const resolvedDefault = resolveDefaultModelForAgent({
     cfg,
@@ -194,29 +176,44 @@ async function buildPreparedDataForConfig(
     options.workspaceDir ??
     (agentId ? resolveAgentWorkspaceDir(cfg, agentId) : undefined) ??
     resolveDefaultAgentWorkspaceDir();
+  const resolvedAgentId = agentId ?? "main";
+  const agentDir = resolveAgentDir(cfg, resolvedAgentId);
+  const inheritedAuthDir = resolveLegacyInheritedAuthDir(cfg);
   const cliRuntimeProviders = new Set(
     listCliRuntimeModelBackendBindings().map((binding) => normalizeProviderId(binding.runtime)),
   );
 
-  let loadedOwner: PreparedModelRuntimeSnapshot | undefined;
-  const snapshot = await loadPreparedModelCatalogSnapshotForBrowse({
-    cfg,
-    agentId,
-    view: options.view ?? "default",
-    loadCatalog: async ({ readOnly }) => {
-      loadedOwner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
-        config: cfg,
-        readOnly,
-        refreshFullCatalog: "stale",
-        ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
-        ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
-      });
-      return loadedOwner.modelCatalog;
-    },
-  });
-  // A timed-out read can complete later. Only pair auth with the catalog actually returned.
-  const owner = loadedOwner?.modelCatalog === snapshot ? loadedOwner : undefined;
-  const authStore = owner && getPreparedModelRuntimeAuthStore(owner);
+  let owner: PreparedModelRuntimeSnapshot | undefined;
+  let snapshot: ModelCatalogSnapshot;
+  let metadataSnapshot: PluginMetadataSnapshot;
+  if (options.view === "all") {
+    owner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
+      config: cfg,
+      readOnly: false,
+      refreshFullCatalog: true,
+      ...(agentId ? { agentId, agentDir: resolveAgentDir(cfg, agentId) } : {}),
+      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+    });
+    snapshot = owner.modelCatalog;
+    metadataSnapshot = owner.metadataSnapshot;
+  } else {
+    owner = await preparedModelCatalog.loadPreparedModelCatalogOwnerSnapshot({
+      config: cfg,
+      readOnly: true,
+      ...(agentId ? { agentId, agentDir } : {}),
+      ...(options.workspaceDir ? { workspaceDir: options.workspaceDir } : {}),
+    });
+    snapshot = owner.modelCatalog;
+    metadataSnapshot = owner.metadataSnapshot;
+  }
+  const authStore =
+    (owner && getPreparedModelRuntimeAuthStore(owner)) ??
+    loadPreparedModelRuntimeAuthStore({
+      agentId: resolvedAgentId,
+      agentDir,
+      config: cfg,
+      ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
+    });
   const catalog = snapshot.entries;
   const visibilityPolicy = createModelVisibilityPolicy({
     cfg,
@@ -233,12 +230,8 @@ async function buildPreparedDataForConfig(
     allowPluginSyntheticAuth: false,
     discoverExternalCliAuth: false,
     allowPreparedRuntimeAuth: true,
-    ...(authStore && owner
-      ? {
-          preparedAuth: { authStore, authModes: owner.authModes },
-          metadataSnapshot: owner.metadataSnapshot,
-        }
-      : {}),
+    preparedAuth: { authStore, providerAuth: owner?.providerAuth ?? {} },
+    metadataSnapshot,
   });
   const logicalModelKey = (entry: { provider: string; id: string }) =>
     openAIModelCatalogRoutePolicy.resolveIdentity(entry)?.key ?? modelCatalogLogicalKey(entry);

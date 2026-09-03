@@ -1,4 +1,3 @@
-/** Shared attempt, error, and harness helpers for model fallback execution. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { TRANSCRIPT_NOT_CONTINUABLE_ERROR_CODE } from "../../packages/agent-core/src/errors.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -22,6 +21,8 @@ import {
 import { isLikelyContextOverflowError } from "./failover/classify.js";
 import type { FailoverReason } from "./failover/signal.js";
 import { MissingAgentHarnessError, isAgentHarnessPreflightError } from "./harness/errors.js";
+/** Shared attempt, error, and harness helpers for model fallback execution. */
+import type { AgentHarnessRuntimeSource } from "./harness/policy.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
@@ -434,7 +435,7 @@ export function resolveModelFallbackCandidateAgentRuntime(
   agentHarnessRuntimeOverride?: string;
   explicitAgentRuntime?: string;
   runtime?: string;
-  runtimeSource?: "model" | "provider" | "implicit";
+  runtimeSource?: AgentHarnessRuntimeSource;
 } {
   const agentHarnessRuntimeOverride = params.resolveAgentHarnessRuntimeOverride?.(
     params.provider,

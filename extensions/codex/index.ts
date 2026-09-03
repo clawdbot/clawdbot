@@ -17,6 +17,7 @@ import {
   createCodexAppServerNativeCompaction,
 } from "./harness.js";
 import { buildCodexMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import { buildMigrationProvider } from "./migration-provider-api.js";
 import { readCodexPluginConfig } from "./src/app-server/config.js";
 import { createCodexAppServerConnectionHealthService } from "./src/app-server/connection-health.js";
 import { createCodexDesktopGenerationService } from "./src/app-server/desktop-generation.js";
@@ -37,7 +38,6 @@ import { createCodexAppServerProcessReaperService } from "./src/app-server/trans
 import type { CodexPluginsConfigBlock } from "./src/command-plugins-management.js";
 import { createCodexCommand } from "./src/commands.js";
 import { codexConversationBindingRuntime } from "./src/conversation-binding.js";
-import { buildCodexMigrationProvider } from "./src/migration/provider.js";
 import { createCodexPluginsTool } from "./src/native-plugin-tool.js";
 import { createCodexThreadsTool } from "./src/native-thread-tool.js";
 import {
@@ -234,7 +234,7 @@ export default definePluginEntry({
     api.registerWebSearchProvider(
       createCodexWebSearchProvider({ resolvePluginConfig: resolveCurrentPluginConfig }),
     );
-    api.registerMigrationProvider(buildCodexMigrationProvider({ runtime: api.runtime }));
+    api.registerMigrationProvider(buildMigrationProvider({ runtime: api.runtime }));
     api.registerTool(
       (context) =>
         createCodexThreadsTool({

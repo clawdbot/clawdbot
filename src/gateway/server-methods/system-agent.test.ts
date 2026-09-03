@@ -41,9 +41,9 @@ import type {
   SystemAgentVerifiedInferenceDeps,
 } from "../../system-agent/verified-inference.js";
 import type { WizardPrompter } from "../../wizard/prompts.js";
-import type { WizardSession } from "../../wizard/session.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createWizardSessionTracker } from "../server-wizard-sessions.js";
 import { runExclusiveSystemAgentSetupActivation } from "./setup-admission.js";
 import { systemAgentHandlers, type SystemAgentChatSession } from "./system-agent.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
@@ -121,14 +121,10 @@ function makeContext(sessions: Map<string, SystemAgentChatSession>): GatewayRequ
 }
 
 function makeWizardContext() {
-  const wizardSessions = new Map<string, WizardSession>();
+  const tracker = createWizardSessionTracker();
   return {
-    wizardSessions,
-    context: {
-      wizardSessions,
-      findRunningWizard: () => undefined,
-      purgeWizardSession: (id: string) => wizardSessions.delete(id),
-    } as unknown as GatewayRequestContext,
+    wizardSessions: tracker.wizardSessions,
+    context: { ...tracker, getRuntimeConfig: () => ({}) } as unknown as GatewayRequestContext,
   };
 }
 

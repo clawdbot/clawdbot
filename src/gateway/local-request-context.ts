@@ -22,6 +22,7 @@ import {
   readPreparedGatewayModelCatalog,
   readPreparedGatewayModelCatalogOwnerSnapshot,
 } from "./server-model-catalog.js";
+import { createWizardSessionTracker } from "./server-wizard-sessions.js";
 
 // Embedded/local agent calls need enough GatewayRequestContext to reuse server
 // methods without starting the full gateway. Unsupported subsystems fail loudly
@@ -73,6 +74,7 @@ function createLocalGatewayRequestContext(
   };
   const sessionEvents = new Set<string>();
   const chatRunState = createChatRunState();
+  const wizardSessionTracker = createWizardSessionTracker();
   const loadCatalogSnapshot: GatewayRequestContext["loadGatewayModelCatalogSnapshot"] = (
     loadParams,
   ) => loadGatewayModelCatalogSnapshot({ ...loadParams, getConfig: params.getRuntimeConfig });
@@ -147,10 +149,8 @@ function createLocalGatewayRequestContext(
     getSessionEventSubscriberConnIds: () => sessionEvents,
     registerToolEventRecipient: () => {},
     dedupe: new Map(),
-    wizardSessions: new Map(),
+    ...wizardSessionTracker,
     systemAgentSessions: new Map(),
-    findRunningWizard: () => null,
-    purgeWizardSession: () => {},
     getRuntimeSnapshot: () => ({}) as ChannelRuntimeSnapshot,
     startChannel: async () => {
       throw new Error("Channel start is unavailable in local embedded agent gateway context.");

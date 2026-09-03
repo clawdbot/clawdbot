@@ -1908,26 +1908,6 @@ describe("cli session history", () => {
       expectCliSessionMarker(messages[1], sessionId);
     });
   });
-
-  it("falls back to legacy claudeCliSessionId when newer fields are absent", async () => {
-    await withClaudeProjectsDir(async ({ homeDir, sessionId }) => {
-      const messages = resolveChatHistoryWithCliSessionImports({
-        entry: {
-          sessionId: "openclaw-session",
-          updatedAt: Date.now(),
-          claudeCliSessionId: sessionId,
-        },
-        provider: "claude-cli",
-        localMessages: [],
-        homeDir,
-      }).messages;
-      expect(messages).toHaveLength(3);
-      expectFields(messages[0], {
-        role: "user",
-      });
-      expectCliSessionMarker(messages[0], sessionId);
-    });
-  });
 });
 
 describe("readClaudeCliFallbackSeed", () => {

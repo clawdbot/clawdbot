@@ -68,7 +68,6 @@ export {
   upsertAuthProfileWithLockCompat as upsertAuthProfileWithLock,
 } from "./provider-auth-write-compat.js";
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
-export { readCodexCliCredentialsCached } from "../agents/cli-credentials.js";
 export { readClaudeCliCredentialsCached } from "./provider-auth-claude-compat.js";
 export { suggestOAuthProfileIdForLegacyDefault } from "../agents/auth-profiles/repair.js";
 export {

@@ -309,8 +309,7 @@ async function expectNativeHarnessModelsPublished(params: {
   metadataSnapshot: PluginMetadataSnapshot;
   snapshot: PreparedModelRuntimeSnapshot;
 }): Promise<void> {
-  const registry = params.snapshot.pluginRegistry;
-  if (!registry) {
+  if (!params.snapshot.pluginRegistry) {
     throw new Error("expected prepared plugin registry");
   }
   const previousRegistry = captureActivePluginRegistrySnapshot();
@@ -336,22 +335,15 @@ async function expectNativeHarnessModelsPublished(params: {
       snapshot: catalog,
       metadataSnapshot: params.metadataSnapshot,
       preparedAuthStore: fullAuth.authStore,
-      preparedRuntimeAuthModes: fullAuth.authModes,
-      pluginRegistry: registry,
-      isCurrent: params.snapshot.isCurrent,
-      observationConfig: params.snapshot.observationConfig,
+      preparedProviderAuth: fullAuth.providerAuth,
     });
-    const hostEvaluation = await projector.evaluateEntry(nativeEntry!);
-    expect(projector.evaluateNative(nativeEntry!, hostEvaluation)).toMatchObject({
+    await expect(projector.evaluateEntry(nativeEntry!)).resolves.toMatchObject({
       availability: true,
     });
     const preparedModels = await buildModelsListResult({
-      context,
+      source: { kind: "published", context, config: params.config, snapshot: catalog, projector },
       agentId: "main",
       params: { view: "configured" },
-      preloadedCatalog: { agentId: "main", config: params.config, snapshot: catalog },
-      preloadedOnly: true,
-      catalogProjector: projector,
     });
     expect(preparedModels.models).toContainEqual(
       expect.objectContaining({
@@ -482,7 +474,6 @@ export async function expectNativeHarnessModelsPublishedFromWorker(params: {
       ],
       new Map(),
       30_000,
-      "static",
     ).pending
   )[0]!;
   await expectNativeHarnessModelsPublished({

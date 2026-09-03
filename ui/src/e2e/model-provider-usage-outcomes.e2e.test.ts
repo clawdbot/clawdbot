@@ -267,8 +267,8 @@ suite.define(() => {
             "models.authStatus": {
               ts: now,
               providerCapabilities: [
-                { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
-                { provider: "google", apiKeySupported: true, quickApiKeySetup: true },
+                { provider: "openai", apiKeySupported: true },
+                { provider: "google", apiKeySupported: true },
               ],
               providers: [
                 {
@@ -285,7 +285,7 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}settings/model-providers`);
         const openaiCard = page.locator('[data-provider-id="openai"]');
-        await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
+        await expect.poll(async () => openaiCard.textContent()).toContain("Access");
         await openaiCard.getByRole("button", { name: "Replace key" }).click();
         if (recordVisuals) {
           await mkdir(path.join(suite.artifactDir, "model-providers"), { recursive: true });
@@ -302,7 +302,9 @@ suite.define(() => {
         const agentPicker = page.locator(".agent-scope-control openclaw-agent-select");
         await agentPicker.locator(".agent-select__trigger").click();
         await agentPicker.locator('wa-dropdown-item[aria-label="Writer"]').click();
-        await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Writer");
+        await expect
+          .poll(async () => agentPicker.locator(".agent-select__trigger").textContent())
+          .toContain("Writer");
         await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         if (recordVisuals) {
@@ -315,17 +317,6 @@ suite.define(() => {
           });
         }
 
-        const addSection = page.locator(".settings-section", {
-          has: page.getByRole("heading", { name: "Add provider" }),
-        });
-        await addSection.getByRole("button", { name: "Add provider", exact: true }).click();
-        await addSection.getByLabel("Provider").selectOption("google");
-        await addSection.getByLabel("API key").fill("synthetic-writer-provider-key");
-        await agentPicker.locator(".agent-select__trigger").click();
-        await agentPicker.locator('wa-dropdown-item[aria-label="Main"]').click();
-        await expect.poll(async () => openaiCard.textContent()).toContain("Credentials for Main");
-        await expect.poll(async () => page.locator(".model-providers__add-form").count()).toBe(0);
-        await expect.poll(async () => openaiCard.locator('input[type="password"]').count()).toBe(0);
         expect(await gateway.getRequests("config.patch")).toHaveLength(0);
         if (recordVisuals) {
           await page.screenshot({

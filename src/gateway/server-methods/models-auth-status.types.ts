@@ -3,6 +3,7 @@ import type {
   AuthProviderHealthStatus,
 } from "../../agents/auth-health.js";
 import type { AuthCredentialReasonCode } from "../../agents/auth-profiles/credential-state.js";
+import type { SecretRefSource } from "../../config/types.secrets.js";
 import type {
   ProviderUsageBilling,
   UsageProviderId,
@@ -21,8 +22,10 @@ export type ModelAuthStatusProfile = {
   type: "oauth" | "token" | "api_key";
   status: AuthProfileHealthStatus;
   reasonCode?: AuthCredentialReasonCode;
+  /** Non-secret reference identity for an unresolved credential. */
+  secretRef?: { source: SecretRefSource; id: string };
   expiry?: ModelAuthExpiry;
-  /** True only for saved OAuth/token profiles this gateway can remove. */
+  /** True only for saved profiles this gateway can remove. */
   logoutSupported?: boolean;
   /** Credential refresh is owned by an external CLI rather than OpenClaw. */
   externallyManaged?: boolean;
@@ -41,6 +44,8 @@ export type ModelAuthStatusProvider = {
   status: AuthProviderHealthStatus;
   expiry?: ModelAuthExpiry;
   profiles: ModelAuthStatusProfile[];
+  /** Native runtime that owns prepared authentication without creating an auth profile. */
+  agentRuntime?: { id: string; source: "auth" };
   /** Explicit stored/config priority. Omitted when selection is automatic. */
   profileOrder?: string[];
   /** True when the priority is a stored override that can be reset. */
@@ -66,6 +71,11 @@ export type ModelProviderCapability = {
   provider: string;
   apiKeySupported: boolean;
   quickApiKeySetup: boolean;
+  accessOptions?: Array<{
+    id: string;
+    label: string;
+    mode: "login" | "setup";
+  }>;
 };
 
 export type ModelAuthStatusResult = {

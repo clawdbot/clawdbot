@@ -26,6 +26,7 @@ const AgentRuntimeSourceSchema = Type.Union([
   Type.Literal("implicit"),
   Type.Literal("session"),
   Type.Literal("session-key"),
+  Type.Literal("auth"),
 ]);
 const AgentsListOutputSchema = Type.Object(
   {

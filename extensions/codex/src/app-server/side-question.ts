@@ -248,7 +248,10 @@ export async function runCodexAppServerSideQuestion(
         authProfileId: preparedRuntimeAuth.plan.forwardedAuthProfileId,
         authProfileStore: preparedRuntimeAuth.authProfileStore,
         agentDir: params.agentDir,
-        homeScope: resolveCodexAppServerHomeScope({ appServer: pluginConfig.appServer }),
+        homeScope: resolveCodexAppServerHomeScope({
+          appServer: pluginConfig.appServer,
+          nativeAuth: preparedRuntimeAuth.plan.deferredRouteSupport !== undefined,
+        }),
         requirePreparedAuth: isCodexRemoteExecPlacementSandbox(params.sandbox),
         config: params.cfg,
         subscriptionProfileRequiredError:
@@ -566,7 +569,9 @@ export async function runCodexAppServerSideQuestion(
             authMode:
               startupPreparedAuth?.kind === "api-key"
                 ? ("prepared-api-key" as const)
-                : ("profile" as const),
+                : connection.appServer.start.homeScope === "user"
+                  ? ("native" as const)
+                  : ("profile" as const),
           }
         : {}),
       config: params.cfg,
@@ -675,6 +680,7 @@ export async function runCodexAppServerSideQuestion(
       ensureCodexAppServerClientRuntime(client, {
         agentDir: params.agentDir,
         authProfileId: connection.requestAuthProfileId,
+        authMode: connection.appServer.start.homeScope === "user" ? "native" : "profile",
         config: params.cfg,
       });
       removeNotificationHandler = client.addNotificationHandler(handleNotification);

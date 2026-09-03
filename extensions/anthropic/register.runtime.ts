@@ -35,7 +35,6 @@ import {
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildAnthropicCliBackend } from "./cli-backend.js";
 import {
-  CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF,
   CLAUDE_CLI_OFF_THINKING_PROFILE,
   CLAUDE_CLI_PROFILE_ID,
   CLAUDE_MODEL_ID_ALIASES,
@@ -43,6 +42,7 @@ import {
 import {
   CLAUDE_CLI_BACKEND_ID,
   CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS,
+  CLAUDE_CLI_DEFAULT_MODEL_REF,
   supportsClaudeDynamicSystemPromptSections,
 } from "./cli-shared.js";
 import {
@@ -176,12 +176,6 @@ function resolveAnthropicModelCost(modelId: string) {
     ? resolveAnthropicSonnet5Cost()
     : manifest.modelCatalog.providers.anthropic.models.find((model) => model.id === id)?.cost;
 }
-
-const CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS = CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS.map((ref) =>
-  ref.startsWith(`${CLAUDE_CLI_BACKEND_ID}/`)
-    ? `anthropic/${ref.slice(CLAUDE_CLI_BACKEND_ID.length + 1)}`
-    : ref,
-);
 
 function resolveAnthropic46ForwardCompatModel(params: {
   ctx: ProviderResolveDynamicModelContext;
@@ -772,8 +766,8 @@ export function buildAnthropicProvider(): ProviderPlugin {
           groupLabel: "Anthropic",
           groupHint: "Claude CLI + API key",
           modelAllowlist: {
-            allowedKeys: [...CLAUDE_CLI_CANONICAL_ALLOWLIST_REFS],
-            initialSelections: [CLAUDE_CLI_CANONICAL_DEFAULT_MODEL_REF],
+            allowedKeys: [...CLAUDE_CLI_DEFAULT_ALLOWLIST_REFS],
+            initialSelections: [CLAUDE_CLI_DEFAULT_MODEL_REF],
             message: "Claude CLI models",
           },
         },

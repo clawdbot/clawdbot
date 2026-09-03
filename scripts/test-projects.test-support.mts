@@ -587,7 +587,6 @@ const PRECISE_SOURCE_TEST_TARGETS = new Map<string, string[]>([
   ],
   ["test/fixtures/vitest-fork-shutdown.mjs", ["test/scripts/vitest-fork-shutdown.test.ts"]],
   ...[
-    "src/system-agent/setup-inference-persist.ts",
     "src/agents/embedded-agent-runner/run/attempt-dispatch-preparation.ts",
     "src/agents/embedded-agent-runner/run/run-attempt-dispatch.ts",
   ].map<[string, string[]]>((sourcePath) => [
@@ -2931,7 +2930,6 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/system-agent/system-agent.test.ts",
       "src/system-agent/operations.test.ts",
       "src/system-agent/overview.test.ts",
-      "src/system-agent/setup-inference.test.ts",
       "src/system-agent/audit.test.ts",
     ],
   ],

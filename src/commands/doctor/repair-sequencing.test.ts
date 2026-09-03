@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   repairStaleOAuthProfileShadows: vi.fn(),
   repairMissingConfiguredPluginInstalls: vi.fn(),
   repairStaleAgentModelRefs: vi.fn(),
+  repairStaleGeneratedModelProviders: vi.fn(),
   resolveConfigWidePluginManifestRegistry: vi.fn(),
   resolveAuthProfileOrder: vi.fn(),
   resolveProviderInstallCatalogEntries: vi.fn(),
@@ -76,6 +77,10 @@ vi.mock("./shared/missing-configured-plugin-install.js", () => ({
 
 vi.mock("./shared/stale-agent-model-ref-repair.js", () => ({
   repairStaleAgentModelRefs: mocks.repairStaleAgentModelRefs,
+}));
+
+vi.mock("./shared/stale-generated-model-providers.js", () => ({
+  repairStaleGeneratedModelProviders: mocks.repairStaleGeneratedModelProviders,
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
@@ -314,6 +319,7 @@ describe("doctor repair sequencing", () => {
       changes: [],
       warnings: [],
     }));
+    mocks.repairStaleGeneratedModelProviders.mockReturnValue({ changes: [], warnings: [] });
     mocks.repairStaleOAuthProfileShadows.mockResolvedValue({
       changes: [],
       warnings: [],
@@ -1092,19 +1098,6 @@ describe("doctor repair sequencing", () => {
       pluginInventoryChanged: true,
       records: {},
     });
-    const { repairStaleAgentModelRefs: repairStaleAgentModelRefsActual } = await vi.importActual<
-      typeof import("./shared/stale-agent-model-ref-repair.js")
-    >("./shared/stale-agent-model-ref-repair.js");
-    mocks.repairStaleAgentModelRefs.mockImplementationOnce(
-      (
-        cfg: OpenClawConfig,
-        options: NonNullable<Parameters<typeof repairStaleAgentModelRefsActual>[1]>,
-      ) =>
-        repairStaleAgentModelRefsActual(cfg, {
-          ...options,
-          persistedProviderIdsByAgentId: new Map([["main", new Set()]]),
-        }),
-    );
     const pluginMetadataSnapshotState = {
       current: staleSnapshot as unknown as PluginMetadataSnapshot,
     };

@@ -28,6 +28,7 @@ import { resolveOwningPluginIdsForProviderRef } from "../plugins/providers.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import { listCliRuntimeProviderIds } from "./cli-backends.js";
 import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
@@ -70,7 +71,6 @@ type ImplicitProviderParams = {
   pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
-  staticCatalogProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
   providerDiscoveryEntriesOnly?: boolean;
   onProviderCatalogOutcome?: (outcome: ProviderCatalogOutcome) => void;
@@ -388,7 +388,15 @@ async function resolvePluginImplicitProviders(
     const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
     catalogCountsByPluginId.set(pluginId, (catalogCountsByPluginId.get(pluginId) ?? 0) + 1);
   }
+  // CLI runtime aliases (claude-cli) exist for synthetic auth only; their models live under the
+  // canonical provider, so they never become a models.json provider.
+  const cliRuntimeAliases = new Set(
+    listCliRuntimeProviderIds({ config: ctx.config, includeSetupRegistry: true }),
+  );
   for (const provider of byOrder[order]) {
+    if (cliRuntimeAliases.has(normalizeProviderId(provider.id))) {
+      continue;
+    }
     const pluginId = provider.pluginId ?? normalizeProviderId(provider.id);
     const ownerProviderIds = ctx.providerDiscoveryScope?.get(pluginId);
     const providerIds =
@@ -581,12 +589,7 @@ async function runProviderCatalogWithTimeout(
 export async function prepareImplicitProviderStaticCatalog(
   params: Pick<
     ImplicitProviderParams,
-    | "config"
-    | "env"
-    | "pluginMetadataSnapshot"
-    | "providerDiscoveryProviderIds"
-    | "staticCatalogProviderIds"
-    | "workspaceDir"
+    "config" | "env" | "pluginMetadataSnapshot" | "providerDiscoveryProviderIds" | "workspaceDir"
   >,
 ): Promise<PreparedProviderStaticCatalog> {
   const env = params.env ?? process.env;
@@ -602,30 +605,9 @@ export async function prepareImplicitProviderStaticCatalog(
     discoveryEntriesOnly: true,
     includeSyntheticAuthProviders: true,
   });
-  const staticCatalogProviderIds = params.staticCatalogProviderIds
-    ? new Set(params.staticCatalogProviderIds.map((provider) => normalizeProviderId(provider)))
-    : undefined;
-  const prepared = await prepareProviderStaticCatalog({
-    providers: staticCatalogProviderIds
-      ? providers.filter((provider) => {
-          if ([...staticCatalogProviderIds].some((id) => matchesProviderPluginRef(provider, id))) {
-            return true;
-          }
-          const ownerProviderIds = provider.pluginId
-            ? discoveryScope?.get(provider.pluginId)
-            : undefined;
-          // A family can publish several identities from one static hook without aliases.
-          return (
-            ownerProviderIds?.some((id) => staticCatalogProviderIds.has(id)) === true &&
-            providers.filter(
-              (candidate) => candidate.pluginId === provider.pluginId && candidate.staticCatalog,
-            ).length === 1
-          );
-        })
-      : providers,
-  });
-  // Synthetic auth consumes the complete configured provider entrypoint set. Static results may
-  // be narrower because startup only executes hooks for unresolved configured model refs.
+  // Every provider in the discovery scope gets its curated rows here, so a credential-backed
+  // provider is visible before live discovery lands.
+  const prepared = await prepareProviderStaticCatalog({ providers });
   return Object.freeze({
     providers: Object.freeze(providers),
     entries: prepared.entries,

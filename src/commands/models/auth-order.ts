@@ -113,7 +113,7 @@ export async function modelsAuthOrderClearCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override cleared; ${describeOrderFallback(cfg, provider)}.`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, "update");
 }
 
 /** Sets the provider auth profile priority order after validating each profile id. */
@@ -161,5 +161,5 @@ export async function modelsAuthOrderSetCommand(
   runtime.log(`Agent: ${agentId}`);
   runtime.log(`Provider: ${provider}`);
   runtime.log(`Auth profile order override: ${describeOrder(updated, provider, cfg).join(", ")}`);
-  await refreshRunningGatewayAuthState(agentId);
+  await refreshRunningGatewayAuthState(agentId, "update");
 }

@@ -4,8 +4,9 @@ import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import type { ModelProvidersData } from "./load.ts";
+import { readModelsRouteState, type ModelsRouteState } from "./location.ts";
 
-export type ModelProvidersRouteData = {
+export type ModelProvidersRouteData = ModelsRouteState & {
   /** Gateway source that owned the route preload. */
   gateway: ApplicationContext["gateway"];
   /** Exact Gateway snapshot captured before the preload began. */
@@ -21,6 +22,7 @@ async function loadModelProvidersRouteData(
   context: ApplicationContext,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
+  const routeState = readModelsRouteState(options.location);
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   let agentId = context.agentSelection.state.selectedId;
@@ -38,8 +40,21 @@ async function loadModelProvidersRouteData(
       context.agentSelection.state.selectedId === agentId
     );
   };
+  const emptyRouteData = (
+    routeClient: ModelProvidersRouteData["client"],
+  ): ModelProvidersRouteData => ({
+    ...routeState,
+    gateway,
+    gatewaySnapshot,
+    data: EMPTY_MODEL_PROVIDERS_DATA,
+    client: routeClient,
+    agentId,
+  });
   if (!client || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
+    return emptyRouteData(null);
+  }
+  if (routeState.view === "connect") {
+    return emptyRouteData(client);
   }
   if (!agentId) {
     const roster = await context.agents.ensureList();
@@ -47,9 +62,10 @@ async function loadModelProvidersRouteData(
     agentId = roster ? normalizeAgentId(roster.defaultId) : null;
   }
   if (!agentId || !isCurrent()) {
-    return { gateway, gatewaySnapshot, data: EMPTY_MODEL_PROVIDERS_DATA, client: null, agentId };
+    return emptyRouteData(null);
   }
   return {
+    ...routeState,
     gateway,
     gatewaySnapshot,
     data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
@@ -60,6 +76,7 @@ async function loadModelProvidersRouteData(
 
 export const page = definePage({
   ...routePageSpec("model-providers"),
+  loaderDeps: (_context: ApplicationContext, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

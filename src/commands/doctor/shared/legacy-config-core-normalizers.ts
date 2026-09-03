@@ -16,6 +16,7 @@ import {
   isBlockedLegacyCodexModelRef,
   type LegacyCodexModelIdentity,
 } from "./codex-route-model-ref.js";
+import { rewriteLegacyRuntimeModelRefs } from "./legacy-config-migrations.runtime.models.ref-rewriters.js";
 import { hasOwnKey, isRecord } from "./legacy-config-record-shared.js";
 import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 import {
@@ -23,9 +24,8 @@ import {
   selectedCanonicalModelRefsForRuntimePolicy,
 } from "./legacy-runtime-model-policy.js";
 import {
-  legacyRuntimeModelAliasRequiresRuntimePolicy,
-  listLegacyRuntimeModelProviderAliases,
   migrateLegacyRuntimeModelRef,
+  resolveLegacyCliRuntimeAlias,
 } from "./legacy-runtime-model-providers.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
 
@@ -237,37 +237,10 @@ type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
 type SelectedRuntimeRef = {
   ref: string;
   runtime: string;
-  requiresRuntimePolicy: boolean;
 };
 
 const LEGACY_CODEX_CLI_RUNTIME_ID = "codex-cli";
 const CODEX_APP_SERVER_RUNTIME_ID = "codex";
-
-function resolveLegacyWholeAgentRuntimePolicy(raw: unknown):
-  | {
-      provider: string;
-      runtime: string;
-      requiresRuntimePolicy: boolean;
-    }
-  | undefined {
-  if (!isRecord(raw)) {
-    return undefined;
-  }
-  const runtime = normalizeOptionalLowercaseString(raw.id);
-  if (!runtime || runtime === "auto" || runtime === "openclaw") {
-    return undefined;
-  }
-  const alias = listLegacyRuntimeModelProviderAliases().find(
-    (entry) => entry.cli && normalizeProviderId(entry.runtime) === runtime,
-  );
-  return alias
-    ? {
-        provider: alias.provider,
-        runtime: alias.runtime,
-        requiresRuntimePolicy: alias.requiresRuntimePolicy,
-      }
-    : undefined;
-}
 
 function migrateUnblockedLegacyRuntimeModelRef(
   modelRef: string,
@@ -278,15 +251,16 @@ function migrateUnblockedLegacyRuntimeModelRef(
     : migrateLegacyRuntimeModelRef(modelRef);
 }
 
-function migratedRuntimeRequiresPolicy(legacyProvider: string): boolean {
-  return legacyRuntimeModelAliasRequiresRuntimePolicy(legacyProvider);
-}
-
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
   if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
     return currentEntry ?? legacyEntry;
   }
-  return { ...legacyEntry, ...currentEntry };
+  const merged: Record<string, unknown> = { ...legacyEntry };
+  for (const [key, value] of Object.entries(currentEntry)) {
+    const prior = merged[key];
+    merged[key] = isRecord(prior) && isRecord(value) ? mergeModelEntry(prior, value) : value;
+  }
+  return merged;
 }
 
 function normalizeLegacyCodexCliAgentRuntimePolicy(raw: unknown): {
@@ -312,7 +286,6 @@ function normalizeLegacyRuntimeAgentModelConfig(
   value?: unknown;
   changed: boolean;
   selectedRuntime?: string;
-  selectedRuntimeRequiresPolicy: boolean;
   selectedRefs: SelectedRuntimeRef[];
 } {
   if (typeof raw === "string") {
@@ -322,19 +295,12 @@ function normalizeLegacyRuntimeAgentModelConfig(
           value: migrated.ref,
           changed: true,
           selectedRuntime: migrated.runtime,
-          selectedRuntimeRequiresPolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
-          selectedRefs: [
-            {
-              ref: migrated.ref,
-              runtime: migrated.runtime,
-              requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
-            },
-          ],
+          selectedRefs: [{ ref: migrated.ref, runtime: migrated.runtime }],
         }
-      : { value: raw, changed: false, selectedRuntimeRequiresPolicy: false, selectedRefs: [] };
+      : { value: raw, changed: false, selectedRefs: [] };
   }
   if (!isRecord(raw)) {
-    return { value: raw, changed: false, selectedRuntimeRequiresPolicy: false, selectedRefs: [] };
+    return { value: raw, changed: false, selectedRefs: [] };
   }
 
   const migratedPrimary =
@@ -345,15 +311,9 @@ function normalizeLegacyRuntimeAgentModelConfig(
   const next: Record<string, unknown> = { ...raw };
   const selectedRefs: SelectedRuntimeRef[] = [];
   let selectedRuntime = migratedPrimary?.runtime;
-  let selectedRuntimeRequiresPolicy =
-    migratedPrimary !== null && migratedRuntimeRequiresPolicy(migratedPrimary.legacyProvider);
   if (migratedPrimary) {
     next.primary = migratedPrimary.ref;
-    selectedRefs.push({
-      ref: migratedPrimary.ref,
-      runtime: migratedPrimary.runtime,
-      requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migratedPrimary.legacyProvider),
-    });
+    selectedRefs.push({ ref: migratedPrimary.ref, runtime: migratedPrimary.runtime });
     changed = true;
   }
   if (Array.isArray(raw.fallbacks)) {
@@ -365,20 +325,9 @@ function normalizeLegacyRuntimeAgentModelConfig(
         fallback,
         blockedModelIdentities,
       );
-      if (
-        migratedFallback &&
-        (migratedFallback.runtime === selectedRuntime ||
-          migratedFallback.legacyProvider === LEGACY_CODEX_CLI_RUNTIME_ID)
-      ) {
+      if (migratedFallback) {
         selectedRuntime ??= migratedFallback.runtime;
-        selectedRuntimeRequiresPolicy ||= migratedRuntimeRequiresPolicy(
-          migratedFallback.legacyProvider,
-        );
-        selectedRefs.push({
-          ref: migratedFallback.ref,
-          runtime: migratedFallback.runtime,
-          requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migratedFallback.legacyProvider),
-        });
+        selectedRefs.push({ ref: migratedFallback.ref, runtime: migratedFallback.runtime });
         changed = true;
         return migratedFallback.ref;
       }
@@ -386,38 +335,13 @@ function normalizeLegacyRuntimeAgentModelConfig(
     });
   }
   if (!changed) {
-    return { value: raw, changed: false, selectedRuntimeRequiresPolicy: false, selectedRefs: [] };
+    return { value: raw, changed: false, selectedRefs: [] };
   }
-  return {
-    value: next,
-    changed: true,
-    selectedRuntime,
-    selectedRuntimeRequiresPolicy,
-    selectedRefs,
-  };
-}
-
-function runtimeNeedsExplicitModelPolicy(runtime: string | undefined): runtime is string {
-  return Boolean(runtime && runtime !== "codex");
-}
-
-function mergeModelEntryWithRuntimePolicy(
-  legacyEntry: unknown,
-  currentEntry: unknown,
-  runtime: string | undefined,
-  requiresRuntimePolicy = runtimeNeedsExplicitModelPolicy(runtime),
-): unknown {
-  const merged = mergeModelEntry(legacyEntry, currentEntry);
-  return runtime && requiresRuntimePolicy
-    ? modelEntryWithRuntimePolicy(merged, runtime).entry
-    : merged;
+  return { value: next, changed: true, selectedRuntime, selectedRefs };
 }
 
 function normalizeLegacyRuntimeAllowlistModels(
   rawModels: unknown,
-  selectedRuntime: string | undefined,
-  selectedRuntimeRequiresPolicy: boolean,
-  policyRuntimes: ReadonlySet<string>,
   blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>,
 ): {
   value?: unknown;
@@ -429,43 +353,23 @@ function normalizeLegacyRuntimeAllowlistModels(
 
   let changed = false;
   const next: Record<string, unknown> = {};
-  const legacyEntries: Array<{
-    migratedKey: string;
-    entry: unknown;
-    runtime: string;
-    requiresRuntimePolicy: boolean;
-  }> = [];
+  const legacyEntries: Array<{ migratedKey: string; entry: unknown; runtime: string }> = [];
   for (const [rawKey, entry] of Object.entries(rawModels)) {
     const migrated = migrateUnblockedLegacyRuntimeModelRef(rawKey, blockedModelIdentities);
-    if (
-      migrated &&
-      (migrated.runtime === selectedRuntime ||
-        migrated.legacyProvider === LEGACY_CODEX_CLI_RUNTIME_ID ||
-        policyRuntimes.has(migrated.runtime))
-    ) {
+    if (migrated) {
       changed = true;
-      // Legacy keys only feed the implicit allowlist; once an explicit allowlist
-      // names this runtime, the canonical key replaces them outright.
-      if (!policyRuntimes.has(migrated.runtime)) {
-        next[rawKey] = mergeModelEntry(entry, next[rawKey]);
-      }
-      legacyEntries.push({
-        migratedKey: migrated.ref,
-        entry,
-        runtime: migrated.runtime,
-        requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
-      });
+      legacyEntries.push({ migratedKey: migrated.ref, entry, runtime: migrated.runtime });
       continue;
     }
     next[rawKey] = mergeModelEntry(entry, next[rawKey]);
   }
-  for (const { migratedKey, entry, runtime, requiresRuntimePolicy } of legacyEntries) {
-    next[migratedKey] = mergeModelEntryWithRuntimePolicy(
-      entry,
-      next[migratedKey],
+  // A migrated legacy ref always pins its runtime, including when that runtime is
+  // the default: the legacy provider id was the only record of the operator's choice.
+  for (const { migratedKey, entry, runtime } of legacyEntries) {
+    next[migratedKey] = modelEntryWithRuntimePolicy(
+      mergeModelEntry(entry, next[migratedKey]),
       runtime,
-      requiresRuntimePolicy || (runtime === selectedRuntime && selectedRuntimeRequiresPolicy),
-    );
+    ).entry;
   }
   return { value: next, changed };
 }
@@ -493,11 +397,7 @@ function normalizeLegacyRuntimeModelPolicy(
       return entry;
     }
     runtimes.add(migrated.runtime);
-    selectedRefs.push({
-      ref: migrated.ref,
-      runtime: migrated.runtime,
-      requiresRuntimePolicy: migratedRuntimeRequiresPolicy(migrated.legacyProvider),
-    });
+    selectedRefs.push({ ref: migrated.ref, runtime: migrated.runtime });
     return migrated.ref;
   });
 
@@ -517,10 +417,7 @@ function ensureSelectedModelRuntimePolicies(
   }
   const next: Record<string, unknown> = isRecord(rawModels) ? { ...rawModels } : {};
   let changed = false;
-  for (const { ref, runtime, requiresRuntimePolicy } of selectedRefs) {
-    if (!requiresRuntimePolicy) {
-      continue;
-    }
+  for (const { ref, runtime } of selectedRefs) {
     const current = next[ref];
     const updated = modelEntryWithRuntimePolicy(current, runtime);
     if (!updated.changed) {
@@ -567,7 +464,9 @@ function normalizeLegacyRuntimeAgentContainer(
 ): { value: Record<string, unknown>; changed: boolean } {
   let changed = false;
   const next: Record<string, unknown> = { ...raw };
-  const legacyWholeAgentRuntime = resolveLegacyWholeAgentRuntimePolicy(raw.agentRuntime);
+  const legacyWholeAgentRuntime = resolveLegacyCliRuntimeAlias(
+    isRecord(raw.agentRuntime) ? raw.agentRuntime.id : undefined,
+  );
 
   const model = normalizeLegacyRuntimeAgentModelConfig(raw.model, blockedModelIdentities);
   if (model.changed) {
@@ -582,13 +481,7 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   const modelPolicy = normalizeLegacyRuntimeModelPolicy(raw.modelPolicy, blockedModelIdentities);
-  const models = normalizeLegacyRuntimeAllowlistModels(
-    raw.models,
-    model.selectedRuntime,
-    model.selectedRuntimeRequiresPolicy,
-    modelPolicy.runtimes,
-    blockedModelIdentities,
-  );
+  const models = normalizeLegacyRuntimeAllowlistModels(raw.models, blockedModelIdentities);
   if (models.changed) {
     next.models = models.value;
     changed = true;
@@ -615,11 +508,7 @@ function normalizeLegacyRuntimeAgentContainer(
     const selectedRefs: SelectedRuntimeRef[] = selectedCanonicalModelRefsForRuntimePolicy(
       next.model ?? raw.model,
       legacyWholeAgentRuntime.provider,
-    ).map((ref) => ({
-      ref,
-      runtime: legacyWholeAgentRuntime.runtime,
-      requiresRuntimePolicy: legacyWholeAgentRuntime.requiresRuntimePolicy,
-    }));
+    ).map((ref) => ({ ref, runtime: legacyWholeAgentRuntime.runtime }));
     const modelRuntimes = ensureSelectedModelRuntimePolicies(next.models, selectedRefs);
     if (modelRuntimes.changed) {
       next.models = modelRuntimes.value;
@@ -628,6 +517,12 @@ function normalizeLegacyRuntimeAgentContainer(
         `Moved ${path}.agentRuntime.id ${legacyWholeAgentRuntime.runtime} to matching ${legacyWholeAgentRuntime.provider} model runtime policy.`,
       );
     }
+  }
+
+  if (model.selectedRuntime && isRecord(raw.agentRuntime)) {
+    delete next.agentRuntime;
+    changed = true;
+    changes.push(`Removed ${path}.agentRuntime; runtime is now model scoped.`);
   }
 
   if (modelPolicy.runtimes.size > 0) {
@@ -726,7 +621,8 @@ export function normalizeLegacyRuntimeModelRefs(
   const cfgWithProviders = providerPinned.config;
   const rawAgents = cfgWithProviders.agents;
   if (!isRecord(rawAgents)) {
-    return cfgWithProviders;
+    return rewriteLegacyRuntimeModelRefs(cfgWithProviders, "config", changes)
+      .value as OpenClawConfig;
   }
 
   let changed = false;
@@ -796,7 +692,7 @@ export function normalizeLegacyRuntimeModelRefs(
         agents: nextAgents as OpenClawConfig["agents"],
       }
     : cfgWithProviders;
-  return nextCfg;
+  return rewriteLegacyRuntimeModelRefs(nextCfg, "config", changes).value as OpenClawConfig;
 }
 
 /** Add missing metadata source markers to legacy OpenAI Codex model catalog entries. */

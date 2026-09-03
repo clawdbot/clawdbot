@@ -35,7 +35,6 @@ describe("resolveCliAuthEpoch", () => {
 
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => null,
       readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
@@ -189,28 +188,6 @@ describe("resolveCliAuthEpoch", () => {
     expectCliAuthEpoch(primary);
     expect(primaryAfterRefresh).toBe(primary);
     expect(renamed).not.toBe(primary);
-  });
-
-  it("keeps strict CLI bindings stable for a known OAuth principal", () => {
-    let access = "access-a";
-    let refresh = "refresh-a";
-    setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "codex-cli",
-        access,
-        refresh,
-        expires: 1,
-        accountId: "account-1",
-      }),
-    });
-
-    const first = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
-    access = "access-b";
-    refresh = "refresh-b";
-    const second = resolveCliAuthBindingFingerprint({ provider: "codex-cli", config: {} });
-
-    expect(second).toBe(first);
   });
 
   it("fingerprints the materialized value selected for a profile SecretRef", () => {
@@ -677,159 +654,6 @@ describe("resolveCliAuthEpoch", () => {
     expectCliAuthEpoch(first);
     expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
-  });
-
-  it("mixes local codex and auth-profile state", async () => {
-    let access = "local-access-a";
-    let localRefresh = "local-refresh-a";
-    let refresh = "profile-refresh-a";
-    let accountId = "acct-1";
-    let email = "user-a@example.com";
-    setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "openai",
-        access,
-        refresh: localRefresh,
-        expires: 1,
-        accountId,
-      }),
-      loadAuthProfileStoreForRuntime: () => ({
-        version: 1,
-        profiles: {
-          "openai:work": {
-            type: "oauth",
-            provider: "openai",
-            access: "profile-access",
-            refresh,
-            expires: 1,
-            email,
-          },
-        },
-      }),
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    access = "local-access-b";
-    const second = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    localRefresh = "local-refresh-b";
-    const third = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    refresh = "profile-refresh-b";
-    const fourth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    accountId = "acct-2";
-    const fifth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-    email = "user-b@example.com";
-    const sixth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:work",
-    });
-
-    expectCliAuthEpoch(first);
-    expect(second).toBe(first);
-    expect(third).toBe(second);
-    expect(fourth).toBe(third);
-    expectCliAuthEpoch(fifth);
-    expectCliAuthEpoch(sixth);
-    expect(fifth).not.toBe(fourth);
-    expect(sixth).not.toBe(fifth);
-  });
-
-  it("can ignore local codex state when the backend is profile-owned", async () => {
-    let localAccess = "local-access-a";
-    let profileRefresh = "profile-refresh-a";
-    let profileAccountId = "acct-1";
-    setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached: () => ({
-        type: "oauth",
-        provider: "openai",
-        access: localAccess,
-        refresh: "local-refresh",
-        expires: 1,
-        accountId: "acct-1",
-      }),
-      loadAuthProfileStoreForRuntime: () => ({
-        version: 1,
-        profiles: {
-          "openai:default": {
-            type: "oauth",
-            provider: "openai",
-            access: "profile-access",
-            refresh: profileRefresh,
-            expires: 1,
-            accountId: profileAccountId,
-          },
-        },
-      }),
-    });
-
-    const first = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:default",
-      skipLocalCredential: true,
-    });
-    localAccess = "local-access-b";
-    const second = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:default",
-      skipLocalCredential: true,
-    });
-    profileRefresh = "profile-refresh-b";
-    const third = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:default",
-      skipLocalCredential: true,
-    });
-    profileAccountId = "acct-2";
-    const fourth = await resolveCliAuthEpoch({
-      provider: "codex-cli",
-      authProfileId: "openai:default",
-      skipLocalCredential: true,
-    });
-
-    expectCliAuthEpoch(first);
-    expect(second).toBe(first);
-    expect(third).toBe(second);
-    expectCliAuthEpoch(fourth);
-    expect(fourth).not.toBe(third);
-  });
-
-  it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
-    const readCodexCliCredentialsCached = vi.fn(() => ({
-      type: "oauth" as const,
-      provider: "openai" as const,
-      access: "local-access",
-      refresh: "local-refresh",
-      expires: 1,
-    }));
-    setCliAuthEpochTestDeps({
-      readCodexCliCredentialsCached,
-      loadAuthProfileStoreForRuntime: () => ({
-        version: 1,
-        profiles: {},
-      }),
-    });
-
-    await resolveCliAuthEpoch({ provider: "codex-cli" });
-
-    expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
-      ttlMs: 5000,
-      allowKeychainPrompt: false,
-    });
   });
 
   function cliConfig(command: string): OpenClawConfig {

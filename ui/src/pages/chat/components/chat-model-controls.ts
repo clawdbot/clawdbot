@@ -256,11 +256,15 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     const isDefault =
       option.value.trim().toLowerCase() === normalizedDefaultModel ||
       (catalogEntry !== undefined && catalogEntry === defaultCatalogEntry);
-    // Runtime meta labels only operator-pinned runtimes (models/provider config);
-    // implicit/default resolution stays unlabeled so ordinary rows stay clean.
+    // Runtime meta labels operator-pinned runtimes (models/provider config) and runtimes chosen
+    // by credentials (a CLI login serving the provider); implicit defaults stay unlabeled so
+    // ordinary rows stay clean.
     const agentRuntime = catalogEntry?.agentRuntime;
     const agentRuntimeId =
-      agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
+      agentRuntime &&
+      (agentRuntime.source === "model" ||
+        agentRuntime.source === "provider" ||
+        agentRuntime.source === "auth")
         ? agentRuntime.id.trim()
         : undefined;
     const pickerOption: ChatModelPickerOption = {

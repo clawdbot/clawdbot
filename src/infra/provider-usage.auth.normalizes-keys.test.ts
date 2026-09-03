@@ -283,7 +283,6 @@ vi.mock("../plugins/provider-runtime.ts", async () => {
 });
 
 vi.mock("../agents/cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
 }));
 

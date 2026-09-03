@@ -55,7 +55,7 @@ suite.define(() => {
     const context = await createProofContext();
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      featureMethods: ["chat.metadata", "chat.startup", "models.list", "sessions.patch"],
       models,
       sessionKey: "agent:main:main",
     });
@@ -142,9 +142,8 @@ suite.define(() => {
       expect(response?.status()).toBe(200);
       await gateway.waitForRequest("agents.list");
       await gateway.waitForRequest("config.get");
-      const modelRequest = await gateway.waitForRequest("chat.metadata");
-      expect(modelRequest.params).toEqual({ agentId: "main" });
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      const modelRequest = await gateway.waitForRequest("models.list");
+      expect(modelRequest.params).toMatchObject({ agentId: "main", view: "configured" });
 
       const select = page.locator("wa-select.model-picker__select").first();
       await select.waitFor({ state: "visible", timeout: 10_000 });

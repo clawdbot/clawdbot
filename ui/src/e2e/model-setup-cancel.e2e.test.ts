@@ -145,7 +145,7 @@ suite.define(() => {
           });
           const dialog = page.locator("openclaw-modal-dialog");
           await dialog.getByRole("heading", { name: "Review model setup" }).waitFor();
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
           expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
           await dialog.getByRole("button", { name: "Continue", exact: true }).click();
           await dialog.getByText("Apply the reviewed changes?", { exact: true }).waitFor();
@@ -179,7 +179,7 @@ suite.define(() => {
             await expect
               .poll(() => page.evaluate((key) => localStorage.getItem(key), receiptKey))
               .toBeNull();
-            expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+            expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
             expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
             expect(await page.locator(".model-setup-success").count()).toBe(0);
           }
@@ -250,7 +250,7 @@ suite.define(() => {
           expect(await gateway.getRequests("openclaw.setup.auth.start")).toHaveLength(2);
           expect(await gateway.getRequests("wizard.cancel")).toHaveLength(1);
           expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(0);
-          expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+          expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
         },
       );
     },
@@ -295,8 +295,8 @@ suite.define(() => {
         await replacement.getByText("Complete provider sign-in").waitFor();
         expect(await nextGateway.getRequests("openclaw.setup.auth.start")).toHaveLength(1);
         expect(await nextGateway.getRequests("wizard.cancel")).toHaveLength(0);
-        expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
-        expect(new URL(replacement.url()).pathname).toBe("/settings/model-setup");
+        expect(new URL(page.url()).pathname).toBe("/settings/model-providers");
+        expect(new URL(replacement.url()).pathname).toBe("/settings/model-providers");
       },
     );
   });

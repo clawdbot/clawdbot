@@ -506,7 +506,6 @@ async function withPreparedSimpleCompletionRuntime<T>(
           })),
         },
         {
-          catalogMode: "static",
           ...(params.pluginMetadataSnapshot
             ? { pluginMetadataSnapshot: params.pluginMetadataSnapshot }
             : {}),

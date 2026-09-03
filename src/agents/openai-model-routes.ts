@@ -1,5 +1,6 @@
 /** Cold adapter for provider-owned OpenAI model route facts. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { ModelApi } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -11,6 +12,7 @@ import type {
 import { createProviderModelRoutesResolver } from "../plugins/provider-model-routes.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
+import { modelKey } from "./model-ref-shared.js";
 import type { ProviderModelAuthSourcePlan } from "./provider-model-auth-source-plan.js";
 import { selectProviderModelRouteAuth } from "./provider-model-route-auth.js";
 import { createProviderModelCatalogRoutePolicy } from "./provider-model-route.js";
@@ -66,6 +68,13 @@ export function selectOpenAIModelRouteAuth(params: {
 
 export const openAIModelCatalogRoutePolicy =
   createProviderModelCatalogRoutePolicy(OPENAI_PROVIDER_ID);
+
+/** Canonical logical identity shared by catalog assembly, routes, and selection. */
+export function modelCatalogLogicalKey(entry: Pick<ModelCatalogEntry, "provider" | "id">): string {
+  const provider = normalizeProviderId(entry.provider);
+  const model = splitTrailingAuthProfile(entry.id).model;
+  return normalizeLowercaseStringOrEmpty(modelKey(provider, model));
+}
 
 /** Canonical catalog identity key: route-policy identity, else normalized provider/id. */
 export function resolveModelCatalogIdentityKey(

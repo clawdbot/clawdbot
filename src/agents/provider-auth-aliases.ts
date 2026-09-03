@@ -30,6 +30,20 @@ export type ProviderAuthAliasLookupParams = {
   };
 };
 
+/** Provider ids retired by the runtime/auth cutover. Doctor is their migration owner. */
+export const PROVIDER_AUTH_ALIAS_MAP = {
+  codex: "openai",
+  "codex-cli": "openai",
+  "openai-codex": "openai",
+  "claude-cli": "anthropic",
+  "google-gemini-cli": "google",
+} as const satisfies Readonly<Record<string, string>>;
+
+export function resolveCanonicalProviderAuthId(provider: string): string {
+  const normalized = normalizeProviderId(provider);
+  return PROVIDER_AUTH_ALIAS_MAP[normalized as keyof typeof PROVIDER_AUTH_ALIAS_MAP] ?? normalized;
+}
+
 function shouldUsePluginAuthAliases(
   plugin: PluginManifestRecord,
   params: ProviderAuthAliasLookupParams | undefined,
@@ -92,7 +106,9 @@ export function resolveProviderAuthAliasMap(
   const aliases: Record<string, string> = Object.create(null) as Record<string, string>;
   // A later winning owner must not move a key inserted by an earlier eligible owner.
   for (const { alias, target } of selected.toSorted((left, right) => left.order - right.order)) {
-    aliases[alias] = target;
+    if (!Object.hasOwn(aliases, alias)) {
+      aliases[alias] = target;
+    }
   }
   return aliases;
 }
@@ -105,6 +121,10 @@ export function resolveProviderIdForAuth(
   const normalized = normalizeProviderId(provider);
   if (!normalized) {
     return normalized;
+  }
+  const staticTarget = resolveCanonicalProviderAuthId(normalized);
+  if (staticTarget !== normalized) {
+    return staticTarget;
   }
   const candidates = resolveProviderAuthAliasCandidates(params).get(normalized);
   // Package facts are stable; workspace trust follows the current call's config.

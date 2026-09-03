@@ -15,6 +15,7 @@ import {
   readConfigFileSnapshot,
   replaceConfigFile,
 } from "../../config/config.js";
+import type { ConfigWriteOptions } from "../../config/io.js";
 import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { normalizeAgentModelRefForConfig, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
@@ -27,7 +28,12 @@ import {
 } from "./provider-aliases.js";
 
 export { formatTokenK } from "./list.format.js";
-export { ensureFlagCompatibility } from "./list.options.js";
+/** Rejects conflicting machine-readable output modes. */
+export function ensureFlagCompatibility(opts: { json?: boolean; plain?: boolean }): void {
+  if (opts.json && opts.plain) {
+    throw new Error("Choose either --json or --plain, not both.");
+  }
+}
 
 /** Formats millisecond durations for model command output. */
 export const formatMs = (value?: number | null) => {
@@ -64,6 +70,7 @@ export async function updateConfig(
     cfg: OpenClawConfig,
     context: UpdateConfigContext,
   ) => OpenClawConfig | Promise<OpenClawConfig>,
+  options: { writeOptions?: ConfigWriteOptions } = {},
 ): Promise<OpenClawConfig> {
   const snapshot = await readConfigFileSnapshot();
   if (!snapshot.valid) {
@@ -78,6 +85,7 @@ export async function updateConfig(
   await replaceConfigFile({
     nextConfig: next,
     baseHash: snapshot.hash,
+    ...(options.writeOptions ? { writeOptions: options.writeOptions } : {}),
   });
   return next;
 }

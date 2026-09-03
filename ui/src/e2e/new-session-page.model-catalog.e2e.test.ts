@@ -24,7 +24,7 @@ function catalogDiscoveryRequests(
 }
 
 suite.define(() => {
-  it("keeps composer actions fixed while model metadata loads", async () => {
+  it("keeps composer actions fixed while the model catalog loads", async () => {
     if (captureUiProof) {
       await mkdir(path.join(suite.artifactDir, "new-session-skeleton-gap"), { recursive: true });
     }
@@ -36,7 +36,7 @@ suite.define(() => {
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
-      heldMethods: ["chat.metadata"],
+      heldMethods: ["models.list"],
       models: [
         {
           available: true,
@@ -71,7 +71,7 @@ suite.define(() => {
         });
       }
 
-      await gateway.resolveDeferred("chat.metadata");
+      await gateway.resolveDeferred("models.list");
       const effortPicker = page.locator(
         ".new-session-page__composer .chat-controls__effort-picker:not(.chat-controls__effort-picker--reserved)",
       );
@@ -147,7 +147,7 @@ suite.define(() => {
     }
   });
 
-  it("shows metadata failure truthfully and recovers when the picker opens", async () => {
+  it("shows catalog failure truthfully and recovers on the next picker read", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -177,7 +177,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page, {
       agentModel: "openai/gpt-5.6-luna",
       methodResponses: {
-        "chat.metadata": {
+        "models.list": {
           sequence: [
             {
               __mockError: {
@@ -194,7 +194,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await gateway.waitForRequest("chat.metadata");
+      await gateway.waitForRequest("models.list");
 
       const modelSelect = page.locator('[data-chat-model-select="true"]');
       await expect.poll(() => modelSelect.getAttribute("title")).toBe("Models unavailable");
@@ -202,9 +202,10 @@ suite.define(() => {
 
       await modelSelect.click();
 
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
-      expect((await gateway.getRequests("chat.metadata"))[1]?.params).toMatchObject({
+      await expect.poll(async () => (await gateway.getRequests("models.list")).length).toBe(2);
+      expect((await gateway.getRequests("models.list"))[1]?.params).toMatchObject({
         agentId: "main",
+        view: "configured",
       });
       await expect.poll(() => page.locator("[data-chat-model-option]").count()).toBe(3);
       expect(await page.locator("[data-chat-model-catalog-state]").count()).toBe(0);
@@ -213,7 +214,7 @@ suite.define(() => {
     }
   });
 
-  it("restores the model picker after startup-sidecars metadata becomes available", async () => {
+  it("restores the model picker after a transient catalog failure", async () => {
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -229,7 +230,7 @@ suite.define(() => {
     };
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "chat.metadata": {
+        "models.list": {
           sequence: [
             {
               __mockError: {
@@ -248,7 +249,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      await gateway.waitForRequest("models.list");
 
       const modelSelect = page.locator(
         '.new-session-page__composer [data-chat-model-select="true"]',
@@ -259,18 +260,7 @@ suite.define(() => {
         .poll(() => page.locator('[data-chat-model-option="openai/gpt-5.6-luna"]').textContent())
         .toContain(recoveredModel.name);
 
-      // Explicit picker discovery refreshes the recovered metadata owner once.
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(3);
-      expect(await gateway.getRequests("models.list")).toEqual([
-        expect.objectContaining({
-          params: { view: "configured", agentId: "main", refresh: true },
-        }),
-      ]);
-      expect(await gateway.getRequests("chat.metadata")).toEqual([
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
-        expect.objectContaining({ params: { agentId: "main" } }),
-      ]);
+      expect(await gateway.getRequests("models.list")).toHaveLength(2);
     } finally {
       await context.close();
     }
@@ -314,6 +304,7 @@ suite.define(() => {
       featureMethods: [
         "chat.metadata",
         "chat.startup",
+        "models.list",
         "sessions.create",
         "sessions.dispatch",
         "sessions.catalog.list",
@@ -360,7 +351,7 @@ suite.define(() => {
         ),
       ).toBe("GPT-5.6 Luna");
       expect(await page.getByText("Models unavailable", { exact: true }).count()).toBe(0);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       if (captureUiProof) {
         await page.screenshot({
           animations: "disabled",
@@ -401,7 +392,7 @@ suite.define(() => {
           catalogDiscoveryRequests(await gateway.getRequests("sessions.catalog.list")),
         )
         .toHaveLength(3);
-      await expect.poll(async () => (await gateway.getRequests("chat.metadata")).length).toBe(2);
+      expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       await expect
         .poll(() => page.locator('[data-chat-model-target="anthropic"]').isVisible())
         .toBe(true);

@@ -1,7 +1,9 @@
+import { resolvePreparedProviderStaticConfigs } from "../plugins/provider-discovery.js";
 import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { discoverModels } from "./agent-model-discovery.js";
 import { loadBundledProviderStaticCatalogContextModels } from "./embedded-agent-runner/model.static-catalog.js";
 import type { ModelCatalogSnapshot } from "./model-catalog.types.js";
+import { modelCatalogLogicalKey } from "./openai-model-routes.js";
 import {
   getPreparedModelFullCatalogAuth,
   setPreparedModelFullCatalogAuth,
@@ -11,7 +13,6 @@ import type {
   PreparedModelRuntimeCatalogFacts,
   PreparedModelRuntimeCatalogSource,
 } from "./prepared-model-runtime.catalog-contract.js";
-import { modelCatalogEntryKey } from "./prepared-model-runtime.configured-catalog.js";
 import {
   toStaticCatalogEntry,
   type PreparedRuntimeCapabilityModel,
@@ -33,16 +34,25 @@ export async function prepareFullCatalogFacts(
 ): Promise<PreparedModelRuntimeCatalogFacts> {
   const { env, input, templateAuthStorage } = agentFacts;
   const { pluginMetadataSnapshot, preparedStaticProviderCatalog } = pluginGeneration;
+  const staticSource =
+    catalogMode === "static"
+      ? {
+          includePluginCatalogs: true,
+          modelsJsonContents: null,
+          pluginCatalogs: [],
+          staticProviderConfigs: resolvePreparedProviderStaticConfigs(
+            preparedStaticProviderCatalog,
+          ),
+        }
+      : catalogSource;
   const templateModelRegistry = discoverModels(templateAuthStorage, input.agentDir, {
     config: input.config,
     ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
     pluginMetadataSnapshot,
     ...(catalogMode === "static" ? { normalizeModels: false } : {}),
-    ...(catalogSource
+    ...(staticSource
       ? {
-          includePluginCatalogs: true,
-          modelsJsonContents: catalogSource.modelsJsonContents,
-          pluginCatalogs: catalogSource.pluginCatalogs,
+          ...staticSource,
         }
       : {}),
   });
@@ -68,7 +78,7 @@ export async function prepareFullCatalogFacts(
   const providerOutcomes = catalogSource?.providerOutcomes ?? [];
   const completeModelCatalog = {
     ...modelCatalog,
-    staticEntries: dedupeByKey(staticModels, modelCatalogEntryKey).map(toStaticCatalogEntry),
+    staticEntries: dedupeByKey(staticModels, modelCatalogLogicalKey).map(toStaticCatalogEntry),
     ...(providerOutcomes.length > 0 ? { providerOutcomes } : {}),
   };
   if (catalogMode === "live") {
@@ -92,13 +102,13 @@ export function materializePreparedModelCatalog(
   const sourceEntries = snapshot.entries;
   const runtimeByKey = new Map(
     runtimeCapabilityModels.map(({ provider, modelId, model }) => [
-      modelCatalogEntryKey({ provider, id: modelId }),
+      modelCatalogLogicalKey({ provider, id: modelId }),
       toStaticCatalogEntry(model),
     ]),
   );
   const project = (entries: ModelCatalogSnapshot["entries"]) =>
     entries.map((entry) => {
-      const runtime = runtimeByKey.get(modelCatalogEntryKey(entry));
+      const runtime = runtimeByKey.get(modelCatalogLogicalKey(entry));
       if (!runtime) {
         return entry;
       }

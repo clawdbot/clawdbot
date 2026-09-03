@@ -1,7 +1,3 @@
-import {
-  readCodexCliCredentialsCached,
-  resolveOpenAICodexAuthIdentity,
-} from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it } from "vitest";
 import type { OpenAIQuicksilverPendingAudio } from "./realtime-quicksilver-audio-buffer.js";
 import { OpenAIQuicksilverGatewayBridge } from "./realtime-quicksilver-gateway-bridge.js";
@@ -53,13 +49,7 @@ async function resolveLiveOAuthProfile(): Promise<
       throw error;
     }
   }
-  const credential = readCodexCliCredentialsCached({ allowKeychainPrompt: false, ttlMs: 0 });
-  if (!credential) {
-    return undefined;
-  }
-  const accountId =
-    credential.accountId ?? resolveOpenAICodexAuthIdentity({ access: credential.access }).accountId;
-  return accountId ? { type: "oauth", token: credential.access, accountId } : undefined;
+  return undefined;
 }
 
 describeLive("OpenAI GPT-Live gateway WebRTC peer", () => {

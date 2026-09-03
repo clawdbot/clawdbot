@@ -18,20 +18,13 @@ import { collectAuthProfileHealthFindings, noteAuthProfileHealth } from "./docto
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
-const cliCredentials = vi.hoisted(() => ({ readCodex: vi.fn() }));
 const refreshProfile = vi.hoisted(() => vi.fn(async () => undefined));
 vi.mock("../agents/auth-profiles.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/auth-profiles.js")>()),
   resolveApiKeyForProfile: refreshProfile,
 }));
-vi.mock("../agents/cli-credentials.js", () => ({
-  readCodexCliCredentialsCached: cliCredentials.readCodex,
-  readMiniMaxCliCredentialsCached: () => null,
-}));
-
 afterEach(() => {
   vi.clearAllMocks();
-  cliCredentials.readCodex.mockReset();
 });
 
 describe("Doctor shared auth health", () => {
@@ -160,18 +153,7 @@ describe("Doctor shared auth health", () => {
         },
         state.agentDir("alpha"),
       );
-      cliCredentials.readCodex.mockReturnValue({
-        type: "oauth",
-        provider: "openai",
-        access: "synthetic-cli-access",
-        refresh: "synthetic-cli-refresh",
-        expires: Date.now() + 7 * 86_400_000,
-      });
-
       expect(await collectAuthProfileHealthFindings({ cfg })).toEqual([]);
-      expect(cliCredentials.readCodex).toHaveBeenCalledWith(
-        expect.objectContaining({ allowKeychainPrompt: false }),
-      );
     });
   });
 

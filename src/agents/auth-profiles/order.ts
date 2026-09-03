@@ -360,15 +360,17 @@ export function resolveAuthProfileOrderWithMetadata(
   // Otherwise, use round-robin by lastUsed. lastGood is intentionally ignored
   // because prioritizing it would starve other healthy profiles.
   const sorted = orderProfilesByMode(deduped, store, now, forModel);
+  const staleStoredOrder =
+    explicitOrderFromStore && repairedFallbackToStoreProfiles && storeProfiles.length === 0;
 
   if (preferredProfile && sorted.includes(preferredProfile)) {
     return {
       profileIds: [preferredProfile, ...sorted.filter((e) => e !== preferredProfile)],
-      hasExplicitOrder: explicitOrder !== undefined,
+      hasExplicitOrder: explicitOrder !== undefined && !staleStoredOrder,
     };
   }
 
-  return { profileIds: sorted, hasExplicitOrder: explicitOrder !== undefined };
+  return { profileIds: sorted, hasExplicitOrder: explicitOrder !== undefined && !staleStoredOrder };
 }
 
 /** Resolves ordered usable auth profile ids for a provider. */

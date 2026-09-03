@@ -1,7 +1,6 @@
 /** Migration provider lookup, option shaping, and plan creation helpers. */
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  ensureStandaloneMigrationProviderRegistryLoaded,
   resolvePluginMigrationProvider,
   resolvePluginMigrationProviders,
 } from "../../plugins/migration-provider-runtime.js";
@@ -10,15 +9,11 @@ import type { RuntimeEnv } from "../../runtime.js";
 import { buildMigrationContext } from "./context.js";
 import type { MigrateCommonOptions } from "./types.js";
 
-/** Resolves a migration provider from the loaded plugin migration registry. */
+/** Resolves a migration provider or throws with the available provider ids. */
 export function resolveMigrationProvider(
   providerId: string,
   config = getRuntimeConfig(),
 ): MigrationProviderPlugin {
-  ensureStandaloneMigrationProviderRegistryLoaded({
-    cfg: config,
-    providerId,
-  });
   const provider = resolvePluginMigrationProvider({ providerId, cfg: config });
   if (!provider) {
     const available = resolvePluginMigrationProviders({ cfg: config }).map((entry) => entry.id);

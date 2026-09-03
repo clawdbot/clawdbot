@@ -1062,7 +1062,7 @@ Existing apps that already use `features.assistant_view` can keep that feature s
     - Use `/agentstatus` instead of `/status` because the `/status` command is reserved.
     - No more than 25 slash commands can be registered on a Slack app at once (Slack platform limit).
 
-    OpenClaw registers handlers for enabled native commands, but Slack manifest entries remain administrator-managed and are not synchronized at runtime. Add `/login` to the manifest manually; the example below includes it instead of the optional `/side` alias to remain at 25 commands. `/login` can be surfaced anywhere, but it issues pairing codes only in private chats or the Web UI.
+    OpenClaw registers handlers for enabled native commands, but Slack manifest entries remain administrator-managed and are not synchronized at runtime. Add `/login` to the manifest manually; the example below includes it instead of the optional `/side` alias to remain at 25 commands. `/login` can be surfaced anywhere, but it issues pairing codes only in private chats or the Control UI.
 
     Replace your existing `features.slash_commands` section with a subset of [available commands](/tools/slash-commands#command-list):
 
@@ -1182,8 +1182,8 @@ Existing apps that already use `features.assistant_view` can keep that feature s
     },
     {
       "command": "/login",
-      "description": "Pair Codex login",
-      "usage_hint": "[codex|openai]"
+      "description": "Sign in to a model provider",
+      "usage_hint": "[provider]"
     },
     {
       "command": "/usage",

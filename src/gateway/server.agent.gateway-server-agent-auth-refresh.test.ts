@@ -262,16 +262,18 @@ describe("gateway agent auth refresh dispatch", () => {
     const subsequentRunId = "idem-agent-auth-subsequent";
     const before = await prepareAuthDispatchAgents(affectedAgentId);
     const activeWorkBefore = getActiveGatewayRootWorkCount();
-    const publicationGate = createDeferred<{ agentDir: string; wrote: false }>();
-    const modelsConfig = await import("../agents/models-config.js");
-    const ensureOpenClawModelsJson = modelsConfig.ensureOpenClawModelsJson;
-    const ensureSpy = vi
-      .spyOn(modelsConfig, "ensureOpenClawModelsJson")
-      .mockImplementation(async (config, agentDir, options) =>
-        agentDir === before.agentDir
-          ? await publicationGate.promise
-          : await ensureOpenClawModelsJson(config, agentDir, options),
-      );
+    // Hold the affected agent's republication open at its build so the waiters queue behind it.
+    const publicationGate = createDeferred();
+    const runtimeFacts = await import("../agents/prepared-model-runtime.facts.js");
+    const prepareWorkspaceBuildGroup = runtimeFacts.prepareWorkspaceBuildGroup;
+    const buildSpy = vi
+      .spyOn(runtimeFacts, "prepareWorkspaceBuildGroup")
+      .mockImplementation(async (inputs, ...rest) => {
+        if (inputs.some((input) => input.agentDir === before.agentDir)) {
+          await publicationGate.promise;
+        }
+        return await prepareWorkspaceBuildGroup(inputs, ...rest);
+      });
     const published = createDeferred();
     const unregister = registerPreparedModelRuntimePublicationListener((event) => {
       if (event.phase === "published") {
@@ -332,7 +334,7 @@ describe("gateway agent auth refresh dispatch", () => {
       });
       expect(waiting.hasResponse()).toBe(false);
 
-      publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+      publicationGate.resolve();
       await published.promise;
       const after = await loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId });
       expect(after).not.toBe(before.runtime);
@@ -364,70 +366,9 @@ describe("gateway agent auth refresh dispatch", () => {
       });
       expect(agentCommandCallsFor(subsequentRunId)).toHaveLength(1);
     } finally {
-      publicationGate.resolve({ agentDir: before.agentDir, wrote: false });
+      publicationGate.resolve();
       unregister();
-      ensureSpy.mockRestore();
-    }
-  });
-
-  test("never reuses an affected projection after auth publication rejects", async () => {
-    const affectedAgentId = "auth-reject";
-    const runId = "idem-agent-auth-reject";
-    const before = await prepareAuthDispatchAgents(affectedAgentId);
-    const modelsConfig = await import("../agents/models-config.js");
-    const ensureOpenClawModelsJson = modelsConfig.ensureOpenClawModelsJson;
-    const ensureSpy = vi
-      .spyOn(modelsConfig, "ensureOpenClawModelsJson")
-      .mockImplementation(async (config, agentDir, options) => {
-        if (agentDir === before.agentDir) {
-          throw new Error("auth publication rejected");
-        }
-        return await ensureOpenClawModelsJson(config, agentDir, options);
-      });
-    const failed = createDeferred();
-    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
-      if (event.phase === "failed") {
-        failed.resolve();
-      }
-    });
-    try {
-      setRuntimeAuthProfileStoreSnapshot(
-        {
-          version: 1,
-          profiles: {
-            "anthropic:default": {
-              type: "api_key",
-              provider: "anthropic",
-              key: "rejected-generation-key",
-            },
-          },
-        },
-        before.agentDir,
-      );
-      await failed.promise;
-      await expect(
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: affectedAgentId }),
-      ).rejects.toThrow(
-        `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`,
-      );
-
-      const rejected = sendAgentRpc(gatewaySuite.ws, {
-        agentId: affectedAgentId,
-        runId,
-      });
-      await expect(rejected.response).resolves.toMatchObject({
-        ok: false,
-        error: {
-          code: "UNAVAILABLE",
-          message: expect.stringContaining(
-            `prepared reply dispatch runtime owner was not published for ${affectedAgentId}`,
-          ),
-        },
-      });
-      expect(agentCommandCallsFor(runId)).toHaveLength(0);
-    } finally {
-      unregister();
-      ensureSpy.mockRestore();
+      buildSpy.mockRestore();
     }
   });
 });

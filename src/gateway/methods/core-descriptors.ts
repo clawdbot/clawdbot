@@ -9,7 +9,7 @@ import {
   type GatewayMethodScope,
 } from "./descriptor.js";
 
-type CoreGatewayMethodSpec = {
+export type CoreGatewayMethodSpec = {
   name: string;
   family?: string;
   scope: GatewayMethodScope;
@@ -21,12 +21,14 @@ type CoreGatewayMethodSpec = {
   description?: string;
 };
 
-type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
+export type CoreGatewayMethodMetadata = Pick<CoreGatewayMethodSpec, "name" | "scope" | "since">;
+
 type CoreGatewayMethodPolicy = Pick<
   CoreGatewayMethodSpec,
   "advertise" | "startup" | "controlPlaneWrite" | "compatibilityRestored" | "description"
 >;
-type CoreGatewayMethodSpecRow = readonly [
+
+export type CoreGatewayMethodSpecRow = readonly [
   name: string,
   family: string | null,
   scope: GatewayMethodScope,
@@ -126,6 +128,13 @@ const CORE_GATEWAY_METHOD_SPECS = [
   ["commands.list", "commands", "operator.read", "<=2026.7"],
   ["models.list", "models", "operator.read", "<=2026.7", { startup: true }],
   ["models.authStatus", "models-auth-status", "operator.read", "<=2026.7"],
+  [
+    "models.authRefresh",
+    "models-auth-status",
+    "operator.admin",
+    "2026.8",
+    { controlPlaneWrite: true },
+  ],
   [
     "models.authLogout",
     "models-auth-status",

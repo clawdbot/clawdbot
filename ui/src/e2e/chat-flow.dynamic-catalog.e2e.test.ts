@@ -93,6 +93,9 @@ suite.define(() => {
           thinkingLevel: null,
         },
         "sessions.list": sessionResponse(preparedLevels, 8_192),
+        "models.list": {
+          sequence: [{ models: [preparedModel] }, { models: [discoveredModel] }],
+        },
       },
       models: [discoveredModel],
       sessionKey,
@@ -107,7 +110,8 @@ suite.define(() => {
       await effortSelect.click();
       await expect.poll(() => main.locator('[data-chat-thinking-option="off"]').count()).toBe(1);
       expect(await main.locator('[data-chat-thinking-slider="true"]').count()).toBe(0);
-      expect(await gateway.getRequests("models.list")).toHaveLength(0);
+      const initialModelsRequestCount = (await gateway.getRequests("models.list")).length;
+      expect(initialModelsRequestCount).toBe(1);
       if (dynamicCatalogProofDir) {
         await page.screenshot({
           animations: "disabled",
@@ -119,12 +123,10 @@ suite.define(() => {
       await gateway.setMethodResponse("sessions.list", sessionResponse(discoveredLevels, 65_536));
       const sessionListCount = (await gateway.getRequests("sessions.list")).length;
       await modelSelect.click();
-      const modelsRequest = await gateway.waitForRequest("models.list");
-      expect(modelsRequest.params).toEqual({
-        view: "configured",
-        agentId: "main",
-        refresh: true,
+      const modelsRequest = await gateway.waitForRequest("models.list", {
+        after: initialModelsRequestCount,
       });
+      expect(modelsRequest.params).toMatchObject({ view: "configured", agentId: "main" });
       const refreshedSessionsRequest = await gateway.waitForRequest("sessions.list", {
         after: sessionListCount,
       });

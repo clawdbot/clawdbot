@@ -304,8 +304,12 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     });
 
     await page.goto(server.baseUrl);
-    await page.waitForURL("**/settings/model-setup?firstRun=1");
-    expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
+    await page.waitForURL(
+      (url) =>
+        url.pathname === "/settings/model-providers" &&
+        url.searchParams.get("view") === "connect" &&
+        url.searchParams.get("firstRun") === "1",
+    );
     await gateway.waitForRequest("openclaw.setup.detect");
     expect(await gateway.getRequests("openclaw.setup.detect")).toHaveLength(1);
     const loading = page.getByText("Checking this Gateway for available AI access…", {
@@ -322,7 +326,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     await waitForControlUiProofSurface(page.locator(".shell"), [loadingSections]);
     const sectionTitles = [
       "Found on this Gateway",
-      "Run a model locally",
+      "Provider setup",
       "Sign in with a provider",
       "Connect with an API key or token",
     ];

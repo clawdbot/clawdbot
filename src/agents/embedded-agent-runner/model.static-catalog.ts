@@ -385,7 +385,6 @@ async function loadBundledProviderStaticCatalogModels(params: {
           env: params.env,
           onlyPluginIds: missingPluginIds,
           includeUntrustedWorkspacePlugins: false,
-          requireCompleteDiscoveryEntryCoverage: true,
           discoveryEntriesOnly: true,
           includeManifestModelCatalogProviders: false,
           ...(params.pluginMetadataSnapshot

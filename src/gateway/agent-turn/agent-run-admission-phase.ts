@@ -406,7 +406,6 @@ export async function prepareAgentRunDispatch(params: {
         ],
       },
       {
-        catalogMode: "static",
         pluginGeneration: replyDispatchRuntime.pluginGeneration,
         abortSignal: activeRunAbort.controller.signal,
       },

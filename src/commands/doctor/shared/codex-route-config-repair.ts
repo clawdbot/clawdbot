@@ -164,7 +164,7 @@ function rewriteAgentModelRefs(params: {
     env: params.env,
   });
   const mediaModels = asMutableRecord(params.agent.mediaModels);
-  for (const key of ["image", "video"] as const) {
+  for (const key of ["image", "video", "music"] as const) {
     rewriteModelConfigSlot({
       hits: params.hits,
       container: mediaModels ?? {},

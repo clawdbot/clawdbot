@@ -231,13 +231,26 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
+  const nativeAuthRoute =
+    !usesSupervisionConnection && params.runtimePlan?.auth.deferredRouteSupport !== undefined;
+  const appServerHomeScope = resolveCodexAppServerHomeScope({
+    appServer: pluginConfig.appServer,
+    nativeAuth: nativeAuthRoute,
+  });
+  const appServerPluginConfig =
+    appServerHomeScope === pluginConfig.appServer?.homeScope
+      ? pluginConfig
+      : {
+          ...pluginConfig,
+          appServer: { ...pluginConfig.appServer, homeScope: appServerHomeScope },
+        };
   const resolveRuntimeOptionsForBinding = (
     binding: CodexAppServerThreadBinding | undefined,
     selection: { modelProvider?: string; model?: string },
   ) =>
     resolveCodexBindingAppServerConnection({
       binding,
-      pluginConfig,
+      pluginConfig: appServerPluginConfig,
       execPolicy,
       modelProvider: selection.modelProvider,
       model: selection.model,
@@ -249,9 +262,6 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     }).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
-  const appServerHomeScope = resolveCodexAppServerHomeScope({
-    appServer: pluginConfig.appServer,
-  });
   const preparedAuthRoute = usesSupervisionConnection
     ? undefined
     : params.runtimePlan?.auth.modelRoute;

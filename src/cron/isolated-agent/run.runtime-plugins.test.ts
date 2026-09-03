@@ -51,7 +51,6 @@ describe("runCronIsolatedAgentTurn runtime plugin owner", () => {
         ],
       },
       {
-        catalogMode: "static",
         pluginMetadataSnapshot: undefined,
         abortSignal: expect.any(AbortSignal),
       },

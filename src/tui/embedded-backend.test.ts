@@ -993,9 +993,7 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig, {
-      catalogMode: "static",
-    });
+    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenCalledWith(initialConfig, {});
     expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
 
     publication.resolve();
@@ -1024,9 +1022,7 @@ describe("EmbeddedTuiBackend", () => {
     });
     await flushMicrotasks();
 
-    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenLastCalledWith(nextConfig, {
-      catalogMode: "static",
-    });
+    expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenLastCalledWith(nextConfig, {});
     expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
 
     replacement.resolve();
@@ -1059,12 +1055,8 @@ describe("EmbeddedTuiBackend", () => {
       configWriteListener?.({ runtimeConfig: latestConfig });
       await flushMicrotasks();
 
-      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(2, middleConfig, {
-        catalogMode: "static",
-      });
-      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(3, latestConfig, {
-        catalogMode: "static",
-      });
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(2, middleConfig, {});
+      expect(refreshPreparedModelRuntimeSnapshotsMock).toHaveBeenNthCalledWith(3, latestConfig, {});
     } finally {
       initial.resolve();
       middle.resolve();

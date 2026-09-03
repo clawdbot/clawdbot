@@ -5,7 +5,7 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import type { PreparedAgentCredentialModes } from "./agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "./agent-auth-credential-modes.js";
 import type { InlineModelEntry } from "./embedded-agent-runner/model.inline-provider.js";
 import type { AgentHarnessPluginSelection } from "./harness/runtime-plugin-load-plan.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -27,6 +27,7 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  nativeHarnessRuntimes?: readonly string[];
   /** Immutable artifact choice for every registry reuse in this generation. */
   preferBuiltPluginArtifacts?: boolean;
 }>;
@@ -44,11 +45,10 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
   /** Session active project set, ordered most-recent first; empty before run binding. */
   activeProjectKeys: readonly string[];
   config: OpenClawConfig;
-  /** Native observations retain preparation identity across model-neutral config publications. */
-  observationConfig: OpenClawConfig;
-  isCurrent: () => boolean;
-  /** Secret-free usable auth modes captured by this exact lifecycle generation. */
-  authModes: PreparedAgentCredentialModes;
+  /** Secret-free provider auth facts captured by this exact lifecycle generation. */
+  providerAuth: PreparedProviderAuth;
+  /** Provider ids whose active runtime owns OAuth token renewal. */
+  oauthRefreshProviderIds: readonly string[];
   metadataSnapshot: PluginMetadataSnapshot;
   messageToolCatalog?: PreparedMessageToolCatalog;
   mediaCapabilityProviders?: ReturnType<typeof prepareMediaCapabilityProviders>;
@@ -60,7 +60,7 @@ export type PreparedModelRuntimeSnapshot = Readonly<{
    * Full inventory discovery is deliberately outside the startup publication boundary.
    */
   modelCatalog: ModelCatalogSnapshot;
-  /** Reads a completed full catalog without starting provider discovery. */
+  /** Reads this generation's completed full catalog without starting discovery. */
   readFullModelCatalog?: () => ModelCatalogSnapshot | undefined;
   /** Builds this generation's full control-plane catalog without replacing turn facts. */
   loadFullModelCatalog?: (options?: { refresh?: boolean }) => Promise<ModelCatalogSnapshot>;
@@ -112,13 +112,11 @@ export type PreparedModelRuntimeLease = Readonly<{
 export type PreparedModelRuntimePublicationOptions = {
   force?: boolean;
   provenance?: PreparedModelRuntimeOwner["provenance"];
-  catalogMode?: PreparedModelRuntimeCatalogMode;
 };
 
 export type PreparedModelRuntimeRefreshOptions = {
   gatewayLifecycle?: boolean;
   defaultWorkspaceDir?: string;
-  catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
@@ -131,9 +129,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   agentCount: number;
   workspaceGroupCount: number;
   configuredFactsGroupCount: number;
-  catalogSourceCount: number;
   credentialGroupCount: number;
-  catalogGroupCount: number;
   runtimeRegistryCount: number;
   configuredRuntimeModelCount: number;
   generatedCatalogPluginCount: number;
@@ -145,9 +141,7 @@ export type PreparedModelRuntimeBuildStats = Readonly<{
   ambientCredentialsMs: number;
   agentFactsMs: number;
   configuredProjectionMs: number;
-  catalogSourceMs: number;
   registryMs: number;
-  sourceConcurrencyLimit: number;
   fullCatalogConcurrencyLimit: number;
 }>;
 
@@ -155,13 +149,9 @@ export type PreparedModelRuntimeOwner = {
   input: PreparedModelRuntimeInput;
   catalogOwner: PublishedModelCatalogOwnerCandidate["catalogOwner"];
   environmentFingerprint: string;
-  catalogMode: PreparedModelRuntimeCatalogMode;
   provenance: "configured" | "standalone" | "explicit" | "run" | "ephemeral";
   generation: number;
   needsRefresh: boolean;
-  catalogStale: boolean;
-  /** Completed discovery facts; runtime capability projection belongs to each generation. */
-  catalogInventory?: { catalog: ModelCatalogSnapshot; key: string };
   refreshError?: Error;
   snapshot?: PreparedModelRuntimeSnapshot;
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
@@ -170,6 +160,7 @@ export type PreparedModelRuntimeOwner = {
   pending?: Promise<PreparedModelRuntimeSnapshot>;
   buildCompletion?: Promise<void>;
   leaseCount?: number;
+  retire?: () => Promise<void>;
 };
 
 export type PreparedModelRuntimeReplacement = {

@@ -41,7 +41,7 @@ async function resolveGatewayCopyModel(params: {
   const sourceModel = `${source.provider}/${source.model}`;
   try {
     const result = await buildModelsListResult({
-      context: params.context,
+      source: { kind: "gateway", context: params.context },
       agentId: params.agentId,
       params: { view: "all" },
     });

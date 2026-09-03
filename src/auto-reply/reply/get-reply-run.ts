@@ -51,7 +51,6 @@ export async function runPreparedReply(
       ],
     },
     {
-      catalogMode: "static",
       pluginGeneration: dispatchRuntime.pluginGeneration,
       abortSignal: params.opts?.abortSignal,
     },

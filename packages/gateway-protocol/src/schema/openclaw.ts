@@ -372,13 +372,17 @@ export const SystemAgentSetupActivateResultSchema = closedObject({
   error: Type.Optional(Type.String()),
 });
 
-/** Starts one provider-owned interactive login as a gateway wizard session. */
-export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+const ProviderAuthWizardStartFields = {
   /** Client-generated so cancellation remains possible if the start reply is lost. */
   sessionId: NonEmptyString,
-  /** Agent that owns credentials and model selection created by this setup flow. */
+  /** Agent that owns credentials created by this login flow. */
   agentId: Type.Optional(NonEmptyString),
   authChoice: NonEmptyString,
+};
+
+/** Starts one provider-owned interactive login as a gateway setup wizard session. */
+export const SystemAgentSetupAuthStartParamsSchema = closedObject({
+  ...ProviderAuthWizardStartFields,
   workspace: Type.Optional(Type.String()),
 });
 
@@ -406,7 +410,6 @@ export type SystemAgentSetupVerifyParams = Static<typeof SystemAgentSetupVerifyP
 export type SystemAgentSetupVerifyResult = Static<typeof SystemAgentSetupVerifyResultSchema>;
 export type SystemAgentSetupAuthStartParams = Static<typeof SystemAgentSetupAuthStartParamsSchema>;
 export type SystemAgentSetupAuthStartResult = Static<typeof SystemAgentSetupAuthStartResultSchema>;
-
 export type SystemAgentSetupActivateStartParams = Static<
   typeof SystemAgentSetupActivateStartParamsSchema
 >;

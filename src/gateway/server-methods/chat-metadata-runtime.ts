@@ -1,4 +1,4 @@
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "../../agents/agent-auth-credential-modes.js";
 import { listAgentIds, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import {
   getPreparedRuntimeAuthProfileStoreSnapshot,
@@ -40,7 +40,7 @@ type PreparedAgentFacts = {
   agentId: string;
   owner: PreparedModelRuntimeSnapshot;
   authStore: AuthProfileStore;
-  authModes: PreparedAgentCredentialModes;
+  providerAuth: PreparedProviderAuth;
   authStoreRevision: string;
   modelCatalog: ModelCatalogSnapshot;
   skillsVersion: number;
@@ -103,7 +103,7 @@ type ChatMetadataRuntimeDeps = {
     facts: PreparedAgentFacts;
     preferredProfileId?: string;
     lockedProfileId?: string;
-  }) => Promise<PreparedAgentProjection<{ models?: unknown[] }>>;
+  }) => Promise<PreparedAgentProjection<Partial<ChatMetadataResult>>>;
 };
 
 const CHAT_METADATA_CACHE_MAX_ENTRIES = 64;
@@ -156,7 +156,7 @@ function captureGenerationFacts(deps: ChatMetadataRuntimeDeps): PreparedGenerati
           version: 1,
           profiles: {},
         },
-      authModes: fullCatalogAuth?.authModes ?? owner.authModes,
+      providerAuth: fullCatalogAuth?.providerAuth ?? owner.providerAuth,
       authStoreRevision: `${deps.getAuthStoreRevision(owner.agentDir)}:${deps.getAuthStoreRevision(owner.inheritedAuthDir)}`,
       modelCatalog: fullModelCatalog ?? owner.modelCatalog,
       skillsVersion: deps.getSkillsVersion(workspaceDir),
@@ -237,7 +237,7 @@ async function defaultBuildProjection(params: {
   facts: PreparedAgentFacts;
   preferredProfileId?: string;
   lockedProfileId?: string;
-}): Promise<PreparedAgentProjection<{ models?: unknown[] }>> {
+}): Promise<PreparedAgentProjection<Partial<ChatMetadataResult>>> {
   const { prepareModelsListResult, createGatewayAgentModelCatalogProjector } =
     await import("./models-list-result.js");
   // Chat metadata must stay on process-published facts. Live discovery belongs to explicit
@@ -250,31 +250,28 @@ async function defaultBuildProjection(params: {
     metadataSnapshot: params.facts.owner.metadataSnapshot,
     preparedAuthStore: params.facts.authStore,
     // The owner records usable auth at discovery; metadata must share that exact generation fact.
-    preparedRuntimeAuthModes: params.facts.authModes,
+    preparedProviderAuth: params.facts.providerAuth,
     preparedRuntimeAuthMaterializations: getPreparedModelRuntimeAuthMaterializations(
       params.facts.owner,
     ),
-    pluginRegistry: params.facts.owner.pluginRegistry,
-    isCurrent: params.facts.owner.isCurrent,
-    observationConfig: params.facts.owner.observationConfig,
     ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
     ...(params.lockedProfileId ? { lockedProfileId: params.lockedProfileId } : {}),
   });
   const [modelCatalog, readModels] = await Promise.all([
     projector.projectCatalog(),
     prepareModelsListResult({
-      context: params.context,
-      agentId: params.facts.agentId,
-      params: { view: "configured" },
-      preloadedCatalog: {
-        agentId: params.facts.agentId,
+      source: {
+        kind: "published",
+        context: params.context,
         config: params.facts.owner.config,
         snapshot,
+        projector,
       },
-      preloadedOnly: true,
-      catalogProjector: projector,
+      agentId: params.facts.agentId,
+      params: { view: "configured" },
     }),
   ]);
+  // Android ChatController.kt still reads models from chat.metadata; drop once it uses models.list.
   return {
     modelCatalog,
     read: () => ({ models: readModels.read().models }),

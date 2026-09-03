@@ -8001,7 +8001,7 @@ describe("chat model controls", () => {
           name: "Claude Opus 4.5",
           provider: "anthropic",
           contextWindow: 200_000,
-          agentRuntime: { id: "claude-cli", source: "model" },
+          agentRuntime: { id: "claude-cli", source: "auth" },
         },
         {
           id: "gemini-3-pro",

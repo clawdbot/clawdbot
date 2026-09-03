@@ -75,7 +75,6 @@ describe("warnIfModelConfigLooksOff", () => {
       undefined,
       expect.objectContaining({
         allowKeychainPrompt: false,
-        externalCliProviderIds: ["openai"],
         readOnly: true,
       }),
     );

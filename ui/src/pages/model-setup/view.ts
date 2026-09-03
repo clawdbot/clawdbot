@@ -46,6 +46,7 @@ type ModelSetupViewProps = {
   modelConfigured?: boolean;
   gatewayTooOld: boolean;
   refreshWarning: string | null;
+  prepareMessage: string | null;
   activationUnresolved?: boolean;
   onUseCurrentModel?: () => void;
   actionsDisabled: boolean;
@@ -54,6 +55,7 @@ type ModelSetupViewProps = {
   manualError: string | null;
   moreSignInOpen: boolean;
   firstRun: boolean;
+  embedded: boolean;
   iconUrls: Readonly<Record<string, string>>;
   onDetect: () => void;
   onVerify: () => void;
@@ -342,7 +344,7 @@ function renderPrepare(props: ModelSetupViewProps, result: SystemAgentSetupDetec
                 ?disabled=${props.actionsDisabled}
                 @click=${() => props.onStartPrepare(option)}
               >
-                ${option.actionLabel ?? t("modelSetup.prepare.ollamaButton")}
+                ${option.actionLabel ?? t("modelSetup.prepare.setup")}
               </button>
             </div>
           `,
@@ -636,7 +638,9 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
     <div class="model-setup">
       <div class="model-setup__intro">
         <div>
-          <h1>${t("modelSetup.heading")}</h1>
+          ${props.embedded
+            ? html`<h2>${t("modelSetup.heading")}</h2>`
+            : html`<h1>${t("modelSetup.heading")}</h1>`}
           <p>${t("modelSetup.intro")}</p>
         </div>
         ${props.page.phase === "ready" &&
@@ -659,6 +663,9 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
         : nothing}
       ${props.refreshWarning
         ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+        : nothing}
+      ${props.prepareMessage
+        ? html`<div class="callout success" role="status">${props.prepareMessage}</div>`
         : nothing}
       ${props.activationUnresolved && !props.actionsDisabled && props.activation.phase !== "success"
         ? html`<div class="model-setup__recovery">
@@ -694,6 +701,9 @@ export function renderModelSetup(props: ModelSetupViewProps): TemplateResult {
         )
       : nothing}
   `;
+  if (props.embedded) {
+    return content;
+  }
   return html`
     <section class="content-header">
       <div>

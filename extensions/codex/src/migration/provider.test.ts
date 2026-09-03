@@ -13,16 +13,33 @@ import {
   type TempWorkspace,
 } from "openclaw/plugin-sdk/temp-path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { buildMigrationProvider as buildCodexMigrationProvider } from "../../migration-provider-api.js";
 import { defaultCodexAppInventoryCache } from "../app-server/app-inventory-cache.js";
 import { codexAppInventoryResponse } from "../app-server/app-inventory.test-helpers.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "../app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "../app-server/plugin-app-cache-key.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
-import { buildCodexMigrationProvider } from "./provider.js";
 import { discoverCodexSource } from "./source.js";
 
 const appServerRequest = vi.hoisted(() => vi.fn());
 const sourceAppServerClientScope = vi.hoisted(() => vi.fn());
+const readCodexCliActiveApiKeyAsync = vi.hoisted(() => vi.fn());
+const readCodexCliCredentialsAsync = vi.hoisted(() => vi.fn());
+let readCodexCliCredentialsAsyncOriginal: typeof import("./cli-credentials.runtime.js").readCodexCliCredentialsAsync;
+
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+}));
+
+vi.mock("./cli-credentials.runtime.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("./cli-credentials.runtime.js")>();
+  readCodexCliCredentialsAsyncOriginal = original.readCodexCliCredentialsAsync;
+  return {
+    ...original,
+    readCodexCliActiveApiKeyAsync,
+    readCodexCliCredentialsAsync,
+  };
+});
 
 vi.mock("../app-server/request.js", () => ({
   requestCodexAppServerJson: appServerRequest,
@@ -202,6 +219,10 @@ afterEach(async () => {
 
 describe("buildCodexMigrationProvider", () => {
   beforeEach(() => {
+    readCodexCliActiveApiKeyAsync.mockReset().mockResolvedValue(null);
+    readCodexCliCredentialsAsync
+      .mockReset()
+      .mockImplementation((options) => readCodexCliCredentialsAsyncOriginal(options));
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
     sourceAppServerClientScope.mockImplementation(
       async (
@@ -230,6 +251,118 @@ describe("buildCodexMigrationProvider", () => {
     expect(source.memoryFiles.map((entry) => entry.path)).toEqual([
       path.join(codexHome, "memories", "MEMORY.md"),
     ]);
+  });
+
+  it("plans explicit auth pickup without scanning Codex apps or user assets", async () => {
+    const fixture = await createCodexFixture();
+    const accessToken = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_auth_only" },
+      "https://api.openai.com/profile": { email: "auth-only@example.test" },
+    });
+    await writeFile(
+      path.join(fixture.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-auth-only",
+          id_token: "id-auth-only",
+          account_id: "acct_auth_only",
+        },
+      }),
+    );
+    await writeFile(path.join(fixture.codexHome, "skills", "ignored", "SKILL.md"), "ignored");
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      includeSecrets: true,
+      itemKinds: ["auth"],
+    });
+
+    await expect(provider.detect?.(ctx)).resolves.toMatchObject({ found: true });
+    const plan = await provider.plan(ctx);
+
+    expect(plan.items.map((item) => item.id)).toEqual(["auth:openai"]);
+    expectRecordFields(findItem(plan.items, "auth:openai"), {
+      status: "planned",
+      sensitive: true,
+    });
+    expect(await provider.prepareApply?.(ctx)).toBeUndefined();
+    expect(sourceAppServerClientScope).not.toHaveBeenCalled();
+  });
+
+  it("reports an authenticated Codex account whose credential storage cannot be imported", async () => {
+    const fixture = await createCodexFixture();
+    appServerRequest.mockResolvedValue({
+      account: {
+        type: "chatgpt",
+        email: "account@example.test",
+        planType: "plus",
+      },
+      requiresOpenaiAuth: true,
+    } satisfies CodexGetAccountResponse);
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      includeSecrets: true,
+      itemKinds: ["auth"],
+      providerOptions: {
+        allowKeychainPrompt: true,
+        credentialKind: "oauth",
+        configPatchMode: "none",
+      },
+    });
+
+    const plan = await provider.plan(ctx);
+
+    expect(findItem(plan.items, "auth:openai")).toMatchObject({
+      action: "skip",
+      status: "skipped",
+      details: {
+        credentialImportUnavailable: true,
+        credentialKind: "oauth",
+      },
+    });
+    expect(appServerRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "account/read",
+        requestParams: { refreshToken: false },
+      }),
+    );
+    expect(sourceAppServerClientScope).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 3_000,
+        isolated: true,
+        isolatedShutdown: { exitTimeoutMs: 300, forceKillDelayMs: 200 },
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it("does not start Codex when explicit login finds no Codex home", async () => {
+    const fixture = await createCodexFixture();
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: path.join(fixture.root, "missing-codex-home"),
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      includeSecrets: true,
+      itemKinds: ["auth"],
+      providerOptions: {
+        allowKeychainPrompt: true,
+        credentialKind: "oauth",
+        configPatchMode: "none",
+      },
+    });
+
+    const plan = await provider.plan(ctx);
+
+    expect(plan.items).toEqual([]);
+    expect(sourceAppServerClientScope).not.toHaveBeenCalled();
   });
 
   it("plans and imports only consolidated Codex memory into the selected agent", async () => {
@@ -960,9 +1093,60 @@ describe("buildCodexMigrationProvider", () => {
     );
   });
 
+  it("ignores an inactive Codex API key when ChatGPT auth is selected", async () => {
+    const fixture = await createCodexFixture();
+    const accessToken = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_combined" },
+      "https://api.openai.com/profile": { email: "combined@example.test" },
+    });
+    await writeFile(
+      path.join(fixture.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        OPENAI_API_KEY: "sk-combined",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-combined-token",
+          account_id: "acct_combined",
+        },
+      }),
+    );
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    };
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      config: configState,
+      runtime: createConfigRuntime(configState),
+      reportDir: path.join(fixture.root, "report"),
+      includeSecrets: true,
+    });
+
+    const plan = await provider.plan(ctx);
+    expect(findItem(plan.items, "auth:openai")).toMatchObject({
+      details: { credentialKind: "oauth" },
+    });
+    expect(plan.items.some((item) => item.id === "auth:openai:api-key")).toBe(false);
+
+    const result = await provider.apply(ctx, plan);
+    expect(findItem(result.items, "auth:openai").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles).toMatchObject({
+      "openai:account-acct_combined": { type: "oauth", provider: "openai" },
+    });
+    expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toBeUndefined();
+  });
+
   it("reports late-created Codex API key config auth profile conflicts before writing", async () => {
     const fixture = await createCodexFixture();
     const reportDir = path.join(fixture.root, "report");
+    readCodexCliActiveApiKeyAsync.mockResolvedValue({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-codex",
+    });
     await writeFile(
       path.join(fixture.codexHome, "auth.json"),
       JSON.stringify({ OPENAI_API_KEY: "sk-codex" }),
@@ -996,13 +1180,101 @@ describe("buildCodexMigrationProvider", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(findItem(result.items, "auth:openai")).toEqual(
+    expect(findItem(result.items, "auth:openai:api-key")).toEqual(
       expect.objectContaining({
         status: "conflict",
         reason: "auth profile exists",
       }),
     );
     expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toBeUndefined();
+  });
+
+  it("imports an active Codex API key from non-file credential storage", async () => {
+    const fixture = await createCodexFixture();
+    readCodexCliActiveApiKeyAsync.mockResolvedValue({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-keyring-active",
+    });
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    };
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      config: configState,
+      runtime: createConfigRuntime(configState),
+      includeSecrets: true,
+      providerOptions: { allowKeychainPrompt: true },
+    });
+
+    const plan = await provider.plan(ctx);
+    expect(readCodexCliActiveApiKeyAsync).toHaveBeenCalledWith({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+    expect(findItem(plan.items, "auth:openai:api-key")).toMatchObject({
+      source: fixture.codexHome,
+      details: { credentialKind: "api_key", sourceKind: "codex-keychain" },
+    });
+    const result = await provider.apply(ctx, plan);
+
+    expect(findItem(result.items, "auth:openai:api-key").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles["openai:codex-import"]).toMatchObject({
+      type: "api_key",
+      provider: "openai",
+      key: "sk-keyring-active",
+    });
+  });
+
+  it("imports selected Codex OAuth from keychain-only credential storage", async () => {
+    const fixture = await createCodexFixture();
+    const accessToken = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_keychain" },
+      "https://api.openai.com/profile": { email: "keychain@example.test" },
+    });
+    readCodexCliCredentialsAsync.mockResolvedValue({
+      type: "oauth",
+      provider: "openai",
+      access: accessToken,
+      refresh: "refresh-keychain",
+      expires: Date.now() + 60_000,
+      accountId: "acct_keychain",
+    });
+    const provider = buildCodexMigrationProvider();
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      includeSecrets: true,
+      itemKinds: ["auth"],
+      providerOptions: {
+        allowKeychainPrompt: true,
+        credentialKind: "oauth",
+        configPatchMode: "none",
+      },
+    });
+
+    const plan = await provider.plan(ctx);
+    expect(readCodexCliCredentialsAsync).toHaveBeenCalledWith({
+      codexHome: fixture.codexHome,
+      allowKeychainPrompt: true,
+    });
+    expect(findItem(plan.items, "auth:openai")).toMatchObject({
+      source: fixture.codexHome,
+      status: "planned",
+      details: { credentialKind: "oauth", sourceKind: "codex-keychain" },
+    });
+
+    const result = await provider.apply(ctx, plan);
+    expect(findItem(result.items, "auth:openai").status).toBe("migrated");
+    expect(loadTargetAuthStore(fixture).profiles["openai:account-acct_keychain"]).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+      refresh: "refresh-keychain",
+    });
   });
 
   it("skips Codex OAuth import when the source account changes after planning", async () => {
@@ -1321,6 +1593,58 @@ describe("buildCodexMigrationProvider", () => {
     );
     expect(configState.auth).toBeUndefined();
     expect(configState.agents?.defaults?.model).toBeUndefined();
+  });
+
+  it("imports only the selected OAuth credential without probing API-key or model config", async () => {
+    const fixture = await createCodexFixture();
+    const accessToken = fakeJwt({
+      "https://api.openai.com/auth": { chatgpt_account_id: "acct_selected" },
+      "https://api.openai.com/profile": { email: "selected@example.test" },
+    });
+    await writeFile(
+      path.join(fixture.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: accessToken,
+          refresh_token: "refresh-selected-token",
+          account_id: "acct_selected",
+        },
+      }),
+    );
+    const configState: MigrationProviderContext["config"] = {
+      agents: { defaults: { workspace: fixture.workspaceDir } },
+    };
+    const mutateConfigFile = vi.fn(async () => {
+      throw new Error("credential-only import must not mutate config");
+    });
+    const provider = buildCodexMigrationProvider({
+      runtime: { config: { current: () => configState, mutateConfigFile } } as never,
+    });
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      config: configState,
+      includeSecrets: true,
+      providerOptions: { configPatchMode: "none", credentialKind: "oauth" },
+    });
+
+    const plan = await provider.plan(ctx);
+    const result = await provider.apply(ctx, plan);
+
+    expect(plan.items.filter((item) => item.kind === "auth").map((item) => item.id)).toEqual([
+      "auth:openai",
+    ]);
+    expect(readCodexCliActiveApiKeyAsync).not.toHaveBeenCalled();
+    expect(result.items.some((item) => item.id.startsWith("auth:openai:config:"))).toBe(false);
+    expect(findItem(result.items, "auth:openai")).toEqual(
+      expect.objectContaining({
+        status: "migrated",
+        details: expect.objectContaining({ configUpdated: false }),
+      }),
+    );
+    expect(mutateConfigFile).not.toHaveBeenCalled();
   });
 
   it.each([

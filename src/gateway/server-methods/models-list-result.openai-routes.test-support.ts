@@ -1,11 +1,9 @@
-import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
+import type { PreparedProviderAuth } from "../../agents/agent-auth-credential-modes.js";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "../../agents/auth-profiles.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
-import type { createOpenAIModelRoutesResolver } from "../../agents/openai-model-routes.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
   type PreparedGatewayModelCatalogSnapshot,
   registerGatewayModelCatalogPrivateAccess,
@@ -57,10 +55,8 @@ export async function listModels(params: {
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
   catalogComplete?: boolean;
-  preparedAuthModes?: PreparedAgentCredentialModes;
+  preparedProviderAuth?: PreparedProviderAuth;
   metadataSnapshot?: PluginMetadataSnapshot;
-  pluginRegistry?: PluginRegistry;
-  routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
   view?: "all" | "configured" | "provider-config" | "default";
 }) {
   const agentId = params.agentId ?? "main";
@@ -72,10 +68,8 @@ export async function listModels(params: {
       catalogComplete: params.catalogComplete ?? false,
       workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
-      observationConfig: config,
-      pluginRegistry: params.pluginRegistry,
-      isCurrent: () => true,
-      authModes: params.preparedAuthModes ?? {},
+      providerAuth: params.preparedProviderAuth ?? {},
+      oauthRefreshProviderIds: [],
       authStore: loadAuthProfileStoreWithoutExternalProfiles(
         params.agentDir ?? "/tmp/models-list-openai-agent",
         {
@@ -111,33 +105,34 @@ export async function listModels(params: {
     loadGatewayModelCatalogSnapshot,
     logGateway: { debug: () => {}, warn: () => {} },
   } as unknown as GatewayRequestContext;
+  const listParams = {
+    view: params.view ?? "all",
+    ...(params.refresh ? { refresh: true } : {}),
+    ...(params.preparedOnly ? { preparedOnly: true } : {}),
+  } as const;
+  if (!params.discoveryModes) {
+    return await buildModelsListResult({
+      source: { kind: "gateway", context },
+      agentId,
+      params: listParams,
+    });
+  }
   return await buildModelsListResult({
-    context,
-    agentId,
-    params: {
-      view: params.view ?? "all",
-      ...(params.refresh ? { refresh: true } : {}),
-      ...(params.preparedOnly ? { preparedOnly: true } : {}),
+    source: {
+      kind: "published",
+      context,
+      config,
+      snapshot: { entries: params.catalog, routeVariants: params.catalog },
+      projector: {
+        metadataSnapshot: {
+          index: { plugins: [] },
+          manifestRegistry: { plugins: [] },
+          plugins: [{ id: "test-provider", modelCatalog: { discovery: params.discoveryModes } }],
+        },
+        authStore: { version: 1, profiles: {} },
+      } as never,
     },
-    ...(params.discoveryModes
-      ? {
-          preloadedCatalog: {
-            agentId: "main",
-            config,
-            snapshot: { entries: params.catalog, routeVariants: params.catalog },
-          },
-          catalogProjector: {
-            metadataSnapshot: {
-              index: { plugins: [] },
-              manifestRegistry: { plugins: [] },
-              plugins: [
-                { id: "test-provider", modelCatalog: { discovery: params.discoveryModes } },
-              ],
-            },
-            authStore: { version: 1, profiles: {} },
-          } as never,
-        }
-      : {}),
-    ...(params.routeResolverFactory ? { routeResolverFactory: params.routeResolverFactory } : {}),
+    agentId,
+    params: listParams,
   });
 }

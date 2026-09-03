@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createConfigResolutionFacts,
   setConfigResolutionFacts,
@@ -9,13 +9,30 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createModelAuthAvailabilityResolver } from "./model-auth-availability.js";
-import {
-  authStore,
-  dualRoutes,
-  evaluate,
-  routeResolverFactory,
-} from "./model-auth-availability.test-support.js";
+import { authStore, evaluate } from "./model-auth-availability.test-support.js";
+import { dualRoutes, openAIModelRoutesMock } from "./openai-model-routes.test-support.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
+
+vi.mock("./openai-model-routes.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./openai-model-routes.js")>();
+  return {
+    ...actual,
+    createOpenAIModelRoutesResolver: (
+      params: Parameters<typeof actual.createOpenAIModelRoutesResolver>[0],
+    ) =>
+      openAIModelRoutesMock.resolution === undefined
+        ? actual.createOpenAIModelRoutesResolver(params)
+        : () => openAIModelRoutesMock.resolution,
+  };
+});
+
+// The compiled unit lane has no plugin manifests, so the real resolver finds no OpenAI routes.
+beforeEach(() => {
+  openAIModelRoutesMock.resolution = dualRoutes;
+});
+afterEach(() => {
+  openAIModelRoutesMock.resolution = undefined;
+});
 
 describe("model auth unavailability reasons", () => {
   it.each([
@@ -165,7 +182,6 @@ describe("model auth unavailability reasons", () => {
           cfg: {},
           authStore: authStore(profiles),
           env: {},
-          routeResolverFactory: routeResolverFactory(dualRoutes),
         }).evaluateModelAuth(provider);
         expect.soft(result.unavailableReason, label).toBe(reason);
         expect.soft(result.unavailableUntil, label).toBeUndefined();
@@ -209,7 +225,6 @@ describe("model auth unavailability reasons", () => {
         cfg: {},
         authStore: store,
         env: {},
-        routeResolverFactory: routeResolverFactory(dualRoutes),
       });
       const result = resolver.evaluateModelAuth(provider);
       expect(result).toMatchObject({ availability: false, unavailableReason: "auth-failed" });

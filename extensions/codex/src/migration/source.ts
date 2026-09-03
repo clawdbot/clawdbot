@@ -62,6 +62,7 @@ export type CodexSource = {
 type CodexSourceDiscoveryOptions = {
   input?: string;
   memoryOnly?: boolean;
+  authOnly?: boolean;
   evaluatePluginMigrationEligibility?: boolean;
   verifyPluginApps?: boolean;
 };
@@ -311,7 +312,7 @@ async function withPluginMigrationEligibility(params: {
     }
     return evaluated;
   }
-  if (sourceAccount === "non_chatgpt") {
+  if (sourceAccount === "api_key" || sourceAccount === "amazon_bedrock") {
     for (const { plugin, apps } of pending) {
       evaluated.push({
         ...plugin,
@@ -386,7 +387,7 @@ async function withPluginMigrationEligibility(params: {
 
 async function readSourceCodexAccount(
   options: SourceAppServerRequestOptions,
-): Promise<"chatgpt" | "non_chatgpt" | "missing"> {
+): Promise<"chatgpt" | "api_key" | "amazon_bedrock" | "missing"> {
   const response = await options.request<CodexGetAccountResponse>({
     method: "account/read",
     requestParams: { refreshToken: false },
@@ -402,8 +403,9 @@ async function readSourceCodexAccount(
     case "chatgpt":
       return "chatgpt";
     case "apiKey":
+      return "api_key";
     case "amazonBedrock":
-      return "non_chatgpt";
+      return "amazon_bedrock";
     default:
       return "missing";
   }
@@ -569,21 +571,23 @@ export async function discoverCodexSource(
   const authPath = path.join(codexHome, "auth.json");
   const modelsCachePath = path.join(codexHome, "models_cache.json");
   const hooksPath = path.join(codexHome, "hooks", "hooks.json");
-  const memoryFiles = await discoverCodexMemorySources(codexHome);
-  const codexSkills = options.memoryOnly
+  const narrowToAuth = options.authOnly === true;
+  const skipAssets = options.memoryOnly === true || narrowToAuth;
+  const memoryFiles = narrowToAuth ? [] : await discoverCodexMemorySources(codexHome);
+  const codexSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: codexSkillsDir,
         sourceLabel: "Codex skill",
         excludeSystem: true,
       });
-  const personalAgentSkills = options.memoryOnly
+  const personalAgentSkills = skipAssets
     ? []
     : await discoverSkillDirs({
         root: agentsSkillsDir,
         sourceLabel: "personal AgentSkill",
       });
-  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = options.memoryOnly
+  const sourcePluginDiscovery: { plugins: CodexPluginSource[]; error?: string } = skipAssets
     ? { plugins: [] }
     : await discoverInstalledCuratedPlugins(codexHome, options);
   const sourcePluginNames = new Set(
@@ -591,17 +595,15 @@ export async function discoverCodexSource(
       plugin.pluginName ? [plugin.pluginName] : [],
     ),
   );
-  const cachedPlugins = (options.memoryOnly ? [] : await discoverPluginDirs(codexHome)).filter(
-    (plugin) => {
-      const normalizedName = sanitizePluginName(plugin.name);
-      return !sourcePluginNames.has(normalizedName);
-    },
-  );
+  const cachedPlugins = (skipAssets ? [] : await discoverPluginDirs(codexHome)).filter((plugin) => {
+    const normalizedName = sanitizePluginName(plugin.name);
+    return !sourcePluginNames.has(normalizedName);
+  });
   const plugins = [...sourcePluginDiscovery.plugins, ...cachedPlugins].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
   const archivePaths: CodexArchiveSource[] = [];
-  if (!options.memoryOnly && (await exists(configPath))) {
+  if (!skipAssets && (await exists(configPath))) {
     archivePaths.push({
       id: "archive:config.toml",
       path: configPath,
@@ -609,7 +611,7 @@ export async function discoverCodexSource(
       message: "Codex config is archived for manual review; it is not activated automatically",
     });
   }
-  if (!options.memoryOnly && (await exists(hooksPath))) {
+  if (!skipAssets && (await exists(hooksPath))) {
     archivePaths.push({
       id: "archive:hooks/hooks.json",
       path: hooksPath,
@@ -621,7 +623,7 @@ export async function discoverCodexSource(
   const skills = [...codexSkills, ...personalAgentSkills].toSorted((a, b) =>
     a.source.localeCompare(b.source),
   );
-  const hasAuth = !options.memoryOnly && (await exists(authPath));
+  const hasAuth = options.memoryOnly !== true && (await exists(authPath));
   const high = Boolean(
     memoryFiles.length || codexSkills.length || plugins.length || archivePaths.length || hasAuth,
   );

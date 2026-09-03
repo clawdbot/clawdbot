@@ -61,6 +61,7 @@ function sessionRow(sharingRole: "owner" | "viewer") {
 const featureMethods = [
   "chat.metadata",
   "chat.startup",
+  "models.list",
   "commands.list",
   "session.suggestions.add",
   "session.suggestions.list",

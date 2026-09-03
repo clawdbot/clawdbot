@@ -4,9 +4,7 @@ import { readCodexPluginConfig } from "./config-parsing.js";
 import { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import { buildCodexRuntimeModelParams } from "./model-runtime.js";
 import { listAllCodexAppServerModels, type CodexAppServerModel } from "./models.js";
-import { isJsonObject, type CodexGetAccountResponse } from "./protocol.js";
 import { withCodexAppServerJsonClient } from "./request.js";
-import { captureSharedCodexAppServerCatalogLifetime } from "./shared-client.js";
 
 // Manifest contract (openclaw.plugin.json discovery.timeoutMs default): live model
 // discovery is bounded tightly so a wedged app-server degrades to the static catalog.
@@ -44,34 +42,10 @@ function codexAppServerModelsToCatalogEntries(
 
 /** One harness registration owns its observations; none travel with worker snapshots. */
 export function createCodexAppServerModelCatalog(runtime: string) {
-  type Observation = {
-    pluginConfig: unknown;
-    models?: ReadonlySet<string>;
-    accountType?: "apiKey" | "chatgpt";
-    isCurrent?: () => boolean;
-  };
-  const scopes = new WeakMap<AgentHarnessModelCatalogParams["config"], Map<string, Observation>>();
-  const scopeKey = (params: AgentHarnessModelCatalogParams) =>
-    JSON.stringify([params.agentId, params.agentDir, params.workspaceDir]);
   let disposed = false;
   return {
     dispose() {
       disposed = true;
-    },
-    read(
-      params: AgentHarnessModelCatalogParams & { provider: string; modelId: string },
-      pluginConfig: unknown,
-    ) {
-      const observation = scopes.get(params.config)?.get(scopeKey(params));
-      return !disposed &&
-        params.provider === "openai" &&
-        observation !== undefined &&
-        observation.pluginConfig === pluginConfig &&
-        observation.models?.has(params.modelId) &&
-        observation.accountType &&
-        observation.isCurrent?.()
-        ? { accountType: observation.accountType }
-        : undefined;
     },
     async load(
       params: AgentHarnessModelCatalogParams,
@@ -80,25 +54,18 @@ export function createCodexAppServerModelCatalog(runtime: string) {
       if (disposed) {
         return [];
       }
-      let observations = scopes.get(params.config);
-      if (!observations) {
-        observations = new Map();
-        scopes.set(params.config, observations);
-      }
-      const key = scopeKey(params);
-      const observation: Observation = { pluginConfig };
-      // Revoke before any await, including failed/disabled refreshes and superseded reads.
-      observations.set(key, observation);
       const discovery = readCodexPluginConfig(pluginConfig).discovery;
       if (discovery?.enabled === false) {
         return [];
       }
-      const { start } = resolveCodexAppServerRuntimeOptions({ pluginConfig });
+      const { start } = resolveCodexAppServerRuntimeOptions({
+        pluginConfig,
+        nativeAuth: params.runtime === "codex",
+      });
       const timeoutMs = discovery?.timeoutMs ?? DEFAULT_MODEL_DISCOVERY_TIMEOUT_MS;
       const result = await withCodexAppServerJsonClient(
         { startOptions: start, config: params.config, agentDir: params.agentDir, timeoutMs },
-        async (request, client) => {
-          const isCurrent = captureSharedCodexAppServerCatalogLifetime(client);
+        async (request) => {
           const listed = await listAllCodexAppServerModels({
             request,
             limit: 100,
@@ -111,27 +78,16 @@ export function createCodexAppServerModelCatalog(runtime: string) {
                 (ref) => ref.provider === "openai" && ref.model === model.id,
               ),
           );
-          const account = await request<CodexGetAccountResponse>({
+          await request({
             method: "account/read",
             requestParams: { refreshToken: false },
           });
-          const observedType = isJsonObject(account.account) ? account.account.type : undefined;
-          const accountType =
-            account.requiresOpenaiAuth === true
-              ? observedType === "apiKey" || observedType === "chatgpt"
-                ? observedType
-                : undefined
-              : undefined;
-          return { models, isCurrent, accountType } as const;
+          return { models } as const;
         },
       );
-      // Publish only after the bounded operation settles; a late timed-out callback cannot publish.
-      if (disposed || observations.get(key) !== observation || !result.isCurrent()) {
+      if (disposed) {
         return [];
       }
-      observation.models = new Set(result.models.map((model) => model.id));
-      observation.accountType = result.accountType;
-      observation.isCurrent = result.isCurrent;
       return codexAppServerModelsToCatalogEntries(result.models, runtime);
     },
   };

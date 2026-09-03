@@ -511,6 +511,7 @@ Each `providerAuthChoices` entry describes one onboarding or auth choice. OpenCl
 | `appGuidedActionLabel` | No       | `string`                                                              | Short command label shown when starting provider-owned app-guided setup.                                  |
 | `appGuidedDiscovery`   | No       | `boolean`                                                             | The matching runtime auth method owns read-only local discovery through `appGuidedSetup`.                 |
 | `appGuidedAuth`        | No       | `"oauth"` \| `"device-code"`                                          | Provider-owned interactive login that native setup clients can render generically.                        |
+| `channelLogin`         | No       | `{ aliases?: string[], default?: boolean }`                           | Offer this fixed-input login through owner-only private chat; the runtime rejects any extra prompt.       |
 | `onboardingScopes`     | No       | `Array<"text-inference" \| "image-generation" \| "music-generation">` | Which onboarding surfaces this choice should appear in. If omitted, it defaults to `["text-inference"]`.  |
 
 When `appGuidedDiscovery` is true, the matching provider auth method must expose
@@ -521,6 +522,21 @@ proposal in isolation and commits it only after success. A provider can also
 expose `appGuidedSetup.detectAvailability` to mark its setup choice as detected
 when the local service is reachable but no model qualifies for automatic setup.
 The availability probe is also read-only.
+
+`channelLogin` is an explicit offering, not a promise inferred from the auth
+method kind. The channel prompter accepts messages and device codes only. It
+stops and directs the owner to the Control UI if the provider asks for text,
+selection, or confirmation. Choice, provider, default, and alias collisions
+also stop with an explicit list of unambiguous `/login <choice>` commands.
+
+The Control UI lists eligible, unambiguous manifest-declared provider auth
+choices. Manual-only choices, choices outside text-inference onboarding, and
+colliding choice IDs do not create actions. Choices with `appGuidedAuth`, or
+`appGuidedSecret` without `appGuidedDiscovery`, run as credential-only **Sign
+in** flows. Other eligible choices run as **Set up** flows because their
+endpoint, local runtime, or cloud configuration is part of the provider
+contract. Descriptor-only `setup.providers[].authMethods` entries remain
+discovery facts and do not create executable Control UI actions.
 
 ## cliCommands reference
 

@@ -3,10 +3,7 @@ import { MAX_MEMORY_MIGRATION_ITEMS } from "../../../packages/gateway-protocol/s
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { bindMemoryMigrationPlanSources } from "../../plugin-sdk/memory-migration-source.js";
 import { summarizeMigrationItems } from "../../plugin-sdk/migration.js";
-import {
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
-} from "../../plugins/migration-provider-runtime.js";
+import { resolvePluginMigrationProviders } from "../../plugins/migration-provider-runtime.js";
 import type {
   MigrationApplyResult,
   MigrationDetection,
@@ -27,7 +24,6 @@ const silentRuntime: RuntimeEnv = {
 };
 
 export function listMemoryMigrationProviders(config: OpenClawConfig): MigrationProviderPlugin[] {
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg: config });
   return resolvePluginMigrationProviders({ cfg: config }).filter((provider) =>
     provider.supportedItemKinds?.includes(MEMORY_ITEM_KIND),
   );

@@ -10,10 +10,7 @@ import { withProgress } from "../cli/progress.js";
 import { promptYesNo } from "../cli/prompt.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { redactMigrationPlan } from "../plugin-sdk/migration.js";
-import {
-  ensureStandaloneMigrationProviderRegistryLoaded,
-  resolvePluginMigrationProviders,
-} from "../plugins/migration-provider-runtime.js";
+import { resolvePluginMigrationProviders } from "../plugins/migration-provider-runtime.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
@@ -290,7 +287,6 @@ function logNoCodexSelection(runtime: RuntimeEnv, plan: MigrationPlan): void {
 /** Lists available migration providers as JSON or terse terminal rows. */
 export async function migrateListCommand(runtime: RuntimeEnv, opts: { json?: boolean } = {}) {
   const cfg = getRuntimeConfig();
-  ensureStandaloneMigrationProviderRegistryLoaded({ cfg });
   const providers = resolvePluginMigrationProviders({ cfg }).map((provider) => ({
     id: provider.id,
     label: provider.label,

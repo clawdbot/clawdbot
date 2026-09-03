@@ -60,12 +60,10 @@ export function resolvePublishedModelCatalogOwner(
     agentDir: snapshot.agentDir,
     workspaceDir,
     config: snapshot.config,
-    observationConfig: snapshot.observationConfig,
-    authModes: snapshot.authModes,
+    providerAuth: snapshot.providerAuth,
     authStore,
     metadataSnapshot: snapshot.metadataSnapshot,
-    pluginRegistry: snapshot.pluginRegistry,
-    isCurrent: snapshot.isCurrent,
+    oauthRefreshProviderIds: snapshot.oauthRefreshProviderIds,
     modelCatalog: snapshot.modelCatalog,
   });
 }
