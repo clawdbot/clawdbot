@@ -55,8 +55,6 @@ type ReclamationDatabaseOptions = OpenClawAgentDatabaseOptions & {
   path: string;
 };
 
-type WorkerDeleteParams = Omit<DeleteSessionEntryLifecycleParams, "commitGuard">;
-
 type SessionReclamationPlanBase = {
   databaseOptions: ReclamationDatabaseOptions;
   materializedPlans: MaterializedSessionStateDeletePlan[];
@@ -64,7 +62,7 @@ type SessionReclamationPlanBase = {
 
 export type SqliteSessionReclamationPlan =
   | (SessionReclamationPlanBase & {
-      deleteParams: WorkerDeleteParams;
+      deleteParams: DeleteSessionEntryLifecycleParams;
       kind: "entry";
       preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
     })
@@ -78,7 +76,7 @@ export type SqliteSessionReclamationPlan =
       sessionId: string;
     })
   | (SessionReclamationPlanBase & {
-      deleteParams: WorkerDeleteParams;
+      deleteParams: DeleteSessionEntryLifecycleParams;
       kind: "historical-generation";
       preparedTargetSnapshot: SqliteLifecycleTargetSnapshot;
       protectedSessionIds: string[];
@@ -139,12 +137,6 @@ function toWorkerDatabaseOptions(
   };
 }
 
-function toWorkerDeleteParams(params: DeleteSessionEntryLifecycleParams): WorkerDeleteParams {
-  const deleteParams = { ...params };
-  delete deleteParams.commitGuard;
-  return deleteParams;
-}
-
 function deleteSessionBoardRows(
   database: OpenClawAgentDatabase,
   sessionKeys: readonly string[],
@@ -177,7 +169,7 @@ function deleteSessionBoardRows(
 export function shouldDeleteSqliteSessionEntryLifecycle(
   database: OpenClawAgentDatabase,
   entry: SessionEntry | undefined,
-  params: WorkerDeleteParams,
+  params: DeleteSessionEntryLifecycleParams,
 ): entry is SessionEntry {
   if (!entry || (params.expectedEntry && !sqliteSessionEntriesEqual(entry, params.expectedEntry))) {
     return false;
@@ -230,6 +222,7 @@ export function reclaimSqliteSessionInTransaction(
   if (plan.kind === "entry") {
     const value = runSqliteSessionDeletionTransaction<DeleteSessionEntryLifecycleResult>(
       (transactionDb) => {
+        plan.deleteParams.commitGuard?.();
         callbacks.beforeMutation?.();
         const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
         const entry = snapshot[0]?.entry;
@@ -321,6 +314,7 @@ export function reclaimSqliteSessionInTransaction(
   }
 
   const value = runOpenClawAgentWriteTransaction((transactionDb) => {
+    plan.deleteParams.commitGuard?.();
     callbacks.beforeMutation?.();
     const snapshot = readLifecycleTargetSnapshot(transactionDb, plan.deleteParams.target);
     if (
@@ -402,7 +396,10 @@ export async function runSqliteSessionReclamation(params: {
   onInProcessCommit?: (database: OpenClawAgentDatabase) => void;
   plan: SqliteSessionReclamationPlan;
 }): Promise<SqliteSessionReclamationResult> {
+  // Caller authority is a live closure: retain its synchronous commit on this thread.
+  // Unguarded background reclamation can still move expensive deletion to a Worker.
   if (
+    ("deleteParams" in params.plan && params.plan.deleteParams.commitGuard) ||
     params.forceInProcess ||
     isIncognitoOpenClawAgentSqlitePath(params.plan.databaseOptions.path, {
       agentId: params.plan.databaseOptions.agentId,
@@ -450,7 +447,7 @@ export function createSessionEntryReclamationPlan(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "entry" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
-    deleteParams: toWorkerDeleteParams(params.deleteParams),
+    deleteParams: { ...params.deleteParams },
     kind: "entry",
     materializedPlans: params.materializedPlans,
     preparedTargetSnapshot: params.preparedTargetSnapshot,
@@ -495,7 +492,7 @@ export function createHistoricalGenerationReclamationPlan(params: {
 }): Extract<SqliteSessionReclamationPlan, { kind: "historical-generation" }> {
   return {
     databaseOptions: toWorkerDatabaseOptions(params.databaseOptions),
-    deleteParams: toWorkerDeleteParams(params.deleteParams),
+    deleteParams: { ...params.deleteParams },
     kind: "historical-generation",
     materializedPlans: params.materializedPlans,
     preparedTargetSnapshot: params.preparedTargetSnapshot,
