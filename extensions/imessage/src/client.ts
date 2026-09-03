@@ -294,7 +294,7 @@ export class IMessageRpcClient {
       if (isIMessageBridgeStall(err)) {
         invalidateCachedIMessagePrivateApiStatus(this.configuredCliPath);
         try {
-          await recoverIMessageBridge(this.cliPath);
+          await recoverIMessageBridge(this.configuredCliPath);
         } catch (recoveryError) {
           this.runtime?.error?.(
             `imessage: automatic bridge recovery failed: ${formatErrorMessage(recoveryError)}`,

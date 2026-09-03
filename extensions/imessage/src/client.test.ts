@@ -6,9 +6,14 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { IMessagePrivateApiStatus } from "./private-api-status.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const runIMessageCliJsonCommandMock = vi.hoisted(() => vi.fn());
 
 vi.mock("node:child_process", () => ({
   spawn: spawnMock,
+}));
+
+vi.mock("./cli-output.js", () => ({
+  runIMessageCliJsonCommand: runIMessageCliJsonCommandMock,
 }));
 
 // A dead imsg helper can emit an async `error` on any of its stdio streams. On
@@ -48,12 +53,6 @@ function createMockChild(): MockChild {
   return child;
 }
 
-function createCompletedMockChild(exitCode = 0): MockChild {
-  const child = createMockChild();
-  queueMicrotask(() => child.emit("close", exitCode, null));
-  return child;
-}
-
 let IMessageRpcClient: typeof import("./client.js").IMessageRpcClient;
 let IMessageRpcRequestError: typeof import("./client.js").IMessageRpcRequestError;
 let privateApiStatus: typeof import("./private-api-status.js");
@@ -68,6 +67,7 @@ beforeAll(async () => {
 
 afterAll(() => {
   vi.doUnmock("node:child_process");
+  vi.doUnmock("./cli-output.js");
   vi.resetModules();
 });
 
@@ -81,11 +81,8 @@ describe("IMessageRpcClient child stream error handling", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("VITEST", "");
     child = createMockChild();
-    spawnMock
-      .mockReset()
-      .mockImplementation((_command, args: string[]) =>
-        args[0] === "launch" ? createCompletedMockChild() : child,
-      );
+    spawnMock.mockReset().mockReturnValue(child);
+    runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
   });
 
   afterEach(async () => {
@@ -423,11 +420,8 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("VITEST", "");
     child = createMockChild();
-    spawnMock
-      .mockReset()
-      .mockImplementation((_command, args: string[]) =>
-        args[0] === "launch" ? createCompletedMockChild() : child,
-      );
+    spawnMock.mockReset().mockReturnValue(child);
+    runIMessageCliJsonCommandMock.mockReset().mockResolvedValue({ status: "launched" });
   });
 
   afterEach(() => {
@@ -468,11 +462,50 @@ describe("IMessageRpcClient bridge-stall cache invalidation", () => {
     const error = await pending.catch((cause: unknown) => cause);
     expect(error).toBeInstanceOf(IMessageRpcRequestError);
     expect(privateApiStatus.getCachedIMessagePrivateApiStatus(cliPath)).toBeUndefined();
-    expect(spawnMock).toHaveBeenNthCalledWith(
-      2,
+    expect(runIMessageCliJsonCommandMock).toHaveBeenCalledWith({
       cliPath,
-      ["launch", "--json"],
-      expect.objectContaining({ stdio: ["ignore", "ignore", "pipe"] }),
+      args: ["launch"],
+      timeoutMs: 30_000,
+    });
+
+    child.emit("close", 0, null);
+    await client.stop();
+  });
+
+  it("logs recovery failure while preserving the original structured error", async () => {
+    const recoveryError = new Error("launch stderr stream failed");
+    const runtimeError = vi.fn();
+    runIMessageCliJsonCommandMock.mockRejectedValueOnce(recoveryError);
+    const client = new IMessageRpcClient({
+      cliPath: "/tmp/imsg-stall-recovery-failure",
+      runtime: { error: runtimeError },
+    });
+    await client.start();
+    const pending = client.request("send", {}, { timeoutMs: 0 });
+    pending.catch(() => {});
+    child.stdout.emit(
+      "data",
+      Buffer.from(
+        `${JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          error: {
+            code: -32603,
+            message: "Timed out waiting for response to 'send-message'",
+            data: { disposition: "may_have_completed", retry_safe: false },
+          },
+        })}\n`,
+      ),
+    );
+
+    const error = (await pending.catch((cause: unknown) => cause)) as IMessageRpcRequestError;
+    expect(error).toMatchObject({
+      code: -32603,
+      data: { disposition: "may_have_completed", retry_safe: false },
+    });
+    expect(error.message).toContain("Timed out waiting for response to 'send-message'");
+    expect(runtimeError).toHaveBeenCalledWith(
+      "imessage: automatic bridge recovery failed: launch stderr stream failed",
     );
 
     child.emit("close", 0, null);
