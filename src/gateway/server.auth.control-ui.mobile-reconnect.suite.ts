@@ -130,7 +130,7 @@ export function registerControlUiMobileReconnectSuite(): void {
 
       nodeWs = await openWs(port);
       const nodeReconnect = await connectReq(nodeWs, {
-        token: nodeToken,
+        deviceToken: nodeToken,
         skipDefaultAuth: true,
         role: "node",
         scopes: [],
@@ -142,7 +142,7 @@ export function registerControlUiMobileReconnectSuite(): void {
 
       operatorWs = await openWs(port);
       const operatorReconnect = await connectReq(operatorWs, {
-        token: operatorToken,
+        deviceToken: operatorToken,
         skipDefaultAuth: true,
         role: "operator",
         scopes: IOS_OPERATOR_SCOPES,
