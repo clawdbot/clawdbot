@@ -267,6 +267,40 @@ describe("plugin management service", () => {
     expect(catalog.mutationAllowed).toBe(true);
   });
 
+  it.each([
+    {
+      name: "reports missing dependencies for a bundled plugin distributed outside the root package",
+      packageBuild: { bundledDist: false },
+      expectsError: true,
+    },
+    {
+      name: "keeps plain bundled plugins free of package-local dependency health",
+      packageBuild: undefined,
+      expectsError: false,
+    },
+  ])("$name", async ({ packageBuild, expectsError }) => {
+    mocks.metadata.mockReturnValue(
+      metadataSnapshot({
+        enabled: true,
+        packageBuild,
+        packageDependencies: { "missing-runtime": "1.0.0" },
+      }),
+    );
+
+    const catalog = await listManagedPlugins({
+      config: { plugins: { entries: { workboard: { enabled: true } } } },
+      env: {},
+      officialCatalog: { entries: [] },
+    });
+
+    const entry = expectDefined(catalog.plugins[0], "catalog entry");
+    if (expectsError) {
+      expect(entry.error).toContain("required dependencies are missing: missing-runtime");
+    } else {
+      expect(entry.error).toBeUndefined();
+    }
+  });
+
   it("projects and resolves installed manifest icons by plugin identity", async () => {
     const icon = "https://cdn.example.test/workboard.svg";
     const config = {
@@ -676,7 +710,7 @@ describe("plugin management service", () => {
     );
     expect(result).toMatchObject({
       pluginId: "diffs",
-      removed: ["config entry", "install record", "directory"],
+      removed: ["plugin settings", "install record", "directory"],
       warnings: ['Warning: plugin "diffs" is referenced by Claw: @acme/review.'],
     });
   });

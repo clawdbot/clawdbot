@@ -1,6 +1,7 @@
 // Run Vitest Profile tests cover run vitest profile script behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs";
+import type { HeapProfiler } from "node:inspector";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -143,9 +144,17 @@ export default class extends TestRunner {
         fs.writeFileSync(
           path.join(root, `${name}.test.ts`),
           `import fs from "node:fs";
+import process from "node:process";
 import { isMainThread, threadId } from "node:worker_threads";
 import { expect, inject, it, vi } from "vitest";
+function retain_${name}_heap_workload() {
+  const blocks = [];
+  for (let index = 0; index < 64; index++) blocks.push(new Array(65_536).fill(index));
+  return blocks;
+}
 it("retains the selected execution context", async () => {
+  // Keep a real named allocation alive through the sampler's final GC and stop.
+  process[Symbol.for("openclaw.test.heap-workload.${name}")] = retain_${name}_heap_workload();
   vi.resetModules();
   expect(inject("customSetupCount")).toBe(1);
   expect(isMainThread).toBe(${pool === "forks"});
@@ -216,12 +225,19 @@ it("retains the selected execution context", async () => {
         expect(cpuFiles, result.output).toHaveLength(1);
         expect(heapFiles, result.output).toHaveLength(1);
         const cpu = JSON.parse(fs.readFileSync(path.join(outputDir, cpuFiles[0]!), "utf8"));
-        const heap = JSON.parse(fs.readFileSync(path.join(outputDir, heapFiles[0]!), "utf8"));
+        const heap = JSON.parse(
+          fs.readFileSync(path.join(outputDir, heapFiles[0]!), "utf8"),
+        ) as HeapProfiler.SamplingHeapProfile;
         expect(cpu.nodes.length).toBeGreaterThan(0);
         expect(cpu.samples.length).toBeGreaterThan(0);
         expect(cpu.endTime).toBeGreaterThan(cpu.startTime);
         expect(heap.head.children.length).toBeGreaterThan(0);
-        expect(heap.samples.length).toBeGreaterThan(0);
+        const nodes = [heap.head];
+        for (const node of nodes) nodes.push(...node.children);
+        const workload = nodes.find(
+          (node) => node.callFrame.functionName === `retain_${name}_heap_workload`,
+        );
+        expect(workload?.selfSize).toBeGreaterThan(0);
       }
     },
   );

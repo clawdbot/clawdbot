@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { GitHubLinkHovercardProvider } from "./github-link-hovercard.runtime.ts";
@@ -224,7 +225,10 @@ describe("openclaw-github-link-hovercard-provider", () => {
       updatedAt: "2026-07-05T09:55:00Z",
     });
     const href = "https://github.com/openclaw/openclaw/pull/99816";
-    const { anchor, provider } = createLink(href, "#99816");
+    const { anchor, provider } = createLink(
+      "HTTPS://GITHUB.COM:443/openclaw/openclaw/pull/99816",
+      "#99816",
+    );
     provider.client = { request } as unknown as GatewayBrowserClient;
 
     await hover(anchor);
@@ -238,7 +242,7 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(card?.textContent).toContain("steipete");
     expect(card?.textContent).toContain("+101");
     expect(card?.textContent).toContain("−12");
-    expect(card?.textContent).toContain("3 files");
+    expect(card?.textContent).not.toContain("3 files");
     expect(card?.textContent).toContain("5m ago");
     expect(anchor.href).toBe(href);
     // A card that owns a link is an interactive popover, never an ARIA tooltip.
@@ -249,20 +253,25 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(anchor.getAttribute("aria-haspopup")).toBe("dialog");
     expect(anchor.getAttribute("aria-expanded")).toBe("true");
     expect(anchor.getAttribute("aria-controls")).toBe(card?.id);
-    // Title, repo reference, author and the files chip are all real links, which
-    // is what makes the card a popover rather than a tooltip.
+    // Title, repo reference, and author are real links, which is what makes the
+    // card a popover rather than a tooltip.
     const cardLink = (selector: string) =>
       card?.querySelector<HTMLAnchorElement>(`.github-link-hovercard__${selector}`);
     expect(cardLink("title")?.getAttribute("href")).toBe(href);
     expect(cardLink("repo")?.getAttribute("href")).toBe(href);
     expect(cardLink("author")?.getAttribute("href")).toBe("https://github.com/steipete");
-    expect(cardLink("metric--files")?.getAttribute("href")).toBe(`${href}/files`);
-    for (const selector of ["title", "repo", "author", "metric--files"]) {
+    expect(card?.querySelector(".github-link-hovercard__metric--files")).toBeNull();
+    for (const selector of ["title", "repo", "author"]) {
       expect(cardLink(selector)?.target).toBe("_blank");
       expect(cardLink(selector)?.rel.split(/\s+/)).toEqual(
         expect.arrayContaining(["noopener", "noreferrer"]),
       );
     }
+    const diffMetrics = card?.querySelector(".github-link-hovercard__metrics--diff");
+    expect(diffMetrics?.children).toHaveLength(2);
+    expect([...(diffMetrics?.children ?? [])].every((metric) => metric.tagName === "SPAN")).toBe(
+      true,
+    );
     expect(request).toHaveBeenCalledWith(
       "controlUi.githubPreview",
       {
@@ -279,6 +288,77 @@ describe("openclaw-github-link-hovercard-provider", () => {
     expect(hovercard()).toBeNull();
     await hover(anchor);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["immediate rejection", "late rejection", "late success"])(
+    "reopens an abandoned request without poisoning its replacement cache: %s",
+    async (settlement) => {
+      const abandoned = createDeferred<ReturnType<typeof issuePreviewResponse>>();
+      let requestSignal: AbortSignal | undefined;
+      const request = vi
+        .fn()
+        .mockImplementationOnce(
+          (_method: string, _params: unknown, options: { signal: AbortSignal }) => {
+            requestSignal = options.signal;
+            if (settlement === "immediate rejection") {
+              options.signal.addEventListener(
+                "abort",
+                () => abandoned.reject(new Error("gateway request aborted")),
+                { once: true },
+              );
+            }
+            return abandoned.promise;
+          },
+        )
+        .mockResolvedValue(issuePreviewResponse());
+      const { anchor, provider } = createLink(ISSUE_HREF);
+      provider.client = { request } as unknown as GatewayBrowserClient;
+
+      await hover(anchor);
+      expect(hovercard()?.dataset.loading).toBe("true");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      expect(requestSignal?.aborted).toBe(true);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+
+      if (settlement === "late success") {
+        abandoned.resolve(issuePreviewResponse({ title: "Abandoned preview" }));
+      } else {
+        abandoned.reject(new Error("gateway request aborted"));
+      }
+      await vi.advanceTimersByTimeAsync(0);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+      leave(anchor);
+      await vi.advanceTimersByTimeAsync(GITHUB_HOVERCARD_CLOSE_DELAY_MS);
+      await hover(anchor);
+      expect(request).toHaveBeenCalledTimes(2);
+      expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
+    },
+  );
+
+  it("keeps genuine request failures cached for 30 seconds before retrying on hover", async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("GitHub preview unavailable"))
+      .mockResolvedValue(issuePreviewResponse());
+    const { anchor, provider } = createLink(ISSUE_HREF);
+    provider.client = { request } as unknown as GatewayBrowserClient;
+
+    await hover(anchor);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(29_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(1);
+    expect(hovercard()?.dataset.state).toBe("unavailable");
+
+    leave(anchor);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await hover(anchor);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(hovercard()?.textContent).toContain("Keep hover previews reachable");
   });
 
   it("stays open while the pointer travels from the link onto the card", async () => {
@@ -426,6 +506,9 @@ describe("openclaw-github-link-hovercard-provider", () => {
   it.each([
     "http://github.com/openclaw/openclaw/issues/99815",
     "https://user:password@github.com/openclaw/openclaw/issues/99815",
+    "https://github.com:8443/openclaw/openclaw/issues/99815",
+    "https://github.com.example.com/openclaw/openclaw/issues/99815",
+    "blob:https://github.com/issues/99815",
     "https://example.com/openclaw/openclaw/issues/99815",
     "javascript:alert(1)",
   ])("does not preview an untrusted item URL: %s", async (href) => {

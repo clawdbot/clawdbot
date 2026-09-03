@@ -62,10 +62,12 @@ describe("live person presence timing", () => {
 
   const clients = new GatewayClientRegistry();
   const sockets: ReturnType<typeof attachGatewayWsForTest>["socket"][] = [];
+  let nextTestTime = new Date("2040-01-01T00:00:00Z").getTime();
 
   beforeEach(() => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2040-01-01T00:00:00Z"));
+    vi.setSystemTime(nextTestTime);
+    nextTestTime += 24 * 60 * 60 * 1000;
     attachMessageHandler.mockClear();
   });
   afterEach(() => {

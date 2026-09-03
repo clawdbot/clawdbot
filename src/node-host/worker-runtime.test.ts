@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { setImmediate } from "node:timers/promises";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
 const fixture = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -21,11 +21,15 @@ vi.mock("./config.js", () => ({ loadNodeHostConfig: async () => ({}) }));
 vi.mock("./runtime.js", () => ({ prepareNodeHostRuntime: fixture.prepare }));
 import { runNodeHostWorker } from "./worker.js";
 
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("publishes hosting through the app route and retires it on disconnect", async () => {
+function startWorkerFixture(workerHostingEnabled = true, workerHostingDisabledReason?: string) {
   const events = new EventEmitter();
   const input = Object.assign(events, {
     close: () => {
@@ -34,7 +38,8 @@ it("publishes hosting through the app route and retires it on disconnect", async
   });
   fixture.input = input;
   const messages: Array<Record<string, unknown>> = [];
-  vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+  const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+  const stdout = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     const message = JSON.parse(String(chunk));
     messages.push(message);
     if (message.type === "gateway-request") {
@@ -54,16 +59,44 @@ it("publishes hosting through the app route and retires it on disconnect", async
     return true;
   });
   fixture.start.mockImplementation((callbacks) => {
-    callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    if (workerHostingEnabled) {
+      callbacks.onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    }
     return fixture.runtime;
   });
   fixture.prepare.mockResolvedValue({
     manifest: { commands: ["system.run"], caps: ["system"], pathEnv: "/bin" },
-    workerHostingEnabled: true,
+    workerHostingEnabled,
+    workerHostingDisabledReason,
     initialInventory: { skills: [], pluginTools: [] },
     start: fixture.start,
   });
+  const previousExitCode = process.exitCode;
+  const interruptListeners = process.listeners("SIGINT");
+  const terminateListeners = process.listeners("SIGTERM");
   const running = runNodeHostWorker();
+  return {
+    input,
+    messages,
+    stderr,
+    stdout,
+    stop: async () => {
+      try {
+        input.close();
+        await running;
+        expect(fixture.runtime.close).toHaveBeenCalledOnce();
+        expect(fixture.runtime.updateGatewayConnection).toHaveBeenLastCalledWith();
+        expect(process.listeners("SIGINT")).toEqual(interruptListeners);
+        expect(process.listeners("SIGTERM")).toEqual(terminateListeners);
+      } finally {
+        process.exitCode = previousExitCode;
+      }
+    },
+  };
+}
+
+it("publishes hosting through the app route and retires it on disconnect", async () => {
+  const { input, messages, stderr, stop } = startWorkerFixture();
   try {
     await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
     expect(fixture.prepare).toHaveBeenCalledWith(
@@ -131,8 +164,87 @@ it("publishes hosting through the app route and retires it on disconnect", async
       }),
     );
     expect(fixture.runtime.invoke).not.toHaveBeenCalled();
+    expect(stderr).not.toHaveBeenCalled();
   } finally {
-    input.close();
-    await running;
+    await stop();
   }
 });
+
+it.each(["prepared failure", "later failure", "configured opt-out"] as const)(
+  "keeps worker hosting diagnostics local across reconnects: %s",
+  async (scenario) => {
+    const secret = "fixture-secret";
+    const action = "install and start the engine";
+    const reason = `Docker authentication failed (password=${secret}); ${action}`;
+    const preparedFailure = scenario === "prepared failure";
+    const laterFailure = scenario === "later failure";
+    const { input, messages, stderr, stdout, stop } = startWorkerFixture(
+      laterFailure,
+      preparedFailure ? reason : undefined,
+    );
+    const expectDiagnostic = () => {
+      expect(stderr).toHaveBeenCalledOnce();
+      const diagnostic = String(stderr.mock.calls[0]?.[0]);
+      expect(diagnostic).toContain(
+        "node host worker hosting disabled: Docker authentication failed",
+      );
+      expect(diagnostic).toContain(action);
+      expect(diagnostic).not.toContain(secret);
+    };
+    try {
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.type === "ready")).toBe(true),
+      );
+      expect(messages).toHaveLength(1);
+      if (preparedFailure) {
+        expectDiagnostic();
+        expect(stderr.mock.invocationCallOrder[0]).toBeLessThan(
+          stdout.mock.invocationCallOrder[0]!,
+        );
+      } else {
+        expect(stderr).not.toHaveBeenCalled();
+      }
+      const connection = {
+        url: "wss://gateway.example.test/current",
+        protocol: 4,
+        capabilities: [],
+      };
+      const inventories = () =>
+        messages.filter((message) => message.method === "node.runnerInventory.update");
+      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 1, connection }));
+      await setImmediate();
+      if (laterFailure) {
+        expect(inventories()).toHaveLength(1);
+        expect(inventories()[0]?.params).toMatchObject({ workerHost: { enabled: true } });
+        fixture.start.mock.calls[0]?.[0].onWorkerHostingDisabled(reason);
+        await setImmediate();
+        expectDiagnostic();
+      }
+      const disabledInventory = expect.objectContaining({ workerHost: { enabled: false } });
+      expect(inventories()).toHaveLength(laterFailure ? 2 : 1);
+      expect(inventories().at(-1)?.params).toEqual(disabledInventory);
+      input.emit(
+        "line",
+        JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
+      );
+      input.emit("line", JSON.stringify({ type: "gateway-connection", generation: 3, connection }));
+      await setImmediate();
+      expect(inventories()).toHaveLength(laterFailure ? 3 : 2);
+      expect(inventories().at(-1)).toMatchObject({ generation: 3, params: disabledInventory });
+      if (scenario === "configured opt-out") {
+        expect(stderr).not.toHaveBeenCalled();
+      } else {
+        expectDiagnostic();
+      }
+      const output = stdout.mock.calls.map(([chunk]) => String(chunk)).join("");
+      expect(output).not.toContain(secret);
+      expect(output).not.toContain(reason);
+      expect(output).not.toContain(action);
+      expect(output).not.toContain("worker hosting disabled");
+      expect(messages.filter((message) => message.type === "ready")).toHaveLength(1);
+      expect(messages.some((message) => message.type === "manifest")).toBe(false);
+    } finally {
+      await stop();
+    }
+  },
+);

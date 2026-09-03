@@ -467,7 +467,10 @@ export async function bindGenericCurrentConversation(
     boundAt: now,
     ...(expiresAt !== undefined ? { expiresAt } : {}),
     metadata: {
-      ...existing?.metadata,
+      ...(existing?.targetSessionKey === targetSessionKey &&
+      existing.targetKind === input.targetKind
+        ? existing.metadata
+        : undefined),
       ...input.metadata,
       lastActivityAt: now,
     },

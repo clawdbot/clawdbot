@@ -1,9 +1,10 @@
+import { LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH } from "./package-lifecycle-marker.mjs";
+
 export const PACKAGE_DIST_INVENTORY_RELATIVE_PATH = "dist/postinstall-inventory.json";
-export const PACKAGE_INSTALL_GUARD_RELATIVE_PATH = "dist/openclaw-install-guard";
 
 const UNINVENTORIED_PACKAGE_DIST_PATHS = new Set([
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
-  PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+  LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
 ]);
 
 export function comparePackageDistInventory(params: {

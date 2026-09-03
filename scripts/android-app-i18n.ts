@@ -386,11 +386,15 @@ function lineNumber(source: string, offset: number): number {
 }
 
 function decodeKotlinLiteral(value: string): string {
-  return value
-    .replaceAll("\\n", "\n")
-    .replaceAll('\\"', '"')
-    .replaceAll("\\$", "$")
-    .replaceAll("\\\\", "\\");
+  return value.replace(
+    /\\(?:u([0-9a-fA-F]{4})|[n"$\\])/gu,
+    (escape, codeUnit: string | undefined) => {
+      if (codeUnit) {
+        return String.fromCharCode(Number.parseInt(codeUnit, 16));
+      }
+      return escape === "\\n" ? "\n" : escape.slice(1);
+    },
+  );
 }
 
 function collectExplicitRuntimeSources(
@@ -524,10 +528,6 @@ const ALLOWED_UI_LITERALS = new Map<string, ReadonlySet<string>>([
     "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
     // Discovered-gateway subtitles are host:port endpoints, not translatable copy.
     new Set(["${endpoint.host}:${endpoint.port}"]),
-  ],
-  [
-    "apps/android/app/src/main/java/ai/openclaw/app/ui/VoiceScreen.kt",
-    new Set(["${normalized.takeUtf16Safe(87)}..."]),
   ],
   [
     "apps/android/app/src/main/java/ai/openclaw/app/ui/SidebarShell.kt",

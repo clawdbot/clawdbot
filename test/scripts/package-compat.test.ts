@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { fixtureCapabilityConsentArgs } from "../../scripts/e2e/lib/package-compat.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -252,19 +253,13 @@ run_plugins_clawhub_scenario
   );
 
   it.each([
-    ["  --accept-capabilities  Accept\n", consent],
-    ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", consent],
-    ["  --accept-capabilities-extra  Other\n", ""],
-    ["See --accept-capabilities in newer releases\n", ""],
-    ["  --force  Confirm\n", ""],
+    ["  --accept-capabilities  Accept\n", [consent]],
+    ["  \u001b[32m--accept-capabilities\u001b[0m  Accept\n", [consent]],
+    ["  --accept-capabilities-extra  Other\n", []],
+    ["See --accept-capabilities in newer releases\n", []],
+    ["  --force  Confirm\n", []],
   ])("reads only an advertised option from help %j", (help, expected) => {
-    const result = spawnSync(
-      process.execPath,
-      ["scripts/e2e/lib/package-compat.mjs", "fixture-consent"],
-      { encoding: "utf8", input: help },
-    );
-    expect(result.status).toBe(0);
-    expect(result.stdout.trim()).toBe(expected);
+    expect(fixtureCapabilityConsentArgs(help)).toEqual(expected);
   });
 
   it.each([

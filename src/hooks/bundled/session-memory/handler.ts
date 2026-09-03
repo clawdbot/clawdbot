@@ -328,8 +328,9 @@ const saveSessionToMemory: HookHandler = (event) => {
       : ({ status: "available", content: null, originClass: "agent" } as const));
   const writePromise = isAutoReset
     ? saveSessionMemoryNow(event, agentId, transcript)
-    : runWithGatewayIndependentRootWorkContinuation(() =>
-        saveSessionMemoryNow(event, agentId, transcript),
+    : runWithGatewayIndependentRootWorkContinuation(
+        () => saveSessionMemoryNow(event, agentId, transcript),
+        "hooks:session-memory",
       );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {

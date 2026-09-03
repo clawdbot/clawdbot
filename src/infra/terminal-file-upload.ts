@@ -13,7 +13,7 @@ const TERMINAL_UPLOAD_PREFIX = "openclaw-terminal-upload-";
 const TERMINAL_UPLOAD_RETENTION_MS = 24 * 60 * 60 * 1000;
 const TERMINAL_UPLOAD_CLEANUP_RETRY_MS = 60 * 60 * 1000;
 const MAX_STAGED_NAME_BYTES = 180;
-const PORTABLE_NAME_FORBIDDEN = new Set(["<", ">", ":", '"', "/", "\\", "|", "?", "*", "%", "!"]);
+const PORTABLE_NAME_FORBIDDEN = new RegExp(String.raw`[\u0000-\u001f\u007f<>:"/\\|?*%!]`, "g");
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/iu;
 const cleanupTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const cleanupRecoveryTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -58,13 +58,8 @@ function truncateUtf8(value: string, maxBytes: number): string {
 
 function sanitizeTerminalUploadName(name: string): string {
   const basename = path.posix.basename(name.replaceAll("\\", "/"));
-  const cleaned = Array.from(basename, (char) => {
-    const codePoint = char.codePointAt(0) ?? 0;
-    return codePoint <= 0x1f || codePoint === 0x7f || PORTABLE_NAME_FORBIDDEN.has(char)
-      ? "_"
-      : char;
-  })
-    .join("")
+  const cleaned = basename
+    .replace(PORTABLE_NAME_FORBIDDEN, "_")
     .trim()
     .replace(/[. ]+$/u, "");
   const portable = WINDOWS_RESERVED_NAME.test(cleaned) ? `_${cleaned}` : cleaned;

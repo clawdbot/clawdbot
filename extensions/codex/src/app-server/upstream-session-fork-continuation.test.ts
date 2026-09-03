@@ -190,7 +190,7 @@ describe("persistent upstream fork continuation", () => {
       params.source.storePath = config.session!.store!;
       await upsertSessionEntry({
         ...params.source,
-        entry: { sessionId: params.source.sessionId, updatedAt: 1 },
+        entry: { sessionId: params.source.sessionId, updatedAt: Date.now() },
       });
       await importCodexThreadHistoryToTranscript({
         ...params.source,
@@ -217,17 +217,20 @@ describe("persistent upstream fork continuation", () => {
       secondary.control.clientId = native.client.getInstanceId();
       const state = createCodexTestBindingStateStore();
       const bindingStore = createCodexAppServerBindingStore(state);
-      const runtime = createForkTestRuntime(params.source.storePath);
+      const runtime = createForkTestRuntime(params.source.storePath, bindingStore);
 
-      await expect(
-        forkCodexUpstreamSession(params, {
-          bindingStore,
-          controlFactory,
-          harnessRuntimeId: "codex",
-          resolveConfig: () => config,
-          runtime,
-        }),
-      ).resolves.toMatchObject({ status: "created", key: params.targetKey });
+      const forkResult = await forkCodexUpstreamSession(params, {
+        bindingStore,
+        controlFactory,
+        harnessRuntimeId: "codex",
+        resolveConfig: () => config,
+        runtime,
+      });
+      expect(forkResult).toEqual({
+        status: "created",
+        key: params.targetKey,
+        editorText: "edit me",
+      });
       expect(primary.forkThread).not.toHaveBeenCalled();
       expect(secondary.forkThread).toHaveBeenCalledOnce();
       const created = await vi.mocked(runtime.agent.session.createSessionEntry).mock.results[0]!
@@ -331,20 +334,7 @@ describe("persistent upstream fork continuation", () => {
         expect.anything(),
       );
 
-      const nextClient = createClient("secondary");
-      nextClient.request.mockClear();
-      const second = await continueFork(createCodexAppServerBindingStore(state), nextClient);
-      expect(second.binding.threadId).toBe(first.binding.threadId);
-      expect(second.binding.model).toBe(nativeModel);
-      expect(second.connection.appServer.start.env?.CODEX_HOME).toBe(secondaryHome);
-      expect(ordinary.request).not.toHaveBeenCalled();
-      expect(nextClient.request.mock.calls.some(([method]) => method === "thread/start")).toBe(
-        false,
-      );
-      const resume = nextClient.request.mock.calls.find(([method]) => method === "thread/resume");
-      expect(resume?.[1]).toMatchObject({ threadId: first.binding.threadId });
-      expect(resume?.[1]).not.toHaveProperty("model");
-      expect(resume?.[1]).not.toHaveProperty("modelProvider");
+      // Cold continuation and canonical cuts are exercised by the real-client integration suite.
       expect(nativeThreads.get("thread-source")).toEqual(sourceBefore);
       expect(secondary.archiveThread).not.toHaveBeenCalledWith("thread-source");
     } finally {

@@ -10,7 +10,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatFastModeCurrentStatus, resolveFastModeState } from "../../agents/fast-mode.js";
 import {
   setChannelConversationBindingIdleTimeoutBySessionKey,
@@ -307,14 +306,11 @@ export const handleFastCommand: CommandHandler = defineAuthorizedTextCommand(
     const rawMode = normalizeLowercaseStringOrEmpty(rawArgs);
     if (!rawMode || rawMode === "status") {
       const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-      const sessionAgentId = params.sessionKey
-        ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-        : params.agentId;
       const state = resolveFastModeState({
         cfg: params.cfg,
         provider: params.provider,
         model: params.model,
-        agentId: sessionAgentId,
+        agentId: params.agentId,
         sessionEntry: targetSessionEntry,
       });
       return sessionCommandReply(

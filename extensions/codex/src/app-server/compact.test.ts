@@ -1170,38 +1170,46 @@ describe("maybeCompactCodexAppServerSession", () => {
     expect(fake.request).not.toHaveBeenCalled();
   });
 
-  it("uses the retained agent for unscoped explicit-roster compaction", async () => {
-    const fake = createFakeCodexClient();
-    setCodexAppServerClientFactoryForTest(async () => fake.client);
-    const sessionFile = await writeTestBinding();
+  it.each([
+    ["node-session", "alpha", undefined, undefined],
+    ["agent:beta:session-1", "beta", "global", "alpha"],
+  ] as const)(
+    "uses the retained policy owner for explicit-roster compaction (%s)",
+    async (sessionKey, agentId, sandboxSessionKey, sandboxAgentId) => {
+      const fake = createFakeCodexClient();
+      setCodexAppServerClientFactoryForTest(async () => fake.client);
+      const sessionFile = await writeTestBinding();
 
-    const result = requireCompactResult(
-      await maybeCompactCodexAppServerSession({
-        sessionId: "session-1",
-        sessionKey: "node-session",
-        sessionFile,
-        workspaceDir: tempDir,
-        trigger: "manual",
-        agentId: "alpha",
-        config: {
-          tools: { exec: { host: "gateway" } },
-          agents: {
-            entries: {
-              alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
-              beta: {},
+      const result = requireCompactResult(
+        await maybeCompactCodexAppServerSession({
+          sessionId: "session-1",
+          sessionKey,
+          sandboxSessionKey,
+          sandboxAgentId,
+          sessionFile,
+          workspaceDir: tempDir,
+          trigger: "manual",
+          agentId,
+          config: {
+            tools: { exec: { host: "gateway" } },
+            agents: {
+              entries: {
+                alpha: { tools: { exec: { host: "node", node: "worker-1" } } },
+                beta: {},
+              },
             },
           },
-        },
-      }),
-    );
+        }),
+      );
 
-    expect(result.ok).toBe(false);
-    expect(result.compacted).toBe(false);
-    expect(result.reason).toContain(
-      "Codex-native native compaction is unavailable because OpenClaw exec host=node is active for this session.",
-    );
-    expect(fake.request).not.toHaveBeenCalled();
-  });
+      expect(result.ok).toBe(false);
+      expect(result.compacted).toBe(false);
+      expect(result.reason).toContain(
+        "Codex-native native compaction is unavailable because OpenClaw exec host=node is active for this session.",
+      );
+      expect(fake.request).not.toHaveBeenCalled();
+    },
+  );
 
   it("does not finish until the matching native compaction turn completes", async () => {
     const fake = createFakeCodexClient({ autoCompleteCompaction: false });

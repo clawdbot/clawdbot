@@ -210,7 +210,7 @@ test("sessions.recover settles its active placement before archiving a real sess
     expect(committedBeforeReclaim).toBe(false);
     expect(reclaim).toHaveBeenCalledWith(
       { agentId: "main", sessionId: sourceSessionId, sessionKey: sourceKey },
-      undefined,
+      expect.any(Function),
       expect.any(Function),
     );
     const unsettledSource = loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath });
@@ -983,8 +983,6 @@ test("sessions.recover rejects continuation launch after runtime authority close
     storePath,
     messages: [{ role: "user", content: "continue after recovery" }],
   });
-  let validations = 0;
-
   const recovered = await directSessionReq<{
     key: string;
     continuation: { status: string; error?: { message?: string } };
@@ -993,7 +991,9 @@ test("sessions.recover rejects continuation launch after runtime authority close
     { agentId: "main", key: sourceKey },
     {
       context: {
-        validateAgentRuntimeApprovalAuthority: () => ++validations < 2,
+        validateAgentRuntimeApprovalAuthority: () =>
+          !loadSessionEntry({ agentId: "main", sessionKey: sourceKey, storePath })
+            ?.mainRestartRecovery?.tombstone?.recoveredSessionKey,
       },
       client: {
         connect: { scopes: ["operator.write"] },
@@ -1017,7 +1017,6 @@ test("sessions.recover rejects continuation launch after runtime authority close
       },
     },
   });
-  expect(validations).toBe(2);
   expect(
     loadSessionEntry({
       agentId: "main",

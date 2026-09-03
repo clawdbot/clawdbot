@@ -13,7 +13,9 @@ const FIRST_INTERNAL_COMMAND_ID = -10_000;
 
 // Playwright's browser-root handler requires browserContextId for non-browser targets.
 // Release only those root targets; nested sessions belong to Playwright's frame handler.
-function contextlessTargetSession(message: Record<string, unknown>): string | undefined {
+function contextlessTargetParams(
+  message: Record<string, unknown>,
+): Record<string, unknown> | undefined {
   if (readStringField(message, "method") !== "Target.attachedToTarget") {
     return undefined;
   }
@@ -26,18 +28,21 @@ function contextlessTargetSession(message: Record<string, unknown>): string | un
   ) {
     return undefined;
   }
-  return readStringField(params, "sessionId");
+  return params ?? {};
 }
 
-export async function connectOverCdpTransport(
+type CdpTransportOptions = {
+  timeout: number;
+  headers: Record<string, string>;
+  lookup?: CdpSocketLookup;
+  resolveWebSocketUrl?: () => Promise<string | undefined>;
+  preparedTransport?: ConnectOverCDPTransport;
+};
+
+async function openCdpTransportSocket(
   connectionUrl: string,
-  opts: {
-    timeout: number;
-    headers: Record<string, string>;
-    lookup?: CdpSocketLookup;
-    resolveWebSocketUrl?: () => Promise<string | undefined>;
-  },
-): Promise<Browser> {
+  opts: CdpTransportOptions,
+): Promise<ConnectOverCDPTransport> {
   const resolvedConnectionUrl = isWebSocketUrl(connectionUrl)
     ? connectionUrl
     : await opts.resolveWebSocketUrl?.();
@@ -56,11 +61,51 @@ export async function connectOverCdpTransport(
       ws.once("error", reject);
       ws.once("close", () => reject(new Error("CDP socket closed")));
     });
+  } catch (error) {
+    ws.close();
+    throw error;
+  }
+  const wire: ConnectOverCDPTransport = {
+    send: (message) => ws.send(JSON.stringify(message)),
+    close: () => {
+      ws.close();
+      const timer = setTimeout(() => {
+        if (ws.readyState !== WebSocket.CLOSED) {
+          ws.terminate();
+        }
+      }, 100);
+      timer.unref?.();
+    },
+  };
+  ws.on("message", (raw) => {
+    try {
+      const parsed = asOptionalRecord(JSON.parse(rawDataToString(raw)));
+      if (!parsed) {
+        wire.close();
+        return;
+      }
+      wire.onmessage?.(parsed);
+    } catch {
+      wire.close();
+    }
+  });
+  ws.on("close", () => wire.onclose?.("CDP socket closed"));
+  ws.on("error", (error) => wire.onclose?.(formatErrorMessage(error)));
+  return wire;
+}
+
+export async function connectOverCdpTransport(
+  connectionUrl: string,
+  opts: CdpTransportOptions,
+): Promise<Browser> {
+  const wire = opts.preparedTransport ?? (await openCdpTransportSocket(connectionUrl, opts));
+  try {
     let onMessage: ((message: object) => void) | undefined;
     let onClose: ((reason?: string) => void) | undefined;
     const pendingMessages: object[] = [];
     let pendingCloseReason: string | undefined;
     let transportClosed = false;
+    let closingReason: string | undefined;
     let transportCloseScheduled = false;
     let nextInternalCommandId = FIRST_INTERNAL_COMMAND_ID;
     const pendingContextlessTargetResumes = new Map<number, string>();
@@ -86,14 +131,9 @@ export async function connectOverCdpTransport(
       });
     };
     const closeTransportSocket = (reason = "CDP socket closed") => {
-      notifyTransportClosed(reason);
-      ws.close();
-      const terminateTimer = setTimeout(() => {
-        if (ws.readyState !== WebSocket.CLOSED) {
-          ws.terminate();
-        }
-      }, 100);
-      terminateTimer.unref?.();
+      closingReason = reason;
+      // Borrowed streams close only after the real owner acknowledges native cleanup.
+      wire.close();
     };
     const sendInternalCommand = (
       method: string,
@@ -101,17 +141,17 @@ export async function connectOverCdpTransport(
       sessionId?: string,
     ): number => {
       const id = nextInternalCommandId--;
-      ws.send(
-        JSON.stringify({
-          id,
-          method,
-          ...(params ? { params } : {}),
-          sessionId,
-        }),
-      );
+      wire.send({ id, method, ...(params ? { params } : {}), sessionId });
       return id;
     };
-    const releaseContextlessTarget = (sessionId: string) => {
+    const releaseContextlessTarget = (params: Record<string, unknown>) => {
+      const sessionId = readStringField(params, "sessionId");
+      if (!sessionId) {
+        // A root attach without a session cannot use the session command path.
+        // Consume only that malformed event so Playwright cannot crash before the
+        // shared browser transport handles the next valid message.
+        return;
+      }
       // Chrome dispatches session and root commands independently. Wait for the
       // resume response before detach so the hidden target cannot stay paused.
       const resumeId = sendInternalCommand("Runtime.runIfWaitingForDebugger", undefined, sessionId);
@@ -119,7 +159,7 @@ export async function connectOverCdpTransport(
     };
     const scheduleMessage = (message: object) => {
       setImmediate(() => {
-        if (transportClosed) {
+        if (transportClosed || closingReason) {
           return;
         }
         if (!onMessage) {
@@ -135,7 +175,10 @@ export async function connectOverCdpTransport(
     };
     const transport: ConnectOverCDPTransport = {
       send: (message) => {
-        ws.send(JSON.stringify(message));
+        if (closingReason || transportClosed) {
+          throw new Error("CDP transport closed");
+        }
+        wire.send(message);
       },
       close: () => {
         closeTransportSocket();
@@ -167,41 +210,39 @@ export async function connectOverCdpTransport(
         }
       },
     };
-    ws.on("message", (raw) => {
-      try {
-        const parsed = asOptionalRecord(JSON.parse(rawDataToString(raw)));
-        if (!parsed) {
-          closeTransportSocket();
-          return;
-        }
-        const id = parsed.id;
-        if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
-          const targetSessionId = pendingContextlessTargetResumes.get(id);
-          if (targetSessionId) {
-            pendingContextlessTargetResumes.delete(id);
-            sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+    Object.assign(wire, {
+      onmessage: (message: object) => {
+        try {
+          const parsed = asOptionalRecord(message);
+          if (!parsed) {
+            closeTransportSocket();
+            return;
           }
-          return;
+          const id = parsed.id;
+          if (typeof id === "number" && id <= FIRST_INTERNAL_COMMAND_ID) {
+            const targetSessionId = pendingContextlessTargetResumes.get(id);
+            if (targetSessionId) {
+              pendingContextlessTargetResumes.delete(id);
+              sendInternalCommand("Target.detachFromTarget", { sessionId: targetSessionId });
+            }
+            return;
+          }
+          const contextlessParams = contextlessTargetParams(parsed);
+          if (contextlessParams) {
+            releaseContextlessTarget(contextlessParams);
+            return;
+          }
+          scheduleMessage(parsed);
+        } catch {
+          closeTransportSocket();
         }
-        const contextlessSessionId = contextlessTargetSession(parsed);
-        if (contextlessSessionId) {
-          releaseContextlessTarget(contextlessSessionId);
-          return;
-        }
-        scheduleMessage(parsed);
-      } catch {
-        closeTransportSocket();
-      }
-    });
-    ws.on("close", () => {
-      scheduleTransportClosed("CDP socket closed");
-    });
-    ws.on("error", (error) => {
-      scheduleTransportClosed(formatErrorMessage(error));
+      },
+      onclose: (reason?: string) =>
+        scheduleTransportClosed(closingReason ?? reason ?? "CDP socket closed"),
     });
     return await getPlaywrightCore().chromium.connectOverCDP(transport, { timeout: opts.timeout });
   } catch (error) {
-    ws.close();
+    wire.close();
     throw error;
   }
 }

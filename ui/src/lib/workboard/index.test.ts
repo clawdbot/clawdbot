@@ -29,6 +29,7 @@ import {
   type WorkboardTaskSummary,
 } from "./index.ts";
 import { normalizeExecution, normalizeMetadata } from "./metadata-normalization.ts";
+import { getWorkboardRuntime } from "./runtime.ts";
 import {
   createGatewaySession,
   createLifecycleHarness,
@@ -73,6 +74,48 @@ function makeSession(overrides: Partial<GatewaySessionRow> = {}) {
 
 function makeTask(overrides: Partial<WorkboardTaskSummary> = {}) {
   return { ...sampleTask, ...overrides } satisfies WorkboardTaskSummary;
+}
+
+function invalidRequest(message: string) {
+  return new GatewayRequestError({ code: "INVALID_REQUEST", message });
+}
+
+function makeDiscoveryCard(id: string, sessionKey: string, taskId?: string) {
+  return makeCard({
+    id,
+    status: "running",
+    sessionKey,
+    runId: `${id}-run`,
+    ...(taskId ? { taskId } : {}),
+  });
+}
+
+function makeCardTask(card: WorkboardCard, taskId: string, progressSummary?: string) {
+  return makeTask({
+    id: taskId,
+    taskId,
+    childSessionKey: card.sessionKey,
+    runId: card.runId,
+    ...(progressSummary ? { progressSummary } : {}),
+  });
+}
+
+function createDiscoveryBatchFixture() {
+  const polledCard = makeDiscoveryCard(
+    "polled-card",
+    "agent:worker:subagent:workboard-polled",
+    "polled-task",
+  );
+  const defaultCard = makeDiscoveryCard("default-card", "subagent:workboard-default-missing");
+  const exactCard = makeDiscoveryCard("exact-card", "agent:worker:subagent:workboard-exact");
+  return {
+    cards: [polledCard, defaultCard, exactCard],
+    polledCard,
+    defaultCard,
+    exactCard,
+    polledTask: makeCardTask(polledCard, "polled-task"),
+    exactTask: makeCardTask(exactCard, "exact-task"),
+  };
 }
 
 function listResult(cards: unknown[] = [sampleCard], statuses: string[] = ["todo", "done"]) {
@@ -1329,6 +1372,276 @@ describe("workboard controller", () => {
       { limit: 500, cursor: "500" },
       { limit: 500 },
     ]);
+  });
+
+  it("retires a rejected stored discovery cursor without publishing its mixed batch", async () => {
+    const { cards, polledCard, exactCard, exactTask, polledTask } = createDiscoveryBatchFixture();
+    cards.push(
+      makeDiscoveryCard("missing-card", "agent:worker:subagent:workboard-missing", "missing-task"),
+    );
+    const preparedTask = { ...polledTask, progressSummary: "Cached task summary" };
+    const refreshedPreparedTask = {
+      ...preparedTask,
+      progressSummary: "New task poll result",
+    };
+    state.tasksByCardId.set(polledCard.id, preparedTask);
+    getWorkboardRuntime(host).defaultTaskDiscoveryCursor = "rejected-cursor";
+    const client = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return listResult(cards, ["todo", "running", "done"]);
+      }
+      if (method === "tasks.get" && (params as { taskId: string }).taskId === "missing-task") {
+        throw invalidRequest("task not found: missing-task");
+      }
+      if (method === "tasks.get") {
+        return { task: refreshedPreparedTask };
+      }
+      if (method === "tasks.list") {
+        const query = params as { cursor?: string; sessionKey?: string };
+        if (query.cursor === "rejected-cursor") {
+          throw invalidRequest("cursor rejected");
+        }
+        if (query.sessionKey) {
+          return { tasks: [exactTask] };
+        }
+        return { tasks: [] };
+      }
+      return {};
+    });
+
+    await refreshBoard(client, "live");
+
+    expect(state.tasksByCardId.get(polledCard.id)).toEqual(preparedTask);
+    expect(state.tasksByCardId.has(exactCard.id)).toBe(false);
+    expect(state.missingTaskIds.has("missing-task")).toBe(false);
+    expect(state.lifecycleTaskRefreshError).toContain("cursor rejected");
+    expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBeUndefined();
+
+    vi.clearAllMocks();
+    await refreshBoard(client, "live");
+
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+    expect(client.request).not.toHaveBeenCalledWith("tasks.list", {
+      cursor: "rejected-cursor",
+      limit: 500,
+    });
+  });
+
+  it.each([
+    {
+      name: "tasks.get INVALID_REQUEST",
+      failure: "task-get",
+      initialCursor: "stored-cursor",
+      error: invalidRequest("task lookup rejected"),
+    },
+    {
+      name: "filtered tasks.list INVALID_REQUEST",
+      failure: "filtered-list",
+      initialCursor: "stored-cursor",
+      error: invalidRequest("filtered discovery rejected"),
+    },
+    {
+      name: "cursorless tasks.list INVALID_REQUEST",
+      failure: "unfiltered-list",
+      initialCursor: undefined,
+      error: invalidRequest("cursorless discovery rejected"),
+    },
+    {
+      name: "stored-cursor transport failure",
+      failure: "unfiltered-list",
+      initialCursor: "stored-cursor",
+      error: new Error("task discovery disconnected"),
+    },
+  ] as const)(
+    "does not retire discovery state for $name",
+    async ({ failure, initialCursor, error }) => {
+      const { cards, polledCard, exactCard, polledTask, exactTask } = createDiscoveryBatchFixture();
+      const cursorlessRequest =
+        failure === "unfiltered-list" && !initialCursor ? createDeferred<unknown>() : null;
+      if (initialCursor) {
+        getWorkboardRuntime(host).defaultTaskDiscoveryCursor = initialCursor;
+      }
+      const client = createClient((method, params) => {
+        if (method === "workboard.cards.list") {
+          return listResult(cards, ["todo", "running", "done"]);
+        }
+        if (method === "tasks.get") {
+          if (failure === "task-get") {
+            throw error;
+          }
+          return { task: polledTask };
+        }
+        if (method === "tasks.list") {
+          const query = params as { cursor?: string; sessionKey?: string };
+          if (query.sessionKey) {
+            if (failure === "filtered-list") {
+              throw error;
+            }
+            return { tasks: [exactTask] };
+          }
+          if (failure === "unfiltered-list") {
+            if (cursorlessRequest) {
+              return cursorlessRequest.promise;
+            }
+            throw error;
+          }
+          return { tasks: [], nextCursor: "stored-cursor" };
+        }
+        return {};
+      });
+
+      const refresh = refreshBoard(client, "live");
+      if (cursorlessRequest) {
+        await waitForFast(() => {
+          expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
+        });
+        getWorkboardRuntime(host).defaultTaskDiscoveryCursor = "replacement-cursor";
+        cursorlessRequest.reject(error);
+      }
+      await refresh;
+
+      expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBe(
+        cursorlessRequest ? "replacement-cursor" : initialCursor,
+      );
+      expect(state.tasksByCardId.has(polledCard.id)).toBe(failure !== "task-get");
+      expect(state.tasksByCardId.has(exactCard.id)).toBe(failure !== "filtered-list");
+      expect(state.lifecycleTaskRefreshError).toContain(error.message);
+      expect(state.lastRefreshError).toContain(error.message);
+    },
+  );
+
+  it("does not let a stale cursor rejection overwrite replacement-generation state", async () => {
+    const stalePolledCard = makeDiscoveryCard(
+      "stale-polled-card",
+      "agent:worker:subagent:workboard-stale-polled",
+      "stale-polled-task",
+    );
+    const staleCard = makeDiscoveryCard("stale-card", "subagent:workboard-stale");
+    const staleExactCard = makeDiscoveryCard(
+      "stale-exact-card",
+      "agent:worker:subagent:workboard-stale-exact",
+    );
+    const stalePolledTask = makeCardTask(stalePolledCard, "stale-polled-task");
+    const staleExactTask = makeCardTask(staleExactCard, "stale-exact-task");
+    const replacementCard = makeDiscoveryCard("replacement-card", "subagent:workboard-replacement");
+    const replacementMissingCard = makeDiscoveryCard(
+      "replacement-missing-card",
+      "agent:worker:subagent:workboard-missing",
+      "replacement-missing",
+    );
+    const replacementTask = makeCardTask(replacementCard, "replacement-task");
+    const staleRequest = createDeferred<unknown>();
+    getWorkboardRuntime(host).defaultTaskDiscoveryCursor = "stale-cursor";
+    const staleClient = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return listResult(
+          [stalePolledCard, staleCard, staleExactCard],
+          ["todo", "running", "done"],
+        );
+      }
+      if (method === "tasks.get") {
+        return { task: stalePolledTask };
+      }
+      if (method === "tasks.list") {
+        if ((params as { sessionKey?: string }).sessionKey) {
+          return { tasks: [staleExactTask] };
+        }
+        return staleRequest.promise;
+      }
+      return {};
+    });
+
+    const staleLoad = loadBoard(staleClient, { taskRefresh: "linked" });
+    await waitForFast(() => {
+      expect(staleClient.request).toHaveBeenCalledWith("tasks.list", {
+        cursor: "stale-cursor",
+        limit: 500,
+      });
+      expect(staleClient.request).toHaveBeenCalledWith("tasks.get", {
+        taskId: stalePolledTask.taskId,
+      });
+      expect(staleClient.request).toHaveBeenCalledWith("tasks.list", {
+        limit: 500,
+        sessionKey: staleExactCard.sessionKey,
+      });
+    });
+    stopWorkboardLifecycleRefresh(host);
+    getWorkboardRuntime(host).defaultTaskDiscoveryCursor = "replacement-start";
+    const replacementClient = createClient((method, params) => {
+      if (method === "workboard.cards.list") {
+        return {
+          boards: [{ id: "replacement-board", total: 2, active: 2, archived: 0, byStatus: {} }],
+          cards: [replacementCard, replacementMissingCard],
+          statuses: ["todo", "running", "done"],
+        };
+      }
+      if (method === "tasks.get") {
+        const taskId = (params as { taskId: string }).taskId;
+        throw invalidRequest(`task not found: ${taskId}`);
+      }
+      if (method === "tasks.list") {
+        expect(params).toEqual({ cursor: "replacement-start", limit: 500 });
+        return { tasks: [replacementTask], nextCursor: "replacement-cursor" };
+      }
+      return {};
+    });
+
+    await expect(loadBoard(replacementClient, { taskRefresh: "linked" })).resolves.toBe(true);
+    state.lastRefreshError = "replacement error";
+    staleRequest.reject(invalidRequest("stale cursor rejected"));
+
+    await expect(staleLoad).resolves.toBe(false);
+    expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBe("replacement-cursor");
+    expect(state.cards).toEqual([
+      { ...replacementCard, taskId: replacementTask.taskId },
+      replacementMissingCard,
+    ]);
+    expect(state.boards).toEqual([
+      { id: "replacement-board", total: 2, active: 2, archived: 0, byStatus: {} },
+    ]);
+    expect(state.statuses).toEqual(["todo", "running", "done"]);
+    expect(state.tasksByCardId.get(replacementCard.id)).toEqual(replacementTask);
+    expect(state.tasksByCardId.has(stalePolledCard.id)).toBe(false);
+    expect(state.tasksByCardId.has(staleExactCard.id)).toBe(false);
+    expect(state.missingTaskIds).toEqual(new Set(["replacement-missing"]));
+    expect(state.error).toBeNull();
+    expect(state.lifecycleTaskRefreshError).toBeNull();
+    expect(state.lastRefreshError).toBe("replacement error");
+  });
+
+  it("retires a rejected cursor before deferring an interaction-blocked refresh", async () => {
+    const card = makeDiscoveryCard("dragged-card", "subagent:workboard-dragged");
+    const rejectedRequest = createDeferred<unknown>();
+    getWorkboardRuntime(host).defaultTaskDiscoveryCursor = "rejected-cursor";
+    const client = createClient((method) => {
+      if (method === "workboard.cards.list") {
+        return listResult([card], ["todo", "running", "done"]);
+      }
+      if (method === "tasks.list") {
+        return rejectedRequest.promise;
+      }
+      return {};
+    });
+
+    const refresh = refreshBoard(client, "live");
+    await waitForFast(() => {
+      expect(client.request).toHaveBeenCalledWith("tasks.list", {
+        cursor: "rejected-cursor",
+        limit: 500,
+      });
+    });
+    state.draggedCardId = card.id;
+    rejectedRequest.reject(invalidRequest("cursor rejected during drag"));
+
+    await expect(refresh).resolves.toBe(false);
+    expect(getWorkboardRuntime(host).defaultTaskDiscoveryCursor).toBeUndefined();
+    expect(state.lifecycleTaskRefreshError).toContain("cursor rejected during drag");
+    expect(state.lastRefreshError).toContain("cursor rejected during drag");
+
+    state.draggedCardId = null;
+    vi.clearAllMocks();
+    await refreshBoard(client, "live");
+    expect(client.request).toHaveBeenCalledWith("tasks.list", { limit: 500 });
   });
 
   it.each([

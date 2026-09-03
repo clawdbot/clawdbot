@@ -379,7 +379,7 @@ export function startManagedGatewayConfigReloader(
       ? { prepareConfigCandidate: params.prepareConfigCandidate }
       : {}),
     initialInternalWriteHash: params.initialInternalWriteHash,
-    runTransaction: runWithGatewayIndependentRootWorkAdmission,
+    runTransaction: (run) => runWithGatewayIndependentRootWorkAdmission(run, "reload:config"),
     readSnapshot: params.readSnapshot,
     promoteSnapshot: async (snapshot, _reason) => await params.promoteSnapshot(snapshot),
     subscribeToWrites: params.subscribeToWrites,

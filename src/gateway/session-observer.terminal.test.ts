@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionObserverDigest } from "../../packages/gateway-protocol/src/schema/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SessionObserverDeps } from "./session-observer-model.js";
 import {
   createHarness as createBaseHarness,
   event,
@@ -97,8 +98,8 @@ function persistGuard(harness: Harness): (() => boolean) | undefined {
   return harness.persistDigest.mock.calls[0]?.[0]?.stillCurrent as (() => boolean) | undefined;
 }
 
-function completionMessages(harness: Harness, index = 0) {
-  return harness.completeModel.mock.calls[index]?.[0]?.context?.messages ?? [];
+function completionPrompt(harness: Harness, index = 0): string {
+  return harness.completeModel.mock.calls[index]?.[0]?.prompt ?? "";
 }
 
 describe("session observer terminal, persistence, synthesis, and races", () => {
@@ -578,7 +579,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     emitEvent(harness, "assistant", { delta: "ey=super-secret-value-0123456789 attached." });
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const prompt = JSON.stringify(completionMessages(harness));
+    const prompt = completionPrompt(harness);
     expect(prompt).toContain("Assistant:");
     expect(prompt).not.toContain("super-secret-value-0123456789");
   });
@@ -611,7 +612,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     emitEvent(harness, "assistant", { text: "Working on the fix and verifying it." });
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const prompt = JSON.stringify(completionMessages(harness));
+    const prompt = completionPrompt(harness);
     expect(prompt.match(/Assistant:/gu)).toHaveLength(1);
     expect(prompt).toContain("Working on the fix and verifying it.");
   });
@@ -716,17 +717,33 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     expect(guard?.()).toBe(false);
   });
 
-  it("drops a completed digest when the session was reset mid-flight", async () => {
+  it.each(["deleted", "reset"])("disables model work after the session is %s", async (change) => {
     useFakeTime();
-    const readSession = vi.fn(() => ({ sessionId: "session-id", updatedAt: 0 }));
+    const readSession = vi.fn<NonNullable<SessionObserverDeps["readSession"]>>(() => ({
+      sessionId: "session-id",
+      updatedAt: 0,
+    }));
     const harness = createHarness({ readSession });
     startAndAddToolNotes(harness.observer);
-    readSession.mockReturnValue({ sessionId: "session-id-reset", updatedAt: 0 });
+    readSession.mockReturnValue(
+      change === "deleted" ? undefined : { sessionId: "session-id-reset", updatedAt: 0 },
+    );
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const broadcasts = observerBroadcasts(harness);
-    expect(broadcasts).toHaveLength(0);
+    expect(observerBroadcasts(harness)).toHaveLength(0);
     expect(harness.persistDigest).not.toHaveBeenCalled();
+
+    startAndAddToolNotes(harness.observer, { count: 4 });
+    await advanceAndFlush(24_000);
+    expect(harness.completeModel).toHaveBeenCalledOnce();
+    expect(vi.getTimerCount()).toBe(0);
+
+    readSession.mockReturnValue({ sessionId: "session-id-next", updatedAt: 36_000 });
+    startAndAddToolNotes(harness.observer, { runId: "run-2" });
+    await advanceAndFlush(12_000);
+    expect(harness.completeModel).toHaveBeenCalledTimes(2);
+    expect(harness.persistDigest).toHaveBeenCalledOnce();
+    expect(observerBroadcasts(harness)).toHaveLength(1);
   });
 
   it("catches up durable persistence when the live digest already carried terminal health", async () => {
@@ -781,7 +798,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     emitEvent(harness, "assistant", { delta: "private-context-body-must-not-leave" });
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledOnce();
-    const openPrompt = String(completionMessages(harness)[0]?.content);
+    const openPrompt = completionPrompt(harness);
     expect(openPrompt).not.toContain("private-context-body-must-not-leave");
     expect(openPrompt).not.toContain("Assistant:");
 
@@ -791,7 +808,7 @@ describe("session observer terminal, persistence, synthesis, and races", () => {
     startAndAddToolNotes(harness.observer, { count: 4 });
     await advanceAndFlush(12_000);
     expect(harness.completeModel).toHaveBeenCalledTimes(2);
-    const closedPrompt = String(completionMessages(harness, 1)[0]?.content);
+    const closedPrompt = completionPrompt(harness, 1);
     expect(closedPrompt).not.toContain("private-context-body-must-not-leave");
     expect(closedPrompt).toContain("visible prose after");
   });

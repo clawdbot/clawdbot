@@ -2,6 +2,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -10,8 +11,11 @@ import {
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
+  ttsMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
+import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
@@ -207,5 +211,171 @@ describe("dispatchReplyFromConfig terminal visible admission recovery", () => {
     });
     expect(readAgentRunTerminalOutcome(result)).toBe("failed");
     expect(dispatchParams.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { surface: "slack", origin: "slack", progress: false, chatType: "direct" },
+    { surface: "slack", origin: "slack", progress: true, chatType: "direct" },
+    { surface: "slack", origin: "slack", progress: true, chatType: "group" },
+    { surface: "slack", origin: "discord", progress: true, chatType: "direct" },
+  ])(
+    "settles an adopted failure on $surface → $origin ($chatType, progress=$progress)",
+    async ({ surface, origin, progress, chatType }) => {
+      sessionStoreMocks.currentEntry = { verboseLevel: "on" };
+      const resolverError = new Error("private synthetic failure detail");
+      const delivered: Array<{ kind: string; payload: ReplyPayload }> = [];
+      const dispatcher = createReplyDispatcher({
+        deliver: async (payload, { kind }) => {
+          delivered.push({ kind, payload });
+        },
+      });
+      mocks.routeReply.mockImplementation(async (raw) => {
+        const { payload, replyKind: kind } = raw as { payload: ReplyPayload; replyKind: string };
+        delivered.push({ kind, payload });
+        return { ok: true, delivered: true };
+      });
+      let operation: ReturnType<typeof createReplyOperation> | undefined;
+      const replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]> = async (
+        _ctx,
+        options,
+      ) => {
+        operation = options?.replyOperation;
+        await options?.turnAdoptionLifecycle?.onAdopted();
+        if (progress) {
+          await options?.onToolResult?.({
+            text: "Got it. I am checking now.",
+            isStatusNotice: true,
+          });
+          await dispatcher.waitForIdle();
+          expect(delivered.map(({ kind }) => kind)).toEqual(["tool"]);
+        }
+        throw resolverError;
+      };
+      const params = {
+        ...createVisibleDispatchParams(replyResolver),
+        dispatcher,
+        replyOptions: {
+          turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
+        },
+      };
+      Object.assign(params.ctx, {
+        Provider: surface,
+        Surface: surface,
+        OriginatingChannel: origin,
+        ChatType: chatType,
+        WasMentioned: chatType === "group",
+      });
+      const { result, processedOutcome } = await withDispatchProcessedOutcomeSink(() =>
+        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+      );
+
+      expect(delivered.map(({ kind }) => kind)).toEqual(progress ? ["tool", "final"] : ["final"]);
+      expect(delivered.at(-1)?.payload).toMatchObject({
+        text: expect.stringContaining("Something went wrong"),
+        isError: true,
+      });
+      expect(JSON.stringify(delivered)).not.toContain(resolverError.message);
+      expect(operation?.result).toEqual({
+        kind: "failed",
+        code: "run_failed",
+        cause: resolverError,
+      });
+      expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+      expect(processedOutcome?.outcome).toBe("error");
+      if (origin !== surface) {
+        expect(mocks.routeReply).toHaveBeenLastCalledWith(
+          expect.objectContaining({
+            channel: origin,
+            to: "user:1",
+            threadId: "501.000",
+            replyKind: "final",
+          }),
+        );
+      }
+    },
+  );
+
+  it.each(["before adoption", "adoption rejected"])(
+    "keeps %s failures retryable without a final notice",
+    async (failure) => {
+      const resolverError = new Error(failure);
+      const onAdopted = vi.fn(async () => {
+        throw resolverError;
+      });
+      const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
+      const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
+        async (_ctx, options) => {
+          if (failure === "adoption rejected") {
+            await options?.turnAdoptionLifecycle?.onAdopted();
+          }
+          throw resolverError;
+        },
+      );
+      const params = {
+        ...createVisibleDispatchParams(replyResolver),
+        dispatcher,
+        replyOptions: { turnAdoptionLifecycle: { onAdopted } },
+      };
+      params.ctx.MessageSid = "retryable-failure";
+      await expect(
+        withReplyDispatcher({ dispatcher, run: () => dispatchReplyFromConfig(params) }),
+      ).rejects.toBe(resolverError);
+      expect(dispatcher.getQueuedCounts()).toEqual({ tool: 0, block: 0, final: 0 });
+      replyResolver.mockResolvedValueOnce({ text: "retry succeeded" });
+      await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+      expect(replyResolver).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it.each(["message_tool_only", "send-denied", "observed-delivery", "ambient"])(
+    "does not add an adopted failure notice for %s",
+    async (policy) => {
+      const params = createVisibleDispatchParams(async (_ctx, options) => {
+        await options?.turnAdoptionLifecycle?.onAdopted();
+        if (policy === "observed-delivery") {
+          await options?.onObservedReplyDelivery?.();
+        }
+        throw new Error("adopted failure");
+      });
+      params.ctx.MessageSid = "adopted-suppressed-failure";
+      if (policy === "send-denied") {
+        sessionStoreMocks.currentEntry = { sendPolicy: "deny" };
+      }
+      if (policy === "ambient") {
+        params.ctx.ChatType = "group";
+        params.ctx.WasMentioned = false;
+      }
+      const result = await dispatchReplyFromConfig({
+        ...params,
+        replyOptions: {
+          ...(policy === "message_tool_only"
+            ? { sourceReplyDeliveryMode: "message_tool_only" as const }
+            : {}),
+          turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) },
+        },
+      });
+      expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+      expect(params.dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains adopted dedupe when failure-notice preparation also fails", async () => {
+    const resolverError = new Error("accepted turn failed");
+    const deliveryError = new Error("final preparation failed");
+    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
+      async (_ctx, options) => {
+        await options?.turnAdoptionLifecycle?.onAdopted();
+        throw resolverError;
+      },
+    );
+    const params = {
+      ...createVisibleDispatchParams(replyResolver),
+      replyOptions: { turnAdoptionLifecycle: { onAdopted: vi.fn(async () => {}) } },
+    };
+    params.ctx.MessageSid = "adopted-final-failure";
+    ttsMocks.maybeApplyTtsToPayload.mockRejectedValueOnce(deliveryError);
+    await expect(dispatchReplyFromConfig(params)).rejects.toBe(deliveryError);
+    await dispatchReplyFromConfig({ ...params, dispatcher: createDispatcher() });
+    expect(replyResolver).toHaveBeenCalledOnce();
   });
 });

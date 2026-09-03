@@ -430,6 +430,8 @@ type AgentHarnessCompactionCapability = {
 };
 
 export type AgentHarnessSessionDeletionParams = {
+  /** Present only during the exact host initializer's guarded rollback. */
+  initialization?: import("../../sessions/session-initialization.js").SessionInitialization;
   agentId: string;
   sessionKey: string;
   sessionId: string;
@@ -514,6 +516,7 @@ export type AgentHarnessModelCatalogParams = {
   agentId: string;
   agentDir: string;
   workspaceDir: string;
+  configuredModelRefs?: readonly import("../model-ref-shared.js").ModelRef[];
 };
 
 type AgentHarnessModelCatalogCapability = {

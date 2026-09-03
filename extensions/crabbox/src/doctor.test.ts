@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as doctorRuntime from "./crabbox-worker-doctor-runtime.js";
 import {
   openCrabboxWarmImageStore,
-  type WarmImageRecord,
+  type WarmProfileRecord,
 } from "./crabbox-worker-warm-image-store.js";
 import {
   CRABBOX_CLOUD_WORKER_PROFILE_CHECK_ID,
@@ -179,12 +179,16 @@ describe("Crabbox warm-image doctor", () => {
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-crabbox-warm-doctor-") };
       const store = openCrabboxWarmImageStore(env);
       const now = Date.now();
-      const record: WarmImageRecord = {
-        checkpointId: "chk_last_good",
-        kind: "native",
-        state: "available",
-        createdAtMs: now,
-        lastUsedAtMs: now,
+      const record: WarmProfileRecord = {
+        version: 2,
+        allocations: {},
+        image: {
+          checkpointId: "chk_last_good",
+          kind: "native",
+          state: "available",
+          createdAtMs: now,
+          lastUsedAtMs: now,
+        },
         ...(operation
           ? {
               operation:

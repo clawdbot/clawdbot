@@ -41,13 +41,16 @@ const agentRuntimeMocks = vi.hoisted(() => ({
   ensureAuthProfileStore: vi.fn(),
   loadAuthProfileStoreForSecretsRuntime: vi.fn(),
   resolveApiKeyForProfile: vi.fn(),
-  resolveAuthProfileOrder: vi.fn(),
   resolveDefaultAgentDir: vi.fn(() => "/agent"),
   resolveAgentWorkspaceDir: vi.fn(() => "/agent/workspace"),
   resolvePersistedAuthProfileOwnerAgentDir: vi.fn(),
   resolveProviderIdForAuth: vi.fn((provider: string, _lookup?: { config?: unknown }) => provider),
   resolveSessionAgentIdsStrict: vi.fn(() => ({ defaultAgentId: "main", sessionAgentId: "main" })),
   saveAuthProfileStore: vi.fn(),
+}));
+
+const providerAuthMocks = vi.hoisted(() => ({
+  resolveAuthProfileOrder: vi.fn(),
 }));
 
 const codexRequirementsTomlMock = vi.hoisted(() => vi.fn<() => string | undefined>());
@@ -131,6 +134,10 @@ vi.mock("openclaw/plugin-sdk/exec-approvals-runtime", async (importOriginal) => 
   };
 });
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => agentRuntimeMocks);
+vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),
+  resolveAuthProfileOrder: providerAuthMocks.resolveAuthProfileOrder,
+}));
 vi.mock("openclaw/plugin-sdk/agent-scope-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-scope-runtime")>()),
   resolveSessionAgentIdsStrict: agentRuntimeMocks.resolveSessionAgentIdsStrict,
@@ -426,7 +433,7 @@ describe("codex conversation binding", () => {
     agentRuntimeMocks.ensureAuthProfileStore.mockReset();
     agentRuntimeMocks.loadAuthProfileStoreForSecretsRuntime.mockReset();
     agentRuntimeMocks.resolveApiKeyForProfile.mockReset();
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReset();
+    providerAuthMocks.resolveAuthProfileOrder.mockReset();
     agentRuntimeMocks.resolveDefaultAgentDir.mockClear();
     agentRuntimeMocks.resolvePersistedAuthProfileOwnerAgentDir.mockReset();
     agentRuntimeMocks.resolveProviderIdForAuth.mockClear();
@@ -443,7 +450,7 @@ describe("codex conversation binding", () => {
       version: 1,
       profiles: {},
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue([]);
+    providerAuthMocks.resolveAuthProfileOrder.mockReturnValue([]);
     agentRuntimeMocks.resolveDefaultAgentDir.mockReturnValue("/agent");
     agentRuntimeMocks.resolveProviderIdForAuth.mockImplementation(
       (provider: string, _lookup?: { config?: unknown }) => provider,
@@ -720,7 +727,7 @@ describe("codex conversation binding", () => {
         },
       },
     });
-    agentRuntimeMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
+    providerAuthMocks.resolveAuthProfileOrder.mockReturnValue(["openai:default"]);
     sharedClientMocks.getSharedCodexAppServerClient.mockResolvedValue({
       request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
         requests.push({ method, params: requestParams });
@@ -740,7 +747,7 @@ describe("codex conversation binding", () => {
       modelProvider: "openai",
     });
 
-    const authOrderParams = mockCallArg(agentRuntimeMocks.resolveAuthProfileOrder) as {
+    const authOrderParams = mockCallArg(providerAuthMocks.resolveAuthProfileOrder) as {
       cfg?: unknown;
       provider?: unknown;
     };

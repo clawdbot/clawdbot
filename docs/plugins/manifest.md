@@ -150,7 +150,7 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `providerCatalogEntry`               | No       | `string`                     | Lightweight provider-catalog module path, relative to the plugin root, for manifest-scoped provider catalog metadata that can be loaded without activating the full plugin runtime.                                                                                                                                                                                                              |
 | `modelSupport`                       | No       | `object`                     | Manifest-owned shorthand model-family metadata used to auto-load the plugin before runtime.                                                                                                                                                                                                                                                                                                      |
 | `modelCatalog`                       | No       | `object`                     | Declarative model catalog metadata for providers owned by this plugin. This is the control-plane contract for future read-only listing, onboarding, model pickers, aliases, and suppression without loading plugin runtime.                                                                                                                                                                      |
-| `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to OpenRouter/LiteLLM catalog ids without hardcoding provider ids in core.                                                                                                                                                                             |
+| `modelPricing`                       | No       | `object`                     | Provider-owned hosted-pricing publication policy. Use it to opt local/self-hosted providers out of published pricing or map provider refs to supported public pricing catalogs without hardcoding provider ids in core.                                                                                                                                                                          |
 | `modelIdNormalization`               | No       | `object`                     | Provider-owned model-id alias/prefix cleanup that must run before provider runtime loads.                                                                                                                                                                                                                                                                                                        |
 | `providerEndpoints`                  | No       | `object[]`                   | Manifest-owned endpoint host/baseUrl metadata for provider routes that core must classify before provider runtime loads.                                                                                                                                                                                                                                                                         |
 | `providerRequest`                    | No       | `object`                     | Cheap provider-family and request-compatibility metadata used by generic request policy before provider runtime loads.                                                                                                                                                                                                                                                                           |
@@ -667,6 +667,8 @@ Top-level `cliBackends` stays valid and continues to describe CLI inference back
 
 When present, `setup.providers` and `setup.cliBackends` are the preferred descriptor-first lookup surface for setup discovery. If the descriptor only narrows the candidate plugin and setup still needs richer setup-time runtime hooks, set `requiresRuntime: true` and keep `setup-api` in place as the fallback execution path.
 
+Without an explicit `openclaw.setupEntry`, OpenClaw resolves the conventional `setup-api` file at the package root or in package-local `dist/`. Standalone runtime builds include that public surface automatically.
+
 OpenClaw includes `setup.providers[].envVars` in generic provider auth and env-var lookups. Put setup and status env metadata there.
 
 Use `providerUsageAuthEnvVars` when a billing or organization-level credential must activate `resolveUsageAuth` without becoming an inference credential. These names join workspace dotenv blocking, ACP child-process stripping, sandbox secret filtering, and broad secret scrubbing. The provider runtime still reads and classifies the value inside `resolveUsageAuth`.
@@ -817,7 +819,7 @@ Provider plugins that implement both `resolveUsageAuth` and `fetchUsageSnapshot`
 
 Embedding providers must declare `contracts.embeddingProviders` for each adapter registered with `api.registerEmbeddingProvider(...)`. The same generic contract serves reusable vector generation and memory search. The retired `contracts.memoryEmbeddingProviders` key is no longer accepted.
 
-Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Registration requires `resolveAllocation`, `provision`, `inspect`, and `destroy`. The allocation resolver returns the exact operation cleanup handle and an explicit shared-host fact without creating or preparing a machine; see the [worker provider contract](/plugins/sdk-overview#registration-api). Core persists durable intent before calling `provision`; providers validate their settings and optional per-dispatch `machineClass` and `executionMode` before external allocation, and repeated calls with the same operation id must adopt the same lease without changing the selected mode. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare a closed, unique, canonically ordered `supportedExecutionModes` tuple: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicates, unknown values, and noncanonical ordering are rejected. `worker-turn` requires a node lease; `remote-exec` accepts a node lease or an SSH lease. Omission advertises no session-placement modes while leaving direct lifecycle operations available. A direct environment create supplies no session execution mode; providers use their documented default, which is `worker-turn` for Crabbox. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `dormant` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` fences the environment and enters canonical teardown; it does not bypass the exact worker-stop acknowledgment required on shared or unknown hosts.
+Worker providers must declare each `api.registerWorkerProvider(...)` id in `contracts.workerProviders`. Registration requires `resolveAllocation`, `provision`, `inspect`, and `destroy`. The allocation resolver returns the exact operation cleanup handle and an explicit shared-host fact without creating or preparing a machine; see the [worker provider contract](/plugins/sdk-overview#registration-api). Core persists durable intent before calling `provision`; providers validate their settings and optional per-dispatch `machineClass` and `executionMode` before external allocation, and repeated calls with the same operation id must adopt the same lease without changing the selected mode. Providers may implement asynchronous `listMachineOptions(profile)` to expose process-stable picker metadata; omit it when machine selection is not meaningful. Machine options contain only `id`, `label`, optional positive-integer `cpu` and `memoryGb`, and optional `default`. Session-placement providers declare a closed, unique, canonically ordered `supportedExecutionModes` tuple: `["worker-turn"]`, `["remote-exec"]`, or `["worker-turn", "remote-exec"]`. Empty lists, duplicates, unknown values, and noncanonical ordering are rejected. `worker-turn` requires a node lease; `remote-exec` accepts a node lease or an SSH lease. Omission advertises no session-placement modes while leaving direct lifecycle operations available. A direct environment create supplies no session execution mode; providers use their documented default, which is `worker-turn` for Crabbox. Providers whose bounded provisioning exceeds core's five-minute default may implement `resolveProvisionTimeoutMs(profile)` and include acquisition, provider-owned setup, and cleanup in the returned positive millisecond budget. The optional `resolveDestroyTimeoutMs(profile)` supplies the equivalent budget for requested teardown and bootstrap-failure cleanup, including snapshot capture before confirmed release. Both hooks must return positive safe integers within the platform timer limit; an explicit service timeout override takes precedence. Core also persists that validated settings snapshot and passes it with `leaseId` to `inspect({ leaseId, profile })` and `destroy({ leaseId, profile })`, including after the named profile is changed or removed. Destruction is idempotent, inspection returns the closed `active` / `dormant` / `destroyed` / `unknown` status union, and SSH private-key material is referenced only through `SecretRef`. Provisioned SSH endpoints must also include a public `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment, so core can pin the host before connecting. They may include up to 10 ordered, unique `fallbackPorts`, excluding the primary `port`; core persists those candidates and rotates among them only for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. Omitted or `false` means a dedicated worker host. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. Optional desktop metadata may advertise up to eight unique closed apps: `browser` with an absolute `executablePath` and a CDP port from 1 through 65535, or `terminal` with an absolute `executablePath`. Core rejects unknown app ids and fields and persists the validated metadata with the existing desktop record. Providers that mint dynamic identity refs may implement authoritative `resolveSshIdentity({ leaseId, profile, keyRef })`; providers without it use core's generic secret resolver. An authoritative `unknown` fences the environment and enters canonical teardown; it does not bypass the exact worker-stop acknowledgment required on shared or unknown hosts.
 
 `contracts.gatewayMethodDispatch` currently accepts `"authenticated-request"`. It is an API hygiene gate for native plugin HTTP routes that intentionally dispatch Gateway control-plane methods in-process, not a sandbox against malicious native plugins. Use it only for tightly reviewed bundled/operator surfaces that already require Gateway HTTP auth. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
@@ -1295,11 +1297,16 @@ Use `modelPricing` when the hosted catalog publisher needs provider-specific pri
 
 Provider fields:
 
-| Field        | Type              | What it means                                                                                 |
-| ------------ | ----------------- | --------------------------------------------------------------------------------------------- |
-| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing. |
-| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.   |
-| `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.         |
+| Field        | Type              | What it means                                                                                   |
+| ------------ | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `cerebras`   | `false \| object` | Explicit mapping to the public Cerebras `/public/v1/models` catalog. Never enabled implicitly.  |
+| `chutes`     | `false \| object` | Explicit mapping to the public Chutes `/v1/models` catalog. Never enabled implicitly.           |
+| `deepinfra`  | `false \| object` | Explicit mapping to the public DeepInfra `/models/list` catalog. Never enabled implicitly.      |
+| `external`   | `boolean`         | Set `false` for local/self-hosted providers that should never use published external pricing.   |
+| `openCode`   | `false \| object` | Explicit mapping to the public `models.opencode.ai/api.json` catalog. Never enabled implicitly. |
+| `openRouter` | `false \| object` | OpenRouter publication-key mapping. `false` disables OpenRouter matching for this provider.     |
+| `liteLLM`    | `false \| object` | LiteLLM publication-key mapping. `false` disables LiteLLM matching for this provider.           |
+| `venice`     | `false \| object` | Explicit mapping to the public Venice `/api/v1/models` catalog. Never enabled implicitly.       |
 
 Source fields:
 
@@ -1308,6 +1315,49 @@ Source fields:
 | `provider`                 | `string`           | External catalog provider id when it differs from the OpenClaw provider id, for example `z-ai` for a `zai` provider. |
 | `passthroughProviderModel` | `boolean`          | Treat slash-containing model ids as nested provider/model refs, useful for proxy providers such as OpenRouter.       |
 | `modelIdTransforms`        | `"version-dots"[]` | Extra external catalog model-id variants. `version-dots` tries dotted version ids like `claude-opus-4.6`.            |
+
+A declared provider policy enables only its declared source mappings. Without a
+policy, publication tries OpenRouter, then LiteLLM. Each selected price is a
+complete schedule: base rates and context tiers are never combined across sources.
+OpenRouter's native prompt-length overrides are supported; time-based overrides
+are not represented as static context tiers.
+
+For authoritative native source mappings, use:
+
+```json
+{
+  "providers": ["opencode", "venice"],
+  "modelPricing": {
+    "providers": {
+      "opencode": { "openCode": { "provider": "opencode" } },
+      "venice": { "venice": { "provider": "venice" } }
+    }
+  }
+}
+```
+
+The publisher fetches a fixed public endpoint without credentials only when its
+source is declared, and publishes native prices only in explicitly mapped owner
+namespaces. Cerebras, Chutes, and DeepInfra use the same shape with their respective source
+and provider IDs. Lightweight plugin-owned `pricing-api.ts` artifacts share
+payload parsing with runtime discovery without importing provider runtimes.
+
+DeepInfra's top-level array uses `model_name` identity. Its numeric discount and
+cached-input ratio apply to native cents-per-token prices. Pricing prose,
+nonempty tables, scheduled expiry, and undocumented generic cache-write rates
+are validated but omitted as unsupported schedules. Priority/flex and explicit
+cache-retention multipliers do not change standard costs. Its agent projection
+continues to own runtime metadata; the pricing feed does not discover chat models.
+
+An opted-in native source owns the complete provider schedule, including missing
+prices: generic sources cannot fill its gaps. A successful feed with no price for
+a bundled model preserves that model's metadata, omits its cost, and emits a
+publication warning. Missing pricing is not evidence of model retirement or free
+usage. Explicit native zero prices remain known-free estimates. Fetch failure,
+malformed response bodies or declared prices, and feeds with no usable prices
+stop publication, leaving the previous hosted catalog intact. Explicit operator
+rates remain unchanged. This authoring metadata adds no operator setting and does
+not change the Gateway's existing refresh and restart lifecycle.
 
 ### OpenClaw Provider Index
 
@@ -1359,7 +1409,7 @@ Important examples:
 | `openclaw.channel.configuredState`                                                         | Lightweight configured-state checker metadata that can answer "does env-only setup already exist?" without loading the full channel runtime.                                              |
 | `openclaw.channel.persistedAuthState`                                                      | Lightweight persisted-auth checker metadata that can answer "is anything already signed in?" without loading the full channel runtime.                                                    |
 | `openclaw.install.clawhubSpec` / `openclaw.install.npmSpec` / `openclaw.install.localPath` | Install/update hints for bundled and externally published plugins.                                                                                                                        |
-| `openclaw.install.defaultChoice`                                                           | Preferred install path when multiple install sources are available.                                                                                                                       |
+| `openclaw.install.defaultChoice`                                                           | Install-path hint, including local checkout selection. Default remote requests prefer declared npm, then ClawHub; explicit source choices remain authoritative.                           |
 | `openclaw.install.minHostVersion`                                                          | Minimum supported OpenClaw host version, using a semver floor like `>=2026.3.22` or `>=2026.5.1-beta.1`.                                                                                  |
 | `openclaw.compat.pluginApi`                                                                | Minimum OpenClaw plugin API range required by this package, using a semver floor like `>=2026.5.27`.                                                                                      |
 | `openclaw.install.expectedIntegrity`                                                       | Expected npm dist integrity string such as `sha512-...`; install and update flows verify the fetched artifact against it.                                                                 |
@@ -1378,7 +1428,7 @@ For `openclaw.channel.cliAddOptions`, use Commander's long-option syntax, such a
 
 `openclaw.compat.pluginApi` is enforced during package install for non-bundled plugin sources. Use it for the OpenClaw plugin SDK/runtime API floor that the package was built against. It can be stricter than `minHostVersion` when a plugin package needs a newer API but still keeps a lower install hint for other flows. Official OpenClaw release sync bumps existing official plugin API floors to the OpenClaw release version by default, but plugin-only releases can keep a lower floor when the package intentionally supports older hosts. Do not use the package version alone as the compatibility contract. `peerDependencies.openclaw` remains npm package metadata; OpenClaw uses the `openclaw.compat.pluginApi` contract for install compatibility decisions.
 
-Official install-on-demand metadata should use `clawhubSpec` when the plugin is published on ClawHub; onboarding treats that as the preferred remote source and records ClawHub artifact facts after install. `npmSpec` remains the compatibility fallback for packages that have not moved to ClawHub yet.
+Official install-on-demand metadata should declare `npmSpec` as the default and `clawhubSpec` as the secondary source when both publish the same plugin. Default remote installs try npm first, then the declared ClawHub source only when the npm target is unavailable. A ClawHub-only plugin stays on ClawHub; OpenClaw never derives an npm package name from a ClawHub slug. Explicit source selections, exact versions, and non-`latest` tags remain authoritative. Doctor's existing stale runtime repair can refresh an official plugin bound to the current OpenClaw release cohort on its recorded registry, retaining exact npm pin intent by recording the replacement version. Bare specs and `@latest` follow the active release-channel policy while retaining the requested selector in the install record. Integrity, compatibility, trust, install-policy, and capability-consent failures do not authorize switching sources.
 
 Exact npm version pinning already lives in `npmSpec`, for example `"npmSpec": "@wecom/wecom-openclaw-plugin@1.2.3"`. Official external catalog entries should pair exact specs with `expectedIntegrity` so update flows fail closed if the fetched npm artifact no longer matches the pinned release. Interactive onboarding still offers trusted registry npm specs, including bare package names and dist-tags, for compatibility. Catalog diagnostics can distinguish exact, floating, integrity-pinned, missing-integrity, package-name mismatch, and invalid default-choice sources. They also warn when `expectedIntegrity` is present but there is no valid npm source it can pin. When `expectedIntegrity` is present, install/update flows enforce it; when it is omitted, the registry resolution is recorded without an integrity pin.
 
@@ -1423,7 +1473,9 @@ Use it when setup, doctor, status, or read-only presence flows need a cheap yes/
 }
 ```
 
-Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`; when `env` is present, OpenClaw uses it without loading that module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+Use `env.allOf` when every listed variable is required and `env.anyOf` when any one non-empty variable is enough. If a tiny non-runtime check needs more than environment metadata, use `specifier` plus `exportName` as shown for `persistedAuthState`. A complete, non-empty `specifier` and `exportName` pair takes precedence over `env`. If either field is absent or blank, the probe uses its `env` metadata without loading a module. If the check needs full config resolution or the real channel runtime, keep that logic in the plugin `config.hasConfiguredState` hook instead.
+
+For both state probes, OpenClaw builds rewrite source specifiers only for complete module pairs, naming the exact emitted JavaScript artifact, including its `.js` or `.cjs` extension. Env-backed incomplete pairs are preserved unchanged. Built checkout metadata uses paths relative to the plugin root; standalone packages use the plugin-local `dist/` directory.
 
 ## Discovery precedence (duplicate plugin ids)
 
@@ -1448,7 +1500,7 @@ Implications:
 
 - **Every plugin must ship a JSON Schema**, even if it accepts no config.
 - An empty schema is acceptable (for example, `{ "type": "object", "additionalProperties": false }`).
-- Schemas are validated at config read/write time, not at runtime.
+- Config is validated against the manifest schema at config read/write time and before the plugin loads.
 - When extending or forking a bundled plugin with new config keys, update that plugin's `openclaw.plugin.json` `configSchema` at the same time. Bundled plugin schemas are strict, so adding `plugins.entries.<id>.config.myNewKey` in user config without adding `myNewKey` to `configSchema.properties` will be rejected before the plugin runtime loads.
 
 Example schema extension:
@@ -1469,8 +1521,9 @@ Example schema extension:
 
 ## Validation behavior
 
+- Required-field errors identify every missing field after schema defaults are applied. For dependencies on multiple fields, the error reports the dependency condition without claiming that fields already present are missing.
 - Unknown `channels.*` keys are **errors**, unless the channel id is declared by a plugin manifest. If the same id also appears in `plugins.allow`, `plugins.entries`, or `plugins.installs` (a plugin that is referenced but not currently discoverable), OpenClaw downgrades this to a **warning** instead.
-- `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup.
+- `plugins.entries.<id>`, `plugins.allow`, and `plugins.deny` referencing unknown plugin ids are **warnings** ("stale config entry ignored"), not errors, so upgrades and removed/renamed plugins do not block gateway startup. An exact `{ enabled: false }` plugin entry is an intentional uninstall marker, so validation and Doctor keep it without a stale-config warning.
 - `plugins.slots.memory` referencing an unknown plugin id is an **error**, except for the known `memory-lancedb` official external plugin, which warns instead.
 - If a plugin is installed but has a broken or missing manifest or schema, validation fails and Doctor reports the plugin error.
 - If plugin config exists but the plugin is **disabled**, the config is kept and a **warning** is surfaced in Doctor + logs.

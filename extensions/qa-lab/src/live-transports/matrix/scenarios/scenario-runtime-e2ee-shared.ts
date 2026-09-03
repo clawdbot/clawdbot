@@ -353,12 +353,29 @@ export async function withMatrixQaE2eeDriverAndObserver<T>(
   }) => Promise<T>,
 ) {
   const driver = await createMatrixQaE2eeDriverClient(context, scenarioId);
-  const observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
-  try {
-    return await run({ driver, observer });
-  } finally {
-    await Promise.all([driver.stop(), observer.stop()]);
+  let observer: MatrixQaE2eeScenarioClient | undefined;
+  const [outcome] = await Promise.allSettled([
+    (async () => {
+      observer = await createMatrixQaE2eeObserverClient(context, scenarioId);
+      return await run({ driver, observer });
+    })(),
+  ]);
+  // Join every acquired client before the next scenario can reuse its device and crypto state.
+  const cleanup = await Promise.allSettled(
+    [driver, observer].map(async (client) => client?.stop()),
+  );
+  const failures: unknown[] = outcome.status === "fulfilled" ? [] : [outcome.reason];
+  failures.push(
+    ...cleanup.flatMap((result) => (result.status === "rejected" ? [result.reason] : [])),
+  );
+  if (outcome.status === "fulfilled" && failures.length === 0) {
+    return outcome.value;
   }
+  throw failures.length === 1
+    ? failures[0]
+    : new AggregateError(failures, "Matrix E2EE scenario and client cleanup failed", {
+        cause: failures[0],
+      });
 }
 
 export async function completeMatrixQaSasVerification(params: {

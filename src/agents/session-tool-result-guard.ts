@@ -28,6 +28,7 @@ import {
   attachSessionTranscriptRunId,
   resolveTerminalAssistantTranscriptRunId,
 } from "../sessions/transcript-events.js";
+import { withRuntimeUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript-runtime-context.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../shared/transcript-only-openclaw-assistant.js";
 import { formatContextLimitTruncationNotice } from "./embedded-agent-runner/context-truncation-notice.js";
 import {
@@ -713,17 +714,18 @@ export function installSessionToolResultGuard(
     copyCodeModeSourceAppend(message, runOwnedMessage, sourceAppend);
     const parentEntryId = sessionManager.getLeafId();
     const appendParentEntryId = sessionManager.getAppendParentId();
-    const { entryId, anchor } = originalAppendWithTranscriptAnchor(
-      runOwnedMessage as never,
-      sourceAppend
-        ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
-        : options,
+    const {
+      entryId,
+      anchor,
+      message: persistedMessage,
+    } = withRuntimeUserTurnTranscriptRecorder(runOwnedMessage, () =>
+      originalAppendWithTranscriptAnchor(
+        runOwnedMessage as never,
+        sourceAppend
+          ? prepareCodeModeSourceAppend(options ?? {}, runOwnedMessage, sourceAppend)
+          : options,
+      ),
     );
-    const entry = sessionManager.getEntry(entryId);
-    if (entry?.type !== "message") {
-      throw new Error(`Appended transcript message is unavailable: ${entryId}`);
-    }
-    const persistedMessage = entry.message;
     // Destructive tool-side state commits only after this exact result is durable.
     acknowledgeInternalToolResult(acknowledgementSource);
     const persistedId =
@@ -758,6 +760,8 @@ export function installSessionToolResultGuard(
   const guardedAppendCompaction = ((
     ...args: Parameters<SessionManager["appendCompaction"]>
   ): string => {
+    // Replayed boundaries supply their recorded identity; new ones inherit the owning run.
+    args[5] = { runId: transcriptRunId, ...args[5] };
     const append = () => originalAppendCompaction(...args);
     return opts?.withCompactionPersistence
       ? opts.withCompactionPersistence(append, isExpectedCompactionAppend)
@@ -977,6 +981,7 @@ export function installSessionToolResultGuard(
           callerInvalidatesCache || transformedMessage !== nextMessage || finalWrite.changed,
       },
       sourceAppend,
+      message,
     );
     if (sessionTarget) {
       const runId = resolveTerminalAssistantTranscriptRunId(persistedMessage, transcriptRunId);

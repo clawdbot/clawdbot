@@ -626,6 +626,7 @@ describe("session catalog Gateway methods", () => {
           id: "codex",
           capabilities: expect.objectContaining({
             createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+            startTerminal: true,
           }),
         }),
         expect.objectContaining({
@@ -638,37 +639,41 @@ describe("session catalog Gateway methods", () => {
     });
   });
 
-  it("refuses direct terminal start when the requested agent has no create target", async () => {
-    const resolveCreateSession = vi.fn(() => undefined);
-    const startTerminalSession = vi.fn();
-    const open = vi.fn();
-    hoisted.activeRegistry.sessionCatalogs = [
-      {
-        provider: provider("codex", { resolveCreateSession, startTerminalSession }),
-      },
-    ];
-    const config = { gateway: { cliAgents: { enabled: true } } };
-
-    const respond = await call(
-      "sessions.catalog.startTerminal",
-      { catalogId: "codex", agentId: "restricted", cwd: process.cwd() },
-      config,
-      { connId: "conn-1", connect: { scopes: ["operator.admin"] } },
-      { isTerminalEnabled: () => true, terminalSessions: { open } },
-    );
-
-    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "restricted" });
-    expect(startTerminalSession).not.toHaveBeenCalled();
-    expect(open).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: ErrorCodes.UNAVAILABLE,
-        message: "session catalog codex cannot create sessions",
-      }),
-    );
-  });
+  it.each(["codex", "claude"])(
+    "advertises %s native hosts with no model create target",
+    async (id) => {
+      const host = {
+        hostId: "node:ready",
+        label: "Ready",
+        kind: "node" as const,
+        connected: true,
+        canStartTerminal: true,
+        sessions: [],
+      };
+      hoisted.activeRegistry.sessionCatalogs = [
+        {
+          provider: provider(id, {
+            resolveCreateSession: () => undefined,
+            list: async () => [host],
+            startTerminalSession: async ({ cwd }) => ({ kind: "local", argv: [id], cwd }),
+          }),
+        },
+      ];
+      const respond = await call("sessions.catalog.list", {});
+      expect(respond).toHaveBeenCalledWith(true, {
+        catalogs: [
+          expect.objectContaining({
+            id,
+            capabilities: {
+              continueSession: false,
+              archive: false,
+              startTerminal: true,
+            },
+          }),
+        ],
+      });
+    },
+  );
 
   it("memoizes a provider's create target until runtime config identity changes", async () => {
     let createSession: { model: string; agentRuntime: string } | undefined = {

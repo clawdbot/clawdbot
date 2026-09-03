@@ -18,6 +18,7 @@ import type { NodeWorkerSupervisorTransport } from "./node-registry-private.js";
 import { emitSessionsChanged } from "./server-methods/session-change-event.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerPlacementChangePublisher } from "./server-worker-placement-change-events.js";
+import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
 import { createGatewayWorkerPlacementMoveBarrier } from "./server-worker-placement-move-barrier.js";
 import { createGatewayWorkerPlacementMoveDestinationResolver } from "./server-worker-placement-move-destination.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
@@ -255,6 +256,7 @@ export function createGatewayWorkerPlacementRuntime(
         agentId,
         executionMode,
         authorize,
+        signal,
         startDispatch,
       }) => {
         const sessionRuntime = await loadWorkerPlacementSessionRuntimeModule();
@@ -279,6 +281,7 @@ export function createGatewayWorkerPlacementRuntime(
         await runExclusiveSessionLifecycleMutation({
           scope: target.storePath,
           identities: lifecycleIdentities,
+          signal,
           prepare: async () => {
             const {
               config: currentConfig,
@@ -311,7 +314,7 @@ export function createGatewayWorkerPlacementRuntime(
               );
             }
             const preflightWorkerWorkspace = await loadWorkerWorkspacePreflight();
-            await preflightWorkerWorkspace({ localPath: worktree.path });
+            await preflightWorkerWorkspace({ localPath: worktree.path, signal });
             authorize?.();
             placement = startDispatch();
             clearSessionQueues(lifecycleIdentities);
@@ -345,21 +348,11 @@ export function createGatewayWorkerPlacementRuntime(
         }
         return placement;
       },
-      runActivationBarrier: async ({
-        sessionId,
-        sessionKey,
-        agentId,
-        executionMode,
-        authorize,
-        activate,
-      }) =>
+      runActivationBarrier: async ({ authorize, activate, ...identity }) =>
         await runWorkerPlacementSessionBarrier({
           sessionRuntime: await loadWorkerPlacementSessionRuntimeModule(),
           getConfig: getRuntimeConfig,
-          sessionId,
-          sessionKey,
-          agentId,
-          executionMode,
+          ...identity,
           action: "activation",
           run: () => {
             authorize?.();
@@ -373,6 +366,7 @@ export function createGatewayWorkerPlacementRuntime(
         executionMode,
         environmentId,
         expectedGeneration,
+        signal,
         run,
       }) =>
         await runWorkerPlacementSessionBarrier({
@@ -383,6 +377,7 @@ export function createGatewayWorkerPlacementRuntime(
           agentId,
           executionMode,
           action: "recovery",
+          signal,
           run: async (worktree) => {
             const placement = params.placements.get(sessionId);
             if (
@@ -437,6 +432,7 @@ export function createGatewayWorkerPlacementRuntime(
           })
         )?.gitAuthor,
     }),
+    createGatewayWorkerDispatchAdmission(loadWorkerPlacementSessionRuntimeModule),
   );
   const dispatchService = {
     ...rawDispatchService,

@@ -20,6 +20,7 @@ export type AgentDeliveryEvidence = {
   deliveryStatus?: {
     status?: unknown;
     errorMessage?: unknown;
+    reason?: unknown;
     payloadOutcomes?: unknown;
   };
   didSendViaMessagingTool?: unknown;
@@ -354,19 +355,34 @@ export function hasCompleteAutomaticMediaDeliveryOutcomeEvidence(
   });
 }
 
-/** Returns whether any automatic payload was sent or may have committed before failure. */
-export function hasPayloadOutcomeSendEvidence(
+/** Preserve batch send evidence and policy reasons hidden by the first suppressed payload. */
+export function getAutomaticDeliveryEvidence(
   result: Pick<AgentDeliveryEvidence, "deliveryStatus">,
-): boolean {
-  return (
-    getPayloadDeliveryOutcomes(result)?.some((outcome) => {
-      if (!outcome || typeof outcome !== "object" || Array.isArray(outcome)) {
-        return false;
-      }
-      const record = outcome as Record<string, unknown>;
-      return normalizeEvidenceStatus(record.status) === "sent" || record.sentBeforeError === true;
-    }) === true
-  );
+): { mayHaveSent: boolean; suppressionReason?: string } {
+  let suppressionReason =
+    normalizeEvidenceStatus(result.deliveryStatus?.status) === "suppressed" &&
+    typeof result.deliveryStatus?.reason === "string"
+      ? result.deliveryStatus.reason
+      : undefined;
+  let mayHaveSent =
+    normalizeEvidenceStatus(result.deliveryStatus?.status) === "partial_failed" ||
+    suppressionReason === "adapter_returned_no_identity";
+  for (const outcome of getPayloadDeliveryOutcomes(result) ?? []) {
+    const record = asOptionalRecord(outcome);
+    const status = normalizeEvidenceStatus(record?.status);
+    mayHaveSent ||=
+      status === "sent" ||
+      record?.sentBeforeError === true ||
+      (status === "suppressed" && record?.reason === "adapter_returned_no_identity");
+    if (
+      status === "suppressed" &&
+      typeof record?.reason === "string" &&
+      (!suppressionReason || suppressionReason === "no_visible_payload")
+    ) {
+      suppressionReason = record.reason;
+    }
+  }
+  return { mayHaveSent, suppressionReason };
 }
 
 function hasPositiveNumber(value: unknown): boolean {

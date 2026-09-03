@@ -526,11 +526,12 @@ resolve_device() {
   devices="$(connected_devices "$adb")"
   count="$(device_count "$devices")"
   if [[ "$count" == "1" ]]; then
-    connected_avd="$(running_avd_name "$adb" "$devices")"
-    if [[ "$connected_avd" != "$AVD" ]]; then
-      echo "Connected emulator '${connected_avd:-unknown}' is not the screenshot AVD '${AVD}'." >&2
-      echo "Stop it so the script can boot '${AVD}', or pass --device '${devices}' to override the no-cutout profile." >&2
-      return 1
+    if connected_avd="$(running_avd_name "$adb" "$devices")"; then
+      if [[ "$connected_avd" != "$AVD" ]]; then
+        echo "Connected emulator '${connected_avd:-unknown}' is not the screenshot AVD '${AVD}'." >&2
+        echo "Stop it so the script can boot '${AVD}', or pass --device '${devices}' to override the no-cutout profile." >&2
+        return 1
+      fi
     fi
     ADB_SERIAL="$devices"
     return

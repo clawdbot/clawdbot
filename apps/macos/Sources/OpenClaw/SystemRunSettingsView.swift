@@ -392,19 +392,21 @@ struct ExecAllowlistRow: View {
 
             if let lastUsedAt = self.entry.lastUsedAt {
                 let date = Date(timeIntervalSince1970: lastUsedAt / 1000.0)
-                Text("Last used \(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))")
+                Text(String(
+                    format: String(localized: "Last used %@"),
+                    Self.relativeFormatter.localizedString(for: date, relativeTo: Date())))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let lastUsedCommand = self.entry.lastUsedCommand, !lastUsedCommand.isEmpty {
-                Text("Last command: \(lastUsedCommand)")
+                Text(String(format: String(localized: "Last command: %@"), lastUsedCommand))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if let lastResolvedPath = self.entry.lastResolvedPath, !lastResolvedPath.isEmpty {
-                Text("Resolved path: \(lastResolvedPath)")
+                Text(String(format: String(localized: "Resolved path: %@"), lastResolvedPath))
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

@@ -37,7 +37,7 @@ import {
   withFileMutationQueueKeyResolution,
 } from "./file-mutation-queue.js";
 import { type PersistedFileStat, verifyPersistedUtf8File } from "./file-write-verification.js";
-import { resolveToCwd } from "./path-utils.js";
+import { resolveLocalPathToCwd, resolveToCwd } from "./path-utils.js";
 import { invalidArgText, shortenPath, str } from "./render-utils.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
@@ -390,6 +390,7 @@ export function createEditToolDefinition(
   options?: EditToolOptions,
 ): ToolDefinition<typeof editSchema, EditToolDetails, EditRenderState> {
   const ops = options?.operations ?? defaultEditOperations;
+  const resolvePath = options?.operations ? resolveToCwd : resolveLocalPathToCwd;
   return {
     name: "edit",
     label: "edit",
@@ -411,7 +412,7 @@ export function createEditToolDefinition(
       void onUpdate;
       void ctx;
       const { path, edits: originalEdits } = validateEditInput(input);
-      const absolutePath = resolveToCwd(path, cwd);
+      const absolutePath = resolvePath(path, cwd);
       const queueKey = resolveFileMutationQueueKey(absolutePath, ops.resolveQueueKey, signal);
 
       return withFileMutationQueueKeyResolution(queueKey, async () => {
@@ -544,14 +545,18 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
-          (preview) => {
-            if (component.previewArgsKey === requestKey) {
-              setEditPreview(component, preview, requestKey);
-              context.invalidate();
-            }
-          },
-        );
+        void computeEditsDiff(
+          previewInput.path,
+          previewInput.edits,
+          context.cwd,
+          ops,
+          resolvePath,
+        ).then((preview) => {
+          if (component.previewArgsKey === requestKey) {
+            setEditPreview(component, preview, requestKey);
+            context.invalidate();
+          }
+        });
       }
 
       return buildEditCallComponent(component, args, theme);

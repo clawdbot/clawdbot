@@ -87,12 +87,6 @@ type WorkerLaunchRuntime = {
   spawnWorker?: BenchmarkWorkerSpawner;
 };
 
-type BenchmarkRuntime = {
-  runWorker?: typeof runWorker;
-  writeProgress?: (line: string) => void;
-  now?: () => number;
-};
-
 function usage(): string {
   return `OpenClaw durable task registry churn benchmark
 
@@ -330,23 +324,6 @@ function parseWorkerProcessResult(
   });
 }
 
-function buildWorkerArgs(options: Options, size: number, stateDir: string): string[] {
-  return [
-    "--expose-gc",
-    "--import",
-    "tsx",
-    "scripts/bench-task-registry-sqlite-worker.ts",
-    "--size",
-    String(size),
-    "--cycles",
-    String(options.cycles),
-    "--warmup",
-    String(options.warmup),
-    "--state-dir",
-    stateDir,
-  ];
-}
-
 function runWorker(
   options: Options,
   size: number,
@@ -355,7 +332,20 @@ function runWorker(
   const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-task-registry-bench-"));
   try {
     return runBenchmarkWorker({
-      args: buildWorkerArgs(options, size, stateDir),
+      args: [
+        "--expose-gc",
+        "--import",
+        "tsx",
+        "scripts/bench-task-registry-sqlite-worker.ts",
+        "--size",
+        String(size),
+        "--cycles",
+        String(options.cycles),
+        "--warmup",
+        String(options.warmup),
+        "--state-dir",
+        stateDir,
+      ],
       label: `size ${size}`,
       sentinel: WORKER_RESULT_SENTINEL,
       spawnWorker: runtime.spawnWorker,
@@ -441,14 +431,11 @@ function aggregateWorkerResults(options: Options, workers: WorkerResult[]) {
   };
 }
 
-function benchmark(options: Options, runtime: BenchmarkRuntime = {}) {
-  const run = runtime.runWorker ?? runWorker;
+function benchmark(options: Options) {
   const workers = runBenchmarkJobs(options.sizes, {
     prefix: "bench-task-registry-sqlite",
     describe: (size) => `size=${size}`,
-    run: (size) => run(options, size),
-    now: runtime.now,
-    writeProgress: runtime.writeProgress,
+    run: (size) => runWorker(options, size),
   });
   return aggregateWorkerResults(options, workers);
 }
@@ -473,12 +460,9 @@ async function main(argv = process.argv.slice(2)): Promise<void> {
 
 export const testing = {
   aggregateWorkerResults,
-  benchmark,
-  buildWorkerArgs,
   parseOptions,
   parseWorkerProcessResult,
   runWorker,
-  summarizeTimings: summarizeBenchmarkTimings,
 };
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {

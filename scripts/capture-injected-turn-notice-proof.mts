@@ -1,10 +1,10 @@
 #!/usr/bin/env node
+import path from "node:path";
+import { chromium } from "playwright";
 // Captures webchat proof that a CLI harness-injected user turn renders as a
 // collapsed system notice while the operator's own message keeps its bubble.
 // Usage: node --import tsx scripts/capture-injected-turn-notice-proof.mts [--mode after|before]
-import { mkdir } from "node:fs/promises";
-import path from "node:path";
-import { chromium } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -26,7 +26,8 @@ const mode = readOption("mode") ?? "after";
 if (mode !== "after" && mode !== "before") {
   throw new Error(`Expected --mode after|before, received ${mode}`);
 }
-const outputDir = path.resolve(
+const outputDir = createControlUiE2eArtifactDir(
+  "injected-turn-notice-proof",
   readOption("output-dir") ?? ".artifacts/control-ui-e2e/injected-turn-notice-proof",
 );
 
@@ -78,7 +79,6 @@ if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const server = await startControlUiE2eServer(undefined, { source: true });
 const browser = await chromium.launch({ executablePath });
 try {

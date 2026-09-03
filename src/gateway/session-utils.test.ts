@@ -7,6 +7,7 @@ import { afterAll, beforeEach, describe, expect, onTestFinished, test, vi } from
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resolveExecDefaults } from "../agents/exec-defaults.js";
 import { resolveLegacyInheritedAuthAgentId } from "../agents/legacy-inherited-auth-dir.js";
+import * as sessionModelRefs from "../agents/session-model-ref.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../agents/session-permission-exec-mode.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -42,12 +43,10 @@ import {
   projectSessionPatchResult,
   resolveGatewayModelSupportsImages,
 } from "./session-utils-model.js";
-import {
-  buildSessionListRowMetadataContext,
-  buildSingleRowStoreChildSessionsByKey,
-} from "./session-utils-projection.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { buildGatewaySessionRow as buildGatewaySessionRowOwner } from "./session-utils-row.js";
 import {
+  type GatewaySessionStoreDiscoveryCache,
   resolveGatewaySessionStoreTarget,
   resolveGatewaySessionStoreTargetWithStore,
 } from "./session-utils-store-lookup.js";
@@ -623,7 +622,12 @@ describe("gateway session utils", () => {
     const store: Record<string, SessionEntry> = {
       recent: { sessionId: "recent", updatedAt: 30 },
       pinned: { sessionId: "pinned", updatedAt: 10, pinnedAt: 40 },
-      archived: { sessionId: "archived", updatedAt: 20, archivedAt: 50 },
+      archived: {
+        sessionId: "archived",
+        updatedAt: 20,
+        archivedAt: 50,
+        archiveReason: "active-session-cap",
+      },
     } satisfies Record<string, SessionEntry>;
 
     const active = await listSessionsFromStoreAsync({ cfg, storePath: "", store, opts: {} });
@@ -641,7 +645,13 @@ describe("gateway session utils", () => {
       opts: { archived: true },
     });
     expect(archived.sessions).toMatchObject([
-      { key: "archived", archived: true, archivedAt: 50, pinned: false },
+      {
+        key: "archived",
+        archived: true,
+        archivedAt: 50,
+        archiveReason: "active-session-cap",
+        pinned: false,
+      },
     ]);
 
     const all = await listSessionsFromStoreAsync({
@@ -1200,12 +1210,14 @@ describe("gateway session utils", () => {
         {
           sessionId: `session-${index}`,
           modelProvider: "openai",
-          model: "gpt-5.5",
+          model: "previous-model",
           updatedAt: Date.now() - index,
         } satisfies SessionEntry,
       ]),
     );
 
+    const historicalModel = vi.spyOn(sessionModelRefs, "resolveSessionModelIdentityRef");
+    onTestFinished(() => historicalModel.mockRestore());
     const result = await listSessionsFromStoreAsync({
       cfg,
       storePath: "",
@@ -1214,6 +1226,10 @@ describe("gateway session utils", () => {
     });
 
     expect(result.sessions).toHaveLength(5);
+    for (const row of result.sessions) {
+      expect(row).toMatchObject({ modelProvider: "openai", model: "gpt-5.5" });
+    }
+    expect(historicalModel).not.toHaveBeenCalled();
     const missingMediumLevelSessionIds = result.sessions
       .filter((session) => !session.thinkingLevels?.some((level) => level.id === "medium"))
       .map((session) => session.sessionId);
@@ -3275,6 +3291,43 @@ describe("gateway session utils", () => {
     }
   });
 
+  test("loadGatewaySessionEntryReadOnly discovers stores once but reads changed rows live", async () => {
+    resetConfigRuntimeState();
+    try {
+      await withStateDirEnv("session-utils-request-discovery-", async ({ stateDir }) => {
+        const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+        const cfg = {
+          session: { mainKey: "main", store: storePath },
+          agents: { entries: { main: {} } },
+        } satisfies OpenClawConfig;
+        const sessionKey = "agent:main:main";
+        await seedSessionEntries(storePath, {
+          [sessionKey]: { sessionId: "session-before", updatedAt: 1 },
+        });
+        setRuntimeConfigSnapshot(cfg, cfg);
+        const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
+        const discoveryWrites = vi.spyOn(targetDiscoveryCache, "set");
+        try {
+          const first = loadGatewaySessionEntryReadOnly(sessionKey, { targetDiscoveryCache });
+          await replaceSessionEntry(
+            { sessionKey, storePath },
+            { sessionId: "session-after", updatedAt: 2 },
+          );
+          const second = loadGatewaySessionEntryReadOnly(sessionKey, { targetDiscoveryCache });
+
+          expect(first.entry?.sessionId).toBe("session-before");
+          expect(second.entry?.sessionId).toBe("session-after");
+          expect(targetDiscoveryCache.size).toBe(1);
+          expect(discoveryWrites).toHaveBeenCalledTimes(1);
+        } finally {
+          discoveryWrites.mockRestore();
+        }
+      });
+    } finally {
+      resetConfigRuntimeState();
+    }
+  });
+
   test("loadGatewaySessionEntryReadOnly clones only the selected row and direct children", async () => {
     resetConfigRuntimeState();
     try {
@@ -3330,38 +3383,6 @@ describe("gateway session utils", () => {
     } finally {
       resetConfigRuntimeState();
     }
-  });
-
-  test("single-row child candidates reuse stable entry identities across sparse stores", () => {
-    const parentKey = "agent:main:main";
-    let spawnedByReads = 0;
-    const parent = { sessionId: "parent", updatedAt: 1 } as SessionEntry;
-    const child = {
-      sessionId: "child",
-      updatedAt: Date.now(),
-      get spawnedBy() {
-        spawnedByReads += 1;
-        return parentKey;
-      },
-    } as SessionEntry;
-    const storePath = "/tmp/openclaw-single-row-child-cache";
-
-    const first = buildSingleRowStoreChildSessionsByKey({
-      store: { [parentKey]: parent, "agent:main:child": child },
-      storePath,
-      key: parentKey,
-      now: Date.now(),
-    });
-    const second = buildSingleRowStoreChildSessionsByKey({
-      store: { [parentKey]: parent, "agent:main:child": child },
-      storePath,
-      key: parentKey,
-      now: Date.now(),
-    });
-
-    expect(first.get(parentKey)).toEqual(["agent:main:child"]);
-    expect(second.get(parentKey)).toEqual(["agent:main:child"]);
-    expect(spawnedByReads).toBe(1);
   });
 
   test("loadGatewaySessionEntryReadOnly rejects a persisted main alias", async () => {

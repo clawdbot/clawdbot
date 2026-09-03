@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { createControlUiE2eArtifactDir } from "../ui/src/test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   resolvePlaywrightChromiumExecutablePath,
@@ -22,13 +22,15 @@ function readOption(name: string): string | undefined {
 }
 
 const baseUrl = new URL(readOption("base-url") ?? DEFAULT_BASE_URL);
-const outputDir = path.resolve(readOption("output-dir") ?? DEFAULT_OUTPUT_DIR);
+const outputDir = createControlUiE2eArtifactDir(
+  "workboard-proof",
+  readOption("output-dir") ?? DEFAULT_OUTPUT_DIR,
+);
 const executablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
 if (!canRunPlaywrightChromium(executablePath)) {
   throw new Error(`Playwright Chromium is unavailable at ${executablePath}`);
 }
 
-await mkdir(outputDir, { recursive: true });
 const browser = await chromium.launch({ executablePath });
 const context = await browser.newContext({
   colorScheme: "light",

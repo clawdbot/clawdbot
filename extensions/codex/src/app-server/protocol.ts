@@ -426,6 +426,7 @@ export type CodexTurn = {
 
 export type CodexThread = {
   id: string;
+  forkedFromId?: string | null;
   sessionId?: string;
   path?: string | null;
   projectId: string | null;

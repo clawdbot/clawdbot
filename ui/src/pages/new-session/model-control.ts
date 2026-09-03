@@ -183,7 +183,7 @@ export class NewSessionModelControl {
             status: "ready",
             owner,
             targets: result.catalogs
-              .filter((catalog) => catalog.capabilities.createSession !== undefined)
+              .filter((catalog) => catalog.capabilities.startTerminal === true)
               .map(({ id, label }) => ({ id, label })),
           };
           this.notify();
@@ -628,6 +628,7 @@ export class NewSessionModelControl {
           this.fastMode ?? (selectedTarget?.entry ?? defaultTarget?.entry)?.effectiveFastMode,
       },
       modelOverrides: { [sessionKey]: this.selected },
+      modelSelectionTarget: "session",
       modelPickerTargetGroups: this.catalogTargetGroups(),
       modelSwitching: false,
       sending: options.sending,

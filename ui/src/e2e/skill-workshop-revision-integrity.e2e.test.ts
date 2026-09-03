@@ -1,7 +1,8 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
-import { beforeAll, expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -16,12 +17,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const artifactDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "skill-workshop-revision-integrity",
-);
+let artifactDir: string;
 const viewport = { height: 900, width: 1280 };
 const PROPOSAL_ID = "revision-integrity-proposal";
 const SKILL_KEY = "revision-integrity";
@@ -174,9 +170,8 @@ async function closeProofContext(params: { context: BrowserContext }): Promise<v
 }
 
 suite.define(() => {
-  beforeAll(async () => {
-    await rm(artifactDir, { force: true, recursive: true });
-    await mkdir(artifactDir, { recursive: true });
+  beforeEach(() => {
+    artifactDir = createControlUiE2eArtifactDir("skill-workshop-revision-integrity");
   });
 
   it.each([

@@ -212,6 +212,82 @@ OpenClaw release:
   </Tab>
 </Tabs>
 
+## Use Claude Fable 5.1
+
+After setting up either auth route above, select the canonical model ref:
+
+```bash
+openclaw models set anthropic/claude-fable-5-1
+```
+
+For Claude CLI authentication, keep that same ref and select the CLI runtime:
+
+```json5
+{
+  agents: {
+    defaults: {
+      model: { primary: "anthropic/claude-fable-5-1" },
+      models: {
+        "anthropic/claude-fable-5-1": {
+          agentRuntime: { id: "claude-cli" },
+        },
+      },
+    },
+  },
+}
+```
+
+The API and Claude CLI catalogs expose a 1,000,000-token context window and
+128,000-token output limit. Fable 5.1 always uses adaptive thinking, defaults to
+`high`, and supports native `low`, `medium`, `high`, `xhigh`, and `max` effort.
+For API-key billing, input and output remain `$10/$50` per million tokens;
+cache reads cost `$0.25` per million tokens, one quarter of Fable 5's rate.
+See Anthropic's [Fable 5.1 specifications](https://platform.claude.com/docs/en/models/fable-5-1/overview).
+
+The bare `fable` alias now selects `anthropic/claude-fable-5-1`. Explicit
+`fable-5` and `anthropic/claude-fable-5` selections still use Fable 5; OpenClaw
+does not rewrite them to Fable 5.1.
+
+### Tool calls and retained thinking
+
+Fable 5.1 accepts automatic or disabled tool use, not forced tool calls.
+OpenClaw's Anthropic adapter converts a forced tool choice to `auto`
+when thinking is enabled. State in the prompt when a particular tool must run;
+see Anthropic's [migration guide](https://platform.claude.com/docs/en/models/fable-5-1/migration-guide).
+
+Fable 5.1 binds retained thinking to the preceding system prompt, tools, and
+conversation history. Changing that prefix can invalidate later thinking
+blocks. Claude Code manages this history for the CLI runtime. OpenClaw's
+embedded runtime persists hidden runtime-context carriers after their user turn
+and keeps earlier carriers and inline inbound metadata in place. Direct
+Anthropic API-key requests with adaptive thinking send the
+`thinking-binding-controls-2026-08-01` beta and
+`thinking.block_binding.prefix_mismatch_behavior: "drop_block"`. Anthropic drops
+invalidated replayed thinking server-side, and OpenClaw logs a warning with the
+count and up to five affected paths. These controls are not sent for OAuth,
+proxies, Bedrock, Vertex, Foundry, or budget-based or disabled thinking.
+Client-side compaction removes stale thinking signatures; a provider-confirmed
+thinking rejection can still trigger one retry without prior thinking and
+persist the successful repair. Adaptive mode remains enabled,
+but a response may contain no thinking block. Integrations that build Messages API
+requests directly should follow Anthropic's [preserved-thinking rules](https://platform.claude.com/docs/en/build-with-claude/thinking#preserved-thinking).
+
+Fable 5.1 thinking is also bound to the model that produced it. Switching a
+session from Fable 5.1 to any other model (Opus 5, Sonnet 5, Fable 5, or
+older) continues the visible conversation without Fable's earlier reasoning;
+Anthropic drops those blocks unbilled, and OpenClaw's embedded runtime omits
+them from the replay for the same result. The reverse move keeps reasoning:
+Fable 5.1 reads thinking produced by Opus 5, Sonnet 5, Opus 4.8, and Fable 5,
+so a session that moves onto Fable 5.1 replays that history intact. Switching
+away and back does not restore the pre-switch Fable reasoning: the switch
+changes the system prompt, which invalidates every earlier Fable block. On
+direct API-key routes Anthropic drops those blocks server-side and OpenClaw
+logs the drop; elsewhere, organizations that enforce the prefix check reject
+the request once and the embedded runtime retries without prior thinking.
+Changing the thinking level with `/think` has the same effect. Pick the model
+and thinking level when you start the session when reasoning continuity
+matters.
+
 ## Claude sessions across computers
 
 The bundled Anthropic plugin adds a **Claude Code** group to the normal sessions
@@ -248,6 +324,16 @@ sessions** below a catalog group to append the next page for every host that has
 more history; appended rows stay visible and are re-fetched to the same depth
 across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses
 `sessions.catalog.read`.
+
+Those refreshes are cheap on the Gateway: the plugin watches `~/.claude/projects/`
+and the Desktop session store for changes instead of re-reading them on every
+poll, so an unchanged tree costs no disk access and a change re-reads only the
+affected project directory. It re-reads the whole tree at most every five
+minutes as a backstop, and falls back to per-request scanning if the platform
+cannot provide a file watcher. Desktop metadata also refreshes every 60 seconds
+to pick up custom-group changes outside the watched session store.
+Gateway enumeration keeps each caller isolated;
+the plugin reuses its watched filesystem snapshot across those enumerations.
 
 Catalog visibility follows the authenticated Gateway profile. Admin connections
 see every discovered Claude row, and solo or shared-secret Gateways remain
@@ -347,11 +433,11 @@ input, and `$5/$25` input/output pricing.
 restrictions. The catalog uses Anthropic's introductory `$2/$10` input/output
 pricing through August 31, 2026; standard `$3/$15` pricing begins September 1, 2026.
 
-`anthropic/claude-fable-5` always uses adaptive thinking and defaults to `high`
-effort. Anthropic does not allow thinking to be disabled for this model, so
-`/think off` and `/think minimal` map to `low` effort instead. OpenClaw also
-omits custom temperature values for Fable 5 requests, since Anthropic rejects
-a temperature override on any thinking-enabled request.
+`anthropic/claude-fable-5-1` and `anthropic/claude-fable-5` always use adaptive
+thinking and default to `high` effort. Anthropic does not allow thinking to be
+disabled for these models, so `/think off` and `/think minimal` map to `low`
+effort instead. OpenClaw also omits caller-selected sampling parameters for
+both Fable versions.
 
 `anthropic/claude-mythos-5` is a limited-access model with the same always-on
 adaptive-thinking contract. OpenClaw defaults to `high`, maps `/think off` and
@@ -390,23 +476,23 @@ Related Anthropic docs:
 ## Safety refusal fallback (Claude Opus 5 and Fable 5)
 
 <Warning>
-Claude Opus 5 and Fable 5 can route a safety-classifier refusal to another
-Claude model. OpenClaw opts into Anthropic's recommended per-category routing
-for direct API-key requests. A fallback-served turn is billed at the model
+Claude Opus 5, Fable 5.1, and Fable 5 can route a safety-classifier refusal to
+another Claude model. OpenClaw opts into Anthropic's recommended per-category
+routing for direct API-key requests. A fallback-served turn is billed at the model
 that answered. If your policy requires every turn to stay on the requested
 model, do not use these models through the automatic fallback path.
 </Warning>
 
 ### Why this exists
 
-Opus 5 and Fable 5 classifiers return `stop_reason: "refusal"` on requests in
+Opus 5 and Fable classifiers return `stop_reason: "refusal"` on requests in
 restricted domains. Without a fallback, the turn ends with an error even when
 Anthropic has a recommended model for that refusal category.
 
 ### How it works
 
-1. For every direct API-key request to `anthropic/claude-opus-5` or
-   `anthropic/claude-fable-5`, OpenClaw sends the
+1. For every direct API-key request to `anthropic/claude-opus-5`,
+   `anthropic/claude-fable-5-1`, or `anthropic/claude-fable-5`, OpenClaw sends the
    `server-side-fallback-2026-07-01` beta header plus
    `fallbacks: "default"`. Anthropic selects the recommended model for the
    reported refusal category.
@@ -421,7 +507,8 @@ Anthropic has a recommended model for that refusal category.
    are discarded per Anthropic's replay rules (they must not be echoed back or
    executed).
 4. If the recommended model declines as well, the turn surfaces the refusal
-   as an error.
+   as an error. OpenClaw does not retry a final refusal or advance to another
+   configured model.
 
 The fallback happens at the Anthropic API level, so the serving model does not
 need to be in your configured OpenClaw fallback chain.
@@ -439,10 +526,10 @@ need to be in your configured OpenClaw fallback chain.
 
 ### Scope
 
-Applies to `anthropic/claude-opus-5` and `anthropic/claude-fable-5` with
-API-key auth against `api.anthropic.com`. OAuth (including Claude CLI
-subscription reuse), proxy base URLs, Bedrock, Vertex, and Foundry requests
-are unchanged and still surface refusals as errors there.
+Applies to `anthropic/claude-opus-5`, `anthropic/claude-fable-5-1`, and
+`anthropic/claude-fable-5` with API-key auth against `api.anthropic.com`.
+OAuth (including Claude CLI subscription reuse), proxy base URLs, Bedrock,
+Vertex, and Foundry requests are unchanged and still surface refusals as errors there.
 
 See Anthropic's [refusals and fallback
 guide](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
@@ -628,7 +715,7 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
   </Accordion>
 
   <Accordion title="1M context window">
-    Claude Opus 5, Sonnet 5, Mythos 5, and Fable 5 have an exact
+    Claude Opus 5, Sonnet 5, Mythos 5, Fable 5.1, and Fable 5 have an exact
     1,000,000-token input window and support up to 128,000 output tokens.
     Anthropic's 1M context window is also GA on Claude 4.x models with adaptive
     thinking: Opus 4.8,

@@ -390,7 +390,7 @@ function renderSettingsTab(props: MemoryViewProps) {
 export function renderMemory(props: MemoryViewProps) {
   return html`
     <section class="memory-page">
-      <section class="content-header content-header--page hub-page-header">
+      <section class="content-header content-header--settings content-header--page hub-page-header">
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">

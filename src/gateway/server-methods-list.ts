@@ -62,6 +62,7 @@ export const GATEWAY_EVENTS = [
   "talk.mode",
   "talk.event",
   "shutdown",
+  "gateway.suspension",
   "health",
   "heartbeat",
   "cron",

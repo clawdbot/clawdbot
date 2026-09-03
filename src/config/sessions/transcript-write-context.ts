@@ -90,6 +90,30 @@ function contextMatches(params: {
   return Boolean(contextSessionKey && sessionKey && contextSessionKey === sessionKey);
 }
 
+/**
+ * Ownership test for a writer fence, which is the one gate a caller can reach holding
+ * nothing but a session key. A delivery mirror knows the session it writes into but not
+ * that session's store path, so it cannot form a target; `contextMatches` would refuse
+ * it for not being target-shaped and leave it unable to tell "the running session" from
+ * "some other session". Compare keys in that case, and defer to the target comparison
+ * whenever the caller can express one.
+ */
+function ownsRequestedSession(params: {
+  context: OwnedSessionTranscriptWriteContext;
+  sessionFile?: string;
+  sessionKey?: string;
+  sessionTarget?: SessionTranscriptWriteTarget;
+}): boolean {
+  if (params.sessionTarget || params.sessionFile) {
+    return contextMatches(params);
+  }
+  const contextSessionKey = (
+    params.context.sessionTarget?.sessionKey ?? params.context.sessionKey
+  )?.trim();
+  const sessionKey = params.sessionKey?.trim();
+  return Boolean(contextSessionKey && sessionKey && contextSessionKey === sessionKey);
+}
+
 /** Runs transcript writes with the admitted run's teardown and writer-fence context. */
 export async function withOwnedSessionTranscriptWrites<T>(
   context: OwnedSessionTranscriptWriteContext,
@@ -110,7 +134,13 @@ export function bindOwnedSessionTranscriptWrites<TArgs extends unknown[], TResul
   return (...args) => ownedTranscriptWriteContext.run(context, () => run(...args));
 }
 
-/** Returns the matching admitted-run fence for a durable write boundary. */
+/**
+ * Returns the matching admitted-run fence for a durable write boundary.
+ *
+ * Every write boundary must name the session it writes into, or it inherits a claim
+ * about whichever session happens to be running. Omitting the scope asks for the
+ * ambient claim itself and is only for diagnostics that observe the running writer.
+ */
 export function getOwnedSessionTranscriptWriterFence(
   params: {
     sessionFile?: string;
@@ -119,7 +149,10 @@ export function getOwnedSessionTranscriptWriterFence(
   } = {},
 ): SessionTranscriptWriterFence | undefined {
   const context = ownedTranscriptWriteContext.getStore();
-  if (!context || (Object.keys(params).length > 0 && !contextMatches({ context, ...params }))) {
+  if (
+    !context ||
+    (Object.keys(params).length > 0 && !ownsRequestedSession({ context, ...params }))
+  ) {
     return undefined;
   }
   const initial = context.initialWriter;

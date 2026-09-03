@@ -8,6 +8,19 @@ import {
 import { createWorkerSessionTools } from "./worker-session-tools.js";
 
 describe("worker Gateway tools", () => {
+  it("keeps session admission separate from announcement delivery", () => {
+    const tools = createWorkerSessionTools({
+      requestGitHubPublish: vi.fn(),
+      requestPortal: vi.fn(),
+      requestSessionsSend: vi.fn(),
+      requestSessionsSpawn: vi.fn(),
+    });
+
+    const description = tools.find((candidate) => candidate.name === "sessions_send")?.description;
+    expect(description).toContain('`targetDisposition: "queued"` or `"steered"`');
+    expect(description).toContain("neither proves target completion");
+  });
+
   it("requests publication without accepting repository or credential authority", async () => {
     const requestGitHubPublish = vi.fn(async () => ({
       type: "res" as const,

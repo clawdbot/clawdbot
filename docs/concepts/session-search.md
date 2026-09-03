@@ -10,7 +10,14 @@ read_when:
 
 `sessions_search` searches the user and assistant text in visible past sessions. Each result
 includes a `sessionKey`, timestamp, role, and a short matching excerpt. Pass the returned
-`sessionKey` to `sessions_history` when you need the surrounding conversation.
+`sessionKey`, `messageId`, and `sessionId` together to `sessions_history` to reopen the matched
+context, including retained history from before a session reset. Without `messageId`, history
+returns the newest bounded tail instead.
+
+Anchored reads use `limit` to bound the surrounding messages and cannot be combined with `offset`.
+For SQLite transcript history, a missing message returns an empty history; a `sessionId` that does
+not belong to the selected session key is rejected. These rules also apply in local embedded mode,
+without a running Gateway.
 
 ## Visibility and output
 

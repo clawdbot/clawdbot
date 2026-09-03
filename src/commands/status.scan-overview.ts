@@ -100,7 +100,10 @@ export type StatusScanOverviewResult = {
     | "gatewaySelf"
     | "gatewayCallOverrides"
   >;
-  runtimeDegradation: Pick<StatusSummary, "degradedSecretOwners" | "degradedPlugins"> | null;
+  runtimeDegradation: Pick<
+    StatusSummary,
+    "degradedSecretOwners" | "degradedPlugins" | "startupMigrationWarning"
+  > | null;
   channelsStatus: unknown;
   channelIssues: ReturnType<typeof collectChannelStatusIssuesFn>;
   channels: Awaited<ReturnType<typeof buildChannelsTableFn>>;
@@ -263,6 +266,7 @@ export async function collectStatusScanOverview(params: {
     runtimeDegradation = status && {
       degradedSecretOwners: status.degradedSecretOwners ?? [],
       degradedPlugins: status.degradedPlugins ?? [],
+      startupMigrationWarning: status.startupMigrationWarning,
     };
   }
 

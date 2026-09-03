@@ -246,8 +246,8 @@ describe("fork boundaries from imported Codex history", () => {
       editorText: "edit me",
       boundary: {
         beforeTurnId: "turn-2",
-        targetTurnId: "turn-2",
-        retainedMarker: { turnId: "turn-1", userMessageCount: 1 },
+
+        lastRetainedTurnId: "turn-1",
       },
     });
   });
@@ -270,8 +270,8 @@ describe("fork boundaries from imported Codex history", () => {
         editorText: text,
         boundary: {
           beforeTurnId: `turn-${count - 1}`,
-          targetTurnId: `turn-${count - 1}`,
-          retainedMarker: { turnId: `turn-${count - 2}`, userMessageCount: 1 },
+
+          lastRetainedTurnId: `turn-${count - 2}`,
         },
       });
     },

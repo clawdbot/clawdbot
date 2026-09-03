@@ -879,6 +879,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const { runBtwSideQuestion } = await import("../agents/btw.js");
     const reply = await runBtwSideQuestion({
       cfg,
+      agentId: sessionAgentId,
       agentDir: resolveAgentDir(cfg, sessionAgentId),
       provider: resolvedModel.provider,
       model: resolvedModel.model,

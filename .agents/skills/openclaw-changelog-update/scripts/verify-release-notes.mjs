@@ -1047,7 +1047,8 @@ function sourceCommits(base, target, mainRef, releaseProvenance = []) {
   }
   const output = git([
     "log",
-    "--first-parent",
+    // Merged side branches carry source PRs too; first-parent hides their credit.
+    "--topo-order",
     "--reverse",
     "--format=%H%x1f%s%x1f%an%x1f%ae%x1f%cI%x1f%B%x1e",
     `${mergeBase}..${targetCommit}`,

@@ -328,22 +328,6 @@ export function resolveCodexAppServerRuntimeOptions(
     codeModeOnly: config.codeModeOnly === true,
     loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
-    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnCompletionIdleTimeoutMs,
-      60_000,
-    ),
-    turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnAssistantCompletionIdleTimeoutMs,
-      10_000,
-    ),
-    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
-      ? {
-          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-            config.postToolRawAssistantCompletionIdleTimeoutMs,
-            60_000,
-          ),
-        }
-      : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
     sandbox: resolvedSandbox,

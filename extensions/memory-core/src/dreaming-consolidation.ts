@@ -481,6 +481,7 @@ export function applyMemoryConsolidationPlan(params: {
 }
 
 export async function consolidateMemory(params: {
+  agentId: string;
   subagent: SubagentSurface;
   workspaceDir: string;
   existingMemory: string;
@@ -496,7 +497,9 @@ export async function consolidateMemory(params: {
   if (candidates.length === 0) {
     return null;
   }
-  const sessionPrefix = `dreaming-narrative-consolidation-${createHash("sha1")
+  const sessionPrefix = `agent:${params.agentId}:dreaming-narrative-consolidation-${createHash(
+    "sha1",
+  )
     .update(params.workspaceDir)
     .digest("hex")
     .slice(0, 12)}-${randomUUID()}`;

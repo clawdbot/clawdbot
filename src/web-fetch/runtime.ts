@@ -20,7 +20,6 @@ import {
   providerRequiresCredential,
   readWebProviderEnvValue,
   resolveWebProviderConfig,
-  resolveWebProviderDefinition,
 } from "../web/provider-runtime-shared.js";
 
 // Runtime provider selection for the web_fetch tool. It resolves config,
@@ -131,31 +130,18 @@ export function listWebFetchProviders(params?: {
   });
 }
 
-/** Resolves the configured or auto-detected web_fetch provider id. */
-function resolveWebFetchProviderId(params: {
+/** Auto-detects a web_fetch provider after explicit selections have been resolved. */
+function resolveAutoWebFetchProviderId(params: {
   fetch?: WebFetchConfig;
   config?: OpenClawConfig;
-  providers?: PluginWebFetchProviderEntry[];
+  providers: PluginWebFetchProviderEntry[];
 }): string {
-  const providers = sortWebFetchProvidersForAutoDetect(
-    params.providers ??
-      resolvePluginWebFetchProviders({
-        config: params.config,
-      }),
-  );
   const raw =
     params.fetch && "provider" in params.fetch
       ? normalizeLowercaseStringOrEmpty(params.fetch.provider)
       : "";
 
-  if (raw) {
-    const explicit = providers.find((provider) => provider.id === raw);
-    if (explicit) {
-      return explicit.id;
-    }
-  }
-
-  for (const provider of providers) {
+  for (const provider of params.providers) {
     if (!providerRequiresCredential(provider)) {
       if (!hasAutoDetectCredential(provider, params.config, params.fetch)) {
         continue;
@@ -262,43 +248,29 @@ function resolveWebFetchProvidersForOptions(
 export function resolveWebFetchDefinition(
   options?: ResolveWebFetchDefinitionParams,
 ): WebFetchDefinitionResolution {
-  const fetch = resolveWebProviderConfig(options?.config, "fetch") as
-    | NonNullable<WebFetchConfig>
-    | undefined;
+  const fetch = resolveFetchConfig(options?.config);
   if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
   const runtimeWebFetch =
     options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
   const providers = resolveWebFetchProvidersForOptions(options);
-  return resolveWebProviderDefinition({
+  if (providers.length === 0) {
+    return null;
+  }
+  const providerId =
+    options?.providerId ??
+    resolveConfiguredWebFetchProviderId({ fetch, providers }) ??
+    runtimeWebFetch?.selectedProvider ??
+    resolveAutoWebFetchProviderId({ config: options?.config, fetch, providers });
+  const provider = providers.find((entry) => entry.id === providerId);
+  if (!provider) {
+    return null;
+  }
+  const definition = provider.createTool({
     config: options?.config,
-    toolConfig: fetch as Record<string, unknown> | undefined,
+    fetchConfig: fetch as Record<string, unknown> | undefined,
     runtimeMetadata: runtimeWebFetch,
-    sandboxed: options?.sandboxed,
-    providerId:
-      options?.providerId ??
-      resolveConfiguredWebFetchProviderId({
-        fetch,
-        providers,
-      }),
-    providers,
-    resolveEnabled: ({ toolConfig, sandboxed }) =>
-      resolveWebFetchEnabled({
-        fetch: toolConfig as WebFetchConfig | undefined,
-        sandboxed,
-      }),
-    resolveAutoProviderId: ({ config, toolConfig, providers: providersLocal }) =>
-      resolveWebFetchProviderId({
-        config,
-        fetch: toolConfig as WebFetchConfig | undefined,
-        providers: providersLocal,
-      }),
-    createTool: ({ provider, config, toolConfig, runtimeMetadata }) =>
-      provider.createTool({
-        config,
-        fetchConfig: toolConfig,
-        runtimeMetadata,
-      }),
   });
+  return definition ? { provider, definition } : null;
 }

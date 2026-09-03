@@ -46,6 +46,7 @@ export const WORKER_PROTOCOL_METHODS = [
   "worker.github.publish",
   "worker.portal",
   "worker.computer",
+  "worker.skill-workshop",
 ] as const;
 export const WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE = "worker-transcript-commit-v1";
 export const WORKER_LIVE_EVENT_PROTOCOL_FEATURE = "worker-live-event-v1";
@@ -55,6 +56,8 @@ export const WORKER_SESSION_TOOLS_PROTOCOL_FEATURE = "worker-session-tools-v1";
 export const WORKER_GITHUB_PUBLICATION_PROTOCOL_FEATURE = "worker-github-publication-v1";
 export const WORKER_PORTAL_PROTOCOL_FEATURE = "worker-portal-v1";
 export const WORKER_PROTOCOL_FEATURES = [
+  "skill-resources-v1",
+  "worker-skill-workshop-v1",
   "worker-heartbeat-v1",
   WORKER_TRANSCRIPT_COMMIT_PROTOCOL_FEATURE,
   WORKER_LIVE_EVENT_PROTOCOL_FEATURE,
@@ -251,7 +254,7 @@ export const WorkerSessionToolResultSchema = closedObject({
   resultJson: Type.String({ minLength: 2, maxLength: WORKER_PROTOCOL_MAX_PAYLOAD_BYTES }),
 });
 
-const WorkerSessionToolResponseFrameSchema = Type.Union([
+export const WorkerSessionToolResponseFrameSchema = Type.Union([
   closedObject({
     type: Type.Literal("res"),
     id: WorkerFrameIdSchema,

@@ -26,12 +26,6 @@ import {
 const suite = createNewSessionPageE2eSuite();
 const SESSION_PLACEMENT_STARTUP_RUNTIME_REQUEST =
   /\/assets\/session-placement-startup\.runtime-[^/?]+\.js(?:\?.*)?$/;
-const cloudProfileRefreshProofDir = path.join(
-  process.cwd(),
-  ".artifacts",
-  "control-ui-e2e",
-  "cloud-profile-refresh-retention",
-);
 
 suite.define(() => {
   it("dispatches an optionless cloud profile without a machine override", async () => {
@@ -87,7 +81,7 @@ suite.define(() => {
         .toBe(false);
       expect(await place.getByText("Machine", { exact: true }).count()).toBe(0);
       expect(await place.locator('[data-value^="machine:"]').count()).toBe(0);
-      await captureUiProof(page, "optionless-cloud-profile.png");
+      await captureUiProof(suite, page, "optionless-cloud-profile.png");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("Use the configured machine size");
@@ -99,14 +93,21 @@ suite.define(() => {
 
   it("dispatches a cloud target before sending its first turn and shows placement", async () => {
     if (captureUiProofEnabled) {
-      await mkdir(cloudProfileRefreshProofDir, { recursive: true });
+      await mkdir(path.join(suite.artifactDir, "cloud-profile-refresh-retention"), {
+        recursive: true,
+      });
     }
     const context = await suite.browser.newContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
       ...(captureUiProofEnabled
-        ? { recordVideo: { dir: cloudProfileRefreshProofDir, size: { height: 900, width: 1280 } } }
+        ? {
+            recordVideo: {
+              dir: path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+              size: { height: 900, width: 1280 },
+            },
+          }
         : {}),
     });
     const page = await context.newPage();
@@ -273,7 +274,7 @@ suite.define(() => {
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("off");
       await thinkingSlider.press("End");
       await expect.poll(() => effortSelect.getAttribute("data-chat-thinking-value")).toBe("high");
-      await captureUiProof(page, "01-cloud-thinking-level.png");
+      await captureUiProof(suite, page, "01-cloud-thinking-level.png");
       await effortSelect.click();
       await expect
         .poll(() => effortSelect.evaluate((element) => element.closest("details")?.open ?? false))
@@ -328,7 +329,7 @@ suite.define(() => {
       await pollLocatorText(project.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs OpenClaw to the selected runner",
       );
-      await captureUiProof(page, "01-cloud-worker-target.png");
+      await captureUiProof(suite, page, "01-cloud-worker-target.png");
       await page.keyboard.press("Escape");
 
       const message = "fix the cloud-only failure";
@@ -362,7 +363,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cloudProfileRefreshProofDir, "01-before-refresh.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+            "01-before-refresh.png",
+          ),
         });
         await page.keyboard.press("Escape");
       }
@@ -383,7 +387,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cloudProfileRefreshProofDir, "02-refresh-pending.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+            "02-refresh-pending.png",
+          ),
         });
       }
       await gateway.rejectDeferred("environments.list", {
@@ -415,7 +422,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cloudProfileRefreshProofDir, "03-after-retry-exhaustion.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+            "03-after-retry-exhaustion.png",
+          ),
         });
       }
       await page.keyboard.press("Escape");
@@ -437,6 +447,7 @@ suite.define(() => {
       expect(create.params).not.toHaveProperty("cwd");
       await expect.poll(() => runtimeRequested).toBe(true);
       const startupStatus = await expectPendingSessionPlacementStartupBeforeRuntime(
+        suite,
         page,
         gateway,
         sessionKey,
@@ -453,7 +464,10 @@ suite.define(() => {
         await page.screenshot({
           animations: "disabled",
           fullPage: true,
-          path: path.join(cloudProfileRefreshProofDir, "04-session-dispatch.png"),
+          path: path.join(
+            path.join(suite.artifactDir, "cloud-profile-refresh-retention"),
+            "04-session-dispatch.png",
+          ),
         });
       }
       const describeRequestsAfterNavigation = (await gateway.getRequests("sessions.describe"))
@@ -468,7 +482,14 @@ suite.define(() => {
         label: string,
         includeNeutral = false,
       ) => {
-        await gateway.setMethodResponse("sessions.list", {
+        const placement = {
+          state,
+          generation,
+          createdAtMs: 1,
+          updatedAtMs: generation,
+          stateChangedAtMs: generation,
+        };
+        await gateway.setSessionsListResponse({
           count: includeNeutral ? 2 : 1,
           path: "",
           defaults: SESSION_LIST_DEFAULTS,
@@ -477,14 +498,10 @@ suite.define(() => {
               key: sessionKey,
               kind: "direct",
               label: "Cloud session",
+              sessionId: "session-cloud-e2e",
+              status: "running",
               updatedAt: Date.now(),
-              placement: {
-                state,
-                generation,
-                createdAtMs: 1,
-                updatedAtMs: generation,
-                stateChangedAtMs: generation,
-              },
+              placement,
             },
             ...(includeNeutral
               ? [
@@ -571,7 +588,7 @@ suite.define(() => {
       const promptBubbles = page.locator(".chat-group.user .chat-bubble", { hasText: message });
       await expect.poll(() => promptBubbles.count()).toBe(1);
 
-      await gateway.setMethodResponse("sessions.list", {
+      await gateway.setSessionsListResponse({
         count: 4,
         path: "",
         defaults: {},
@@ -580,9 +597,22 @@ suite.define(() => {
             key: sessionKey,
             kind: "direct",
             label: "Cloud session",
+            sessionId: "session-cloud-e2e",
+            status: "running",
             updatedAt: Date.now(),
             worktree: { id: "worktree-1", branch: "openclaw/cloud-e2e", repoRoot: WORKSPACE },
-            placement: { state: "active" },
+            placement: {
+              state: "active",
+              generation: 5,
+              createdAtMs: 1,
+              updatedAtMs: 5,
+              stateChangedAtMs: 5,
+              environmentId: "worker-1",
+              activeOwnerEpoch: 1,
+              workerBundleHash: "a".repeat(64),
+              workspaceBaseManifestRef: "manifest-1",
+              remoteWorkspaceDir: "/workspace",
+            },
           },
           {
             key: "agent:cloud:managed-e2e",
@@ -623,7 +653,7 @@ suite.define(() => {
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
-      await captureUiProof(page, "02-active-cloud-worker-stop.png");
+      await captureUiProof(suite, page, "02-active-cloud-worker-stop.png");
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
       expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
       expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);

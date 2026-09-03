@@ -4,6 +4,7 @@ import { chatQueueOrderKey, isMovableChatQueueItem } from "../../lib/chat/chat-q
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import {
   getChatAttachmentDataUrl,
   releaseChatAttachmentPayloads,
@@ -15,7 +16,7 @@ import {
   removeVisibleOrScopedQueuedMessageWithoutReleasing,
   type ChatQueueScopedSessionHost,
 } from "./chat-queue.ts";
-import { resolveStoredChatOutboxScope, storedChatOutboxScopeKey } from "./composer-persistence.ts";
+import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
 
 /**
  * The edited row stays in the queue, holding its own place, so the operator can
@@ -51,7 +52,7 @@ function currentQueuedMessageEditOwner(host: QueuedMessageEditHost) {
     return null;
   }
   return {
-    ...resolveStoredChatOutboxScope(host, host.sessionKey),
+    ...resolveUiConversationIdentity(host, host.sessionKey),
     gatewayOwner: storageTargetForGateway(host.settings?.gatewayUrl).gatewayOwner,
     recoveryScope: host.client?.recoveryScope?.trim() || undefined,
   };
@@ -105,7 +106,7 @@ export function isQueuedMessageBeingEdited(host: QueuedMessageEditHost, id: stri
       pane.chatQueuedEdit?.id === id &&
       pane.chatQueuedEdit.gatewayOwner === gatewayOwner &&
       storedChatOutboxScopeKey(pane.chatQueuedEdit) ===
-        storedChatOutboxScopeKey(resolveStoredChatOutboxScope(pane, pane.sessionKey)),
+        storedChatOutboxScopeKey(resolveUiConversationIdentity(pane, pane.sessionKey)),
   );
 }
 

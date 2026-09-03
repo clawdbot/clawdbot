@@ -17,7 +17,7 @@ type PlatformClaimParams = {
   reconciledPlatformSendStartedAt?: number;
 };
 
-export const PLATFORM_SEND_OWNER_LEASE_MS = 30_000;
+export const PLATFORM_SEND_OWNER_LEASE_MS = 60_000;
 
 /** Creates the owner published atomically with an immediate live delivery. */
 export function createInitialDeliveryProducerClaim(now = Date.now()) {

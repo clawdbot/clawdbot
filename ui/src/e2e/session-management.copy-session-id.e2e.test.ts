@@ -1,11 +1,12 @@
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   activateSelfRemovingControl,
   captureUiProof,
   createSessionManagementE2eSuite,
   controlUiSessionUrl,
   installMockGateway,
-  sessionRow,
+  openSessionMenuSubmenu,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
 
@@ -50,9 +51,10 @@ suite.define(() => {
       await row.getByRole("button", { name: "Open session menu: Copy session ID proof" }).click();
 
       const menuHost = page.locator("openclaw-session-menu");
-      const copyItem = menuHost.getByRole("menuitem", { name: "Copy session ID" });
+      await openSessionMenuSubmenu(page, "Copy");
+      const copyItem = menuHost.getByRole("menuitem", { name: "Session ID", exact: true });
       await expect.poll(() => copyItem.count()).toBe(1);
-      await captureUiProof(page, "copy-session-id-menu.png");
+      await captureUiProof(suite, page, "copy-session-id-menu.png");
 
       await activateSelfRemovingControl(copyItem);
 

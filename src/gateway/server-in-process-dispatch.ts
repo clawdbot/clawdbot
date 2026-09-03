@@ -78,6 +78,7 @@ async function waitForDispatch<T>(
   deadlineMs?: number,
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
+  onTimeout?: () => void,
 ): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
   let onAbort: (() => void) | undefined;
@@ -92,6 +93,7 @@ async function waitForDispatch<T>(
     const cancellation = new Promise<never>((_resolve, reject) => {
       if (remainingTimeoutMs !== undefined) {
         timeout = setTimeout(() => {
+          onTimeout?.();
           reject(new Error(`gateway request timeout for ${method}`));
         }, remainingTimeoutMs);
       }
@@ -128,6 +130,7 @@ export async function waitForGatewayDispatch<T>(
   timeoutMs?: number,
   signal?: AbortSignal,
   onSignalAbort?: () => Promise<void> | void,
+  onTimeout?: () => void,
 ): Promise<T> {
   return await waitForDispatch(
     method,
@@ -135,6 +138,7 @@ export async function waitForGatewayDispatch<T>(
     resolveDispatchDeadlineMs(timeoutMs),
     signal,
     onSignalAbort,
+    onTimeout,
   );
 }
 

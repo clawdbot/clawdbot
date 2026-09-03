@@ -4,6 +4,10 @@
  * Kept separate so hot Plugin SDK setup helpers never import plugin discovery.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  getOfficialExternalPluginCatalogManifest,
+} from "../../plugins/official-external-plugin-catalog.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "../../plugins/plugin-registry.js";
 import { getBundledChannelSetupPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
 import type { ChannelSetupPromotionSurface } from "./setup-promotion-helpers.js";
@@ -25,6 +29,12 @@ export function resolveDiscoveredChannelSetupPromotionSurface(
         plugin.packageManifest?.setupFeatures?.configPromotion === "preserve-root",
     )
   ) {
+    return { configPromotion: "preserve-root" };
+  }
+  const officialManifest = getOfficialExternalPluginCatalogManifest(
+    getOfficialExternalPluginCatalogEntry(channelKey) ?? {},
+  );
+  if (officialManifest?.setupFeatures?.configPromotion === "preserve-root") {
     return { configPromotion: "preserve-root" };
   }
   if (!hasBundledChannelPackageSetupFeature(channelKey, "configPromotion")) {

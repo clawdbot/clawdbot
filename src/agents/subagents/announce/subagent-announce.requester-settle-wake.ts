@@ -13,7 +13,11 @@ import {
   type DeliveryContext,
   normalizeDeliveryContext,
 } from "../../../utils/delivery-context.shared.js";
-import { INTERNAL_MESSAGE_CHANNEL } from "../../../utils/message-channel.js";
+import {
+  INTERNAL_MESSAGE_CHANNEL,
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../../utils/message-channel.js";
 import { buildAnnounceIdempotencyKey } from "../../announce-idempotency.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
@@ -51,6 +55,8 @@ const activeRequesterSettleWakeBatches = new Set<string>();
 function buildRequesterSettleWakeMessage(params: {
   findings?: string;
   requireVisibleReply: boolean;
+  modelRouteChange?: string;
+  preserveModelRouteNotice: boolean;
 }): string {
   return [
     "[Subagent Context] Every subagent spawned from this session has now settled — none are still running or awaiting completion delivery.",
@@ -59,6 +65,14 @@ function buildRequesterSettleWakeMessage(params: {
     params.requireVisibleReply
       ? "[Subagent Context] Child completion delivery is internal; the original user request still requires your visible final answer."
       : `[Subagent Context] Reply ONLY: ${SILENT_REPLY_TOKEN} only if you already delivered the consolidated final answer for this batch.`,
+    ...(params.modelRouteChange
+      ? [
+          params.modelRouteChange,
+          params.preserveModelRouteNotice
+            ? "[Subagent Context] Preserve this runtime-authored model-route change notice in your final answer."
+            : "[Subagent Context] Keep this runtime-authored model-route change notice internal on this shared surface.",
+        ]
+      : []),
     "",
     params.findings ??
       "(each child result was announced individually in earlier completion events)",
@@ -379,12 +393,18 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(params: {
       }),
     ),
   );
+  const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
+  const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
+  const terminalReply = currentSettledEntry.completion?.terminalReply;
+  const modelRouteChange =
+    terminalReply?.disposition === "visible" ? terminalReply.modelRouteChange : undefined;
+  const completionChannel = normalizeMessageChannel(directOrigin?.channel);
   const wakeMessage = buildRequesterSettleWakeMessage({
     findings,
     requireVisibleReply: requesterYieldedAfterDelivery,
+    modelRouteChange,
+    preserveModelRouteNotice: !completionChannel || !isDeliverableMessageChannel(completionChannel),
   });
-  const requesterSessionOrigin = normalizeDeliveryContext(params.requesterOrigin);
-  const directOrigin = resolveAnnounceOrigin(requesterEntry, requesterSessionOrigin);
   const wakeKeyBase = [
     `requester-settle:${requesterAgentId ?? "unknown"}:${requesterSessionKey}:${batchRunIds.join(",")}`,
     selectedState.rearmGeneration === undefined

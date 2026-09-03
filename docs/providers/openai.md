@@ -923,6 +923,15 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     The bundled `openai` plugin registers batch speech-to-text through
     OpenClaw's media-understanding transcription surface.
 
+    Batch transcription can use the selected OpenAI API-key or ChatGPT OAuth
+    profile on the standard transcription endpoint when the account permits it.
+    Configured models, prompts, and language hints work through the same request
+    path. Access and quota errors are reported without switching credential
+    classes; OAuth support does not imply included or unlimited transcription.
+    Custom endpoints and request overrides require an API-key profile.
+    See [Audio and voice notes](/nodes/audio#openai-transcription-alongside-chatgptcodex-oauth)
+    for selecting a separate audio API-key profile when desired.
+
     - Default model: `gpt-4o-transcribe`
     - Endpoint: OpenAI REST `/v1/audio/transcriptions`
     - Input path: multipart audio file upload
@@ -1046,8 +1055,7 @@ value into `plugins.entries.openai.config.personality` when that key is unset.
     and Voice Call use the Frameless Bidi
     `wss://api.openai.com/v1/live?model=...` endpoint with Platform API-key auth.
 
-    Use `gpt-live-1-codex` (recommended) or
-    `gpt-live-1-boulder-alpha`. The values `gpt-live-1` and
+    Use `gpt-live-1-codex`. The values `gpt-live-1` and
     `gpt-live-1-mini` are not valid on this route. Opt in explicitly with
     `talk.realtime.model`; `gpt-realtime-2.1` remains the GA default.
 

@@ -1684,10 +1684,10 @@ describe("buildOpenClawReleaseClawHubRuntimeState", () => {
 
     expect(state.verifierArgs).toEqual(["--skip-clawhub"]);
     expect(state.proofLines.normal).toBe(
-      "- plugin ClawHub publish: https://github.com/openclaw/openclaw/actions/runs/111",
+      "- plugin ClawHub publish: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/111",
     );
     expect(state.proofLines.bootstrap).toBe(
-      "- plugin ClawHub bootstrap: https://github.com/openclaw/openclaw/actions/runs/222",
+      "- plugin ClawHub bootstrap: not verified after a required ClawHub failure: https://github.com/openclaw/openclaw/actions/runs/222",
     );
   });
 });
@@ -1823,9 +1823,7 @@ exit 0
     const invocations = readFileSync(markerPath, "utf8");
     const resolvedRepoDir = realpathSync(repoDir);
     expect(invocations).toContain(`--workdir ${resolvedRepoDir}`);
-    expect(invocations).toContain(
-      `package pack ${join(resolvedRepoDir, "extensions/demo-plugin")}`,
-    );
+    expect(invocations).toContain("package pack .");
     expect(invocations).toContain("package publish ");
     expect(invocations).toContain(".tgz --tags latest");
     expect(invocations).toContain("--dry-run");

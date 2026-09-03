@@ -4,6 +4,10 @@ import { resolveGatewayServiceProbeHosts } from "../../daemon/gateway-service-pr
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import type { GatewayService } from "../../daemon/service.js";
 import type { PluginHealthErrorSummary } from "../../gateway/health/types.js";
+import {
+  createConfiguredGatewayLocalProbe,
+  type ConfiguredGatewayLocalProbe,
+} from "../../gateway/local-http-probe.js";
 import { classifyPortListener } from "../../infra/ports-format.js";
 import { inspectPortUsage } from "../../infra/ports-inspect.js";
 import type { PortUsage } from "../../infra/ports-types.js";
@@ -14,7 +18,7 @@ import {
 import { sleep } from "../../utils.js";
 import {
   confirmGatewayReachable,
-  resolveGatewayRestartProbeAuth,
+  resolveGatewayRestartProbeContext,
   type GatewayReachability,
   type GatewayRestartProbeAuth,
 } from "./restart-health-probe.js";
@@ -28,7 +32,9 @@ export {
   DEFAULT_RESTART_HEALTH_ATTEMPTS,
   DEFAULT_RESTART_HEALTH_DELAY_MS,
 } from "./restart-health.constants.js";
+export { waitForGatewayHttpReadiness } from "./restart-health-probe.js";
 export {
+  formatGatewayRestartFailure,
   renderGatewayPortHealthDiagnostics,
   renderRestartDiagnostics,
 } from "./restart-health-diagnostics.js";
@@ -124,6 +130,7 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   includeUnknownListenersAsStale?: boolean;
   probeAuth?: GatewayRestartProbeAuth;
+  configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
 }): Promise<GatewayRestartSnapshot> {
   const env = params.env ?? process.env;
@@ -146,6 +153,7 @@ export async function inspectGatewayRestart(params: {
         port: params.port,
         includeHealthDetails: requiresGatewayProbe,
         auth: params.probeAuth,
+        ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
       });
       probeError = reachability.probeError;
@@ -336,7 +344,11 @@ export async function waitForGatewayHealthyRestart(params: {
   const delayMs = params.delayMs ?? DEFAULT_RESTART_HEALTH_DELAY_MS;
   const standardDeadlineMs = attempts * delayMs;
 
-  const probeAuth = await resolveGatewayRestartProbeAuth(params.env).catch(() => undefined);
+  const probeContext = await resolveGatewayRestartProbeContext(params.env).catch(() => ({
+    auth: undefined,
+    config: {},
+  }));
+  const configuredProbe = createConfiguredGatewayLocalProbe(probeContext.config);
   const probeHosts =
     params.probeHosts ??
     (await resolveGatewayServiceProbeHosts({
@@ -350,7 +362,8 @@ export async function waitForGatewayHealthyRestart(params: {
     expectedVersion: params.expectedVersion,
     expectedBuildId: params.expectedBuildId,
     includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-    probeAuth,
+    probeAuth: probeContext.auth,
+    configuredProbe,
     probeHosts,
   });
 
@@ -442,7 +455,8 @@ export async function waitForGatewayHealthyRestart(params: {
       expectedVersion: params.expectedVersion,
       expectedBuildId: params.expectedBuildId,
       includeUnknownListenersAsStale: params.includeUnknownListenersAsStale,
-      probeAuth,
+      probeAuth: probeContext.auth,
+      configuredProbe,
       probeHosts,
     });
   }

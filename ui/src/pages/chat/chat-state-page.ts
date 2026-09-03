@@ -61,6 +61,7 @@ import {
   normalizeSidebarLayout,
   openSlot,
 } from "./sidebar-layout.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
 import { resetToolStream } from "./tool-stream.ts";
 
 type ChatPageElement = {
@@ -147,7 +148,7 @@ export function createPageState(
     sessions: context.sessions,
     hasPendingInitialTurn: (sessionKey: string) =>
       context.placementStartup.hasPendingTurn(sessionKey),
-    initialUserMessage: context.initialUserMessage,
+    chatSubmissions: context.chatSubmissions,
     settings,
     password: "",
     onboarding: false,
@@ -190,7 +191,7 @@ export function createPageState(
     chatEffectiveQueueMode: undefined,
     chatAttachments: [],
     chatRunId: null,
-    chatRunUsageById: new Map<string, number>(),
+    chatRunUsageById: new Map<string, RunOutputUsage>(),
     chatStream: null,
     chatStreamStartedAt: null,
     chatRunStartup: null,
@@ -376,7 +377,10 @@ export function createPageState(
       );
   };
   state.cancelQueuedChatMessageEdit = () => {
-    cancelQueuedMessageEdit(state);
+    if (cancelQueuedMessageEdit(state)) {
+      // Reconnect may have parked the drain on this local hold; Cancel does not write storage.
+      void resumeStoredChatOutboxes(state);
+    }
     renderLifecycle.invalidate();
   };
   state.updateSidebarLayout = (layout) => {

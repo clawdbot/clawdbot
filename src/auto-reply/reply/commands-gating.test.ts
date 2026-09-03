@@ -32,7 +32,8 @@ const resolveConfigWriteDeniedTextMock = vi.hoisted(() =>
 const isInternalMessageChannelMock = vi.hoisted(() => vi.fn(() => false));
 
 vi.mock("../../agents/agent-scope.js", () => ({
-  resolveSessionAgentId: vi.fn(() => "agent:main"),
+  resolveSessionAgentId: vi.fn(() => "main"),
+  resolveAgentDir: vi.fn(() => "/tmp/agent"),
 }));
 
 vi.mock("../../agents/bash-process-registry.js", () => ({
@@ -229,6 +230,7 @@ function buildParams(commandBody: string, cfg: OpenClawConfig): HandleCommandsPa
     directives: parseInlineSessionDirectives(""),
     elevated: { enabled: true, allowed: true, failures: [] },
     sessionKey: "agent:main:main",
+    agentId: "main",
     workspaceDir: "/tmp",
     defaultGroupActivation: () => "mention",
     resolvedVerboseLevel: "off",

@@ -3,6 +3,7 @@ import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 /** Exercises provider runtime loading, ordering, and manifest-backed discovery paths. */
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
@@ -11,6 +12,7 @@ import {
   expectCodexMissingAuthHint,
 } from "./provider-runtime.test-support.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
+import { withPluginRuntimeGenerationScope } from "./runtime/generation-scope.js";
 import type {
   AnyAgentTool,
   ProviderExternalAuthProfile,
@@ -229,6 +231,16 @@ function expectCalledOnce(...mocks: Array<{ mock: { calls: unknown[] } }>) {
   for (const mockFn of mocks) {
     expect(mockFn).toHaveBeenCalledTimes(1);
   }
+}
+
+function registerLoadedProviders(providers: ProviderPlugin[]) {
+  const registry = createEmptyPluginRegistry();
+  registry.providers = providers.map((provider) => ({
+    pluginId: provider.id,
+    provider,
+    source: "test",
+  }));
+  setActivePluginRegistry(registry);
 }
 
 function expectResolvedValues(
@@ -605,6 +617,7 @@ describe("provider-runtime", () => {
       id: DEMO_PROVIDER_ID,
       label: "Demo",
       auth: [],
+      classifyFailoverReason: () => "billing",
       prepareExtraParams: ({ extraParams }) => ({
         ...extraParams,
         fromActiveRegistry: true,
@@ -629,6 +642,13 @@ describe("provider-runtime", () => {
     ).toEqual({
       fromActiveRegistry: true,
     });
+    expect(
+      classifyProviderFailoverSignalWithPlugin({
+        provider: DEMO_PROVIDER_ID,
+        workspaceDir: "/tmp/workspace",
+        context: { provider: DEMO_PROVIDER_ID, status: 403, errorMessage: "fixture refusal" },
+      }),
+    ).toBe("billing");
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -669,12 +689,14 @@ describe("provider-runtime", () => {
   it("uses the prepared run registry without repeating provider discovery", () => {
     const provider: ProviderPlugin = {
       id: DEMO_PROVIDER_ID,
+      pluginId: "embedded-owner",
       label: "Prepared demo",
       auth: [],
+      classifyFailoverReason: () => "overloaded",
     };
     const registry = createEmptyPluginRegistry();
     registry.providers.push({
-      pluginId: DEMO_PROVIDER_ID,
+      pluginId: "registered-owner",
       provider,
       source: "test",
     });
@@ -686,8 +708,20 @@ describe("provider-runtime", () => {
       }),
     );
 
+    expect(
+      withPluginRuntimeRegistryScope(registry, () =>
+        classifyProviderFailoverSignalWithPlugin({
+          provider: DEMO_PROVIDER_ID,
+          workspaceDir: "/tmp/prepared-workspace",
+          context: { provider: DEMO_PROVIDER_ID, status: 403, errorMessage: "fixture refusal" },
+        }),
+      ),
+    ).toBe("overloaded");
     expect(resolved?.id).toBe(DEMO_PROVIDER_ID);
-    expect(resolved?.pluginId).toBe(DEMO_PROVIDER_ID);
+    expect(resolved?.pluginId).toBe("registered-owner");
+    expect(resolved).not.toBe(provider);
+    expect(resolved?.auth).toBe(provider.auth);
+    expect(resolved?.classifyFailoverReason).toBe(provider.classifyFailoverReason);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1045,15 +1079,30 @@ describe("provider-runtime", () => {
   });
 
   it("serves hook plugin lists from the active loaded registry without a scoped load", () => {
-    const provider: ProviderPlugin = { id: DEMO_PROVIDER_ID, label: "Demo", auth: [] };
+    const provider: ProviderPlugin = {
+      id: DEMO_PROVIDER_ID,
+      pluginId: "embedded-owner",
+      aliases: ["demo-alias"],
+      label: "Demo",
+      auth: [],
+    };
     const registry = createEmptyPluginRegistry();
     registry.plugins.push({ id: "demo-plugin", status: "loaded" } as never);
-    registry.providers.push({ pluginId: "demo-plugin", provider, source: "demo-plugin/index.js" });
+    registry.providers.push(
+      { pluginId: "other-plugin", provider, source: "other-plugin/index.js" },
+      { pluginId: "demo-plugin", provider, source: "demo-plugin/index.js" },
+    );
     setActivePluginRegistry(registry, "workspace-one", "default", "/tmp/work");
 
-    const plugins = resolveProviderPluginsForHooks({ onlyPluginIds: ["demo-plugin"] });
+    const plugins = resolveProviderPluginsForHooks({
+      onlyPluginIds: ["demo-plugin"],
+      providerRefs: ["demo-alias"],
+    });
 
     expect(plugins.map((plugin) => plugin.id)).toEqual([DEMO_PROVIDER_ID]);
+    expect(plugins[0]?.pluginId).toBe("demo-plugin");
+    expect(plugins[0]).not.toBe(provider);
+    expect(plugins[0]?.auth).toBe(provider.auth);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1735,8 +1784,64 @@ describe("provider-runtime", () => {
     });
   });
 
+  it.each([undefined, "openai", "custom-provider"])(
+    "does not discover providers while classifying an error for %s",
+    (provider) => {
+      expect(
+        classifyProviderFailoverSignalWithPlugin({
+          provider,
+          context: { provider, errorMessage: "bad request" },
+        }),
+      ).toBeUndefined();
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "openai"])(
+    "keeps an empty generation authoritative when classifying for %s",
+    (provider) => {
+      const classifyFailoverReason = vi.fn(() => "billing" as const);
+      registerLoadedProviders([
+        { id: "openai", label: "OpenAI", auth: [], classifyFailoverReason },
+      ]);
+      const config = {};
+      const metadataSnapshot = createPluginMetadataSnapshot({
+        config,
+        manifestRegistry: { plugins: [], diagnostics: [] },
+      });
+      withPluginRuntimeGenerationScope({ metadataSnapshot }, () => {
+        expect(
+          classifyProviderFailoverSignalWithPlugin({
+            provider,
+            context: { provider, errorMessage: "bad request" },
+          }),
+        ).toBeUndefined();
+        expect(resolveProviderPluginsForHooks({})).toEqual([]);
+      });
+      expect(classifyFailoverReason).not.toHaveBeenCalled();
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, "openai", "custom-provider"])(
+    "reuses active hooks after an empty request scope for %s",
+    (provider) => {
+      registerLoadedProviders([
+        { id: "openai", label: "OpenAI", auth: [], classifyFailoverReason: () => "billing" },
+      ]);
+      const result = withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+        classifyProviderFailoverSignalWithPlugin({
+          provider,
+          context: { provider, errorMessage: "bad request" },
+        }),
+      );
+      expect(result).toBe("billing");
+      expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("resolves failover classification through hook-only aliases", () => {
-    resolvePluginProvidersMock.mockReturnValue([
+    registerLoadedProviders([
       {
         id: "openai",
         label: "OpenAI",
@@ -1784,11 +1889,41 @@ describe("provider-runtime", () => {
     ).toBe("billing");
   });
 
-  it("falls back to all failover hooks when a provider owner cannot be resolved", () => {
+  it.each([
+    { result: "billing", expected: "billing", laterCalls: 0 },
+    { result: "context_overflow", expected: "context_overflow", laterCalls: 0 },
+    { result: "unsupported-reason", expected: undefined, laterCalls: 0 },
+    { result: {}, expected: undefined, laterCalls: 0 },
+    { result: true, expected: undefined, laterCalls: 0 },
+    { result: null, expected: "overloaded", laterCalls: 1 },
+    { result: undefined, expected: "overloaded", laterCalls: 1 },
+    { result: "", expected: "overloaded", laterCalls: 1 },
+  ])(
+    "normalizes external failover result $result without changing hook precedence",
+    ({ result, expected, laterCalls }) => {
+      const later = vi.fn(() => "overloaded" as const);
+      registerLoadedProviders([
+        // External JavaScript plugins are not constrained by the TypeScript return type.
+        {
+          id: "first",
+          label: "First",
+          auth: [],
+          classifyFailoverReason: () => result,
+        } as ProviderPlugin,
+        { id: "second", label: "Second", auth: [], classifyFailoverReason: later },
+      ]);
+      expect(
+        classifyProviderFailoverSignalWithPlugin({ context: { errorMessage: "fixture failure" } }),
+      ).toBe(expected);
+      expect(later).toHaveBeenCalledTimes(laterCalls);
+    },
+  );
+
+  it("consults loaded failover hooks when a provider owner cannot be resolved", () => {
     const classifyFailoverReason = vi.fn(({ errorMessage }) =>
       /\bconcurrency limit breached\b/i.test(errorMessage) ? "rate_limit" : undefined,
     );
-    resolvePluginProvidersMock.mockReturnValue([
+    registerLoadedProviders([
       {
         id: "together",
         label: "Together",
@@ -1830,7 +1965,7 @@ describe("provider-runtime", () => {
 
   it("does not broad-scan failover hooks for unresolved providers with structured descriptors", () => {
     const classifyFailoverReason = vi.fn(() => "overloaded" as const);
-    resolvePluginProvidersMock.mockReturnValue([
+    registerLoadedProviders([
       {
         id: "mantle",
         label: "Mantle",

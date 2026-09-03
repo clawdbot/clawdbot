@@ -25,8 +25,9 @@ action. Behavior varies by channel.
 - Set `remove: true` to remove one specific emoji (requires non-empty
   `emoji`).
 - On channels with status reactions, `trackToolCalls: true` on a reaction lets
-  the runtime reuse that reacted message for subsequent tool-progress
-  reactions during the same turn.
+  the runtime reuse that reacted message for the same turn's status lifecycle.
+  Discord keeps the chosen reaction stable during work and signals actual
+  failures, rather than cycling through tool-specific emoji.
 
 ## Channel behavior
 

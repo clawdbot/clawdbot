@@ -2,7 +2,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGoalDraftMode, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
-import { subscribeStoredChatOutboxChanges } from "../../lib/chat/outbox-store.ts";
+import {
+  captureChatOutboxAdmission,
+  subscribeStoredChatOutboxChanges,
+} from "../../lib/chat/outbox-store.ts";
+import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   admitStoredChatComposerQueueItem,
@@ -12,7 +16,6 @@ import {
   loadChatComposerSnapshot,
   persistChatComposerState,
   removeStoredChatComposerQueueItem,
-  resolveStoredChatOutboxScope,
   restoreChatComposerState,
   updateStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
@@ -88,7 +91,8 @@ describe("chat composer persistence", () => {
     expect(loadChatComposerSnapshot(state, "agent:lily:other")).toBeNull();
 
     const queued = reconnectItem("other-message", 1);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, queued)).toBe(true);
+    const queuedAdmission = captureChatOutboxAdmission(state, state.sessionKey, queued.agentId);
+    expect(admitStoredChatComposerQueueItem(state, queuedAdmission, queued)).toBe(true);
     expect(removeStoredChatComposerQueueItem(state, state.sessionKey, queued.id)).toBe(true);
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.goalMode).toEqual(goalMode);
   });
@@ -253,7 +257,12 @@ describe("chat composer persistence", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(persistChatComposerState({ ...state, chatMessage: "" })).toBe(true);
       expect(listener).toHaveBeenCalledTimes(2);
-      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      const originalAdmission = captureChatOutboxAdmission(
+        state,
+        state.sessionKey,
+        original.agentId,
+      );
+      expect(admitStoredChatComposerQueueItem(state, originalAdmission, original)).toBe(true);
       expect(listener).toHaveBeenCalledTimes(3);
       expect(
         updateStoredChatComposerQueueItem(
@@ -447,7 +456,11 @@ describe("chat composer persistence", () => {
     for (let index = 0; index < 20; index += 1) {
       const sessionKey = `agent:worker-${index}:thread`;
       expect(
-        admitStoredChatComposerQueueItem(state, sessionKey, reconnectItem(`scope-${index}`, index)),
+        admitStoredChatComposerQueueItem(
+          state,
+          captureChatOutboxAdmission(state, sessionKey),
+          reconnectItem(`scope-${index}`, index),
+        ),
       ).toBe(true);
     }
 
@@ -462,7 +475,12 @@ describe("chat composer persistence", () => {
   it("preserves a newer outbox attempt when a stale pane saves its draft", () => {
     const admitted = reconnectItem("shared", 1);
     const stalePane = createState({ chatQueue: [admitted] });
-    expect(admitStoredChatComposerQueueItem(stalePane, stalePane.sessionKey, admitted)).toBe(true);
+    const admittedAdmission = captureChatOutboxAdmission(
+      stalePane,
+      stalePane.sessionKey,
+      admitted.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(stalePane, admittedAdmission, admitted)).toBe(true);
     const attempted = { ...admitted, sendAttempts: 1 };
     expect(
       updateStoredChatComposerQueueItem(stalePane, stalePane.sessionKey, admitted, attempted),
@@ -487,8 +505,20 @@ describe("chat composer persistence", () => {
     const first = reconnectItem("first-pane", 1);
     const second = reconnectItem("second-pane", 2);
 
-    expect(admitStoredChatComposerQueueItem(createState(), "agent:lily:main", first)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(createState(), "agent:lily:main", second)).toBe(true);
+    expect(
+      admitStoredChatComposerQueueItem(
+        createState(),
+        captureChatOutboxAdmission(createState(), "agent:lily:main", first.agentId),
+        first,
+      ),
+    ).toBe(true);
+    expect(
+      admitStoredChatComposerQueueItem(
+        createState(),
+        captureChatOutboxAdmission(createState(), "agent:lily:main", second.agentId),
+        second,
+      ),
+    ).toBe(true);
 
     expect(
       loadChatComposerSnapshot(createState(), "agent:lily:main")?.queue.map((item) => item.id),
@@ -497,13 +527,23 @@ describe("chat composer persistence", () => {
 
   it("rejects conflicting admission of an existing item id", () => {
     const item = reconnectItem("same-id", 1);
-    expect(admitStoredChatComposerQueueItem(createState(), "agent:lily:main", item)).toBe(true);
+    expect(
+      admitStoredChatComposerQueueItem(
+        createState(),
+        captureChatOutboxAdmission(createState(), "agent:lily:main", item.agentId),
+        item,
+      ),
+    ).toBe(true);
 
     expect(
-      admitStoredChatComposerQueueItem(createState(), "agent:lily:main", {
-        ...item,
-        text: "different payload",
-      }),
+      admitStoredChatComposerQueueItem(
+        createState(),
+        captureChatOutboxAdmission(createState(), "agent:lily:main", item.agentId),
+        {
+          ...item,
+          text: "different payload",
+        },
+      ),
     ).toBe(false);
   });
 
@@ -529,7 +569,12 @@ describe("chat composer persistence", () => {
         change === "send-attempt"
           ? { ...original, sendAttempts: 1 }
           : { ...original, attachmentPayload: { ...reference, key: "replacement-payload" } };
-      expect(admitStoredChatComposerQueueItem(state, state.sessionKey, original)).toBe(true);
+      const originalAdmission = captureChatOutboxAdmission(
+        state,
+        state.sessionKey,
+        original.agentId,
+      );
+      expect(admitStoredChatComposerQueueItem(state, originalAdmission, original)).toBe(true);
       expect(updateStoredChatComposerQueueItem(state, state.sessionKey, original, successor)).toBe(
         true,
       );
@@ -559,8 +604,10 @@ describe("chat composer persistence", () => {
     const offlineGlobal = createState({ agentsList: null, hello: null, sessionKey: "global" });
     const mainItem = reconnectItem("unresolved-main", 1);
     const globalItem = reconnectItem("unresolved-global", 2);
-    expect(admitStoredChatComposerQueueItem(offlineMain, "main", mainItem)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(offlineGlobal, "global", globalItem)).toBe(true);
+    const mainAdmission = captureChatOutboxAdmission(offlineMain, "main", mainItem.agentId);
+    expect(admitStoredChatComposerQueueItem(offlineMain, mainAdmission, mainItem)).toBe(true);
+    const globalAdmission = captureChatOutboxAdmission(offlineGlobal, "global", globalItem.agentId);
+    expect(admitStoredChatComposerQueueItem(offlineGlobal, globalAdmission, globalItem)).toBe(true);
     expect(listStoredChatOutboxes(offlineMain)).toEqual([
       {
         sessionKey: "main",
@@ -644,7 +691,8 @@ describe("chat composer persistence", () => {
     });
     const item = reconnectItem("offline-workspace", 1);
     expect(persistChatComposerState(offline)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(offline, offline.sessionKey, item)).toBe(true);
+    const admission = captureChatOutboxAdmission(offline, offline.sessionKey, item.agentId);
+    expect(admitStoredChatComposerQueueItem(offline, admission, item)).toBe(true);
 
     const reconnected = createState({
       agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
@@ -691,7 +739,8 @@ describe("chat composer persistence", () => {
       sessionKey: "matrix:group:RoomCase",
     });
     const item = reconnectItem("opaque-room", 1);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(true);
+    const admission = captureChatOutboxAdmission(state, state.sessionKey, item.agentId);
+    expect(admitStoredChatComposerQueueItem(state, admission, item)).toBe(true);
 
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toEqual([
       { ...item, sessionKey: state.sessionKey },
@@ -769,7 +818,8 @@ describe("chat composer persistence", () => {
       sessionKey: "agent:main:workspace",
     });
     const item = reconnectItem("explicit-main-workspace", 1);
-    expect(admitStoredChatComposerQueueItem(offline, offline.sessionKey, item)).toBe(true);
+    const admission = captureChatOutboxAdmission(offline, offline.sessionKey, item.agentId);
+    expect(admitStoredChatComposerQueueItem(offline, admission, item)).toBe(true);
 
     const selectedWork = createState({
       agentsList: { defaultId: "work", mainKey: "workspace", scope: "global" },
@@ -792,7 +842,12 @@ describe("chat composer persistence", () => {
     });
     const queued = reconnectItem("custom-main-queue", 1);
     expect(persistChatComposerState(resolved)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(resolved, resolved.sessionKey, queued)).toBe(true);
+    const queuedAdmission = captureChatOutboxAdmission(
+      resolved,
+      resolved.sessionKey,
+      queued.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(resolved, queuedAdmission, queued)).toBe(true);
 
     const offline = createState({
       agentsList: null,
@@ -814,7 +869,7 @@ describe("chat composer persistence", () => {
       expect(
         admitStoredChatComposerQueueItem(
           createState({ sessionKey }),
-          sessionKey,
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey),
           reconnectItem(`custom-clear-capacity-${index}`, index + 2),
         ),
       ).toBe(true);
@@ -849,7 +904,12 @@ describe("chat composer persistence", () => {
     });
     const queued = reconnectItem("qualified-custom-main", 1);
     expect(persistChatComposerState(connected)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(connected, connected.sessionKey, queued)).toBe(true);
+    const queuedAdmission = captureChatOutboxAdmission(
+      connected,
+      connected.sessionKey,
+      queued.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(connected, queuedAdmission, queued)).toBe(true);
 
     const gatewayUrl = connected.settings?.gatewayUrl;
     const storageKey = storageKeyForGateway(gatewayUrl);
@@ -866,7 +926,7 @@ describe("chat composer persistence", () => {
       sessionKey: "agent:work:workspace",
     });
     expect(loadChatComposerDraftRevision(offline, offline.sessionKey)).toBeGreaterThan(0);
-    expect(resolveStoredChatOutboxScope(offline, offline.sessionKey)).toEqual({
+    expect(resolveUiConversationIdentity(offline, offline.sessionKey)).toEqual({
       agentId: "work",
       sessionKey: "agent:work:workspace",
     });
@@ -876,7 +936,7 @@ describe("chat composer persistence", () => {
     });
 
     const unrelatedRoute = "agent:work:project";
-    expect(resolveStoredChatOutboxScope(offline, unrelatedRoute)).toEqual({
+    expect(resolveUiConversationIdentity(offline, unrelatedRoute)).toEqual({
       agentId: "work",
       sessionKey: unrelatedRoute,
     });
@@ -900,11 +960,19 @@ describe("chat composer persistence", () => {
   it("migrates unresolved global input only to the selected agent", () => {
     const alpha = createState({ assistantAgentId: "alpha", sessionKey: "global" });
     const alphaItem = reconnectItem("alpha-existing", 1);
-    expect(admitStoredChatComposerQueueItem(alpha, "global", alphaItem)).toBe(true);
+    const alphaAdmission = captureChatOutboxAdmission(alpha, "global", alphaItem.agentId);
+    expect(admitStoredChatComposerQueueItem(alpha, alphaAdmission, alphaItem)).toBe(true);
 
     const unresolved = createState({ agentsList: null, hello: null, sessionKey: "global" });
     const unresolvedItem = reconnectItem("selected-work", 2);
-    expect(admitStoredChatComposerQueueItem(unresolved, "global", unresolvedItem)).toBe(true);
+    const unresolvedAdmission = captureChatOutboxAdmission(
+      unresolved,
+      "global",
+      unresolvedItem.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(unresolved, unresolvedAdmission, unresolvedItem)).toBe(
+      true,
+    );
 
     const selectedWork = createState({
       assistantAgentId: "work",
@@ -1022,14 +1090,22 @@ describe("chat composer persistence", () => {
     expect(
       admitStoredChatComposerQueueItem(
         createState({ assistantAgentId: "work", sessionKey: "global" }),
-        "global",
+        captureChatOutboxAdmission(
+          createState({ assistantAgentId: "work", sessionKey: "global" }),
+          "global",
+          workItem.agentId,
+        ),
         workItem,
       ),
     ).toBe(true);
     expect(
       admitStoredChatComposerQueueItem(
         createState({ assistantAgentId: "other", sessionKey: "global" }),
-        "global",
+        captureChatOutboxAdmission(
+          createState({ assistantAgentId: "other", sessionKey: "global" }),
+          "global",
+          otherItem.agentId,
+        ),
         otherItem,
       ),
     ).toBe(true);
@@ -1064,7 +1140,8 @@ describe("chat composer persistence", () => {
     });
     const item = reconnectItem("unresolved-with-quota", 1);
     expect(persistChatComposerState(unresolved)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(unresolved, "main", item)).toBe(true);
+    const admission = captureChatOutboxAdmission(unresolved, "main", item.agentId);
+    expect(admitStoredChatComposerQueueItem(unresolved, admission, item)).toBe(true);
     vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new DOMException("quota exceeded", "QuotaExceededError");
     });
@@ -1087,8 +1164,14 @@ describe("chat composer persistence", () => {
     });
     const bare = reconnectItem("bare-configured", 1);
     const qualified = reconnectItem("qualified-configured", 2);
-    expect(admitStoredChatComposerQueueItem(state, "workspace", bare)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(state, "agent:work:workspace", qualified)).toBe(true);
+    const bareAdmission = captureChatOutboxAdmission(state, "workspace", bare.agentId);
+    expect(admitStoredChatComposerQueueItem(state, bareAdmission, bare)).toBe(true);
+    const qualifiedAdmission = captureChatOutboxAdmission(
+      state,
+      "agent:work:workspace",
+      qualified.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(state, qualifiedAdmission, qualified)).toBe(true);
 
     expect(loadChatComposerSnapshot(state, "global")?.queue.map((item) => item.id)).toEqual([
       "bare-configured",
@@ -1139,8 +1222,10 @@ describe("chat composer persistence", () => {
     const state = createState();
     const older = reconnectItem("inactive-a", 1);
     const newer = reconnectItem("inactive-b", 2);
-    expect(admitStoredChatComposerQueueItem(state, "agent:alpha:thread:1", older)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(state, "agent:beta:thread:2", newer)).toBe(true);
+    const olderAdmission = captureChatOutboxAdmission(state, "agent:alpha:thread:1", older.agentId);
+    expect(admitStoredChatComposerQueueItem(state, olderAdmission, older)).toBe(true);
+    const newerAdmission = captureChatOutboxAdmission(state, "agent:beta:thread:2", newer.agentId);
+    expect(admitStoredChatComposerQueueItem(state, newerAdmission, newer)).toBe(true);
 
     expect(listStoredChatOutboxes(state)).toEqual([
       {
@@ -1183,9 +1268,22 @@ describe("chat composer persistence", () => {
       ...reconnectItem("executing-command", 3),
       sendState: "executing-command",
     };
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, sending)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, waitingModel)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, executingCommand)).toBe(true);
+    const sendingAdmission = captureChatOutboxAdmission(state, state.sessionKey, sending.agentId);
+    expect(admitStoredChatComposerQueueItem(state, sendingAdmission, sending)).toBe(true);
+    const waitingModelAdmission = captureChatOutboxAdmission(
+      state,
+      state.sessionKey,
+      waitingModel.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(state, waitingModelAdmission, waitingModel)).toBe(true);
+    const executingCommandAdmission = captureChatOutboxAdmission(
+      state,
+      state.sessionKey,
+      executingCommand.agentId,
+    );
+    expect(
+      admitStoredChatComposerQueueItem(state, executingCommandAdmission, executingCommand),
+    ).toBe(true);
 
     expect(loadChatComposerSnapshot(state, state.sessionKey)?.queue).toEqual([
       { ...sending, sendState: "waiting-reconnect", sessionKey: state.sessionKey, agentId: "lily" },
@@ -1208,7 +1306,11 @@ describe("chat composer persistence", () => {
   it("scopes composer state and outboxes by gateway", () => {
     const state = createState({ chatMessage: "gateway-local draft" });
     persistChatComposerState(state);
-    admitStoredChatComposerQueueItem(state, state.sessionKey, reconnectItem("gateway-local", 1));
+    admitStoredChatComposerQueueItem(
+      state,
+      captureChatOutboxAdmission(state, state.sessionKey),
+      reconnectItem("gateway-local", 1),
+    );
     const otherGateway = createState({
       settings: { gatewayUrl: "ws://other-gateway.test/control" },
     });
@@ -1237,9 +1339,15 @@ describe("chat composer persistence", () => {
     const firstItem = reconnectItem("first-long-gateway", 1);
     const secondItem = reconnectItem("second-long-gateway", 2);
     expect(persistChatComposerState(first)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(first, first.sessionKey, firstItem)).toBe(true);
+    const firstAdmission = captureChatOutboxAdmission(first, first.sessionKey, firstItem.agentId);
+    expect(admitStoredChatComposerQueueItem(first, firstAdmission, firstItem)).toBe(true);
     expect(persistChatComposerState(second)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(second, second.sessionKey, secondItem)).toBe(true);
+    const secondAdmission = captureChatOutboxAdmission(
+      second,
+      second.sessionKey,
+      secondItem.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(second, secondAdmission, secondItem)).toBe(true);
 
     expect(loadChatComposerSnapshot(first, first.sessionKey)).toEqual({
       draft: "first gateway draft",
@@ -1320,7 +1428,7 @@ describe("chat composer persistence", () => {
       expect(
         admitStoredChatComposerQueueItem(
           createState({ sessionKey }),
-          sessionKey,
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey),
           reconnectItem(`queued-${index}`, index),
         ),
       ).toBe(true);
@@ -1336,7 +1444,10 @@ describe("chat composer persistence", () => {
     expect(
       admitStoredChatComposerQueueItem(
         createState({ sessionKey: twentiethSessionKey }),
-        twentiethSessionKey,
+        captureChatOutboxAdmission(
+          createState({ sessionKey: twentiethSessionKey }),
+          twentiethSessionKey,
+        ),
         reconnectItem("queued-19", 19),
       ),
     ).toBe(true);
@@ -1358,7 +1469,10 @@ describe("chat composer persistence", () => {
     expect(
       admitStoredChatComposerQueueItem(
         createState({ sessionKey: overflowSessionKey }),
-        overflowSessionKey,
+        captureChatOutboxAdmission(
+          createState({ sessionKey: overflowSessionKey }),
+          overflowSessionKey,
+        ),
         reconnectItem("queued-20", 20),
       ),
     ).toBe(false);
@@ -1376,7 +1490,12 @@ describe("chat composer persistence", () => {
     });
     const queued = reconnectItem("resolved-work-queue", 1);
     expect(persistChatComposerState(resolved)).toBe(true);
-    expect(admitStoredChatComposerQueueItem(resolved, resolved.sessionKey, queued)).toBe(true);
+    const queuedAdmission = captureChatOutboxAdmission(
+      resolved,
+      resolved.sessionKey,
+      queued.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(resolved, queuedAdmission, queued)).toBe(true);
 
     const offline = createState({ sessionKey: "main", chatMessage: "stale resolved draft" });
     expect(persistChatComposerState(offline)).toBe(true);
@@ -1402,7 +1521,7 @@ describe("chat composer persistence", () => {
       expect(
         admitStoredChatComposerQueueItem(
           createState({ sessionKey }),
-          sessionKey,
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey),
           reconnectItem(`clear-fence-capacity-${index}`, index + 2),
         ),
       ).toBe(true);
@@ -1443,7 +1562,7 @@ describe("chat composer persistence", () => {
       expect(
         admitStoredChatComposerQueueItem(
           createState({ sessionKey }),
-          sessionKey,
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey),
           reconnectItem(`capacity-${index}`, index),
         ),
       ).toBe(true);
@@ -1469,7 +1588,7 @@ describe("chat composer persistence", () => {
       expect(
         admitStoredChatComposerQueueItem(
           createState({ sessionKey }),
-          sessionKey,
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey),
           reconnectItem(`queue-only-${index}`, index),
         ),
       ).toBe(true);
@@ -1487,7 +1606,12 @@ describe("chat composer persistence", () => {
       ),
     ).toBe(true);
     const sameScope = reconnectItem("same-scope-queue", 21);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, sameScope)).toBe(true);
+    const sameScopeAdmission = captureChatOutboxAdmission(
+      state,
+      state.sessionKey,
+      sameScope.agentId,
+    );
+    expect(admitStoredChatComposerQueueItem(state, sameScopeAdmission, sameScope)).toBe(true);
     expect(loadChatComposerSnapshot(state, state.sessionKey)).toEqual({
       draft: "",
       queue: [{ ...sameScope, sessionKey: state.sessionKey, agentId: "lily" }],
@@ -1511,9 +1635,13 @@ describe("chat composer persistence", () => {
     const outboxes = Array.from({ length: 20 }, (_, index) => {
       const sessionKey = `agent:lily:failed-fence:${index}`;
       const item = reconnectItem(`failed-fence-${index}`, index);
-      expect(admitStoredChatComposerQueueItem(createState({ sessionKey }), sessionKey, item)).toBe(
-        true,
-      );
+      expect(
+        admitStoredChatComposerQueueItem(
+          createState({ sessionKey }),
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey, item.agentId),
+          item,
+        ),
+      ).toBe(true);
       return { item, sessionKey };
     });
     expect(loadChatComposerSnapshot(baseline, baseline.sessionKey)).toBeNull();
@@ -1590,9 +1718,13 @@ describe("chat composer persistence", () => {
     const outboxes = Array.from({ length: 20 }, (_, index) => {
       const sessionKey = `agent:lily:stale-fence:${index}`;
       const item = reconnectItem(`stale-fence-${index}`, index);
-      expect(admitStoredChatComposerQueueItem(createState({ sessionKey }), sessionKey, item)).toBe(
-        true,
-      );
+      expect(
+        admitStoredChatComposerQueueItem(
+          createState({ sessionKey }),
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey, item.agentId),
+          item,
+        ),
+      ).toBe(true);
       return { item, sessionKey };
     });
     expect(loadChatComposerSnapshot(baseline, baseline.sessionKey)).toBeNull();
@@ -1645,9 +1777,13 @@ describe("chat composer persistence", () => {
     const outboxes = Array.from({ length: 20 }, (_, index) => {
       const sessionKey = `agent:lily:failed-revert:${index}`;
       const item = reconnectItem(`failed-revert-${index}`, index);
-      expect(admitStoredChatComposerQueueItem(createState({ sessionKey }), sessionKey, item)).toBe(
-        true,
-      );
+      expect(
+        admitStoredChatComposerQueueItem(
+          createState({ sessionKey }),
+          captureChatOutboxAdmission(createState({ sessionKey }), sessionKey, item.agentId),
+          item,
+        ),
+      ).toBe(true);
       return { item, sessionKey };
     });
     expect(loadChatComposerSnapshot(state, state.sessionKey)).toBeNull();
@@ -1689,7 +1825,8 @@ describe("chat composer persistence", () => {
     vi.stubGlobal("sessionStorage", storage);
     const state = createState();
     const item = reconnectItem("readable-after-quota", 1);
-    expect(admitStoredChatComposerQueueItem(state, state.sessionKey, item)).toBe(true);
+    const admission = captureChatOutboxAdmission(state, state.sessionKey, item.agentId);
+    expect(admitStoredChatComposerQueueItem(state, admission, item)).toBe(true);
     vi.spyOn(storage, "setItem").mockImplementation(() => {
       throw new DOMException("quota exceeded", "QuotaExceededError");
     });

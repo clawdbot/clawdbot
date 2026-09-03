@@ -441,9 +441,9 @@ describe("gateway chat metadata lifecycle composition", () => {
         }
         const expectNativeAvailable = async (available: boolean) => {
           const expected = { models: expectedModels(available) };
-          await expect(
-            lifecycle.readStartup({ agentId: "main", readPolicy: "ready" }),
-          ).resolves.toMatchObject({ metadata: expected });
+          const catalogs = await lifecycle.readStartup({ agentId: "main", readPolicy: "ready" });
+          expect(catalogs?.sessionModelCatalog).toBe(catalogs?.defaultModelCatalog);
+          expect(catalogs).not.toHaveProperty("metadata");
           await expect(lifecycle.read({ agentId: "main" })).resolves.toMatchObject(expected);
           await expect(lifecycle.readStartup({ agentId: "main" })).resolves.toMatchObject({
             metadata: expected,
@@ -497,13 +497,21 @@ describe("gateway chat metadata lifecycle composition", () => {
             ? []
             : [expect.objectContaining({ id: "codex-latest", available: false })],
         });
+        const lockedStartup = await lifecycle.readStartup({
+          agentId: "main",
+          sessionEntry: lockedSession,
+        });
+        expect(lockedStartup?.metadata).toEqual(lockedMetadata);
         await expect(
           lifecycle.readStartup({
             agentId: "main",
             sessionEntry: lockedSession,
             readPolicy: "ready",
           }),
-        ).resolves.toMatchObject({ metadata: lockedMetadata });
+        ).resolves.toEqual({
+          sessionModelCatalog: lockedStartup?.sessionModelCatalog,
+          defaultModelCatalog: lockedStartup?.defaultModelCatalog,
+        });
 
         currentConfig = { ...nativeConfig };
         await lifecycle.refresh();

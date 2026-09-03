@@ -123,11 +123,18 @@ const codexStatusModel: ModelDefinitionConfig = {
   maxTokens: 128_000,
 };
 
-async function buildStatusReplyForTest(params: { sessionKey?: string; verbose?: boolean }) {
-  const commandParams = buildCommandTestParams("/status", baseCfg);
+async function buildStatusReplyForTest(params: {
+  sessionKey?: string;
+  agentId?: string;
+  cfg?: OpenClawConfig;
+  verbose?: boolean;
+}) {
+  const cfg = params.cfg ?? baseCfg;
+  const commandParams = buildCommandTestParams("/status", cfg);
   const sessionKey = params.sessionKey ?? commandParams.sessionKey;
   return await buildStatusReply({
-    cfg: baseCfg,
+    cfg,
+    agentId: params.agentId,
     command: commandParams.command,
     sessionEntry: commandParams.sessionEntry,
     sessionKey,
@@ -465,6 +472,45 @@ describe("buildStatusReply subagent summary", () => {
 
     expect(reply?.text).toContain("📌 Tasks: 2 active · 2 total");
     expect(reply?.text).toMatch(/📌 Tasks: 2 active · 2 total · (subagent|cron) · /);
+  });
+
+  it.each(["research", "ops"])("isolates global task status for %s", async (agentId) => {
+    for (const requesterAgentId of ["research", "ops", undefined]) {
+      const executorAgentId = requesterAgentId === "research" ? "ops" : "research";
+      createRunningTaskRunCore({
+        runtime: "cli",
+        requesterSessionKey: "global",
+        requesterAgentId,
+        agentId: executorAgentId,
+        childSessionKey: `agent:${executorAgentId}:subagent:${requesterAgentId ?? "unknown"}`,
+        runId: `global-status-task-${requesterAgentId ?? "unknown"}`,
+        task: `${requesterAgentId ?? "unknown"} private task`,
+      });
+    }
+
+    const reply = await buildStatusReplyForTest({
+      sessionKey: "global",
+      agentId,
+      cfg: {
+        ...baseCfg,
+        session: { scope: "global" },
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { sandbox: { mode: "all" } },
+            ops: { sandbox: { mode: "off" } },
+          },
+        },
+      },
+    });
+
+    expect(reply?.text).toContain("📌 Tasks: 1 active · 1 total");
+    expect(reply?.text).toContain(`${agentId} private task`);
+    expect(reply?.text).not.toContain(
+      `${agentId === "research" ? "ops" : "research"} private task`,
+    );
+    expect(reply?.text).not.toContain("unknown private task");
+    expect(reply?.text).toContain(`Execution: ${agentId === "research" ? "docker/all" : "direct"}`);
   });
 
   it("hides stale completed task rows from the session task line", async () => {

@@ -3,10 +3,11 @@ import { initialState, Task, TaskStatus } from "@lit/task";
 import { html } from "lit";
 import { state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { renderAgentScopeControl } from "../../components/agent-scope-control.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { watchAgentScope } from "../../lib/agents/index.ts";
@@ -396,11 +397,10 @@ class TasksPage extends OpenClawLightDomElement {
   override render() {
     const fallbackAgentId = resolveSessionNavigationAgentId(this.context);
     return html`
-      <section class="content-header content-header--page">
-        <div>
-          <div class="page-title">${titleForRoute("tasks")}</div>
-        </div>
-        <div class="page-header-actions">
+      ${renderSettingsPageHeader({
+        title: titleForRoute("tasks"),
+        subtitle: subtitleForRoute("tasks"),
+        actions: html`
           ${renderAgentScopeControl({
             agents: this.context.agents.state.agentsList?.agents ?? [],
             selection: this.context.agentSelection,
@@ -415,8 +415,8 @@ class TasksPage extends OpenClawLightDomElement {
               ? t("common.refreshing")
               : t("common.refresh")}
           </button>
-        </div>
-      </section>
+        `,
+      })}
       ${renderSettingsWorkspace(
         renderTasks({
           basePath: this.context.basePath,

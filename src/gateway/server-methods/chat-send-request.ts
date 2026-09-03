@@ -13,6 +13,10 @@ import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  SessionPermissionMode,
+  SessionToolOverrides,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isBtwRequestText } from "../../auto-reply/reply/btw-command.js";
 import type { SessionGoalOperation } from "../../config/sessions/goals-operations.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
@@ -61,6 +65,8 @@ type ChatSendRequestParams = {
   suppressCommandInterpretation?: boolean;
   expectedLeafEntryId?: string | null;
   expectedSessionRoutingContract?: string;
+  expectedPermissionMode?: SessionPermissionMode | null;
+  expectedToolOverrides?: SessionToolOverrides | null;
   idempotencyKey: string;
 };
 

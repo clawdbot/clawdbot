@@ -5,7 +5,7 @@ import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-run
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { filterConsolidationCandidates } from "./dreaming-consolidation-candidates.js";
-import { applyMemoryConsolidationPlan, consolidateMemory } from "./dreaming-consolidation.js";
+import { applyMemoryConsolidationPlan } from "./dreaming-consolidation.js";
 import {
   configureMemoryCoreDreamingState,
   DREAMING_MEMORY_BACKUP_NAMESPACE,
@@ -13,13 +13,14 @@ import {
 } from "./dreaming-state.js";
 import { buildPromotionRecallAnnotations } from "./short-term-promotion-metadata.js";
 import {
-  applyShortTermPromotions,
   rankShortTermPromotionCandidates,
   recordShortTermRecalls,
   type PromotionCandidate,
 } from "./short-term-promotion.js";
 import {
+  applyShortTermPromotionsForTests as applyShortTermPromotions,
   configureMemoryCoreDreamingStateForTests,
+  consolidateMemoryForTests as consolidateMemory,
   createMemoryCoreTestHarness,
   shortTermTestState,
 } from "./test-helpers.js";
@@ -186,7 +187,7 @@ describe("memory consolidation", () => {
       ([options]) => (options as { sessionKey: string }).sessionKey,
     );
     expect(new Set(sessionKeys).size).toBe(2);
-    expect(sessionKeys.every((key) => key.startsWith("dreaming-narrative-"))).toBe(true);
+    expect(sessionKeys.every((key) => key.startsWith("agent:memory-core-test:"))).toBe(true);
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
   });
 

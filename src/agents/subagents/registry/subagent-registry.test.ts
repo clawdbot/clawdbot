@@ -63,6 +63,7 @@ import {
 } from "./subagent-lifecycle-events.js";
 import { countPendingDescendantRuns } from "./subagent-registry-read.js";
 import { createSubagentRunManager } from "./subagent-registry-run-manager.js";
+import { saveSubagentRegistryChangesToSqlite } from "./subagent-registry.store.sqlite.js";
 import type {
   ContextEngineSubagentEndedParams,
   SubagentRunRecord,
@@ -2021,7 +2022,7 @@ describe("subagent registry seam flow", () => {
     expect(mod.getSubagentRunByRunId(runId)?.execution.endedAt).toBeUndefined();
   });
 
-  it("requeues durable requester-settle obligations after a worker error", async () => {
+  it("settles a requester-settle wake rejected before attempt admission", async () => {
     const endedAt = Date.now() - 1_000;
     mod.addSubagentRunForTests({
       runId: "run-settle-retry",
@@ -2042,10 +2043,13 @@ describe("subagent registry seam flow", () => {
     );
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
 
+    expect(mod.getSubagentRunByRunId("run-settle-retry")).toMatchObject({
+      delivery: { status: "delivered" },
+      requesterSettleWake: undefined,
+    });
+
     await mod.testing.sweepOnceForTests();
-    await waitForFast(() =>
-      expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(2),
-    );
+    expect(mocks.maybeWakeRequesterAfterAllChildrenSettled).toHaveBeenCalledTimes(1);
   });
 
   it("keeps runs active instead of terminally failing on recoverable wait transport errors", async () => {
@@ -3747,6 +3751,22 @@ describe("subagent registry seam flow", () => {
       },
       expectedReason: "subagent-error",
       label: "blocked wait announce",
+    },
+    {
+      name: "announces terminal failures whose diagnostics resemble transport errors",
+      runId: "run-diagnostic-transport-wait",
+      task: "report failed child",
+      wait: {
+        status: "error",
+        error: "child exited with code 1\nstderr: socket hang up",
+        livenessState: undefined,
+      },
+      expectedOutcome: {
+        status: "error",
+        error: "child exited with code 1\nstderr: socket hang up",
+      },
+      expectedReason: "subagent-error",
+      label: "diagnostic transport wait announce",
     },
     {
       name: "announces provider hard timeout wait snapshots as timeouts despite blocked metadata",
@@ -5759,6 +5779,10 @@ describe("subagent registry seam flow", () => {
   });
 
   it("retains delete-mode successful completions through the delivery deadline", async () => {
+    const persist = (runs: Map<string, SubagentRunRecord>, runIds?: readonly string[]) =>
+      saveSubagentRegistryChangesToSqlite(runs, runIds ?? [...runs.keys()]);
+    mocks.persistSubagentRunsToDisk.mockImplementation(persist);
+    mocks.persistSubagentRunsToDiskOrThrow.mockImplementation(persist);
     mocks.runSubagentAnnounceFlow.mockResolvedValue("retryable");
     const endedAt = Date.parse("2026-03-24T12:00:00Z");
     mocks.callGateway.mockResolvedValueOnce({

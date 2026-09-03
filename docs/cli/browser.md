@@ -178,8 +178,13 @@ pairings continue to use the relay on the browser-node host, while explicit
 `--gateway-url` pairings remain direct-remote and manual-only.
 
 The advanced manual `extension pair` command without `--gateway-url` retains
-the host-local `/extension` relay URL. It does not wake Browser control, so the
-selected profile relay must already be running before the extension connects.
+the host-local `/extension` relay URL. With the native host installed,
+**Automatic local setup** enabled, and an extension build that supports relay
+wake-up, reconnecting can start a standalone relay on the saved pairing's
+configured port. This does not start Gateway browser control: authenticated CDP
+clients can use the standalone relay without a Gateway, but `openclaw browser`
+actions still require one. For source-checkout testing, load the managed unpacked
+copy from the same OpenClaw installation.
 
 `extension cdp --legacy-bearer` is a temporary migration escape hatch. It
 prints the old Bearer header with a warning only while

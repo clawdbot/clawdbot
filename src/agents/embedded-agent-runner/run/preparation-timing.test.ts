@@ -4,11 +4,17 @@ import { join } from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { flushDiagnosticsTimeline } from "../../../infra/diagnostics-timeline.js";
 import { createEmbeddedAttemptPreparation } from "./attempt-preparation.js";
 import { measureEmbeddedAgentPreparation } from "./preparation-timing.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = createTempDirTracker();
+
+afterEach(() => {
+  flushDiagnosticsTimeline();
+  tempDirs.cleanup();
+});
 
 async function createTimelineEnv() {
   const dir = tempDirs.make("openclaw-agent-preparation-");
@@ -22,6 +28,7 @@ async function createTimelineEnv() {
 }
 
 async function readTimeline(path: string) {
+  flushDiagnosticsTimeline();
   return (await readFile(path, "utf8"))
     .trim()
     .split("\n")

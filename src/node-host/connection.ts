@@ -12,6 +12,7 @@ import {
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import type { NodeHostClient } from "./client.js";
 import type { prepareNodeHostRuntime, NodeHostInventory } from "./runtime.js";
 
@@ -345,6 +346,15 @@ export function startNodeHostConnection({
     );
   };
 
+  const onWorkerHostingDisabled = (reason: string) => {
+    workerHostingEnabled = false;
+    writeStderrLine(`node host worker hosting disabled: ${redactSensitiveText(reason)}`);
+    publishRunnerInventory();
+  };
+  // Preparation failures have no supervisor left to report them. Emit once before hello.
+  if (prepared.workerHostingDisabledReason) {
+    onWorkerHostingDisabled(prepared.workerHostingDisabledReason);
+  }
   const disconnect = () => {
     retireGatewayConnection();
     runtime.updateGatewayConnection();
@@ -360,11 +370,7 @@ export function startNodeHostConnection({
       workerCapacity = capacity;
       publishRunnerInventory();
     },
-    onWorkerHostingDisabled: (reason) => {
-      workerHostingEnabled = false;
-      writeStderrLine(`node host worker hosting disabled: ${reason}`);
-      publishRunnerInventory();
-    },
+    onWorkerHostingDisabled,
     onManifestChanged: (manifest) => {
       retireGatewayConnection();
       onManifestChanged(manifest);

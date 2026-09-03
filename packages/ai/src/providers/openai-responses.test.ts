@@ -66,6 +66,7 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.configs).toHaveLength(1);
     expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
+    expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });
   });
 
   it("fails closed before constructing an OpenAI client for another provider without an endpoint", async () => {

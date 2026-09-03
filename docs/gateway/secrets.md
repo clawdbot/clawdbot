@@ -115,6 +115,10 @@ One object shape everywhere:
 { source: "env" | "file" | "exec" | "store", provider: "default", id: "..." }
 ```
 
+`env` and `store` refs have an implicit provider at their source's effective default alias: `secrets.defaults.env` or `secrets.defaults.store`, falling back to `default` when unset. A matching same-source `secrets.providers` entry takes precedence; otherwise, the ref uses the built-in reader without a provider entry.
+
+Other aliases and all `file`/`exec` refs require a registered `secrets.providers` entry with the same `source`. Changing a source's default does not rewrite explicit refs: a ref that still names `default` after an override must match a registered same-source provider, or resolution fails.
+
 <Tabs>
   <Tab title="env">
     ```json5
@@ -786,6 +790,7 @@ Behavior:
 - A strict startup failure never emits a degraded event, because runtime never became active. A successful startup with cold owners logs the owner degradation but does not emit a reloader event.
 - Ref-scoped startup and reload failures emit a structured `SECRETS_DEGRADED` warning for each affected owner. Provider-scoped outages emit one `SECRETS_PROVIDER_DEGRADED` warning with the provider and complete affected-owner list instead of repeating the provider failure per owner. Warnings include a redacted reason, `cold` or `stale` owner state, and the `openclaw secrets reload` retry hint. They never include resolved values or SecretRef ids.
 - `openclaw doctor` lists cold and stale owners with their affected config paths, redacted reason, and retry guidance.
+- Channel health and status keep cold accounts visible as configured but unavailable, alongside healthy accounts. Read-only inspection does not resolve inactive credentials or probe cold accounts. `/healthz` still reports Gateway liveness; `/readyz` may report the affected channel as failing until it recovers. Restore the secret, then run `openclaw secrets reload`.
 
 ## Command-path resolution
 

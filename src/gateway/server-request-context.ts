@@ -47,11 +47,15 @@ type GatewayRequestContextParams = {
   isTerminalEnabled: GatewayRequestContext["isTerminalEnabled"];
   execApprovalManager: GatewayRequestContext["execApprovalManager"];
   questionManager?: GatewayRequestContext["questionManager"];
-  cancelRunBoundApprovals?: (runId: string, context: GatewayRequestContext) => number;
+  cancelRunBoundApprovals?: (
+    target: Parameters<NonNullable<GatewayRequestContext["cancelRunBoundApprovals"]>>[0],
+    context: GatewayRequestContext,
+  ) => number;
   forwardPluginApprovalRequest?: GatewayRequestContext["forwardPluginApprovalRequest"];
   approvalWebPushDelivery?: GatewayRequestContext["approvalWebPushDelivery"];
   pluginApprovalIosPushDelivery?: GatewayRequestContext["pluginApprovalIosPushDelivery"];
   pluginApprovalManager: GatewayRequestContext["pluginApprovalManager"];
+  placementStandingGrants: GatewayRequestContext["placementStandingGrants"];
   systemAgentApprovalManager?: GatewayRequestContext["systemAgentApprovalManager"];
   listSessionPendingApprovals: GatewayRequestContext["listSessionPendingApprovals"];
   loadGatewayModelCatalog: GatewayRequestContext["loadGatewayModelCatalog"];
@@ -209,6 +213,7 @@ export function createGatewayRequestContext(
     approvalWebPushDelivery: params.approvalWebPushDelivery,
     pluginApprovalIosPushDelivery: params.pluginApprovalIosPushDelivery,
     pluginApprovalManager: params.pluginApprovalManager,
+    placementStandingGrants: params.placementStandingGrants,
     systemAgentApprovalManager: params.systemAgentApprovalManager,
     listSessionPendingApprovals: params.listSessionPendingApprovals,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,

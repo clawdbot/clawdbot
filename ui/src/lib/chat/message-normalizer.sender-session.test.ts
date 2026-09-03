@@ -34,6 +34,20 @@ describe("message-normalizer senderSession", () => {
     },
   );
 
+  it("trims forwarded source fields and drops unrelated session metadata", () => {
+    expect(
+      normalizeMessage({
+        role: "assistant",
+        content: "Forwarded report",
+        senderSession: {
+          sessionKey: " agent:source:main ",
+          agentId: " source\t",
+          extra: "discarded",
+        },
+      }).senderSession,
+    ).toStrictEqual({ sessionKey: "agent:source:main", agentId: "source" });
+  });
+
   it("keeps a valid source agent when its source-session key is malformed", () => {
     expect(
       normalizeMessage({

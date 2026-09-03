@@ -411,8 +411,6 @@ type CodexAppServerBindingMutation =
   | {
       kind: "clear";
       threadId?: string;
-      /** Only failed creation may clear the exact provisional supervision owner. */
-      expectedPendingSupervisionBranch?: CodexAppServerPendingSupervisionBranch;
     };
 
 export type CodexSessionGenerationAdoptionResult = "adopted" | "current" | "absent" | "conflict";
@@ -653,16 +651,19 @@ export function scopeCodexRunBindingStore(params: {
 
 /** Lets the authoritative OpenClaw session generation claim a stale stable binding row. */
 export async function reclaimCurrentCodexSessionGeneration(params: {
+  assertCurrent?: () => void;
   bindingStore: CodexAppServerBindingStore;
   identity: Extract<CodexAppServerBindingIdentity, { kind: "session" }>;
   config?: OpenClawConfig;
   storePath?: string;
 }): Promise<boolean> {
+  params.assertCurrent?.();
   const sessionKey = params.identity.sessionKey?.trim();
   if (!sessionKey) {
     return true;
   }
   const plan = await params.bindingStore.prepareSessionGenerationReclaim(params.identity);
+  params.assertCurrent?.();
   if (plan.kind === "resolved") {
     return plan.result;
   }
@@ -686,10 +687,14 @@ export async function reclaimCurrentCodexSessionGeneration(params: {
   } catch {
     return false;
   }
-  return await params.bindingStore.mutate(params.identity, {
-    kind: "reclaim-generation",
-    expectedPreviousSessionId: plan.expectedPreviousSessionId,
-  });
+  return await params.bindingStore.mutate(
+    params.identity,
+    {
+      kind: "reclaim-generation",
+      expectedPreviousSessionId: plan.expectedPreviousSessionId,
+    },
+    params.assertCurrent,
+  );
 }
 
 /** Creates the single binding facade owned by the Codex plugin runtime. */
@@ -1129,13 +1134,6 @@ export function createCodexAppServerBindingStore(
               mutation.kind === "set" &&
               active?.binding.connectionScope === "supervision" &&
               isSameSupervisionOwner(active.binding, mutation.binding);
-            const clearsPendingSupervisionOwner =
-              mutation.kind === "clear" &&
-              matchesPendingSupervisionClear(
-                active?.binding,
-                mutation.threadId,
-                mutation.expectedPendingSupervisionBranch,
-              );
             const replacesExpectedOrdinaryOwner =
               mutation.kind === "replace-thread" &&
               active?.binding.threadId === mutation.expectedThreadId &&
@@ -1156,11 +1154,9 @@ export function createCodexAppServerBindingStore(
                 !matchesPendingSupervisionBranch(active?.binding, mutation.expected)) ||
               (mutation.kind === "clear" &&
                 (!ownsGeneration ||
-                  (mutation.expectedPendingSupervisionBranch
-                    ? !clearsPendingSupervisionOwner
-                    : (mutation.threadId !== undefined &&
-                        active?.binding.threadId !== mutation.threadId) ||
-                      active?.binding.connectionScope === "supervision")))
+                  (mutation.threadId !== undefined &&
+                    active?.binding.threadId !== mutation.threadId) ||
+                  active?.binding.connectionScope === "supervision"))
             ) {
               return { result: false };
             }
@@ -1404,24 +1400,6 @@ function isSameSupervisionOwner(
   );
 }
 
-function matchesPendingSupervisionClear(
-  binding: CodexAppServerThreadBinding | undefined,
-  threadId: string | undefined,
-  expected: CodexAppServerPendingSupervisionBranch | undefined,
-): boolean {
-  if (!expected || threadId !== expected.sourceThreadId) {
-    return false;
-  }
-  // Failed creation may never have written its binding. The transaction separately
-  // fences the generation; only this exact-pending clear is idempotent when absent.
-  return (
-    !binding ||
-    (binding.connectionScope === "supervision" &&
-      binding.supervisionSourceThreadId === expected.sourceThreadId &&
-      matchesPendingSupervisionBranch(binding, expected))
-  );
-}
-
 /** Stable plugin-state key for one current binding owner. */
 export function bindingStoreKey(identity: CodexAppServerBindingIdentity): string {
   if (identity.kind === "session") {
@@ -1486,7 +1464,7 @@ function ownsStoredSessionGeneration(
   );
 }
 
-function validateBindingForWrite(
+export function validateBindingForWrite(
   binding: CodexAppServerThreadBinding,
 ): CodexAppServerThreadBinding {
   const validated = readCodexAppServerThreadBinding(binding);

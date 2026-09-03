@@ -1489,6 +1489,7 @@ extension GatewayConnection {
         sessionKey: String,
         agentID: String? = nil,
         expectedSessionRoutingContract: String? = nil,
+        expectedSessionSettings: OpenClawChatSessionSettingsExpectation? = nil,
         message: String,
         thinking: String?,
         idempotencyKey: String,
@@ -1498,11 +1499,23 @@ extension GatewayConnection {
         ifCurrentRoute route: Route? = nil,
         distinguishPreDispatchRouteChange: Bool = false) async throws -> OpenClawChatSendResponse
     {
+        let supportsSettingsCAS = if let route {
+            await self.supportsServerCapability(
+                .sessionSettingsCAS,
+                ifCurrentRoute: route) == true
+        } else {
+            false
+        }
+        guard expectedSessionSettings == nil || supportsSettingsCAS else {
+            throw OpenClawChatTransportSendError.notDispatched
+        }
         let resolvedKey = self.canonicalizeSessionKey(sessionKey)
         let request = OpenClawChatGatewayRequests.sendMessage(
             sessionKey: resolvedKey,
             agentID: agentID,
             expectedSessionRoutingContract: expectedSessionRoutingContract,
+            expectedSessionSettings: expectedSessionSettings,
+            supportsSessionSettingsCAS: supportsSettingsCAS,
             message: message,
             thinking: thinking,
             idempotencyKey: idempotencyKey,

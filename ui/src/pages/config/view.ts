@@ -10,8 +10,10 @@ import "../../components/tooltip.ts";
 import { icons } from "../../components/icons.ts";
 import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { isJson5Warm, warmJson5 } from "../../lib/json5-runtime.ts";
 import { renderNotificationsSection } from "./notifications-section.ts";
+import { renderSetupSection } from "./setup.ts";
 import { renderAppearanceSection } from "./view-appearance.ts";
 import { computeRawDiff, formatConfigDiffPath, renderRawDiffValue } from "./view-diff.ts";
 import {
@@ -34,6 +36,8 @@ import {
   toggleSensitivePathReveal,
 } from "./view-state.ts";
 import type { ConfigProps } from "./view-types.ts";
+
+registerSettingsEnglish();
 
 export { createConfigViewState } from "./view-state.ts";
 export type { ConfigProps, ConfigViewState } from "./view-types.ts";
@@ -213,6 +217,16 @@ export function renderConfig(props: ConfigProps) {
           },
         }
       : analysis.schema;
+  const setupSchema = formSchema?.properties?.wizard;
+  const showSetup = setupSchema && (!props.activeSection || props.activeSection === "wizard");
+  const editorSchema = setupSchema
+    ? {
+        ...formSchema,
+        properties: Object.fromEntries(
+          Object.entries(formSchema.properties ?? {}).filter(([key]) => key !== "wizard"),
+        ),
+      }
+    : formSchema;
   const topTabs = [
     ...(showRootTab
       ? [{ key: null as string | null, label: props.navRootLabel ?? t("nav.settings") }]
@@ -526,10 +540,10 @@ export function renderConfig(props: ConfigProps) {
                       <span>${t("configView.loadingSchema")}</span>
                     </div>`
                   : renderConfigForm({
-                      schema: formSchema,
+                      schema: editorSchema,
                       uiHints: props.uiHints,
                       value: props.formValue,
-                      embedded: props.embeddedEditor === true,
+                      embedded: props.embeddedEditor === true || Boolean(showSetup),
                       rawAvailable,
                       disabled: configBusy || !props.formValue || !mutationAllowed,
                       unsupportedPaths: analysis.unsupportedPaths,
@@ -569,6 +583,13 @@ export function renderConfig(props: ConfigProps) {
                         requestUpdate();
                       },
                     })}
+                ${showSetup && !props.schemaLoading
+                  ? renderSetupSection(
+                      setupSchema,
+                      props,
+                      configBusy || !props.formValue || !mutationAllowed,
+                    )
+                  : nothing}
               `
             : (() => {
                 const sensitiveCount = countSensitiveConfigValues(

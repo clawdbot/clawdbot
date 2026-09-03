@@ -81,10 +81,13 @@ vi.mock("../plugins/setup-registry.js", () => ({
   resolvePluginSetupProviderCore: () => undefined,
 }));
 
+vi.mock("../plugins/provider-external-auth.js", () => ({
+  resolveExternalAuthProfilesWithPlugins: () => [],
+}));
+
 vi.mock("../plugins/provider-runtime.js", () => {
   return {
     buildProviderMissingAuthMessageWithPlugin: () => undefined,
-    resolveExternalAuthProfilesWithPlugins: () => [],
     resolveProviderDeprecatedAuthProfileIds: () => [],
     shouldDeferProviderSyntheticProfileAuthWithPlugin: (params: {
       context?: { resolvedApiKey?: string };
@@ -182,6 +185,7 @@ let hasSyntheticLocalProviderAuthConfig: typeof import("./model-auth.js").hasSyn
 let requireApiKey: typeof import("./model-auth.js").requireApiKey;
 let getApiKeyForModelCore: typeof import("./model-auth.js").getApiKeyForModelCore;
 let resolveApiKeyForProviderCore: typeof import("./model-auth.js").resolveApiKeyForProviderCore;
+let resolveProviderEntryApiKeyAuth: typeof import("./model-auth-provider.js").resolveProviderEntryApiKeyAuth;
 let resolveAwsSdkEnvVarName: typeof import("./model-auth.js").resolveAwsSdkEnvVarName;
 let resolveModelAuthMode: typeof import("./model-auth.js").resolveModelAuthMode;
 let resolveUsableCustomProviderApiKey: typeof import("./model-auth.js").resolveUsableCustomProviderApiKey;
@@ -202,6 +206,7 @@ beforeAll(async () => {
   ({ clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
     await import("./auth-profiles/runtime-snapshots.js"));
   cliCredentials = await import("./cli-credentials.js");
+  ({ resolveProviderEntryApiKeyAuth } = await import("./model-auth-provider.js"));
   ({
     applyAuthHeaderOverride,
     applyLocalNoAuthHeaderOverride,
@@ -971,50 +976,65 @@ describe("resolveApiKeyForProviderCore", () => {
     });
   });
 
-  it("keeps the whole provider cold when a non-api-key SecretRef fails", async () => {
-    const sourceConfig = {
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            headers: {
-              "X-Provider-Secret": {
-                source: "env",
-                provider: "default",
-                id: "MISSING_OPENAI_HEADER",
-              } as const,
+  it.each([false, true])(
+    "keeps the whole provider cold when a non-api-key SecretRef fails (per-entry = %s)",
+    async (perEntry) => {
+      const sourceConfig = {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              ...(perEntry ? { apiKey: "openai:bound" } : {}),
+              headers: {
+                "X-Provider-Secret": {
+                  source: "env",
+                  provider: "default",
+                  id: "MISSING_OPENAI_HEADER",
+                } as const,
+              },
+              models: [],
             },
-            models: [],
           },
         },
-      },
-    };
-    setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
-    setActiveDegradedSecretOwners([
-      {
-        ownerKind: "provider",
-        ownerId: "openai",
-        state: "unavailable",
-        paths: ["models.providers.openai.headers.X-Provider-Secret"],
-        refKeys: ["env:default:MISSING_OPENAI_HEADER"],
-        reason: "secret reference was not found",
-      },
-    ]);
+      };
+      setRuntimeConfigSnapshot(sourceConfig, sourceConfig);
+      setActiveDegradedSecretOwners([
+        {
+          ownerKind: "provider",
+          ownerId: "openai",
+          state: "unavailable",
+          paths: ["models.providers.openai.headers.X-Provider-Secret"],
+          refKeys: ["env:default:MISSING_OPENAI_HEADER"],
+          reason: "secret reference was not found",
+        },
+      ]);
 
-    await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
-      await expect(
-        resolveApiKeyForProviderCore({
-          provider: "openai",
-          cfg: sourceConfig,
-          store: { version: 1, profiles: {} },
-        }),
-      ).rejects.toMatchObject({
-        code: "SECRET_SURFACE_UNAVAILABLE",
-        ownerKind: "provider",
-        ownerId: "openai",
-      } satisfies Partial<SecretSurfaceUnavailableError>);
-    });
-  });
+      await withEnv("OPENAI_API_KEY", "must-not-be-used", async () => {
+        await expect(
+          (perEntry ? resolveProviderEntryApiKeyAuth : resolveApiKeyForProviderCore)({
+            provider: "openai",
+            cfg: sourceConfig,
+            store: {
+              version: 1,
+              profiles: perEntry
+                ? {
+                    "openai:bound": {
+                      type: "api_key",
+                      provider: "openai",
+                      key: "bound-key-must-not-be-used",
+                    },
+                  }
+                : {},
+            },
+          }),
+        ).rejects.toMatchObject({
+          code: "SECRET_SURFACE_UNAVAILABLE",
+          ownerKind: "provider",
+          ownerId: "openai",
+        } satisfies Partial<SecretSurfaceUnavailableError>);
+      });
+    },
+  );
 
   it("keeps a failed profile ref terminal without cooling an unrelated profile", async () => {
     const agentDir = "/tmp/openclaw-agent-profile-isolation";

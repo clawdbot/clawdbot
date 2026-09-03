@@ -1,6 +1,5 @@
 /** Session update helpers for skill snapshots and completed compaction accounting. */
 import crypto from "node:crypto";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import type { EmbeddedAgentCompactResult } from "../../agents/embedded-agent-runner/types.js";
 import {
@@ -73,6 +72,7 @@ function resolveNonNegativeTokenCount(value: number | undefined): number | undef
 
 /** Ensures a session entry has the reusable skill snapshot needed for reply runs. */
 export async function ensureSkillSnapshot(params: {
+  agentId: string;
   sessionEntry?: SessionEntry;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
@@ -103,6 +103,7 @@ export async function ensureSkillSnapshot(params: {
   }
 
   const {
+    agentId,
     sessionEntry,
     sessionEntryHandle,
     sessionStore,
@@ -118,12 +119,11 @@ export async function ensureSkillSnapshot(params: {
 
   let nextEntry = sessionEntryHandle?.getCurrent() ?? sessionEntry;
   let systemSent = sessionEntry?.systemSent ?? false;
-  const sessionAgentId = resolveSessionAgentId({ sessionKey, config: cfg });
   const nodeSkillsEligibility = resolveNodeExecEligibility({
     cfg,
     sessionEntry,
     sessionKey,
-    agentId: sessionAgentId,
+    agentId,
     execOverrides: params.execOverrides,
   });
   const remoteEligibility = getRemoteSkillEligibility({
@@ -135,11 +135,12 @@ export async function ensureSkillSnapshot(params: {
       workspaceDir,
       ...(params.executionSkillsDir ? { executionSkillsDir: params.executionSkillsDir } : {}),
       config: cfg,
-      agentId: sessionAgentId,
+      agentId,
       skillFilter,
       skillOverrides,
       eligibility: { nodeSkills: nodeSkillsEligibility, remote: remoteEligibility },
       existingSnapshot: snapshot,
+      librarySelections: nextEntry?.skillLibrarySelections,
     });
   const initialSnapshotState = resolveSnapshot(existingSnapshot);
   const shouldRefreshSnapshot = initialSnapshotState.shouldRefresh;

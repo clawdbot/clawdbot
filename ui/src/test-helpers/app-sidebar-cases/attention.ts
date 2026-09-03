@@ -99,9 +99,17 @@ describe("AppSidebar session attention", () => {
       id: "question-home",
       status: "cancelled",
     });
-    setRows(sessionsHarness, [failedRow(mainKey)]);
+    setRows(sessionsHarness, [
+      failedRow(mainKey, {
+        lastRunError: "⚠️ ✉️ Message failed:  delivery unavailable",
+      }),
+    ]);
     await sidebar.updateComplete;
     expect(home?.querySelector('[data-session-attention="error"]')).not.toBeNull();
+    expect(home?.getAttribute("aria-label")).toBe(
+      "Home · Run failed:   Message failed:  delivery unavailable",
+    );
+    expect(home?.getAttribute("aria-label")).not.toMatch(/[⚠✉]/u);
 
     setRows(sessionsHarness, [
       { key: mainKey, kind: "direct", label: "Home", updatedAt: 3, status: "done" },
@@ -137,8 +145,22 @@ describe("AppSidebar session attention", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.querySelector('[data-session-attention="question"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Waiting for your answer");
+    const questionAttention = sidebar.querySelector('[data-session-attention="question"]');
+    expect(questionAttention).not.toBeNull();
+    expect(questionAttention?.getAttribute("aria-label")).toBe("Waiting for your answer");
+    expect(questionAttention?.getAttribute("tabindex")).toBe("0");
+    expect(
+      (
+        questionAttention?.closest("openclaw-tooltip") as
+          | (HTMLElement & {
+              content?: string;
+            })
+          | null
+      )?.content,
+    ).toBe("Waiting for your answer");
+    expect(
+      sidebar.querySelector(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
+    ).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
 
     gatewayHarness.publishEvent("question.resolved", {

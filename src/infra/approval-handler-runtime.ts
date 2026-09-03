@@ -152,6 +152,8 @@ async function applyApprovalFinalAction(params: {
   nativeRuntime: ChannelApprovalNativeRuntimeAdapter;
   baseContext: ChannelApprovalCapabilityHandlerContext;
   wrapped: WrappedPendingEntry;
+  request: ApprovalRequest;
+  approvalKind: ChannelApprovalKind;
   result: ChannelApprovalNativeFinalAction<unknown>;
   phase: "resolved" | "expired";
 }): Promise<void> {
@@ -160,6 +162,8 @@ async function applyApprovalFinalAction(params: {
       await params.nativeRuntime.transport.updateEntry?.({
         ...params.baseContext,
         entry: params.wrapped.entry,
+        request: params.request,
+        approvalKind: params.approvalKind,
         payload: params.result.payload,
         phase: params.phase,
       });
@@ -234,6 +238,8 @@ export function createChannelApprovalNativeRuntimeAdapter<
             updateEntry: async (
               params: {
                 entry: unknown;
+                request: ApprovalRequest;
+                approvalKind: ChannelApprovalKind;
                 payload: unknown;
                 phase: "resolved" | "expired";
               } & ChannelApprovalCapabilityHandlerContext,
@@ -298,6 +304,14 @@ export function createChannelApprovalNativeRuntimeAdapter<
             ...(spec.observe.onDelivered
               ? {
                   onDelivered: (params) => spec.observe?.onDelivered?.(params as never),
+                }
+              : {}),
+            ...(spec.observe.onFinalized
+              ? {
+                  onFinalized: (params) => {
+                    // SAFETY: The factory preserves the request and lifecycle types for this adapter.
+                    return spec.observe?.onFinalized?.(params as never);
+                  },
                 }
               : {}),
           },
@@ -675,10 +689,18 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               nativeRuntime,
               baseContext,
               wrapped,
+              request,
+              approvalKind,
               result,
               phase: "resolved",
             });
           },
+        });
+        nativeRuntime.observe?.onFinalized?.({
+          ...baseContext,
+          request,
+          approvalKind,
+          phase: "resolved",
         });
       },
       finalizeExpired: async ({ request, entries }) => {
@@ -710,10 +732,18 @@ export async function createChannelApprovalHandlerFromCapability(params: {
               nativeRuntime,
               baseContext,
               wrapped,
+              request,
+              approvalKind,
               result,
               phase: "expired",
             });
           },
+        });
+        nativeRuntime.observe?.onFinalized?.({
+          ...baseContext,
+          request,
+          approvalKind,
+          phase: "expired",
         });
       },
       onStopped: async () => {

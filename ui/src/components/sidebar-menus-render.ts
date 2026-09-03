@@ -2,11 +2,10 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { DEFAULT_SIDEBAR_ENTRIES, serializeSidebarEntry } from "../app-navigation.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
-import { isUpdateActionable } from "../app/update-overlay-helpers.ts";
+import { isUpdateActionable } from "../app/update-schedule-projection.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { copyToClipboard } from "../lib/clipboard.ts";
 import { openEditor } from "../lib/editor-links.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
@@ -17,7 +16,11 @@ import {
   canDeleteSessionRows,
   resolveUiConfiguredMainKey,
 } from "../lib/sessions/session-key.ts";
-import { showToast } from "../lib/toast.ts";
+import {
+  canCopySessionMarkdown,
+  canSplitSessionView,
+  runSessionNavigationAction,
+} from "../lib/sessions/session-menu-navigation.ts";
 import { renderSidebarAgentMenu, renderSidebarIdentityMenu } from "./app-sidebar-agent-menu.ts";
 import { renderSidebarCustomizeMenu, renderSidebarMoreMenu } from "./app-sidebar-nav-menus.ts";
 import { formatSidebarTimestamp } from "./app-sidebar-session-catalogs.ts";
@@ -26,6 +29,7 @@ import {
   renderSidebarSessionGroupMenu,
   renderSidebarSessionSortMenu,
 } from "./app-sidebar-session-menu-renderers.ts";
+import "../styles/sidebar-menus.css";
 import { sessionMenuReasons } from "./session-menu-access.ts";
 import type { SessionMenuAction } from "./session-menu.ts";
 import { listAssignableSessionOwners } from "./session-owner-chip.ts";
@@ -40,6 +44,9 @@ import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
 export function renderSidebarCustomizeMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.customizeMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.customizeMenuTrigger;
   return renderSidebarCustomizeMenu({
     position,
@@ -86,6 +93,9 @@ export function renderSidebarCustomizeMenuForController(controller: SidebarMenus
 export function renderSidebarAgentMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.agentMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.agentMenuTrigger;
   const { activeId, agent, agents, identity, identities } = host.activeChipAgent();
   return renderSidebarAgentMenu({
@@ -118,6 +128,9 @@ export function renderSidebarAgentMenuForController(controller: SidebarMenusCont
 export function renderSidebarIdentityMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.identityMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.identityMenuTrigger;
   const selfUser = resolveCurrentSelfUser({
     snapshotUser: host.sessionDataContext?.gateway.snapshot.selfUser,
@@ -157,7 +170,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     profileViewer: selfUser ? { ...selfUser, watchedSessions: [] } : undefined,
     offline: host.offline,
     themeMode: host.themeMode,
-    triggerWidth: position?.width ?? 0,
+    triggerWidth: position.width,
     onTabAway: () => trigger?.focus(),
     onClose: (restoreFocus) => {
       if (controller.identityMenuPosition !== position) {
@@ -178,7 +191,13 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
     return nothing;
   }
   const context = host.sessionDataContext;
-  const { session } = menu;
+  const currentSession = host.findSidebarSessionByKey(menu.session.key);
+  // Appearance editing keeps this menu open. Refresh its row without adopting
+  // a replacement session that happens to reuse the captured key.
+  const session =
+    currentSession && currentSession.sessionId === menu.session.sessionId
+      ? currentSession
+      : menu.session;
   const mainKey = resolveUiConfiguredMainKey({
     agentsList: host.sessionDataContext?.agents.state.agentsList,
     hello: host.sessionDataContext?.gateway.snapshot.hello,
@@ -254,6 +273,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
         .trigger=${controller.sessionMenuTrigger}
         .disabled=${!host.connected}
         .actionDisabledReasons=${actionDisabledReasons}
+        .navigationAllowed=${Boolean(context)}
+        .copyMarkdownAllowed=${canCopySessionMarkdown(context?.gateway.snapshot)}
+        .splitAllowed=${canSplitSessionView()}
         .forkDisabled=${host.sessionData.sessionsLoading || session.modelSelectionLocked}
         .forkFromLastCompleted=${session.gatewayHasActiveRun ?? session.hasActiveRun}
         .archiveAllowed=${archiveAllowed}
@@ -283,9 +305,23 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               openEditor(action.editor, action.path);
               break;
             case "copy-session-id":
-              void copyToClipboard(session.sessionId ?? "").then((copied) => {
-                showToast({ message: t(copied ? "common.copied" : "common.copyFailed") });
-              });
+            case "copy-session-link":
+            case "copy-markdown":
+            case "open-new-tab":
+            case "open-new-window":
+            case "split-right":
+            case "split-below":
+              if (context) {
+                const selectedAgentId = host.getSessionNavigationState().selectedAgentId;
+                void runSessionNavigationAction(action.kind, {
+                  context,
+                  session,
+                  agentId: selectedAgentId,
+                  isCurrent: () =>
+                    host.sessionDataContext === context &&
+                    host.getSessionNavigationState().selectedAgentId === selectedAgentId,
+                });
+              }
               break;
             case "toggle-pin":
               void host.sessionOrganizer.patchSession(session, { pinned: !session.pinned });
@@ -301,6 +337,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
               break;
             case "set-icon":
               void host.sessionOrganizer.patchSession(session, { icon: action.icon });
+              break;
+            case "reset-appearance":
+              void host.sessionOrganizer.patchSession(session, { icon: null, color: null });
               break;
             case "assign-owner":
               void host.sessionOrganizer.assignSessionOwner(session, action.owner);
@@ -343,6 +382,9 @@ export function renderSidebarSessionMenuForController(controller: SidebarMenusCo
 export function renderSidebarSessionGroupMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const menu = controller.sessionGroupMenu;
+  if (!menu) {
+    return nothing;
+  }
   const groupDefaultsStatus = host.sessionDataContext?.sessions.groupsStatus() ?? "idle";
   const groupActionAccess = {
     "group-defaults": readSessionMethodAccess(host.sessionDataContext?.gateway.snapshot, {
@@ -413,6 +455,9 @@ export function renderSidebarSessionGroupMenuForController(controller: SidebarMe
 export function renderSidebarSessionSortMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.sessionSortMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   return renderSidebarSessionSortMenu({
     position,
     trigger: controller.sessionSortMenuTrigger,
@@ -423,10 +468,14 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
     showCron: host.sessionsShowCron,
     showPreview: host.sessionsShowPreview,
     showSystem: host.sessionsShowSystem,
+    hideEmptyGroups: host.sessionsHideEmptyGroups,
     owners: host.sessionOwnershipVisible ? host.sessionOwnerOptions : [],
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.sessionOrganizer.setSessionsGrouping(grouping);
       controller.closeSessionSortMenu({ restoreFocus: true });
@@ -455,6 +504,10 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
       host.sessionOrganizer.setSessionsShowSystem(show);
       controller.closeSessionSortMenu({ restoreFocus: true });
     },
+    onHideEmptyGroupsChange: (hide) => {
+      host.sessionOrganizer.setSessionsHideEmptyGroups(hide);
+      controller.closeSessionSortMenu({ restoreFocus: true });
+    },
     onClose: (restoreFocus) => {
       if (controller.sessionSortMenuPosition !== position) {
         return;
@@ -467,6 +520,9 @@ export function renderSidebarSessionSortMenuForController(controller: SidebarMen
 export function renderSidebarCatalogViewMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.catalogViewMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   return renderSidebarCatalogViewMenu({
     position,
     trigger: controller.catalogViewMenuTrigger,
@@ -475,12 +531,15 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
     ownerFilterId: host.sessionOwnerFilterActive ? host.sessionOwnerFilterId : null,
     involvingMe: host.sessionInvolvingMeFilterActive,
     selfOwnerId: host.sessionDataContext?.gateway.snapshot.selfUser?.id ?? null,
+    compact: isMobileNavLayout(),
+    view: controller.filterMenuView,
+    onViewChange: (view) => controller.setFilterMenuView(view),
     onGroupingChange: (grouping) => {
       host.setCatalogProjectGrouping(grouping);
       controller.closeCatalogViewMenu({ restoreFocus: true });
     },
     onHide: () => {
-      if (!position || controller.catalogViewMenuPosition !== position) {
+      if (controller.catalogViewMenuPosition !== position) {
         return;
       }
       host.hideSessionCatalog(position.catalogId);
@@ -502,6 +561,9 @@ export function renderSidebarCatalogViewMenuForController(controller: SidebarMen
 export function renderSidebarMoreMenuForController(controller: SidebarMenusController) {
   const { host } = controller;
   const position = controller.moreMenuPosition;
+  if (!position) {
+    return nothing;
+  }
   const trigger = controller.moreMenuTrigger;
   return renderSidebarMoreMenu({
     position,

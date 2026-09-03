@@ -19,6 +19,68 @@ OpenClaw stores control-plane state in a global SQLite database and agent data i
 
 A few high-volume or lifecycle-specific features use dedicated SQLite stores, including the task registry and trajectory data.
 
+### Meeting transcript tables
+
+Meeting captures use three `STRICT` tables in the shared
+`state/openclaw.sqlite` database, separate from per-agent conversation transcripts.
+The transcript store (`src/transcripts/store.ts`) owns their reads and writes;
+`src/transcripts/sqlite-schema.ts` ensures the tables on first use. Markdown and
+JSON files under the transcripts directory are explicit exports, not runtime
+storage. See [Transcripts CLI](/cli/transcripts).
+
+#### `meeting_transcript_sessions`
+
+One row per capture identity. The primary key is `(session_id, started_at)`;
+`selector` is unique. Indexes support start-time, session-ID, slug, and export-key
+lookups.
+
+| Columns                                  | Type                                        | Purpose                                                                 |
+| ---------------------------------------- | ------------------------------------------- | ----------------------------------------------------------------------- |
+| `session_id`, `started_at`               | `TEXT NOT NULL`                             | Capture ID and original start time.                                     |
+| `selector`, `export_key`, `session_slug` | `TEXT NOT NULL`                             | Canonical selector and derived export identity.                         |
+| `provider_id`, `source_json`             | `TEXT NOT NULL`                             | Source provider and locator.                                            |
+| `title`, `stopped_at`, `metadata_json`   | Nullable `TEXT`                             | Display title, terminal time, and session metadata including ownership. |
+| `export_manifest_json`                   | `TEXT NOT NULL`, default `{}`               | Export artifact ownership manifest.                                     |
+| `export_pending_json`                    | `TEXT NOT NULL`, default `[]`               | Pending export artifacts.                                               |
+| `next_utterance_seq`                     | Nonnegative `INTEGER NOT NULL`, default `0` | Next append sequence.                                                   |
+| `created_at_ms`, `updated_at_ms`         | Nonnegative `INTEGER NOT NULL`              | Store timestamps.                                                       |
+
+Reopening an occupancy-driven capture clears `stopped_at` without changing the
+primary key, so the same meeting retains its utterances.
+
+#### `meeting_transcript_utterances`
+
+Append-ordered speech records. The primary key is
+`(session_id, session_started_at, sequence)`; the session pair references
+`meeting_transcript_sessions(session_id, started_at)` with `ON DELETE CASCADE`.
+
+| Columns                                  | Type                           | Purpose                                          |
+| ---------------------------------------- | ------------------------------ | ------------------------------------------------ |
+| `session_id`, `session_started_at`       | `TEXT NOT NULL`                | Owning capture identity.                         |
+| `sequence`                               | Nonnegative `INTEGER NOT NULL` | Stable append order within the capture.          |
+| `utterance_id`, `started_at`, `ended_at` | Nullable `TEXT`                | Provider utterance identity and timing.          |
+| `speaker_id`, `speaker_label`            | Nullable `TEXT`                | Provider speaker identity and display label.     |
+| `text`                                   | `TEXT NOT NULL`                | Captured transcript text.                        |
+| `final`                                  | Nullable `INTEGER`, `0` or `1` | Whether the provider marked the utterance final. |
+| `metadata_json`                          | Nullable `TEXT`                | Provider utterance metadata.                     |
+
+#### `meeting_transcript_summaries`
+
+One current summary per capture. The primary key is
+`(session_id, session_started_at)` and references the session primary key with
+`ON DELETE CASCADE`. At least one of `summary_json` or `markdown` must be non-null.
+
+| Columns                            | Type                           | Purpose                                                                                                     |
+| ---------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| `session_id`, `session_started_at` | `TEXT NOT NULL`                | Owning capture identity.                                                                                    |
+| `generated_at`                     | Nullable `TEXT`                | Summary generation time.                                                                                    |
+| `summary_json`                     | Nullable `TEXT`                | Free-form summary, including participants, `source` (`model` or `heuristic`), and optional model reference. |
+| `markdown`                         | Nullable `TEXT`                | Rendered meeting notes.                                                                                     |
+| `utterance_count`                  | Nonnegative `INTEGER NOT NULL` | Number of utterances covered by the stored summary.                                                         |
+
+These are existing feature-local tables. Occupancy episodes and model-backed
+notes do not change their schema or database version.
+
 ## Versioning contract
 
 Each database records its schema in two places:
@@ -33,6 +95,14 @@ When Gateway startup encounters a newer database schema, it exits with status 78
 Changes may stay at the same schema version only when downgraded readers remain safe. New tables qualify because older builds ignore them. An explicitly compatible column on an existing table qualifies only when its declaration is exactly one bare nullable SQLite `STRICT` datatype: `ANY`, `BLOB`, `INT`, `INTEGER`, `REAL`, or `TEXT`. The declaration cannot have a default, `NOT NULL`, a primary or unique key, a check, a reference, a collation, a generated expression, or another suffix. Constrained existing-table additions require a schema-version bump or a companion table instead.
 
 Matching numeric versions are necessary but not sufficient. A release can add a lazy or startup-repairable table, column, index, or trigger without advancing `user_version`, so two databases at the same version can still have different shapes. OpenClaw validates the canonical table definitions, constraints, indexes, triggers, virtual tables, and table options owned by the running release.
+
+Agent schema 19 records collected input consumption in the nullable
+`session_pending_inputs.consumed_event_id TEXT` column. Doctor and the feature's
+first-use ensure add it when needed; the schema version stays 19. The supported
+beta upgrade runs Doctor from the upcoming release. Intermediate builds that
+already validate the optional pending-input table may reject the added column
+despite sharing version 19. Consumed source receipts remain until their session
+window is deleted, so rewriting a transcript cannot make an old input runnable again.
 
 The placement-move table uses this same-version rule for its nullable bare
 `abandon_source INTEGER` column. The feature lazily ensures the column on first
@@ -98,6 +168,30 @@ validity expires; later Goal writes prune expired rows. They retain the
 original result and a keyed request fingerprint, not a second raw request.
 There is no backfill or configuration switch. Downgrading preserves the table
 but disables the new structured controls; upgrading can read retained receipts.
+
+### Profile-owned skill library
+
+[Personal and team skills](/tools/skills#personal-skills-on-a-shared-gateway) use four first-use tables in the shared state database without changing its schema version: `skill_library_entries`, `skill_library_revisions`, `skill_library_events`, and `skill_library_uploads`. Ordinary workspace skills and unused-library discovery do not create these tables. Ownership, sharing, the current revision pointer, portable file manifests, and publication events are canonical SQLite data. Session selections remain in the existing per-agent session store; inherited cron selections remain in the existing private job record.
+
+Complete skill bundles are product artifacts under `<state-dir>/skill-library/<skill-id>/revisions/<revision-hash>/`. Publication writes and verifies an immutable bundle before committing its current pointer and event in one synchronous database transaction. Concurrent edits require the expected revision. A crash before that commit can leave an unreferenced complete bundle, but not a pointer to partially written content. Sharing and transfer change metadata without moving revision files.
+
+Removing a skill excludes it from future selections; existing sessions retain their selected revisions. Published history and complete orphan revisions are retained conservatively. Expired upload records are pruned when another upload begins; clearly abandoned staging directories are cleaned during later publication. Back up both the state databases and the skill-library directory, not just the current revision pointers.
+
+Older same-schema readers ignore the new tables but cannot provide managed-library selection or authoring. Keep the tables and bundle directory intact when changing builds; do not lower schema markers or delete revisions to disable the feature. The accepted storage and ownership decision is recorded in [the profile-owned skills design issue](https://github.com/openclaw/openclaw/issues/133602).
+
+## Personal GitHub connections and publication
+
+Personal GitHub connection state uses the existing `secret_store_entries` identity scope, with the canonical authenticated profile as `scope_id` and the fixed private name `github-connection`. It is not a generic identity-secret API or a profile preference. One bounded record owns selection, pending device authorization, and refresh recovery. Personal managed CLI credentials use a separate `credentials/github/personal/<opaque-profile-id>` directory, outside older system/agent cleanup roots.
+
+Personal publication uses the lazy, same-version `github_personal_publication_requests` table. It records the requesting profile, selected connection generation and account, immutable target/workspace snapshot, idempotency, and outcome; it contains no tokens. Reading status does not create the table. Existing system and agent requests remain in their original table and retain their existing lifecycle.
+
+Older builds ignore both the personal request table and identity-scoped credential rows instead of executing a personal request as System. Re-upgrade still enforces original authorization expiry. Unfinished personal publication requires fresh confirmation by the same authenticated owner after a Gateway restart; remote-result reconciliation reuses the original request markers.
+
+Disconnect removes usable local credentials and retains a secret-free disconnected selection to fence stale work. Profile merges preserve target state, including an explicit disconnection; a source connection transfers only when the target has no state, with new selection authority. Credentials stranded by a profile merge performed on an older build require reconnect, not runtime adoption through aliases.
+
+Personal publication receipts remain for the logical session's lifetime. Archive/reset preserves receipts and invalidates incompatible unfinished work. Permanent session deletion fences execution and removes its personal receipts. There is no timed idempotency expiry, and deleting local state does not undo an already-created GitHub commit or pull request.
+
+See the accepted [personal GitHub ownership and publication design](https://github.com/openclaw/openclaw/issues/133590) and the operator-facing [GitHub connections guide](/concepts/user-model#github-connections).
 
 ## Review checkpoint for material changes
 
@@ -240,6 +334,10 @@ Schema 9 stores an `agent_databases.path` value relative to the state directory 
 The Gateway startup preflight reads schema headers only. `openclaw database preflight` performs the release-local shape comparison for an explicit copied file. The background verifier owns the slower recurring full scan for live databases that do not need migration.
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 
+Agent database maintenance fences other writers with a 60-second lease in the shared state database. A dedicated worker renews that lease during synchronous integrity scans and migration phases. Maintenance still checks the exact persisted owner before mutations and commit, and stops if the heartbeat fails or ownership expires or changes. Finishing or cancelling maintenance stops renewal before releasing the lease; process death leaves at most the remaining lease duration.
+
+The heartbeat proves ownership, not migration progress. A live but stuck maintenance process can keep its lease; stop that process before retrying Doctor.
+
 ## Troubleshooting
 
 ### Why you cannot go back after updating to 2026.7.2
@@ -263,6 +361,13 @@ Act on the install root, not the version. One release version string spans many 
 When a Gateway runs from a linked source checkout, its status and schema-refusal diagnostics report the commit captured when `dist/` was built, not the checkout's current Git HEAD. If that build identity is unknown, rebuild the checkout (`pnpm build`) before concluding the version is wrong.
 
 Open the database with a build that supports its schema, or point the older build at a separate `OPENCLAW_STATE_DIR`. Do not edit the database to silence the error.
+
+Config reads also save health fingerprints to this database. If that write fails,
+`Config health-state write failed` reports the first failure for that database
+in the current process. Repeated identical failures are suppressed while writes
+continue to be attempted. A different error, or a failure after a successful
+health-state write, is reported again. Suppressing duplicates does not resolve
+the underlying database error.
 
 ### A database is quarantined after integrity verification failed
 

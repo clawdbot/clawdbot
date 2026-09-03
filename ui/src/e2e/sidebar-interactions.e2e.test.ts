@@ -46,7 +46,7 @@ suite.define(() => {
               capabilities: {
                 continueSession: true,
                 archive: false,
-                createSession: { model: "openai/gpt-5.6-luna" },
+                startTerminal: true,
               },
               hosts: [],
             },
@@ -84,7 +84,7 @@ suite.define(() => {
       const draft = "Keep this unsent conversation draft";
       await composer.fill(draft);
       const originalUrl = page.url();
-      await captureSidebarUiProof(page, "new-session-links-source.png");
+      await captureSidebarUiProof(suite, page, "new-session-links-source.png");
 
       const actions: Array<{ selector: string; section?: string; params: Record<string, string> }> =
         [
@@ -107,7 +107,7 @@ suite.define(() => {
         ];
       for (const [index, action] of actions.entries()) {
         if (index === actions.length - 1) {
-          await page.locator(".shell-chrome-controls__nav-toggle").click();
+          await page.locator(".sidebar-brand__collapse").click();
         }
         if (action.section) {
           await page
@@ -149,7 +149,7 @@ suite.define(() => {
           expect(await composer.inputValue()).toBe(draft);
           expect(await sessionCreates(page)).toEqual([]);
           if ("group" in action.params) {
-            await captureSidebarUiProof(popup, "new-session-links-group-tab.png");
+            await captureSidebarUiProof(suite, popup, "new-session-links-group-tab.png");
           }
         } finally {
           await popup.close();
@@ -181,44 +181,81 @@ suite.define(() => {
     await installMockGateway(page);
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const sidebar = page.locator("openclaw-app-sidebar");
-    await sidebar.locator(".sidebar-agent-card__main").click();
-    await sidebar
-      .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
-      .click();
-
-    const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-    const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
-    let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
-    await expect
-      .poll(async () => {
-        const state = await textarea.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
-            throw new TypeError("capabilities prompt target must be a textarea");
-          }
-          const inputElement = element.closest<HTMLElement>(".agent-chat__input");
-          const style = inputElement ? getComputedStyle(inputElement) : null;
-          return {
-            active:
-              inputElement?.classList.contains("agent-chat__input--prefill-attention") ?? false,
-            background: style?.backgroundColor ?? "",
-            boxShadow: style?.boxShadow ?? "",
-            duration: style?.animationDuration ?? "",
-            focused: element === document.activeElement,
-            name: style?.animationName ?? "",
-            value: element.value,
-          };
+    // Record the 600ms cue before clicking; a host-side poll can arrive after it expires.
+    const observedCue = await page.evaluateHandle(() => {
+      const state = {
+        active: false,
+        background: "",
+        boxShadow: "",
+        duration: "",
+        focused: false,
+        name: "",
+        value: "",
+      };
+      const observer = new MutationObserver(() => {
+        const textarea = document.querySelector<HTMLTextAreaElement>(
+          ".agent-chat__composer-combobox > textarea",
+        );
+        const input = textarea?.closest<HTMLElement>(".agent-chat__input");
+        if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
+          return;
+        }
+        const style = getComputedStyle(input);
+        Object.assign(state, {
+          active: true,
+          background: style.backgroundColor,
+          boxShadow: style.boxShadow,
+          duration: style.animationDuration,
+          focused: textarea === document.activeElement,
+          name: style.animationName,
+          value: textarea.value,
         });
-        cueStyle = {
-          background: state.background,
-          boxShadow: state.boxShadow,
-          duration: state.duration,
-          name: state.name,
-        };
-        return { active: state.active, focused: state.focused, value: state.value };
-      })
-      .toEqual({ active: true, focused: true, value: "What can you do?" });
-    return { context, cueStyle, input, page };
+        observer.disconnect();
+      });
+      observer.observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ["class"],
+        childList: true,
+        subtree: true,
+      });
+      return { state, disconnect: () => observer.disconnect() };
+    });
+
+    try {
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await sidebar.locator(".sidebar-agent-card__main").click();
+      await sidebar
+        .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
+        .click();
+
+      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
+      let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
+      await expect
+        .poll(async () => {
+          const state = await observedCue.evaluate((cue) => cue.state);
+          cueStyle = {
+            background: state.background,
+            boxShadow: state.boxShadow,
+            duration: state.duration,
+            name: state.name,
+          };
+          return { active: state.active, focused: state.focused, value: state.value };
+        })
+        .toEqual({ active: true, focused: true, value: "What can you do?" });
+      await expect
+        .poll(() =>
+          textarea.evaluate((element: HTMLTextAreaElement) => ({
+            focused: element === document.activeElement,
+            value: element.value,
+          })),
+        )
+        .toEqual({ focused: true, value: "What can you do?" });
+      return { context, cueStyle, input, page };
+    } finally {
+      await observedCue.evaluate((cue) => cue.disconnect());
+      await observedCue.dispose();
+    }
   }
 
   it("focuses and highlights the composer from the agent capabilities action", async () => {
@@ -229,7 +266,7 @@ suite.define(() => {
         duration: "0.6s",
         name: "chat-composer-prefill-attention",
       });
-      await captureSidebarUiProof(page, "capabilities-composer-focus.png");
+      await captureSidebarUiProof(suite, page, "capabilities-composer-focus.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
@@ -247,7 +284,7 @@ suite.define(() => {
     try {
       expect(cueStyle.name).toBe("none");
       expect(cueStyle.boxShadow).not.toBe("none");
-      await captureSidebarUiProof(page, "capabilities-composer-reduced-motion.png");
+      await captureSidebarUiProof(suite, page, "capabilities-composer-reduced-motion.png");
       await expect
         .poll(() => input.getAttribute("class"))
         .not.toContain("agent-chat__input--prefill-attention");
@@ -496,7 +533,7 @@ suite.define(() => {
       await expect
         .poll(() => researchSwitch.evaluate((element) => element === document.activeElement))
         .toBe(true);
-      await captureSidebarUiProof(page, "agent-menu-without-new-session-rows.png");
+      await captureSidebarUiProof(suite, page, "agent-menu-without-new-session-rows.png");
       await page.keyboard.press("Enter");
       await expect
         .poll(() => new URL(page.url()).pathname)
@@ -552,7 +589,7 @@ suite.define(() => {
       await expect
         .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
         .toBe(1);
-      await captureSidebarUiProof(page, "workspace-agent-avatar.png");
+      await captureSidebarUiProof(suite, page, "workspace-agent-avatar.png");
     } finally {
       await suite.closeBrowserContext(context);
     }

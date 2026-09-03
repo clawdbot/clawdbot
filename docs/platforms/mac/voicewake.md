@@ -26,7 +26,7 @@ Voice Wake requires Apple Speech to support on-device recognition for the select
 - Hard stop: 120s (`captureHardStop`) to prevent runaway sessions.
 - Debounce between sessions: 350ms (`debounceAfterSend`) after a send.
 - The overlay is driven via `VoiceWakeOverlayController`, with committed/volatile text coloring.
-- After send, the recognizer restarts cleanly to listen for the next trigger.
+- After send, a fresh recognition task listens for the next trigger. Talk, Voice Wake, push-to-talk, and Quick Chat dictation reuse their recognizer while the selected language is unchanged; stopping capture still releases the microphone and cancels the task.
 
 ## Lifecycle invariants
 

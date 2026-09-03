@@ -39,6 +39,7 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       snapshot,
       connection: {
@@ -73,6 +74,7 @@ function createConnectedContext(
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const subscribe = () => () => undefined;
   const context = {
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       get snapshot() {
         return snapshot;
@@ -389,7 +391,28 @@ it("keeps co-author credit on until the person opts out", async () => {
 });
 
 it("renders a write-access note without calling users.self for read-only viewers", async () => {
-  const request = vi.fn();
+  const request = vi.fn(async () => ({
+    personal: {
+      state: "disconnected",
+      generation: null,
+      account: null,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      pending: null,
+    },
+    system: {
+      source: "system-detected",
+      credentialKind: "native",
+      credentialState: "unavailable",
+      account: null,
+      gitAuthor: { name: null, email: null },
+      evidence: "none",
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      oauthScopes: [],
+      repositoryGrants: "unknown",
+    },
+  }));
   const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
     id: "profile-1",
     email: "ada@example.test",
@@ -407,7 +430,7 @@ it("renders a write-access note without calling users.self for read-only viewers
   document.body.append(provider);
 
   await page.updateComplete;
-  expect(request).not.toHaveBeenCalled();
+  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
   expect(page.textContent).toContain("Profile editing requires operator.write access.");
   expect(page.querySelector(".identity-name-control")).toBeNull();
 });

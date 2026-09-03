@@ -28,6 +28,8 @@ type CodexAppServerThreadLifecycle = {
 export type CodexAppServerThreadLifecycleBinding = CodexAppServerThreadBinding & {
   lifecycle: CodexAppServerThreadLifecycle;
   liveThreadConfigFingerprint?: string;
+  /** Creation-time policy for a live ephemeral thread; never persisted in the binding. */
+  liveThreadEphemeralPolicy?: string;
   /** Process-local claim proof; never write this callback into durable binding state. */
   liveThreadOwnership?: CodexAppServerLiveThreadOwnership;
   clearInheritedServiceTier?: true;
@@ -37,7 +39,7 @@ type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };
 
-type CodexThreadFinalConfigPatchResult = {
+export type CodexThreadFinalConfigPatchResult = {
   configPatch?: JsonObject;
   nativeHookRelayGeneration?: string;
 };
@@ -123,4 +125,23 @@ export type CodexThreadRequestContext = {
     modelProvider: string | undefined,
   ) => string | undefined;
   throwIfAborted: () => void;
+};
+
+export type CodexResumeThreadContext = CodexThreadRequestContext & {
+  binding: CodexAppServerThreadBinding;
+  clearCurrentBinding: (operation: string) => Promise<void>;
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  buildLoadedPluginThreadConfig?: (
+    binding: CodexAppServerThreadBinding,
+  ) => Promise<CodexPluginThreadConfig | undefined>;
+  prebuiltFinalConfigPatch?: CodexThreadFinalConfigPatchResult;
+  assertResumeConfiguration: () => void;
+  assertResumeOwnership: () => void;
+};
+
+export type CodexStartThreadContext = CodexThreadRequestContext & {
+  prebuiltPluginThreadConfig?: CodexPluginThreadConfig;
+  preserveExistingBinding: boolean;
+  rotatedContextEngineBinding: boolean;
+  replacementPredecessor?: CodexAppServerThreadBinding;
 };

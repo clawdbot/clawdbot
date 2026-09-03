@@ -93,13 +93,16 @@ export async function runDiscordScenario(
         triggerTimestamp: sent.timestamp,
         predicate: (message) => message.senderId === environment.sutIdentity.id,
       });
-      await discordQaScenarioSupport.testing.waitForDiscordMessageText({
+      const progressMessage = await discordQaScenarioSupport.testing.waitForDiscordMessageText({
         token: environment.runtimeEnv.driverBotToken,
         channelId: environment.runtimeEnv.channelId,
         messageId: draft.message.messageId,
-        textIncludes: [run.progressLabel, "🛠️ Exec"],
+        textIncludes: [run.progressLabel],
         timeoutMs: remainingMs(),
       });
+      if (/\p{Extended_Pictographic}|\bExec\b/u.test(progressMessage.text)) {
+        throw new Error("Discord progress draft retained generated emoji or tool rows");
+      }
       const final = await discordQaScenarioSupport.testing.pollChannelMessages({
         token: environment.runtimeEnv.driverBotToken,
         channelId: environment.runtimeEnv.channelId,
@@ -146,7 +149,7 @@ export async function runDiscordScenario(
       token: environment.runtimeEnv.driverBotToken,
       channelId: environment.runtimeEnv.channelId,
       messageId: failed.draft.message.messageId,
-      textIncludes: [run.progressLabel, "🛠️ Exec"],
+      textIncludes: [run.progressLabel],
       timeoutMs: remainingMs(),
     });
     return {

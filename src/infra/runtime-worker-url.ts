@@ -1,5 +1,6 @@
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { isBunRuntime } from "../daemon/runtime-binary.js";
 
 /** Resolve a source worker sibling or its stable packaged path under dist. */
 export function resolveRuntimeWorkerUrl(params: {
@@ -19,8 +20,7 @@ export function resolveRuntimeWorkerUrl(params: {
   return new URL(`./${params.sourceWorkerName}${extension}`, params.currentModuleUrl);
 }
 
-export function resolveRuntimeWorkerArgv(url: URL): string[] {
-  return url.pathname.endsWith(".ts")
-    ? ["--import", "tsx", fileURLToPath(url)]
-    : [fileURLToPath(url)];
+export function resolveRuntimeWorkerArgv(url: URL, execPath = process.execPath): string[] {
+  const entry = fileURLToPath(url);
+  return /\.[cm]?ts$/.test(entry) && !isBunRuntime(execPath) ? ["--import", "tsx", entry] : [entry];
 }

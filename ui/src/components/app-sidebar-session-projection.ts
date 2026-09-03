@@ -31,7 +31,7 @@ type SidebarProjectionInput = {
   catalogIds?: readonly string[];
   sectionOrder?: readonly string[];
   collapsedSections: ReadonlySet<string>;
-  hideEmptyOwnerFilteredGroup: (category: string | undefined, rowCount: number) => boolean;
+  hideEmptyGroups: boolean;
   visibleSessionLimits: ReadonlyMap<string, number>;
   sortMode: SidebarSessionSortMode;
   statusFilter: SidebarSessionStatusFilter;
@@ -201,7 +201,7 @@ export class SidebarSessionProjection {
     }).filter(
       (section) =>
         section.id !== "pinned" &&
-        !input.hideEmptyOwnerFilteredGroup(section.category, section.rows.length),
+        !(input.hideEmptyGroups && section.category && section.rows.length === 0),
     );
     const sectionIds = new Set<string>(sections.map((section) => section.id));
     for (const sectionId of this.stickySections.keys()) {
@@ -349,6 +349,9 @@ export class SidebarSessionProjection {
     } satisfies SidebarSubtitleParams;
     const value = resolveSidebarSessionSubtitle(params);
     if (!value.subtitle) {
+      if (session.attention.kind === "question") {
+        this.heldSubtitles.delete(session.key);
+      }
       // Transient gaps between event updates keep the last shown line; the
       // hold dies with the run (the hasActiveRun branch above).
       return;

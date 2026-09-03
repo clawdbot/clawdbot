@@ -1,6 +1,6 @@
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiSessionUrl,
@@ -15,7 +15,10 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const outputDir = path.resolve(process.cwd(), ".artifacts/control-ui-e2e/session-activity-feed");
+let outputDir: string;
+beforeEach(() => {
+  outputDir = createControlUiE2eArtifactDir("session-activity-feed");
+});
 const proofPhase = process.env.OPENCLAW_MENU_THEME_PROOF_PHASE;
 
 suite.define(() => {
@@ -295,7 +298,6 @@ suite.define(() => {
         const onlineToggle = page.getByRole("button", { name: "Online", exact: true });
         await expect.poll(() => onlineToggle.getAttribute("aria-expanded")).toBe("true");
         await expect.poll(() => page.locator(".sidebar-online__person").count()).toBe(4);
-        await mkdir(outputDir, { recursive: true });
         await page.locator(".sidebar").screenshot({
           animations: "disabled",
           path: path.join(outputDir, "01-sidebar-online-default-open-light.png"),

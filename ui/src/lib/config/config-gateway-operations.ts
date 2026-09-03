@@ -116,10 +116,12 @@ export type RuntimeConfigExternalMutationResult<T> =
       error: string;
     };
 
-export type RuntimeConfigExternalMutationOptions = {
+export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   waitForWritesResumed?: boolean;
   canDispatch?: () => boolean;
   dispatchError?: string;
+  /** Refresh only responses that changed configuration, such as completed device authorization. */
+  shouldRefresh?: (value: T) => boolean;
 };
 
 export type RuntimeConfigDispatchOptions = {
@@ -149,7 +151,7 @@ export type ConfigWriteCoordinator = {
   patchFromSnapshot: (build: ConfigPatchBuilder) => Promise<boolean>;
   runExternalMutation: <T>(
     task: (client: GatewayBrowserClient) => Promise<T>,
-    options?: RuntimeConfigExternalMutationOptions,
+    options?: RuntimeConfigExternalMutationOptions<T>,
   ) => Promise<RuntimeConfigExternalMutationResult<T>>;
   dispose: () => void;
 };
@@ -159,7 +161,7 @@ export async function executeConfigExternalMutation<T>(
   client: GatewayBrowserClient,
   connectionEpoch: number,
   task: (client: GatewayBrowserClient) => Promise<T>,
-  options: RuntimeConfigExternalMutationOptions,
+  options: RuntimeConfigExternalMutationOptions<T>,
   refresh: () => Promise<boolean>,
 ): Promise<RuntimeConfigExternalMutationResult<T>> {
   if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
@@ -206,6 +208,9 @@ export async function executeConfigExternalMutation<T>(
     return refreshFailure("Connection changed before the configuration update was refreshed.");
   }
   try {
+    if (options.shouldRefresh && !options.shouldRefresh(value)) {
+      return { ok: true, value, refresh: { ok: true } };
+    }
     const refreshed = await refresh();
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
       return refreshFailure("Connection changed before the configuration update was refreshed.");

@@ -50,15 +50,48 @@ function declarationReferences(file: string, contents: string) {
 /** Publish a declaration subset only after its complete canonical build succeeds. */
 export async function publishStagedDeclarations(
   plan: NonNullable<ReturnType<typeof prepareTsdownBuildExecution>>,
+  sources: { output: string; required: string[] }[],
   staging: string,
   dist: string,
   required: string[],
+  previous: string[],
+  sealInputs?: () => void,
 ) {
-  const code = await executeTsdownBuildPlan(plan);
-  if (code !== 0) {
-    throw Object.assign(new Error(`SDK declaration build failed with exit ${code}`), {
-      exitCode: code,
-    });
+  if (plan.invocations.length) {
+    const code = await executeTsdownBuildPlan(plan);
+    if (code !== 0) {
+      throw Object.assign(new Error(`Declaration build failed with exit ${code}`), {
+        exitCode: code,
+      });
+    }
+  }
+  for (const source of sources) {
+    const files = listCacheFiles(
+      source.output,
+      [{ path: ".", extensions: [".d.ts", ".d.mts", ".d.cts"] }],
+      fs,
+    );
+    const emitted = new Set(files.map((file) => portableRelativePath(source.output, file)));
+    for (const entry of source.required) {
+      if (!emitted.has(entry)) {
+        throw new Error(`Missing canonical declaration: ${entry}`);
+      }
+    }
+    for (const file of files) {
+      const relative = portableRelativePath(source.output, file);
+      const target = path.join(staging, relative);
+      const bytes = fs.readFileSync(file);
+      // Shared chunks may be identical across groups. A differing owner must
+      // fail before publication; last-writer-wins can corrupt nominal identity.
+      if (fs.existsSync(target)) {
+        if (!fs.readFileSync(target).equals(bytes)) {
+          throw new Error(`Conflicting canonical declaration owners: ${relative}`);
+        }
+        continue;
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, bytes, { flag: "wx" });
+    }
   }
   const files = listCacheFiles(
     staging,
@@ -68,11 +101,11 @@ export async function publishStagedDeclarations(
   const emitted = new Set(files);
   for (const entry of required) {
     if (!emitted.has(entry)) {
-      throw new Error(`Missing canonical SDK declaration: ${entry}`);
+      throw new Error(`Missing canonical declaration: ${entry}`);
     }
   }
   // Validate all staged relative edges before touching live declarations, including
-  // shared root chunks. The SDK subset has no authority to garbage-collect chunks.
+  // shared root chunks. The caller supplies only its owned previous inventory.
   const dependencies = new Map<string, string[]>();
   for (const file of files) {
     const targets: string[] = [];
@@ -106,10 +139,6 @@ export async function publishStagedDeclarations(
   for (const file of files) {
     visit(file);
   }
-  const previous = listCacheFiles(
-    dist,
-    [{ path: "plugin-sdk", extensions: [".d.ts", ".d.mts", ".d.cts"], recursive: false }],
-    fs,
-  ).map((file) => portableRelativePath(dist, file));
+  sealInputs?.();
   publishArtifactFiles(staging, dist, ordered, previous);
 }

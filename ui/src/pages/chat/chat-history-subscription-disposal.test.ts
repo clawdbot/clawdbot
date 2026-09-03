@@ -5,8 +5,8 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   disposeSelectedSessionMessageSubscription,
   syncSelectedSessionMessageSubscription,
-  type ChatState,
-} from "./chat-history.ts";
+} from "./chat-history-subscription.ts";
+import type { ChatState } from "./chat-state-contract.ts";
 
 const subscription = { key: "agent:main:main", agentId: null };
 

@@ -1,4 +1,5 @@
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
+import type { StoredChatOutboxScope } from "../../lib/chat/outbox-store.ts";
 import { visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import {
@@ -14,7 +15,6 @@ import {
 } from "./chat-queue.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import type { StoredChatOutboxScope } from "./composer-persistence.ts";
 
 export type ChatCommandComposerRecovery = {
   client: ChatHost["client"];

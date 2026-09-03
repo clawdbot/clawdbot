@@ -1,3 +1,4 @@
+import type { SessionWriterDeliveryAuthority } from "../../auto-reply/reply-payload.js";
 import { resolveMessageReceiptPrimaryId } from "../../channels/message/receipt.js";
 import {
   ConversationDeliveryMissingError,
@@ -29,6 +30,7 @@ export type DurableDeliveryCompletion =
       sessionId: string;
       sessionKey: string;
       storePath: string;
+      sessionWriterDeliveryAuthority?: SessionWriterDeliveryAuthority;
     };
 
 type DurableDeliveryCompletionResult = {

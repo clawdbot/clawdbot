@@ -42,10 +42,10 @@ export function createNewerSqliteSchemaVersionError(
   supportedVersion: number,
 ): Error {
   return new SqliteSchemaVersionError(
-    `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}. ` +
-      `Refused by ${describeRunningOpenClawBuild()}. ` +
-      "Identify installs by that path when multiple installs share a version or build. " +
-      `Run a build that supports schema ${schemaVersion} or newer against this state directory — rebuild or update the install above — or point this build at a different OPENCLAW_STATE_DIR. ` +
+    "This OpenClaw build cannot open your existing data.\n" +
+      `${databaseLabel} ${pathname} uses newer schema version ${schemaVersion}; this build supports ${supportedVersion}.\n` +
+      `Refused by ${describeRunningOpenClawBuild()}.\n` +
+      `Use a build that supports schema ${schemaVersion} or newer with this state directory. To start fresh with this build, point OPENCLAW_STATE_DIR at a separate directory.\n` +
       `See ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
   );
 }

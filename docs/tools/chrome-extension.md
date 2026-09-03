@@ -45,8 +45,11 @@ development IDs. After pre-registration succeeds, add
 
 The extension pairs on its first native call; you do not need to open its
 popup, reload it, or restart Chrome during a normal first-time setup. The
-installer then reads the profile's `Secure Preferences` and verifies the exact
-Store ID independently from any extension path.
+installer then inspects the profile's `Preferences` and `Secure Preferences`
+backing files and verifies the exact Store ID independently from any extension
+path. Chromium selects the backing file by settings-enforcement policy; Linux
+normally uses `Preferences`. Both files receive the same ownership, path, file
+type, permission, and size checks.
 
 For extension development, the command also copies the bundled extension to a
 stable OpenClaw-owned directory. Use that unpacked copy only as a development
@@ -107,7 +110,7 @@ openclaw config set browser.defaultProfile chrome
 Fresh automatic pairings use **All tabs**. Existing valid pairings are never
 overwritten, and older pairings keep their stored access mode.
 
-For local setup, native bootstrap connects the extension through the local
+For fresh local setup, native bootstrap connects the extension through the local
 Gateway's exact `/browser/extension` route. That first authenticated connection
 wakes the lazy browser-control service and starts the profile's loopback relay;
 OpenClaw and local clients such as mcporter then use that profile relay port.
@@ -118,6 +121,55 @@ Browser-node setup remains different: the extension connects to the relay on
 the browser-node host while the node uses its configured remote Gateway. An
 explicit `--gateway-url` pairing connects directly to that remote Gateway and
 remains a manual-only flow.
+
+### Standalone direct-loopback relay
+
+A pairing on `ws://127.0.0.1:<port>/extension` can run without a local Gateway
+or browser node. On macOS and Linux, the bundled extension can ask the installed
+native host to start a standalone relay when reconnecting to that endpoint.
+Automatic local setup must be enabled. Requests are limited to once per minute;
+the extension still authenticates the relay with connection-bound v2 proofs.
+This requires both the updated native host and an extension build containing
+relay wake-up support. Do not assume the Store v2.2.0 build includes that code;
+the bundled unpacked development copy is the source-build validation path.
+
+Automatic wake-up requires the exact `127.0.0.1` host that the daemon serves.
+Other loopback aliases, including `localhost` and IPv6, do not trigger wake-up;
+use the canonical IPv4 endpoint when pairing for standalone operation.
+
+Wake-up uses the port in the extension's existing canonical pairing. It does
+not switch to the first configured profile. The native host resolves current
+`browser.profiles` and permits only an extension-driver relay port, including
+automatically allocated ports and explicit `cdpPort` pins. A removed profile
+or stale port fails closed; correct the pairing to match the current profile.
+Gateway `/browser/extension` routes and remote pairings never trigger local
+daemon wake-up. Browser-node pairings that use a direct loopback relay can use
+it even when their Gateway hint points to a remote host.
+
+An existing listener keeps ownership of its port. Otherwise, the native host
+spawns `dist/extensions/browser/relay-daemon-entry.js` as a detached process.
+The daemon uses the same per-host relay key and stays alive while an extension
+or CDP client is connected. After both disconnect, it exits following ten
+minutes of inactivity, checked every 30 seconds. Closing Chrome alone does not
+stop it while a CDP client remains connected. A later reconnect can wake it again.
+
+The standalone daemon defaults to **v2-only authentication**, independently of
+the Gateway relay's legacy default. Only an explicit
+`browser.extensionRelay.allowLegacyAuth=true` enables legacy authentication;
+an unset value, `false`, or a config-read failure never enables it. Prefer v2
+clients so the persistent key is not disclosed to a process occupying the port.
+
+Gateway browser control can join a standalone relay that already owns the
+configured profile and port. It authenticates that exact owner with v2 and uses
+its existing bridge; it does not start a second listener. Stopping Gateway
+releases only Gateway's connections, leaving the daemon, its direct extension
+connection, and other CDP clients running. Gateway-first automatic setup through
+`/browser/extension` remains supported.
+
+Both processes need an OpenClaw build that supports this owner-access protocol. A
+mismatched profile, port, key, or stricter authentication policy produces an
+error; Gateway never takes over the listener or falls back to legacy credentials.
+The daemon's stricter v2-only default is compatible with Gateway's default.
 
 ### Choose tab access
 
@@ -165,7 +217,7 @@ Settings shows redacted relay/native bootstrap status and the **Use automatic
 local setup** switch.
 
 - Turning automatic setup off preserves a valid existing pairing but prevents
-  new native bootstrap attempts.
+  new native bootstrap and standalone relay wake-up attempts.
 - **Disconnect and disable automatic setup** revokes the pairing immediately,
   detaches debugger sessions, and persists the opt-out.
 - **Use local OpenClaw** clears the opt-out and retries the native host.
@@ -233,8 +285,10 @@ Manual pairing remains useful on Windows and for recovery. Treat the complete
 pairing string as a password.
 
 Without `--gateway-url`, this command retains the host-local `/extension` relay
-for standalone manual pairing. It does not wake Browser control; the selected
-profile relay must already be running before the extension connects.
+for standalone manual pairing. It does not wake Browser control. With native
+wake-up support installed and automatic local setup enabled, the extension can
+start that relay on reconnect without a local Gateway. Otherwise, the relay
+must already be running, for example through Browser control or a browser node.
 
 For a laptop that has Chrome but does not run OpenClaw or a browser node, pair
 directly to a remote Gateway:
@@ -330,20 +384,28 @@ The extension requests only:
 - `tabs` and `tabGroups`: discover tabs and enforce access mode;
 - `storage`: persist pairing, access mode, session pauses, and bootstrap opt-out;
 - `alarms`: wake the MV3 worker for relay/bootstrap retries;
-- `nativeMessaging`: request one local bootstrap pairing.
+- `nativeMessaging`: request a local bootstrap pairing or wake its configured relay.
 
 It does not request `activeTab`, `contextMenus`, `scripting`, or `sidePanel`.
 
 ## Native bootstrap security
 
-The native host is `ai.openclaw.browser_bootstrap`. Each
-`chrome.runtime.sendNativeMessage` call starts one process, reads one request,
-writes one response, and exits.
+The native host is `ai.openclaw.browser_bootstrap`. The extension opens a
+`chrome.runtime.connectNative` port for one request, validates the response,
+then disconnects. The host writes one response and exits; a spawned standalone
+relay outlives this short-lived native connection.
 
 The request uses a versioned, length-prefixed JSON frame with a fresh 16-byte
 nonce. The host caps input at 4 KiB, requires fatal UTF-8 decoding and exact
 fields, verifies the caller origin against the exact installed manifest, and
-returns only a locally generated pairing or a bounded non-secret failure code.
+returns only a locally generated pairing, a relay status, or a bounded
+non-secret failure code. The bootstrap request remains exactly
+`{v:1, op:"bootstrap", nonce}`. Relay wake-up uses
+`{v:1, op:"ensure_relay", nonce, relayPort}` with a required integer port from
+1 through 65535. Missing, duplicate, malformed, or extra fields are rejected.
+After manifest and caller validation, the host checks the requested port
+against current extension profiles before probing or spawning. No request can
+supply a host, executable path, or credential to the launcher.
 The response is below Chrome's 1 MiB native-message limit. Pairing keys never
 appear in launcher arguments, manifests, status JSON, or diagnostics.
 
@@ -370,7 +432,10 @@ manifest has no `key`; only these development IDs depend on approved
 OpenClaw-owned realpaths.
 
 The relay itself uses connection-bound HMAC proofs. The persistent per-host key
-is not sent in a URL, header, WebSocket subprotocol, or application frame.
+is not sent in a URL, header, WebSocket subprotocol, or application frame during
+v2 authentication. On POSIX hosts, each key read rejects foreign-owned and
+non-regular files and tightens an owned group/other-accessible file to `0600`;
+if tightening fails, the key is refused. Windows uses its existing ACL policy.
 
 ## Troubleshooting
 
@@ -399,10 +464,12 @@ openclaw doctor
   OpenClaw**.
 - **Manual setup required:** use Settings for the advanced pairing flow. This
   is expected on Windows and direct extension-only remote Gateway setups.
-- **Relay unavailable:** confirm `openclaw gateway run` or the managed Gateway
-  service is running for local setup, or confirm the browser node is running
-  for browser-node setup. Then run browser doctor. No separate browser prewarm
-  should be necessary.
+- **Relay unavailable:** for `/browser/extension` pairings, confirm the target
+  Gateway is running. For direct loopback `/extension` pairings, check native
+  host registration, wake-up support in the extension build, automatic setup,
+  and that the paired port still belongs to an extension profile. Allow for the
+  one-minute wake-up throttle, then run browser doctor. No local Gateway is
+  required for the standalone path.
 
 See [Browser](/tools/browser) for the full profile model and the managed
 `openclaw` and Chrome MCP `user` profiles.

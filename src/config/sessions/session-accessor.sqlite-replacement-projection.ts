@@ -73,7 +73,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
     sessionKey: params.activeSessionKey ?? params.sessionKeys?.[0] ?? "",
     storePath: params.storePath,
   });
-  const committed = await runPreparedSqliteSessionWrite(resolved, async () => {
+  const preparedWrite = await runPreparedSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const selectedKeys = params.sessionKeys ? new Set(params.sessionKeys) : undefined;
     const selectedStatuses = params.statuses ? new Set(params.statuses) : undefined;
@@ -263,9 +263,11 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
       },
     };
   });
+  const committed = preparedWrite.result;
   await finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort(
     resolved,
     committed.maintenancePlans,
+    { deletedEntriesBeforeMaintenance: preparedWrite.deletedEntries },
   );
   return committed.result;
 }

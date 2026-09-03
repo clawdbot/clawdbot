@@ -162,27 +162,24 @@ export class SubagentLifecycleController {
     void this.scheduledRequesterSettleWakeRuns.add(runId);
   runRequesterSettleWake = (runId: string, run: () => Promise<unknown>): Promise<unknown> => {
     if (!this.restoredRequesterSettleWakeRuns.has(runId)) {
-      return runWithGatewayIndependentRootWorkContinuation(run);
+      return runWithGatewayIndependentRootWorkContinuation(run, "subagents:lifecycle-wake");
     }
     // Reserve the independent Gateway root before entering the limiter. The
     // limiter may queue this callback for an arbitrary amount of time; that
     // queue wait must still count as active work during a restart drain.
-    return runWithGatewayIndependentRootWorkContinuation(() =>
-      this.restoredRequesterSettleWakeLimit(async () => {
-        try {
-          return await run();
-        } finally {
-          // Keep restored classification across retryable wakes. A retry is
-          // still part of startup catch-up until its durable wake state retires.
-          if (!this.options.runs.get(runId)?.requesterSettleWake) {
-            this.restoredRequesterSettleWakeRuns.delete(runId);
-          }
-        }
-      }),
+    return runWithGatewayIndependentRootWorkContinuation(
+      () => this.restoredRequesterSettleWakeLimit(run),
+      "subagents:lifecycle-wake",
     );
   };
-  unmarkRequesterSettleWakeRunScheduled = (runId: string): void =>
-    void this.scheduledRequesterSettleWakeRuns.delete(runId);
+  unmarkRequesterSettleWakeRunScheduled = (runId: string): void => {
+    this.scheduledRequesterSettleWakeRuns.delete(runId);
+    // Retryable durable wakes remain startup recovery. Once settlement retires
+    // that state, the same run id must return to the ordinary live path.
+    if (!this.options.runs.get(runId)?.requesterSettleWake) {
+      this.restoredRequesterSettleWakeRuns.delete(runId);
+    }
+  };
   markRequesterSettleWakeRearm = (runId: string): void =>
     void this.pendingRequesterSettleWakeRearms.add(runId);
   takeRequesterSettleWakeRearm = (runId: string): boolean =>
@@ -195,7 +192,7 @@ export class SubagentLifecycleController {
     // Callers can detach while retaining parent ALS, so nesting is intentional.
     await runWithGatewayIndependentRootWorkContinuation(async () => {
       await completeSubagentRunAttempt(this, completeParams);
-    });
+    }, "subagents:lifecycle-complete");
   };
 
   completeCleanupBookkeeping = (params: CleanupBookkeepingParams) => {

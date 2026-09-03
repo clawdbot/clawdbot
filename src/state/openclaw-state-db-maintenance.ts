@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import {
   assertSqliteSchemaContains,
   assertSqliteSchemaTablesPresent,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -112,6 +113,7 @@ export function assertOpenClawStateDatabaseOwner(
 export function assertOpenClawStateDatabaseForMaintenance(
   database: DatabaseSync,
   options: { pathname: string },
+  readTable?: SqliteTableContractReader,
 ): void {
   const userVersion = readSqliteUserVersion(database);
   if (userVersion > OPENCLAW_STATE_SCHEMA_VERSION) {
@@ -144,6 +146,7 @@ export function assertOpenClawStateDatabaseForMaintenance(
     options.pathname,
     OPENCLAW_STATE_SCHEMA_SQL,
     OPENCLAW_STATE_MAINTENANCE_SCHEMA_COMPATIBILITY,
+    readTable,
   );
 }
 

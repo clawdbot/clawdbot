@@ -540,13 +540,19 @@ describe("OpenClaw performance workflow", () => {
 
   it("builds only the QA and startup artifacts required by source probes", () => {
     const run = findStep("Run OpenClaw source performance probes", "source_performance").run ?? "";
-    const build =
+    const typedBuild =
       "OPENCLAW_BUILD_PRIVATE_QA=1 node --import tsx scripts/build-all.mts sourcePerformance";
+    const nativeBuild = "OPENCLAW_BUILD_PRIVATE_QA=1 node scripts/build-all.mjs sourcePerformance";
 
-    expect(run).toContain("module.BUILD_ALL_PROFILES?.sourcePerformance");
-    expect(run).toContain(build);
+    expect(run).toContain("scripts/profile-extension-memory.{mts,mjs}");
+    expect(run).toContain("scripts/build-all.mts --help");
+    expect(run).toContain("scripts/build-all.mjs --help");
+    expect(run).toContain("sourcePerformance");
+    expect(run).toContain(typedBuild);
+    expect(run).toContain(nativeBuild);
     expect(run).toContain("pnpm build");
-    expect(run.indexOf(build)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf(typedBuild)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
+    expect(run.indexOf(nativeBuild)).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
     expect(run.indexOf("pnpm build")).toBeLessThan(run.indexOf("pnpm test:gateway:cpu-scenarios"));
   });
 

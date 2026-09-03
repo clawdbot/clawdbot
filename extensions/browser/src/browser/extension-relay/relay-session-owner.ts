@@ -36,6 +36,8 @@ type LogicalSession = {
   children: Map<PhysicalSession, LogicalSession>;
   flat: boolean;
   detachedChildren: Set<PhysicalSession>;
+  frameTreeRead?: Promise<void>;
+  runtimeGeneration: number;
 };
 export type RelaySessionClient = {
   socket: { send: (data: string) => void };
@@ -161,6 +163,7 @@ export class RelaySessionOwner {
       children: new Map(),
       flat,
       detachedChildren: new Set(),
+      runtimeGeneration: 0,
     };
     client.sessions.set(sessionId, session);
     physical.subscribers.add(session);

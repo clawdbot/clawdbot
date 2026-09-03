@@ -10,11 +10,15 @@ import { setAvatarGatewayOrigin } from "../../../lib/identity-avatar-context.ts"
 import * as localStorageModule from "../../../local-storage.ts";
 import * as chatAvatar from "../chat-avatar.ts";
 import { chatStartupStatusLabel } from "../chat-run-startup.ts";
+import { groupMessages } from "../chat-thread-grouping.ts";
 import { buildCachedChatItems } from "../chat-thread.ts";
 import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "../tool-stream.ts";
 import { renderChatNotice } from "./chat-divider.ts";
-import { getChatMediaRenderVersion } from "./chat-message-media.ts";
+import {
+  getChatMediaRenderVersion,
+  releaseChatMediaResourceSubscriber,
+} from "./chat-message-media.ts";
 import {
   dismissConfirmedActionPopovers,
   renderActivityGroup,
@@ -26,13 +30,16 @@ import { renderTurnRecapRow } from "./chat-working-indicator.ts";
 import "./chat-sidebar.ts";
 
 const localStorageValues = new Map<string, string>();
+const mediaSubscribers = new Set<() => void>();
 const renderMarkdownHtml = markdown.toSanitizedMarkdownHtml;
 const markdownRenderMock = vi.fn(
   (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) => value,
 );
 const streamingMarkdownRenderMock = vi.fn(
-  (value: string, _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean }) =>
-    `<div class="streaming-markdown">${value}</div>`,
+  (
+    value: string,
+    _options?: { codeBlockChrome?: "copy" | "none"; fileLinks?: boolean },
+  ): [string, string] => ["", `<div class="streaming-markdown">${value}</div>`],
 );
 
 function getSafeLocalStorageMock(): Storage {
@@ -84,7 +91,7 @@ function pointerClick(element: Element) {
 beforeEach(() => {
   vi.spyOn(localStorageModule, "getSafeLocalStorage").mockImplementation(getSafeLocalStorageMock);
   vi.spyOn(markdown, "toSanitizedMarkdownHtml").mockImplementation(markdownRenderMock);
-  vi.spyOn(markdown, "toStreamingMarkdownHtml").mockImplementation(streamingMarkdownRenderMock);
+  vi.spyOn(markdown, "toStreamingMarkdownParts").mockImplementation(streamingMarkdownRenderMock);
   vi.spyOn(chatAvatar, "renderChatAvatar").mockImplementation(renderChatAvatarMock);
 });
 
@@ -214,6 +221,9 @@ function renderTestMessageGroup(
   group: MessageGroup,
   opts: Partial<RenderMessageGroupOptions> = {},
 ) {
+  if (opts.onRequestUpdate) {
+    mediaSubscribers.add(opts.onRequestUpdate);
+  }
   return renderMessageGroup(group, {
     showReasoning: true,
     showToolCalls: true,
@@ -278,11 +288,21 @@ function createMessageGroup(
   overrides: Partial<MessageGroup> = {},
 ): MessageGroup {
   const timestamp = overrides.timestamp ?? messageTimestamp(message);
+  const messages = overrides.messages ?? [{ key: `${role}:${timestamp}:message`, message }];
+  const groups = groupMessages(messages.map((entry) => ({ kind: "message", ...entry }))).filter(
+    (item) => item.kind === "group",
+  );
+  const visibleContent = groups.some((group) => group.visibleContent === "non-text")
+    ? "non-text"
+    : groups.some((group) => group.visibleContent === "text")
+      ? "text"
+      : "none";
   return {
     kind: "group",
     key: `${role}:${timestamp}`,
     role,
-    messages: [{ key: `${role}:${timestamp}:message`, message }],
+    messages,
+    visibleContent,
     timestamp,
     isStreaming: false,
     ...overrides,
@@ -656,6 +676,11 @@ function mediaTicketPayload(mediaTicket: string, ttlMs = 5 * 60 * 1000) {
 }
 
 afterEach(() => {
+  // These detached render fixtures own the callbacks a live chat pane normally releases.
+  for (const subscriber of mediaSubscribers) {
+    releaseChatMediaResourceSubscriber(subscriber);
+  }
+  mediaSubscribers.clear();
   markdownRenderMock.mockClear();
   document.querySelectorAll("[data-confirmed-action-fixture]").forEach((element) => {
     dismissConfirmedActionPopovers(element);
@@ -1175,7 +1200,7 @@ describe("grouped chat rendering", () => {
     expect(onRewind).toHaveBeenCalledTimes(1);
   });
 
-  it("disables rewind while the agent is working", () => {
+  it("hides rewind while the agent is working", () => {
     const container = document.createElement("div");
     renderMessageGroups(
       container,
@@ -1183,10 +1208,7 @@ describe("grouped chat rendering", () => {
       { onRewind: vi.fn(), rewindDisabled: true },
     );
 
-    const button = container.querySelector<HTMLButtonElement>(".chat-group-rewind");
-    const tooltip = button?.closest("openclaw-tooltip");
-    expect(button?.disabled).toBe(true);
-    expect(tooltip?.content).toBe("Rewind is unavailable while the agent is working");
+    expect(container.querySelector(".chat-group-rewind")).toBeNull();
   });
 
   it.each([
@@ -1788,6 +1810,7 @@ describe("grouped chat rendering", () => {
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__status > .sr-only")).toBeNull();
+    expect(container.querySelector("openclaw-working-phrase")).toBeNull();
   });
 
   it("formats terminal recap durations with full localized units", () => {
@@ -1807,30 +1830,39 @@ describe("grouped chat rendering", () => {
       render(renderTurnRecapRow({ runtimeMs, outputTokens: null }), container);
       expect(container.querySelector(".chat-turn-recap")?.textContent?.trim()).toBe(expected);
     }
-
-    const withTokens = document.createElement("div");
-    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens: 2_400 }), withTokens);
-    expect(
-      withTokens.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
-    ).toBe("Done in 30 seconds · 2.4k tokens");
   });
 
-  it("shows live output usage beside elapsed time", () => {
+  it.each([
+    [0, "0 output tokens"],
+    [1, "1 output token"],
+    [999, "999 output tokens"],
+    [1_000, "1k output tokens"],
+    [5_500, "5.5k output tokens"],
+    [7_094, "7.1k output tokens"],
+    [999_950, "1M output tokens"],
+    [1_500_000, "1.5M output tokens"],
+    [4_132_000_000, "4.1B output tokens"],
+  ])("shows compact %i output tokens during and after a run", (outputTokens, label) => {
     const container = document.createElement("div");
 
     render(
       renderStreamGroup([{ kind: "reading-indicator", key: "reading", startedAt: 1_000 }], {
-        runOutputTokens: 5_500,
+        runOutputTokens: outputTokens,
       }),
       container,
     );
 
     expect(container.querySelector(".chat-working-indicator__elapsed")).not.toBeNull();
     expect(container.querySelector(".chat-working-indicator__tokens")?.textContent?.trim()).toBe(
-      "5.5k tokens",
+      label,
     );
-    // Streaming tokens replace the whimsical phrase: one liveness signal at a time.
+    // Known usage replaces the pre-usage working phrase.
     expect(container.querySelector("openclaw-working-phrase")).toBeNull();
+
+    render(renderTurnRecapRow({ runtimeMs: 30_000, outputTokens }), container);
+    expect(
+      container.querySelector(".chat-turn-recap")?.textContent?.replace(/\s+/g, " ").trim(),
+    ).toBe(`Done in 30 seconds · ${label}`);
   });
 
   it("relabels the working indicator while the run waits for approval", () => {
@@ -1845,11 +1877,13 @@ describe("grouped chat rendering", () => {
       container,
     );
 
-    expect(container.querySelector(".chat-working-indicator__status")?.textContent?.trim()).toBe(
+    expect(container.querySelector(".chat-working-indicator__status")?.textContent).toContain(
       "Waiting for approval…",
     );
     expect(container.querySelector(".chat-working-indicator__elapsed")).toBeNull();
-    expect(container.querySelector(".chat-working-indicator__tokens")).toBeNull();
+    expect(container.querySelector(".chat-working-indicator__tokens")?.textContent).toBe(
+      "5.5k output tokens",
+    );
   });
 
   it("keeps streamed assistant content in the guttered group without an avatar", () => {
@@ -1943,31 +1977,50 @@ describe("grouped chat rendering", () => {
     expect(avatar?.tagName).toBe("DIV");
   });
 
-  it("keeps the sender name visible without duplicating a gutter avatar", () => {
-    const container = document.createElement("div");
-    const message = { role: "user", content: "hello", timestamp: 1000 };
-    const group = createMessageGroup(message, "user", {
-      key: "attributed-user-group",
+  it.each([
+    {
+      behavior: "keeps a peer's recorded sender name visible",
       senderLabel: "alice",
       sender: { id: "profile-1", name: "Alice Example" },
-      messages: [createMessageEntry("attributed-user-message", message)],
-    });
+      viewer: { userName: "Local User" },
+      expectedName: "alice",
+    },
+    {
+      behavior: "uses the current display name for the signed-in user's proven profile",
+      senderLabel: "fullerstackd",
+      sender: {
+        id: "profile-1",
+        username: "fullerstackd",
+        identity: { type: "profile" as const, id: "profile-1" },
+      },
+      viewer: { userId: "profile-1", userName: "Fuller Stack" },
+      expectedName: "Fuller Stack",
+    },
+  ])(
+    "$behavior without duplicating a gutter avatar",
+    ({ senderLabel, sender, viewer, expectedName }) => {
+      const container = document.createElement("div");
+      const message = { role: "user", content: "hello", timestamp: 1000 };
+      const group = createMessageGroup(message, "user", {
+        key: "attributed-user-group",
+        senderLabel,
+        sender,
+        messages: [createMessageEntry("attributed-user-message", message)],
+      });
 
-    render(
-      renderTestMessageGroup(group, { userName: "Local User", showAvatarGutter: true }),
-      container,
-    );
+      render(renderTestMessageGroup(group, { ...viewer, showAvatarGutter: true }), container);
 
-    expect(
-      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
-    ).toBe("alice");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("alice");
-    expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
-    expect(container.querySelector(".chat-author-avatar")).toBeNull();
-  });
+      expect(
+        container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
+      ).toBe(expectedName);
+      expect(
+        container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
+          ?.textContent,
+      ).toBe(expectedName);
+      expect(container.querySelector(".chat-avatar.user")).not.toBeNull();
+      expect(container.querySelector(".chat-author-avatar")).toBeNull();
+    },
+  );
 
   it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
     const navigate = vi.fn();
@@ -2331,47 +2384,6 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("System");
     expect(container.textContent).toContain("Custom execution rules were not applied.");
     expect(container.textContent).not.toContain("Guardian warning");
-  });
-
-  it("uses the current profile display name for the signed-in user's proven profile messages", () => {
-    const container = document.createElement("div");
-    render(
-      renderMessageGroup(
-        createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
-          key: "current-user-group",
-          senderLabel: "fullerstackd",
-          sender: {
-            id: "profile-1",
-            username: "fullerstackd",
-            identity: { type: "profile", id: "profile-1" },
-          },
-          messages: [
-            {
-              key: "current-user-message",
-              message: { role: "user", content: "hello", timestamp: 1000 },
-            },
-          ],
-          timestamp: 1000,
-        }),
-        {
-          showReasoning: true,
-          showToolCalls: true,
-          assistantName: "OpenClaw",
-          userId: "profile-1",
-          userName: "Fuller Stack",
-          showAvatarGutter: true,
-        },
-      ),
-      container,
-    );
-
-    expect(
-      container.querySelector<HTMLElement>(".chat-group.user .chat-sender-name")?.textContent,
-    ).toBe("Fuller Stack");
-    expect(
-      container.querySelector(".chat-group-footer--persistent-identity .chat-sender-name")
-        ?.textContent,
-    ).toBe("Fuller Stack");
   });
 
   it("renders a compact author avatar when the gutter is hidden", async () => {

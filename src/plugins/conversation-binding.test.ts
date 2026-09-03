@@ -491,6 +491,22 @@ describe("plugin conversation binding approvals", () => {
     expect(hasShownPluginBindingFallbackNotice(bindingId)).toBe(true);
   });
 
+  it("bounds historical fallback notices while preserving recent suppression and lifecycle cleanup", async () => {
+    const scope = { channel: "discord", accountId: "default" };
+    for (let index = 0; index <= 4096; index += 1) {
+      markPluginBindingFallbackNoticeShown(`binding-${index}`, scope);
+    }
+
+    expect(hasShownPluginBindingFallbackNotice("binding-0", scope)).toBe(false);
+    expect(hasShownPluginBindingFallbackNotice("binding-1", scope)).toBe(true);
+    expect(hasShownPluginBindingFallbackNotice("binding-4096", scope)).toBe(true);
+    markPluginBindingFallbackNoticeShown("binding-4097", scope);
+    expect(hasShownPluginBindingFallbackNotice("binding-2", scope)).toBe(false);
+    expect(hasShownPluginBindingFallbackNotice("binding-1", scope)).toBe(true);
+    await drainGlobalSingletonLifecycleState();
+    expect(hasShownPluginBindingFallbackNotice("binding-4096", scope)).toBe(false);
+  });
+
   it("restores the prior Control UI binding when provider publication fails", async () => {
     const previous: SessionBindingRecord = {
       bindingId: "binding-prior",

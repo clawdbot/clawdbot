@@ -40,7 +40,6 @@ type RestoredDraft = {
 const reportedStorageOwners = new Set<string>();
 
 const durableComposerStore = import("../../lib/chat/composer-draft-store.runtime.ts");
-const loadDurableComposerStore = () => durableComposerStore;
 
 function durableComposerOwnerKey(scope: DurableComposerDraftScope): string {
   return JSON.stringify([scope.gatewayOwner, scope.recoveryScope]);
@@ -188,7 +187,7 @@ export async function hydrateDurableComposerAttachments(
 }
 
 export async function writeDurableComposerSnapshot(snapshot: DurableChatComposerSnapshot) {
-  const { writeDurableComposerDraft } = await loadDurableComposerStore();
+  const { writeDurableComposerDraft } = await durableComposerStore;
   const payloadUnavailable = snapshot.storedAttachments === null;
   const result = await writeDurableComposerDraft(
     snapshot.scope,
@@ -281,7 +280,7 @@ export class DurableChatComposerPersistence {
   retire(scope: DurableComposerDraftScope, minimumRevision: number) {
     this.resetRestoreScope();
     const run = async () => {
-      const { retireDurableComposerDraft } = await loadDurableComposerStore();
+      const { retireDurableComposerDraft } = await durableComposerStore;
       const result = await retireDurableComposerDraft(scope, minimumRevision);
       if (result.status === "storage-failed") {
         reportDurableComposerStorageError(scope, this.onStorageError);
@@ -312,8 +311,7 @@ export class DurableChatComposerPersistence {
     apply: (draft: RestoredDraft) => void,
     onCurrentWins: (storedRevision: number) => void,
   ) {
-    const { readDurableComposerDraft, prepareDurableComposerRecovery } =
-      await loadDurableComposerStore();
+    const { readDurableComposerDraft, prepareDurableComposerRecovery } = await durableComposerStore;
     if (baseline.scope.scopeKey.startsWith("chat:v3:")) {
       const recovery = await prepareDurableComposerRecovery(baseline.scope);
       if (recovery.status === "storage-failed") {

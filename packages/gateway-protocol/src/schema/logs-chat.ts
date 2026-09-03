@@ -1,9 +1,16 @@
 // Gateway Protocol schema module defines protocol validation shapes.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Static } from "typebox";
 import { Type } from "typebox";
-import { CHAT_HISTORY_MAX_ENTRIES } from "./chat-history-constants.js";
+import {
+  CHAT_HISTORY_MAX_ENTRIES,
+  CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
+  CHAT_INPUT_RUN_ID_MAX_CHARS,
+} from "./chat-history-constants.js";
 import { closedObject } from "./closed-object.js";
 import { ChatSendSessionKeyString, InputProvenanceSchema, NonEmptyString } from "./primitives.js";
+import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessions-row.js";
 
 /** Cursor-based request for the gateway log tail endpoint. */
 export const LogsTailParamsSchema = closedObject({
@@ -31,6 +38,13 @@ export const ChatHistoryParamsSchema = closedObject({
   limit: Type.Optional(Type.Integer({ minimum: 1, maximum: CHAT_HISTORY_MAX_ENTRIES })),
   offset: Type.Optional(Type.Integer({ minimum: 0 })),
   pendingBefore: Type.Optional(Type.Integer({ minimum: 1 })),
+  inputRunIds: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }), {
+      minItems: 1,
+      maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS,
+      uniqueItems: true,
+    }),
+  ),
   messageId: Type.Optional(NonEmptyString),
   sessionId: Type.Optional(NonEmptyString),
   maxChars: Type.Optional(Type.Integer({ minimum: 1, maximum: 500_000 })),
@@ -41,7 +55,7 @@ export const ChatPendingInputsPageSchema = closedObject({
   items: Type.Array(
     closedObject({
       id: NonEmptyString,
-      runId: Type.Optional(Type.String({ minLength: 1, maxLength: 256 })),
+      runId: Type.Optional(Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS })),
       message: Type.Unknown(),
       acceptedAt: Type.Number(),
       state: Type.String({ enum: ["queued", "cancelled", "interrupted"] }),
@@ -52,6 +66,33 @@ export const ChatPendingInputsPageSchema = closedObject({
   nextBefore: Type.Optional(Type.Integer({ minimum: 1 })),
 });
 export type ChatPendingInputsPage = Static<typeof ChatPendingInputsPageSchema>;
+
+/** Exact accepted-input custody, independent of display pagination and message identity. */
+export const ChatInputReceiptsSchema = Type.Array(
+  Type.Union([
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("pending"),
+    }),
+    closedObject({
+      runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+      state: Type.Literal("consumed"),
+      consumedByEventId: NonEmptyString,
+    }),
+  ]),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputReceipts = Static<typeof ChatInputReceiptsSchema>;
+
+/** Consumed-only compatibility projection for existing v4 clients. */
+export const ChatInputConsumptionsSchema = Type.Array(
+  closedObject({
+    runId: Type.String({ minLength: 1, maxLength: CHAT_INPUT_RUN_ID_MAX_CHARS }),
+    consumedByEventId: NonEmptyString,
+  }),
+  { maxItems: CHAT_INPUT_RECEIPT_MAX_RUN_IDS },
+);
+export type ChatInputConsumptions = Static<typeof ChatInputConsumptionsSchema>;
 
 /**
  * Bounded forward catch-up response. Clients replay `messages` as `session.message`
@@ -67,6 +108,8 @@ export const ChatHistoryDeltaResultSchema = closedObject({
   inFlightRun: Type.Optional(Type.Unknown()),
   metadata: Type.Optional(Type.Unknown()),
   pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+  inputReceipts: Type.Optional(ChatInputReceiptsSchema),
+  inputConsumptions: Type.Optional(ChatInputConsumptionsSchema),
 });
 
 /** Normal cursor discontinuity; clients recover with a fresh tail request. */
@@ -205,6 +248,8 @@ export const ChatSendParamsSchema = closedObject({
   // the Gateway steers the session's direct run or starts a turn when idle.
   expectedLeafEntryId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   expectedSessionRoutingContract: Type.Optional(NonEmptyString),
+  expectedPermissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
+  expectedToolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
   idempotencyKey: NonEmptyString,
 });
 
@@ -289,13 +334,61 @@ export const ChatAbortedEventSchema = closedObject({
   stopReason: Type.Optional(Type.String()),
 });
 
-/** Terminal event for failed chat runs with an optional normalized failure kind. */
+const CHAT_ERROR_DETAIL_MAX_CHARS = 300;
+const ChatErrorDetailTextSchema = Type.Optional(
+  Type.String({ maxLength: CHAT_ERROR_DETAIL_MAX_CHARS }),
+);
+const ChatErrorDetailSchema = closedObject({
+  provider: ChatErrorDetailTextSchema,
+  model: ChatErrorDetailTextSchema,
+  failoverReason: ChatErrorDetailTextSchema,
+  providerRuntimeFailureKind: ChatErrorDetailTextSchema,
+  providerErrorType: ChatErrorDetailTextSchema,
+  httpStatus: Type.Optional(Type.Integer({ minimum: 100, maximum: 599 })),
+  providerErrorMessagePreview: ChatErrorDetailTextSchema,
+});
+
+type ChatErrorDetail = Static<typeof ChatErrorDetailSchema>;
+
+/** Bounds already-redacted provider facts before lifecycle and chat publication. */
+export function projectChatErrorDetail(observation: unknown): ChatErrorDetail | undefined {
+  const source = asOptionalRecord(observation);
+  if (!source) {
+    return undefined;
+  }
+  const readText = (value: unknown) =>
+    typeof value === "string" && value.trim()
+      ? truncateUtf16Safe(value.trim(), CHAT_ERROR_DETAIL_MAX_CHARS)
+      : undefined;
+  const httpStatus = typeof source.httpStatus === "number" ? source.httpStatus : undefined;
+  // Only the observation owner's redacted facts cross this boundary; raw previews,
+  // bodies, and correlation hashes remain outside the closed chat contract.
+  const detail: ChatErrorDetail = {
+    provider: readText(source.provider),
+    model: readText(source.model),
+    failoverReason: readText(source.failoverReason),
+    providerRuntimeFailureKind: readText(source.providerRuntimeFailureKind),
+    providerErrorType: readText(source.providerErrorType),
+    httpStatus:
+      httpStatus !== undefined &&
+      Number.isInteger(httpStatus) &&
+      httpStatus >= 100 &&
+      httpStatus <= 599
+        ? httpStatus
+        : undefined,
+    providerErrorMessagePreview: readText(source.providerErrorMessagePreview),
+  };
+  return Object.values(detail).some((value) => value !== undefined) ? detail : undefined;
+}
+
+/** Terminal event for failed chat runs with optional sanitized provider diagnostics. */
 export const ChatErrorEventSchema = closedObject({
   ...ChatEventBaseSchema,
   state: Type.Literal("error"),
   message: Type.Optional(Type.Unknown()),
   errorMessage: Type.Optional(Type.String()),
   errorKind: Type.Optional(ChatEventErrorKindSchema),
+  errorDetail: Type.Optional(ChatErrorDetailSchema),
   usage: Type.Optional(Type.Unknown()),
   stopReason: Type.Optional(Type.String()),
 });

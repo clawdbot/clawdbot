@@ -117,7 +117,7 @@ function loadControlUiSessionPreview(
     entry,
     includeDerivedTitles: true,
     includeLastMessage: true,
-    transcriptUsageMaxBytes: 64 * 1024,
+    skipTranscriptUsageFallback: true,
   });
   return {
     sessionKey: row.key,

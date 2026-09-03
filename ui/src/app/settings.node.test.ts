@@ -74,6 +74,37 @@ describe("resolveApplicationStartupSettings", () => {
     expect(startup.settings.token).toBe("");
     expect(startup.password).toBe("next-password");
   });
+
+  it("carries a bounded native client identity into gateway startup", () => {
+    Object.assign(window, {
+      __OPENCLAW_NATIVE_CONTROL_AUTH__: {
+        gatewayUrl: "wss://gateway.example",
+        client: {
+          id: "openclaw-ios",
+          mode: "ui",
+          platform: "iOS 27.0.0",
+          deviceFamily: "iPhone",
+          instanceId: "ios-installation",
+          scopes: ["operator.read", "operator.write"],
+        },
+      },
+    });
+
+    const startup = resolveApplicationStartupSettings(makeUiSettings("wss://gateway.example"), {
+      pathname: "/chat",
+      search: "",
+      hash: "",
+    });
+
+    expect(startup.nativeClient).toEqual({
+      clientName: "openclaw-ios",
+      mode: "ui",
+      platform: "iOS 27.0.0",
+      deviceFamily: "iPhone",
+      instanceId: "ios-installation",
+      scopes: ["operator.read", "operator.write"],
+    });
+  });
 });
 
 describe("loadSettings default gateway URL derivation", () => {

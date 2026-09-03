@@ -123,27 +123,24 @@ export async function buildPreparedPluginModelCatalog(params: {
 }) {
   const { credentials, input } = params.agentFacts;
   const { pluginMetadataSnapshot: metadataSnapshot, pluginRegistry } = params.pluginGeneration;
-  return await withPluginRuntimeGenerationScope(
-    { config: input.config, metadataSnapshot, pluginRegistry },
-    async () => {
-      const snapshot = await buildPreparedModelCatalogSnapshot({
-        agentDir: input.agentDir,
-        authCredentials: credentials,
-        config: input.config,
-        modelRegistry: params.modelRegistry,
-        metadataSnapshot,
-        includeProviderPluginAugmentation: params.catalogMode === "live",
-        ...(input.env ? { env: input.env } : {}),
-        ...(input.readOnly ? { readOnly: true } : {}),
-        ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
-      });
-      return params.catalogMode === "live"
-        ? await augmentPreparedModelCatalogWithAgentHarness({
-            input,
-            snapshot,
-            pluginRegistry,
-          })
-        : snapshot;
-    },
-  );
+  return await withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, async () => {
+    const snapshot = await buildPreparedModelCatalogSnapshot({
+      agentDir: input.agentDir,
+      authCredentials: credentials,
+      config: input.config,
+      modelRegistry: params.modelRegistry,
+      metadataSnapshot,
+      includeProviderPluginAugmentation: params.catalogMode === "live",
+      ...(input.env ? { env: input.env } : {}),
+      ...(input.readOnly ? { readOnly: true } : {}),
+      ...(input.workspaceDir ? { workspaceDir: input.workspaceDir } : {}),
+    });
+    return params.catalogMode === "live"
+      ? await augmentPreparedModelCatalogWithAgentHarness({
+          input,
+          snapshot,
+          pluginRegistry,
+        })
+      : snapshot;
+  });
 }

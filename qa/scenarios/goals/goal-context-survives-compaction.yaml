@@ -14,9 +14,10 @@ scenario:
   successCriteria:
     - An authorized channel turn starts a session goal through `/goal start`.
     - A separate conversation completes a turn before the original session is compacted.
-    - The same session completes a manual `/compact` operation.
-    - The first post-compaction inbound turn reaches the mock model with the exact active-goal context line.
-    - The assertion uses the captured post-compaction provider request.
+    - The same session records exactly one manual compaction, with stable identity and fresh context accounting.
+    - At least one successful summary request belongs to the manual compaction.
+    - The first post-compaction inbound turn includes the persisted summary and exact active-goal context, then delivers one successful final reply.
+    - The assertions use causal provider-request and transcript cursors.
   gatewayConfigPatch:
     agents:
       defaults:
@@ -41,7 +42,8 @@ scenario:
       expectedGoalContext: "Active goal: Preserve the deployment audit objective — advance; keep active until fully achieved; block only after the same blocker on 3 consecutive turns; after update_goal, provide the requested visible final."
       contextSeedMarker: GOAL-COMPACTION-CONTEXT-SEED
       otherConversationMarker: GOAL-COMPACTION-SECOND-SESSION-READY
-      postCompactionMessage: GOAL-CONTEXT-POST-COMPACTION unrelated lunch question
+      postCompactionMessage: "GOAL-CONTEXT-POST-COMPACTION unrelated lunch question. Reply exactly: GOAL-COMPACTION-RESUMED"
+      postCompactionReplyMarker: GOAL-COMPACTION-RESUMED
 
 flow:
   steps:
@@ -62,6 +64,12 @@ flow:
         - set: conversationId
           value:
             expr: "`${config.conversationId}-${randomUUID().slice(0, 8)}`"
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: delivery.replyTo }, mainKey: env.cfg.session?.mainKey, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: outboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -84,28 +92,63 @@ flow:
               ref: outboundIndex
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
-        - set: seedOutboundIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
-        - sendInbound:
-            conversation:
-              id:
-                ref: conversationId
-              kind: direct
-            senderId:
-              ref: config.senderId
-            senderName: QA Goal Operator
-            text:
-              expr: "`${config.contextSeedMarker} ${'retain this audit context '.repeat(80)}`"
-        - waitForOutbound:
-            conversation:
-              id:
-                ref: conversationId
-              kind: direct
-            sinceIndex:
-              ref: seedOutboundIndex
-            timeoutMs:
-              expr: liveTurnTimeoutMs(env, 60000)
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+            - allowEmpty: true
+          saveAs: transcriptBeforeSeeds
+        - forEach:
+            items:
+              expr: "Array.from({ length: 6 }, (_, index) => index + 1)"
+            item: seedTurn
+            actions:
+              - set: seedReplyMarker
+                value:
+                  expr: "`GOAL-COMPACTION-SEED-${seedTurn}-READY`"
+              - set: seedOutboundIndex
+                value:
+                  expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+              - sendInbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind: direct
+                  senderId:
+                    ref: config.senderId
+                  senderName: QA Goal Operator
+                  text:
+                    expr: "`${config.contextSeedMarker}-${seedTurn} ${'retain this audit context '.repeat(80)} Reply exactly: ${seedReplyMarker}`"
+              - waitForOutbound:
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind: direct
+                  sinceIndex:
+                    ref: seedOutboundIndex
+                  textIncludes:
+                    ref: seedReplyMarker
+                  timeoutMs:
+                    expr: liveTurnTimeoutMs(env, 60000)
+                saveAs: seedReply
+              - assert:
+                  expr: "seedReply.isError !== true && seedReply.text === seedReplyMarker"
+                  message: seed turn did not complete successfully
+              - call: waitForCondition
+                args:
+                  - lambda:
+                      async: true
+                      expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+                  - expr: liveTurnTimeoutMs(env, 60000)
+                  - 100
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+          saveAs: seededTranscript
+        - assert:
+            expr: "seededTranscript.userMessageCount === transcriptBeforeSeeds.userMessageCount + 6"
+            message: every seed turn must reach the durable transcript
         - set: otherConversationId
           value:
             expr: "`${conversationId}-other`"
@@ -146,6 +189,23 @@ flow:
                 expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === otherSessionKey && session.hasActiveRun === false))"
             - expr: liveTurnTimeoutMs(env, 60000)
             - 100
+        - set: sessionBeforeCompaction
+          value:
+            expr: "(await readRawQaSessionStore(env))[sessionKey]"
+        - assert:
+            expr: "typeof sessionBeforeCompaction?.sessionId === 'string' && sessionBeforeCompaction.agentHarnessId === 'openclaw'"
+            message: expected an existing embedded session before manual compaction
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+          saveAs: transcriptBeforeCompaction
+        - set: checkpointsBeforeCompaction
+          value:
+            expr: "(await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })).checkpoints ?? []"
+        - set: requestCursorBeforeCompaction
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - set: compactOutboundIndex
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
@@ -165,14 +225,47 @@ flow:
               kind: direct
             sinceIndex:
               ref: compactOutboundIndex
-            textIncludes: Compact
+            textIncludes: Compacted
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: compactReply
         - assert:
-            expr: "!normalizeLowercaseStringOrEmpty(compactReply.text).includes('skipped')"
+            expr: "!/(failed|unavailable|incomplete|skipped|aborted|cancelled|canceled)/iu.test(compactReply.text)"
             message:
               expr: "`manual compaction did not compact the seeded session: ${compactReply.text}`"
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "readRawQaSessionStore(env).then((store) => { const entry = store[sessionKey]; return entry?.compactionCount === (sessionBeforeCompaction.compactionCount ?? 0) + 1 ? entry : undefined; })"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+          saveAs: compactedSession
+        - assert:
+            expr: "compactedSession.sessionId === sessionBeforeCompaction.sessionId && compactedSession.lifecycleRevision === sessionBeforeCompaction.lifecycleRevision && compactedSession.agentHarnessId === 'openclaw' && Number.isFinite(compactedSession.totalTokens) && compactedSession.totalTokens >= 0 && compactedSession.totalTokensFresh === true"
+            message: manual compaction changed session identity or failed to publish fresh context
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+            - afterEventCursor:
+                expr: transcriptBeforeCompaction.eventCursor
+          saveAs: compactedTranscript
+        - assert:
+            expr: "compactedTranscript.compactionSummaries.length === 1"
+            message: manual compaction must append exactly one durable summary
+        - set: newCheckpoints
+          value:
+            expr: "((await env.gateway.call('sessions.compaction.list', { key: sessionKey }, { timeoutMs: 15000 })).checkpoints ?? []).filter((checkpoint) => !checkpointsBeforeCompaction.some((previous) => previous.checkpointId === checkpoint.checkpointId))"
+        - assert:
+            expr: "newCheckpoints.length === 1 && Number.isFinite(newCheckpoints[0].tokensBefore) && Number.isFinite(newCheckpoints[0].tokensAfter) && newCheckpoints[0].tokensAfter === compactedSession.totalTokens"
+            message: manual compaction must publish one checkpoint with the same context snapshot
+        - set: summaryRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeCompaction}`)).filter((request) => request.requestKind === 'compaction-summary')"
+        - assert:
+            expr: "summaryRequests.length > 0 && summaryRequests.every((request) => request.outcome === 'success' && request.plannedToolName === undefined && request.toolOutputStructuredError !== true)"
+            message: manual compaction must complete a causal summary request without tool execution
         - set: requestCursorBeforePostCompactionTurn
           value:
             expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
@@ -204,10 +297,41 @@ flow:
               kind: direct
             sinceIndex:
               ref: postCompactOutboundIndex
+            textIncludes:
+              ref: config.postCompactionReplyMarker
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: postCompactionReply
         - assert:
-            expr: "String(postCompactionRequest.allInputText ?? '').includes(config.expectedGoalContext)"
-            message: post-compaction provider request input missed active goal context
-      detailsExpr: "`compact=${compactReply.text}; post-compaction=${postCompactionReply.text}`"
+            expr: "String(postCompactionRequest.allInputText ?? '').includes(config.expectedGoalContext) && String(postCompactionRequest.allInputText ?? '').includes(compactedTranscript.compactionSummaries[0])"
+            message: post-compaction provider request missed active goal context or the persisted summary
+        - assert:
+            expr: "postCompactionReply.text === config.postCompactionReplyMarker && postCompactionReply.isError !== true"
+            message: post-compaction turn did not deliver its successful final reply
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 60000)
+            - 100
+        - set: sessionAfterTurn
+          value:
+            expr: "(await readRawQaSessionStore(env))[sessionKey]"
+        - assert:
+            expr: "sessionAfterTurn.sessionId === compactedSession.sessionId && sessionAfterTurn.lifecycleRevision === compactedSession.lifecycleRevision && sessionAfterTurn.compactionCount === compactedSession.compactionCount"
+            message: the next accepted turn must retain the compacted session without another compaction
+        - call: readSessionTranscriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+            - afterEventCursor:
+                expr: compactedTranscript.eventCursor
+          saveAs: postCompactionTranscript
+        - assert:
+            expr: "postCompactionTranscript.userMessageCount === 1 && postCompactionTranscript.compactionSummaries.length === 0 && postCompactionTranscript.finalText === config.postCompactionReplyMarker && postCompactionTranscript.lastAssistantStopReason === 'stop' && !postCompactionTranscript.lastAssistantErrorMessage"
+            message: the accepted post-compaction turn must persist one user message and a successful terminal assistant
+        - assert:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(postCompactOutboundIndex).filter((message) => message.conversation.id === conversationId && message.text === config.postCompactionReplyMarker).length === 1"
+            message: the post-compaction final reply must be delivered exactly once
+      detailsExpr: "JSON.stringify({ sessionKey, sessionId: compactedSession.sessionId, lifecycleRevision: compactedSession.lifecycleRevision, counts: [sessionBeforeCompaction.compactionCount ?? 0, compactedSession.compactionCount, sessionAfterTurn.compactionCount], contextAfterCompaction: compactedSession.totalTokens, contextFresh: compactedSession.totalTokensFresh, checkpointId: newCheckpoints[0].checkpointId, summaryRequests: summaryRequests.map((request) => ({ cursor: request.cursor, kind: request.requestKind, outcome: request.outcome })), postCompactionRequestCursor: postCompactionRequest.cursor, finalReply: postCompactionReply.text })"

@@ -3,10 +3,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();
-const ensurePageState = vi.fn();
+const ensurePageState = vi.fn(() => ({}));
 const storeRoleRefsForTarget = vi.fn();
 const withPageScopedCdpClient = vi.fn();
 const markBackendDomRefsOnPage = vi.fn();
+const readMainFrameDocumentIdentityForPage = vi.fn();
 const formatAriaSnapshot = vi.fn();
 const gotoPageWithNavigationGuard = vi.fn();
 const createDownloadCaptureForPage = vi.fn(() => ({
@@ -33,6 +34,7 @@ vi.mock("./pw-download-capture.js", () => ({
 
 vi.mock("./pw-session.page-cdp.js", () => ({
   markBackendDomRefsOnPage,
+  readMainFrameDocumentIdentityForPage,
   withPageScopedCdpClient,
 }));
 
@@ -536,7 +538,7 @@ describe("pw-tools-core aria snapshot storage", () => {
     getPageForTargetId.mockResolvedValue(page);
     markBackendDomRefsOnPage.mockResolvedValue(new Set());
 
-    await mod.storeAriaSnapshotRefsViaPlaywright({
+    await mod.storeSnapshotRefsViaPlaywright({
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       nodes: [
@@ -557,5 +559,57 @@ describe("pw-tools-core aria snapshot storage", () => {
       },
       mode: "role",
     });
+  });
+
+  it("publishes finalized CDP refs without recomputing duplicate indexes", async () => {
+    const page = { id: "page-1" };
+    const mod = await import("./pw-tools-core.snapshot.js");
+
+    getPageForTargetId.mockResolvedValue(page);
+    markBackendDomRefsOnPage.mockResolvedValue(new Set(["e2"]));
+    readMainFrameDocumentIdentityForPage.mockResolvedValue("cdp:loader-1");
+
+    await mod.storeSnapshotRefsViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      expectedDocumentIdentity: "cdp:loader-1",
+      refs: {
+        e1: { role: "button", name: "Save", nth: 0, backendDOMNodeId: 42 },
+        e2: { role: "button", name: "Save", nth: 1, backendDOMNodeId: 84 },
+      },
+    });
+
+    expect(storeRoleRefsForTarget).toHaveBeenCalledWith({
+      page,
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      refs: {
+        e1: { role: "button", name: "Save", nth: 0 },
+        e2: { role: "button", name: "Save", nth: 1, domMarker: true },
+      },
+      mode: "role",
+    });
+  });
+
+  it("does not publish CDP refs after the document changes", async () => {
+    const page = { id: "page-1" };
+    const mod = await import("./pw-tools-core.snapshot.js");
+
+    getPageForTargetId.mockResolvedValue(page);
+    markBackendDomRefsOnPage.mockResolvedValue(new Set(["e1"]));
+    readMainFrameDocumentIdentityForPage.mockResolvedValue("cdp:loader-2");
+
+    await expect(
+      mod.storeSnapshotRefsViaPlaywright({
+        cdpUrl: "http://127.0.0.1:9222",
+        targetId: "tab-1",
+        expectedDocumentIdentity: "cdp:loader-1",
+        refs: {
+          e1: { role: "button", name: "Save", backendDOMNodeId: 42 },
+        },
+      }),
+    ).rejects.toThrow("Frame changed while its browser snapshot refs were being published");
+
+    expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 });

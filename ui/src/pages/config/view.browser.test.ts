@@ -137,6 +137,80 @@ describe("config view", () => {
     }
   });
 
+  it("keeps Setup collapsed on Advanced and edits consent without exposing machine state", () => {
+    const wizard = {
+      accessMode: "full",
+      appRecommendations: true,
+      lastRunAt: "2026-08-30T12:00:00Z",
+      lastRunVersion: "2026.8.30",
+      lastRunCommit: "abc1234",
+      lastRunCommand: "onboard",
+      lastRunMode: "local",
+      localModelLeanAutoModel: "internal/model",
+      securityAcknowledgedAt: "2026-08-29T12:00:00Z",
+    };
+    const schema = {
+      type: "object",
+      properties: {
+        wizard: {
+          type: "object",
+          properties: Object.fromEntries(
+            Object.entries(wizard).map(([key, value]) => [
+              key,
+              key === "accessMode"
+                ? { type: "string", enum: ["full", "guarded"] }
+                : { type: typeof value },
+            ]),
+          ),
+        },
+      },
+    };
+    const onFormPatch = vi.fn();
+    const { container, props } = renderConfigView({
+      schema,
+      formValue: { wizard },
+      forceShowAdvanced: true,
+      settingsLayout: "accordion",
+      onFormPatch,
+    });
+    const setup = queryRequired(container, "#config-section-wizard", HTMLDetailsElement);
+    expect(setup.open).toBe(false);
+    setup.open = true;
+    expect(setup.textContent).toContain(wizard.lastRunVersion);
+    expect(setup.textContent).not.toContain(wizard.localModelLeanAutoModel);
+    expect(setup.textContent).not.toContain(wizard.securityAcknowledgedAt);
+    expect(setup.querySelectorAll("input, textarea, select")).toHaveLength(0);
+    expect(onFormPatch).not.toHaveBeenCalled();
+    const access = setup.querySelector("wa-radio-group") as HTMLElement & { value: string };
+    access.value = setup.querySelector('wa-radio[value="1"]')?.getAttribute("value") ?? "";
+    access.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenCalledWith(["wizard", "accessMode"], "guarded");
+    const toggle = setup.querySelector("wa-switch") as HTMLElement & { checked: boolean };
+    expect(toggle.checked).toBe(true);
+    toggle.checked = false;
+    toggle.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onFormPatch).toHaveBeenLastCalledWith(["wizard", "appRecommendations"], false);
+    expect(props.formValue).toEqual({ wizard });
+
+    const defaults = renderConfigView({
+      schema,
+      formValue: {},
+      activeSection: "wizard",
+      forceAdvancedSection: "wizard",
+      forceShowAdvanced: true,
+    });
+    expect(
+      queryRequired(defaults.container, "#config-section-wizard", HTMLDetailsElement).open,
+    ).toBe(true);
+    expect(
+      (defaults.container.querySelector("wa-radio-group") as HTMLElement & { value: string }).value,
+    ).toBe("0");
+    expect(
+      (defaults.container.querySelector("wa-switch") as HTMLElement & { checked: boolean }).checked,
+    ).toBe(true);
+    expect(defaults.props.onFormPatch).not.toHaveBeenCalled();
+  });
+
   it("renders System language first on Appearance and emits locale overrides", () => {
     const onLocaleChange = vi.fn();
     const { container } = renderConfigView({

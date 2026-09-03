@@ -1,7 +1,7 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionBranch } from "../../api/types.ts";
+import type { ApplicationChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
-import type { ApplicationInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import type { SessionCapability, SessionMessageSubscription } from "../../lib/sessions/index.ts";
@@ -10,6 +10,7 @@ import type { ChatRunStartupState } from "./chat-run-startup.ts";
 import type { ChatRunError, LocalTerminalReconcile } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
+import type { RunOutputUsage } from "./tool-stream-contract.ts";
 
 type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: AgentsListResult["agents"];
@@ -18,7 +19,7 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
 export type ChatState = StreamCausalBoundaryState & {
   client: GatewayBrowserClient | null;
   connected: boolean;
-  initialUserMessage?: ApplicationInitialUserMessageHandoff;
+  chatSubmissions?: ApplicationChatSubmissions;
   /** Monotonic owner epoch; reconnects can reuse the same client object. */
   connectionEpoch: number;
   sessionKey: string;
@@ -46,7 +47,7 @@ export type ChatState = StreamCausalBoundaryState & {
   /** True when the active run was recovered from the embedded-run registry and
    * Stop must use the session-owned abort path (sessions.abort), not chat.abort. */
   chatRunSessionAbortable?: boolean;
-  chatRunUsageById?: Map<string, number>;
+  chatRunUsageById?: Map<string, RunOutputUsage>;
   /** Producer-cumulative text; visible tails derive from the segment baseline. */
   chatStream: string | null;
   chatStreamStartedAt: number | null;

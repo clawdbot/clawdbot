@@ -307,6 +307,7 @@ export interface SessionParticipants {
 
 export interface SessionPendingInputs {
   accepted_at: number;
+  consumed_event_id: string | null;
   idempotency_key: string;
   input_id: string;
   lifecycle_generation: string;

@@ -148,7 +148,7 @@ function resolveKnownAgentId(cfg: OpenClawConfig, rawAgentId: string): string {
 
 type ModelsTargetMode = { kind: "read"; agentDirOverride?: string } | { kind: "mutation" };
 
-/** Resolves the selected model-command agent and its profile directory. */
+/** Resolves model-command scope and retains configured auth ownership through read overrides. */
 export function resolveModelsTargetAgent(
   cfg: OpenClawConfig,
   rawAgentId: string | undefined,
@@ -172,8 +172,8 @@ export function resolveModelsTargetAgent(
         resolveSoleAgentId(cfg, { surface: "the model command", hint: "Pass --agent <id>." }));
   const agentId = resolveKnownAgentId(cfg, resolvedAgentId);
   const agentDirOverride = mode.kind === "read" ? mode.agentDirOverride : undefined;
-  const agentDir = agentDirOverride ?? resolveAgentDir(cfg, agentId);
-  return { agentId, agentDir };
+  const agentDir = resolveAgentDir(cfg, agentId);
+  return { agentId, agentDir: agentDirOverride ?? agentDir };
 }
 
 /** Normalized primary/fallback config shape used by text and image defaults. */

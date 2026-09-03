@@ -438,6 +438,7 @@ export type AgentRuntimeIdentityTokenParams = {
   sessionSpawnContext?: AgentRuntimeSessionSpawnContext;
   executionLineageHandoffId?: string;
   workerTurnClaim?: WorkerSessionTurnClaim;
+  approvalAuthority?: AgentRunDelegatedAuthority;
 };
 
 function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTokenParams): string {
@@ -471,9 +472,17 @@ function prepareAgentRuntimeIdentityTokenPayload(params: AgentRuntimeIdentityTok
   ) {
     throw new Error("worker delegated authority disagrees with the operational run");
   }
+  const approvalAuthority = params.approvalAuthority ?? activeAuthority;
+  if (
+    approvalAuthority.operationalRunInstance.instanceId !== operationalInstanceId ||
+    approvalAuthority.operationalRunInstance.runId !== operationalRunId ||
+    !validateAgentRunDelegatedAuthority(approvalAuthority)
+  ) {
+    throw new Error("agent runtime approval authority is no longer active");
+  }
   const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
-    ? { kind: "worker", ...activeAuthority, turnClaim: params.workerTurnClaim }
-    : { kind: "local", ...activeAuthority };
+    ? { kind: "worker", ...approvalAuthority, turnClaim: params.workerTurnClaim }
+    : { kind: "local", ...approvalAuthority };
   if (
     params.cronCreatorAuthorityGrant &&
     params.cronToolsAllowCapture !== "final-executable-surface"

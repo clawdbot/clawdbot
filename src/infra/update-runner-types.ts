@@ -1,9 +1,10 @@
 import type { CommandOptions } from "../process/exec.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
-import type { PackageUpdateStepAdvisory } from "./package-update-steps.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { PackageUpdateStepAdvisory } from "./update-doctor-result.js";
 import type { GlobalInstallManager } from "./update-global.js";
+import type { UpdateRecovery } from "./update-recovery.js";
 
 export type UpdateStepAdvisory = PackageUpdateStepAdvisory;
 
@@ -35,18 +36,7 @@ export type UpdateRunResult = {
   };
   steps: UpdateStepResult[];
   durationMs: number;
-  recovery?:
-    | { serviceRestartSafe: true }
-    | {
-        serviceRestartSafe: false;
-        reason:
-          | "source-rollback-failed"
-          | "manager-unavailable"
-          | "deps-install-failed"
-          | "build-failed"
-          | "rollback-checkout-dirty"
-          | "runtime-verification-failed";
-      };
+  recovery?: UpdateRecovery;
   postUpdate?: {
     plugins?: {
       status: "ok" | "warning" | "skipped" | "error";
@@ -115,15 +105,7 @@ export type UpdateStepInfo = {
   total: number;
 };
 
-type UpdateStepCompletion = UpdateStepInfo & {
-  durationMs: number;
-  exitCode: number | null;
-  stderrTail?: string | null;
-  signal?: NodeJS.Signals | null;
-  killed?: boolean;
-  termination?: "exit" | "timeout" | "no-output-timeout" | "signal";
-  advisory?: UpdateStepAdvisory;
-};
+type UpdateStepCompletion = UpdateStepInfo & Omit<UpdateStepResult, "cwd">;
 
 export type UpdateStepProgress = {
   onStepStart?: (step: UpdateStepInfo) => void;

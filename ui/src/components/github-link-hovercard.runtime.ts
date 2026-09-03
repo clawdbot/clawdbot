@@ -10,7 +10,6 @@ import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import {
   GITHUB_HOVERCARD_OPEN_DELAY_MS,
-  gitHubFilesChangedUrl,
   githubLinkAnchorFromEvent,
   gitHubProfileUrl,
   parseGitHubLinkTarget,
@@ -32,6 +31,7 @@ type PreviewState = {
 type CacheEntry = {
   expiresAt: number;
   promise: Promise<GitHubPreview>;
+  signal: AbortSignal;
 };
 
 let nextHovercardId = 0;
@@ -87,7 +87,6 @@ function parsePreviewResponse(target: GitHubLinkTarget, value: unknown): GitHubP
     ...target,
     additions: asFiniteNumber(value.additions),
     avatarDataUrl: safeAvatarDataUrl(value.avatarDataUrl),
-    changedFiles: asFiniteNumber(value.changedFiles),
     closedAt: readNonBlankString(value.closedAt),
     coAuthorCount: asFiniteNumber(value.coAuthorCount),
     coAuthors: parseCoAuthors(value.coAuthors),
@@ -291,19 +290,9 @@ function renderPreview(card: HTMLDivElement, preview: GitHubPreview): void {
   const metrics = document.createElement("span");
   metrics.className = "github-link-hovercard__metrics";
   if (preview.kind === "pull") {
+    metrics.classList.add("github-link-hovercard__metrics--diff");
     appendMetric(metrics, "github-link-hovercard__metric--additions", `+${preview.additions ?? 0}`);
     appendMetric(metrics, "github-link-hovercard__metric--deletions", `−${preview.deletions ?? 0}`);
-    const files = preview.changedFiles ?? 0;
-    // The diff-size chip's natural next step is the files-changed view; issues
-    // have no such view, so their comment count stays plain text.
-    appendCardLink(
-      metrics,
-      "github-link-hovercard__metric github-link-hovercard__metric--files",
-      gitHubFilesChangedUrl(preview),
-      t(files === 1 ? "githubPreview.file" : "githubPreview.files", {
-        count: String(files),
-      }),
-    );
   } else {
     const comments = preview.comments ?? 0;
     appendMetric(
@@ -610,13 +599,11 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
     const key = `${target.kind}:${target.owner.toLowerCase()}/${target.repo.toLowerCase()}#${target.number}`;
     const now = Date.now();
     const cached = this.cache.get(key);
-    if (cached && cached.expiresAt > now) {
-      this.cache.delete(key);
+    this.cache.delete(key);
+    // Dismissal invalidates only that request, even before its rejection settles.
+    if (cached && !cached.signal.aborted && cached.expiresAt > now) {
       this.cache.set(key, cached);
       return cached.promise;
-    }
-    if (cached) {
-      this.cache.delete(key);
     }
 
     const load = async (): Promise<GitHubPreview> => {
@@ -638,6 +625,7 @@ export class GitHubLinkHovercardProvider extends ReactiveElement {
 
     const entry: CacheEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
+      signal,
       promise: load().catch((error: unknown) => {
         // Keep short-lived failures cached so repeatedly crossing a broken or
         // private link does not burn GitHub's anonymous rate limit.

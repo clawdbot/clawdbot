@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
-import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
@@ -31,7 +31,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
-import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -48,6 +51,7 @@ import {
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -238,38 +242,21 @@ export function buildGatewaySessionRow(params: {
     rowContext,
     allowPluginNormalization: !lightweight,
   });
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-    { allowPluginNormalization: !lightweight },
-  );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
-  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    !skipTranscriptUsage &&
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
-      entry,
-      rowContext,
-    }) === undefined;
-  const transcriptUsage =
-    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
-      ? resolveTranscriptUsageFallback({
-          cfg,
-          key,
-          entry,
-          storePath,
-          fallbackProvider: resolvedModel.provider,
-          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
-          rowContext: params.rowContext,
-          agentId: sessionAgentId,
-        })
-      : null;
+  const transcriptUsage = !skipTranscriptUsage
+    ? resolveTranscriptUsageFallback({
+        cfg,
+        key,
+        entry,
+        storePath,
+        freshTotalTokens: freshSessionTotalTokens,
+        fallbackModelRef: subagentRun?.model,
+        allowPluginNormalization: !lightweight,
+        maxTranscriptBytes: params.transcriptUsageMaxBytes,
+        rowContext: params.rowContext,
+        agentId: sessionAgentId,
+      })
+    : null;
   const totalTokens =
     freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
@@ -440,6 +427,7 @@ export function buildGatewaySessionRow(params: {
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     permissionMode: entry?.permissionMode,
+    permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
@@ -458,7 +446,13 @@ export function buildGatewaySessionRow(params: {
       Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.size ? [...participants.values()].slice(0, 4) : undefined,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.size
+      ? [...participants.values()].slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.size
+      ? [...participants.values()].slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
     participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
@@ -484,6 +478,7 @@ export function buildGatewaySessionRow(params: {
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
+    archiveReason: entry?.archiveReason,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),

@@ -14,6 +14,33 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
+  it("discloses session-only selection and keeps a draft model local", async () => {
+    const { context, request } = contextWith([
+      { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+    ]);
+    const control = new NewSessionModelControl(() => undefined);
+    control.load(context, "main", true);
+
+    await vi.waitFor(() =>
+      expect(
+        renderControl(control, context).querySelector(
+          '[data-chat-model-option="anthropic/claude-sonnet-4-6"]',
+        ),
+      ).not.toBeNull(),
+    );
+    const container = renderControl(control, context);
+    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
+      "This session",
+    );
+    container
+      .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
+      ?.click();
+
+    expect(control.selected).toBe("anthropic/claude-sonnet-4-6");
+    expect(request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
+  });
+
   it("keeps CLI agents hidden and undiscovered while the Labs gate is off", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
@@ -30,7 +57,7 @@ describe("new-session model runtime", () => {
     ).toBeNull();
   });
 
-  it("lists create-capable CLI agents and selects the canonical catalog target", async () => {
+  it("lists terminal-capable CLI agents and selects the canonical catalog target", async () => {
     const { context, request } = contextWith(
       [{ id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" }],
       "openclaw",
@@ -43,7 +70,7 @@ describe("new-session model runtime", () => {
               {
                 id: "anthropic",
                 label: "Claude Code",
-                capabilities: { createSession: { model: "anthropic/claude-sonnet-4-6" } },
+                capabilities: { startTerminal: true },
                 hosts: [],
               },
               {

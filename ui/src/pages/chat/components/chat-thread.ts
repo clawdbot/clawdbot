@@ -4,7 +4,7 @@ import { ref } from "lit/directives/ref.js";
 import { sessionRefFromPath } from "../../../app-session-route-paths.ts";
 import {
   handleMarkdownCodeBlockClick,
-  initializeMarkdownCodeBlocks,
+  markdownCodeBlocks,
 } from "../../../components/markdown-code-blocks.ts";
 import {
   markdownFileLinkFromEvent,
@@ -115,9 +115,9 @@ function renderTranscriptShell(
   return html`
     <div
       class="chat-thread ${projection.isDirectThread ? "chat-thread--direct" : ""}"
+      ${markdownCodeBlocks()}
       ${ref((element) => {
         if (element instanceof HTMLElement) {
-          initializeMarkdownCodeBlocks(element);
           hydrateLinkFavicons(element, props.fetchLinkFavicon);
         }
       })}

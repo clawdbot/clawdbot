@@ -65,6 +65,7 @@ type TabState = {
 type CdpClientState = RelaySessionClient & {
   socket: BridgeSocket;
   autoAttach: boolean;
+  creating: Set<Promise<void>>;
 };
 
 /** Browser identity reported by the paired extension. */
@@ -90,6 +91,7 @@ function toErrorPayload(
  */
 export class ExtensionRelayBridge {
   private extension: { socket: BridgeSocket; identity: ExtensionIdentity } | null = null;
+  extensionGeneration = 0;
   private readonly extensionCandidates = new Set<BridgeSocket>();
   private readonly clients = new Set<CdpClientState>();
   private readonly tabs = new Map<number, TabState>();
@@ -158,7 +160,9 @@ export class ExtensionRelayBridge {
   }
 
   /** Capture the exact extension connection and tab instance for one browser operation. */
-  captureOperationTarget(targetId: string): (() => string | undefined) | undefined {
+  captureOperationTarget(
+    targetId: string,
+  ): ((() => string | undefined) & { isCurrent: () => boolean }) | undefined {
     const extension = this.extension;
     const target = this.tabByTargetId(targetId);
     if (!extension || !target) {
@@ -166,12 +170,12 @@ export class ExtensionRelayBridge {
     }
     // Chrome tab ids survive renderer swaps but can be reused by another browser;
     // pin both the authenticated extension owner and the exact granted tab instance.
-    return () =>
-      this.extension === extension && this.tabs.get(target.tabId) === target.tab
-        ? target.tab.target?.sessionId
-          ? target.tab.target.id
-          : undefined
-        : undefined;
+    const isCurrent = () =>
+      this.extension === extension && this.tabs.get(target.tabId) === target.tab;
+    return Object.assign(
+      () => (isCurrent() && target.tab.target?.sessionId ? target.tab.target.id : undefined),
+      { isCurrent },
+    );
   }
 
   /**
@@ -242,6 +246,7 @@ export class ExtensionRelayBridge {
             this.handleExtensionGone();
           }
         }
+        this.extensionGeneration += 1;
         this.extension = {
           socket,
           identity: {
@@ -436,12 +441,9 @@ export class ExtensionRelayBridge {
           if (!client.autoAttach) {
             continue;
           }
-          void this.withAttachedTab(client, info.tabId, ({ targetId, sessionId }) => {
+          void this.withAttachedTab(client, info.tabId, (attached) => {
             if (client.autoAttach) {
-              this.announceAttachedTab(info.tabId, targetId, sessionId, {
-                onlyAutoAttach: false,
-                onlyClient: client,
-              });
+              this.announceAttachedTab(info.tabId, attached, [client]);
             }
           }).catch((err: unknown) =>
             log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`),
@@ -478,7 +480,7 @@ export class ExtensionRelayBridge {
       return use(attached);
     } finally {
       tab.claimants.delete(claimant);
-      this.detachUnusedAttachments();
+      void this.detachUnusedAttachments();
     }
   }
 
@@ -607,27 +609,21 @@ export class ExtensionRelayBridge {
 
   private announceAttachedTab(
     tabId: number,
-    targetId: string,
-    sessionId: string,
-    opts: { onlyAutoAttach: boolean; onlyClient?: CdpClientState },
+    attached: { targetId: string; sessionId: string },
+    recipients: readonly CdpClientState[],
   ): void {
     const tab = this.tabs.get(tabId);
+    const { targetId, sessionId } = attached;
     if (tab?.target?.sessionId !== sessionId) {
       return;
     }
-    const event = {
-      method: "Target.attachedToTarget",
-      params: {
-        sessionId,
-        targetInfo: this.targetInfoForTab(tab, targetId),
-        waitingForDebugger: false,
-      },
+    const params = {
+      sessionId,
+      targetInfo: this.targetInfoForTab(tab, targetId),
+      waitingForDebugger: false,
     };
-    const recipients = opts.onlyClient
-      ? [opts.onlyClient]
-      : [...this.clients].filter((client) => !opts.onlyAutoAttach || client.autoAttach);
     for (const client of recipients) {
-      this.sessions.announce(client, sessionId, sessionId, event.params);
+      this.sessions.announce(client, sessionId, sessionId, params);
     }
   }
 
@@ -638,9 +634,14 @@ export class ExtensionRelayBridge {
   /** Wire up a newly accepted CDP client WebSocket. */
   attachCdpClientSocket(socket: BridgeSocket): {
     onMessage: (raw: string) => void;
-    onClose: () => void;
+    onClose: () => Promise<void>;
   } {
-    const client: CdpClientState = { socket, autoAttach: false, sessions: new Map() };
+    const client: CdpClientState = {
+      socket,
+      autoAttach: false,
+      sessions: new Map(),
+      creating: new Set(),
+    };
     this.clients.add(client);
     const onMessage = (raw: string) => {
       if (!this.clients.has(client)) {
@@ -667,24 +668,28 @@ export class ExtensionRelayBridge {
       }
       void this.handleCdpRequest(client, request as CdpRequest);
     };
-    const onClose = () => {
+    const onClose = async () => {
       this.clients.delete(client);
+      const acquisitions: Promise<unknown>[] = [...client.creating];
       for (const tab of this.tabs.values()) {
         for (const claim of tab.claimants) {
           if (claim.client === client) {
             tab.claimants.delete(claim);
+            if (tab.attaching) {
+              acquisitions.push(tab.attaching.then(() => this.detachUnusedAttachments()));
+            }
           }
         }
       }
-      void this.sessions
-        .close(client)
-        .catch((error: unknown) => log.warn(`Client cleanup incomplete: ${String(error)}`));
+      const cleanup = this.sessions.close(client);
       for (const [sessionId, owner] of this.browserSessions) {
         if (owner === client) {
           this.browserSessions.delete(sessionId);
         }
       }
-      this.detachUnusedAttachments();
+      // A socket can close before an earlier acquisition returns its native identity.
+      // Its acknowledgement includes the eventual detach, not only today's sessions.
+      await Promise.all([cleanup, ...acquisitions, this.detachUnusedAttachments()]);
     };
     return { onMessage, onClose };
   }
@@ -692,21 +697,27 @@ export class ExtensionRelayBridge {
   /**
    * Release a tab only after its last pending or delivered logical claimant leaves.
    */
-  private detachUnusedAttachments(): void {
+  private detachUnusedAttachments(): Promise<void> {
     if (!this.extension) {
-      return;
+      return Promise.resolve();
     }
+    const retirements: Promise<void>[] = [];
     for (const tab of this.tabs.values()) {
-      if (
+      if (tab.retiring) {
+        retirements.push(tab.retiring);
+      } else if (
         tab.target?.sessionId &&
         tab.claimants.size === 0 &&
         !this.sessions.hasRootSessions(tab.target.sessionId)
       ) {
-        void this.retireAttachment(tab.target.sessionId).catch((error: unknown) =>
-          log.warn(`Debugger retirement failed: ${String(error)}`),
-        );
+        retirements.push(this.retireAttachment(tab.target.sessionId));
       }
     }
+    const cleanup = Promise.all(retirements).then(() => {});
+    void cleanup.catch((error: unknown) =>
+      log.warn(`Debugger retirement failed: ${String(error)}`),
+    );
+    return cleanup;
   }
 
   private retireAttachment(rootSessionId: string): Promise<void> {
@@ -782,20 +793,77 @@ export class ExtensionRelayBridge {
     return null;
   }
 
-  private async handleCdpRequest(client: CdpClientState, request: CdpRequest): Promise<void> {
-    try {
-      if (request.sessionId) {
-        if (this.browserSessions.get(request.sessionId) === client) {
-          await this.handleBrowserScopedRequest(client, request);
-          return;
-        }
-        await this.handleSessionScopedRequest(client, request);
-        return;
-      }
-      await this.handleBrowserScopedRequest(client, request);
-    } catch (err) {
-      this.respondError(client, request, err instanceof Error ? err.message : String(err));
+  private async createTarget(client: CdpClientState, request: CdpRequest): Promise<void> {
+    const extension = this.extension;
+    const url =
+      typeof request.params?.url === "string" && request.params.url
+        ? request.params.url
+        : "about:blank";
+    const createParams = resolveCreateTargetParams(request.params);
+    const command = { type: "createTab", url, ...createParams } as const;
+    const created = (await this.callExtension(command)) as {
+      tabId?: unknown;
+      targetId?: unknown;
+    } | null;
+    if (this.extension !== extension) {
+      return;
     }
+    if (typeof created?.tabId !== "number") {
+      this.respondError(client, request, "extension did not return a tabId for createTab");
+      return;
+    }
+    const tabId = created.tabId;
+    if (!this.clients.has(client) && !this.tabs.has(tabId)) {
+      // An abandoned creator never publishes an invented inventory entry.
+      // No tab record means no pending/delivered peer can own this handoff.
+      if (typeof created.targetId === "string") {
+        await this.callExtension({ type: "detach", tabId });
+      }
+      return;
+    }
+    if (!this.tabs.has(tabId)) {
+      this.tabs.set(tabId, {
+        info: { tabId, url, title: "", active: false },
+        claimants: new Set(),
+        restoreAttachment: false,
+      });
+    }
+    // Store 2.2.0 returns only tabId and still needs the separate attach.
+    // New workers own create/group/attach/rollback and return the attachment.
+    await this.withAttachedTab(
+      client,
+      tabId,
+      (attached) => {
+        const recipients = [...this.clients].filter((recipient) => recipient.autoAttach);
+        this.announceAttachedTab(tabId, attached, recipients);
+        this.announceAttachedTab(tabId, attached, [client]);
+        this.respond(client, request, { targetId: attached.targetId });
+      },
+      typeof created.targetId === "string" ? created.targetId : undefined,
+    );
+  }
+
+  private handleCdpRequest(client: CdpClientState, request: CdpRequest): Promise<void> {
+    const session = request.sessionId ? client.sessions.get(request.sessionId) : undefined;
+    const dispatch =
+      request.sessionId && this.browserSessions.get(request.sessionId) !== client
+        ? this.handleSessionScopedRequest(client, request)
+        : this.handleBrowserScopedRequest(client, request);
+    const completed = dispatch.catch((err: unknown) => {
+      this.respondError(client, request, err instanceof Error ? err.message : String(err));
+    });
+    if (session && request.method === "Page.getFrameTree") {
+      // Playwright's CRPage installs Runtime listeners after this reply. Worker access
+      // rechecks can delay it past native events; order only this session's Runtime enable.
+      const ready = Promise.all([session.frameTreeRead, completed]).then(() => {});
+      session.frameTreeRead = ready;
+      void ready.then(() => {
+        if (session.frameTreeRead === ready) {
+          session.frameTreeRead = undefined;
+        }
+      });
+    }
+    return completed;
   }
 
   private async handleSessionScopedRequest(
@@ -867,9 +935,22 @@ export class ExtensionRelayBridge {
       return;
     }
     if (request.method === "Runtime.disable") {
+      session.runtimeGeneration++;
       runtime.disable(session);
       this.respond(client, request, {});
       return;
+    }
+    if (request.method === "Runtime.enable" && session.frameTreeRead) {
+      // Disable can retire this pending enable while a peer keeps the physical Runtime alive.
+      const generation = session.runtimeGeneration;
+      await session.frameTreeRead;
+      if (
+        !this.clients.has(client) ||
+        client.sessions.get(sessionId) !== session ||
+        session.runtimeGeneration !== generation
+      ) {
+        throw new Error("Runtime session detached or disabled");
+      }
     }
     const send = () =>
       this.sessions.send(
@@ -969,12 +1050,9 @@ export class ExtensionRelayBridge {
         if (autoAttach) {
           const attachResults = await Promise.allSettled(
             [...this.tabs.keys()].map((tabId) =>
-              this.withAttachedTab(client, tabId, ({ targetId, sessionId }) => {
+              this.withAttachedTab(client, tabId, (attached) => {
                 if (client.autoAttach) {
-                  this.announceAttachedTab(tabId, targetId, sessionId, {
-                    onlyAutoAttach: false,
-                    onlyClient: client,
-                  });
+                  this.announceAttachedTab(tabId, attached, [client]);
                 }
               }),
             ),
@@ -1043,59 +1121,13 @@ export class ExtensionRelayBridge {
         return;
       }
       case "Target.createTarget": {
-        const extension = this.extension;
-        const url =
-          typeof request.params?.url === "string" && request.params.url
-            ? request.params.url
-            : "about:blank";
-        const createParams = resolveCreateTargetParams(request.params);
-        const command = { type: "createTab", url, ...createParams } as const;
-        const created = (await this.callExtension(command)) as {
-          tabId?: unknown;
-          targetId?: unknown;
-        } | null;
-        if (this.extension !== extension) {
-          return;
+        const creating = this.createTarget(client, request);
+        client.creating.add(creating);
+        try {
+          await creating;
+        } finally {
+          client.creating.delete(creating);
         }
-        if (typeof created?.tabId !== "number") {
-          this.respondError(client, request, "extension did not return a tabId for createTab");
-          return;
-        }
-        const tabId = created.tabId;
-        if (!this.clients.has(client) && !this.tabs.has(tabId)) {
-          // An abandoned creator never publishes an invented inventory entry.
-          // No tab record means no pending/delivered peer can own this handoff.
-          if (typeof created.targetId === "string") {
-            void this.callExtension({ type: "detach", tabId }).catch((error: unknown) =>
-              log.warn(`Abandoned creation cleanup failed: ${String(error)}`),
-            );
-          }
-          return;
-        }
-        if (!this.tabs.has(tabId)) {
-          this.tabs.set(tabId, {
-            info: { tabId, url, title: "", active: false },
-            claimants: new Set(),
-            restoreAttachment: false,
-          });
-        }
-        // Store 2.2.0 returns only tabId and still needs the separate attach.
-        // New workers own create/group/attach/rollback and return the attachment.
-        await this.withAttachedTab(
-          client,
-          tabId,
-          (attached) => {
-            this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-              onlyAutoAttach: true,
-            });
-            this.announceAttachedTab(tabId, attached.targetId, attached.sessionId, {
-              onlyAutoAttach: false,
-              onlyClient: client,
-            });
-            this.respond(client, request, { targetId: attached.targetId });
-          },
-          typeof created.targetId === "string" ? created.targetId : undefined,
-        );
         return;
       }
       case "Target.closeTarget": {

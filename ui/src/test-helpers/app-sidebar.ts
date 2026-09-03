@@ -98,6 +98,8 @@ export type SidebarLifecycleState = HTMLElement & {
   refreshRequired: boolean;
   onRefresh: () => void;
   onRetryConnect?: () => void;
+  onOpenPalette?: () => void;
+  onToggleSidebar?: () => void;
   onOpenNewSession?: (agentId: string, target?: { catalogId: string }) => void;
   variant: "panel" | "drawer";
 };

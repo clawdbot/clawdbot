@@ -169,6 +169,11 @@ Remote embeddings require an API key. Bedrock uses the AWS SDK default credentia
 | OpenAI         | `OPENAI_API_KEY`                                    | `models.providers.openai.apiKey`    |
 | Voyage         | `VOYAGE_API_KEY`                                    | `models.providers.voyage.apiKey`    |
 
+For custom OpenAI-compatible providers, `models.providers.<id>.apiKey` can name
+an API-key or bearer-token profile saved with [`openclaw models auth`](/cli/models#auth-profiles),
+such as `my-embeddings:default`. Literal keys keep their configured value even
+when other profiles are saved for the provider. Empty keys do not select a saved profile.
+
 <Note>
 Codex OAuth covers chat/completions only and does not satisfy embedding requests.
 </Note>

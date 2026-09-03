@@ -1291,8 +1291,8 @@ openclaw-session-progress-hovercard-provider {
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 14%, transparent);
 }
 
-/* The repo reference, author and files chip are links too, but the title owns
-   the card's only underline; the rest stay text until hovered or focused. */
+/* The repo reference and author are links too, but the title owns the card's
+   only underline; the rest stay text until hovered or focused. */
 .github-link-hovercard__repo {
   min-width: 0;
   color: inherit;
@@ -1394,6 +1394,11 @@ openclaw-session-progress-hovercard-provider {
   gap: 6px;
 }
 
+.github-link-hovercard__metrics--diff .github-link-hovercard__metric {
+  padding: 0;
+  background: none;
+}
+
 .github-link-hovercard__metric {
   padding: 4px 8px;
   border-radius: var(--radius-sm);
@@ -1403,17 +1408,6 @@ openclaw-session-progress-hovercard-provider {
   font-size: var(--control-ui-text-sm);
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
-}
-
-.github-link-hovercard__metric--files {
-  text-decoration: none;
-}
-
-.github-link-hovercard__metric--files:hover,
-.github-link-hovercard__metric--files:focus-visible {
-  background: var(--bg-muted);
-  color: var(--text-strong);
-  text-decoration: none;
 }
 
 .github-link-hovercard__metric--additions {
@@ -1490,6 +1484,10 @@ openclaw-session-progress-hovercard-provider {
     align-items: flex-start;
     flex-direction: column;
     gap: 10px;
+  }
+
+  .github-link-hovercard__metrics--diff {
+    align-self: flex-end;
   }
 }
 
@@ -1984,60 +1982,6 @@ select.input {
   font-size: 11px;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-/* Compaction indicator */
-.compaction-indicator {
-  align-self: center;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-  line-height: 1.2;
-  padding: 6px 14px;
-  margin-bottom: 8px;
-  border-radius: var(--radius-full);
-  border: 1px solid var(--border);
-  background: var(--panel-strong);
-  color: var(--text);
-  white-space: nowrap;
-  user-select: none;
-  animation: fade-in 0.2s var(--ease-out);
-}
-
-.compaction-indicator svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
-.compaction-indicator--active {
-  color: var(--info);
-  border-color: color-mix(in srgb, var(--info) 35%, transparent);
-}
-
-.compaction-indicator--active svg {
-  animation: compaction-spin 1s linear infinite;
-}
-
-.compaction-indicator--complete {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
-}
-
-.compaction-indicator--fallback {
-  color: var(--warn-strong);
-  border-color: color-mix(in srgb, var(--warn-strong) 35%, transparent);
-}
-
-.compaction-indicator--fallback-cleared {
-  color: var(--ok);
-  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
 }
 
 @keyframes compaction-spin {
@@ -3702,13 +3646,18 @@ td.data-table-key-col {
   min-width: 0;
 }
 
-.agent-scope-control__label {
+.agent-scope-control__label,
+.agent-scope-control .agent-select__menu-title {
   color: var(--muted);
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+.agent-scope-control .agent-select__menu-title {
+  padding: 4px 8px 2px;
 }
 
 .agent-scope-control openclaw-agent-select {
@@ -3751,6 +3700,9 @@ td.data-table-key-col {
   background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   color: var(--text);
+  /* Keep page content from showing through Web Awesome's menu fade.
+   * The scale animation still communicates that the picker opened. */
+  opacity: 1 !important;
 }
 
 .agent-select__trigger {
@@ -5919,8 +5871,8 @@ td.data-table-key-col {
   }
 }
 
-.session-row-host--pinned .session-action--pin {
-  color: var(--accent);
+.session-row-host--pinned .session-action--pin svg {
+  fill: currentColor;
 }
 
 .session-run-spinner {

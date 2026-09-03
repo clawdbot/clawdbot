@@ -65,6 +65,10 @@ CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_archived_at
   ON session_nodes(archived_at, session_key)
   WHERE archived_at IS NOT NULL;
 
+CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_active
+  ON session_nodes(session_key)
+  WHERE archived_at IS NULL;
+
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_current_session_id
   ON session_nodes(current_session_id);
 
@@ -766,6 +770,7 @@ CREATE TABLE IF NOT EXISTS session_pending_inputs (
   lifecycle_generation TEXT NOT NULL,
   state TEXT NOT NULL CHECK (state IN ('queued', 'interrupted', 'cancelled')),
   accepted_at INTEGER NOT NULL,
+  consumed_event_id TEXT,
   UNIQUE (session_id, idempotency_key),
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
   FOREIGN KEY (session_id) REFERENCES session_windows(session_id) ON DELETE CASCADE

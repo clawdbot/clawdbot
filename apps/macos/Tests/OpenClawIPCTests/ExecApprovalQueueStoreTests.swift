@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 @testable import OpenClawKit
@@ -44,13 +45,13 @@ private struct ApprovalGatewayRequest: Sendable {
 }
 
 private actor ApprovalGatewayRequestLog {
-    private var listedRequests: [ApprovalFixtureRequest]
+    private var makeListedRequests: @Sendable () -> [ApprovalFixtureRequest]
     private var requests: [ApprovalGatewayRequest] = []
     private var nextSequence = 0
     private var resolveRejection: String?
 
-    init(initialRequests: [ApprovalFixtureRequest]) {
-        self.listedRequests = initialRequests
+    init(initialRequests: @escaping @Sendable () -> [ApprovalFixtureRequest]) {
+        self.makeListedRequests = initialRequests
     }
 
     func append(_ request: ApprovalGatewayRequest) {
@@ -62,14 +63,15 @@ private actor ApprovalGatewayRequestLog {
     }
 
     func listResponse() -> String {
-        String(decoding: try! JSONEncoder().encode(self.listedRequests), as: UTF8.self)
+        // Start fixture lifetimes at the Gateway response, after cold connection work.
+        String(decoding: try! JSONEncoder().encode(self.makeListedRequests()), as: UTF8.self)
     }
 
     /// Simulates another client (the modal prompter) winning the resolution
     /// race server-side: resolves reject and the authoritative list is empty.
     func markResolvedElsewhere(reason: String = "APPROVAL_ALREADY_RESOLVED") {
         self.resolveRejection = reason
-        self.listedRequests = []
+        self.makeListedRequests = { [] }
     }
 
     func resolveRejectionReason() -> String? {
@@ -87,7 +89,10 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
     let session: GatewayTestWebSocketSession
     let gateway: GatewayConnection
 
-    init(initialRequests: [ApprovalFixtureRequest] = []) {
+    init(
+        initialRequests: @escaping @Sendable () -> [ApprovalFixtureRequest] = { [] },
+        listResponseDelay: Duration = .zero)
+    {
         let requestLog = ApprovalGatewayRequestLog(initialRequests: initialRequests)
         self.requestLog = requestLog
         self.session = GatewayTestWebSocketSession(taskFactory: {
@@ -97,10 +102,17 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
                 if request.method.hasSuffix("approval.resolve"),
                    let reason = await requestLog.resolveRejectionReason()
                 {
-                    let response =
-                        #"{"type":"res","id":"\#(request.id)","ok":false,"error":{"message":"\#(reason)"}}"#
-                    socket.emitReceiveSuccess(.data(Data(response.utf8)))
+                    let response = ResponseFrame(
+                        type: "res", id: request.id, ok: false,
+                        error: ErrorShape(
+                            code: "INVALID_REQUEST",
+                            message: "approval already resolved",
+                            details: .init(["reason": reason])))
+                    try socket.emitReceiveSuccess(.data(JSONEncoder().encode(response)))
                     return
+                }
+                if request.method == "exec.approval.list", listResponseDelay > .zero {
+                    try await Task.sleep(for: listResponseDelay)
                 }
                 let payload = if request.method == "exec.approval.list" {
                     await requestLog.listResponse()
@@ -159,11 +171,13 @@ private final class ApprovalGatewayFixture: @unchecked Sendable {
 @MainActor
 struct ExecApprovalQueueStoreTests {
     @Test func `refresh seeds direct gateway list and excludes expired approvals`() async {
-        let fixture = ApprovalGatewayFixture(initialRequests: [
-            ApprovalFixtureRequest(id: "later", sessionKey: "work", createdOffsetMs: 200),
-            ApprovalFixtureRequest(id: "expired", expiresOffsetMs: -100),
-            ApprovalFixtureRequest(id: "earlier", createdOffsetMs: -200),
-        ])
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [
+                ApprovalFixtureRequest(id: "later", sessionKey: "work", createdOffsetMs: 200),
+                ApprovalFixtureRequest(id: "expired", expiresOffsetMs: -100),
+                ApprovalFixtureRequest(id: "earlier", createdOffsetMs: -200),
+            ]
+        })
         let store = ExecApprovalQueueStore(gateway: fixture.gateway)
         defer { store.stop() }
 
@@ -176,9 +190,9 @@ struct ExecApprovalQueueStoreTests {
     }
 
     @Test func `losing a resolution race re-syncs from the authoritative queue`() async throws {
-        let fixture = ApprovalGatewayFixture(initialRequests: [
-            ApprovalFixtureRequest(id: "contested"),
-        ])
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [ApprovalFixtureRequest(id: "contested")]
+        })
         let store = ExecApprovalQueueStore(gateway: fixture.gateway)
         defer { store.stop() }
 
@@ -188,6 +202,16 @@ struct ExecApprovalQueueStoreTests {
         // The modal prompter (a second presentation surface on the same event
         // stream) resolves first; the gateway rejects this store's attempt.
         await fixture.requestLog.markResolvedElsewhere()
+        // A malformed response can also trigger timeout recovery; require a decoded rejection.
+        let rejection = try await #require(throws: GatewayResponseError.self) {
+            try await fixture.gateway.requestVoid(
+                method: .execApprovalResolve,
+                params: ["id": .init(contested.id), "decision": .init("deny")],
+                timeoutMs: 10000)
+        }
+        #expect(rejection.code == "INVALID_REQUEST")
+        #expect(rejection.detailsReason == "APPROVAL_ALREADY_RESOLVED")
+
         await store.resolve(request: contested, decision: .deny)
 
         #expect(store.requests.isEmpty)
@@ -210,10 +234,11 @@ struct ExecApprovalQueueStoreTests {
         try #require(await self.waitUntil { store.requests.isEmpty })
     }
 
-    @Test func `expired requests disappear without a gateway resolution event`() async throws {
-        let fixture = ApprovalGatewayFixture(initialRequests: [
-            ApprovalFixtureRequest(id: "short-lived", expiresOffsetMs: 500),
-        ])
+    @Test(arguments: [0, 600])
+    func `expired requests disappear without a gateway resolution event`(listResponseDelayMs: Int) async throws {
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [ApprovalFixtureRequest(id: "short-lived", expiresOffsetMs: 500)]
+        }, listResponseDelay: .milliseconds(listResponseDelayMs))
         let store = ExecApprovalQueueStore(gateway: fixture.gateway)
         defer { store.stop() }
 
@@ -222,12 +247,39 @@ struct ExecApprovalQueueStoreTests {
         try #require(await self.waitUntil { store.requests.isEmpty })
     }
 
+    @Test func `expiry keeps its deadline when the main actor delays task startup`() async {
+        // The child owns the actor stall so parallel suites keep their own deadlines.
+        await #expect(processExitsWith: .success) {
+            try await ExecApprovalQueueStoreTests.checkDelayedExpiry()
+        }
+    }
+
+    private static func checkDelayedExpiry() async throws {
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [ApprovalFixtureRequest(id: "delayed-expiry-task", expiresOffsetMs: 3000)]
+        })
+        let store = ExecApprovalQueueStore(gateway: fixture.gateway)
+        defer { store.stop() }
+
+        await store.refresh()
+        let request = try #require(store.requests.first)
+        // Hold the actor past the published deadline before the queued expiry task can start.
+        Self.blockUntilExpiry(request.expiresAtMs)
+        try #require(await Self().waitUntil { store.requests.isEmpty })
+    }
+
+    private static func blockUntilExpiry(_ expiresAtMs: Int) {
+        Thread.sleep(until: Date(timeIntervalSince1970: Double(expiresAtMs) / 1000))
+    }
+
     @Test func `explicit decision policy excludes allow always and blocks unavailable decisions`() async {
-        let fixture = ApprovalGatewayFixture(initialRequests: [
-            ApprovalFixtureRequest(
-                id: "deny-only",
-                allowedDecisions: ["allow-always", "deny"]),
-        ])
+        let fixture = ApprovalGatewayFixture(initialRequests: {
+            [
+                ApprovalFixtureRequest(
+                    id: "deny-only",
+                    allowedDecisions: ["allow-always", "deny"]),
+            ]
+        })
         let store = ExecApprovalQueueStore(gateway: fixture.gateway)
         defer { store.stop() }
         await store.refresh()

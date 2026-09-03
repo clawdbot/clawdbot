@@ -19,6 +19,7 @@ import {
   dropRepoOwnedCustomElements,
   trackCustomElementRegistry,
 } from "./jsdom-custom-elements.ts";
+import { repositoryTestApiPublications } from "./repository-test-api-publications.ts";
 
 type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
   mockedExports?: unknown;
@@ -27,7 +28,13 @@ type EvaluatedModuleNode = ViteEvaluatedModuleNode & {
 type EvaluatedModules = {
   idToModuleMap: Map<string, EvaluatedModuleNode>;
   invalidateModule: ViteEvaluatedModules["invalidateModule"];
+  [RETIRED_TEST_API_EXECUTIONS]?: WeakSet<ModuleExecution>;
 };
+
+// Vitest's public worker type leaves execution entries untyped; mirror the
+// evaluator's external flag without importing an unexported package subpath.
+type ModuleExecution = { external?: boolean };
+type ModuleExecutionInfo = Map<string, ModuleExecution>;
 
 type SerializableMocker = {
   reset?: () => void;
@@ -36,10 +43,11 @@ type SerializableMocker = {
 
 type TestRunnerInternals = {
   moduleRunner?: { mocker?: SerializableMocker };
-  workerState: { evaluatedModules: unknown };
+  workerState: { evaluatedModules: unknown; moduleExecutionInfo: ModuleExecutionInfo };
 };
 
 const SHARED_TEST_SETUP = Symbol.for("openclaw.sharedTestSetup");
+const RETIRED_TEST_API_EXECUTIONS = Symbol.for("openclaw.retiredTestApiExecutions");
 const EMBEDDED_RUN_STATE = Symbol.for("openclaw.embeddedRunState");
 const REPLY_RUN_REGISTRY = Symbol.for("openclaw.replyRunRegistry");
 const DIAGNOSTIC_EVENTS_STATE = Symbol.for("openclaw.diagnosticEvents.state.v1");
@@ -77,12 +85,29 @@ function getSharedTestHome(): string | undefined {
   return globalState[SHARED_TEST_SETUP]?.tempHome ?? process.env.OPENCLAW_TEST_HOME;
 }
 
-function resetEvaluatedModules(modules: EvaluatedModules) {
+function resetEvaluatedModules(modules: EvaluatedModules, executions: ModuleExecutionInfo) {
   const skipPaths = [/\/vitest\/dist\//, /vitest-virtual-\w+\/dist/u, /@vitest\/dist/u];
+  // Vitest reuses the graph across runner instances. Weak marks prevent a past
+  // execution from owning a later mock-only slot without retaining any records
+  // or changing Vitest's timing/coverage data; each evaluation gets a new record.
+  const retiredExecutions = (modules[RETIRED_TEST_API_EXECUTIONS] ??= new WeakSet());
 
   modules.idToModuleMap.forEach((node, modulePath) => {
     if (skipPaths.some((pattern) => pattern.test(modulePath))) {
       return;
+    }
+    // importActual can execute a source then replace its meta with a mock placeholder.
+    // Vitest's evaluator records each execution independently (including native ones),
+    // using the unprefixed id for automocks. Module resets preserve those records.
+    const key = repositoryTestApiPublications.get(node.file);
+    const executionId = node.id.startsWith("mock:") ? node.id.slice(5) : node.id;
+    const execution = executions.get(executionId);
+    if (key && execution && !execution.external && !retiredExecutions.has(execution)) {
+      retiredExecutions.add(execution);
+      const publication = Object.getOwnPropertyDescriptor(globalThis, key);
+      if (publication?.configurable && "value" in publication) {
+        Reflect.deleteProperty(globalThis, key);
+      }
     }
     // Mock metadata owns factories and cached exports after the registry resets.
     // Retire those nodes while preserving ordinary transformed-code metadata.
@@ -509,6 +534,9 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     resetGatewayWorkAdmission();
     vi.resetModules();
     internals.moduleRunner?.mocker?.reset?.();
-    resetEvaluatedModules(internals.workerState.evaluatedModules as EvaluatedModules);
+    resetEvaluatedModules(
+      internals.workerState.evaluatedModules as EvaluatedModules,
+      internals.workerState.moduleExecutionInfo,
+    );
   }
 }

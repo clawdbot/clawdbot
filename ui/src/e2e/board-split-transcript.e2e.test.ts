@@ -1,10 +1,10 @@
 // Regression: the chat transcript must repaint after a dashboard -> split face
 // switch re-stamps it into the sidebar region (issue: virtualizer stayed
 // detached until an unrelated re-render, painting a blank pane).
-import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
   controlUiBundledSettingsStorageKey,
@@ -21,7 +21,12 @@ const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
 const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
 const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
 const sessionKey = "agent:main:board-split-transcript";
-const proofDir = path.resolve(".artifacts/control-ui-e2e/dashboard-side-chat-tabs");
+let proofDir: string;
+beforeEach(() => {
+  if (process.env.OPENCLAW_UI_E2E_RECORD === "1") {
+    proofDir = createControlUiE2eArtifactDir("dashboard-side-chat-tabs");
+  }
+});
 
 let browser: Browser;
 let controlUi: ControlUiE2eServer;
@@ -270,9 +275,6 @@ describeControlUiE2e("Board split transcript restore", () => {
 
   it("transitions between Dashboard and Split with the whole side panel", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await browser.newContext({
       viewport: { width: 1400, height: 900 },
       ...(recordProof
@@ -380,9 +382,6 @@ describeControlUiE2e("Board split transcript restore", () => {
 
   it("activates Side chat from a split dashboard panel", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await browser.newContext({
       viewport: { width: 1400, height: 900 },
       ...(recordProof
@@ -445,9 +444,6 @@ describeControlUiE2e("Board split transcript restore", () => {
 
   it("does not offer Discussion when the gateway has no discussion provider", async () => {
     const recordProof = process.env.OPENCLAW_UI_E2E_RECORD === "1";
-    if (recordProof) {
-      await mkdir(proofDir, { recursive: true });
-    }
     const context = await browser.newContext({
       viewport: { width: 1400, height: 900 },
       ...(recordProof

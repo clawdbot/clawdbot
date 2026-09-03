@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
   parseCommandArgs,
@@ -10,6 +10,7 @@ import {
  *
  * Reads markdown prompt templates from user, project, and package sources with frontmatter metadata.
  */
+import { isPathInside } from "../../infra/path-guards.js";
 import { expandTildePath } from "../../shared/tilde-path.js";
 import { CONFIG_DIR_NAME } from "../config.js";
 import { parsePromptFrontmatter } from "../utils/frontmatter.js";
@@ -138,24 +139,15 @@ export function loadPromptTemplates(options: LoadPromptTemplatesOptions): Prompt
   const globalPromptsDir = options.agentDir ? join(options.agentDir, "prompts") : resolvedAgentDir;
   const projectPromptsDir = resolve(resolvedCwd, CONFIG_DIR_NAME, "prompts");
 
-  const isUnderPath = (target: string, root: string): boolean => {
-    const normalizedRoot = resolve(root);
-    if (target === normalizedRoot) {
-      return true;
-    }
-    const prefix = normalizedRoot.endsWith(sep) ? normalizedRoot : `${normalizedRoot}${sep}`;
-    return target.startsWith(prefix);
-  };
-
   const getSourceInfo = (resolvedPath: string): SourceInfo => {
-    if (isUnderPath(resolvedPath, globalPromptsDir)) {
+    if (isPathInside(globalPromptsDir, resolvedPath)) {
       return createSyntheticSourceInfo(resolvedPath, {
         source: "local",
         scope: "user",
         baseDir: globalPromptsDir,
       });
     }
-    if (isUnderPath(resolvedPath, projectPromptsDir)) {
+    if (isPathInside(projectPromptsDir, resolvedPath)) {
       return createSyntheticSourceInfo(resolvedPath, {
         source: "local",
         scope: "project",

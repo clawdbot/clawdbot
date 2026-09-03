@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  getCoreTtsAttemptResultMediaUrls,
+  markCoreTtsAttemptResult,
+} from "../../tools/tts-tool-result-provenance.js";
 import { runEmbeddedAttemptWithBackend } from "./backend.js";
 
 const harnessMocks = vi.hoisted(() => ({
@@ -15,6 +19,25 @@ vi.mock("../../subagents/registry/subagent-registry.js", () => ({
 }));
 
 describe("embedded attempt backend", () => {
+  it("preserves core TTS delivery provenance through backend projection", async () => {
+    const operationalRunInstance = {};
+    const attempt = markCoreTtsAttemptResult(
+      {
+        agentHarnessId: "openclaw",
+        toolMediaUrls: ["/tmp/reply.opus"],
+      },
+      ["/tmp/reply.opus"],
+      operationalRunInstance,
+    );
+    harnessMocks.runAttempt.mockResolvedValueOnce(attempt);
+
+    const result = await runEmbeddedAttemptWithBackend({} as never);
+
+    expect(
+      getCoreTtsAttemptResultMediaUrls(result, result.toolMediaUrls, operationalRunInstance),
+    ).toEqual(["/tmp/reply.opus"]);
+  });
+
   it.each([
     {
       name: "replaces stale harness provenance",

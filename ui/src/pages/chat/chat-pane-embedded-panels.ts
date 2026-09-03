@@ -220,32 +220,17 @@ export function sidebarPanelDefinitions(
       companion,
       params
         ? {
-            headerAction: html`<wa-dropdown
-              class="chat-session-rail__menu"
-              placement="bottom-end"
-              @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
-                if (event.detail.item.value === "clear") {
-                  params.onClearCompanion();
-                }
-              }}
-            >
+            headerAction: html`<openclaw-tooltip .content=${t("chat.rail.clear")}>
               <button
-                slot="trigger"
-                class="rail-header__action"
+                class="rail-header__action chat-session-rail__clear"
                 type="button"
-                aria-label=${t("chat.rail.moreActions")}
-                aria-haspopup="menu"
-                aria-expanded="false"
-              >
-                ${icons.moreHorizontal}
-              </button>
-              <wa-dropdown-item
-                value="clear"
+                aria-label=${t("chat.rail.clear")}
                 ?disabled=${!params.connected || params.pendingQuestion !== null}
+                @click=${params.onClearCompanion}
               >
-                ${t("chat.rail.clear")}
-              </wa-dropdown-item>
-            </wa-dropdown>`,
+                ${icons.trash}
+              </button>
+            </openclaw-tooltip>`,
           }
         : undefined,
     ),

@@ -25,6 +25,7 @@ import type { SubagentRunRecord } from "./subagent-registry.types.js";
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => "delivered" as const),
 }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 vi.mock("../announce/subagent-announce.js", () => ({
   runSubagentAnnounceFlow: announceSpy,
 }));
@@ -103,7 +104,6 @@ function createOrphanedRequiredDelivery(
 }
 
 describe("subagent registry persistence resume", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   beforeAll(async () => {
     vi.resetModules();
     mod = await import("./subagent-registry.test-helpers.js");
@@ -388,6 +388,64 @@ describe("subagent registry persistence resume", () => {
     });
   });
 
+  it("settles a restored delivered wake rejected before attempt admission", async () => {
+    const stateDir = tempDirs.make("openclaw-subagent-");
+    await withRegistryState(stateDir, async () => {
+      const endedAt = Date.now();
+      const run: SubagentRunRecord = {
+        runId: "run-rejected-requester-wake",
+        childSessionKey: "agent:main:subagent:rejected-requester-wake",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "settle one rejected requester wake",
+        cleanup: "keep",
+        createdAt: endedAt - 1_000,
+        endedReason: "subagent-complete",
+        execution: {
+          status: "terminal",
+          startedAt: endedAt - 500,
+          endedAt,
+          outcome: { status: "ok" },
+        },
+        expectsCompletionMessage: true,
+        completion: { required: true, resultText: "done", capturedAt: endedAt },
+        delivery: { status: "delivered", deliveredAt: endedAt },
+        cleanupHandled: true,
+        cleanupCompletedAt: endedAt,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["run-rejected-requester-wake"],
+          requesterYieldBatch: true,
+          afterRequesterYield: true,
+          rearmGeneration: 1,
+        },
+      };
+      const wakeRequester = vi.fn(async () => {
+        throw new Error("requester wake rejected before attempt admission");
+      });
+      mod.testing.setDepsForTest({
+        ...createSubagentRegistryTestDeps({
+          callGateway: vi.mocked(callGatewayModule.callGateway),
+          maybeWakeRequesterAfterAllChildrenSettled: wakeRequester,
+        }),
+      });
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      mod.initSubagentRegistry();
+      activateRegistry();
+
+      await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce());
+      await vi.waitFor(() => {
+        const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+        expect(restored?.delivery).toMatchObject({ status: "delivered" });
+        expect(restored?.requesterSettleWake).toBeUndefined();
+      });
+      await mod.testing.sweepOnceForTests();
+      expect(wakeRequester).toHaveBeenCalledOnce();
+    });
+  });
+
   it.each([
     { status: "suspended" as const, disposition: undefined, queueId: undefined },
     { status: "in_progress" as const, disposition: "session_queued" as const, queueId: "queue-1" },
@@ -590,11 +648,12 @@ describe("subagent registry persistence resume", () => {
   });
 
   it.each([
-    { activationSettlement: false, label: "persisted" },
-    { activationSettlement: true, label: "activation-created" },
+    { activationSettlement: false, requesterYielded: false, label: "persisted" },
+    { activationSettlement: true, requesterYielded: false, label: "activation-created normal" },
+    { activationSettlement: true, requesterYielded: true, label: "activation-created yielded" },
   ])(
     "bounds restored $label requester-settle wakes after Gateway activation",
-    async ({ activationSettlement }) => {
+    async ({ activationSettlement, requesterYielded }) => {
       const stateDir = tempDirs.make("openclaw-subagent-");
       let activeWakes = 0;
       let maxActiveWakes = 0;
@@ -644,7 +703,7 @@ describe("subagent registry persistence resume", () => {
             ...(activationSettlement
               ? {
                   requesterTurnRunId: `requester-turn-${index}`,
-                  requesterTurnYielded: true,
+                  requesterTurnYielded: requesterYielded,
                   taskRunId: runId,
                 }
               : { requesterSettleWake: { status: "pending", attemptCount: 0 } }),
@@ -675,18 +734,26 @@ describe("subagent registry persistence resume", () => {
         expect(wakeRequester).not.toHaveBeenCalled();
 
         activateRegistry();
-        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(2));
-        expect(activeWakes).toBe(2);
-        expect(maxActiveWakes).toBe(2);
+        try {
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(2));
+          expect(activeWakes).toBe(2);
+          expect(maxActiveWakes).toBe(2);
 
-        wakeResolvers.shift()?.();
-        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(3));
-        expect(maxActiveWakes).toBe(2);
-
-        for (const resolveWake of wakeResolvers) {
-          resolveWake();
+          wakeResolvers.shift()?.();
+          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledTimes(3));
+          expect(maxActiveWakes).toBe(2);
+        } finally {
+          for (let attempt = 0; attempt <= restoredRuns.length; attempt += 1) {
+            while (wakeResolvers.length > 0) {
+              wakeResolvers.shift()?.();
+            }
+            await new Promise<void>((resolve) => setImmediate(resolve));
+            if (activeWakes === 0) {
+              break;
+            }
+          }
+          await vi.waitFor(() => expect(activeWakes).toBe(0));
         }
-        await vi.waitFor(() => expect(activeWakes).toBe(0));
       });
     },
   );
@@ -817,14 +884,13 @@ describe("subagent registry persistence resume", () => {
             requesterYieldBatch: true,
             afterRequesterYield: true,
           });
-          await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
-            timeout: 1_000,
-            interval: 10,
-          });
         } else {
           expect(restored?.requesterSettleWake).toBeUndefined();
-          expect(wakeRequester).not.toHaveBeenCalled();
         }
+        await vi.waitFor(() => expect(wakeRequester).toHaveBeenCalledOnce(), {
+          timeout: 1_000,
+          interval: 10,
+        });
       });
     },
   );

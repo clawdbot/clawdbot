@@ -17,7 +17,8 @@ import {
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { canAccessTaskRequesterSession } from "../task-session-access.js";
 import { mapTaskSummary } from "./task-summary.js";
@@ -26,6 +27,7 @@ import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const TASKS_LIST_MAX_ATTEMPTS = 3;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -62,7 +64,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond, context, client }) => {
+  "tasks.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
@@ -101,7 +103,9 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // The ledger pages by last activity so an old long-running task that just
     // finished still surfaces first. Selection stays inside the registry so
     // only the bounded wire page pays for defensive record cloning.
-    const page = listTaskRecordPage({
+    const canReadTask = (task: Readonly<TaskRecord>) =>
+      canAccessTaskRequesterSession({ cfg, client, task });
+    const pageParams = {
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
@@ -109,13 +113,40 @@ export const tasksHandlers: GatewayRequestHandlers = {
       sessionKey,
       sessionAgentId,
       cfg,
-      filter: (task) => canAccessTaskRequesterSession({ cfg, client, task }),
-    });
-    const nextOffset = cursor + page.tasks.length;
-    respond(true, {
-      tasks: page.tasks.map((task) => mapTaskSummary(task)),
-      ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
-    });
+      filter: canReadTask,
+    };
+    for (let attempt = 0; attempt < TASKS_LIST_MAX_ATTEMPTS; attempt += 1) {
+      const accessRevision = readGatewayAccessRevision();
+      const pageResult = await listTaskRecordPage(pageParams);
+      if (!pageResult.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "task registry changed during tasks.list; retry"),
+        );
+        return;
+      }
+      const page = pageResult.value;
+      // Sharing changes invalidate every access decision made before a yield.
+      // Recheck selected rows in the final synchronous response turn as well.
+      if (
+        accessRevision !== readGatewayAccessRevision() ||
+        page.tasks.some((task) => !canReadTask(task))
+      ) {
+        continue;
+      }
+      const nextOffset = cursor + page.tasks.length;
+      respond(true, {
+        tasks: page.tasks.map((task) => mapTaskSummary(task)),
+        ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
+      });
+      return;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "task access changed during tasks.list; retry"),
+    );
   },
   "tasks.get": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {

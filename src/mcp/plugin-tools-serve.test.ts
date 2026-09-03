@@ -92,29 +92,36 @@ function requireToolPolicyParams(mock: ReturnType<typeof vi.fn>) {
 }
 
 describe("plugin tools MCP server", () => {
-  it("passes the managed ACP session agent into plugin tool factories", async () => {
-    const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
-    const runtimeRegistry = createMockPluginRegistry([]);
-    ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
-    const config = { plugins: { enabled: true } } as never;
+  it.each([
+    { agentSessionKey: "agent:research:acp:session-1", agentId: undefined, owner: "research" },
+    { agentSessionKey: "global", agentId: "work", owner: "work" },
+  ])(
+    "passes $agentSessionKey owner into plugin tool factories",
+    async ({ agentSessionKey, agentId, owner }) => {
+      const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");
+      const runtimeRegistry = createMockPluginRegistry([]);
+      ensureStandalonePluginToolRegistryLoadedMock.mockReturnValue(runtimeRegistry);
+      const config = { plugins: { enabled: true } } as never;
 
-    resolvePluginToolsForMcp({
-      config,
-      agentSessionKey: "agent:research:acp:session-1",
-    });
+      resolvePluginToolsForMcp({
+        config,
+        agentSessionKey,
+        agentId,
+      });
 
-    const expectedContext = {
-      config,
-      agentId: "research",
-      sessionKey: "agent:research:acp:session-1",
-    };
-    expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
-      context: expectedContext,
-    });
-    expect(resolvePluginToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ context: expectedContext, runtimeRegistry }),
-    );
-  });
+      const expectedContext = {
+        config,
+        agentId: owner,
+        sessionKey: agentSessionKey,
+      };
+      expect(ensureStandalonePluginToolRegistryLoadedMock).toHaveBeenCalledWith({
+        context: expectedContext,
+      });
+      expect(resolvePluginToolsMock).toHaveBeenCalledWith(
+        expect.objectContaining({ context: expectedContext, runtimeRegistry }),
+      );
+    },
+  );
 
   it("rejects a non-agent session identity from the managed bridge", async () => {
     const { resolvePluginToolsForMcp } = await import("./plugin-tools-serve.js");

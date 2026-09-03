@@ -22,6 +22,7 @@ import { recordRuntimeActionDecision } from "../audit/runtime-action-decision.js
 import { copyReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
 import { formatHookErrorForLog } from "../hooks/fire-and-forget.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { projectModelContextMessages } from "../shared/model-context-message.js";
 import { concatOptionalTextSegments } from "../shared/text/join-segments.js";
 import {
   type GateHookResult,
@@ -835,6 +836,18 @@ export function createHookRunner(
       return undefined;
     }
 
+    // Snapshot only after registration/authority filtering. Handlers in this dispatch
+    // intentionally share its event, while later dispatches and the caller stay isolated.
+    const dispatchEvent =
+      (hookName === "before_prompt_build" || hookName === "agent_turn_prepare") &&
+      "messages" in event &&
+      Array.isArray(event.messages)
+        ? cloneHookIsolationValue(hookName, {
+            ...event,
+            messages: projectModelContextMessages(event.messages),
+          })
+        : event;
+
     logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);
 
     let result: TResult | undefined;
@@ -845,8 +858,8 @@ export function createHookRunner(
       try {
         const handler = hook.handler as (event: unknown, ctx: unknown) => Promise<TResult>;
         const handlerEvent = policy.isolateEventPerHandler
-          ? cloneHookIsolationValue(hookName, event)
-          : event;
+          ? cloneHookIsolationValue(hookName, dispatchEvent)
+          : dispatchEvent;
         const promise = Promise.resolve(handler(handlerEvent, ctx));
         const timeoutMs = getModifyingHookTimeoutMs(hookName, hook);
         const handlerResult = timeoutMs ? await withHookTimeout(promise, timeoutMs) : await promise;

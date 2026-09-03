@@ -28,7 +28,9 @@ describe.each(["signal", "predicate"] as const)(
         const build =
           boundary === "refresh"
             ? old
-            : await writeRetentionBuild(path.join(root, "current"), "current");
+            : await writeRetentionBuild(path.join(root, "current"), "current", {
+                size: 128 * 1024,
+              });
         const target = path.join(cache, build.manifest.generation);
         const stale = [".staging-1-aaaa", ".staging-2-bbbb"].map((name) => path.join(cache, name));
         for (const directory of stale) {
@@ -39,6 +41,7 @@ describe.each(["signal", "predicate"] as const)(
         const controller = new AbortController();
         let cancelled = false;
         let published = false;
+        const closed = new Set<string>();
         const pruned = new Set<string>();
         const cancel = () => {
           cancelled = true;
@@ -56,37 +59,60 @@ describe.each(["signal", "predicate"] as const)(
         };
         vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
           const result = await original.readFile(...args);
-          if (
-            (boundary === "retained-read" && args[0] === path.join(old.target, old.assetPath)) ||
-            (boundary === "refresh" && args[0] === path.join(build.root, "asset-manifest.json"))
-          ) {
+          if (boundary === "refresh" && args[0] === path.join(build.root, "asset-manifest.json")) {
             cancel();
           }
           return result;
         });
         vi.spyOn(fs, "open").mockImplementation(async (...args) => {
           const handle = await original.open(...args);
-          const read = handle.readFile.bind(handle);
-          vi.spyOn(handle, "readFile").mockImplementation(async (...readArgs) => {
-            const result = await read(...readArgs);
-            if (boundary === "source-read") {
+          const file = args[0];
+          if (typeof file !== "string") {
+            return handle;
+          }
+          const read = handle.read.bind(handle);
+          vi.spyOn(handle, "read").mockImplementation((async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number | null,
+          ) => {
+            const result = await read(buffer, offset, length, position);
+            if (
+              (boundary === "retained-read" && file === path.join(old.target, old.assetPath)) ||
+              (boundary === "source-read" && file === path.join(build.root, build.assetPath))
+            ) {
               cancel();
             }
             return result;
+          }) as typeof handle.read);
+          const write = handle.write.bind(handle);
+          vi.spyOn(handle, "write").mockImplementation((async (
+            buffer: Buffer,
+            offset: number,
+            length: number,
+            position: number | null,
+          ) => {
+            const result = await write(buffer, offset, length, position);
+            if (
+              boundary === "asset-write" &&
+              file.includes(".staging-") &&
+              file.endsWith(build.assetPath)
+            ) {
+              cancel();
+            }
+            return result;
+          }) as typeof handle.write);
+          const close = handle.close.bind(handle);
+          vi.spyOn(handle, "close").mockImplementation(async () => {
+            await close();
+            closed.add(file);
           });
           return handle;
         });
         vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
           await original.writeFile(...args);
           const file = args[0];
-          if (
-            boundary === "asset-write" &&
-            typeof file === "string" &&
-            file.includes(".staging-") &&
-            file.endsWith(build.assetPath)
-          ) {
-            cancel();
-          }
           if (
             boundary === "manifest-write" &&
             typeof file === "string" &&
@@ -138,6 +164,14 @@ describe.each(["signal", "predicate"] as const)(
         expect(refreshes).toHaveBeenCalledTimes(
           ["prune-issued", "projection"].includes(boundary) ? 1 : 0,
         );
+        if (boundary === "source-read" || boundary === "asset-write") {
+          expect(closed).toContain(path.join(build.root, build.assetPath));
+          expect(
+            [...closed].some(
+              (file) => file.includes(".staging-") && file.endsWith(build.assetPath),
+            ),
+          ).toBe(true);
+        }
         vi.restoreAllMocks();
         expect(
           (await fs.readdir(cache)).filter(
