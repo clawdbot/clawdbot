@@ -2230,18 +2230,19 @@ private fun ProgressCardPill(
       nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
     }
 
-  val shape = if (attachedToComposer) RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp) else RoundedCornerShape(0.dp)
-  Column(
-    modifier =
-      modifier
-        .fillMaxWidth()
-        .heightIn(max = 240.dp)
-        .testTag("chat-progress-card")
-        .clip(shape)
-        .background(if (attachedToComposer) ClawTheme.colors.surface else Color.Transparent)
-        .border(if (attachedToComposer) 1.dp else 0.dp, ClawTheme.colors.borderStrong, shape)
-        .padding(bottom = if (attachedToComposer) 18.dp else 0.dp),
-  ) {
+  val attachedShape = RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)
+  val baseModifier = modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("chat-progress-card")
+  val progressModifier =
+    if (attachedToComposer) {
+      baseModifier
+        .clip(attachedShape)
+        .background(ClawTheme.colors.surface)
+        .border(1.dp, ClawTheme.colors.borderStrong, attachedShape)
+        .padding(bottom = 18.dp)
+    } else {
+      baseModifier
+    }
+  Column(modifier = progressModifier) {
     Surface(
       onClick = { expanded = !expanded },
       modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -2499,9 +2500,7 @@ private fun ChatComposer(
 
     val attachedProgress = progressCard != null && voiceNoteState !is VoiceNoteRecorderState.Recording && voiceNoteState !is VoiceNoteRecorderState.Preparing
     Column(verticalArrangement = Arrangement.spacedBy(if (attachedProgress) (-18).dp else 4.dp)) {
-      progressCard?.let { card ->
-        ProgressCardPill(card, pendingRunCount > 0, Modifier.weight(1f, fill = false), attachedProgress)
-      }
+      progressCard?.let { card -> ProgressCardPill(card, pendingRunCount > 0, Modifier.weight(1f, fill = false), attachedProgress) }
       Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         if (voiceNoteState is VoiceNoteRecorderState.Recording) {
           VoiceNoteRecordingControls(
