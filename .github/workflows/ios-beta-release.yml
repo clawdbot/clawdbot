@@ -134,7 +134,7 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Revalidate release authority after approval
+      - name: Revalidate release authority immediately before signing access
         uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
         with:
           operation: revalidate

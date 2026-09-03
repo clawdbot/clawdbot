@@ -854,16 +854,40 @@ describe("mobile release authority", () => {
 
   it("keeps upload and recovery credentials inside one protected platform boundary", () => {
     const workflows = [
-      [".github/workflows/ios-beta-release.yml", "iOS Beta Release", "ios-beta-release", "ios"],
-      [
-        ".github/workflows/android-beta-release.yml",
-        "Android Beta Release",
-        "android-beta-release",
-        "android",
-      ],
+      {
+        environment: "ios-beta-release",
+        file: ".github/workflows/ios-beta-release.yml",
+        name: "iOS Beta Release",
+        platform: "ios",
+        signingCheckoutName: "Checkout encrypted iOS signing assets",
+        signingMaterializeName: undefined,
+        setupBeforeSigning: [],
+      },
+      {
+        environment: "android-beta-release",
+        file: ".github/workflows/android-beta-release.yml",
+        name: "Android Beta Release",
+        platform: "android",
+        signingCheckoutName: "Checkout encrypted Android signing assets",
+        signingMaterializeName: "Materialize Android release signing",
+        setupBeforeSigning: [
+          "Setup Node environment",
+          "Setup Android toolchain",
+          "Setup Ruby",
+          "Install pinned Fastlane",
+        ],
+      },
     ] as const;
 
-    for (const [file, name, environment, platform] of workflows) {
+    for (const {
+      environment,
+      file,
+      name,
+      platform,
+      signingCheckoutName,
+      signingMaterializeName,
+      setupBeforeSigning,
+    } of workflows) {
       const source = fs.readFileSync(file, "utf8");
       const workflow = parse(source) as {
         jobs: Record<
@@ -907,6 +931,45 @@ describe("mobile release authority", () => {
       expect(release.if).toBe(
         "inputs.operation == 'upload-and-record' && needs.authorize.outputs.approved == 'true'",
       );
+      const signingRevalidateIndex = release.steps.findIndex(
+        (step) => step.name === "Revalidate release authority immediately before signing access",
+      );
+      const signingTokenIndex = release.steps.findIndex(
+        (step) => step.name === "Create apps-signing read token",
+      );
+      const signingCheckoutIndex = release.steps.findIndex(
+        (step) => step.name === signingCheckoutName,
+      );
+      expect(signingRevalidateIndex).toBeGreaterThan(-1);
+      expect(signingTokenIndex).toBe(signingRevalidateIndex + 1);
+      expect(signingCheckoutIndex).toBe(signingTokenIndex + 1);
+      for (const setupName of setupBeforeSigning) {
+        expect(
+          release.steps.findIndex((step) => step.name === setupName),
+          `${file}:${setupName}`,
+        ).toBeLessThan(signingRevalidateIndex);
+      }
+
+      const signingBoundaryIndexes = [
+        signingRevalidateIndex,
+        signingTokenIndex,
+        signingCheckoutIndex,
+      ];
+      if (signingMaterializeName) {
+        const signingMaterializeIndex = release.steps.findIndex(
+          (step) => step.name === signingMaterializeName,
+        );
+        expect(signingMaterializeIndex).toBe(signingCheckoutIndex + 1);
+        signingBoundaryIndexes.push(signingMaterializeIndex);
+      }
+      for (const stepIndex of signingBoundaryIndexes) {
+        expect(release.steps[stepIndex]?.if, `${file}:${stepIndex}:if`).toBeUndefined();
+        expect(
+          release.steps[stepIndex]?.["continue-on-error"],
+          `${file}:${stepIndex}:continue-on-error`,
+        ).toBeUndefined();
+      }
+
       const revalidateIndex = release.steps.findIndex(
         (step) => step.name === "Revalidate release authority immediately before upload",
       );
@@ -940,6 +1003,62 @@ describe("mobile release authority", () => {
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("GH_APP_PRIVATE_KEY");
       expect(release.steps[uploadIndex]?.env).not.toHaveProperty("MOBILE_RELEASE_REF_TOKEN");
       expect(release.steps[recordIndex]?.with?.operation).toBe("record");
+
+      const secretPlacements = Object.entries(workflow.jobs).flatMap(([jobName, job]) =>
+        job.steps.flatMap((step) => {
+          const serialized = JSON.stringify(step);
+          return ["GH_APP_PRIVATE_KEY", "MATCH_PASSWORD"]
+            .filter((secret) => serialized.includes(`secrets.${secret}`))
+            .map((secret) => ({ jobName, secret, stepName: step.name }));
+        }),
+      );
+      expect(secretPlacements).toEqual(
+        platform === "ios"
+          ? [
+              {
+                jobName: "release",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Create apps-signing read token",
+              },
+              {
+                jobName: "release",
+                secret: "MATCH_PASSWORD",
+                stepName: "Upload and distribute iOS beta",
+              },
+              {
+                jobName: "release",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Validate and record immutable iOS release ref",
+              },
+              {
+                jobName: "recover-record",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Validate and recover immutable iOS release ref",
+              },
+            ]
+          : [
+              {
+                jobName: "release",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Create apps-signing read token",
+              },
+              {
+                jobName: "release",
+                secret: "MATCH_PASSWORD",
+                stepName: "Materialize Android release signing",
+              },
+              {
+                jobName: "release",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Validate and record immutable Android release ref",
+              },
+              {
+                jobName: "recover-record",
+                secret: "GH_APP_PRIVATE_KEY",
+                stepName: "Validate and recover immutable Android release ref",
+              },
+            ],
+      );
 
       const recoveryJob = workflow.jobs["recover-record"];
       if (!recoveryJob) {

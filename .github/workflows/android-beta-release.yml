@@ -134,18 +134,6 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: Revalidate release authority after approval
-        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
-        with:
-          operation: revalidate
-          platform: android
-          workflow-path: .github/workflows/android-beta-release.yml
-          workflow-full-ref: ${{ github.workflow_ref }}
-          workflow-sha: ${{ github.workflow_sha }}
-          target-ref: ${{ needs.authorize.outputs.target_ref }}
-          target-sha: ${{ env.RELEASE_TARGET_SHA }}
-          authority-run-id: ${{ needs.authorize.outputs.run_id }}
-
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
@@ -158,6 +146,29 @@ jobs:
         with:
           cache-mode: off
           install-screenshot-emulators: "true"
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
+        with:
+          ruby-version: "3.4.10"
+
+      - name: Install pinned Fastlane
+        run: |
+          set -euo pipefail
+          gem install fastlane --version 2.238.0 --no-document
+          test "$(ruby -e 'require "rubygems"; print Gem::Specification.find_by_name("fastlane").version')" = "2.238.0"
+
+      - name: Revalidate release authority immediately before signing access
+        uses: ./.mobile-release-authority/.github/actions/mobile-release-authority
+        with:
+          operation: revalidate
+          platform: android
+          workflow-path: .github/workflows/android-beta-release.yml
+          workflow-full-ref: ${{ github.workflow_ref }}
+          workflow-sha: ${{ github.workflow_sha }}
+          target-ref: ${{ needs.authorize.outputs.target_ref }}
+          target-sha: ${{ env.RELEASE_TARGET_SHA }}
+          authority-run-id: ${{ needs.authorize.outputs.run_id }}
 
       - name: Create apps-signing read token
         id: apps-signing-token
@@ -182,17 +193,6 @@ jobs:
         env:
           MATCH_PASSWORD: ${{ secrets.MATCH_PASSWORD }}
         run: node scripts/android-release-signing.mjs --mode materialize
-
-      - name: Setup Ruby
-        uses: ruby/setup-ruby@95ef2b042f9d7a56d8268cba8559e2842e2ad01b # v1
-        with:
-          ruby-version: "3.4.10"
-
-      - name: Install pinned Fastlane
-        run: |
-          set -euo pipefail
-          gem install fastlane --version 2.238.0 --no-document
-          test "$(ruby -e 'require "rubygems"; print Gem::Specification.find_by_name("fastlane").version')" = "2.238.0"
 
       - name: Refresh trusted authority before store access
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
