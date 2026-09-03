@@ -239,154 +239,145 @@ describe("release candidate checklist", () => {
     },
   );
 
-  it.each([
-    "matching",
-    "pnpm-lock.yaml",
-    "dependencies",
-    "devDependencies",
-    "optionalDependencies",
-    "peerDependencies",
-    "missing node_modules",
-    "install failure",
-    "child failure",
-  ])("prepares and cleans trusted tooling dependencies: %s", (scenario) => {
-    const manifest = { version: "2026.9.1", dependencies: { yaml: "2.8.1" } };
-    const { root: targetRoot, git } = candidateGitFixture({
-      ".gitignore": "node_modules\n",
-      "package.json": JSON.stringify(manifest),
-      "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-      "scripts/release-candidate-checklist.mts": [
-        'import { parse } from "yaml";',
-        'console.log(JSON.stringify({ parsed: parse("ready: true"), cwd: process.cwd() }));',
-        'if (process.argv.includes("--fail")) process.exit(7);',
-      ].join("\n"),
-    });
-    const trustedToolingSha = git("rev-parse", "HEAD");
-    // A version-only target commit must still reuse the matching dependency graph.
-    writeFileSync(
-      join(targetRoot, "package.json"),
-      JSON.stringify({
-        ...manifest,
-        version: "2026.9.2",
-        ...([
-          "dependencies",
-          "devDependencies",
-          "optionalDependencies",
-          "peerDependencies",
-        ].includes(scenario)
-          ? { [scenario]: { yaml: "2.8.2" } }
-          : {}),
-      }),
-    );
-    if (["pnpm-lock.yaml", "install failure"].includes(scenario)) {
-      writeFileSync(join(targetRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n# changed\n");
-    }
-    git("commit", "-am", "test: target differs from tooling");
-    expect(git("rev-parse", "HEAD")).not.toBe(trustedToolingSha);
-    const installedModules = realpathSync("node_modules");
-    if (scenario !== "missing node_modules") {
-      symlinkSync(installedModules, join(targetRoot, "node_modules"), "junction");
-    }
-    const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
-    const owner = source.match(/^function runFromTrustedTooling\([\s\S]*?^\}/mu)?.[0];
-    const jsonReader = source.match(/^function readJson\([\s\S]*?^\}/mu)?.[0];
-    const installs = vi.fn(
-      (_command: string, args: string[], options: Parameters<typeof run>[2]) => {
-        expect(args).toEqual([
-          "install",
-          "--frozen-lockfile",
-          "--ignore-scripts",
-          "--prefer-offline",
-        ]);
-        const root = options?.cwd ?? "";
-        expect(root).not.toBe(targetRoot);
-        expect(existsSync(join(root, "node_modules"))).toBe(false);
-        expect(run("git", ["rev-parse", "HEAD"], { cwd: root, capture: true }).trim()).toBe(
-          trustedToolingSha,
-        );
-        if (scenario === "install failure") {
-          throw new Error("fixture install failed");
-        }
-        // Stand in for pnpm's output; never install or modify the shared ready install.
-        mkdirSync(join(root, "node_modules"));
-        for (const dependency of ["tsx", "yaml"]) {
-          symlinkSync(
-            join(installedModules, dependency),
-            join(root, "node_modules", dependency),
-            "junction",
+  it.each(["pnpm-lock.yaml", "missing node_modules", "install failure", "child failure"])(
+    "prepares and cleans trusted tooling dependencies: %s",
+    (scenario) => {
+      const manifest = { version: "2026.9.1", dependencies: { yaml: "2.8.1" } };
+      const { root: targetRoot, git } = candidateGitFixture({
+        ".gitignore": "node_modules\n",
+        "package.json": JSON.stringify(manifest),
+        "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
+        "scripts/release-candidate-checklist.mts": [
+          'import { parse } from "yaml";',
+          'console.log(JSON.stringify({ parsed: parse("ready: true"), cwd: process.cwd() }));',
+          'if (process.argv.includes("--fail")) process.exit(7);',
+        ].join("\n"),
+      });
+      const trustedToolingSha = git("rev-parse", "HEAD");
+      // The tooling worktree never borrows the target graph, even for a version-only target commit.
+      writeFileSync(
+        join(targetRoot, "package.json"),
+        JSON.stringify({
+          ...manifest,
+          version: "2026.9.2",
+          ...([
+            "dependencies",
+            "devDependencies",
+            "optionalDependencies",
+            "peerDependencies",
+          ].includes(scenario)
+            ? { [scenario]: { yaml: "2.8.2" } }
+            : {}),
+        }),
+      );
+      if (["pnpm-lock.yaml", "install failure"].includes(scenario)) {
+        writeFileSync(join(targetRoot, "pnpm-lock.yaml"), "lockfileVersion: '9.0'\n# changed\n");
+      }
+      git("commit", "-am", "test: target differs from tooling");
+      expect(git("rev-parse", "HEAD")).not.toBe(trustedToolingSha);
+      const installedModules = realpathSync("node_modules");
+      if (scenario !== "missing node_modules") {
+        symlinkSync(installedModules, join(targetRoot, "node_modules"), "junction");
+      }
+      const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
+      const owner = source.match(/^function runFromTrustedTooling\([\s\S]*?^\}/mu)?.[0];
+      const jsonReader = source.match(/^function readJson\([\s\S]*?^\}/mu)?.[0];
+      const installs = vi.fn(
+        (_command: string, args: string[], options: Parameters<typeof run>[2]) => {
+          expect(args).toEqual([
+            "install",
+            "--frozen-lockfile",
+            "--ignore-scripts",
+            "--prefer-offline",
+          ]);
+          const root = options?.cwd ?? "";
+          expect(root).not.toBe(targetRoot);
+          expect(existsSync(join(root, "node_modules"))).toBe(false);
+          expect(run("git", ["rev-parse", "HEAD"], { cwd: root, capture: true }).trim()).toBe(
+            trustedToolingSha,
           );
-        }
-        return "";
-      },
-    );
-    let toolingRoot = "";
-    let childOutput = "";
-    const execute = () =>
-      runInNewContext(
-        stripTypeScriptTypes(
-          `${jsonReader}\n${owner}\nrunFromTrustedTooling(argv, { targetRoot, workflowRef: "main" });`,
-        ),
-        {
-          existsSync,
-          mkdirSync,
-          mkdtempSync,
-          readFileSync,
-          rmSync,
-          symlinkSync,
-          createRequire,
-          pathToFileURL,
-          tmpdir,
-          join,
-          isRecord,
-          process,
-          console,
-          targetRoot,
-          argv: [scenario === "child failure" ? "--fail" : "--help"],
-          TRUSTED_TOOLING_SHA_ENV: "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA",
-          fetchTrustedWorkflowSha: () => trustedToolingSha,
-          run: (command: string, args: string[], options: Parameters<typeof run>[2]) =>
-            command === "pnpm" ? installs(command, args, options) : run(command, args, options),
-          spawnSync: (
-            command: string,
-            args: string[],
-            options: Parameters<typeof spawnSync>[2],
-          ) => {
-            if (command === process.execPath) {
-              const entrypoint = args[2];
-              if (!entrypoint) {
-                throw new Error("missing trusted tooling entrypoint");
-              }
-              toolingRoot = dirname(dirname(entrypoint));
-              const child = spawnSync(command, args, {
-                ...options,
-                encoding: "utf8",
-                stdio: "pipe",
-              });
-              childOutput = child.stdout;
-              expect(child.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
-              return child;
-            }
-            return spawnSync(command, args, options);
-          },
+          if (scenario === "install failure") {
+            throw new Error("fixture install failed");
+          }
+          // Stand in for pnpm's output; never install or modify the shared ready install.
+          mkdirSync(join(root, "node_modules"));
+          for (const dependency of ["tsx", "yaml"]) {
+            symlinkSync(
+              join(installedModules, dependency),
+              join(root, "node_modules", dependency),
+              "junction",
+            );
+          }
+          return "";
         },
       );
-    if (scenario === "install failure") {
-      expect(execute).toThrow("fixture install failed");
-    } else if (scenario === "child failure") {
-      expect(execute).toThrow("trusted release candidate tooling failed with 7");
-    } else {
-      execute();
-      expect(JSON.parse(childOutput)).toEqual({ parsed: { ready: true }, cwd: targetRoot });
-    }
-    expect(installs).toHaveBeenCalledTimes(
-      ["matching", "child failure"].includes(scenario) ? 0 : 1,
-    );
-    if (toolingRoot) {
-      expect(existsSync(toolingRoot)).toBe(false);
-    }
-    expect(git("worktree", "list", "--porcelain").match(/^worktree /gmu)).toHaveLength(1);
-    expect(existsSync(join(installedModules, "yaml"))).toBe(true);
-  });
+      let toolingRoot = "";
+      let childOutput = "";
+      const execute = () =>
+        runInNewContext(
+          stripTypeScriptTypes(
+            `${jsonReader}\n${owner}\nrunFromTrustedTooling(argv, { targetRoot, workflowRef: "main" });`,
+          ),
+          {
+            existsSync,
+            mkdirSync,
+            mkdtempSync,
+            readFileSync,
+            rmSync,
+            symlinkSync,
+            createRequire,
+            pathToFileURL,
+            tmpdir,
+            join,
+            isRecord,
+            process,
+            console,
+            targetRoot,
+            argv: [scenario === "child failure" ? "--fail" : "--help"],
+            TRUSTED_TOOLING_SHA_ENV: "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA",
+            fetchTrustedWorkflowSha: () => trustedToolingSha,
+            run: (command: string, args: string[], options: Parameters<typeof run>[2]) =>
+              command === "pnpm" ? installs(command, args, options) : run(command, args, options),
+            spawnSync: (
+              command: string,
+              args: string[],
+              options: Parameters<typeof spawnSync>[2],
+            ) => {
+              if (command === process.execPath) {
+                const entrypoint = args[2];
+                if (!entrypoint) {
+                  throw new Error("missing trusted tooling entrypoint");
+                }
+                toolingRoot = dirname(dirname(entrypoint));
+                const child = spawnSync(command, args, {
+                  ...options,
+                  encoding: "utf8",
+                  stdio: "pipe",
+                });
+                childOutput = child.stdout;
+                expect(child.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+                return child;
+              }
+              return spawnSync(command, args, options);
+            },
+          },
+        );
+      if (scenario === "install failure") {
+        expect(execute).toThrow("fixture install failed");
+      } else if (scenario === "child failure") {
+        expect(execute).toThrow("trusted release candidate tooling failed with 7");
+      } else {
+        execute();
+        expect(JSON.parse(childOutput)).toEqual({ parsed: { ready: true }, cwd: targetRoot });
+      }
+      expect(installs).toHaveBeenCalledTimes(1);
+      if (toolingRoot) {
+        expect(existsSync(toolingRoot)).toBe(false);
+      }
+      expect(git("worktree", "list", "--porcelain").match(/^worktree /gmu)).toHaveLength(1);
+      expect(existsSync(join(installedModules, "yaml"))).toBe(true);
+    },
+  );
 
   it.each([
     { warnings: [] },

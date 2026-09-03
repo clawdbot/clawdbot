@@ -11,7 +11,6 @@ import {
   realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createRequire } from "node:module";
@@ -682,31 +681,17 @@ function runFromTrustedTooling(
   const tempRoot = mkdtempSync(join(tmpdir(), "openclaw-release-tooling-"));
   const toolingRoot = join(tempRoot, "checkout");
   let worktreeAdded = false;
-  let linkedNodeModules = false;
   try {
     run("git", ["worktree", "add", "--detach", toolingRoot, trustedToolingSha], {
       cwd: targetRoot,
     });
     worktreeAdded = true;
-    const toolingPackage = readJson(join(toolingRoot, "package.json"), "tooling package");
-    const targetPackage = readJson(join(targetRoot, "package.json"), "target package");
-    // Matching lockfile bytes and dependency declarations are the reuse trust boundary:
-    // a different graph must be installed from trusted tooling, never borrowed from the target.
-    const matchingDependencies =
-      readFileSync(join(toolingRoot, "pnpm-lock.yaml")).equals(
-        readFileSync(join(targetRoot, "pnpm-lock.yaml")),
-      ) &&
-      ["dependencies", "devDependencies", "optionalDependencies", "peerDependencies"].every(
-        (key) => JSON.stringify(toolingPackage[key]) === JSON.stringify(targetPackage[key]),
-      );
-    if (matchingDependencies && existsSync(join(targetRoot, "node_modules"))) {
-      symlinkSync(join(targetRoot, "node_modules"), join(toolingRoot, "node_modules"), "junction");
-      linkedNodeModules = true;
-    } else {
-      run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
-        cwd: toolingRoot,
-      });
-    }
+    // The tooling worktree installs its own frozen graph: borrowing the target's
+    // node_modules would resolve workspace package links back into the target
+    // checkout and let candidate code run inside the trusted helper.
+    run("pnpm", ["install", "--frozen-lockfile", "--ignore-scripts", "--prefer-offline"], {
+      cwd: toolingRoot,
+    });
     const tsxLoader = pathToFileURL(
       createRequire(join(toolingRoot, "package.json")).resolve("tsx"),
     ).href;
@@ -730,9 +715,6 @@ function runFromTrustedTooling(
       );
     }
   } finally {
-    if (linkedNodeModules) {
-      rmSync(join(toolingRoot, "node_modules"), { force: true });
-    }
     if (worktreeAdded) {
       const cleanup = spawnSync("git", ["worktree", "remove", "--force", toolingRoot], {
         cwd: targetRoot,
