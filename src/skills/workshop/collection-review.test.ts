@@ -213,6 +213,44 @@ describe("skill collection review", () => {
     );
   });
 
+  it("authorizes collection reviews by canonical skill key", async () => {
+    const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-canonical-key-");
+    const skillsRoot = resolveWorkshopSkillsDir({}, "main", testState.env);
+    await writeSkill({
+      dir: path.join(skillsRoot, "alpha-guide"),
+      name: "Alpha Guide",
+      description: "A reusable procedure",
+      metadata: '{"openclaw":{"skillKey":"alpha-guide"}}',
+    });
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const tool = createSkillWorkshopTool({
+        workspaceDir: params.workspaceDir,
+        config: params.config,
+        agentId: params.agentId,
+        env: params.skillWorkshopProposalEnv,
+        collectionReconcile: params.skillWorkshopCollectionReconcile,
+      });
+      await expect(
+        tool.execute("read", { action: "read", skill_name: "Alpha Guide" }),
+      ).resolves.toMatchObject({
+        details: { skillName: "Alpha Guide", skillKey: "alpha-guide" },
+      });
+      await expect(
+        tool.execute("reconcile", { action: "reconcile", collection: [] }),
+      ).resolves.toBeDefined();
+    });
+
+    await expect(
+      runReview({
+        config: {
+          agents: { list: [{ id: "main", default: true, workspace: workspaceDir }] },
+          skills: { workshop: { autonomous: { mode: "auto" } } },
+        },
+        env: testState.env,
+      }),
+    ).resolves.toEqual({ status: "ok", summary: "skill collection review completed" });
+  });
+
   it("encodes hostile skill metadata as JSON data", async () => {
     const workspaceDir = await makeWorkspaceDir("openclaw-collection-review-hostile-metadata-");
     await writeWorkshopSkills([

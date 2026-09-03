@@ -16,7 +16,6 @@ import {
   type SkillCollectionReconcileContext,
   type SkillCollectionReconcileResult,
 } from "./collection-contracts.js";
-import { listWritableSkillCollection } from "./collection-reconcile.js";
 import {
   recordSkillCollectionReviewStatus,
   withSkillCollectionReviewClaim,
@@ -24,6 +23,7 @@ import {
 import { resolveSkillWorkshopConfig } from "./config.js";
 import { readSkillUsageByFile } from "./curator.js";
 import { runSkillWorkshopReview } from "./review-run.js";
+import { listWritableWorkshopSkillSummaries } from "./workspace-skill-read.js";
 
 const COLLECTION_REVIEW_SESSION_SEGMENT = "skill-collection-review";
 const COLLECTION_REVIEW_TIMEOUT_MS = 10 * 60_000;
@@ -37,7 +37,7 @@ async function runSkillCollectionReview(params: {
   assertCurrent: () => void;
 }): Promise<SkillCollectionReconcileResult | null> {
   params.assertCurrent();
-  const skills = listWritableSkillCollection({
+  const skills = listWritableWorkshopSkillSummaries({
     config: params.config,
     agentId: params.agentId,
     env: params.env,
@@ -63,7 +63,7 @@ async function runSkillCollectionReview(params: {
   const runId = `${COLLECTION_REVIEW_SESSION_SEGMENT}:${randomUUID()}`;
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
-    approvedSkillNames: new Set(skills.map((skill) => skill.name)),
+    approvedSkillNames: new Set(skills.map((skill) => skill.skillKey)),
     assertCurrent: params.assertCurrent,
   };
   await runSkillWorkshopReview({
