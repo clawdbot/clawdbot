@@ -498,7 +498,7 @@ describe("amazon-bedrock provider plugin", () => {
   it.each([
     [ANTHROPIC_MODEL, false],
     ["us.anthropic.claude-fable-5-1-v1:0", true],
-    ["global.anthropic.claude-mythos-5-1-v1:0", true],
+    ["global.anthropic.claude-mythos-5-1-v1:0", false],
   ])(
     "owns Anthropic-style replay policy for Bedrock %s",
     async (modelId, appendOnlyRuntimeContext) => {

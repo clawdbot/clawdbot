@@ -741,7 +741,7 @@ describe("resolveTranscriptPolicy", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", true],
+    ["claude-mythos-5-1", false],
     ["claude-fable-5", false],
     ["claude-mythos-5", false],
     ["claude-opus-5", false],
@@ -788,7 +788,7 @@ describe("resolveTranscriptPolicy", () => {
         modelId: "deployment",
         model: makeOpenAiCompatibleReasoningModel({ params: { canonicalModelId } }),
       });
-      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId !== "claude-opus-5");
+      expect(policy.appendOnlyRuntimeContext).toBe(canonicalModelId === "claude-fable-5-1");
     },
   );
 

@@ -111,7 +111,7 @@ describe("provider replay helpers", () => {
 
   it.each([
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", true],
+    ["claude-mythos-5-1", false],
     ["us.anthropic.claude-fable-5-1-v1:0", true],
     ["claude-fable-5", false],
     ["claude-mythos-5", false],

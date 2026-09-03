@@ -222,7 +222,7 @@ describe("anthropic provider replay hooks", () => {
   it.each([
     ["claude-fable-5", false],
     ["claude-fable-5-1", true],
-    ["claude-mythos-5-1", true],
+    ["claude-mythos-5-1", false],
   ])(
     "preserves thinking and scopes runtime context for %s",
     async (modelId, appendOnlyRuntimeContext) => {

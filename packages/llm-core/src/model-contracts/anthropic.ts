@@ -79,11 +79,12 @@ export function resolveClaudeMythos5ModelIdentity(ref: ClaudeModelRef): string |
 }
 
 /**
- * Anthropic binds thinking to the conversation prefix starting with Fable 5.1
- * and Mythos 5.1 and plans to enforce it on later models. Extend when a new binding model ships.
+ * Anthropic binds thinking to the conversation prefix starting with Fable 5.1 and
+ * plans to enforce it on later models. Extend only with live replay proof for the
+ * new model (Mythos 5.1 is unregistered here and unproven).
  */
 export function bindsClaudeThinkingPrefix(ref: ClaudeModelRef): boolean {
-  return /^claude-(?:fable|mythos)-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref));
+  return /^claude-fable-5-1(?=$|[^a-z0-9])/.test(resolveClaudeModelIdentity(ref));
 }
 
 /** Return whether a Claude model requires adaptive thinking instead of manual budgets. */

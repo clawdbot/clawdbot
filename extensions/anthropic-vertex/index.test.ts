@@ -272,7 +272,7 @@ describe("anthropic-vertex provider plugin", () => {
   it.each([
     ["claude-sonnet-4-6", false],
     ["claude-fable-5-1@20260801", true],
-    ["claude-mythos-5-1@20260801", true],
+    ["claude-mythos-5-1@20260801", false],
   ])(
     "owns Anthropic-style replay policy for Vertex %s",
     async (modelId, appendOnlyRuntimeContext) => {
