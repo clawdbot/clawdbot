@@ -1147,16 +1147,40 @@ describe("openclaw test instance", () => {
 
   it.runIf(process.platform !== "win32")(
     "reaps terminal children with inherited stdio before starting a new gateway",
-    async () => {
+    async ({ signal: testSignal }) => {
       const stopTimeoutMs = 100;
+      const control = await createGatewayControl();
       const { instance, readAttempts, tracePath } = await createFakeGateway(
         "terminal-drain,ready",
         300,
         stopTimeoutMs,
+        control,
       );
-
+      // Bootstrap is not the teardown deadline. Start policy time at native exit,
+      // keeping the real inherited-pipe drain and failed restart budgets intact.
+      testSignal.throwIfAborted();
+      const now = Date.now.bind(Date);
+      const fixtureTime = now();
+      const clock = vi.spyOn(Date, "now").mockReturnValue(fixtureTime);
+      const restoreClock = () => clock.mockRestore();
+      testSignal.addEventListener("abort", restoreClock, { once: true });
+      const exited = createDeferred<{ code: number | null; signal: NodeJS.Signals | null }>();
+      control.observers.onLaunch = () => {
+        if (control.launches.length !== 1) {
+          return;
+        }
+        const leader = instance.child;
+        if (!leader) {
+          exited.reject(new Error("fixture launched without a process owner"));
+          return;
+        }
+        leader.once("exit", (code, signal) => exited.resolve({ code, signal }));
+      };
       const startup = trackOperation(instance.startGateway());
       try {
+        expect(await Promise.race([exited.promise, startup])).toEqual({ code: 7, signal: null });
+        const drainStartedAt = now();
+        clock.mockImplementation(() => fixtureTime + now() - drainStartedAt);
         const startupError = await startup.catch((error: unknown) => error);
         expect(startupError).toBeInstanceOf(Error);
         expect((startupError as Error).message).toContain(
@@ -1193,7 +1217,9 @@ describe("openclaw test instance", () => {
         );
         expect(firstChild.stdout.closed).toBe(true);
         expect(firstChild.stderr.closed).toBe(true);
+        clock.mockReturnValue(Date.now());
         await trackOperation(instance.startGateway());
+        restoreClock();
 
         const attempts = await readAttempts();
         expect(attempts).toHaveLength(2);
@@ -1204,6 +1230,8 @@ describe("openclaw test instance", () => {
         expect(isProcessAlive(attempts[1]?.pid as number)).toBe(false);
         await expect.poll(() => isProcessAlive(drainingPid), { timeout: 500 }).toBe(false);
       } finally {
+        restoreClock();
+        testSignal.removeEventListener("abort", restoreClock);
         await fs.writeFile(`${tracePath}.draining-release`, "");
         await Promise.allSettled([startup]);
       }

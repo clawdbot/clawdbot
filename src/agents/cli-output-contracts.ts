@@ -31,7 +31,11 @@ export type CliTerminalFailure =
       reason: "max_turns";
       limit?: number;
     }
-  | { reason: "synthetic_no_response" };
+  | { reason: "synthetic_no_response" }
+  // The backend ended the turn on purpose without a reply (hook stop, aborted
+  // tools, budget). Keeping the CLI's own `terminal_reason` here is what lets
+  // consumers name the cause instead of reporting a transport-shaped failure.
+  | { reason: "turn_stopped"; terminalReason: string; stopReason?: string };
 
 export type CliTerminalInterruption = {
   reason: "aborted" | "timeout";

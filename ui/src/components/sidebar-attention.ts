@@ -4,6 +4,7 @@ import { property, state } from "lit/decorators.js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
+import type { MentionsCapability } from "../app/mentions.ts";
 import type { UpdateProgress } from "../app/update-confirmation.ts";
 import { t } from "../i18n/index.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
@@ -12,9 +13,9 @@ import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
 import "../styles/sidebar-attention-floating.css";
 import { icons } from "./icons.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
+import type { SidebarAttentionDismissal } from "./sidebar-attention-dismissals.ts";
 import {
   sidebarInboxTabCounts,
-  type SidebarAttentionDismissal,
   type SidebarAttentionItem,
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
@@ -49,6 +50,7 @@ class SidebarAttention extends OpenClawLightDomElement {
   @property({ attribute: false }) watchUpdateProgress?: UpdateProgressWatcher;
 
   private panelTrigger: HTMLElement | null = null;
+  private mentions: MentionsCapability | null = null;
   private panelRenderer: SidebarAttentionPanelRenderer | null = null;
   private panelLoad: Promise<SidebarAttentionPanelRuntime> | null = null;
   private panelGeneration = 0;
@@ -73,7 +75,8 @@ class SidebarAttention extends OpenClawLightDomElement {
 
   override connectedCallback() {
     super.connectedCallback();
-    this.context?.sidebarAttention.activate(SidebarAttentionStoreController);
+    this.mentions =
+      this.context?.sidebarAttention.activate(SidebarAttentionStoreController) ?? null;
     // Dismissal belongs to the connected Inbox, including while its panel imports.
     document.addEventListener("pointerdown", this.handleOutsideInteraction, true);
     document.addEventListener("keydown", this.handleOutsideInteraction, true);
@@ -314,9 +317,10 @@ class SidebarAttention extends OpenClawLightDomElement {
             >`
           : nothing}
       </button>
-      ${this.panelOpen && this.panelRenderer
+      ${this.panelOpen && this.panelRenderer && this.mentions
         ? this.panelRenderer({
             context: this.context,
+            mentions: this.mentions,
             entries,
             onApprovalDecision: (event, approvalId, decision) =>
               void this.decideApproval(event, approvalId, decision),

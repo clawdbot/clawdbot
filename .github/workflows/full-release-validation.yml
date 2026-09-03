@@ -34,7 +34,7 @@ on:
         default: false
         type: boolean
       telegram_waiver:
-        description: Explicit owner-approved Telegram integration waiver for stable 2026.8.1 only
+        description: Telegram waiver <target-version>-owner-approved for stable/full; requires release-owner approval
         required: false
         default: ""
         type: string

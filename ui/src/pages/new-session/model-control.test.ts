@@ -14,7 +14,7 @@ afterEach(() => {
 });
 
 describe("new-session model runtime", () => {
-  it("discloses session-only selection and keeps a draft model local", async () => {
+  it("keeps a draft model local without exposing its internal selection target", async () => {
     const { context, request } = contextWith([
       { id: "gpt-5.6-luna", name: "GPT-5.6 Luna", provider: "openai" },
       { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
@@ -30,9 +30,7 @@ describe("new-session model runtime", () => {
       ).not.toBeNull(),
     );
     const container = renderControl(control, context);
-    expect(container.querySelector("[data-chat-model-selection-target]")?.textContent).toContain(
-      "This session",
-    );
+    expect(container.querySelector("[data-chat-model-selection-target]")).toBeNull();
     container
       .querySelector<HTMLButtonElement>('[data-chat-model-option="anthropic/claude-sonnet-4-6"]')
       ?.click();

@@ -104,7 +104,9 @@ describe("repo E2E artifact transfer", () => {
         fs.statSync(path.join(root, "package.json")).mtimeMs,
       );
       expect(fs.readlinkSync(path.join(root, "dist-runtime/index.js"))).toBe("../dist/index.js");
-      expect(fs.statSync(path.join(root, "dist/index.js")).mode & 0o777).toBe(0o755);
+      expect(execFileSync(path.join(root, "dist/index.js"), { encoding: "utf8" })).toBe(
+        "artifact\n",
+      );
       expect(fs.readFileSync(path.join(root, "dist/private-qa.js"), "utf8")).toBe("private QA\n");
       expect(fs.readFileSync(path.join(root, "packages/demo/dist/index.d.ts"), "utf8")).toContain(
         "ready",

@@ -44,6 +44,7 @@ import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.getUnclippedBoundsInRoot
 import androidx.compose.ui.test.hasClickAction
+import androidx.compose.ui.test.hasContentDescription
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.isDialog
@@ -481,10 +482,12 @@ class ChatComposerLayoutTest {
             modelLabel = name
             controller.handleGatewayEvent("chat.metadata.changed", "{}")
           }
+          // Catalog publication can precede ViewModel collection and the picker rendering.
           composeRule.waitUntil {
-            controller.modelCatalog.value
-              .singleOrNull()
-              ?.name == name
+            composeRule
+              .onAllNodes(hasContentDescription(nativeString("Model")) and hasText(name))
+              .fetchSemanticsNodes()
+              .size == 1
           }
           assertComposerControlsVisible(talkActive = true, modelLabel = name)
           val label = composeRule.onNodeWithText(name, useUnmergedTree = true).assertIsDisplayed()

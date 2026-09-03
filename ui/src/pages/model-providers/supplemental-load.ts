@@ -12,6 +12,7 @@ type SupplementalGateway = {
 };
 
 type SupplementalOptions = {
+  isCoreLoading: () => boolean;
   getGateway: () => SupplementalGateway;
   getData: () => ModelProvidersData | null;
   getDataClient: () => GatewayBrowserClient | null;
@@ -76,9 +77,15 @@ export class ModelProviderSupplementalLoader {
         this.options.getGateway().epoch,
       );
     }
-    // The same route data can be adopted more than once. Core refresh cancels
-    // the prior generation before its replacement reaches this boundary.
-    if (client && !this.loading && data.providerUsage === null && data.costByProvider === null) {
+    // Cached core data stays visible during route reloads; only the settled
+    // loader starts supplemental work, so adopting its result cannot duplicate it.
+    if (
+      client &&
+      !this.options.isCoreLoading() &&
+      !this.loading &&
+      data.providerUsage === null &&
+      data.costByProvider === null
+    ) {
       void this.load(client);
     }
   }

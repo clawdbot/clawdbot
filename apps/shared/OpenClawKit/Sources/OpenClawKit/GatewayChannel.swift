@@ -44,12 +44,10 @@ public actor GatewayChannelActor {
         timeoutMs == 0 ? nil : (timeoutMs ?? defaultMs)
     }
 
-    nonisolated static func minimumProtocolVersion(role: String, clientMode: String) -> Int {
-        // Node RPC frames stayed compatible across v3/v4. Operator chat surfaces require v4.
-        if role == "node", clientMode == "node" {
-            return GATEWAY_MIN_NODE_PROTOCOL_VERSION
-        }
-        return GATEWAY_MIN_PROTOCOL_VERSION
+    private var supportedProtocols: ClosedRange<Int> {
+        Self.minimumProtocolVersion(
+            role: self.connectOptions?.role ?? "operator",
+            clientMode: self.connectOptions?.clientMode ?? "ui")...GATEWAY_PROTOCOL_VERSION
     }
 
     private let logger = Logger(subsystem: "ai.openclaw", category: "gateway")
@@ -381,7 +379,10 @@ public actor GatewayChannelActor {
             } else {
                 self.wrap(error, context: "connect to gateway @ \(self.url.absoluteString)")
             }
-            self.connectFailureBackoff.record(error: error, pendingDeviceTokenRetry: self.pendingDeviceTokenRetry)
+            self.connectFailureBackoff.record(
+                error: error,
+                pendingDeviceTokenRetry: self.pendingDeviceTokenRetry,
+                supportedProtocols: self.supportedProtocols)
             await self.transitionToDisconnected(
                 reason: "connect failed: \(wrapped.localizedDescription)",
                 error: wrapped,
@@ -469,7 +470,7 @@ public actor GatewayChannelActor {
         let clientId = options.clientId
         let clientMode = options.clientMode
         let role = options.role
-        let minProtocol = Self.minimumProtocolVersion(role: role, clientMode: clientMode)
+        let protocols = self.supportedProtocols
         let deviceIdentityProfile = options.deviceIdentityProfile
         let requestedScopes = options.scopes
         let scopesAreExplicit = options.scopesAreExplicit
@@ -499,8 +500,8 @@ public actor GatewayChannelActor {
             displayName: clientDisplayName,
             platform: platform)
         var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(minProtocol),
-            "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "minProtocol": ProtoAnyCodable(protocols.lowerBound),
+            "maxProtocol": ProtoAnyCodable(protocols.upperBound),
             "client": ProtoAnyCodable(client),
             "caps": ProtoAnyCodable(options.caps),
             "locale": ProtoAnyCodable(primaryLocale),

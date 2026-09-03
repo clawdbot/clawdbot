@@ -778,6 +778,24 @@ The OpenClaw transcript remains the compatibility layer for:
 - switching back to the built-in OpenClaw harness on a later turn
 - generic `/new`, `/reset`, and session deletion behavior
 
+For user-message mirrors, use
+`restorePreparedUserTurnOperationalMetaForRuntime({ runtimeMessage, preparedMessage })`
+from `openclaw/plugin-sdk/agent-harness-runtime`. Pass an independent, trusted
+snapshot of the host-prepared input as `preparedMessage`. Clone `content` and
+selected-mention metadata before hooks that can mutate them in place, and keep
+that snapshot unchanged.
+
+The helper restores operational metadata on user messages without replacing
+native or hook-rewritten content. Non-user runtime messages are returned unchanged.
+Human mentions survive only when the entire `content` value exactly matches the
+prepared snapshot; changed text must not inherit the old selections.
+
+Restored metadata neither authorizes actions nor proves a fresh transcript append.
+After the canonical append, pass its committed message, anchor, and actual
+`{ appended }` result to `userTurnTranscriptRecorder.markRuntimePersisted(...)`.
+Only `appended: true` can trigger an original-input commit notification; an
+idempotent history match must report `false`.
+
 Store native bindings in plugin state. Implement `reset(...)` for an in-place
 session reset and `withSessionDeletion(params, run)` for removal of a session
 key, including expiry and maintenance. A physical session ID changing at the

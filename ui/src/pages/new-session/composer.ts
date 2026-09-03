@@ -1,13 +1,15 @@
 import { html, nothing, type TemplateResult } from "lit";
+import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
+import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { icons } from "../../components/icons.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
-import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../../lib/chat/human-mentions.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import {
   createChatAttachmentDropHandlers,
@@ -22,6 +24,12 @@ import {
   paneDomId,
   scheduleTextareaHeightAdjustment,
 } from "../chat/components/chat-composer-dom.ts";
+import {
+  HumanMentionMenu,
+  renderSelectedHumanMentions,
+  type HumanMentionDirectory,
+  type HumanMentionMenuHost,
+} from "../chat/components/chat-composer-mention-menu.ts";
 import type { ChatComposerPlusMenuView } from "../chat/components/chat-composer-plus-menu.ts";
 import {
   createSkillMenuState,
@@ -46,6 +54,7 @@ import {
   updateSlashMenu,
 } from "../chat/components/chat-composer-slash-menu.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
+import { ensureChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { insertComposerDictation } from "../chat/composer-dictation.ts";
 import {
   renderNewSessionDraftVisibility,
@@ -60,6 +69,9 @@ export type NewSessionComposerOptions = {
   canSubmit: boolean;
   getAttachments: () => ChatAttachment[];
   message: string;
+  mentions?: readonly HumanMention[];
+  getMentions?: () => readonly HumanMention[];
+  mentionDirectory?: HumanMentionDirectory;
   modelControl?: TemplateResult | typeof nothing;
   permissionControl?: TemplateResult | typeof nothing;
   pendingAttachmentReads: number;
@@ -84,7 +96,7 @@ export type NewSessionComposerOptions = {
   toolOverrides?: SessionToolOverrides | null;
   onAttachmentsChange: (attachments: ChatAttachment[]) => void;
   onPendingReadsChange: (delta: 1 | -1) => void;
-  onInput: (message: string) => void;
+  onInput: (message: string, mentions?: readonly HumanMention[]) => void;
   onOpenImage?: (item: ImageLightboxItem) => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
   onSubmit: () => void;
@@ -92,6 +104,7 @@ export type NewSessionComposerOptions = {
 };
 
 function submitNewSession(options: NewSessionComposerOptions) {
+  options.textareaController.mentionMenu.close();
   resetSkillMenuState(options.textareaController.skillMenuState);
   resetSlashMenuState(options.textareaController.slashMenuState);
   options.onSubmit();
@@ -136,6 +149,8 @@ export class NewSessionComposerTextareaController {
   private skillCommandDraftOwnerKey = "";
   readonly skillMenuState = createSkillMenuState();
   readonly slashMenuState = createSlashMenuState();
+  readonly mentionMenu = new HumanMentionMenu();
+  mentionInput?: HumanMentionInput;
   capabilityMenuOpen = false;
   capabilityMenuView: ChatComposerPlusMenuView = "root";
 
@@ -320,6 +335,7 @@ export class NewSessionComposerTextareaController {
   }
 
   disconnect() {
+    this.mentionMenu.dispose();
     this.resetPlaceholder();
     this.skillCommandClient = null;
     this.skillCommandAgentId = "";
@@ -335,32 +351,26 @@ export class NewSessionComposerTextareaController {
   }
 }
 
-export function renderDraftError(message: string, action?: { label: string; onClick: () => void }) {
-  return html`
-    <div class="callout danger new-session-page__error new-session-page__alert" role="alert">
-      <span class="new-session-page__alert-icon" aria-hidden="true">${icons.alertTriangle}</span>
-      <span class="callout__content new-session-page__alert-message"
-        >${formatUiError(message)}</span
-      >
-      ${action
-        ? html`<button class="btn btn--sm" type="button" @click=${action.onClick}>
-            ${action.label}
-          </button>`
-        : nothing}
-    </div>
-  `;
-}
-
 function handleComposerKeydown(
   event: KeyboardEvent,
   options: NewSessionComposerOptions,
   skillMenuHost: SkillMenuHost,
   slashMenuHost: SlashMenuHost,
+  mentionMenuHost: HumanMentionMenuHost,
 ) {
   if (options.dictationActive) {
     return;
   }
   if (event.isComposing || event.keyCode === 229) {
+    return;
+  }
+  if (
+    options.textareaController.mentionMenu.handleKeydown(
+      event,
+      mentionMenuHost,
+      options.requestUpdate,
+    )
+  ) {
     return;
   }
   if (
@@ -395,6 +405,7 @@ function handleComposerKeydown(
       event.preventDefault();
       resetSkillMenuState(options.textareaController.skillMenuState);
       resetSlashMenuState(options.textareaController.slashMenuState);
+      options.textareaController.mentionMenu.close();
       options.onBackgroundSubmit();
     }
     return;
@@ -415,6 +426,12 @@ function handleComposerKeydown(
 export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   const skillMenuState = options.textareaController.skillMenuState;
   const slashMenuState = options.textareaController.slashMenuState;
+  const mentionMenu = options.textareaController.mentionMenu;
+  mentionMenu.syncDirectory(
+    options.submitting || options.messageLocked || options.dictationActive
+      ? undefined
+      : options.mentionDirectory,
+  );
   const skillMenuHost: SkillMenuHost = {
     paneId: "new-session",
     getDraft: () => options.textareaController.getTextarea()?.value ?? options.message,
@@ -433,7 +450,14 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     refreshCommands: options.refreshCommands,
     commandFilter: (command) => command.executeLocal !== true,
   };
-  const updateMenus = (target: HTMLTextAreaElement) => {
+  const mentionMenuHost: HumanMentionMenuHost = {
+    paneId: skillMenuHost.paneId,
+    getDraft: skillMenuHost.getDraft,
+    getTextarea: skillMenuHost.getTextarea,
+    getMentions: () => options.getMentions?.() ?? options.mentions ?? [],
+    commitDraft: options.onInput,
+  };
+  const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
     if (options.nativeTerminal) {
       return;
     }
@@ -445,6 +469,20 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
       skillMenuHost,
       options.requestUpdate,
     );
+    if (
+      event?.inputType === "insertFromPaste" ||
+      event?.inputType === "insertFromDrop" ||
+      event?.isComposing
+    ) {
+      mentionMenu.close();
+    } else {
+      mentionMenu.update(
+        target.value,
+        target.selectionStart,
+        options.requestUpdate,
+        event?.inputType === "insertText" && event.data?.includes("@") === true,
+      );
+    }
   };
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
@@ -487,17 +525,28 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     !options.nativeTerminal && !composerLocked && isSkillMenuVisible(skillMenuState);
   const slashMenuVisible =
     !options.nativeTerminal && !composerLocked && isSlashMenuVisible(slashMenuState);
-  const menuVisible = skillMenuVisible || slashMenuVisible;
+  const menuVisible = skillMenuVisible || slashMenuVisible || mentionMenu.open;
+  if (mentionMenu.open) {
+    ensureChatComposerPickerDismissal();
+  }
   const menuListboxId = paneDomId(
     skillMenuHost.paneId,
-    skillMenuVisible ? "skill-menu-listbox" : "slash-menu-listbox",
+    mentionMenu.open
+      ? "mention-menu-listbox"
+      : skillMenuVisible
+        ? "skill-menu-listbox"
+        : "slash-menu-listbox",
   );
-  const activeMenuOptionId = skillMenuVisible
-    ? getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId)
-    : getActiveSlashMenuOptionId(slashMenuState, slashMenuHost.paneId);
-  const activeMenuOptionLabel = skillMenuVisible
-    ? getActiveSkillMenuOptionLabel(skillMenuState)
-    : getActiveSlashMenuOptionLabel(slashMenuState);
+  const activeMenuOptionId = mentionMenu.open
+    ? mentionMenu.activeId(skillMenuHost.paneId)
+    : skillMenuVisible
+      ? getActiveSkillMenuOptionId(skillMenuState, skillMenuHost.paneId)
+      : getActiveSlashMenuOptionId(slashMenuState, slashMenuHost.paneId);
+  const activeMenuOptionLabel = mentionMenu.open
+    ? mentionMenu.activeLabel()
+    : skillMenuVisible
+      ? getActiveSkillMenuOptionLabel(skillMenuState)
+      : getActiveSlashMenuOptionLabel(slashMenuState);
   const menuAnnouncementId = paneDomId(skillMenuHost.paneId, "active-menu-announcement");
   const ordinaryShortcut = options.requiresModifier ? "Control+Enter Meta+Enter" : "Enter";
   const backgroundShortcut = options.requiresModifier
@@ -525,9 +574,17 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         class="agent-chat__input agent-chat__input--mobile-toolbar${options.dictationActive
           ? " agent-chat__input--dictating"
           : ""}"
+        @openclaw-composer-dismiss-invocations=${() => {
+          mentionMenu.close();
+          options.requestUpdate();
+        }}
       >
+        ${mentionMenu.render(mentionMenuHost, options.requestUpdate)}
         ${options.nativeTerminal ? nothing : renderChatAttachmentInputs(attachmentProps)}
         ${renderAttachmentPreview(attachmentProps)}
+        ${renderSelectedHumanMentions(options.message, options.mentions, () =>
+          options.onInput(options.message, []),
+        )}
         <div class="agent-chat__composer-lede">${options.dictationStatus ?? nothing}</div>
         <div class="agent-chat__composer-input-row">
           <div class="agent-chat__composer-combobox">
@@ -552,24 +609,57 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               placeholder=${animatedPlaceholder}
               aria-label=${messagePlaceholder}
               aria-keyshortcuts=${keyShortcuts}
-              .value=${visibleMessage}
+              .value=${guard([visibleMessage], () => live(visibleMessage))}
               aria-autocomplete="list"
               aria-controls=${ifDefined(menuVisible ? menuListboxId : undefined)}
               aria-expanded=${ifDefined(menuVisible ? "true" : undefined)}
               aria-activedescendant=${ifDefined(activeMenuOptionId ?? undefined)}
               aria-describedby=${menuAnnouncementId}
-              @input=${(event: Event) => {
+              @input=${(event: InputEvent) => {
                 if (options.dictationActive) {
                   return;
                 }
+                // SAFETY: this input listener is attached directly to the textarea below.
                 const target = event.target as HTMLTextAreaElement;
                 adjustTextareaHeight(target);
-                updateMenus(target);
-                options.onInput(target.value);
+                const mentions = mentionMenuHost.getMentions();
+                options.onInput(
+                  target.value,
+                  mentions.length
+                    ? updateHumanMentions(
+                        options.message,
+                        target.value,
+                        mentions,
+                        options.textareaController.mentionInput,
+                      )
+                    : undefined,
+                );
+                options.textareaController.mentionInput = undefined;
+                updateMenus(target, event);
+              }}
+              @beforeinput=${(event: InputEvent) => {
+                // SAFETY: this beforeinput listener belongs to this native textarea.
+                const target = event.target as HTMLTextAreaElement;
+                options.textareaController.mentionInput = {
+                  value: target.value,
+                  start: target.selectionStart,
+                  end: target.selectionEnd,
+                  inputType: event.inputType,
+                };
               }}
               @select=${handleSelect}
               @keydown=${(event: KeyboardEvent) =>
-                handleComposerKeydown(event, options, skillMenuHost, slashMenuHost)}
+                handleComposerKeydown(
+                  event,
+                  options,
+                  skillMenuHost,
+                  slashMenuHost,
+                  mentionMenuHost,
+                )}
+              @compositionstart=${() => {
+                mentionMenu.close();
+                options.requestUpdate();
+              }}
               @paste=${(event: ClipboardEvent) => {
                 if (options.nativeTerminal && event.clipboardData?.files.length) {
                   event.preventDefault();

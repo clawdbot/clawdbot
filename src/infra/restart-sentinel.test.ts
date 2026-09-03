@@ -218,7 +218,33 @@ describe("restart sentinel", () => {
     });
   });
 
-  it("reconstructs typed columns when payload_json is corrupt", async () => {
+  it.each([
+    { name: "the shadow payload is corrupt", columns: { payload_json: "not-json" } },
+    {
+      name: "recovery has an unknown reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: { serviceRestartSafe: false, reason: "future-recovery-reason", detail: "new" },
+        }),
+      },
+    },
+    {
+      name: "recovery has a known reason and extra field",
+      columns: {
+        stats_json: JSON.stringify({
+          mode: "npm",
+          reason: "pending",
+          recovery: {
+            serviceRestartSafe: false,
+            reason: "runtime-verification-failed",
+            detail: "new",
+          },
+        }),
+      },
+    },
+  ])("keeps notices readable and consumable when $name", async ({ columns }) => {
     await withRestartSentinelStateDir(async () => {
       const payload = {
         kind: "update" as const,
@@ -233,9 +259,13 @@ describe("restart sentinel", () => {
         stats: { mode: "npm", reason: "pending" },
       };
       const written = await writeRestartSentinel(payload);
-      updateSentinelRow({ payload_json: "not-json" });
+      updateSentinelRow(columns);
 
-      await expect(readRestartSentinel()).resolves.toEqual(written);
+      const read = await readRestartSentinel();
+      expect(read).toEqual(written);
+      expect(formatRestartSentinelMessage(read!.payload)).toContain(payload.message);
+      await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
+      await expect(readRestartSentinel()).resolves.toBeNull();
     });
   });
 

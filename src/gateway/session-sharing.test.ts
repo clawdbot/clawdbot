@@ -336,8 +336,6 @@ describe("session sharing policy", () => {
       expect(creatorEntryFilter?.(foreignKey, foreignEntry)).toBe(true);
       expect(
         entryFilter?.(ownKey, {
-          sessionId: "session-team-own",
-          updatedAt: 1,
           createdActor: { type: "human", source: "profile", id: restrictedId },
         }),
       ).toBe(true);

@@ -436,6 +436,7 @@ export async function runEmbeddedAttemptSettledPhase(
           attempt,
           activeSession,
           sessionManager,
+          toolResultPromptProjectionState,
           withOwnedTranscriptWrite: input.sessionLock.withOwnedTranscriptWrite,
           state: streamSettleState,
           getRunAbortDeadlineAtMs,

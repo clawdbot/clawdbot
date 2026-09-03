@@ -545,6 +545,24 @@ and private dist-tag surfaces. See [Monthly Gateway extended-stable
 publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
 for commands and recovery.
 
+### Windows Testbox Probe
+
+The manual `windows-testbox-probe.yml` workflow keeps Windows/WSL probing and
+headless Windows CI on the selected `runner_label`. The `run_windows_ci` input
+(default `false`) requests both headless CI and a separate native Scheduled Task
+proof job on GitHub-hosted `windows-2025`. Neither job depends on the other, so
+their results remain independently visible; either requested proof failing fails
+the workflow.
+
+For both proofs, set `target_ref` to an exact 40-character commit SHA. Both jobs
+check out that target, and native proof verifies checkout equality before running
+the lifecycle test. Native preflight runs before setup and requires an interactive
+Windows session. A noninteractive runner fails qualification rather than silently
+skipping proof. Selecting `windows-2025` does not establish native qualification:
+the unchanged lifecycle assertions and cleanup must pass on the actual runner.
+Cleanup and diagnostic upload still run after failure, and retained evidence is
+removed only after cleanup and upload succeed.
+
 ## Runners
 
 Runner choice follows contributor trust, not whether a pull request came from a fork. Every `runs-on` expression admits Blacksmith only when `github.event.pull_request.author_association` is `OWNER`, `MEMBER`, `COLLABORATOR`, or `CONTRIBUTOR`, so a fork pull request from someone who has already landed a commit is routed exactly like a maintainer pull request. `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`, and `MANNEQUIN` stay on GitHub-hosted runners, which are free for public repositories, so an unreviewed author cannot spend Blacksmith capacity. Maintainers report `CONTRIBUTOR` here because org membership is concealed; keep `CONTRIBUTOR` in that list or maintainer pull requests lose Blacksmith. Pushes and manual dispatches are unaffected. Cache trust is a separate, stricter boundary: exact dependency restores require a pull request from `openclaw/openclaw`, and ordinary CI never publishes the shared archives. The separate trusted warmer owns publication.

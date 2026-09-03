@@ -96,7 +96,7 @@ struct AppStateRemoteConfigTests {
             let gate = GatewayConfigReadGate()
 
             let read = Task {
-                await GatewayEndpointStore._testLiveSourceSnapshot(
+                try await GatewayEndpointStore._testLiveSourceSnapshot(
                     state: state,
                     beforeConfigRead: { await gate.suspendRead() })
             }
@@ -104,13 +104,9 @@ struct AppStateRemoteConfigTests {
             state.remoteUrl = "wss://gateway-b.example.test"
             await gate.release()
 
-            let source = await read.value
-            #expect(source.mode == .unconfigured)
-            #expect(source.token == nil)
-            #expect(source.password == nil)
-            #expect(source.deviceAuthGatewayID == nil)
-            #expect(source.directRemoteURL == nil)
-            #expect(source.sshRouteIdentity == nil)
+            await #expect(throws: CancellationError.self) {
+                try await read.value
+            }
         }
     }
 
@@ -811,7 +807,9 @@ struct AppStateRemoteConfigTests {
                 #expect(settings.identity.isEmpty)
             }
     }
+}
 
+extension AppStateRemoteConfigTests {
     @Test
     func `updated remote gateway config sets trimmed token`() {
         let remote = AppState._testUpdatedRemoteGatewayConfig(

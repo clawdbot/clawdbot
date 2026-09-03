@@ -103,13 +103,15 @@ export function renderChatModelPickerOption(params: {
     (params.entry.unavailableReason === "missing-auth" ||
       params.entry.unavailableReason === "auth-failed");
   const onModelSetup = needsAuth ? params.onModelSetup : undefined;
-  const modelMeta = [
-    formatModelContextMeta(params.entry),
-    params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
-    needsAuth ? t("modelSetup.candidates.signInNeeded") : "",
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  const modelMeta = needsAuth
+    ? ""
+    : [
+        formatModelContextMeta(params.entry),
+        params.entry.agentRuntimeId ? formatAgentRuntimeLabel(params.entry.agentRuntimeId) : "",
+      ]
+        .filter(Boolean)
+        .join(" · ");
+  const accessibleStatus = needsAuth ? t("modelSetup.candidates.signInNeeded") : "";
   const option = html`<button
     class="chat-controls__inline-select-option chat-controls__model-option ${selected
       ? "chat-controls__inline-select-option--selected"
@@ -126,9 +128,13 @@ export function renderChatModelPickerOption(params: {
     ).toLocaleLowerCase()}
     role="option"
     aria-selected=${selected ? "true" : "false"}
-    aria-label=${params.entry.supportsTools === false
-      ? `${modelLabel}. ${t("chat.modelControls.chatOnlyHelp")}`
-      : modelLabel}
+    aria-label=${[
+      modelLabel,
+      accessibleStatus,
+      params.entry.supportsTools === false ? t("chat.modelControls.chatOnlyHelp") : "",
+    ]
+      .filter(Boolean)
+      .join(". ")}
     type="button"
     ?disabled=${params.disabled || (params.entry.disabled && !onModelSetup)}
     data-chat-model-setup=${onModelSetup ? "true" : nothing}
@@ -159,6 +165,14 @@ export function renderChatModelPickerOption(params: {
           : nothing}
         ${modelMeta
           ? html`<span class="chat-controls__model-option-meta">${modelMeta}</span>`
+          : nothing}
+        ${needsAuth
+          ? html`<span
+              class="chat-controls__model-option-auth-warning"
+              data-chat-model-auth-warning
+            >
+              ${icons.alertTriangle}<span>${accessibleStatus}</span>
+            </span>`
           : nothing}
         ${params.entry.supportsTools === false
           ? html`<span class="chat-controls__model-chat-only-info" aria-hidden="true"

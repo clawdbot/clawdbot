@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -89,7 +90,7 @@ export type CronFormState = {
   failureAlertCooldownSeconds: string;
   failureAlertChannel: string;
   failureAlertTo: string;
-  failureAlertDeliveryMode: "announce" | "webhook";
+  failureAlertDeliveryMode: "" | "announce" | "webhook";
   failureAlertAccountId: string;
   timeoutSeconds: string;
 };
@@ -171,11 +172,11 @@ const DEFAULT_CRON_FORM: CronFormState = {
   deliveryCompletionDestination: undefined,
   deliveryFailureDestination: undefined,
   failureAlertMode: "inherit",
-  failureAlertAfter: "2",
-  failureAlertCooldownSeconds: "3600",
+  failureAlertAfter: "",
+  failureAlertCooldownSeconds: "",
   failureAlertChannel: "last",
   failureAlertTo: "",
-  failureAlertDeliveryMode: "announce",
+  failureAlertDeliveryMode: "",
   failureAlertAccountId: "",
   timeoutSeconds: "",
 };
@@ -412,16 +413,13 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
     const afterRaw = form.failureAlertAfter.trim();
     if (afterRaw) {
       const after = toNumber(afterRaw, 0);
-      if (!Number.isFinite(after) || after <= 0) {
-        errors.failureAlertAfter = "Failure alert threshold must be greater than 0.";
+      if (!Number.isFinite(after) || after < 1) {
+        errors.failureAlertAfter = "Failure alert threshold must be at least 1.";
       }
     }
     const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-    if (cooldownRaw) {
-      const cooldown = toNumber(cooldownRaw, -1);
-      if (!Number.isFinite(cooldown) || cooldown < 0) {
-        errors.failureAlertCooldownSeconds = "Cooldown must be 0 or greater.";
-      }
+    if (cooldownRaw && parseFailureAlertCooldownMs(cooldownRaw) === undefined) {
+      errors.failureAlertCooldownSeconds = "Cooldown must be finite and 0 or greater.";
     }
   }
   return errors;
@@ -884,7 +882,7 @@ function isReadOnlyCronPayload(payload: CronPayload | null): boolean {
 }
 
 function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
-  const failureAlert = job.failureAlert;
+  const failureAlert = typeof job.failureAlert === "object" ? job.failureAlert : undefined;
   const payload = getCronJobPayload(job);
   const payloadLocked = isReadOnlyCronPayload(payload);
   if (!isCronFormSessionTarget(job.sessionTarget)) {
@@ -937,33 +935,16 @@ function jobToForm(job: CronJob, prev: CronFormState): CronFormState {
     deliveryCompletionDestination:
       job.delivery?.mode === "announce" ? job.delivery.completionDestination : undefined,
     deliveryFailureDestination: job.delivery?.failureDestination,
-    failureAlertMode:
-      failureAlert === false
-        ? "disabled"
-        : failureAlert && typeof failureAlert === "object"
-          ? "custom"
-          : "inherit",
-    failureAlertAfter:
-      failureAlert && typeof failureAlert === "object" && typeof failureAlert.after === "number"
-        ? String(failureAlert.after)
-        : DEFAULT_CRON_FORM.failureAlertAfter,
+    failureAlertMode: job.failureAlert === false ? "disabled" : failureAlert ? "custom" : "inherit",
+    failureAlertAfter: typeof failureAlert?.after === "number" ? String(failureAlert.after) : "",
     failureAlertCooldownSeconds:
-      failureAlert &&
-      typeof failureAlert === "object" &&
-      typeof failureAlert.cooldownMs === "number"
-        ? String(Math.floor(failureAlert.cooldownMs / 1000))
-        : DEFAULT_CRON_FORM.failureAlertCooldownSeconds,
-    failureAlertChannel:
-      failureAlert && typeof failureAlert === "object"
-        ? (failureAlert.channel ?? CRON_CHANNEL_LAST)
-        : CRON_CHANNEL_LAST,
-    failureAlertTo: failureAlert && typeof failureAlert === "object" ? (failureAlert.to ?? "") : "",
-    failureAlertDeliveryMode:
-      failureAlert && typeof failureAlert === "object"
-        ? (failureAlert.mode ?? "announce")
-        : "announce",
-    failureAlertAccountId:
-      failureAlert && typeof failureAlert === "object" ? (failureAlert.accountId ?? "") : "",
+      typeof failureAlert?.cooldownMs === "number"
+        ? durationMsToSecondsString(failureAlert.cooldownMs)
+        : "",
+    failureAlertChannel: failureAlert?.channel ?? CRON_CHANNEL_LAST,
+    failureAlertTo: failureAlert?.to ?? "",
+    failureAlertDeliveryMode: failureAlert?.mode ?? "",
+    failureAlertAccountId: failureAlert?.accountId ?? "",
     timeoutSeconds:
       payload?.kind === "agentTurn" && typeof payload.timeoutSeconds === "number"
         ? String(payload.timeoutSeconds)
@@ -1093,40 +1074,53 @@ function buildCronPayload(form: CronFormState) {
 
 function normalizePersistedDeliveryChannel(
   value: string,
-  options: { preserveLastOnUpdate?: boolean } = {},
+  options: { preserveLast?: boolean } = {},
 ) {
   const channel = value.trim();
   if (!channel) {
     return undefined;
   }
   if (channel === CRON_CHANNEL_LAST) {
-    return options.preserveLastOnUpdate ? CRON_CHANNEL_LAST : undefined;
+    return options.preserveLast ? CRON_CHANNEL_LAST : undefined;
   }
   return channel;
 }
 
-function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert"]) {
+function parseFailureAlertCooldownMs(value: string): number | undefined {
+  const raw = value.trim();
+  const seconds = toNumber(raw, Number.NaN);
+  if (!raw || !Number.isFinite(seconds) || seconds < 0) {
+    return undefined;
+  }
+  // Keep decimal precision; normalize other accepted Number spellings before the same scale.
+  const decimal =
+    seconds === 0 || parseStrictFiniteNumber(raw) === undefined ? String(seconds) : raw;
+  const [coefficient, exponent = "0"] = decimal.split(/[eE]/u);
+  const ms = Number(`${coefficient}e${Number(exponent) + 3}`);
+  return Number.isFinite(ms) && ms >= 0 ? Math.floor(ms) : undefined;
+}
+
+function buildFailureAlert(
+  form: CronFormState,
+  source?: CronJob["failureAlert"],
+  isUpdate = false,
+) {
   if (form.failureAlertMode === "disabled") {
     return false as const;
   }
   if (form.failureAlertMode !== "custom") {
-    return existing !== undefined ? null : undefined;
+    return isUpdate && source !== undefined ? null : undefined;
   }
-  const existingConfig = existing && typeof existing === "object" ? existing : undefined;
+  const sourceConfig = source && typeof source === "object" ? source : undefined;
+  const existingConfig = isUpdate ? sourceConfig : undefined;
   const after = toNumber(form.failureAlertAfter.trim(), 0);
-  const cooldownRaw = form.failureAlertCooldownSeconds.trim();
-  const cooldownSeconds = cooldownRaw.length > 0 ? toNumber(cooldownRaw, 0) : undefined;
-  const cooldownMs =
-    cooldownSeconds !== undefined && Number.isFinite(cooldownSeconds) && cooldownSeconds >= 0
-      ? Math.floor(cooldownSeconds * 1000)
-      : undefined;
-  const deliveryMode = form.failureAlertDeliveryMode;
+  const cooldownMs = parseFailureAlertCooldownMs(form.failureAlertCooldownSeconds);
   const accountId = form.failureAlertAccountId.trim();
   const to = form.failureAlertTo.trim();
-  const patch: Record<string, unknown> = {
+  return {
     after: after > 0 ? Math.floor(after) : existingConfig?.after !== undefined ? null : undefined,
     channel: normalizePersistedDeliveryChannel(form.failureAlertChannel, {
-      preserveLastOnUpdate: Boolean(existingConfig?.channel),
+      preserveLast: Boolean(sourceConfig?.channel),
     }),
     to: to || (existingConfig?.to ? null : undefined),
     ...(cooldownMs !== undefined
@@ -1134,12 +1128,10 @@ function buildFailureAlert(form: CronFormState, existing?: CronJob["failureAlert
       : existingConfig?.cooldownMs !== undefined
         ? { cooldownMs: null }
         : {}),
+    mode: form.failureAlertDeliveryMode || (existingConfig?.mode !== undefined ? null : undefined),
+    accountId: accountId || (existingConfig?.accountId ? null : undefined),
+    includeSkipped: sourceConfig?.includeSkipped,
   };
-  if (deliveryMode) {
-    patch.mode = deliveryMode;
-  }
-  patch.accountId = accountId || (existingConfig?.accountId ? null : undefined);
-  return patch;
 }
 
 type CronSaveResult = { saved: false } | { saved: true; jobId: string | null };
@@ -1217,7 +1209,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
             channel:
               selectedDeliveryMode === "announce"
                 ? normalizePersistedDeliveryChannel(form.deliveryChannel, {
-                    preserveLastOnUpdate: Boolean(editingJob?.delivery?.channel),
+                    preserveLast: Boolean(editingJob?.delivery?.channel),
                   })
                 : undefined,
             to:
@@ -1243,7 +1235,7 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 : {}),
             } as const)
           : undefined;
-    const failureAlert = buildFailureAlert(form, editingJob?.failureAlert);
+    const failureAlert = buildFailureAlert(form, sourceJob?.failureAlert, Boolean(editingJob));
     const triggerScript = form.triggerScript.trim();
     const trigger = form.triggerEnabled
       ? editingJob?.trigger?.script === triggerScript &&

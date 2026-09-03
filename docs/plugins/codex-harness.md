@@ -1070,6 +1070,11 @@ the problem and keeps the selected native thread intact. It does not silently
 start another thread. Use `/new` to start with the current harness tools, or
 continue the preserved thread in native Codex.
 
+If an ordinary OpenClaw-managed native thread was deleted, the next turn starts
+a fresh native thread while keeping the selected model and provider. This
+recovery preserves pending manual attachments and native-model-owned threads.
+It does not replay a turn whose native outcome is uncertain.
+
 ### Shared Fast mode and Codex fast mode
 
 `/fast` controls the shared OpenClaw policy. A directive-only `/fast off`

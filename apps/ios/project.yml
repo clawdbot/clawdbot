@@ -401,6 +401,10 @@ targets:
         group: Tests
       - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatMermaidRenderModelTests.swift
         group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatSelectableTextViewTests.swift
+        group: Tests
+      - path: ../shared/OpenClawKit/Tests/OpenClawKitTests/ChatPasteboardTests.swift
+        group: Tests
       - path: WatchApp/Sources/WatchDeferredPayloadOrdering.swift
         group: WatchApp/Sources
     dependencies:

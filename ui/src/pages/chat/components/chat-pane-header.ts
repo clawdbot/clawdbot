@@ -435,6 +435,7 @@ export function renderChatPaneHeader(props: ChatPaneHeaderProps) {
                   ? props.session.owner.actor.identity.id
                   : undefined,
                 props.personActivity,
+                props.session?.owner?.actor.label,
               )
             : null,
         )}

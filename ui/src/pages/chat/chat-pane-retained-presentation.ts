@@ -221,6 +221,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       if (scope) {
         storeChatComposerMemoryFallback(state, scope, {
           message: state.chatMessage,
+          mentions: state.chatMentions,
           goalMode: state.chatGoalDraftMode,
           attachments: state.chatAttachments,
           draftRetry: persistResult,
@@ -232,6 +233,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       // fallbacks. This transfer carries only composer metadata and the draft.
       attachments: [],
       draft: state.chatMessage,
+      ...(state.chatMentions?.length ? { mentions: state.chatMentions } : {}),
       ...(state.chatGoalDraftMode ? { goalMode: state.chatGoalDraftMode } : {}),
       restore: true,
       storageFailed: persistResult.status === "storage-failed",
@@ -269,9 +271,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     state.chatGoalDraftMode = handoff.goalMode ?? null;
     if (notifyDraftChange) {
-      state.handleChatDraftChange(handoff.draft);
+      state.handleChatDraftChange(handoff.draft, handoff.mentions ?? []);
     } else {
       state.chatMessage = handoff.draft;
+      state.chatMentions = handoff.mentions;
     }
     if (handoff.storageFailed) {
       state.lastError = CHAT_COMPOSER_DRAFT_STORAGE_ERROR;

@@ -453,6 +453,7 @@ async function persistTextTurnTranscript(
       // SAFETY: The typed user-write hook above is the only producer of this batch's user row.
       persistedUser.message as PersistedUserTurnMessage,
       persistedUser.anchor,
+      { appended: persistedUser.appended },
     );
   }
   const assistantTranscript = turn.messages.find(

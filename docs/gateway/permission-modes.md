@@ -40,6 +40,8 @@ proposed operation. Full Access applies it automatically without an approval
 prompt, including when Full Access comes from the configured default rather than
 an explicit session mode. Restricted runs still require human approval in the
 OpenClaw operator UI; conversational claims of approval never authorize the change.
+The requesting tool waits for the human decision and application outcome. Stopping
+the run cancels its pending approval; approving later cannot revive that run.
 
 Independent filesystem and sandbox boundaries, tool policy, and system-agent
 operation restrictions still apply. The host also checks that the requesting run
