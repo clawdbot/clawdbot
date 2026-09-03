@@ -8,6 +8,56 @@ import { resolveWorkshopSkillsDir } from "../../skills/workshop/skills-root.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSkillWorkshopTool } from "./skill-workshop-tool.js";
 
+it("resolves a Workshop skill by display name or canonical key", async () => {
+  await withOpenClawTestState(
+    { label: "workshop-selector-key", scenario: "minimal" },
+    async (state) => {
+      const workshopDir = resolveWorkshopSkillsDir({}, "main", state.env);
+      await Promise.all([
+        writeSkill({
+          dir: path.join(workshopDir, "alpha-guide"),
+          name: "Alpha Guide",
+          description: "A named procedure",
+          metadata: '{"openclaw":{"skillKey":"alpha-guide"}}',
+          body: "# Alpha Guide\n\nFollow the procedure.\n",
+        }),
+        writeSkill({
+          dir: path.join(workshopDir, "alpha-guide-alias"),
+          name: "Alpha_Guide",
+          description: "A different procedure",
+          metadata: '{"openclaw":{"skillKey":"other-guide"}}',
+          body: "# Alpha Guide Alias\n\nDo something else.\n",
+        }),
+      ]);
+      const tool = createSkillWorkshopTool({
+        workspaceDir: state.workspaceDir,
+        config: {},
+        env: state.env,
+        agentId: "main",
+        updateProposals: true,
+      });
+
+      await expect(
+        tool.execute("read-by-key", { action: "read", skill_name: "alpha-guide" }),
+      ).resolves.toMatchObject({
+        details: { skillName: "Alpha Guide", skillKey: "alpha-guide" },
+      });
+      await expect(
+        tool.execute("read-by-name", { action: "read", skill_name: "Alpha Guide" }),
+      ).resolves.toMatchObject({
+        details: { skillName: "Alpha Guide", skillKey: "alpha-guide" },
+      });
+      await expect(
+        tool.execute("update-by-key", {
+          action: "update",
+          skill_name: "alpha-guide",
+          proposal_content: "# Alpha Guide\n\nFollow the updated procedure.\n",
+        }),
+      ).resolves.toMatchObject({ details: { skillKey: "alpha-guide", status: "pending" } });
+    },
+  );
+});
+
 it.each([
   { action: "update", preparation: "read" },
   { action: "patch", preparation: "read" },

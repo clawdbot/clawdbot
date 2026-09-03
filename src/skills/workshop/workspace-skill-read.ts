@@ -1,7 +1,7 @@
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizeSkillIndexName } from "../discovery/skill-index.js";
+import { resolveSkillStatusEntry } from "../discovery/status.js";
 import {
   assertInsideSkillsRoot,
   readWorkspaceSkillFile,
@@ -71,14 +71,9 @@ function resolveWritableWorkshopSkillSummary(
   skillName: string,
   options: WorkshopSkillReadOptions,
 ): WritableWorkshopSkillSummary | undefined {
-  const normalized = normalizeSkillIndexName(skillName);
-  const matches = listWritableWorkshopSkillSummaries(options).filter(
-    (skill) =>
-      skill.name === skillName ||
-      skill.name.toLowerCase() === skillName.toLowerCase() ||
-      (normalized !== "" && normalizeSkillIndexName(skill.name) === normalized),
+  return (
+    resolveSkillStatusEntry(listWritableWorkshopSkillSummaries(options), skillName) ?? undefined
   );
-  return matches.length === 1 ? matches[0] : undefined;
 }
 
 export async function readWritableWorkshopSkill(
