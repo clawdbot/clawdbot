@@ -498,12 +498,7 @@ export function loadUiPreferences(targetGatewayUrl?: string): UiPreferences {
     const legacySelectedGatewayUrl = normalizeOptionalString(
       storage?.getItem(currentGatewaySelectionKeyForPage(pageDerivedUrl)),
     );
-    const registry = loadGatewayRegistry();
-    const registeredActiveGateway = registry.gateways.find(
-      (gateway) => gateway.id === registry.activeGatewayId,
-    );
-    const selectedGatewayUrl =
-      targetGatewayUrl ?? registeredActiveGateway?.url ?? legacySelectedGatewayUrl;
+    const selectedGatewayUrl = targetGatewayUrl ?? legacySelectedGatewayUrl;
     const source =
       (selectedGatewayUrl ? readSettingsForGateway(storage, selectedGatewayUrl) : null) ??
       (targetGatewayUrl ? null : readSettingsForGateway(storage, defaultUrl));

@@ -3,13 +3,16 @@ import { describe, expect, it } from "vitest";
 import { installSettingsStorageLifecycle, setTestLocation } from "../test-helpers/settings-node.ts";
 import {
   createGatewayProfile,
+  GATEWAY_REGISTRY_MAX_PROFILES,
   GATEWAY_REGISTRY_STORAGE_KEY,
   gatewayProfileId,
   loadGatewayRegistry,
+  loadGatewayRegistryForGateway,
   normalizeGatewayUrl,
   removeGatewayProfile,
   selectGatewayProfile,
   upsertGatewayProfile,
+  type GatewayProfile,
 } from "./gateway-registry.ts";
 import { loadSettings, saveSettings } from "./settings.ts";
 
@@ -78,6 +81,48 @@ describe("gateway registry", () => {
     const registry = loadGatewayRegistry();
     expect(registry.gateways).toHaveLength(1);
     expect(registry.activeGatewayId).toBe(registry.gateways[0]?.id);
+  });
+
+  it("rejects a new profile when the registry is at capacity", () => {
+    const profiles = Array.from({ length: GATEWAY_REGISTRY_MAX_PROFILES }, (_, index) =>
+      createGatewayProfile({
+        name: `Gateway ${index}`,
+        url: `wss://gateway-${index}.example/`,
+      }),
+    );
+    if (profiles.some((profile) => profile === null)) {
+      throw new Error("test fixtures must produce gateway profiles");
+    }
+    const savedProfiles = profiles as GatewayProfile[];
+    for (const [index, profile] of savedProfiles.entries()) {
+      upsertGatewayProfile(profile, { select: index === 0 });
+    }
+    const before = loadGatewayRegistry();
+    const extra = createGatewayProfile({ name: "Overflow", url: "wss://overflow.example/" });
+    expect(extra).not.toBeNull();
+    if (!extra) {
+      throw new Error("test fixture must produce a gateway profile");
+    }
+
+    const after = upsertGatewayProfile(extra, { select: true });
+
+    expect(after).toEqual(before);
+    expect(after.gateways).toHaveLength(GATEWAY_REGISTRY_MAX_PROFILES);
+    expect(after.gateways.some((gateway) => gateway.id === extra.id)).toBe(false);
+    expect(loadGatewayRegistry()).toEqual(before);
+  });
+
+  it("derives the visible active gateway from the current connection", () => {
+    const personal = createGatewayProfile({ name: "Personal", url: "wss://personal.example/" });
+    const team = createGatewayProfile({ name: "Team", url: "wss://team.example/" });
+    if (!personal || !team) {
+      throw new Error("test fixtures must produce gateway profiles");
+    }
+    upsertGatewayProfile(personal, { select: true });
+    upsertGatewayProfile(team);
+
+    expect(loadGatewayRegistryForGateway(team.url).activeGatewayId).toBe(team.id);
+    expect(loadGatewayRegistry().activeGatewayId).toBe(personal.id);
   });
 
   it("migrates the legacy selected gateway into the registry on the next settings save", () => {

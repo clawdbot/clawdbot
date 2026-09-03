@@ -42,6 +42,7 @@ const enSettings = {
       switchTitle: "Switch gateway",
       manage: "Manage gateways",
       invalidUrl: "Enter a valid ws:// or wss:// Gateway URL.",
+      capacity: "Gateway registry is full. Remove a saved gateway before adding another.",
       removeConfirm: 'Remove "{name}" from saved gateways?',
       title: "Saved gateways",
       subtitle: "Switch between personal, team, and other Gateway connections.",

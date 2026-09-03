@@ -22,7 +22,7 @@ type PersistedGatewayRegistry = {
 };
 
 const MAX_GATEWAY_NAME_LENGTH = 80;
-const MAX_GATEWAYS = 20;
+export const GATEWAY_REGISTRY_MAX_PROFILES = 20;
 
 function defaultGatewayName(url: string): string {
   try {
@@ -111,7 +111,7 @@ function readStoredRegistry(): GatewayRegistry | null {
       parsed.gateways
         .map(normalizePersistedGateway)
         .filter((value): value is GatewayProfile => value !== null),
-    ).slice(0, MAX_GATEWAYS);
+    ).slice(0, GATEWAY_REGISTRY_MAX_PROFILES);
     const activeGatewayId =
       typeof parsed.activeGatewayId === "string" &&
       gateways.some((gateway) => gateway.id === parsed.activeGatewayId)
@@ -128,7 +128,7 @@ function normalizedRegistry(registry: GatewayRegistry): GatewayRegistry {
     registry.gateways
       .map((gateway) => normalizePersistedGateway(gateway))
       .filter((value): value is GatewayProfile => value !== null),
-  ).slice(0, MAX_GATEWAYS);
+  ).slice(0, GATEWAY_REGISTRY_MAX_PROFILES);
   return {
     gateways,
     activeGatewayId:
@@ -151,9 +151,18 @@ export function loadGatewayRegistry(fallback?: { url: string; name?: unknown }):
     return stored;
   }
   return {
-    gateways: [...stored.gateways, fallbackProfile].slice(0, MAX_GATEWAYS),
+    gateways: [...stored.gateways, fallbackProfile].slice(0, GATEWAY_REGISTRY_MAX_PROFILES),
     activeGatewayId: stored.activeGatewayId,
   };
+}
+
+/** Load the shared profile list while marking the gateway serving this view active. */
+export function loadGatewayRegistryForGateway(url: string): GatewayRegistry {
+  const registry = loadGatewayRegistry({ url });
+  const activeGatewayId = gatewayProfileId(url);
+  return registry.gateways.some((gateway) => gateway.id === activeGatewayId)
+    ? { ...registry, activeGatewayId }
+    : registry;
 }
 
 export function saveGatewayRegistry(registry: GatewayRegistry): GatewayRegistry {
@@ -171,7 +180,11 @@ export function upsertGatewayProfile(
   options: { select?: boolean } = {},
 ): GatewayRegistry {
   const current = loadGatewayRegistry(profile);
-  const gateways = current.gateways.some((gateway) => gateway.id === profile.id)
+  const existing = current.gateways.some((gateway) => gateway.id === profile.id);
+  if (!existing && current.gateways.length >= GATEWAY_REGISTRY_MAX_PROFILES) {
+    return current;
+  }
+  const gateways = existing
     ? current.gateways.map((gateway) => (gateway.id === profile.id ? profile : gateway))
     : [...current.gateways, profile];
   return saveGatewayRegistry({
