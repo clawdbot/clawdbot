@@ -156,13 +156,21 @@ function constituentArtifactReader(manifest: CandidateConstituentSource) {
   };
 }
 
-async function fixture() {
+async function fixture(expiresAt = EXPIRES_AT) {
   const manifest = fullReleaseCandidateManifestFixture();
+  // CLI children use the real clock, so their evidence must remain valid too.
+  for (const artifact of [
+    manifest.package.artifact,
+    manifest.prepublishPluginRegistry.artifact,
+    manifest.sharedImage.artifact,
+  ]) {
+    artifact.expiresAt = expiresAt;
+  }
   const archive = await archiveWithManifest(manifest);
   return {
     archive,
     manifest,
-    metadata: artifactMetadata(archive),
+    metadata: artifactMetadata(archive, { expires_at: expiresAt }),
   };
 }
 
@@ -553,14 +561,17 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest } = await fixture();
+    const { manifest, metadata } = await fixture(
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    );
     const artifacts = Array.from({ length: 6 }, (_, index) => {
       const runId = 80 + index;
       const jobs = workflowJobs(manifest, { runId });
       jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
       writeFileSync(join(responses, `run-${runId}.json`), JSON.stringify(workflowRun(runId)));
       writeFileSync(join(responses, `jobs-${runId}.json`), JSON.stringify([jobs]));
-      return artifactMetadata(archive, {
+      return {
+        ...metadata,
         created_at: new Date(NOW - index * 1000).toISOString(),
         id: 400 + index,
         workflow_run: {
@@ -569,7 +580,7 @@ esac
           id: runId,
           repository_id: 1,
         },
-      });
+      };
     });
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts }));
@@ -638,7 +649,9 @@ esac
 `,
     );
     chmodSync(ghPath, 0o755);
-    const { archive, manifest, metadata } = await fixture();
+    const { archive, manifest, metadata } = await fixture(
+      new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+    );
     writeFileSync(inputPath, JSON.stringify(fullReleaseCandidateManifestFixture().request));
     writeFileSync(archivePath, archive);
     writeFileSync(artifactListingPath, JSON.stringify({ artifacts: [metadata] }));
