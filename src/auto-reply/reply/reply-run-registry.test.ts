@@ -15,10 +15,7 @@ import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import {
-  beginReplyOperationFinalization,
-  beginReplyOperationFinalizationWork,
-} from "./reply-run-finalization-lease.js";
+import { beginReplyOperationFinalizationWork } from "./reply-run-finalization-lease.js";
 import type { ReplyToolAuthorityOverlay } from "./reply-run-registry.contracts.js";
 import {
   abortActiveReplyRuns,
@@ -1716,25 +1713,6 @@ describe("reply run registry", () => {
       await vi.advanceTimersByTimeAsync(30_000);
       expect(replyRunRegistry.get("agent:main:pre-finalization-work")).toBeUndefined();
       expect(operation.result).toEqual({ kind: "failed", code: "run_stalled" });
-    });
-  });
-
-  it("starts finalization without freezing an abortable owner", async () => {
-    await withFakeReplyTimers(async () => {
-      const operation = createTestReplyOperation({
-        sessionKey: "agent:main:abortable-finalization",
-        sessionId: "session-abortable-finalization",
-      });
-      operation.setPhase("running");
-
-      beginReplyOperationFinalization(operation);
-      beginReplyOperationFinalizationWork(operation, REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
-
-      expect(operation.abortSignal.aborted).toBe(false);
-      expect(isReplyRunAbortableForSignal(operation.abortSignal)).toBe(true);
-      expect(replyRunRegistry.get("agent:main:abortable-finalization")).toBe(operation);
-
-      operation.complete();
     });
   });
 

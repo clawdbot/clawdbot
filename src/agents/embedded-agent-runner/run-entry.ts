@@ -578,13 +578,15 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       behavior: params.behavior,
       runId: params.identity.runId,
     });
-    const acceptedTerminal = canAdvanceContextEngineTurn({
-      result,
-      fallbackOutcome: settledResult.outcome,
-      terminal,
-    });
+    const acceptedTerminal =
+      !params.abortSignal?.aborted &&
+      canAdvanceContextEngineTurn({
+        result,
+        fallbackOutcome: settledResult.outcome,
+        terminal,
+      });
     let releaseAcceptedTerminalWork: (() => void) | undefined;
-    if (acceptedTerminal && !params.abortSignal?.aborted) {
+    if (acceptedTerminal) {
       const acceptedTerminalWork = await params.onAcceptedTerminal?.();
       if (typeof acceptedTerminalWork === "function") {
         releaseAcceptedTerminalWork = acceptedTerminalWork;

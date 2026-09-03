@@ -143,11 +143,6 @@ export function beginReplyOperationFinalizationWork(owner: object, timeoutMs: nu
   return leasesByOwner.get(owner)?.beginWork(timeoutMs) ?? (() => undefined);
 }
 
-/** Starts the owner-bound finalization lease without changing abort admission. */
-export function beginReplyOperationFinalization(owner: object): void {
-  leasesByOwner.get(owner)?.begin();
-}
-
 export function resetReplyRunSettleTimersForTesting(): void {
   for (const lease of activeLeases) {
     lease.clear();

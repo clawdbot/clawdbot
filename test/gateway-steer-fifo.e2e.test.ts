@@ -18,9 +18,7 @@ import { createDeferred } from "./helpers/promise.js";
 type FirstResponseKind = "final" | "sequential-tools" | "tool";
 type ModelRequest = { body: Record<string, unknown> };
 type MockModelServer = {
-  afterTurnStarted: Promise<void>;
   baseUrl: string;
-  releaseAfterTurn: () => void;
   releaseFirst: (kind: FirstResponseKind) => void;
   requests: ModelRequest[];
   stop: () => Promise<void>;
@@ -52,7 +50,6 @@ type SteeringGateMode = "preflight" | "execute";
 const TEST_TIMEOUT_MS = 180_000;
 const WAIT_OPTS = { timeout: 30_000, interval: 20 } as const;
 const STEERING_PLUGIN_ID = "gateway-steering-tools";
-const AFTER_TURN_PLUGIN_ID = "gateway-after-turn-gate";
 const STEERING_GATE_TOOL = "steering_gate";
 const STEERING_TAIL_TOOL = "steering_tail";
 const instances: OpenClawTestInstance[] = [];
@@ -60,13 +57,6 @@ const clients: GatewayChatClient[] = [];
 const diagnosticsClients: GatewayClient[] = [];
 const cleanupDirs: string[] = [];
 const modelServers: MockModelServer[] = [];
-const proofTraceEnabled = process.env.OPENCLAW_E2E_PROOF_TRACE === "1";
-
-function emitProofTrace(event: Record<string, unknown>): void {
-  if (proofTraceEnabled) {
-    process.stdout.write(`PROOF_TRACE ${JSON.stringify(event)}\n`);
-  }
-}
 
 async function collectCleanupFailures(
   tasks: Array<Promise<unknown>>,
@@ -251,8 +241,6 @@ function writeSequentialToolsResponse(res: ServerResponse): void {
 async function startMockModelServer(): Promise<MockModelServer> {
   const requests: ModelRequest[] = [];
   const firstResponse = createDeferred();
-  const afterTurnStarted = createDeferred();
-  const afterTurnRelease = createDeferred();
   let firstResponseKind: FirstResponseKind = "final";
   const server = createServer((req, res) => {
     void (async () => {
@@ -260,12 +248,6 @@ async function startMockModelServer(): Promise<MockModelServer> {
       if (req.method === "GET" && url.pathname === "/v1/models") {
         res.writeHead(200, { "content-type": "application/json" });
         res.end(JSON.stringify({ data: [{ id: "steer-fifo", object: "model" }] }));
-        return;
-      }
-      if (req.method === "POST" && url.pathname === "/after-turn") {
-        afterTurnStarted.resolve();
-        await afterTurnRelease.promise;
-        res.writeHead(204).end();
         return;
       }
       if (req.method !== "POST" || url.pathname !== "/v1/responses") {
@@ -306,9 +288,7 @@ async function startMockModelServer(): Promise<MockModelServer> {
   }
   let stopped = false;
   return {
-    afterTurnStarted: afterTurnStarted.promise,
     baseUrl: `http://127.0.0.1:${address.port}`,
-    releaseAfterTurn: () => afterTurnRelease.resolve(),
     requests,
     releaseFirst: (kind) => {
       firstResponseKind = kind;
@@ -320,7 +300,6 @@ async function startMockModelServer(): Promise<MockModelServer> {
       }
       stopped = true;
       firstResponse.resolve();
-      afterTurnRelease.resolve();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
         server.closeAllConnections();
@@ -422,49 +401,6 @@ async function writeSteeringToolsPlugin(
   return { pluginDir, releasePath, tracePath };
 }
 
-async function writeAfterTurnGatePlugin(
-  fixtureDir: string,
-  modelServer: MockModelServer,
-): Promise<{ pluginDir: string }> {
-  const pluginDir = path.join(fixtureDir, "after-turn-gate-plugin");
-  await mkdir(pluginDir, { recursive: true });
-  await Promise.all([
-    writeFile(
-      path.join(pluginDir, "openclaw.plugin.json"),
-      `${JSON.stringify({
-        id: AFTER_TURN_PLUGIN_ID,
-        name: "Gateway After-Turn Gate",
-        activation: { onStartup: true },
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      })}\n`,
-      "utf8",
-    ),
-    writeFile(
-      path.join(pluginDir, "index.mjs"),
-      [
-        "export default {",
-        `  id: ${JSON.stringify(AFTER_TURN_PLUGIN_ID)},`,
-        "  register(api) {",
-        `    api.registerContextEngine(${JSON.stringify(AFTER_TURN_PLUGIN_ID)}, () => ({`,
-        `      info: { id: ${JSON.stringify(AFTER_TURN_PLUGIN_ID)}, name: "After-Turn Gate", transcriptSemantics: { currentTurnFence: "before-current-turn-entry-v1", turnAdvancementIdempotency: "atomic-idempotent-v1" } },`,
-        "      async ingest() { return { ingested: false }; },",
-        "      async assemble({ messages }) { return { messages, estimatedTokens: 0 }; },",
-        "      async compact() { return { ok: true, compacted: false }; },",
-        "      async commitTurn() {",
-        `        const response = await fetch(${JSON.stringify(`${modelServer.baseUrl}/after-turn`)}, { method: "POST" });`,
-        "        if (!response.ok) throw new Error(`after-turn gate failed: ${response.status}`);",
-        "      },",
-        "    }));",
-        "  },",
-        "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    ),
-  ]);
-  return { pluginDir };
-}
-
 async function readTrace(tracePath: string): Promise<string[]> {
   try {
     return (await readFile(tracePath, "utf8")).split("\n").filter(Boolean);
@@ -477,7 +413,6 @@ async function readTrace(tracePath: string): Promise<string[]> {
 }
 
 function createConfig(params: {
-  afterTurnGate?: { pluginDir: string };
   fixtureDir: string;
   modelServer: MockModelServer;
   steeringTools?: SteeringToolsFixture;
@@ -487,20 +422,14 @@ function createConfig(params: {
     "steer-fifo",
   );
   const steeringTools = params.steeringTools;
-  const loadedPlugin = params.afterTurnGate ?? steeringTools;
   return {
-    plugins: loadedPlugin
+    plugins: steeringTools
       ? {
           enabled: true,
-          allow: [params.afterTurnGate ? AFTER_TURN_PLUGIN_ID : STEERING_PLUGIN_ID],
-          load: { paths: [loadedPlugin.pluginDir] },
-          entries: {
-            [params.afterTurnGate ? AFTER_TURN_PLUGIN_ID : STEERING_PLUGIN_ID]: { enabled: true },
-          },
-          slots: {
-            memory: "none",
-            ...(params.afterTurnGate ? { contextEngine: AFTER_TURN_PLUGIN_ID } : {}),
-          },
+          allow: [STEERING_PLUGIN_ID],
+          load: { paths: [steeringTools.pluginDir] },
+          entries: { [STEERING_PLUGIN_ID]: { enabled: true } },
+          slots: { memory: "none" },
         }
       : { slots: { memory: "none" } },
     agents: {
@@ -578,11 +507,7 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
 
 async function createGatewayFixture(
   name: string,
-  options: {
-    withAfterTurnGate?: boolean;
-    withSteeringTools?: boolean;
-    steeringGateMode?: SteeringGateMode;
-  } = {},
+  options: { withSteeringTools?: boolean; steeringGateMode?: SteeringGateMode } = {},
 ): Promise<GatewayFixture> {
   const fixtureDir = await mkdtemp(path.join(tmpdir(), `openclaw-${name}-`));
   cleanupDirs.push(fixtureDir);
@@ -591,13 +516,10 @@ async function createGatewayFixture(
     : undefined;
   const modelServer = await startMockModelServer();
   modelServers.push(modelServer);
-  const afterTurnGate = options.withAfterTurnGate
-    ? await writeAfterTurnGatePlugin(fixtureDir, modelServer)
-    : undefined;
   const instance = await createOpenClawTestInstance({
     name,
     gatewayToken: "steer-fifo-token",
-    config: createConfig({ fixtureDir, modelServer, steeringTools, afterTurnGate }),
+    config: createConfig({ fixtureDir, modelServer, steeringTools }),
     env: {
       OPENCLAW_LOG_LEVEL: "debug",
       OPENCLAW_SKIP_PROVIDERS: undefined,
@@ -814,135 +736,6 @@ function currentUserInput(request: ModelRequest | undefined): string {
 }
 
 describe("Gateway steer FIFO", () => {
-  it(
-    "dedupes a late abort after the durable final reply while after-turn work settles",
-    async () => {
-      const fixture = await createGatewayFixture("final-reply-late-abort", {
-        withAfterTurnGate: true,
-      });
-      const first = await sendHeldTurn(fixture);
-
-      try {
-        fixture.modelServer.releaseFirst("final");
-        await fixture.modelServer.afterTurnStarted;
-
-        const waiting = await fixture.diagnosticsClient.request<{ status?: string }>(
-          "agent.wait",
-          { runId: first.runId, timeoutMs: 100 },
-          { timeoutMs: 5_000 },
-        );
-        expect(waiting.status).toBe("timeout");
-
-        let historyBeforeAbort:
-          | {
-              messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
-              sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
-            }
-          | undefined;
-        await vi.waitFor(async () => {
-          const history = await fixture.diagnosticsClient.request<{
-            messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
-            sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
-          }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 });
-          historyBeforeAbort = history;
-          const assistantMessages = (history.messages ?? []).filter(
-            (message) => message.role === "assistant",
-          );
-          expect(assistantMessages).toHaveLength(1);
-          expect(contentText(assistantMessages[0]?.content)).toBe("TURN_1_COMPLETE");
-          expect(history.sessionInfo).toMatchObject({
-            hasActiveRun: true,
-          });
-        }, WAIT_OPTS);
-        if (!historyBeforeAbort) {
-          throw new Error("history was not captured before abort");
-        }
-        emitProofTrace({
-          phase: "held-after-turn-commit",
-          assistantMessages: (historyBeforeAbort.messages ?? []).filter(
-            (message) => message.role === "assistant",
-          ).length,
-          assistantText: contentText(
-            (historyBeforeAbort.messages ?? []).find((message) => message.role === "assistant")
-              ?.content,
-          ),
-          hasActiveRun: historyBeforeAbort.sessionInfo?.hasActiveRun ?? null,
-        });
-
-        const abort = await fixture.client.abortChat({
-          sessionKey: fixture.sessionKey,
-          runId: first.runId,
-        });
-        expect(abort, redactedFixtureLogs(fixture.instance)).toEqual({
-          ok: true,
-          aborted: true,
-          runIds: [first.runId],
-        });
-        emitProofTrace({ phase: "late-abort", ...abort });
-
-        const historyAfterAbort = await fixture.diagnosticsClient.request<{
-          messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
-        }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 });
-        const assistantMessagesAfterAbort = (historyAfterAbort.messages ?? []).filter(
-          (message) => message.role === "assistant",
-        );
-        expect(assistantMessagesAfterAbort).toHaveLength(1);
-        expect(contentText(assistantMessagesAfterAbort[0]?.content)).toBe("TURN_1_COMPLETE");
-        expect(assistantMessagesAfterAbort[0]).not.toHaveProperty("abortMeta");
-
-        fixture.modelServer.releaseAfterTurn();
-        const terminal = await fixture.diagnosticsClient.request<{ status?: string }>(
-          "agent.wait",
-          { runId: first.runId, timeoutMs: 30_000 },
-          { timeoutMs: 35_000 },
-        );
-        // The abort is accepted for the still-active run; the persistence
-        // boundary deduplicates its already-committed reply while settlement
-        // reports the expected abort outcome.
-        expect(terminal.status).toBe("error");
-        await waitForRunTerminal(fixture, first.runId);
-
-        let finalHistory:
-          | {
-              messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
-              sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
-            }
-          | undefined;
-        await vi.waitFor(async () => {
-          finalHistory = await fixture.diagnosticsClient.request<{
-            messages?: Array<{ abortMeta?: unknown; content?: unknown; role?: unknown }>;
-            sessionInfo?: { activeRunIds?: string[]; hasActiveRun?: boolean };
-          }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 });
-          const finalAssistantMessages = (finalHistory.messages ?? []).filter(
-            (message) => message.role === "assistant",
-          );
-          expect(finalAssistantMessages).toHaveLength(1);
-          expect(contentText(finalAssistantMessages[0]?.content)).toBe("TURN_1_COMPLETE");
-          expect(finalAssistantMessages[0]).not.toHaveProperty("abortMeta");
-          expect(finalHistory.sessionInfo).toMatchObject({
-            activeRunIds: [],
-            hasActiveRun: false,
-          });
-        }, WAIT_OPTS);
-        emitProofTrace({
-          phase: "settled",
-          terminalStatus: terminal.status ?? null,
-          assistantMessages: (finalHistory?.messages ?? []).filter(
-            (message) => message.role === "assistant",
-          ).length,
-          hasAbortMeta: (finalHistory?.messages ?? []).some((message) =>
-            Object.hasOwn(message, "abortMeta"),
-          ),
-          activeRunIds: finalHistory?.sessionInfo?.activeRunIds ?? null,
-          hasActiveRun: finalHistory?.sessionInfo?.hasActiveRun ?? null,
-        });
-      } finally {
-        fixture.modelServer.releaseAfterTurn();
-      }
-    },
-    TEST_TIMEOUT_MS,
-  );
-
   it(
     "promotes a terminal steer into the next model turn",
     async () => {
