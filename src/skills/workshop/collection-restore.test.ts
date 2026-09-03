@@ -104,7 +104,7 @@ describe("skill collection backup and restore", () => {
       workspaceDir,
       env: testState.env,
       ...(await readCollectionReceipt()),
-      plan: [{ action: "drop", name: "declared-name", reason: "Test restore" }],
+      plan: [{ action: "drop", skillKey: "declared-name", reason: "Test restore" }],
     });
     await expect(fs.access(nestedDir)).rejects.toThrow();
 
@@ -165,7 +165,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "procedure",
+          skillKey: "procedure",
           description: "First rewrite",
           content: "# First rewrite\n",
         },
@@ -191,7 +191,7 @@ describe("skill collection backup and restore", () => {
           plan: [
             {
               action: "write",
-              name: "procedure",
+              skillKey: "procedure",
               description: "Second rewrite",
               content: "# Second rewrite\n",
             },
@@ -231,7 +231,7 @@ describe("skill collection backup and restore", () => {
         plan: [
           {
             action: "write",
-            name: "procedure",
+            skillKey: "procedure",
             description: "Rewritten procedure",
             content: "# Rewritten\n",
           },
@@ -256,7 +256,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "procedure",
+          skillKey: "procedure",
           description: "Clean procedure",
           content: "# Clean\n",
         },
@@ -286,7 +286,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "owned",
+          skillKey: "owned",
           description: "Updated Workshop procedure",
           content: "# Owned updated\n",
         },
@@ -317,14 +317,14 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "updated",
+          skillKey: "updated",
           description: "Updated procedure",
           content: "# Updated result\n",
         },
-        { action: "drop", name: "dropped", reason: "Temporarily removed" },
+        { action: "drop", skillKey: "dropped", reason: "Temporarily removed" },
         {
           action: "write",
-          name: "created",
+          skillKey: "created",
           description: "Created procedure",
           content: "# Created result\n",
         },
@@ -356,7 +356,7 @@ describe("skill collection backup and restore", () => {
         plan: [
           {
             action: "write",
-            name: "updated",
+            skillKey: "updated",
             description: "Restored procedure",
             content: "# Restored and mutable\n",
           },
@@ -376,7 +376,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "procedure",
+          skillKey: "procedure",
           description: "Clean procedure",
           content: "# Clean\n",
         },
@@ -405,7 +405,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "procedure",
+          skillKey: "procedure",
           description: "Clean procedure",
           content: "# Clean\n",
         },
@@ -458,7 +458,7 @@ describe("skill collection backup and restore", () => {
       plan: [
         {
           action: "write",
-          name: "procedure",
+          skillKey: "procedure",
           description: "Clean procedure",
           content: "# Clean\n",
         },
@@ -514,7 +514,7 @@ describe("skill collection backup and restore", () => {
         plan: [
           {
             action: "write",
-            name: "procedure",
+            skillKey: "procedure",
             description: "Rewritten recorded procedure",
             content: "# Rewritten\n",
           },
@@ -548,7 +548,7 @@ describe("skill collection backup and restore", () => {
           workspaceDir,
           env: testState.env,
           ...(await readCollectionReceipt()),
-          plan: [{ action: "drop", name: "obsolete", reason: "obsolete" }],
+          plan: [{ action: "drop", skillKey: "obsolete", reason: "obsolete" }],
         }),
       ).rejects.toThrow("forced backup commit failure");
     } finally {
@@ -583,7 +583,7 @@ describe("skill collection backup and restore", () => {
         plan: [
           {
             action: "write",
-            name: "procedure",
+            skillKey: "procedure",
             description: "Rewritten procedure",
             content: "# Rewritten\n",
           },
@@ -603,7 +603,7 @@ async function readCollectionReceipt() {
       await Promise.all(
         skills.map(
           async (skill) =>
-            [skill.name, sha256Hex(await fs.readFile(skill.filePath, "utf8"))] as const,
+            [skill.skillKey, sha256Hex(await fs.readFile(skill.filePath, "utf8"))] as const,
         ),
       ),
     ),
@@ -611,7 +611,7 @@ async function readCollectionReceipt() {
       await Promise.all(
         skills.map(
           async (skill) =>
-            [skill.name, await readSkillProposalTargetTreeSha256(skill.baseDir)] as const,
+            [skill.skillKey, await readSkillProposalTargetTreeSha256(skill.baseDir)] as const,
         ),
       ),
     ),

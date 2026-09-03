@@ -142,7 +142,7 @@ describe("skill_workshop collection history", () => {
     const restrictedSchema = JSON.stringify(
       createSkillWorkshopTool({
         workspaceDir: "/tmp/openclaw",
-        collectionReconcile: { approvedSkillNames: new Set() },
+        collectionReconcile: { approvedSkillKeys: new Set() },
       }).parameters,
     );
 

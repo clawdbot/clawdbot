@@ -253,7 +253,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
         );
         if (
           options.collectionReconcile &&
-          !options.collectionReconcile.approvedSkillNames?.has(skill.skillKey)
+          !options.collectionReconcile.approvedSkillKeys?.has(skill.skillKey)
         ) {
           throw new ToolInputError(`skill is outside this collection review: ${skill.skillName}`);
         }

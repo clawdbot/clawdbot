@@ -36,13 +36,13 @@ export async function createCollectionBackup(params: {
   const id = `${new Date().toISOString().replaceAll(":", "-")}-${randomUUID().slice(0, 8)}`;
   const backupDir = path.join(backupRoot, `.pending-${id}`);
   const committedBackupDir = path.join(backupRoot, id);
-  const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));
+  const currentBySkillKey = new Map(params.current.map((skill) => [skill.skillKey, skill]));
   // A restore must never rewrite an unlisted, externally owned skill. Back up only paths
   // this transaction may mutate; newly created result paths are removed on restore.
   const skillDirs = [
     ...new Set(
       params.plan.flatMap((entry) => {
-        const existing = currentByName.get(entry.name);
+        const existing = currentBySkillKey.get(entry.skillKey);
         return existing ? [path.relative(params.skillsRoot, existing.baseDir)] : [];
       }),
     ),
@@ -55,10 +55,10 @@ export async function createCollectionBackup(params: {
     resultSkillDirs: params.plan
       .filter((entry) => entry.action === "write")
       .map((entry) => {
-        const existing = currentByName.get(entry.name);
+        const existing = currentBySkillKey.get(entry.skillKey);
         return path.relative(
           params.skillsRoot,
-          existing?.baseDir ?? path.join(params.skillsRoot, entry.name),
+          existing?.baseDir ?? path.join(params.skillsRoot, entry.skillKey),
         );
       }),
     resultSkillHashes: {},

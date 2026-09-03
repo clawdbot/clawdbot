@@ -107,7 +107,7 @@ describe("skill_workshop tool", () => {
       proposalId: seeded.record.id,
       expectedRevisionHash: seeded.revisionHash,
     });
-    const collectionReconcile = { approvedSkillNames: new Set(["duplicate"]) };
+    const collectionReconcile = { approvedSkillKeys: new Set(["duplicate"]) };
     const tool = createSkillWorkshopTool({
       workspaceDir,
       env: testState.env,
@@ -116,14 +116,14 @@ describe("skill_workshop tool", () => {
 
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["read","reconcile"]');
     expect(JSON.stringify(tool.parameters)).toContain(
-      "Only Workshop-generated skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
+      "Only Workshop-generated skills to change, identified by canonical skill_key; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
     );
     expect(JSON.stringify(tool.parameters)).toContain('"enum":["write","drop"]');
     expect(tool.description).toContain(SKILL_AUTHORING_STANDARDS_PROMPT);
     await tool.execute("read", { action: "read", skill_name: "duplicate" });
     await tool.execute("reconcile", {
       action: "reconcile",
-      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
+      collection: [{ action: "drop", skill_key: "duplicate", reason: "redundant" }],
     });
 
     expect(collectionReconcile).toMatchObject({
@@ -142,7 +142,7 @@ describe("skill_workshop tool", () => {
   it("reserves the one reconciliation before awaiting its commit", async () => {
     const workspaceDir = await tempDirs.make("openclaw-skill-collection-concurrent-tool-");
     await writeWorkshopSkills([{ name: "procedure", description: "Procedure" }]);
-    const collectionReconcile = { approvedSkillNames: new Set(["procedure"]) };
+    const collectionReconcile = { approvedSkillKeys: new Set(["procedure"]) };
     const tool = createSkillWorkshopTool({
       workspaceDir,
       env: testState.env,
@@ -172,7 +172,7 @@ describe("skill_workshop tool", () => {
     await expect(
       tool.execute("second", {
         action: "reconcile",
-        collection: [{ action: "drop", name: "procedure", reason: "duplicate" }],
+        collection: [{ action: "drop", skill_key: "procedure", reason: "duplicate" }],
       }),
     ).rejects.toThrow("already been reconciled");
 
@@ -193,7 +193,7 @@ describe("skill_workshop tool", () => {
     const tool = createSkillWorkshopTool({
       workspaceDir,
       config: { skills: { workshop: { maxSkillBytes: 300_000 } } },
-      collectionReconcile: { approvedSkillNames: new Set(["oversized"]) },
+      collectionReconcile: { approvedSkillKeys: new Set(["oversized"]) },
     });
 
     await expect(tool.execute("read", { action: "read", skill_name: "oversized" })).rejects.toThrow(

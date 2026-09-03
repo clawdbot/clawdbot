@@ -13,6 +13,7 @@ import {
   prepareWorkspaceSkillMutation,
   type PreparedWorkspaceSkillMutation,
 } from "../lifecycle/workspace-skill-write.js";
+import { resolveSkillManifestMetadata } from "../loading/frontmatter.js";
 import { loadSingleSkillDirectory } from "../loading/local-loader.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
 import {
@@ -82,15 +83,10 @@ export async function reconcileSkillCollection(params: {
         config,
         agentId,
         env: params.env,
-      }).map((skill) => ({
-        name: skill.name,
-        description: skill.description,
-        baseDir: path.resolve(skill.baseDir),
-        filePath: path.resolve(skill.filePath),
-      }));
-      const currentByName = new Map(current.map((skill) => [skill.name, skill]));
-      if (currentByName.size !== current.length) {
-        throw new Error("Writable skill names must be unique before collection reconciliation.");
+      });
+      const currentBySkillKey = new Map(current.map((skill) => [skill.skillKey, skill]));
+      if (currentBySkillKey.size !== current.length) {
+        throw new Error("Writable skill keys must be unique before collection reconciliation.");
       }
       const plan = validateSkillCollectionPlan(
         params.plan,
@@ -98,21 +94,23 @@ export async function reconcileSkillCollection(params: {
         params.readSkillHashes,
         MAX_RECONCILED_SKILLS,
       );
-      const plannedNames = new Set(plan.map((entry) => entry.name));
+      const plannedSkillKeys = new Set(plan.map((entry) => entry.skillKey));
       const outcome = {
-        kept: current.filter((skill) => !plannedNames.has(skill.name)).map((skill) => skill.name),
-        written: plan.filter((entry) => entry.action === "write").map((entry) => entry.name),
+        kept: current
+          .filter((skill) => !plannedSkillKeys.has(skill.skillKey))
+          .map((skill) => skill.skillKey),
+        written: plan.filter((entry) => entry.action === "write").map((entry) => entry.skillKey),
         dropped: plan
           .filter(
             (entry): entry is Extract<SkillCollectionPlanEntry, { action: "drop" }> =>
               entry.action === "drop",
           )
-          .map((entry) => ({ name: entry.name, reason: entry.reason })),
+          .map((entry) => ({ name: entry.skillKey, reason: entry.reason })),
       };
       await assertCollectionReadsCurrent(
         current,
         params.readSkillHashes,
-        plannedNames,
+        plannedSkillKeys,
         MAX_RECONCILED_SKILL_BYTES,
       );
       params.assertCurrent?.();
@@ -161,15 +159,15 @@ export async function reconcileSkillCollection(params: {
       const before = new Map<string, PluginHookSkillArtifact | undefined>();
       if (shouldDispatch) {
         for (const entry of plan) {
-          const existing = currentByName.get(entry.name);
+          const existing = currentBySkillKey.get(entry.skillKey);
           if (!existing) {
             continue;
           }
           before.set(
-            entry.name,
+            entry.skillKey,
             await snapshotCommittedSkillArtifactBestEffort({
               skillDir: existing.baseDir,
-              skillKey: existing.name,
+              skillKey: existing.skillKey,
               source: "workshop",
             }),
           );
@@ -179,7 +177,7 @@ export async function reconcileSkillCollection(params: {
         await assertCollectionMutationCurrent(
           current,
           params.readSkillTreeHashes,
-          plannedNames,
+          plannedSkillKeys,
           prepared,
         );
         params.assertCurrent?.();
@@ -188,9 +186,7 @@ export async function reconcileSkillCollection(params: {
         throw error;
       }
       const appliedWrites: PreparedWorkspaceSkillMutation[] = [];
-      const droppedSkills: Array<
-        Pick<WritableSkillCollectionEntry, "name" | "baseDir"> & { stagedDir: string }
-      > = [];
+      const droppedSkills: Array<{ skillKey: string; baseDir: string; stagedDir: string }> = [];
       try {
         for (const mutation of prepared) {
           params.assertCurrent?.();
@@ -203,7 +199,7 @@ export async function reconcileSkillCollection(params: {
           if (entry.action !== "drop") {
             continue;
           }
-          const skill = currentByName.get(entry.name)!;
+          const skill = currentBySkillKey.get(entry.skillKey)!;
           droppedSkills.push(await stageSkillCollectionDrop({ ...skill, skillsRoot }));
           params.assertCurrent?.();
         }
@@ -230,7 +226,7 @@ export async function reconcileSkillCollection(params: {
       await discardStagedSkillCollectionDrops(skillsRoot, droppedSkills);
       if (droppedSkills.length > 0) {
         clearSkillUsageForRemovedSkills(
-          droppedSkills.map(({ name }) => currentByName.get(name)!.filePath),
+          droppedSkills.map(({ skillKey }) => currentBySkillKey.get(skillKey)!.filePath),
           { env: params.env },
         );
       }
@@ -246,16 +242,16 @@ export async function reconcileSkillCollection(params: {
       const changes: SkillCollectionChange[] = [];
       if (shouldDispatch) {
         for (const entry of plan) {
-          const existing = currentByName.get(entry.name);
-          const skillDir = existing?.baseDir ?? path.join(skillsRoot, entry.name);
+          const existing = currentBySkillKey.get(entry.skillKey);
+          const skillDir = existing?.baseDir ?? path.join(skillsRoot, entry.skillKey);
           changes.push({
             action: entry.action === "drop" ? "removed" : existing ? "updated" : "created",
-            before: before.get(entry.name),
+            before: before.get(entry.skillKey),
             after:
               entry.action === "write"
                 ? await snapshotCommittedSkillArtifactBestEffort({
                     skillDir,
-                    skillKey: entry.name,
+                    skillKey: entry.skillKey,
                     source: "workshop",
                   })
                 : undefined,
@@ -332,13 +328,13 @@ export async function restoreLatestSkillCollectionBackup(params: {
         const affectedSkill = {
           relativeDir,
           skillDir,
-          skillKey: loaded.skill.name,
+          skillKey: resolveSkillManifestMetadata(loaded.frontmatter)?.skillKey ?? loaded.skill.name,
           liveExists,
         };
         affectedSkills.push(affectedSkill);
         if (shouldDispatch) {
           before.set(
-            relativeDir,
+            affectedSkill.skillKey,
             await snapshotCommittedSkillArtifactBestEffort({
               skillDir,
               skillKey: affectedSkill.skillKey,
@@ -367,7 +363,7 @@ export async function restoreLatestSkillCollectionBackup(params: {
           }
           changes.push({
             action: !affectedSkill.liveExists ? "created" : afterExists ? "updated" : "removed",
-            before: before.get(affectedSkill.relativeDir),
+            before: before.get(affectedSkill.skillKey),
             after: afterExists
               ? await snapshotCommittedSkillArtifactBestEffort({
                   skillDir: affectedSkill.skillDir,
@@ -409,21 +405,21 @@ async function prepareWrites(params: {
   config: OpenClawConfig;
 }): Promise<PreparedWorkspaceSkillMutation[]> {
   const workshop = resolveSkillWorkshopConfig(params.config);
-  const currentByName = new Map(params.current.map((skill) => [skill.name, skill]));
+  const currentBySkillKey = new Map(params.current.map((skill) => [skill.skillKey, skill]));
   const writes: PreparedWorkspaceSkillMutation[] = [];
   for (const entry of params.plan) {
     if (entry.action !== "write") {
       continue;
     }
-    const existing = currentByName.get(entry.name);
-    const skillDir = existing?.baseDir ?? path.join(params.skillsRoot, entry.name);
+    const existing = currentBySkillKey.get(entry.skillKey);
+    const skillDir = existing?.baseDir ?? path.join(params.skillsRoot, entry.skillKey);
     const skillFile = existing?.filePath ?? path.join(skillDir, "SKILL.md");
     if (!existing && (await pathExists(skillDir))) {
       throw new Error(`New skill directory already exists: ${skillDir}`);
     }
     const currentContent = existing ? await fs.readFile(existing.filePath, "utf8") : undefined;
     const draft = prepareSkillProposalDraft({
-      name: entry.name,
+      name: existing?.name ?? entry.skillKey,
       description: entry.description,
       content: entry.content,
       fallbackFrontmatterContent: currentContent,
@@ -434,11 +430,11 @@ async function prepareWrites(params: {
       throw draft.error.cause;
     }
     if (draft.value.scan.critical > 0) {
-      throw new Error(`Skill security scan rejected ${entry.name}.`);
+      throw new Error(`Skill security scan rejected ${entry.skillKey}.`);
     }
     const resultContent = stripProposalFrontmatterForSkill(draft.value.content);
     const currentChars = currentContent?.length ?? 0;
-    const sizeError = autonomousSkillSizeError(entry.name, currentChars, resultContent.length);
+    const sizeError = autonomousSkillSizeError(entry.skillKey, currentChars, resultContent.length);
     if (sizeError) {
       throw new Error(sizeError);
     }

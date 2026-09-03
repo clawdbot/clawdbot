@@ -52,12 +52,12 @@ describe("skill_workshop collection restore", () => {
     const reviewTool = createSkillWorkshopTool({
       workspaceDir,
       env: testState.env,
-      collectionReconcile: { approvedSkillNames: new Set(["duplicate"]) },
+      collectionReconcile: { approvedSkillKeys: new Set(["duplicate"]) },
     });
     await reviewTool.execute("read", { action: "read", skill_name: "duplicate" });
     const reconciled = await reviewTool.execute("reconcile", {
       action: "reconcile",
-      collection: [{ action: "drop", name: "duplicate", reason: "redundant" }],
+      collection: [{ action: "drop", skill_key: "duplicate", reason: "redundant" }],
     });
     const backupId = (reconciled.details as { backupId: string }).backupId;
     const workshopSkillFile = path.join(

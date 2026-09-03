@@ -10,7 +10,7 @@ export function buildSkillWorkshopToolDescription(params: {
     return `Inspect and revise only the proposal revision selected by the operator. The proposal id and expected revision hash are bound by the run and cannot be replaced by tool arguments. Never apply, reject, quarantine, or create another proposal.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   if (params.collectionOnly) {
-    return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Read the skills in your agent's Workshop directory that you intend to change, then finish with one reconcile call listing only writes and drops; unlisted skills stay. An empty collection records that nothing changed. This tool never edits skills outside your agent's Workshop directory; the operator edits those directly.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
+    return `${SKILL_WORKSHOP_TOOL_DISPLAY_SUMMARY} Read the skills in your agent's Workshop directory that you intend to change, then finish with one reconcile call listing only writes and drops by canonical skill key; unlisted skills stay. An empty collection records that nothing changed. This tool never edits skills outside your agent's Workshop directory; the operator edits those directly.\n\n${SKILL_AUTHORING_STANDARDS_PROMPT}`;
   }
   const repairPolicy =
     params.autonomousMode === "off"

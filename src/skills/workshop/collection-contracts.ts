@@ -19,8 +19,8 @@ export function autonomousSkillSizeError(
 }
 
 export type SkillCollectionPlanEntry =
-  | { action: "drop"; name: string; reason: string }
-  | { action: "write"; name: string; description: string; content: string };
+  | { action: "drop"; skillKey: string; reason: string }
+  | { action: "write"; skillKey: string; description: string; content: string };
 
 export type SkillCollectionReconcileResult = {
   backupId: string;
@@ -36,7 +36,7 @@ export type SkillCollectionRestoreResult = {
 };
 
 export type SkillCollectionReconcileContext = {
-  approvedSkillNames?: Set<string>;
+  approvedSkillKeys?: Set<string>;
   readSkillHashes?: Map<string, string>;
   readSkillTreeHashes?: Map<string, string>;
   readSkillBytes?: Map<string, number>;
@@ -48,6 +48,7 @@ export type SkillCollectionReconcileContext = {
 
 export type WritableSkillCollectionEntry = {
   name: string;
+  skillKey: string;
   description?: string;
   baseDir: string;
   filePath: string;

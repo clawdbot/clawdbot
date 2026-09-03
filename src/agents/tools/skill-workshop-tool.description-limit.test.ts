@@ -64,7 +64,7 @@ describe("skill_workshop description validation", () => {
       collection: [
         {
           action: "write" as const,
-          name: "long-description",
+          skill_key: "long-description",
           description: "x".repeat(161),
           content: "# Long Description\n",
         },

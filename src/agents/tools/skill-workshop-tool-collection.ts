@@ -71,7 +71,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     Type.Object(
       {
         action: stringEnum(["write", "drop"] as const),
-        name: Type.String(),
+        skill_key: Type.String(),
         description: Type.Optional(Type.String()),
         content: Type.Optional(Type.String()),
         reason: Type.Optional(Type.String()),
@@ -81,7 +81,7 @@ export const skillCollectionPlanSchema = Type.Optional(
     {
       maxItems: MAX_RECONCILED_SKILLS,
       description:
-        "Only Workshop-generated skills to change; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
+        "Only Workshop-generated skills to change, identified by canonical skill_key; unlisted skills stay. write requires description and complete SKILL.md content; drop requires a reason.",
     },
   ),
 );
@@ -211,18 +211,18 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
       throw new ToolInputError(`collection[${index}] must be an object`);
     }
     const action = readToolStringParam(entry, "action", { required: true });
-    const name = readToolStringParam(entry, "name", { required: true });
+    const skillKey = readToolStringParam(entry, "skill_key", { required: true });
     if (action === "drop") {
       return {
         action,
-        name,
+        skillKey,
         reason: readToolStringParam(entry, "reason", { required: true }),
       };
     }
     if (action === "write") {
       return {
         action,
-        name,
+        skillKey,
         description: readToolStringParam(entry, "description", { required: true }),
         content: readToolStringParam(entry, "content", { required: true, trim: false }),
       };
@@ -232,4 +232,4 @@ function readCollectionPlanParam(params: Record<string, unknown>): SkillCollecti
 }
 
 export const SKILL_COLLECTION_ACTION_DESCRIPTION =
-  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills; unlisted skills stay.";
+  "read = inspect one current skill; reconcile = one atomic call that rewrites, creates, or drops the listed skills by canonical skill_key; unlisted skills stay.";

@@ -63,7 +63,7 @@ async function runSkillCollectionReview(params: {
   const runId = `${COLLECTION_REVIEW_SESSION_SEGMENT}:${randomUUID()}`;
   const sessionKey = `agent:${params.agentId}:${COLLECTION_REVIEW_SESSION_SEGMENT}:incognito-${sessionId}`;
   const collectionReconcile: SkillCollectionReconcileContext = {
-    approvedSkillNames: new Set(skills.map((skill) => skill.skillKey)),
+    approvedSkillKeys: new Set(skills.map((skill) => skill.skillKey)),
     assertCurrent: params.assertCurrent,
   };
   await runSkillWorkshopReview({
@@ -177,7 +177,7 @@ function resolveCollectionReviewModel(config: OpenClawConfig, agentId: string) {
 }
 
 function buildCollectionReviewPrompt(
-  skills: readonly { name: string; description?: string; filePath: string }[],
+  skills: ReturnType<typeof listWritableWorkshopSkillSummaries>,
   env?: NodeJS.ProcessEnv,
 ): string {
   const usageBySkillFile = readSkillUsageByFile(
@@ -196,6 +196,7 @@ function buildCollectionReviewPrompt(
     ...skills.map((skill) => {
       const usage = usageBySkillFile.get(canonicalizePath(skill.filePath));
       return JSON.stringify({
+        skillKey: skill.skillKey,
         name: skill.name,
         ...(skill.description
           ? { description: truncateUtf16Safe(skill.description.replace(/\s+/gu, " ").trim(), 160) }

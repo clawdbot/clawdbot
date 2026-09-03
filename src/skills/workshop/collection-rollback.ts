@@ -13,7 +13,7 @@ import {
 export async function rollbackSkillCollectionMutation(params: {
   skillsRoot: string;
   appliedWrites: readonly PreparedWorkspaceSkillMutation[];
-  droppedSkills: readonly { name: string; baseDir: string; stagedDir: string }[];
+  droppedSkills: readonly { skillKey: string; baseDir: string; stagedDir: string }[];
 }): Promise<void> {
   const errors: unknown[] = [];
   for (const mutation of params.appliedWrites.toReversed()) {
@@ -36,7 +36,7 @@ export async function rollbackSkillCollectionMutation(params: {
     try {
       const baseRelativePath = relativeSkillCollectionPath(params.skillsRoot, skill.baseDir);
       if (await skillsRootHandle.exists(baseRelativePath)) {
-        throw new Error(`Dropped skill changed before restoration: ${skill.name}`);
+        throw new Error(`Dropped skill changed before restoration: ${skill.skillKey}`);
       }
       await skillsRootHandle.move(
         relativeSkillCollectionPath(params.skillsRoot, skill.stagedDir),
@@ -54,9 +54,9 @@ export async function rollbackSkillCollectionMutation(params: {
 
 export async function stageSkillCollectionDrop(params: {
   skillsRoot: string;
-  name: string;
+  skillKey: string;
   baseDir: string;
-}): Promise<{ name: string; baseDir: string; stagedDir: string }> {
+}): Promise<{ skillKey: string; baseDir: string; stagedDir: string }> {
   const stagedDir = path.join(
     path.dirname(params.baseDir),
     `.openclaw-drop-${path.basename(params.baseDir)}-${randomUUID()}`,
@@ -67,7 +67,7 @@ export async function stageSkillCollectionDrop(params: {
     relativeSkillCollectionPath(params.skillsRoot, stagedDir),
     { overwrite: true },
   );
-  return { name: params.name, baseDir: params.baseDir, stagedDir };
+  return { skillKey: params.skillKey, baseDir: params.baseDir, stagedDir };
 }
 
 export async function discardStagedSkillCollectionDrops(

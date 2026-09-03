@@ -114,7 +114,7 @@ describe("skill_workshop model projection", () => {
         modelContextWindowTokens,
         run: {
           env: testState.env,
-          collectionReconcile: { approvedSkillNames: new Set(["large"]) },
+          collectionReconcile: { approvedSkillKeys: new Set(["large"]) },
         },
       });
 
@@ -132,7 +132,7 @@ describe("skill_workshop model projection", () => {
         await expect(
           tool.execute("change-rejected", {
             action: "reconcile",
-            collection: [{ action: "drop", name: "large", reason: "Oversized" }],
+            collection: [{ action: "drop", skill_key: "large", reason: "Oversized" }],
           }),
         ).rejects.toThrow("Read the skill before changing it: large");
       }
