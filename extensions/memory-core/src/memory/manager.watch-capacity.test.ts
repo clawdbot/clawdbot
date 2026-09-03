@@ -410,6 +410,14 @@ describe("memory watcher kernel capacity degrade", () => {
     );
     const rootWatcher = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
     const chokidarBaseline = createdChokidarWatchers.length;
+    // The event path must degrade the tree, not restart the chokidar
+    // fallback. The spy must be armed before the emit: the mock listener
+    // dispatches synchronously, so a later spy would observe nothing.
+    // SAFETY: test-only spy on the protected fallback entry point.
+    const fallbackSpy = vi.spyOn(
+      active as unknown as { attachMemoryChokidarFallback: () => void },
+      "attachMemoryChokidarFallback",
+    );
 
     // A new subdirectory appears at runtime; attaching it exhausts capacity.
     const childDir = path.join(memoryDir, "runtime-child");
@@ -417,14 +425,6 @@ describe("memory watcher kernel capacity degrade", () => {
     capacityOverride.current = "EMFILE";
     rootWatcher?.emit("rename", "runtime-child");
 
-    // The event path must degrade the tree, not restart the chokidar fallback.
-    // The event path must degrade the tree, not restart the chokidar
-    // fallback (spy is decisive even when a startup watcher exists to reuse).
-    // SAFETY: test-only spy on the protected fallback entry point.
-    const fallbackSpy = vi.spyOn(
-      active as unknown as { attachMemoryChokidarFallback: () => void },
-      "attachMemoryChokidarFallback",
-    );
     await vi.waitFor(() => {
       const degraded = memoryLoggerWarn.mock.calls.some((call) =>
         String(call[0]).includes("kernel watch capacity exhausted"),
