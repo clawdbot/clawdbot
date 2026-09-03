@@ -211,6 +211,66 @@ describe("maybeCompactCodexAppServerSession", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
+  it("defers to codex app-server for non-manual triggers when a valid thread binding exists", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = path.join(tempDir, "session-automatic-valid.jsonl");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+
+    // Arrange: Write a valid, live thread binding to disk
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-live-123",
+      cwd: tempDir,
+    });
+
+    // Act: Trigger an automatic compaction (e.g., "budget" instead of "manual")
+    const result = await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+      trigger: "budget", // Non-manual trigger
+    });
+
+    // Assert: The liveness check passes, so it safely defers to Codex
+    expect(result).toMatchObject({
+      compacted: false,
+      reason: "codex app-server owns automatic compaction",
+    });
+
+    // It should exit before making native client requests
+    expect(fake.request).not.toHaveBeenCalledWith("thread/compact/start", expect.any(Object));
+  });
+
+  it("bypasses ownership deferral and surfaces missing binding for non-manual triggers when thread is stale", async () => {
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = path.join(tempDir, "session-automatic-missing.jsonl");
+
+    // Arrange: Register the session identity but deliberately DO NOT write a thread binding.
+    // This simulates the state where the shared client is retired and the binding is stale.
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+
+    // Act: Trigger an automatic compaction
+    const result = await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+      trigger: "budget", // Non-manual trigger
+    });
+
+    // Assert: The liveness check fails. It refuses to defer and correctly falls back
+    // to the native recovery pathway for a missing thread.
+    expect(result).toMatchObject({
+      ok: false,
+      compacted: false,
+      failure: { reason: "missing_thread_binding" },
+    });
+
+    expect(fake.request).not.toHaveBeenCalled();
+  });
+
   it("waits for native app-server compaction completion", async () => {
     const fake = createFakeCodexClient();
     setCodexAppServerClientFactoryForTest(async () => fake.client);
@@ -2072,6 +2132,188 @@ describe("maybeCompactCodexAppServerSession", () => {
           "agents.defaults.compaction.thinkingLevel",
           "agents.defaults.compaction.provider",
         ],
+      },
+    );
+    warn.mockRestore();
+  });
+
+  it("bounds ignored compaction override warnings through the compact entry point", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const info = vi.spyOn(embeddedAgentLog, "info").mockImplementation(() => undefined);
+
+    async function runWithIgnoredOverrides(index: number): Promise<void> {
+      const agentId = `cap-${index}`;
+      await maybeCompactCodexAppServerSessionImpl(
+        {
+          sessionId: `session-${index}`,
+          sessionKey: `agent:${agentId}:session-${index}`,
+          sessionFile: path.join(tempDir, `${agentId}.jsonl`),
+          workspaceDir: tempDir,
+          trigger: "budget",
+          config: {
+            agents: {
+              list: [
+                {
+                  id: agentId,
+                  compaction: {
+                    model: "openai/gpt-5.4-mini",
+                    provider: "custom-summary",
+                  },
+                },
+              ],
+            },
+          },
+        },
+        { bindingStore: testCodexAppServerBindingStore },
+      );
+    }
+    // Fill exactly the advertised 4,096-entry cap: every distinct key warns once.
+    for (let index = 0; index < 4_096; index += 1) {
+      await runWithIgnoredOverrides(index);
+      if ((index + 1) % 256 === 0) {
+        // Thousands of resolved promises otherwise starve Vitest timeout and
+        // progress callbacks without increasing real LRU-cap coverage.
+        await flushAsyncTasks(1);
+      }
+    }
+    expect(
+      warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+      ).length,
+    ).toBe(4_096);
+
+    // At exactly 4,096 entries the oldest key is still retained, so a duplicate stays suppressed.
+    await runWithIgnoredOverrides(0);
+    expect(
+      warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+      ).length,
+    ).toBe(4_096);
+
+    // The 4,097th distinct key pushes past the cap and evicts the LRU entry. The duplicate
+    // check on key 0 refreshed its recency, so the evicted key is 1.
+    await runWithIgnoredOverrides(4_096);
+    expect(
+      warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+      ).length,
+    ).toBe(4_097);
+
+    // The evicted key warns again on reappearance.
+    await runWithIgnoredOverrides(1);
+    expect(
+      warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+      ).length,
+    ).toBe(4_098);
+
+    // A recent duplicate stays suppressed.
+    await runWithIgnoredOverrides(4_096);
+    expect(
+      warn.mock.calls.filter(
+        (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+      ).length,
+    ).toBe(4_098);
+
+    const overrideWarnings = warn.mock.calls.filter(
+      (c) => typeof c[0] === "string" && c[0].includes("ignoring OpenClaw compaction overrides"),
+    );
+
+    expect(overrideWarnings.at(-1)).toEqual([
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:cap-1:session-1",
+        ignoredConfig: [
+          "agents.list.cap-1.compaction.model",
+          "agents.list.cap-1.compaction.provider",
+        ],
+      },
+    ]);
+    info.mockRestore();
+    warn.mockRestore();
+  });
+
+  it("warns when active agent compaction overrides are ignored", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({}, "agent:sara:session-1");
+
+    await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:sara:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+      trigger: "manual",
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sara",
+              compaction: {
+                model: "openai/gpt-5.4-mini",
+                provider: "openai",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(warn).toHaveBeenCalledWith(
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:sara:session-1",
+        ignoredConfig: [
+          "agents.list.sara.compaction.model",
+          "agents.list.sara.compaction.provider",
+        ],
+      },
+    );
+    warn.mockRestore();
+  });
+
+  it("reports inherited compaction providers at the source path", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const fake = createFakeCodexClient();
+    setCodexAppServerClientFactoryForTest(async () => fake.client);
+    const sessionFile = await writeTestBinding({}, "agent:nik:session-1");
+
+    await maybeCompactCodexAppServerSession({
+      sessionId: "session-1",
+      sessionKey: "agent:nik:session-1",
+      sessionFile,
+      workspaceDir: tempDir,
+      trigger: "manual",
+      config: {
+        agents: {
+          defaults: {
+            compaction: {
+              provider: "custom-summary",
+            },
+          },
+          list: [
+            {
+              id: "nik",
+              compaction: {
+                model: "openai/gpt-5.4-mini",
+              },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(fake.request).toHaveBeenCalledWith("thread/compact/start", { threadId: "thread-1" });
+    expect(warn).toHaveBeenCalledWith(
+      "ignoring OpenClaw compaction overrides for Codex app-server compaction; Codex uses native server-side compaction",
+      {
+        sessionId: "session-1",
+        sessionKey: "agent:nik:session-1",
+        ignoredConfig: ["agents.defaults.compaction.provider", "agents.list.nik.compaction.model"],
       },
     );
     warn.mockRestore();
