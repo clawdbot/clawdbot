@@ -1,6 +1,9 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
+
+registerDevicesEnglish();
 
 type CapabilityPresentation = {
   icon: TemplateResult;
