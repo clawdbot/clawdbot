@@ -6,6 +6,7 @@ import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
+  controlUiSessionUrl,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -308,6 +309,54 @@ suite.define(() => {
         path: path.join(RECOVERY_ARTIFACT_DIR, "02-reconnecting-actions-blocked.png"),
         fullPage: true,
       });
+    } finally {
+      await closeContext(context);
+    }
+  });
+
+  it("keeps the session header available while disabling Gateway actions on reconnect", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 900, width: 1280 } });
+    const page = await context.newPage();
+    const sessionKey = "agent:main:main";
+    const gateway = await installMockGateway(page, { sessionKey });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+      const header = page.locator(".chat-pane__header");
+      await header.waitFor({ state: "visible" });
+      await gateway.setOnline(false);
+
+      await expect
+        .poll(() =>
+          page.evaluate(() => {
+            const app = document.querySelector("openclaw-app") as HTMLElement & {
+              runtime?: { context: { gateway: { snapshot: { phase: string } } } };
+            };
+            return app.runtime?.context.gateway.snapshot.phase;
+          }),
+        )
+        .toBe("reconnecting");
+      await page.screenshot({
+        path: path.join(RECOVERY_ARTIFACT_DIR, "03-session-reconnecting-after.png"),
+        fullPage: true,
+      });
+
+      expect(await page.locator(".connection-action-block").count()).toBe(0);
+      expect(await page.locator("#control-ui-main").getAttribute("inert")).toBeNull();
+      const outlet = page.locator("openclaw-router-outlet");
+      expect(await outlet.getAttribute("inert")).toBeNull();
+      expect(await outlet.getAttribute("aria-disabled")).toBeNull();
+      expect(await header.isVisible()).toBe(true);
+
+      const headerActions = header.locator(".chat-pane__actions");
+      expect(
+        await headerActions.evaluate((element) => (element as HTMLFieldSetElement).disabled),
+      ).toBe(true);
+      const actionButtons = headerActions.getByRole("button");
+      expect(await actionButtons.count()).toBeGreaterThan(0);
+      for (const button of await actionButtons.all()) {
+        expect(await button.isDisabled()).toBe(true);
+      }
     } finally {
       await closeContext(context);
     }

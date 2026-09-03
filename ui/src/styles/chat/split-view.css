@@ -650,12 +650,15 @@ openclaw-chat-pane {
 .chat-pane__actions {
   display: flex;
   align-items: center;
+  border: 0;
   gap: 4px;
   flex: 0 0 auto;
+  min-width: 0;
+  padding: 0;
   /* With the title text-hugging, this claims the leftover width so the
      action cluster stays pinned to the right edge (and doubles as the
      native window-drag surface between chip and actions). */
-  margin-left: auto;
+  margin: 0 0 0 auto;
 }
 
 /* One box model for every action, whatever wraps it. A custom element defaults
