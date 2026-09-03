@@ -600,16 +600,11 @@ export async function resolveImplicitProviders(
   ) {
     const { prepareProviderDiscoveryAuth } =
       await import("./models-config.providers.discovery-auth.runtime.js");
-    Object.assign(
-      context,
-      await prepareProviderDiscoveryAuth(
-        {
-          ...context,
-          providerIds: discoveryProviders.map((provider) => provider.id),
-        },
-        discoveryAuthConfig,
-      ),
+    const preparedAuth = await prepareProviderDiscoveryAuth(
+      { ...context, providerIds: discoveryProviders.map((provider) => provider.id) },
+      discoveryAuthConfig,
     );
+    Object.assign(context, preparedAuth);
   }
   const preparedStaticResultsByProvider = new Map(
     preparedStaticEntries?.map(({ provider, result }) => [

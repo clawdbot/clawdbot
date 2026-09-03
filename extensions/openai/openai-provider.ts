@@ -980,6 +980,15 @@ export function buildOpenAIProvider(): ProviderPlugin {
             ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
           };
         }
+        if (!auth.profileId && isCodexCatalogAuthMode(auth.mode) && auth.apiKey) {
+          const catalog = await buildOpenAICodexLiveProviderConfig({
+            discoveryApiKey: auth.discoveryApiKey ?? auth.apiKey,
+          });
+          return {
+            providers: { [PROVIDER_ID]: catalog.provider },
+            ...(catalog.outcome ? { outcomes: [catalog.outcome] } : {}),
+          };
+        }
         if (auth.profileId && isCodexCatalogAuthMode(auth.mode)) {
           return {
             providers: { [PROVIDER_ID]: buildOpenAICodexStaticProviderConfig() },
