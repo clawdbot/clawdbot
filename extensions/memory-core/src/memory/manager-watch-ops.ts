@@ -74,7 +74,10 @@ function runDetachedMemorySync(sync: () => Promise<void>, reason: "interval" | "
 export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
   private nativeMemoryWatchPairs: NativeMemoryWatchPair[] = [];
   private readonly memoryWatchPressureWarning: MemoryWatchPressureWarningState = { shown: false };
-  private capacityPollingActive = false;
+  // Directories degraded to polling after kernel watch capacity exhaustion.
+  // Tracked per root: reattaching one root must not stop the forced rescans
+  // that other still-degraded roots depend on.
+  private readonly capacityDegradedDirs = new Set<string>();
   protected ensureWatcher() {
     if (!this.sources.has("memory") || !this.settings.sync.watch) {
       return;
@@ -385,9 +388,9 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
           if (result === "failed") {
             this.attachMemoryChokidarFallback(dir, markDirty);
           } else if (result === "attached") {
-            // Watch coverage is back; interval ticks return to dirty-gated
-            // behavior instead of forcing a rescan every cycle.
-            this.capacityPollingActive = false;
+            // Watch coverage is back for this root; interval ticks stay
+            // forced only while other degraded roots remain.
+            this.capacityDegradedDirs.delete(pair.dir);
           }
         },
       );
@@ -577,7 +580,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     log.warn(
       `kernel watch capacity exhausted on ${dir}; skipping chokidar fallback and degrading memory index to interval sync`,
     );
-    this.capacityPollingActive = true;
+    this.capacityDegradedDirs.add(dir);
     if (!this.closed) {
       markDirty();
     }
@@ -595,7 +598,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       return;
     }
     this.intervalTimer = setInterval(() => {
-      if (this.capacityPollingActive) {
+      if (this.capacityDegradedDirs.size > 0) {
         // Degraded polling has no watcher to re-dirty the index, so every
         // tick must rescan; otherwise the first successful sync clears the
         // dirty flag and later edits are never picked up.

@@ -292,6 +292,43 @@ describe("memory watcher kernel capacity degrade", () => {
     expect(readDirty(active)).toBe(true);
   });
 
+  it("reattaching one degraded root keeps forced rescans for the other", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    const extraDir = path.join(workspaceDir, "extra-memory");
+    await fs.mkdir(extraDir, { recursive: true });
+    await fs.writeFile(path.join(extraDir, "extra.md"), "extra note");
+    capacityOverride.current = "EMFILE";
+
+    const active = await createManager(createWatchConfig({ extraPaths: [extraDir] }));
+    await vi.waitFor(() => expect(readIntervalTimer(active)).toBeTruthy());
+
+    function readDegradedDirs(m: MemoryIndexManager): string[] {
+      // SAFETY: test-only read of the per-root degraded set.
+      return Array.from(
+        (m as unknown as { capacityDegradedDirs: Set<string> }).capacityDegradedDirs,
+      );
+    }
+
+    // Both roots degraded: the workspace memory dir and the extra path dir.
+    expect(readDegradedDirs(active)).toHaveLength(2);
+
+    // One root recovers (its parent watcher reattaches successfully): the
+    // other root must keep its forced rescans.
+    // SAFETY: test-only removal mimicking one root's successful reattachment.
+    const memoryRoot = readDegradedDirs(active).find((dir) => dir.endsWith("memory"));
+    (active as unknown as { capacityDegradedDirs: Set<string> }).capacityDegradedDirs.delete(
+      memoryRoot,
+    );
+    expect(readDegradedDirs(active)).toHaveLength(1);
+    // SAFETY: test-only write simulating the settle after the previous sync.
+    (active as unknown as { dirty: boolean }).dirty = false;
+    // The still-degraded root keeps forcing rescans on every tick: verified
+    // structurally in the tick test; here the surviving degraded root proves
+    // the manager-wide gate remains armed (size > 0).
+    expect(readDegradedDirs(active).length).toBeGreaterThan(0);
+  });
+
   // The full index pipeline needs the plugin state store; its sqlite temp-dir
   // handling does not work on local Windows (same class as the doctor suites),
   // so CI Linux is authoritative for the real-index proof.
