@@ -2,6 +2,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadTranscriptEvents, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { ASSISTANT_DISPLAY_CONTENT_FIELD } from "../shared/assistant-display-content.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { commitBackgroundResultToSession } from "./background-session-result.js";
 import {
@@ -75,7 +76,7 @@ describe("commitBackgroundResultToSession", () => {
     admission.release();
 
     const first = await commit;
-    expect(first).toMatchObject({ ok: true });
+    expect(first).toMatchObject({ ok: true, appended: true });
     (await laterAdmission).release();
     const retry = await commitBackgroundResultToSession({
       agentId: "main",
@@ -86,7 +87,11 @@ describe("commitBackgroundResultToSession", () => {
       provenance: { kind: "cron", jobId: "job-1", runId: "cron:job-1:1000" },
       config: target.config,
     });
-    expect(retry).toEqual(first);
+    expect(retry).toMatchObject({
+      ok: true,
+      messageId: first.ok ? first.messageId : undefined,
+      appended: false,
+    });
 
     const events = await loadTranscriptEvents({
       agentId: "main",
@@ -113,6 +118,74 @@ describe("commitBackgroundResultToSession", () => {
     ]);
     expect(updates).toHaveLength(1);
     unsubscribe();
+  });
+
+  it("stores model-safe text separately from rich display content", async () => {
+    const target = await createTarget();
+    const displayContent = [
+      { type: "text", text: "Automation finished with an image." },
+      {
+        type: "image",
+        url: "/api/chat/media/outgoing/source-session/attachment/report.png",
+      },
+    ];
+    const committed: Array<{ appended: boolean; displayContent: unknown }> = [];
+    const recordCommitted = (result: { appended: boolean; message: unknown }) => {
+      committed.push({
+        appended: result.appended,
+        displayContent: (result.message as Record<string, unknown>)[
+          ASSISTANT_DISPLAY_CONTENT_FIELD
+        ],
+      });
+    };
+    const commitParams = {
+      agentId: "main",
+      sessionKey: target.sessionKey,
+      expectedGeneration: target.generation,
+      text: "Automation finished with an image.",
+      displayContent,
+      idempotencyKey: "cron-current-completion:cron:job-media:1500",
+      provenance: { kind: "cron" as const, jobId: "job-media", runId: "cron:job-media:1500" },
+      config: target.config,
+      onMessageCommitted: recordCommitted,
+    };
+
+    await expect(commitBackgroundResultToSession(commitParams)).resolves.toMatchObject({
+      ok: true,
+      appended: true,
+    });
+    await expect(
+      commitBackgroundResultToSession({
+        ...commitParams,
+        displayContent: [
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/source-session/attachment/retry.png",
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ ok: true, appended: false });
+
+    expect(committed).toEqual([
+      { appended: true, displayContent },
+      { appended: false, displayContent },
+    ]);
+    const events = await loadTranscriptEvents({
+      agentId: "main",
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      storePath: target.storePath,
+    });
+    expect(events).toEqual([
+      expect.objectContaining({ type: "session" }),
+      expect.objectContaining({
+        type: "message",
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "Automation finished with an image." }],
+          [ASSISTANT_DISPLAY_CONTENT_FIELD]: displayContent,
+        }),
+      }),
+    ]);
   });
 
   it("refuses an archived target conversation", async () => {
@@ -168,6 +241,13 @@ describe("commitBackgroundResultToSession", () => {
         sessionKey: target.sessionKey,
         expectedGeneration: target.generation,
         text: "Do not append this stale cron result.",
+        displayContent: [
+          { type: "text", text: "Do not append this stale cron result." },
+          {
+            type: "image",
+            url: "/api/chat/media/outgoing/source-session/attachment/stale.png",
+          },
+        ],
         idempotencyKey: "cron-current-completion:cron:job-stale:3000",
         provenance: { kind: "cron", jobId: "job-stale", runId: "cron:job-stale:3000" },
         config: target.config,

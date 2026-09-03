@@ -700,7 +700,13 @@ export async function dispatchCronDelivery(
     }
     if (requiresCurrentSessionCompletion) {
       deliveryAttempted = true;
-      const completion = await commitCurrentSessionCronCompletion(params, synthesizedText);
+      // Descendant finalization can replace the initial payload set; persist
+      // exactly the payloads this dispatch will deliver.
+      const completion = await commitCurrentSessionCronCompletion(
+        params,
+        deliveryPayloads,
+        synthesizedText,
+      );
       if (!completion.ok) {
         recordDelivery("not-delivered", completion.reason);
         return failDeliveryTarget(completion.reason);
