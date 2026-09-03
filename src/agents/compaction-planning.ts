@@ -324,8 +324,6 @@ function pruneHistoryForContextShare(params: {
   let keptMessages = params.messages;
   const allDroppedMessages: AgentMessage[] = [];
   let droppedChunks = 0;
-  let droppedMessages = 0;
-  let droppedTokens = 0;
 
   const parts = normalizeCompactionParts(params.parts ?? DEFAULT_PARTS, keptMessages.length);
   const originalMessageIndexes = new Map(
@@ -344,8 +342,6 @@ function pruneHistoryForContextShare(params: {
     const repairedDropped = repairReport.discarded;
 
     droppedChunks += 1;
-    droppedMessages += dropped.length + repairedDropped.length;
-    droppedTokens += estimateMessagesTokens(dropped) + estimateMessagesTokens(repairedDropped);
     allDroppedMessages.push(...dropped, ...repairedDropped);
     keptMessages = repairReport.messages;
   }
@@ -360,8 +356,8 @@ function pruneHistoryForContextShare(params: {
     messages: keptMessages,
     droppedMessagesList: allDroppedMessages,
     droppedChunks,
-    droppedMessages,
-    droppedTokens,
+    droppedMessages: allDroppedMessages.length,
+    droppedTokens: estimateMessagesTokens(allDroppedMessages),
     keptTokens: estimateMessagesTokens(keptMessages),
     budgetTokens,
   };
