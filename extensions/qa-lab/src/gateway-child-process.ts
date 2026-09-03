@@ -111,6 +111,16 @@ export function createQaGatewayChildLogCollector() {
   };
 }
 
+export function createQaGatewayChildLogAccess(output: {
+  mark(): number;
+  readSince(mark: number): string;
+}) {
+  return {
+    markLogs: () => output.mark(),
+    readLogsSince: (mark: number) => redactQaGatewayDebugText(output.readSince(mark)),
+  };
+}
+
 function formatQaGatewayChildFailure(failure: QaChildFailure) {
   return failure.source === "process"
     ? `gateway failed to spawn: ${formatErrorMessage(failure.error)}`

@@ -4,6 +4,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runQaGatewayCliCommand } from "./gateway-child-command.js";
 import { QaGatewayChildLifecycle, type QaGatewayStopOptions } from "./gateway-child-lifecycle.js";
 import {
+  createQaGatewayChildLogAccess,
   formatQaGatewayProcessBoundaryStartupFailure,
   monitorQaGatewayChildFailure,
   throwQaGatewayChildFailure,
@@ -250,6 +251,7 @@ async function startOwnedGatewayChild(
     configPath,
     runtimeEnv: runningEnv,
     logs,
+    ...createQaGatewayChildLogAccess(output),
     runCli(args: readonly string[]) {
       throwActiveChildFailure();
       return runQaGatewayCliCommand({

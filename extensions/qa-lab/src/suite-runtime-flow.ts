@@ -199,6 +199,36 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
       ...options,
       accountId: params.env.transport.accountId,
     });
+  const markLogs = params.env.gateway.markLogs;
+  const readLogsSince = params.env.gateway.readLogsSince;
+  let monotonicGatewayLogs =
+    typeof markLogs === "function" && typeof readLogsSince === "function"
+      ? { mark: markLogs, readSince: readLogsSince }
+      : undefined;
+  const isValidGatewayLogMark = (mark: number | undefined): mark is number =>
+    Number.isSafeInteger(mark) && (mark ?? -1) >= 0;
+  const readLegacyGatewayLogs = (mark?: number) => {
+    const logs = params.env.gateway.logs?.() ?? "";
+    return isValidGatewayLogMark(mark) ? logs.slice(mark) : logs;
+  };
+  const readGatewayLogs = (mark?: number) => {
+    if (monotonicGatewayLogs && isValidGatewayLogMark(mark)) {
+      return monotonicGatewayLogs.readSince(mark);
+    }
+    return readLegacyGatewayLogs(mark);
+  };
+  const readGatewayLogsForSentinels = (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
+    if (monotonicGatewayLogs && isValidGatewayLogMark(options?.since)) {
+      return {
+        logs: monotonicGatewayLogs.readSince(options.since),
+        options: { ...options, since: 0 },
+      };
+    }
+    return {
+      logs: params.env.gateway.logs?.(),
+      options,
+    };
+  };
   return {
     ...qaSuiteScenarioIdentityDeps,
     runScenario: params.runScenario,
@@ -220,12 +250,25 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     webType: webRuntime.qaWebType,
     webSnapshot: webRuntime.qaWebSnapshot,
     webEvaluate: webRuntime.qaWebEvaluate,
-    readGatewayLogs: () => params.env.gateway.logs?.() ?? "",
-    markGatewayLogCursor: () => (params.env.gateway.logs?.() ?? "").length,
-    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) =>
-      scanGatewayLogSentinels(params.env.gateway.logs?.(), options),
-    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) =>
-      assertNoGatewayLogSentinels(params.env.gateway.logs?.(), options),
+    readGatewayLogs,
+    markGatewayLogCursor: () => {
+      if (monotonicGatewayLogs) {
+        const mark = monotonicGatewayLogs.mark();
+        if (isValidGatewayLogMark(mark)) {
+          return mark;
+        }
+        monotonicGatewayLogs = undefined;
+      }
+      return (params.env.gateway.logs?.() ?? "").length;
+    },
+    scanGatewayLogSentinels: (options?: Parameters<typeof scanGatewayLogSentinels>[1]) => {
+      const input = readGatewayLogsForSentinels(options);
+      return scanGatewayLogSentinels(input.logs, input.options);
+    },
+    assertNoGatewayLogSentinels: (options?: Parameters<typeof assertNoGatewayLogSentinels>[1]) => {
+      const input = readGatewayLogsForSentinels(options);
+      return assertNoGatewayLogSentinels(input.logs, input.options);
+    },
     runRuntimeToolFixture: async (
       envArg: QaSuiteScenarioFlowEnv,
       configArg: Record<string, unknown>,
