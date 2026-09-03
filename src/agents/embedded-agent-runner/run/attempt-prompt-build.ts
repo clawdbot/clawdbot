@@ -155,6 +155,8 @@ export async function prepareEmbeddedAttemptPromptAssembly(input: {
     ...buildAgentHookContextIdentityFields({
       trigger: attempt.trigger,
       senderId: attempt.senderId,
+      senderName: attempt.senderName,
+      senderE164: attempt.senderE164,
       chatId: attempt.chatId,
       channelContext: attempt.channelContext,
     }),

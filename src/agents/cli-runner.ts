@@ -184,6 +184,8 @@ async function runCliAgentInternal(
             ...buildAgentHookContextIdentityFields({
               trigger: params.trigger,
               senderId: params.senderId,
+              senderName: params.senderName,
+              senderE164: params.senderE164,
               chatId: params.chatId,
               channelContext: params.channelContext,
             }),
@@ -310,6 +312,8 @@ export async function runPreparedCliAgent(
     ...buildAgentHookContextIdentityFields({
       trigger: params.trigger,
       senderId: params.senderId,
+      senderName: params.senderName,
+      senderE164: params.senderE164,
       chatId: params.chatId,
       channelContext: params.channelContext,
     }),

@@ -46,10 +46,14 @@ describe("buildAgentHookContextIdentityFields", () => {
     expect(
       buildAgentHookContextIdentityFields({
         senderId: "open-id-1",
+        senderName: "Alice",
+        senderE164: "+15551234567",
         chatId: "chat-1",
       }),
     ).toEqual({
       senderId: "open-id-1",
+      senderName: "Alice",
+      senderE164: "+15551234567",
       chatId: "chat-1",
       channelContext: {
         sender: { id: "open-id-1" },
@@ -79,6 +83,8 @@ describe("buildAgentHookContextIdentityFields", () => {
       buildAgentHookContextIdentityFields({
         trigger: "cron",
         senderId: "open-id-1",
+        senderName: "Alice",
+        senderE164: "+15551234567",
         chatId: "chat-1",
       }),
     ).toEqual({});

@@ -325,6 +325,10 @@ export type PluginHookAgentContext = {
   chatId?: string;
   /** Sender identity for channel-originated runs when available. */
   senderId?: string;
+  /** Channel-provided sender display name when available. */
+  senderName?: string;
+  /** Sender phone number in E.164 form when the channel resolved one. */
+  senderE164?: string;
   trigger?: string;
   channelId?: string;
   /** Resolved effective context-token budget after model/config/agent caps. */
