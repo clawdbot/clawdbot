@@ -70,7 +70,7 @@ A conversation that starts in the team channel can continue as a session the who
 
 For coding work, verified GitHub identity pays off at the commit: with **Git co-author credit** enabled, commits from a shared session carry `Co-authored-by` trailers for the people who steered it, and generated pull requests link back to the session so reviewers can read the conversation that produced the diff.
 
-Teammates with their own model subscriptions can connect them under **Settings → Profile → Model accounts**. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
+Teammates can add their own provider accounts under **Settings → Profile → Connected accounts**, using the sign-in methods offered by each provider. Their new sessions prefer that account without making it a Gateway-wide default. Collaborators use the session's selected account, and shared same-provider failover can still apply - see [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
 ## Step 5: Bound what each person can do
 

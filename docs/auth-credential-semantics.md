@@ -65,7 +65,7 @@ Auth writes that explicitly select a state directory, including isolated QA stag
 
 ## Personal model accounts
 
-Accounts connected from **Settings → Profile → Model accounts** have an identity-scoped owner in the shared state database. Their credentials and usage state never enter shared or agent-local auth stores, external CLI mirrors, or global runtime snapshots. A runtime loads at most the one personal credential selected by its session. Unlinked personal accounts remain usable by existing session pins, not by automatic selection for new sessions.
+Accounts connected from **Settings → Profile → Connected accounts** have an identity-scoped owner in the shared state database. Their credentials and usage state never enter shared or agent-local auth stores, external CLI mirrors, or global runtime snapshots. A runtime loads at most the one personal credential selected by its session. Unlinked personal accounts remain usable by existing session pins, not by automatic selection for new sessions.
 
 Personal pins keep the existing same-provider failover policy: ordered shared accounts can be tried after a pinned account fails. They do not make another person's personal account a fallback. Reconnecting can replace only the connecting person's own credential; shared credentials referenced by an administrator-created link are not personal property. See [Per-person model accounts](/concepts/multi-user#per-person-model-accounts).
 
