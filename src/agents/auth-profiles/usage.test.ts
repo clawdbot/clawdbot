@@ -759,7 +759,7 @@ describe("clearExpiredCooldowns", () => {
     }
   });
 
-  it("clears expired blockedUntil and resets errorCount", () => {
+  it("clears an expired provider block but preserves retry backoff until success", () => {
     const lastFailureAt = Date.now() - 120_000;
     const store = makeStore({
       "openai:default": {
@@ -778,8 +778,8 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.blockedUntil).toBeUndefined();
     expect(stats?.blockedReason).toBeUndefined();
     expect(stats?.blockedSource).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
+    expect(stats?.errorCount).toBe(4);
+    expect(stats?.failureCounts).toEqual({ rate_limit: 4 });
     expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
 
@@ -884,6 +884,39 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       dateNowSpy.mockRestore();
     }
   }
+
+  it("exponentially backs off rate limits without a provider reset up to 24 hours", async () => {
+    const store = makeStore(undefined);
+    let now = 1_700_000_000_000;
+    const expectedDelays = [
+      30_000,
+      60_000,
+      2 * 60_000,
+      4 * 60_000,
+      8 * 60_000,
+      16 * 60_000,
+      32 * 60_000,
+      64 * 60_000,
+      128 * 60_000,
+      256 * 60_000,
+      512 * 60_000,
+      1_024 * 60_000,
+      24 * 60 * 60 * 1000,
+      24 * 60 * 60 * 1000,
+    ];
+
+    for (const [index, expectedDelay] of expectedDelays.entries()) {
+      clearExpiredCooldowns(store, now);
+      await markFailureAt({ store, now, reason: "rate_limit" });
+      const stats = store.usageStats?.["anthropic:default"];
+      expect((stats?.cooldownUntil ?? 0) - now, `attempt ${index + 1}`).toBe(expectedDelay);
+      now += expectedDelay + 1;
+    }
+
+    expect(store.usageStats?.["anthropic:default"]?.failureCounts?.rate_limit).toBe(
+      expectedDelays.length,
+    );
+  });
 
   const activeWindowCases = [
     {
@@ -1475,6 +1508,33 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     } else {
       expect(stats?.cooldownUntil).toBe(now + expectedMs);
     }
+  });
+
+  it("uses an exact provider reset instead of the local exponential backoff", async () => {
+    const now = 1_700_000_000_000;
+    const providerResetMs = 5 * 60 * 60 * 1000;
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now - 1,
+        cooldownReason: "rate_limit",
+        errorCount: 12,
+        failureCounts: { rate_limit: 12 },
+        lastFailureAt: now - 1,
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: providerResetMs / 1000 },
+      },
+    });
+
+    await markCodexFailureAt({ store, now });
+
+    const stats = store.usageStats?.["openai:default"];
+    expect(stats?.blockedUntil).toBe(now + providerResetMs);
+    expect(stats?.blockedReason).toBe("subscription_limit");
+    expect(stats?.cooldownUntil).toBeUndefined();
   });
 
   it("probes WHAM before recording an OpenAI OAuth detail-less failure", async () => {

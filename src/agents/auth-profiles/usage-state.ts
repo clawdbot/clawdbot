@@ -247,6 +247,10 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
       stats.disabledUntil > 0 &&
       ts >= stats.disabledUntil;
 
+    const preserveRateLimitBackoff =
+      (cooldownExpired && stats.cooldownReason === "rate_limit") ||
+      (blockedExpired && stats.blockedReason === "subscription_limit");
+
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
@@ -269,9 +273,11 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     }
 
     // Reset error counters when ALL cooldowns have expired so the profile gets
-    // a fair retry window. Preserves lastFailureAt for the failureWindowMs
+    // a fair retry window. Rate-limit counters are the exception: they persist
+    // until a successful request resets them so repeated failed probes can grow
+    // to the capped retry interval. Preserves lastFailureAt for other failures'
     // decay check in computeNextProfileUsageStats.
-    if (profileMutated && !resolveProfileUnusableUntil(stats)) {
+    if (profileMutated && !resolveProfileUnusableUntil(stats) && !preserveRateLimitBackoff) {
       stats.errorCount = 0;
       stats.failureCounts = undefined;
     }
