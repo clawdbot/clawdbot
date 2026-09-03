@@ -14,7 +14,7 @@ can affect bundled plugins and third-party plugins.
 - Definition files:
   - `package.json`
   - `scripts/lib/plugin-sdk-entrypoints.json`
-  - `src/plugin-sdk/entrypoints.ts`
+  - `scripts/lib/plugin-sdk-entries.mts`
   - `src/plugin-sdk/api-baseline.ts`
   - `src/plugin-sdk/plugin-entry.ts`
   - `src/plugin-sdk/core.ts`
@@ -66,13 +66,21 @@ can affect bundled plugins and third-party plugins.
   execute plugin runtime, that is usually a boundary smell. Prefer metadata or
   descriptor-driven control-plane seams first.
 
+## Versioned Required Capabilities
+
+- Always: when a shipped Plugin SDK parameter contract gains required host authority, introduce a versioned type that requires it. Keep the legacy type source-compatible for its documented deprecation window, and migrate every bundled/internal caller in the same change.
+- Always: keep host capabilities generic and closure-bound. Bind every exposed tool, preparer, callback, approval operation, and native-action surface; retained copies must fail after owner or capability closure, including closure during awaited policy work.
+- Never: treat legacy optionality as a capability-free runtime path, reconstruct host authority inside a plugin, or add provider-specific authority to the generic contract.
+- Never: hand-edit generated SDK baselines, declarations, hashes, or budgets. Regenerate them canonically.
+- Ask first: obtain SDK and security owner acceptance before shortening a compatibility window, making a shipped type source-incompatible, or widening a capability’s trust, authority, or persistence boundary.
+
 ## Verification
 
 - If you touch SDK seams that affect lazy loading, hot channel entrypoints, or
   bundled plugin import topology, run `pnpm build`.
 - If the change can alter bundled channel startup cost, also run the isolated
   entrypoint profiler for the affected plugin:
-  `OPENCLAW_LOCAL_CHECK=0 node scripts/profile-extension-memory.mjs --extension <id> --skip-combined --concurrency 1`
+  `OPENCLAW_LOCAL_CHECK=0 node --import tsx scripts/profile-extension-memory.mts --extension <id> --skip-combined --concurrency 1`
 
 ## Expanding The Boundary
 
@@ -81,14 +89,14 @@ can affect bundled plugins and third-party plugins.
 - When adding or changing a public subpath, keep these aligned:
   - docs in `docs/plugins/*`
   - `scripts/lib/plugin-sdk-entrypoints.json`
-  - `src/plugin-sdk/entrypoints.ts`
+  - `scripts/lib/plugin-sdk-entries.mts`
   - `package.json` exports
-  - API baseline and export checks
+  - API diff and export checks
 - If a bundled channel/helper need crosses package boundaries, first ask
   whether the need is truly generic. If yes, add a narrow generic subpath. If
   not, keep it plugin-local through `api.ts` / `runtime-api.ts`.
 - When expanding provider-facing seams, update or add the matching narrow tests
-  that lock the contract: Plugin SDK baseline/export checks for public subpaths
+  that lock the contract: Plugin SDK diff/export checks for public subpaths
   and the most direct provider/plugin tests for the behavior you are
   centralizing.
 - Breaking removals or renames are major-version work, not drive-by cleanup.

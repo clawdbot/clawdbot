@@ -1,10 +1,28 @@
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace as readNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { formatErrorMessage } from "../infra/errors.js";
+import type { MeetingAudioBackendSelection, MeetingAudioRuntime } from "./audio-backend.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
 import { terminateMeetingBridgeProcess } from "./bridge-process.js";
+import { splitCommandArgv } from "./command-argv.js";
+import {
+  prepareMeetingNodeAudio,
+  readMeetingNodeCommand,
+  type MeetingNodeAudioConfig,
+} from "./node-audio-config.js";
 import { MeetingNodeAudioPullWaiters } from "./node-audio-pull-waiters.js";
+import type { MeetingRealtimeAudioFormat } from "./realtime-audio-format.js";
+
+export type { MeetingNodeAudioConfig } from "./node-audio-config.js";
 
 const NODE_BRIDGE_TERMINATION_GRACE_MS = 2_000;
+const NODE_BRIDGE_INPUT_DRAIN_MS = NODE_BRIDGE_TERMINATION_GRACE_MS + 1_000;
+const NODE_BRIDGE_TERMINAL_RETENTION_MS = 5_000;
+const NODE_BRIDGE_MAX_QUEUED_INPUT_CHUNKS = 200;
+const NODE_BRIDGE_MAX_QUEUED_INPUT_BYTES = 1024 * 1024;
 
 type NodeOutputWriteWaiter = {
   output: ChildProcess;
@@ -19,6 +37,7 @@ type NodeBridgeSession = {
   input?: ChildProcess;
   output?: ChildProcess;
   chunks: Buffer[];
+  queuedInputBytes: number;
   waiters: MeetingNodeAudioPullWaiters;
   closed: boolean;
   createdAt: string;
@@ -33,6 +52,9 @@ type NodeBridgeSession = {
   outputWriteWaiters: Set<NodeOutputWriteWaiter>;
   stopPromise?: Promise<void>;
   retiredOutputStops: Set<Promise<void>>;
+  stopping: boolean;
+  discardQueuedAudioOnStop: boolean;
+  terminalEvictionTimer?: ReturnType<typeof setTimeout>;
 };
 
 export type MeetingNodeHostOptions = {
@@ -42,11 +64,17 @@ export type MeetingNodeHostOptions = {
   bridgeIdPrefix: string;
   defaultAudioInputCommand: readonly string[];
   defaultAudioOutputCommand: readonly string[];
+  defaultAudio?: {
+    backend?: MeetingAudioBackendSelection;
+    bufferBytes: number;
+    format: MeetingRealtimeAudioFormat;
+  };
   talkBackModes: ReadonlySet<string>;
   agentMode: string;
   normalizeUrl(input: unknown): string;
   normalizeMeetingKey(url?: string): string | undefined;
-  assertAudioAvailable(timeoutMs: number): void;
+  assertAudioAvailable(timeoutMs: number): void | Promise<void>;
+  prepareAudio?(config: MeetingNodeAudioConfig, timeoutMs: number): Promise<MeetingAudioRuntime>;
   browser: {
     application: string;
     buildProfileArgs(profile: string): string[];
@@ -55,39 +83,8 @@ export type MeetingNodeHostOptions = {
   };
 };
 
-type MeetingConfiguredNodeHostOptions = Omit<MeetingNodeHostOptions, "assertAudioAvailable"> & {
-  meetingLabel: string;
-  outputMentionsAudioDevice(output: string): boolean;
-  sharePrerequisiteDeadline: boolean;
-  systemProfilerCommand: string;
-};
-
-function readStringArray(value: unknown): string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const result = value.filter(
-    (entry): entry is string => typeof entry === "string" && entry.length > 0,
-  );
-  return result.length > 0 ? result : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function formatErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function readNumber(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+function readPositiveNumberOr(value: unknown, fallback: number): number {
+  return asPositiveFiniteNumber(value) ?? fallback;
 }
 
 function readOutputGeneration(value: unknown): number | undefined {
@@ -101,10 +98,7 @@ function readOutputGeneration(value: unknown): number | undefined {
 }
 
 function runCommandWithTimeout(argv: string[], timeoutMs: number) {
-  const [command, ...args] = argv;
-  if (!command) {
-    throw new Error("command must not be empty");
-  }
+  const { command, args } = splitCommandArgv(argv, "command");
   const result = spawnSync(command, args, { encoding: "utf8", timeout: timeoutMs });
   const errorMessage = result.error ? formatErrorMessage(result.error) : "";
   const stderr =
@@ -118,12 +112,33 @@ function runCommandWithTimeout(argv: string[], timeoutMs: number) {
   };
 }
 
-function splitCommand(argv: string[]): { command: string; args: string[] } {
-  const [command, ...args] = argv;
-  if (!command) {
-    throw new Error("audio command must not be empty");
+function waitForInputDrain(
+  stream: ChildProcess["stdout"] | undefined,
+  timeoutMs: number,
+): Promise<void> {
+  if (!stream || stream.readableEnded || stream.destroyed) {
+    return Promise.resolve();
   }
-  return { command, args };
+  return new Promise<void>((resolve) => {
+    let settled = false;
+    const finish = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      stream.off("end", finish);
+      stream.off("close", finish);
+      resolve();
+    };
+    const timeout = setTimeout(finish, timeoutMs);
+    timeout.unref?.();
+    stream.once("end", finish);
+    stream.once("close", finish);
+    if (stream.readableEnded || stream.destroyed) {
+      finish();
+    }
+  });
 }
 
 export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
@@ -153,16 +168,63 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     });
   };
 
-  const stopSession = (session: NodeBridgeSession): Promise<void> => {
+  const deleteSession = (session: NodeBridgeSession): void => {
+    if (session.terminalEvictionTimer) {
+      clearTimeout(session.terminalEvictionTimer);
+      session.terminalEvictionTimer = undefined;
+    }
+    session.chunks.length = 0;
+    session.queuedInputBytes = 0;
+    if (sessions.get(session.id) === session) {
+      sessions.delete(session.id);
+    }
+  };
+
+  const armTerminalEviction = (session: NodeBridgeSession): void => {
+    if (session.terminalEvictionTimer) {
+      clearTimeout(session.terminalEvictionTimer);
+    }
+    session.terminalEvictionTimer = setTimeout(() => {
+      deleteSession(session);
+    }, NODE_BRIDGE_TERMINAL_RETENTION_MS);
+    session.terminalEvictionTimer.unref?.();
+  };
+
+  const stopSession = (
+    session: NodeBridgeSession,
+    stopOptions: { discardQueuedAudio?: boolean } = {},
+  ): Promise<void> => {
+    session.stopping = true;
+    if (stopOptions.discardQueuedAudio) {
+      session.discardQueuedAudioOnStop = true;
+      if (session.terminalEvictionTimer) {
+        clearTimeout(session.terminalEvictionTimer);
+        session.terminalEvictionTimer = undefined;
+      }
+      session.chunks.length = 0;
+      session.queuedInputBytes = 0;
+      if (!session.closed) {
+        session.closed = true;
+        session.closedAt = new Date().toISOString();
+      }
+      wake(session);
+    }
+    releaseOutputWriteWaiters(session);
     // Process and stream errors can arrive together during teardown. Close once
     // so every caller shares one bounded process-termination promise.
     if (session.stopPromise) {
       return session.stopPromise;
     }
-    session.closed = true;
-    session.closedAt = new Date().toISOString();
-    wake(session);
-    releaseOutputWriteWaiters(session);
+    const terminalReady = session.discardQueuedAudioOnStop
+      ? Promise.resolve()
+      : waitForInputDrain(session.input?.stdout, NODE_BRIDGE_INPUT_DRAIN_MS).then(() => {
+          if (session.discardQueuedAudioOnStop || session.closed) {
+            return;
+          }
+          session.closed = true;
+          session.closedAt = new Date().toISOString();
+          wake(session);
+        });
     session.stopPromise = Promise.all([
       terminateMeetingBridgeProcess(session.input, {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
@@ -171,7 +233,16 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
       }),
       ...session.retiredOutputStops,
-    ]).then(() => undefined);
+      terminalReady,
+    ]).then(() => {
+      if (session.discardQueuedAudioOnStop) {
+        deleteSession(session);
+        return;
+      }
+      // A terminal pull normally deletes the session first. This deadline
+      // releases bounded retention when no consumer returns to drain it.
+      armTerminalEviction(session);
+    });
     return session.stopPromise;
   };
 
@@ -196,14 +267,15 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     url?: string;
     mode?: string;
   }): NodeBridgeSession => {
-    const input = splitCommand(params.inputCommand);
-    const output = splitCommand(params.outputCommand);
+    const input = splitCommandArgv(params.inputCommand, "audio command");
+    const output = splitCommandArgv(params.outputCommand, "audio command");
     const session: NodeBridgeSession = {
       id: `${options.bridgeIdPrefix}${randomUUID()}`,
       url: params.url,
       mode: params.mode,
       outputCommand: output,
       chunks: [],
+      queuedInputBytes: 0,
       waiters: new MeetingNodeAudioPullWaiters(),
       closed: false,
       createdAt: new Date().toISOString(),
@@ -213,22 +285,49 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       outputGeneration: 0,
       outputWriteWaiters: new Set(),
       retiredOutputStops: new Set(),
+      stopping: false,
+      discardQueuedAudioOnStop: false,
     };
     const outputProcess = startOutputProcess(output);
-    const inputProcess = spawn(input.command, input.args, {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    let inputProcess: ChildProcess;
+    try {
+      inputProcess = spawn(input.command, input.args, {
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      void terminateMeetingBridgeProcess(outputProcess, {
+        graceMs: NODE_BRIDGE_TERMINATION_GRACE_MS,
+      });
+      throw error;
+    }
     session.input = inputProcess;
     session.output = outputProcess;
     inputProcess.stdout?.on("data", (chunk) => {
+      if (session.discardQueuedAudioOnStop || session.closed) {
+        return;
+      }
       const audio = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       session.lastInputAt = new Date().toISOString();
       session.lastInputBytes += audio.byteLength;
-      session.chunks.push(audio);
-      if (session.chunks.length > 200) {
-        session.chunks.splice(0, session.chunks.length - 200);
+      // Keep the existing normal 200-chunk window while bounding custom capture
+      // commands whose stdout chunks are much larger than the default 4 KiB.
+      const retainedAudio = Buffer.from(
+        audio.subarray(Math.max(0, audio.byteLength - NODE_BRIDGE_MAX_QUEUED_INPUT_BYTES)),
+      );
+      session.chunks.push(retainedAudio);
+      session.queuedInputBytes += retainedAudio.byteLength;
+      while (
+        session.chunks.length > NODE_BRIDGE_MAX_QUEUED_INPUT_CHUNKS ||
+        session.queuedInputBytes > NODE_BRIDGE_MAX_QUEUED_INPUT_BYTES
+      ) {
+        const evicted = session.chunks.shift();
+        if (evicted) {
+          session.queuedInputBytes -= evicted.byteLength;
+        }
       }
-      wake(session);
+      if (!session.stopPromise) {
+        wake(session);
+      }
     });
     const stop = () => {
       void stopSession(session);
@@ -243,7 +342,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const pullAudio = async (params: Record<string, unknown>) => {
-    const bridgeId = readString(params.bridgeId);
+    const bridgeId = readNonEmptyString(params.bridgeId);
     if (!bridgeId) {
       throw new Error("bridgeId required");
     }
@@ -251,14 +350,25 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session) {
       throw new Error(`unknown bridgeId: ${bridgeId}`);
     }
-    const timeoutMs = Math.min(readNumber(params.timeoutMs, 250), 2_000);
+    const timeoutMs = Math.min(readPositiveNumberOr(params.timeoutMs, 250), 2_000);
     if (session.chunks.length === 0 && !session.closed) {
       await session.waiters.wait(timeoutMs);
     }
     const chunk = session.chunks.shift();
+    if (chunk) {
+      session.queuedInputBytes -= chunk.byteLength;
+    }
+    const closed = session.closed && session.chunks.length === 0;
+    if (closed) {
+      deleteSession(session);
+    } else if (chunk && session.closed && session.terminalEvictionTimer) {
+      // Terminal audio can span many node RPCs. Retain only while the consumer
+      // keeps making progress, then evict after one full idle window.
+      armTerminalEviction(session);
+    }
     return {
       bridgeId,
-      closed: session.closed,
+      closed,
       base64: chunk ? chunk.toString("base64") : undefined,
     };
   };
@@ -307,13 +417,13 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     });
 
   const pushAudio = async (params: Record<string, unknown>) => {
-    const bridgeId = readString(params.bridgeId);
-    const base64 = readString(params.base64);
+    const bridgeId = readNonEmptyString(params.bridgeId);
+    const base64 = readNonEmptyString(params.base64);
     if (!bridgeId || !base64) {
       throw new Error("bridgeId and base64 required");
     }
     const session = sessions.get(bridgeId);
-    if (!session || session.closed) {
+    if (!session || session.stopping || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
     const requestedGeneration = readOutputGeneration(params.outputGeneration);
@@ -338,6 +448,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
     if (
+      session.stopping ||
       session.closed ||
       session.output !== output ||
       (requestedGeneration !== undefined && requestedGeneration !== session.outputGeneration)
@@ -350,12 +461,12 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const clearAudio = (params: Record<string, unknown>) => {
-    const bridgeId = readString(params.bridgeId);
+    const bridgeId = readNonEmptyString(params.bridgeId);
     if (!bridgeId) {
       throw new Error("bridgeId required");
     }
     const session = sessions.get(bridgeId);
-    if (!session || session.closed) {
+    if (!session || session.stopping || session.closed) {
       throw new Error(`bridge is not open: ${bridgeId}`);
     }
     const requestedGeneration = readOutputGeneration(params.outputGeneration);
@@ -378,18 +489,19 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     return { bridgeId, ok: true, clearCount: session.clearCount };
   };
 
-  const startBrowser = (params: Record<string, unknown>) => {
+  const startBrowser = async (params: Record<string, unknown>) => {
     const url = options.normalizeUrl(params.url);
-    const timeoutMs = readNumber(params.joinTimeoutMs, 30_000);
-    const mode = readString(params.mode);
+    const timeoutMs = readPositiveNumberOr(params.joinTimeoutMs, 30_000);
+    const mode = readNonEmptyString(params.mode);
+    let audioRuntime: MeetingAudioRuntime | undefined;
     let bridgeId: string | undefined;
     let audioBridge:
       | { type: "external-command" }
       | { type: "node-command-pair"; outputGeneration: true }
       | undefined;
     if (mode && options.talkBackModes.has(mode)) {
-      options.assertAudioAvailable(Math.min(timeoutMs, 10_000));
-      const healthCommand = readStringArray(params.audioBridgeHealthCommand);
+      audioRuntime = await prepareMeetingNodeAudio(params, Math.min(timeoutMs, 10_000), options);
+      const healthCommand = readMeetingNodeCommand(params.audioBridgeHealthCommand);
       if (healthCommand) {
         const health = runCommandWithTimeout(healthCommand, timeoutMs);
         if (health.code !== 0) {
@@ -398,7 +510,7 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           );
         }
       }
-      const bridgeCommand = readStringArray(params.audioBridgeCommand);
+      const bridgeCommand = readMeetingNodeCommand(params.audioBridgeCommand);
       if (bridgeCommand) {
         if (mode === options.agentMode) {
           throw new Error(
@@ -414,12 +526,8 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
         audioBridge = { type: "external-command" };
       } else {
         const session = startCommandPair({
-          inputCommand: readStringArray(params.audioInputCommand) ?? [
-            ...options.defaultAudioInputCommand,
-          ],
-          outputCommand: readStringArray(params.audioOutputCommand) ?? [
-            ...options.defaultAudioOutputCommand,
-          ],
+          inputCommand: audioRuntime.inputCommand,
+          outputCommand: audioRuntime.outputCommand,
           url,
           mode,
         });
@@ -430,25 +538,31 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
 
     if (params.launch !== false) {
       const argv = ["open", "-a", options.browser.application, url];
-      const browserProfile = readString(params.browserProfile);
+      const browserProfile = readNonEmptyString(params.browserProfile);
       if (browserProfile) {
         argv.push(...options.browser.buildProfileArgs(browserProfile));
       }
-      const result = runCommandWithTimeout(argv, timeoutMs);
-      if (result.code !== 0) {
+      try {
+        const result = runCommandWithTimeout(argv, timeoutMs);
+        if (result.code !== 0) {
+          throw new Error(
+            `failed to launch Chrome for ${options.browserLabel}: ${result.stderr || result.stdout || result.code}`,
+          );
+        }
+      } catch (error) {
         if (bridgeId) {
           const session = sessions.get(bridgeId);
           if (session) {
-            void stopSession(session);
+            void stopSession(session, { discardQueuedAudio: true });
           }
         }
-        throw new Error(
-          `failed to launch Chrome for ${options.browserLabel}: ${result.stderr || result.stdout || result.code}`,
-        );
+        throw error;
       }
     }
     return {
       launched: params.launch !== false,
+      audioBackend: audioRuntime?.backend,
+      audioDeviceLabel: audioRuntime?.deviceLabel,
       bridgeId,
       audioBridge,
       browser:
@@ -463,13 +577,13 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const bridgeStatus = (params: Record<string, unknown>) => {
-    const bridgeId = readString(params.bridgeId);
+    const bridgeId = readNonEmptyString(params.bridgeId);
     const session = bridgeId ? sessions.get(bridgeId) : undefined;
     return {
       bridge: session
         ? {
             bridgeId,
-            closed: session.closed,
+            closed: session.stopping || session.closed,
             createdAt: session.createdAt,
             lastInputAt: session.lastInputAt,
             lastOutputAt: session.lastOutputAt,
@@ -499,10 +613,10 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   });
 
   const listSessions = (params: Record<string, unknown>) => {
-    const urlKey = options.normalizeMeetingKey(readString(params.url));
-    const mode = readString(params.mode);
+    const urlKey = options.normalizeMeetingKey(readNonEmptyString(params.url));
+    const mode = readNonEmptyString(params.mode);
     const bridges = [...sessions.values()]
-      .filter((session) => !session.closed)
+      .filter((session) => !session.stopping && !session.closed)
       .filter((session) => !urlKey || options.normalizeMeetingKey(session.url) === urlKey)
       .filter((session) => !mode || session.mode === mode)
       .map(summarizeSession);
@@ -510,18 +624,14 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
   };
 
   const stopSessionsByUrl = async (params: Record<string, unknown>) => {
-    const urlKey = options.normalizeMeetingKey(readString(params.url));
+    const urlKey = options.normalizeMeetingKey(readNonEmptyString(params.url));
     if (!urlKey) {
       throw new Error("url required");
     }
-    const mode = readString(params.mode);
-    const exceptBridgeId = readString(params.exceptBridgeId);
+    const mode = readNonEmptyString(params.mode);
+    const exceptBridgeId = readNonEmptyString(params.exceptBridgeId);
     let stopped = 0;
-    const stopping: Array<{
-      bridgeId: string;
-      session: NodeBridgeSession;
-      stopPromise: Promise<void>;
-    }> = [];
+    const stopping: Promise<void>[] = [];
     for (const [bridgeId, session] of sessions) {
       if (exceptBridgeId && bridgeId === exceptBridgeId) {
         continue;
@@ -532,23 +642,18 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       if (mode && session.mode !== mode) {
         continue;
       }
-      const wasClosed = session.closed;
-      stopping.push({ bridgeId, session, stopPromise: stopSession(session) });
+      const wasClosed = session.stopping || session.closed;
+      stopping.push(stopSession(session, { discardQueuedAudio: true }));
       if (!wasClosed) {
         stopped += 1;
       }
     }
-    await Promise.all(stopping.map(({ stopPromise }) => stopPromise));
-    for (const { bridgeId, session } of stopping) {
-      if (sessions.get(bridgeId) === session) {
-        sessions.delete(bridgeId);
-      }
-    }
+    await Promise.all(stopping);
     return { ok: true, stopped };
   };
 
   const stopBrowser = async (params: Record<string, unknown>) => {
-    const bridgeId = readString(params.bridgeId);
+    const bridgeId = readNonEmptyString(params.bridgeId);
     if (!bridgeId) {
       return { ok: true, stopped: false };
     }
@@ -556,11 +661,9 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
     if (!session) {
       return { ok: true, stopped: false };
     }
-    await stopSession(session);
-    if (sessions.get(bridgeId) === session) {
-      sessions.delete(bridgeId);
-    }
-    return { ok: true, stopped: true };
+    const wasStopped = session.stopping || session.closed;
+    await stopSession(session, { discardQueuedAudio: true });
+    return { ok: true, stopped: !wasStopped };
   };
 
   return {
@@ -573,16 +676,22 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
           throw new Error(`${options.displayName} node host received malformed params JSON.`);
         }
       }
-      const params = asRecord(raw);
-      const action = readString(params.action);
+      const params = asOptionalRecord(raw) ?? {};
+      const action = readNonEmptyString(params.action);
       let result: unknown;
       switch (action) {
         case "setup":
-          options.assertAudioAvailable(10_000);
-          result = { ok: true };
+          {
+            const audioRuntime = await prepareMeetingNodeAudio(params, 10_000, options);
+            result = {
+              ok: true,
+              audioBackend: audioRuntime.backend,
+              audioDeviceLabel: audioRuntime.deviceLabel,
+            };
+          }
           break;
         case "start":
-          result = startBrowser(params);
+          result = await startBrowser(params);
           break;
         case "status":
           result = bridgeStatus(params);
@@ -610,94 +719,5 @@ export function createMeetingNodeHost(options: MeetingNodeHostOptions): {
       }
       return JSON.stringify(result);
     },
-  };
-}
-
-function readSetupCommand(params: Record<string, unknown>, name: string): string[] {
-  const value = params[name];
-  if (
-    !Array.isArray(value) ||
-    value.length === 0 ||
-    value.some((entry) => typeof entry !== "string")
-  ) {
-    throw new Error(`${name} must be a non-empty string array.`);
-  }
-  return value as string[];
-}
-
-export function createMeetingConfiguredNodeHost(options: MeetingConfiguredNodeHostOptions) {
-  const commandExists = (command: string, timeoutMs: number): boolean => {
-    const result = spawnSync("/bin/sh", ["-lc", 'command -v "$1" >/dev/null 2>&1', "sh", command], {
-      encoding: "utf8",
-      timeout: timeoutMs,
-    });
-    return result.status === 0;
-  };
-  const assertAudioAvailable = (
-    timeoutMs: number,
-    commands: readonly (readonly string[])[] = [
-      options.defaultAudioInputCommand,
-      options.defaultAudioOutputCommand,
-    ],
-  ) => {
-    if (process.platform !== "darwin") {
-      throw new Error(`${options.meetingLabel} talk-back with BlackHole 2ch is macOS-only`);
-    }
-    const deadline = Date.now() + timeoutMs;
-    const commandTimeout = () =>
-      options.sharePrerequisiteDeadline ? Math.max(1, deadline - Date.now()) : timeoutMs;
-    const result = spawnSync(options.systemProfilerCommand, ["SPAudioDataType"], {
-      encoding: "utf8",
-      timeout: commandTimeout(),
-    });
-    const stderr =
-      result.stderr ??
-      (result.error
-        ? result.error instanceof Error
-          ? result.error.message
-          : String(result.error)
-        : "");
-    const output = `${result.stdout ?? ""}\n${stderr}`;
-    if (
-      (typeof result.status === "number" ? result.status : result.error ? 1 : 0) !== 0 ||
-      !options.outputMentionsAudioDevice(output)
-    ) {
-      throw new Error("BlackHole 2ch audio device not found on the node.");
-    }
-    for (const argv of commands) {
-      const command = argv[0];
-      if (
-        !command ||
-        (options.sharePrerequisiteDeadline && Date.now() >= deadline) ||
-        !commandExists(command, commandTimeout())
-      ) {
-        throw new Error(`Configured audio command not found on the node: ${command || "<empty>"}`);
-      }
-    }
-  };
-  const host = createMeetingNodeHost({ ...options, assertAudioAvailable });
-
-  return async (paramsJSON?: string | null): Promise<string> => {
-    if (paramsJSON) {
-      let raw: unknown;
-      try {
-        raw = JSON.parse(paramsJSON) as unknown;
-      } catch {
-        throw new Error(`${options.displayName} node host received malformed params JSON.`);
-      }
-      const params = asRecord(raw);
-      if (params.action === "setup") {
-        const commands = [
-          readSetupCommand(params, "audioInputCommand"),
-          readSetupCommand(params, "audioOutputCommand"),
-        ];
-        if (params.bargeInInputCommand !== undefined) {
-          commands.push(readSetupCommand(params, "bargeInInputCommand"));
-        }
-        assertAudioAvailable(10_000, commands);
-        return JSON.stringify({ ok: true });
-      }
-    }
-    return await host.handleCommand(paramsJSON);
   };
 }

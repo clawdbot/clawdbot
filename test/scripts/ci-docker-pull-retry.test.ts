@@ -1,6 +1,6 @@
 // Ci Docker Pull Retry tests cover ci docker pull retry script behavior.
-import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -19,11 +19,7 @@ function writeExecutable(filePath: string, contents: string) {
   chmodSync(filePath, 0o755);
 }
 
-function runPullHelper(binDir: string) {
-  return runPullHelperWithEnv(binDir, {});
-}
-
-function runPullHelperWithEnv(binDir: string, env: Record<string, string>) {
+function runPullHelper(binDir: string, env: Record<string, string> = {}) {
   return spawnSync("/bin/bash", [SCRIPT_PATH, "registry.example/openclaw:test"], {
     cwd: process.cwd(),
     encoding: "utf8",
@@ -45,17 +41,21 @@ afterEach(() => {
 });
 
 describe("scripts/ci-docker-pull-retry.sh", () => {
-  it("uses a kill-after grace period when timeout supports it", () => {
-    const binDir = makeTempBin("openclaw-ci-docker-pull-gnu-");
+  it.each([
+    { name: "GNU timeout", binary: "timeout", killAfter: true },
+    { name: "plain timeout", binary: "timeout", killAfter: false },
+    { name: "GNU gtimeout", binary: "gtimeout", killAfter: true },
+  ])("bounds Docker pulls with $name", ({ binary, killAfter }) => {
+    const binDir = makeTempBin("openclaw-ci-docker-pull-");
     const timeoutArgsPath = path.join(binDir, "timeout-args.txt");
     const dockerArgsPath = path.join(binDir, "docker-args.txt");
 
     writeExecutable(
-      path.join(binDir, "timeout"),
+      path.join(binDir, binary),
       [
         "#!/bin/bash",
         "set -euo pipefail",
-        'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
+        `if [ "\${1:-}" = "--kill-after=1s" ]; then exit ${killAfter ? 0 : 1}; fi`,
         `printf "%s\\n" "$*" >${JSON.stringify(timeoutArgsPath)}`,
         'while [ "$#" -gt 0 ] && [ "$1" != "docker" ]; do shift; done',
         'exec "$@"',
@@ -72,82 +72,10 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
     const result = runPullHelper(binDir);
 
     expect(result.status).toBe(0);
-    expect(execFileSync("cat", [timeoutArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "--kill-after=30s 42s docker pull registry.example/openclaw:test",
+    expect(readFileSync(timeoutArgsPath, "utf8").trim()).toBe(
+      `${killAfter ? "--kill-after=30s " : ""}42s docker pull registry.example/openclaw:test`,
     );
-    expect(execFileSync("cat", [dockerArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "pull registry.example/openclaw:test",
-    );
-  });
-
-  it("falls back to plain timeout when kill-after is unavailable", () => {
-    const binDir = makeTempBin("openclaw-ci-docker-pull-plain-");
-    const timeoutArgsPath = path.join(binDir, "timeout-args.txt");
-    const dockerArgsPath = path.join(binDir, "docker-args.txt");
-
-    writeExecutable(
-      path.join(binDir, "timeout"),
-      [
-        "#!/bin/bash",
-        "set -euo pipefail",
-        'if [ "${1:-}" = "--kill-after=1s" ]; then exit 1; fi',
-        `printf "%s\\n" "$*" >${JSON.stringify(timeoutArgsPath)}`,
-        'while [ "$#" -gt 0 ] && [ "$1" != "docker" ]; do shift; done',
-        'exec "$@"',
-        "",
-      ].join("\n"),
-    );
-    writeExecutable(
-      path.join(binDir, "docker"),
-      ["#!/bin/sh", "set -eu", `printf "%s\\n" "$*" >${JSON.stringify(dockerArgsPath)}`, ""].join(
-        "\n",
-      ),
-    );
-
-    const result = runPullHelper(binDir);
-
-    expect(result.status).toBe(0);
-    expect(execFileSync("cat", [timeoutArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "42s docker pull registry.example/openclaw:test",
-    );
-    expect(execFileSync("cat", [dockerArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "pull registry.example/openclaw:test",
-    );
-  });
-
-  it("uses gtimeout when timeout is unavailable", () => {
-    const binDir = makeTempBin("openclaw-ci-docker-pull-gtimeout-");
-    const timeoutArgsPath = path.join(binDir, "gtimeout-args.txt");
-    const dockerArgsPath = path.join(binDir, "docker-args.txt");
-
-    writeExecutable(
-      path.join(binDir, "gtimeout"),
-      [
-        "#!/bin/bash",
-        "set -euo pipefail",
-        'if [ "${1:-}" = "--kill-after=1s" ]; then exit 0; fi',
-        `printf "%s\\n" "gtimeout:$*" >${JSON.stringify(timeoutArgsPath)}`,
-        'while [ "$#" -gt 0 ] && [ "$1" != "docker" ]; do shift; done',
-        'exec "$@"',
-        "",
-      ].join("\n"),
-    );
-    writeExecutable(
-      path.join(binDir, "docker"),
-      ["#!/bin/sh", "set -eu", `printf "%s\\n" "$*" >${JSON.stringify(dockerArgsPath)}`, ""].join(
-        "\n",
-      ),
-    );
-
-    const result = runPullHelper(binDir);
-
-    expect(result.status).toBe(0);
-    expect(execFileSync("cat", [timeoutArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "gtimeout:--kill-after=30s 42s docker pull registry.example/openclaw:test",
-    );
-    expect(execFileSync("cat", [dockerArgsPath], { encoding: "utf8" }).trim()).toBe(
-      "pull registry.example/openclaw:test",
-    );
+    expect(readFileSync(dockerArgsPath, "utf8").trim()).toBe("pull registry.example/openclaw:test");
   });
 
   it("fails fast when timeout and gtimeout are unavailable", () => {
@@ -196,12 +124,12 @@ describe("scripts/ci-docker-pull-retry.sh", () => {
       ].join("\n"),
     );
 
-    const result = runPullHelperWithEnv(binDir, { OPENCLAW_DOCKER_PULL_ATTEMPTS: "2" });
+    const result = runPullHelper(binDir, { OPENCLAW_DOCKER_PULL_ATTEMPTS: "2" });
 
     expect(result.status).toBe(42);
     expect(result.stderr).toContain("Docker pull failed or timed out after 42s: status=42");
-    expect(execFileSync("wc", ["-l", dockerArgsPath], { encoding: "utf8" }).trim()).toMatch(
-      /^2\b/u,
+    expect(readFileSync(dockerArgsPath, "utf8")).toBe(
+      "pull registry.example/openclaw:test\npull registry.example/openclaw:test\n",
     );
   });
 });

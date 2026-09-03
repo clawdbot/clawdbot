@@ -1,12 +1,14 @@
 // Hook workspace tests cover workspace hook discovery and path handling.
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
 const { warnMock } = vi.hoisted(() => ({ warnMock: vi.fn() }));
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const discoveryModes = ["collection", "extra root"] as const;
 
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({ warn: warnMock }),
@@ -33,7 +35,7 @@ function setupHardlinkHookWorkspace(hookName: string): {
   hookDir: string;
   outsideDir: string;
 } {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-hardlink-"));
+  const root = tempDirs.make("openclaw-hooks-workspace-hardlink-");
   const hooksRoot = path.join(root, "hooks");
   fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -60,11 +62,17 @@ function hookNames(entries: ReturnType<typeof loadWorkspaceHookEntries>): string
   return entries.map((entry) => entry.hook.name);
 }
 
-function loadWorkspaceEntriesFromHooksRoot(hooksRoot: string) {
-  const workspaceDir = path.dirname(hooksRoot);
+function loadWorkspaceEntriesFromHooksRoot(hooksRoot: string, extraRoot?: string) {
+  const workspaceDir = extraRoot
+    ? path.join(path.dirname(hooksRoot), "empty-workspace")
+    : path.dirname(hooksRoot);
   return loadWorkspaceHookEntries(workspaceDir, {
     managedHooksDir: path.join(workspaceDir, "managed-none"),
     bundledHooksDir: path.join(workspaceDir, "bundled-none"),
+    config: {
+      plugins: { enabled: false },
+      hooks: { internal: { load: { extraDirs: extraRoot ? [extraRoot] : [] } } },
+    },
   });
 }
 
@@ -100,27 +108,49 @@ describe("hooks workspace", () => {
     warnMock.mockClear();
   });
 
-  it("ignores package.json hook paths that traverse outside package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-"));
+  it.each(discoveryModes)(
+    "rejects package traversal without scanning unlisted children (%s)",
+    (mode) => {
+      const root = tempDirs.make("openclaw-hooks-workspace-");
+      const hooksRoot = path.join(root, "hooks");
+      fs.mkdirSync(hooksRoot, { recursive: true });
+
+      const pkgDir = path.join(hooksRoot, "pkg");
+      fs.mkdirSync(pkgDir, { recursive: true });
+
+      writePlainHook(root, "outside");
+      writePlainHook(pkgDir, "unlisted");
+
+      writeHookPackageManifest(pkgDir, ["../../outside"]);
+
+      const entries = loadWorkspaceEntriesFromHooksRoot(
+        hooksRoot,
+        mode === "extra root" ? pkgDir : undefined,
+      );
+      expect(hookNames(entries)).toEqual([]);
+    },
+  );
+
+  it.each(discoveryModes)("does not recurse into declared packs or collections (%s)", (mode) => {
+    const root = tempDirs.make("openclaw-hooks-workspace-nested-");
     const hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot, { recursive: true });
-
     const pkgDir = path.join(hooksRoot, "pkg");
-    fs.mkdirSync(pkgDir, { recursive: true });
+    const nestedPack = path.join(pkgDir, "nested-pack");
+    writePlainHook(nestedPack, "nested-hook");
+    writeHookPackageManifest(nestedPack, ["./nested-hook"]);
+    writePlainHook(path.join(pkgDir, "nested-collection"), "collection-hook");
+    writePlainHook(pkgDir, "unlisted");
+    writeHookPackageManifest(pkgDir, ["./nested-pack", "./nested-collection"]);
 
-    const outsideHookDir = path.join(root, "outside");
-    fs.mkdirSync(outsideHookDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideHookDir, "HOOK.md"), "---\nname: outside\n---\n");
-    fs.writeFileSync(path.join(outsideHookDir, "handler.js"), "export default async () => {};\n");
-
-    writeHookPackageManifest(pkgDir, ["../outside"]);
-
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).not.toContain("outside");
+    const entries = loadWorkspaceEntriesFromHooksRoot(
+      hooksRoot,
+      mode === "extra root" ? pkgDir : undefined,
+    );
+    expect(hookNames(entries)).toEqual([]);
   });
 
   it("accepts package.json hook paths within package directory", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-ok-"));
+    const root = tempDirs.make("openclaw-hooks-workspace-ok-");
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -138,7 +168,7 @@ describe("hooks workspace", () => {
   });
 
   it("warns, skips oversized metadata, and continues discovering other hooks", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-mixed-"));
+    const root = tempDirs.make("openclaw-hooks-oversized-mixed-");
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -158,7 +188,7 @@ describe("hooks workspace", () => {
   });
 
   it("loads hooks whose metadata sits exactly at the byte limit", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-exact-limit-"));
+    const root = tempDirs.make("openclaw-hooks-exact-limit-");
     const hooksRoot = path.join(root, "hooks");
     fs.mkdirSync(hooksRoot, { recursive: true });
 
@@ -180,45 +210,54 @@ describe("hooks workspace", () => {
     expect(warnMock).not.toHaveBeenCalled();
   });
 
-  it("still loads a plain hook when its package.json is oversized", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-oversized-compat-"));
-    const hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot, { recursive: true });
+  it.each(discoveryModes)(
+    "still loads a plain hook when its package.json is oversized (%s)",
+    (mode) => {
+      const root = tempDirs.make("openclaw-hooks-oversized-compat-");
+      const hooksRoot = path.join(root, "hooks");
+      fs.mkdirSync(hooksRoot, { recursive: true });
 
-    const hookDir = writePlainHook(hooksRoot, "compat-hook");
-    const manifestPath = path.join(hookDir, "package.json");
-    fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
+      const hookDir = writePlainHook(hooksRoot, "compat-hook");
+      const manifestPath = path.join(hookDir, "package.json");
+      fs.writeFileSync(manifestPath, "x".repeat(METADATA_MAX_BYTES + 1), "utf8");
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).toContain("compat-hook");
-    expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
-  });
+      const entries = loadWorkspaceEntriesFromHooksRoot(
+        hooksRoot,
+        mode === "extra root" ? hookDir : undefined,
+      );
+      expect(hookNames(entries)).toContain("compat-hook");
+      expect(oversizedMetadataWarnings(manifestPath)).toHaveLength(1);
+    },
+  );
 
-  it("ignores package.json hook paths that escape via symlink", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-workspace-link-"));
-    const hooksRoot = path.join(root, "hooks");
-    fs.mkdirSync(hooksRoot, { recursive: true });
+  it.each(discoveryModes)(
+    "rejects package symlink escapes without scanning unlisted children (%s)",
+    (mode) => {
+      const root = tempDirs.make("openclaw-hooks-workspace-link-");
+      const hooksRoot = path.join(root, "hooks");
+      fs.mkdirSync(hooksRoot, { recursive: true });
 
-    const pkgDir = path.join(hooksRoot, "pkg");
-    const outsideDir = path.join(root, "outside");
-    const linkedDir = path.join(pkgDir, "linked");
-    fs.mkdirSync(pkgDir, { recursive: true });
-    fs.mkdirSync(outsideDir, { recursive: true });
-    fs.writeFileSync(path.join(outsideDir, "HOOK.md"), "---\nname: outside\n---\n");
-    fs.writeFileSync(path.join(outsideDir, "handler.js"), "export default async () => {};\n");
-    try {
+      const pkgDir = path.join(hooksRoot, "pkg");
+      const outsideDir = path.join(root, "outside");
+      const linkedDir = path.join(pkgDir, "linked");
+      fs.mkdirSync(pkgDir, { recursive: true });
+      fs.mkdirSync(outsideDir, { recursive: true });
+      fs.writeFileSync(path.join(outsideDir, "HOOK.md"), "---\nname: outside\n---\n");
+      fs.writeFileSync(path.join(outsideDir, "handler.js"), "export default async () => {};\n");
       fs.symlinkSync(outsideDir, linkedDir, process.platform === "win32" ? "junction" : "dir");
-    } catch {
-      return;
-    }
 
-    writeHookPackageManifest(pkgDir, ["./linked"]);
+      writePlainHook(pkgDir, "unlisted");
+      writeHookPackageManifest(pkgDir, ["./linked"]);
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).not.toContain("outside");
-  });
+      const entries = loadWorkspaceEntriesFromHooksRoot(
+        hooksRoot,
+        mode === "extra root" ? pkgDir : undefined,
+      );
+      expect(hookNames(entries)).toEqual([]);
+    },
+  );
 
-  it("ignores hooks with hardlinked HOOK.md aliases", () => {
+  it.each(discoveryModes)("ignores hooks with hardlinked HOOK.md aliases (%s)", (mode) => {
     if (process.platform === "win32") {
       return;
     }
@@ -234,13 +273,15 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    const names = hookNames(entries);
-    expect(names).not.toContain("hardlink-hook");
-    expect(names).not.toContain("outside");
+    writePlainHook(hookDir, "unlisted");
+    const entries = loadWorkspaceEntriesFromHooksRoot(
+      hooksRoot,
+      mode === "extra root" ? hookDir : undefined,
+    );
+    expect(hookNames(entries)).toEqual([]);
   });
 
-  it("ignores hooks with hardlinked handler aliases", () => {
+  it.each(discoveryModes)("ignores hooks with hardlinked handler aliases (%s)", (mode) => {
     if (process.platform === "win32") {
       return;
     }
@@ -254,12 +295,16 @@ describe("hooks workspace", () => {
       return;
     }
 
-    const entries = loadWorkspaceEntriesFromHooksRoot(hooksRoot);
-    expect(hookNames(entries)).not.toContain("hardlink-handler-hook");
+    writePlainHook(hookDir, "unlisted");
+    const entries = loadWorkspaceEntriesFromHooksRoot(
+      hooksRoot,
+      mode === "extra root" ? hookDir : undefined,
+    );
+    expect(hookNames(entries)).toEqual([]);
   });
 
   it("does not let workspace hooks override managed hooks with the same name", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-collision-"));
+    const root = tempDirs.make("openclaw-hooks-collision-");
     const workspaceDir = path.join(root, "workspace");
     const managedHooksDir = path.join(root, "managed-hooks");
     const workspaceHookDir = path.join(workspaceDir, "hooks", "session-memory");
@@ -289,7 +334,7 @@ describe("hooks workspace", () => {
   });
 
   it("treats configured extraDirs as managed hook sources", () => {
-    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hooks-extra-"));
+    const root = tempDirs.make("openclaw-hooks-extra-");
     const workspaceDir = path.join(root, "workspace");
     const extraHookDir = path.join(root, "shared-hooks", "shared-hook");
     fs.mkdirSync(extraHookDir, { recursive: true });

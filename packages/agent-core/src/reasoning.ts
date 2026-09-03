@@ -7,21 +7,6 @@ import {
 } from "@openclaw/llm-core";
 import type { ThinkingLevel } from "./types.js";
 
-type EnabledThinkingLevel = Exclude<NonNullable<SimpleStreamOptions["reasoning"]>, "off">;
-
-const ENABLED_THINKING_LEVELS = new Set<EnabledThinkingLevel>([
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-]);
-
-function isEnabledThinkingLevel(value: unknown): value is EnabledThinkingLevel {
-  return ENABLED_THINKING_LEVELS.has(value as EnabledThinkingLevel);
-}
-
 export function resolveAgentReasoningOption(
   model: Model,
   thinkingLevel: ThinkingLevel,
@@ -35,11 +20,20 @@ export function resolveAgentReasoningOption(
     resolveClaudeFable5ModelIdentity(model)
       ? "low"
       : undefined);
-  if (isEnabledThinkingLevel(offFallback)) {
-    return offFallback;
+  switch (offFallback) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+    case "max":
+      return offFallback;
+    default:
+      // Unsupported off keeps transport defaults; native Sonnet/Opus retain their off contract.
+      return model.thinkingLevelMap?.off !== null ||
+        (model.api === "anthropic-messages" &&
+          (resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model)))
+        ? "off"
+        : undefined;
   }
-  return model.api === "anthropic-messages" &&
-    (resolveClaudeSonnet5ModelIdentity(model) || resolveClaudeOpus5ModelIdentity(model))
-    ? "off"
-    : undefined;
 }

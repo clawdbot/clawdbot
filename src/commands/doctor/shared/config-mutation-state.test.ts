@@ -1,5 +1,9 @@
 // Config mutation state tests cover doctor mutation tracking and final state reporting.
 import { describe, expect, it } from "vitest";
+import {
+  retainLegacyDefaultAgentId,
+  tryGetLegacyDefaultAgentId,
+} from "../../../config/legacy.default-agent-owner.js";
 import { applyDoctorConfigMutation } from "./config-mutation-state.js";
 import type { DoctorConfigMutationState } from "./config-mutation-state.js";
 
@@ -64,5 +68,19 @@ describe("doctor config mutation state", () => {
         shouldRepair: false,
       }),
     ).toBe(state);
+  });
+
+  it("carries the upgrade-only owner across repair mutations", () => {
+    const state = emptyMutationState();
+    retainLegacyDefaultAgentId(state.candidate, "ops");
+
+    const next = applyDoctorConfigMutation({
+      state,
+      mutation: enabledSignalMutation(),
+      shouldRepair: true,
+    });
+
+    expect(tryGetLegacyDefaultAgentId(next.candidate)).toBe("ops");
+    expect(tryGetLegacyDefaultAgentId(next.cfg)).toBe("ops");
   });
 });

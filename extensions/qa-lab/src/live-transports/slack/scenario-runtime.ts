@@ -31,6 +31,7 @@ export {
   slackQaProgressCommentaryOmittedScenario,
   slackQaProgressCommentaryTrueScenario,
   slackQaProgressCommentaryVerboseDedupeScenario,
+  slackQaProgressCommentaryVerboseFullScenario,
   slackQaReactionGlyphNativeScenario,
   slackQaTableInvalidBlocksFallbackScenario,
   slackQaTablePresentationNativeScenario,
@@ -117,7 +118,7 @@ async function runSlackMessageScenario(params: {
       finalMessage: reply.message,
       messages: [
         ...params.environment.observedMessages.slice(observedMessageStartIndex),
-        ...capturedMessages,
+        ...capturedMessages.filter((message) => message.channelId === channelId),
       ],
     });
     const afterReplyDetails = await params.run.afterReply?.(reply.message, {

@@ -98,7 +98,6 @@ scenario:
         - hosted media resolver registration missing resolver
         - "http route registration missing or invalid auth: /kitchen-sink/http-route"
         - "plugin must declare contracts.embeddingProviders for adapter: kitchen-sink-embedding-provider"
-        - "plugin must own memory slot or declare contracts.memoryEmbeddingProviders for adapter: kitchen-sink-memory-embedding-provider"
         - "trusted tool policy registration requires id, description, and evaluate()"
         - memory prompt supplement registration missing builder
         - model catalog provider registration missing provider

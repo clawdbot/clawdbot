@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-route-paths.ts";
@@ -38,7 +39,17 @@ function createContext(
   };
   const subscribe = () => () => undefined;
   return {
-    gateway: { snapshot, subscribe },
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
+    gateway: {
+      snapshot,
+      connection: {
+        gatewayUrl: window.location.origin.replace(/^http/u, "ws"),
+        token: "",
+        bootstrapToken: "",
+        password: "",
+      },
+      subscribe,
+    },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
   } as unknown as ApplicationContext<RouteId>;
@@ -63,6 +74,7 @@ function createConnectedContext(
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const subscribe = () => () => undefined;
   const context = {
+    runtimeConfig: { subscribe, state: {}, ensureLoaded: async () => undefined },
     gateway: {
       get snapshot() {
         return snapshot;
@@ -123,6 +135,37 @@ function createConnectedContext(
   };
 }
 
+function stubProfileAvatarProcessing() {
+  class StubUrl extends URL {
+    static override createObjectURL = vi.fn(() => "blob:avatar");
+    static override revokeObjectURL = vi.fn();
+  }
+  class StubImage {
+    decoding = "auto";
+    src = "";
+    naturalWidth = 512;
+    naturalHeight = 256;
+    decode = vi.fn(async () => undefined);
+  }
+  vi.stubGlobal("URL", StubUrl);
+  vi.stubGlobal("Image", StubImage);
+  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
+    drawImage: vi.fn(),
+  } as unknown as CanvasRenderingContext2D);
+  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
+    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
+  });
+}
+
+function selectProfileAvatar(page: ParentNode) {
+  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
+  Object.defineProperty(avatarInput, "files", {
+    configurable: true,
+    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
+  });
+  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
+}
+
 beforeEach(async () => {
   await i18n.setLocale("en");
 });
@@ -160,6 +203,7 @@ it("renders identity before a Usage statistics link without requesting usage dat
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const request = vi.fn(async (method: string) => {
@@ -193,6 +237,202 @@ it("renders identity before a Usage statistics link without requesting usage dat
 
   usageRow?.click();
   expect(harness.context.navigate).toHaveBeenCalledWith("usage");
+});
+
+it("loads and updates co-author consent separately from verified GitHub identity", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
+      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } };
+    }
+    if (method === "users.prefs.set") {
+      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
+      return { status: "ok" };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  expect(request.mock.calls.map(([method]) => method)).toEqual(["users.self", "users.prefs.get"]);
+  expect(page.querySelector(".identity-github-form")).toBeNull();
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  expect(toggle?.checked).toBe(false);
+
+  toggle!.checked = true;
+  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+  );
+  await waitForFast(() => expect(toggle?.checked).toBe(true));
+  expect(request.mock.calls.map(([method]) => method)).toEqual([
+    "users.self",
+    "users.prefs.get",
+    "users.prefs.set",
+  ]);
+});
+
+it("treats a malformed co-author preference as opted out", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      // The preference API stores arbitrary JSON; a non-boolean row must not publish a trailer.
+      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  await waitForFast(() => expect(toggle?.checked).toBe(false));
+});
+
+it("keeps co-author credit on until the person opts out", async () => {
+  const profile: UserProfile = {
+    id: "profile-1",
+    displayName: "Ada",
+    avatarMime: null,
+    mergedInto: null,
+    createdAt: 1,
+    updatedAt: 2,
+    emails: [],
+    githubIdentity: {
+      login: "octocat",
+      profileUrl: "https://github.com/octocat",
+      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
+    },
+    hasAvatar: false,
+  };
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    if (method === "users.self") {
+      return { profile };
+    }
+    if (method === "users.prefs.get") {
+      // No stored row: the verified account is credited without an explicit opt-in.
+      return { status: "ok", entries: {} };
+    }
+    if (method === "users.prefs.set") {
+      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
+      return { status: "ok" };
+    }
+    throw new Error(`unexpected method: ${method}`);
+  });
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: profile.id,
+    name: profile.displayName ?? undefined,
+  });
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
+  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
+  await waitForFast(() => expect(toggle?.checked).toBe(true));
+
+  toggle!.checked = false;
+  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
+
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
+  );
+  await waitForFast(() => expect(toggle?.checked).toBe(false));
+});
+
+it("renders a write-access note without calling users.self for read-only viewers", async () => {
+  const request = vi.fn(async () => ({
+    personal: {
+      state: "disconnected",
+      generation: null,
+      account: null,
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      pending: null,
+    },
+    system: {
+      source: "system-detected",
+      credentialKind: "native",
+      credentialState: "unavailable",
+      account: null,
+      gitAuthor: { name: null, email: null },
+      evidence: "none",
+      accessExpiresAtMs: null,
+      refreshState: "not_applicable",
+      oauthScopes: [],
+      repositoryGrants: "unknown",
+    },
+  }));
+  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
+    id: "profile-1",
+    email: "ada@example.test",
+    name: "Ada",
+  });
+  harness.context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    auth: { role: "operator", scopes: ["operator.read"] },
+    features: { methods: ["users.self"] },
+  } as ApplicationGatewaySnapshot["hello"];
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await page.updateComplete;
+  expect(request.mock.calls).toEqual([["users.github.status", {}]]);
+  expect(page.textContent).toContain("Profile editing requires operator.write access.");
+  expect(page.querySelector(".identity-name-control")).toBeNull();
 });
 
 it("keeps identity UI and profile RPCs absent for unidentified connections", async () => {
@@ -250,7 +490,11 @@ it("falls back to the text avatar when the hero image fails to load", async () =
     agents: [
       {
         id: "main",
-        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/unloadable-avatar.png" },
+        identity: {
+          name: "Molty",
+          emoji: "🦞",
+          avatarUrl: "data:image/png;base64,unloadable",
+        },
       },
     ],
   };
@@ -261,7 +505,7 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   await page.updateComplete;
   const image = page.querySelector<HTMLImageElement>(".profile-hero__avatar-image");
-  expect(image?.getAttribute("src")).toBe("/unloadable-avatar.png");
+  expect(image?.getAttribute("src")).toBe("data:image/png;base64,unloadable");
   expect(page.querySelector(".profile-hero__avatar-text")).toBeNull();
 
   image?.dispatchEvent(new Event("error"));
@@ -269,6 +513,60 @@ it("falls back to the text avatar when the hero image fails to load", async () =
 
   expect(page.querySelector(".profile-hero__avatar-image")).toBeNull();
   expect(page.querySelector(".profile-hero__avatar-text")?.textContent).toBe("🦞");
+});
+
+it("fetches a protected hero avatar with the current Control UI credential", async () => {
+  const createObjectURL = vi.fn(() => "blob:hero-avatar");
+  const revokeObjectURL = vi.fn();
+  vi.stubGlobal(
+    "URL",
+    class extends URL {
+      static override createObjectURL = createObjectURL;
+      static override revokeObjectURL = revokeObjectURL;
+    },
+  );
+  const fetchMock = vi.fn().mockResolvedValue({
+    ok: true,
+    blob: async () => new Blob(["avatar"], { type: "image/svg+xml" }),
+  });
+  vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+  const harness = createConnectedContext(vi.fn() as GatewayBrowserClient["request"]);
+  harness.context.gateway.connection.token = "profile-token";
+  const agentsState = harness.context.agents.state as unknown as {
+    agentsList: {
+      defaultId: string;
+      agents: Array<{
+        id: string;
+        identity: { name: string; emoji: string; avatarUrl: string };
+      }>;
+    };
+  };
+  agentsState.agentsList = {
+    defaultId: "main",
+    agents: [
+      {
+        id: "main",
+        identity: { name: "Molty", emoji: "🦞", avatarUrl: "/avatar/main" },
+      },
+    ],
+  };
+  const provider = createApplicationContextProvider(harness.context);
+  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
+  provider.append(page);
+  document.body.append(provider);
+
+  await waitForFast(() => {
+    expect(fetchMock).toHaveBeenCalledWith("/avatar/main", {
+      headers: { Authorization: "Bearer profile-token" },
+      signal: expect.any(AbortSignal),
+    });
+    expect(
+      page.querySelector<HTMLImageElement>(".profile-hero__avatar-image")?.getAttribute("src"),
+    ).toBe("blob:hero-avatar");
+  });
+
+  page.remove();
+  await waitForFast(() => expect(revokeObjectURL).toHaveBeenCalledWith("blob:hero-avatar"));
 });
 
 it("retries the identity bootstrap when users.self returns no profile", async () => {
@@ -280,6 +578,7 @@ it("retries the identity bootstrap when users.self returns no profile", async ()
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let identityRequests = 0;
@@ -326,6 +625,7 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let rejectIdentity: ((reason: Error) => void) | undefined;
@@ -363,10 +663,11 @@ it("keeps identity refresh single-flight and allows retry after settlement", asy
   await Promise.all([pageWithIdentity.loadIdentity(), pageWithIdentity.loadIdentity()]);
   expect(request.mock.calls.filter(([method]) => method === "users.self")).toHaveLength(1);
 
-  rejectIdentity?.(new Error("identity unavailable"));
+  rejectIdentity?.(new Error("identity unavailable: OPENAI_API_KEY=sk-1234567890abcdef"));
   await waitForFast(() => expect(refresh.disabled).toBe(false));
   expect(refresh.textContent?.trim()).toBe(t("common.refresh"));
-  expect(page.textContent).toContain("identity unavailable");
+  expect(page.textContent).toContain("identity unavailable: OPENAI_API_KEY=sk-123...cdef");
+  expect(page.textContent).not.toContain("sk-1234567890abcdef");
 
   refresh.click();
   await waitForFast(() =>
@@ -386,6 +687,7 @@ it("replaces an in-flight identity request after a same-client reconnect", async
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   const freshProfile = { ...staleProfile, displayName: "Fresh identity", updatedAt: 3 };
@@ -437,6 +739,8 @@ it("replaces an in-flight identity request after a same-client reconnect", async
 });
 
 it("bootstraps and refreshes the connected user's profile through users.self", async () => {
+  let avatarRevision = "avatar-content-hash-png";
+  let publishAvatarPresence: (() => void) | undefined;
   let profile: UserProfile = {
     id: "profile-1",
     displayName: "Ada",
@@ -445,6 +749,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     createdAt: 1,
     updatedAt: 2,
     emails: ["ada@example.test", "ada@work.test"],
+    githubIdentity: null,
     hasAvatar: false,
   };
   let omitNextProfile = false;
@@ -469,7 +774,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
         hasAvatar: true,
         updatedAt: 4,
       };
-      return { profile };
+      publishAvatarPresence?.();
+      return { profile, avatarRevision };
     }
     throw new Error(`unexpected method: ${method}`);
   });
@@ -478,6 +784,10 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
     email: "ada@example.test",
     name: "Ada",
   });
+  publishAvatarPresence = () =>
+    harness.context.gateway.updateSelfUser?.({
+      avatarUrl: `/api/users/${profile.id}/avatar?v=${avatarRevision}`,
+    });
   const provider = createApplicationContextProvider(harness.context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);
@@ -515,31 +825,8 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   displayNameInput.value = "Unsaved draft";
   displayNameInput.dispatchEvent(new Event("input", { bubbles: true }));
   await page.updateComplete;
-  class StubUrl extends URL {
-    static override createObjectURL = vi.fn(() => "blob:avatar");
-    static override revokeObjectURL = vi.fn();
-  }
-  class StubImage {
-    decoding = "auto";
-    src = "";
-    naturalWidth = 512;
-    naturalHeight = 256;
-    decode = vi.fn(async () => undefined);
-  }
-  vi.stubGlobal("URL", StubUrl);
-  vi.stubGlobal("Image", StubImage);
-  vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue({
-    drawImage: vi.fn(),
-  } as unknown as CanvasRenderingContext2D);
-  vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback, type) => {
-    callback(new Blob([new Uint8Array([1, 2, 3])], { type: type ?? "image/png" }));
-  });
-  const avatarInput = page.querySelector<HTMLInputElement>('input[type="file"]')!;
-  Object.defineProperty(avatarInput, "files", {
-    configurable: true,
-    value: [new File(["avatar"], "avatar.png", { type: "image/png" })],
-  });
-  avatarInput.dispatchEvent(new Event("change", { bubbles: true }));
+  stubProfileAvatarProcessing();
+  selectProfileAvatar(page);
   await waitForFast(() =>
     expect(request.mock.calls.some(([method]) => method === "users.setAvatar")).toBe(true),
   );
@@ -548,10 +835,43 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   );
   await page.updateComplete;
   expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
-    "/api/users/profile-1/avatar?v=4",
+    `/api/users/profile-1/avatar?v=${avatarRevision}`,
   );
+  expect(
+    (
+      page.querySelector("openclaw-viewer-avatar") as
+        | (HTMLElement & { user?: AuthenticatedUser })
+        | null
+    )?.user?.avatarUrl,
+  ).toBe(`/api/users/profile-1/avatar?v=${avatarRevision}`);
   expect(page.querySelector<HTMLInputElement>(".identity-name-control input")?.value).toBe(
     "Unsaved draft",
+  );
+
+  const avatarRequestCount = request.mock.calls.filter(
+    ([method]) => method === "users.setAvatar",
+  ).length;
+  avatarRevision = "response-content-hash-png";
+  publishAvatarPresence = undefined;
+  selectProfileAvatar(page);
+  await waitForFast(() =>
+    expect(request.mock.calls.filter(([method]) => method === "users.setAvatar")).toHaveLength(
+      avatarRequestCount + 1,
+    ),
+  );
+  await waitForFast(() =>
+    expect(harness.context.gateway.snapshot.selfUser?.avatarUrl).toContain(
+      `/api/users/profile-1/avatar?v=${avatarRevision}`,
+    ),
+  );
+  await waitForFast(() =>
+    expect(
+      (
+        page.querySelector("openclaw-viewer-avatar") as
+          | (HTMLElement & { user?: AuthenticatedUser })
+          | null
+      )?.user?.avatarUrl,
+    ).toContain(`/api/users/profile-1/avatar?v=${avatarRevision}`),
   );
 
   omitNextProfile = true;

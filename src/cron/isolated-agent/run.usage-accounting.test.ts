@@ -48,10 +48,11 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     expect(cronSession.sessionEntry.outputTokens).toBe(2000);
     expect(cronSession.sessionEntry.totalTokens).toBe(56000);
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(true);
-    expect(result.usage).toMatchObject({
+    expect(result.usage).toEqual({
       input_tokens: 75000,
       output_tokens: 2000,
       total_tokens: 82000,
+      cache_read_tokens: 5000,
     });
     expect(deriveSessionTotalTokensMock).toHaveBeenCalledWith({
       usage: {
@@ -170,5 +171,12 @@ describe("runCronIsolatedAgentTurn usage accounting", () => {
     expect(cronSession.sessionEntry.totalTokens).toBeUndefined();
     expect(cronSession.sessionEntry.totalTokensFresh).toBe(false);
     expect(deriveSessionTotalTokensMock).toHaveBeenCalledTimes(1);
+    expect(result.usage).toEqual({
+      input_tokens: 12,
+      output_tokens: 15_104,
+      total_tokens: 927_907,
+      cache_read_tokens: 819_661,
+      cache_write_tokens: 93_130,
+    });
   });
 });

@@ -67,9 +67,10 @@ export function createExaWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using Exa AI. Supports neural or keyword search, publication date filters, and optional highlights or text extraction.",
       parameters: ExaSearchSchema,
-      execute: async (args) => {
+      execute: async (args, context) => {
+        context?.signal?.throwIfAborted();
         const { executeExaWebSearchProviderTool } = await loadExaWebSearchRuntime();
-        return await executeExaWebSearchProviderTool(ctx, args);
+        return await executeExaWebSearchProviderTool(ctx, args, context?.signal);
       },
     }),
   };

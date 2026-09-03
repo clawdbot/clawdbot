@@ -1,6 +1,9 @@
 // Restart request parsing keeps restart sentinel payloads limited to resumable
 // session, delivery, thread, and delay fields.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 
 type RestartDeliveryContext = {
@@ -59,4 +62,87 @@ export function parseRestartRequestParams(params: unknown): {
       ? Math.max(0, Math.floor(restartDelayMsRaw))
       : undefined;
   return { sessionKey, deliveryContext, threadId, note, continuationMessage, restartDelayMs };
+}
+
+type TargetedGatewayRestart = {
+  pid: number;
+  ownerId: string;
+  port: number;
+};
+
+export function parseTargetedGatewayRestart(
+  value: unknown,
+): TargetedGatewayRestart | null | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return null;
+  }
+  const target = value as { pid?: unknown; ownerId?: unknown; port?: unknown };
+  if (
+    typeof target.pid !== "number" ||
+    !Number.isSafeInteger(target.pid) ||
+    target.pid <= 0 ||
+    typeof target.ownerId !== "string" ||
+    !target.ownerId.trim() ||
+    typeof target.port !== "number" ||
+    !Number.isInteger(target.port) ||
+    target.port <= 0 ||
+    target.port > 65_535
+  ) {
+    return null;
+  }
+  return {
+    pid: target.pid,
+    ownerId: target.ownerId.trim(),
+    port: target.port,
+  };
+}
+
+export function parseTargetedGatewayRestartIntent(
+  value: unknown,
+  reason: string | undefined,
+): GatewayRestartIntent | null {
+  if (value !== undefined && (!value || typeof value !== "object" || Array.isArray(value))) {
+    return null;
+  }
+  const raw = (value ?? {}) as { force?: unknown; waitMs?: unknown };
+  const force = raw.force === true;
+  const waitMs =
+    typeof raw.waitMs === "number" &&
+    Number.isSafeInteger(raw.waitMs) &&
+    raw.waitMs >= 0 &&
+    raw.waitMs <= MAX_TIMER_TIMEOUT_MS
+      ? raw.waitMs
+      : undefined;
+  if (
+    (raw.force !== undefined && typeof raw.force !== "boolean") ||
+    (raw.waitMs !== undefined && waitMs === undefined) ||
+    (force && waitMs !== undefined)
+  ) {
+    return null;
+  }
+  return {
+    ...(reason ? { reason } : {}),
+    ...(force ? { force: true } : {}),
+    ...(waitMs !== undefined ? { waitMs } : {}),
+  };
+}
+
+/**
+ * Only the predecessor-bound restart may cross a prepared suspension lease.
+ * The live lock target is sufficient: restart drain becomes the stronger owner
+ * and explicitly retires the reversible suspension token after delivery.
+ */
+export function isTargetedNonSafeGatewayRestartRequest(params: unknown): boolean {
+  if (!isRecord(params) || (params.safe !== undefined && params.safe !== false)) {
+    return false;
+  }
+  const target = parseTargetedGatewayRestart(params.target);
+  return (
+    target !== undefined &&
+    target !== null &&
+    parseTargetedGatewayRestartIntent(params.restartIntent, undefined) !== null
+  );
 }

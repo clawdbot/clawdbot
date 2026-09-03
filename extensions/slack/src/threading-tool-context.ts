@@ -6,6 +6,7 @@ import type {
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveSlackAccount, resolveSlackReplyToMode } from "./accounts.js";
+import { formatSlackTarget, parseSlackTarget } from "./target-parsing.js";
 import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
 
 export function buildSlackThreadingToolContext(params: {
@@ -32,13 +33,23 @@ export function buildSlackThreadingToolContext(params: {
     transportThreadTs != null ||
     (replyToThreadTs != null && currentMessageTs != null && replyToThreadTs !== currentMessageTs);
   const effectiveReplyToMode = hasExplicitThreadTarget ? "all" : configuredReplyToMode;
-  // For channel messages, To is "channel:C…" — extract the bare ID.
-  // For DMs, prefer NativeChannelId for channel-scoped actions, but keep the
-  // user target as a valid implicit send destination when no D… id is known.
   const currentMessagingTarget = normalizeOptionalString(params.context.To);
-  const currentChannelId = currentMessagingTarget?.startsWith("channel:")
-    ? currentMessagingTarget.slice("channel:".length)
-    : (normalizeOptionalString(params.context.NativeChannelId) ?? currentMessagingTarget);
+  const parsedMessagingTarget = currentMessagingTarget
+    ? parseSlackTarget(currentMessagingTarget)
+    : undefined;
+  const nativeChannelId = normalizeOptionalString(params.context.NativeChannelId);
+  const currentChannelId =
+    parsedMessagingTarget?.teamId && nativeChannelId
+      ? formatSlackTarget({
+          teamId: parsedMessagingTarget.teamId,
+          kind: "channel",
+          id: nativeChannelId,
+        })
+      : parsedMessagingTarget?.teamId
+        ? currentMessagingTarget
+        : parsedMessagingTarget?.kind === "channel"
+          ? parsedMessagingTarget.id
+          : (nativeChannelId ?? currentMessagingTarget);
   return {
     currentChannelId,
     currentMessagingTarget,

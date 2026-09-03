@@ -29,6 +29,28 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
 
+## Rejected Experiments
+
+- **Hosted Mac exact dependencies (2026-09-01):** The same-head publisher and
+  consumer in [run 33458856298](https://github.com/openclaw/openclaw/actions/runs/33458856298)
+  successfully saved and restored a 1.66-GB dependency archive, but setup took
+  142s versus 86s with the ordinary store cache. Extraction took 82s versus 27s;
+  install improved only from 43s to 35s. Keep hosted Mac jobs on the ordinary
+  store cache. Reconsider only with measured total setup savings, including
+  transfer, extraction and frozen reconciliation, not a successful cache hit.
+- **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
+  shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
+  artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
+  measured a 16s Blacksmith checkout baseline versus 7s hosted. The best direct
+  artifact variant cost 1s to pack, 3s to upload, and 11s median to restore;
+  including the serial prefix left only about 1s median improvement and
+  regressed Blacksmith's fast-fetch runs. The official artifact client was
+  worse: [run 31971531521](https://github.com/openclaw/openclaw/actions/runs/31971531521)
+  measured 22s median download plus 2s materialization. Blacksmith's fast
+  Actions-cache path does not imply fast Actions-artifact downloads. Reconsider
+  only with measured end-to-end proof for a different transport, including its
+  producer cost and fast-fetch regressions.
+
 ## First Checks
 
 Before changing CI, collect current pressure:
@@ -114,9 +136,10 @@ such as `preflight`, `security-fast`, `build-artifacts`, and platform lanes.
 
 For repeated pull-request pushes, multiply by the number of runs expected to
 reach Blacksmith admission in the same 5-minute window, including runs canceled
-after admission. Canonical `main` is single-flight: one run completes while
-GitHub's default single pending slot is replaced by the newest push. Count one
-active main matrix plus its next pending matrix, not every intermediate merge.
+after admission. Canonical `main` uses two run-number-parity slots. Each slot
+keeps one active non-canceling run and one coalesced pending tip. Budget for up
+to two active main matrices plus their two pending tips entering the next
+admission wave, not every intermediate merge.
 
 Reject a change unless the org-level worst case stays below about 60% of the
 live bucket. With the current 10,000-registration bucket, keep planned
@@ -128,8 +151,8 @@ ClawSweeper, ClawHub, Clownfish, OpenClaw RTT, and Clawbench.
 Prefer these in order:
 
 1. Preserve cancel-in-progress for superseded pull-request heads.
-2. Preserve canonical `main` single-flight without canceling its running
-   integration cycle; GitHub's default pending slot coalesces to the newest tip.
+2. Preserve canonical `main` as two non-canceling parity slots; each slot's
+   default pending run coalesces to the newest tip.
 3. Move high-frequency, short, non-build jobs to `ubuntu-24.04`.
 4. Reduce matrix rows by bundling related tests inside one runner job when the
    combined job stays under timeout and keeps useful failure names.
@@ -155,28 +178,147 @@ Do not:
 
 These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 
-- `CI` concurrency key version, PR cancellation, and non-canceling canonical
-  `main` single-flight with one coalesced pending tip.
-- `preflight` and hosted `security-fast` start immediately without a debounce
-  or standalone admission job. On Node-relevant canonical main pushes,
-  preflight also owns the sole dependency sticky-disk write and 8 GiB prune
-  before fanout; replacement visibility is proved only by a later exact-marker
-  restore because Blacksmith snapshot promotion can lag job completion.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
-  Android at 2.
+- `CI` concurrency key version, PR cancellation, and canonical `main`'s two
+  non-canceling parity slots, each with one coalesced pending tip.
+- `preflight` and `security-fast` start immediately without a debounce
+  or standalone admission job. The protected `vitest-cache-warm` workflow
+  publishes the immutable semantic dependency archive after setup succeeds,
+  before build and transform warming. Preflight and downstream Node jobs are
+  restore-only consumers on eligible self-hosted runners. Exact misses and
+  hosted paths, including Mac Node jobs, use the ordinary pnpm-store cache.
+- `ci-gate` follows `preflight` routing for every non-`github` value, including
+  the existing 4-vCPU Blacksmith runner, contributor-trust checks, hosted
+  dispatch/retry/fork fallbacks, and non-canonical fallbacks; `security-fast`
+  stays hosted outside eligible hybrid first attempts. This avoids a second
+  hosted assignment wave. Security hooks use pinned installed packages and
+  local hook definitions, without remote Git initialization. The `github` outage override remains
+  intact. Budget two control-job registrations per eligible Blacksmith run and
+  three per eligible hybrid first attempt.
+  The aggregate uses `!cancelled()` to report failed prerequisites without
+  holding a superseded run open after workflow cancellation.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
+  and Android at 2. Every compact profile has an enforced 80-row budget, plugin
+  fallback has a 50-row budget, and the final Node matrix enforces 64 push or
+  120 PR rows, including precise plans. Excess inventory fails preflight.
+- Windows keeps two disjoint file inventories. Jobs requesting the existing
+  Blacksmith class admit at most two project processes with one Vitest worker
+  each; hosted fallbacks remain serial. Runtime preparation completes before
+  project readers start. Native proof must cover available CPUs/RAM, concurrent
+  fixture memory and cleanup. This adds no runner registrations.
+- macOS Swift uses two mandatory matrix phases with `max-parallel: 2`:
+  release compilation and the complete shared/app test workload. This adds one
+  registration per eligible Blacksmith native run: up to four across the two
+  active and two pending main slots, plus one for each eligible trusted PR.
+  Build caches are phase-owned; only the release phase writes the shared
+  SwiftPM dependency cache.
+- iOS Release, Debug/simulator tests, and both screenshot shards always use
+  `macos-26`. Repeated Blacksmith admission stalls were recovered by the same
+  hosted image; do not require a failed first attempt to select that capacity.
+  The current non-Node inventory is 85 rows, or 86 for historical UI targets.
+  Excluding those four hosted rows leaves at most 82 potentially eligible jobs.
+  The enforced Node caps therefore give 146 registrations per main run and
+  202 per PR: `4 × 146 + 21 × 202 = 4,826` in the retained peak arrival
+  envelope. The old 19-arrival estimate is obsolete. The remaining 1,174 below
+  the 6,000 reference target must cover adjacent repositories, releases and
+  carryover; the bounded 2026-09-02 census did not prove that upper bound.
+  Treat a single PR concurrency trial separately from a global rollout.
+  A shared-token quota response does not establish organization-wide usage.
+  Budget all six npm qualification jobs and the actual full-release children;
+  ordinary manual check rows can still use Blacksmith outside hybrid mode.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the 14-job
-  compact full-suite plan. Targeted plans retain the full built-artifact
-  boundary gate. `main`, manual, and release runs stay full.
-- `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
+  broad, deleted or unknown changes fall back to the compact full-suite plan
+  plus affected plugin coverage. Current PR planner errors fail preflight.
+  Targeted plans retain the full built-artifact
+  boundary gate. `main` uses compact integration; manual and release runs use
+  full named shards.
+- The combined Node matrix admits compact and plugin descriptors by estimated
+  duration within the same cap. Catch-all, QA and provider configs use the
+  existing 90-file job budget with native Vitest sharding; retain complete
+  config discovery, exclusions and process isolation. Count every appended
+  plugin row, including the five added QA/provider rows, in the burst envelope.
+- Plugin fallback groups retain separate child processes, including process-bounded
+  configs. Different compatible configs share up to 150 predicted seconds without
+  a pair-count limit; expanded compact jobs use 210. Runtime preparation stays
+  separate; no process/file/worker limits are relaxed. The complete supplemental boundary list runs in one job
+  with four concurrent checks and one full-root focused-rule scan.
+- Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
+  outliers reuse the existing file splitter. Preserve serial execution, worker
+  pins and complete timing-history floors; no blanket increase in sharding.
+- Blacksmith compact bins with multiple ordinary groups request the existing
+  32-vCPU class and two child slots with a 300s aggregate budget. Serial bins retain
+  200/276s, exclusive bins retain 150s, and groups above their serial cap stay alone.
+  Runtime consumers share preparation only with other consumers; ordinary groups
+  do not inherit the slower serial host. Complete inventories remain intact.
+  The canonical shard executor admits two CI children
+  only with at least eight available CPUs and 24 GiB actual memory; otherwise it
+  admits one. Inner project parallelism stays one and each child keeps two
+  Vitest workers. Hosted and hybrid plans remain serial. Fewer jobs must retain
+  native elapsed-time, memory and cleanup proof.
+- The whole Blacksmith agent-support group requests `blacksmith-32vcpu-ubuntu-2404`.
+  Its file inventory and resource-derived worker policy remain unchanged.
+- Numbered Blacksmith tooling bins request the same 32-vCPU class after packing.
+  Keep their logical classes, names, file inventories, serial project/file
+  execution and two-worker pins. This adds no jobs and does not promote hosted
+  or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
+  comparison; capacity alone is not a measured speedup.
+- The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
+  scheduler and serial declaration compiler policy stay unchanged.
+- Eligible Control UI E2E rows request the 32-vCPU class with unchanged live
+  backend/event/contributor routing and two/one-worker project limits. Targets
+  with the named-project contract use six shards on non-frozen Blacksmith first
+  attempts; other fresh plans retain twelve. Historical targets without that
+  contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
+  including the browser-extension row. Failed-job-only PR retries of the six-shard
+  plan retain that width on hosted Ubuntu with the existing 25-minute timeout.
+  The browser-extension row stays on 8 and real-Gateway
+  on 16. Twelve rows finished by 4:38 in run 33695337496; the reduced width needs
+  native timing proof and does not refresh stale timing weights.
+- `build-artifacts` on `blacksmith-32vcpu-ubuntu-2404`.
+- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
+  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+  [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
+  measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
+  larger requests as a measured capacity workaround, never as worker counts.
+  Keep existing routing, fanout, and resource-based worker limits; reassess
+  sizing after provider allocation changes. See `docs/ci.md` for the full table.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.
 - heavy retained Linux/Android shards on `blacksmith-8vcpu-ubuntu-2404`.
 - CodeQL Critical Quality on `ubuntu-24.04` with no `blacksmith-` labels.
+- `OPENCLAW_CI_RUNNER_BACKEND=github` routes every configurable `ci.yml` job
+  to its existing GitHub-hosted fallback label. Unset or `blacksmith` preserves
+  the normal Blacksmith-first route.
 - Vitest/test compile caches are restore-only in CI and use immutable Actions
   caches; the daily/dispatch warmer is their sole writer. Build compile cache
   writes rotate at most once per UTC day. PRs create no runtime-cache archives.
 
 When changing one knob, update `docs/ci.md` and the guard test in the same PR.
+
+## Blacksmith Outage Circuit Breaker
+
+Use the repository variable only after confirming a Blacksmith outage or
+unavailable runner capacity. Do not set it merely for a failing test that has
+already started.
+
+```bash
+gh variable set OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw --body github
+```
+
+In degraded mode, `ci.yml` uses the same hosted labels and non-Blacksmith paths
+as manual dispatches and fork pull requests. Blacksmith-only Docker and sticky
+steps stay off, dependency setup uses the ordinary Actions pnpm-store cache,
+and Android's large build uses separate low-memory Gradle processes. Standard
+4-core hosted runners make builds and test lanes slower. Blacksmith runner
+registration is no longer part of the budget, while GitHub-hosted concurrency
+limits apply.
+
+Flip back after the outage by deleting the variable:
+
+```bash
+gh variable delete OPENCLAW_CI_RUNNER_BACKEND --repo openclaw/openclaw
+```
+
+Scheduled health detection and automatic flipping are a follow-up, not part of
+the current circuit breaker.
 
 ## Validation
 
@@ -184,7 +326,7 @@ For workflow-only or docs/skill-only changes in a Codex worktree:
 
 ```bash
 node scripts/run-vitest.mjs test/scripts/ci-workflow-guards.test.ts
-node scripts/check-workflows.mjs
+node --import tsx scripts/check-workflows.mts
 node scripts/docs-list.js
 ./node_modules/.bin/oxfmt --check .github/workflows/ci.yml .github/workflows/codeql-critical-quality.yml docs/ci.md test/scripts/ci-workflow-guards.test.ts .agents/skills/openclaw-ci-limits/SKILL.md .agents/skills/openclaw-ci-limits/agents/openai.yaml
 git diff --check

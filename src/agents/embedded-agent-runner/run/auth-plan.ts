@@ -36,13 +36,6 @@ function loadEmbeddedRunAuthProfileStore(params: {
   });
 }
 
-// Test-only seam access mirrors external-auth.ts; the config-threading regression
-// must stay provable without composing a full embedded runner.
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.embeddedRunAuthPlanTestApi")] =
-    { loadEmbeddedRunAuthProfileStore };
-}
-
 export async function prepareEmbeddedRunAuthPlan(params: {
   runParams: RunEmbeddedAgentParams;
   provider: string;
@@ -87,7 +80,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
           agentId: runParams.agentId,
           modelId: params.modelId,
           workspaceDir: params.workspaceDir,
-          userLockedAuthProfileId:
+          userPinnedAuthProfileId:
             runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
         });
   let noExternalAuthStore: AuthProfileStore | undefined;
@@ -102,7 +95,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       modelId: params.modelId,
       workspaceDir: params.workspaceDir,
       store: noExternalAuthStore,
-      userLockedAuthProfileId:
+      userPinnedAuthProfileId:
         runParams.authProfileIdSource === "user" ? runParams.authProfileId : undefined,
     });
   }
@@ -148,6 +141,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       env: process.env,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: params.preparedModelRuntime?.metadataSnapshot,
       authProfileStore: attemptAuthProfileStore,
       sessionAuthProfileId: preferredProfileId,
       sessionAuthProfileSource: runParams.authProfileIdSource,

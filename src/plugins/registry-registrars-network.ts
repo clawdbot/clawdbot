@@ -1,17 +1,24 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import { createPluginGatewayMethodDescriptor } from "../gateway/methods/registry.js";
+import {
+  createPluginGatewayMethodDescriptor,
+  type GatewayMethodProfileAccess,
+} from "../gateway/methods/descriptor.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import type { GatewayRequestHandler, RespondFn } from "../gateway/server-methods/types.js";
 import { normalizePluginGatewayMethodScope } from "../shared/gateway-method-policy.js";
 import { normalizeRegisteredChannelPlugin } from "./channel-validation.js";
 import { normalizePluginHttpPath } from "./http-path.js";
-import { findOverlappingPluginHttpRoute } from "./http-route-overlap.js";
+import { findPluginHttpRouteRegistrationConflicts } from "./http-route-overlap.js";
 import {
   resolvePluginRegistrationCapabilities,
   type PluginRegistryState,
 } from "./registry-state.js";
-import type { PluginHttpRouteRegistration, PluginRecord } from "./registry-types.js";
+import type {
+  PluginChannelRegistration,
+  PluginHttpRouteRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
 import type {
   OpenClawPluginChannelRegistration,
@@ -38,38 +45,38 @@ function adaptPluginGatewayMethodHandler(handler: GatewayRequestHandler): Gatewa
 }
 
 export function createNetworkRegistrars(state: PluginRegistryState) {
-  const { registry, coreGatewayMethods, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
-    state;
+  const {
+    registry,
+    coreGatewayMethods,
+    pluginsWithChannelRegistrationConflict,
+    pushDiagnostic,
+    reportRegistrationError,
+    reportRegistrationWarning,
+  } = state;
+  let reportedLegacyCatalogSkip = false;
 
   const registerGatewayMethod = (
     record: PluginRecord,
     method: string,
     handler: GatewayRequestHandler,
-    opts?: { scope?: OperatorScope },
+    opts?: { scope?: OperatorScope; profileAccess?: GatewayMethodProfileAccess },
   ) => {
     const trimmed = method.trim();
     if (!trimmed) {
       return;
     }
     if (coreGatewayMethods.has(trimmed) || registry.gatewayHandlers[trimmed]) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `gateway method already registered: ${trimmed}`,
-      });
+      reportRegistrationError(record, `gateway method already registered: ${trimmed}`);
       return;
     }
     const wrappedHandler = adaptPluginGatewayMethodHandler(handler);
     registry.gatewayHandlers[trimmed] = wrappedHandler;
     const normalizedScope = normalizePluginGatewayMethodScope(trimmed, opts?.scope);
     if (normalizedScope.coercedToReservedAdmin) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
-      });
+      reportRegistrationWarning(
+        record,
+        `gateway method scope coerced to operator.admin for reserved core namespace: ${trimmed}`,
+      );
     }
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
@@ -77,6 +84,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         name: trimmed,
         handler: wrappedHandler,
         scope: normalizedScope.scope,
+        ...(opts?.profileAccess ? { profileAccess: opts.profileAccess } : {}),
       }),
     );
   };
@@ -85,22 +93,25 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const id = provider.id.trim();
     const label = provider.label.trim();
     if (!id || !label) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "session catalog requires non-empty id and label",
-      });
+      reportRegistrationError(record, "session catalog requires non-empty id and label");
+      return;
+    }
+    if (!state.allowProcessHomeSessionCatalogs && provider.supportsProcessHomeIsolation !== true) {
+      if (!reportedLegacyCatalogSkip) {
+        reportedLegacyCatalogSkip = true;
+        reportRegistrationWarning(
+          record,
+          "external session catalog skipped in isolated state: provider must declare supportsProcessHomeIsolation",
+        );
+      }
       return;
     }
     const existing = registry.sessionCatalogs.find((entry) => entry.provider.id === id);
     if (existing) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `session catalog already registered: ${id} (${existing.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `session catalog already registered: ${id} (${existing.pluginId})`,
+      );
       return;
     }
     registry.sessionCatalogs.push({
@@ -124,43 +135,37 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   const registerHttpRoute = (record: PluginRecord, params: OpenClawPluginHttpRouteParams) => {
     const normalizedPath = normalizePluginHttpPath(params.path);
     if (!normalizedPath) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: "http route registration missing path",
-      });
+      reportRegistrationWarning(record, "http route registration missing path");
       return;
     }
     if (params.auth !== "gateway" && params.auth !== "plugin") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `http route registration missing or invalid auth: ${normalizedPath}`,
-      });
+      reportRegistrationError(
+        record,
+        `http route registration missing or invalid auth: ${normalizedPath}`,
+      );
       return;
     }
     const match = params.match ?? "exact";
-    const overlappingRoute = findOverlappingPluginHttpRoute(registry.httpRoutes, {
-      path: normalizedPath,
-      match,
-    });
-    if (overlappingRoute && overlappingRoute.auth !== params.auth) {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message:
-          `http route overlap rejected: ${normalizedPath} (${match}, ${params.auth}) ` +
-          `overlaps ${overlappingRoute.path} (${overlappingRoute.match}, ${overlappingRoute.auth}) ` +
-          `owned by ${describeHttpRouteOwner(overlappingRoute)}`,
-      });
+    const { authOverlap, canonicalMatches } = findPluginHttpRouteRegistrationConflicts(
+      registry.httpRoutes,
+      {
+        path: normalizedPath,
+        match,
+        auth: params.auth,
+      },
+    );
+    if (authOverlap) {
+      reportRegistrationError(
+        record,
+        `http route overlap rejected: ${normalizedPath} (${match}, ${params.auth}) ` +
+          `overlaps ${authOverlap.path} (${authOverlap.match}, ${authOverlap.auth}) ` +
+          `owned by ${describeHttpRouteOwner(authOverlap)}`,
+      );
       return;
     }
-    const existingIndex = registry.httpRoutes.findIndex(
-      (entry) => entry.path === normalizedPath && entry.match === match,
-    );
+    const existingIndex = canonicalMatches[0]
+      ? registry.httpRoutes.indexOf(canonicalMatches[0])
+      : -1;
     const registration = {
       pluginId: record.id,
       path: normalizedPath,
@@ -182,25 +187,23 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (!existing) {
         return;
       }
-      if (!params.replaceExisting && existing.pluginId !== record.id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(existing)}`,
-        });
-        return;
-      }
-      if (existing.pluginId && existing.pluginId !== record.id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(existing)}`,
-        });
+      const foreignOwner = canonicalMatches.find((route) => route.pluginId !== record.id);
+      if (foreignOwner) {
+        reportRegistrationError(
+          record,
+          params.replaceExisting
+            ? `http route replacement rejected: ${normalizedPath} (${match}) owned by ${describeHttpRouteOwner(foreignOwner)}`
+            : `http route already registered: ${normalizedPath} (${match}) by ${describeHttpRouteOwner(foreignOwner)}`,
+        );
         return;
       }
       registry.httpRoutes[existingIndex] = registration;
+      for (const route of canonicalMatches.toReversed()) {
+        const index = registry.httpRoutes.indexOf(route);
+        if (index >= 0 && index !== existingIndex) {
+          registry.httpRoutes.splice(index, 1);
+        }
+      }
       return;
     }
     record.httpRoutes += 1;
@@ -212,12 +215,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     resolver: OpenClawPluginHostedMediaResolver,
   ) => {
     if (typeof resolver !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "hosted media resolver registration missing resolver",
-      });
+      reportRegistrationError(record, "hosted media resolver registration missing resolver");
       return;
     }
     registry.hostedMediaResolvers.push({
@@ -235,12 +233,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
   ) => {
     const serverName = normalizeOptionalString(resolver?.serverName);
     if (!serverName || typeof resolver.resolve !== "function") {
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: "MCP server connection resolver registration missing serverName or resolve",
-      });
+      reportRegistrationError(
+        record,
+        "MCP server connection resolver registration missing serverName or resolve",
+      );
       return;
     }
     const existingIndex = registry.mcpServerConnectionResolvers.findIndex(
@@ -262,12 +258,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       // must not depend on plugin load order. First registration wins; a
       // duplicate from another plugin is rejected, not silently replaced.
       if (existing && existing.pluginId !== record.id) {
-        pushDiagnostic({
-          level: "error",
-          pluginId: record.id,
-          source: record.source,
-          message: `MCP server connection resolver for "${serverName}" rejected: already registered by plugin "${existing.pluginId}"`,
-        });
+        reportRegistrationError(
+          record,
+          `MCP server connection resolver for "${serverName}" rejected: already registered by plugin "${existing.pluginId}"`,
+        );
         return;
       }
       registry.mcpServerConnectionResolvers[existingIndex] = registration;
@@ -280,14 +274,13 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     registration: OpenClawPluginChannelRegistration | ChannelPlugin,
     mode: PluginRegistrationMode = "full",
+    resolveChannelRuntime?: PluginChannelRegistration["resolveChannelRuntime"],
   ) => {
     if (record.origin === "workspace" && !record.enabled) {
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `channel registration rejected for disabled workspace plugin: ${record.id}`,
-      });
+      reportRegistrationWarning(
+        record,
+        `channel registration rejected for disabled workspace plugin: ${record.id}`,
+      );
       return;
     }
     const registrationCapabilities = resolvePluginRegistrationCapabilities(mode);
@@ -310,6 +303,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       if (existingRuntime.pluginId === record.id) {
         existingRuntime.plugin = plugin;
         existingRuntime.pluginName = record.name;
+        existingRuntime.resolveChannelRuntime = resolveChannelRuntime;
         existingRuntime.origin = record.origin;
         existingRuntime.source = record.source;
         existingRuntime.rootDir = record.rootDir;
@@ -324,12 +318,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         }
         return;
       }
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `channel already registered: ${id} (${existingRuntime.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `channel already registered: ${id} (${existingRuntime.pluginId})`,
+      );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
@@ -344,12 +336,10 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
         existingSetup.rootDir = record.rootDir;
         return;
       }
-      pushDiagnostic({
-        level: "error",
-        pluginId: record.id,
-        source: record.source,
-        message: `channel setup already registered: ${id} (${existingSetup.pluginId})`,
-      });
+      reportRegistrationError(
+        record,
+        `channel setup already registered: ${id} (${existingSetup.pluginId})`,
+      );
       pluginsWithChannelRegistrationConflict.add(record.id);
       return;
     }
@@ -372,6 +362,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
       pluginId: record.id,
       pluginName: record.name,
       plugin,
+      resolveChannelRuntime,
       origin: record.origin,
       source: record.source,
       rootDir: record.rootDir,

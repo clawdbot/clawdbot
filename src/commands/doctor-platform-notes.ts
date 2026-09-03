@@ -242,10 +242,6 @@ export async function collectMacGatewayPlatformWarnings(
   return warnings;
 }
 
-function isTruthyEnvValue(value: string | undefined): boolean {
-  return Boolean(normalizeOptionalString(value));
-}
-
 function isTmpCompileCachePath(cachePath: string): boolean {
   const normalized = cachePath.trim().replace(/\/+$/, "");
   return (
@@ -296,7 +292,7 @@ export function noteStartupOptimizationHints(
     );
   }
 
-  if (isTruthyEnvValue(disableCompileCache)) {
+  if (disableCompileCache) {
     lines.push("- NODE_DISABLE_COMPILE_CACHE is set; startup compile cache is disabled.");
   }
 
@@ -315,7 +311,7 @@ export function noteStartupOptimizationHints(
     "  export NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache",
     "  mkdir -p /var/tmp/openclaw-compile-cache",
     "  export OPENCLAW_NO_RESPAWN=1",
-    isTruthyEnvValue(disableCompileCache) ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
+    disableCompileCache ? "  unset NODE_DISABLE_COMPILE_CACHE" : undefined,
   ].filter((line): line is string => Boolean(line));
 
   noteFn([...lines, ...suggestions].join("\n"), "Startup optimization");

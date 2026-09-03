@@ -1,8 +1,8 @@
 // Live checks for Anthropic replay transcript sanitization and tool-call history.
 import type { Message, Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt.tool-call-normalization.js";
-import { extractAssistantText } from "./embedded-agent-utils.js";
+import { wrapStreamFnSanitizeMalformedToolCalls } from "./embedded-agent-runner/run/attempt-tool-call-replay-sanitization.js";
+import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
 import { completeSimpleWithLiveTimeout, logLiveCache } from "./live-cache-test-support.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { buildAssistantMessage, buildUsageWithNoCost } from "./stream-message-shared.js";
@@ -100,7 +100,7 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
         ANTHROPIC_TIMEOUT_MS,
       );
 
-      const text = extractAssistantText(response);
+      const text = extractEmbeddedAssistantText(response);
       logLiveCache(`anthropic regular replay live result=${JSON.stringify(text)}`);
       if (shouldSkipEmptyAnthropicReplayResult("regular replay", text)) {
         return;
@@ -147,7 +147,7 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
         ANTHROPIC_TIMEOUT_MS,
       );
 
-      const text = extractAssistantText(response);
+      const text = extractEmbeddedAssistantText(response);
       logLiveCache(`anthropic omitted-reasoning replay live result=${JSON.stringify(text)}`);
       if (shouldSkipEmptyAnthropicReplayResult("omitted reasoning replay", text)) {
         return;
@@ -216,7 +216,7 @@ describeLive("embedded agent anthropic replay sanitization (live)", () => {
         ANTHROPIC_TIMEOUT_MS,
       );
 
-      const text = extractAssistantText(response);
+      const text = extractEmbeddedAssistantText(response);
       logLiveCache(`anthropic replay live result=${JSON.stringify(text)}`);
       expect(response.content.length).toBeGreaterThanOrEqual(0);
     },

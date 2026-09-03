@@ -11,6 +11,23 @@ afterEach(() => {
 });
 
 describe("worktrees cli", () => {
+  it("maps --force only to snapshot-loss permission", async () => {
+    const remove = vi.spyOn(managedWorktrees, "remove").mockResolvedValue({ removed: true });
+    vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const program = new Command().name("openclaw");
+    registerWorktreesCli(program);
+
+    await program.parseAsync(["worktrees", "remove", "worktree-id", "--force"], {
+      from: "user",
+    });
+
+    expect(remove).toHaveBeenCalledWith({
+      id: "worktree-id",
+      reason: "manual-delete",
+      allowSnapshotLoss: true,
+    });
+  });
+
   it("passes session owner activity and built-in limits to gc", async () => {
     setRuntimeConfigSnapshot({}, {});
     const gc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue({
@@ -25,8 +42,9 @@ describe("worktrees cli", () => {
     await program.parseAsync(["worktrees", "gc"], { from: "user" });
 
     expect(gc).toHaveBeenCalledWith({
-      limits: {},
+      limits: { maxCount: 100 },
       shouldProtectOwner: expect.any(Function),
+      shouldRemoveOwner: expect.any(Function),
     });
   });
 });

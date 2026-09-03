@@ -3,6 +3,7 @@
  *
  * Reads, writes, migrates, and normalizes direct-message policy and allowFrom fields.
  */
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 
 /**
@@ -50,12 +51,6 @@ export function normalizeChannelDmPolicy(value: string | undefined): ChannelDmPo
   return value === "pairing" || value === "allowlist" || value === "open" || value === "disabled"
     ? value
     : undefined;
-}
-
-function asObjectRecord(value: unknown): DmAccessRecord | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as DmAccessRecord)
-    : null;
 }
 
 function cloneDm(entry: DmAccessRecord): DmAccessRecord | null {

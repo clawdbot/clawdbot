@@ -1,5 +1,6 @@
 import type { Command } from "commander";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import * as cli from "./cli-shared.js";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import { listMatrixOwnDevices } from "./matrix/actions/devices.js";
@@ -162,7 +163,7 @@ async function addMatrixAccount(params: {
         avatarUpdated: false,
         resolvedAvatarUrl: null,
         convertedAvatarFromHttp: false,
-        error: cli.formatMatrixErrorMessage(err),
+        error: formatErrorMessage(err),
       };
     }
   }
@@ -180,7 +181,7 @@ async function addMatrixAccount(params: {
     deviceHealth = {
       currentDeviceId: null,
       staleOpenClawDeviceIds: [],
-      error: cli.formatMatrixErrorMessage(err),
+      error: formatErrorMessage(err),
     };
   }
 

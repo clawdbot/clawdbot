@@ -1,5 +1,5 @@
 // Command execution startup tests cover startup behavior before CLI command execution.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
 const routeLogsToStderrMock = vi.hoisted(() => vi.fn());
@@ -24,10 +24,13 @@ vi.mock("./command-bootstrap.js", () => ({
 describe("command-execution-startup", () => {
   let mod: typeof import("./command-execution-startup.js");
 
-  beforeEach(async () => {
-    vi.clearAllMocks();
+  beforeAll(async () => {
     vi.resetModules();
     mod = await import("./command-execution-startup.js");
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
   });
 
   it("preserves console exports for a co-sharded subsystem logger", async () => {
@@ -44,7 +47,6 @@ describe("command-execution-startup", () => {
         argv: ["node", "openclaw", "status", "--json"],
         jsonOutputMode: true,
         env: {},
-        routeMode: true,
       }),
     ).toEqual({
       invocation: {
@@ -57,8 +59,8 @@ describe("command-execution-startup", () => {
       commandPath: ["status"],
       startupPolicy: {
         suppressDoctorStdout: true,
-        hideBanner: false,
-        skipConfigGuard: false,
+        hideBanner: true,
+        skipConfigGuard: true,
         loadPlugins: false,
         pluginRegistry: { scope: "channels" },
       },
@@ -90,6 +92,18 @@ describe("command-execution-startup", () => {
         process.env.OPENCLAW_HIDE_BANNER = originalHideBanner;
       }
     }
+  });
+
+  it("keeps plain machine stdout clean without treating the command as JSON", () => {
+    const startupPolicy = mod.resolveCliExecutionStartupContext({
+      argv: ["node", "openclaw", "models", "aliases", "list", "--plain"],
+      jsonOutputMode: false,
+      machineOutputMode: true,
+      env: {},
+    }).startupPolicy;
+
+    expect(startupPolicy.suppressDoctorStdout).toBe(true);
+    expect(startupPolicy.hideBanner).toBe(true);
   });
 
   it("skips local plugin bootstrap for JSON gateway agent calls", () => {
@@ -185,7 +199,7 @@ describe("command-execution-startup", () => {
     expect(emitCliBannerMock).toHaveBeenCalledTimes(1);
   });
 
-  it("does not import the banner module for JSON output", async () => {
+  it("does not emit the banner for JSON output", async () => {
     await mod.applyCliExecutionStartupPresentation({
       startupPolicy: {
         suppressDoctorStdout: true,

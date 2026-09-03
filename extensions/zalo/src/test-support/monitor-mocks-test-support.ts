@@ -1,20 +1,22 @@
 // Zalo plugin module implements monitor mocks test support behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi, type Mock } from "vitest";
-import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
@@ -114,9 +116,17 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
+  // Agent close releases leases through shared state; closing shared state first
+  // can reopen it during teardown and leave Windows handles under the state dir.
+  closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   if (lifecycleStateDir) {
-    await fs.rm(lifecycleStateDir, { recursive: true, force: true });
+    await fs.rm(lifecycleStateDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
     lifecycleStateDir = undefined;
   }
   if (previousLifecycleStateDir === undefined) {

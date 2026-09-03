@@ -36,7 +36,15 @@ const CATALOG = [
 
 function runtime(): ToolSearchRuntime {
   const ctx = {
-    catalogRef: { current: { entries: CATALOG, searchCount: 0, describeCount: 0, callCount: 0 } },
+    catalogRef: {
+      current: {
+        entries: CATALOG,
+        counterScope: "scope-1",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+      },
+    },
   };
   return new ToolSearchRuntime(ctx as never, {
     enabled: true,
@@ -210,6 +218,7 @@ describe("untrusted schemas", () => {
       catalogRef: {
         current: {
           entries: [...CATALOG, hostile],
+          counterScope: "scope-1",
           searchCount: 0,
           describeCount: 0,
           callCount: 0,
@@ -257,7 +266,15 @@ describe("ToolSearchRuntime.search", () => {
       entry({ id: "b", name: "notes", description: "Notes about issue_create and other tools" }),
     ];
     const ctx = {
-      catalogRef: { current: { entries: catalog, searchCount: 0, describeCount: 0, callCount: 0 } },
+      catalogRef: {
+        current: {
+          entries: catalog,
+          counterScope: "scope-1",
+          searchCount: 0,
+          describeCount: 0,
+          callCount: 0,
+        },
+      },
     };
     const search = new ToolSearchRuntime(ctx as never, {
       enabled: true,
@@ -301,7 +318,15 @@ describe("ToolSearchRuntime.search", () => {
       entry({ id: "other", name: "other", description: "Unrelated" }),
     ];
     const ctx = {
-      catalogRef: { current: { entries: catalog, searchCount: 0, describeCount: 0, callCount: 0 } },
+      catalogRef: {
+        current: {
+          entries: catalog,
+          counterScope: "scope-1",
+          searchCount: 0,
+          describeCount: 0,
+          callCount: 0,
+        },
+      },
     };
     const search = new ToolSearchRuntime(ctx as never, {
       enabled: true,

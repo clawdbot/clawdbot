@@ -1,6 +1,7 @@
 import type { EventEmitter } from "node:events";
 import { Worker, type WorkerOptions } from "node:worker_threads";
 import { isVitestRuntimeEnv } from "../infra/env.js";
+import { formatErrorMessage } from "../infra/errors.js";
 
 const SYSTEM_CA_WARMUP_TIMEOUT_MS = 10_000;
 const SYSTEM_CA_WORKER_SOURCE = String.raw`
@@ -35,6 +36,8 @@ type SystemCaWarmupOptions = {
 
 type SystemCaWarmupMessage = { ok: true; certificateCount: number } | { ok: false; error: string };
 
+let macOSSystemCaWarmupPromise: Promise<void> | undefined;
+
 function isSystemCaWarmupMessage(value: unknown): value is SystemCaWarmupMessage {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -52,10 +55,6 @@ function isWorkerPermissionDenied(error: unknown): boolean {
     "code" in error &&
     error.code === "ERR_ACCESS_DENIED"
   );
-}
-
-function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 /** Warm Node's effective default CA set without blocking the gateway event loop on macOS. */
@@ -80,7 +79,7 @@ export async function warmMacOSSystemCaOffMainThread(
     // CA prewarming is an optimization. Node can still load trust settings lazily.
     const reason = isWorkerPermissionDenied(error)
       ? "Node denied worker-thread permission"
-      : `worker creation failed: ${describeError(error)}`;
+      : `worker creation failed: ${formatErrorMessage(error)}`;
     options.log?.warn(`macOS CA warmup skipped because ${reason}; trust settings will load lazily`);
     return;
   }
@@ -146,4 +145,12 @@ export async function warmMacOSSystemCaOffMainThread(
     // A wedged trustd lookup must not keep an otherwise stopped gateway process alive.
     worker.unref();
   });
+}
+
+/**
+ * One warmup worker runs per process, and every caller awaits its shared completion.
+ * The settled promise is retained after success or failure because warmup is only an optimization.
+ */
+export function beginMacOSSystemCaWarmupOnce(options: SystemCaWarmupOptions = {}): Promise<void> {
+  return (macOSSystemCaWarmupPromise ??= warmMacOSSystemCaOffMainThread(options));
 }

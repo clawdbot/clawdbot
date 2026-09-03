@@ -1,5 +1,6 @@
-// Lobster tests cover lobster tool plugin behavior.
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+// Lobster tests cover lobster tool plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../runtime-api.js";
 import { createLobsterTool } from "./lobster-tool.js";
@@ -30,12 +31,7 @@ function fakeCtx(overrides: Partial<OpenClawPluginToolContext> = {}): OpenClawPl
   };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 describe("lobster plugin tool", () => {
   it("returns the Lobster envelope in details", async () => {
@@ -110,7 +106,7 @@ describe("lobster plugin tool", () => {
     expect(approval.resumeToken).toBe("resume-token-1");
   });
 
-  it("keeps ordinary run on the embedded runner when flow defaults are injected", async () => {
+  it("keeps ordinary run on the runner for neutral flow defaults and ignores resume credentials", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -130,8 +126,15 @@ describe("lobster plugin tool", () => {
     const res = await tool.execute("call-default-flow-run", {
       action: "run",
       pipeline: "noop",
+      token: 42,
+      approve: "yes",
+      flowControllerId: " ",
+      flowGoal: "",
       flowStateJson: "{}",
-      flowExpectedRevision: 0,
+      flowId: " ",
+      flowExpectedRevision: "0",
+      flowCurrentStep: "",
+      flowWaitingStep: " ",
     });
 
     expect(taskFlow.createManaged).not.toHaveBeenCalled();
@@ -168,7 +171,7 @@ describe("lobster plugin tool", () => {
     },
   );
 
-  it("keeps ordinary resume on the embedded runner when flow defaults are injected", async () => {
+  it("keeps ordinary resume on the runner for neutral flow defaults", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -184,8 +187,13 @@ describe("lobster plugin tool", () => {
       action: "resume",
       token: "resume-token-1",
       approve: true,
+      flowControllerId: " ",
+      flowGoal: "",
       flowStateJson: "{}",
-      flowExpectedRevision: 0,
+      flowId: " ",
+      flowExpectedRevision: "0",
+      flowCurrentStep: "",
+      flowWaitingStep: " ",
     });
 
     expect(taskFlow.resume).not.toHaveBeenCalled();
@@ -200,6 +208,20 @@ describe("lobster plugin tool", () => {
     const details = requireRecord(res.details, "ordinary resume with flow defaults details");
     expect(details.ok).toBe(true);
     expect(details.status).toBe("ok");
+  });
+
+  it("rejects malformed resume credentials before ordinary fallback", async () => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), { runner });
+
+    await expect(
+      tool.execute("call-ordinary-resume-invalid-credentials", {
+        action: "resume",
+        token: 42,
+        approve: "yes",
+      }),
+    ).rejects.toThrow("token must be a string");
+    expect(runner.run).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -225,21 +247,73 @@ describe("lobster plugin tool", () => {
     expect(runner.run).not.toHaveBeenCalled();
   });
 
-  it("rejects resume with a non-default flow revision but no flowId", async () => {
+  it.each([
+    [
+      { action: "run", flowCurrentStep: "run_lobster" },
+      "flowControllerId required when using managed TaskFlow run mode",
+    ],
+    [
+      { action: "run", flowWaitingStep: "await_review" },
+      "flowControllerId required when using managed TaskFlow run mode",
+    ],
+    [
+      { action: "run", flowControllerId: "tests/lobster" },
+      "flowGoal required when using managed TaskFlow run mode",
+    ],
+    [
+      { action: "resume", token: "resume-token-1", approve: true, flowExpectedRevision: 1 },
+      "flowId required when using managed TaskFlow resume mode",
+    ],
+    [
+      { action: "resume", token: "resume-token-1", approve: true, flowId: "flow-1" },
+      "flowExpectedRevision required when using managed TaskFlow resume mode",
+    ],
+    [
+      {
+        action: "resume",
+        token: "resume-token-1",
+        approve: true,
+        flowCurrentStep: "resume_lobster",
+      },
+      "flowId required when using managed TaskFlow resume mode",
+    ],
+    [
+      { action: "resume", token: "resume-token-1", approve: true, flowWaitingStep: "await_review" },
+      "flowId required when using managed TaskFlow resume mode",
+    ],
+    [
+      { action: "resume", approve: true, flowId: "flow-1", flowExpectedRevision: 1 },
+      "token or approvalId required when using managed TaskFlow resume mode",
+    ],
+    [
+      { action: "resume", token: "resume-token-1", flowId: "flow-1", flowExpectedRevision: 1 },
+      "approve required when using managed TaskFlow resume mode",
+    ],
+  ])("requires managed TaskFlow fields", async (params, error) => {
     const runner = { run: vi.fn() };
     const tool = createLobsterTool(fakeApi(), {
       runner,
       taskFlow: createFakeTaskFlow(),
     });
 
-    await expect(
-      tool.execute("call-revision-without-flow-id", {
-        action: "resume",
-        token: "resume-token-1",
-        approve: true,
-        flowExpectedRevision: 1,
-      }),
-    ).rejects.toThrow(/flowId required when using managed TaskFlow resume mode/);
+    await expect(tool.execute("call-missing-managed-field", params)).rejects.toThrow(error);
+    expect(runner.run).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      { action: "run", flowControllerId: 42, flowId: "flow-1" },
+      "flowControllerId must be a string",
+    ],
+    [{ action: "resume", token: 42, flowControllerId: "tests/lobster" }, "token must be a string"],
+  ])("preserves mixed-invalid field error precedence", async (params, error) => {
+    const runner = { run: vi.fn() };
+    const tool = createLobsterTool(fakeApi(), {
+      runner,
+      taskFlow: createFakeTaskFlow(),
+    });
+
+    await expect(tool.execute("call-mixed-invalid-fields", params)).rejects.toThrow(error);
     expect(runner.run).not.toHaveBeenCalled();
   });
 
@@ -435,7 +509,7 @@ describe("lobster plugin tool", () => {
     ).rejects.toThrow(/flowStateJson must be valid JSON/);
   });
 
-  it("can resume managed TaskFlow mode with only approvalId", async () => {
+  it("can resume managed TaskFlow revision zero with only approvalId", async () => {
     const runner = {
       run: vi.fn().mockResolvedValue({
         ok: true,
@@ -452,14 +526,14 @@ describe("lobster plugin tool", () => {
       approvalId: "approval-1",
       approve: true,
       flowId: "flow-1",
-      flowExpectedRevision: 1,
+      flowExpectedRevision: 0,
       flowStateJson: "{}",
       flowCurrentStep: "resume_lobster",
     });
 
     expect(taskFlow.resume).toHaveBeenCalledWith({
       flowId: "flow-1",
-      expectedRevision: 1,
+      expectedRevision: 0,
       status: "running",
       currentStep: "resume_lobster",
     });
@@ -492,7 +566,7 @@ describe("lobster plugin tool", () => {
 
     await tool.execute("call-managed-resume-string-revision", {
       action: "resume",
-      approvalId: "approval-1",
+      token: " resume-token-1 ",
       approve: true,
       flowId: "flow-1",
       flowExpectedRevision: "1",
@@ -505,38 +579,14 @@ describe("lobster plugin tool", () => {
       status: "running",
       currentStep: "resume_lobster",
     });
-  });
-
-  it("rejects managed TaskFlow resume mode without a token or approvalId", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-      taskFlow: createFakeTaskFlow(),
+    expect(runner.run).toHaveBeenCalledWith({
+      action: "resume",
+      token: " resume-token-1 ",
+      approve: true,
+      cwd: process.cwd(),
+      timeoutMs: 20_000,
+      maxStdoutBytes: 512_000,
     });
-
-    await expect(
-      tool.execute("call-missing-resume-token", {
-        action: "resume",
-        flowId: "flow-1",
-        flowExpectedRevision: 1,
-        approve: true,
-      }),
-    ).rejects.toThrow(/token or approvalId required when using managed TaskFlow resume mode/);
-  });
-
-  it("rejects managed TaskFlow resume mode without approve", async () => {
-    const tool = createLobsterTool(fakeApi(), {
-      runner: { run: vi.fn() },
-      taskFlow: createFakeTaskFlow(),
-    });
-
-    await expect(
-      tool.execute("call-missing-resume-approve", {
-        action: "resume",
-        token: "resume-token",
-        flowId: "flow-1",
-        flowExpectedRevision: 1,
-      }),
-    ).rejects.toThrow(/approve required when using managed TaskFlow resume mode/);
   });
 
   it("requires action", async () => {

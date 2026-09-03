@@ -1,6 +1,7 @@
 // Active session shutdown tracker.
 // Remembers sessions needing `session_end` hooks during gateway shutdown/restart.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 
 // Module-level tracker of sessions that have received `session_start` but not
 // yet a paired `session_end`. The close handler drains this set on gateway
@@ -21,10 +22,13 @@ type ActiveSessionForShutdown = {
   sessionId: string;
   storePath: string;
   sessionFile?: string;
-  agentId?: string;
+  agentId: string;
 };
 
-const trackedSessions = new Map<string, ActiveSessionForShutdown>();
+const trackedSessions = resolveGlobalMap<string, ActiveSessionForShutdown>(
+  Symbol.for("openclaw.activeSessionsForShutdown"),
+  "close-and-restart",
+);
 
 export function noteActiveSessionForShutdown(entry: ActiveSessionForShutdown): void {
   if (!entry.sessionId) {

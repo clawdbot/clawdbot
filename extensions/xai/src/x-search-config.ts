@@ -1,30 +1,15 @@
 // Xai helper module supports x search config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { isRecord } from "./tool-config-shared.js";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type JsonRecord = Record<string, unknown>;
 
-function cloneRecord<T extends JsonRecord | undefined>(value: T): T {
-  if (!value) {
-    return value;
-  }
-  return { ...value } as T;
-}
-
-function resolvePluginXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
+function resolvePluginSearchConfig(
+  config: OpenClawConfig | undefined,
+  key: "webSearch" | "xSearch",
+): JsonRecord | undefined {
   const pluginConfig = config?.plugins?.entries?.xai?.config;
-  if (!isRecord(pluginConfig?.xSearch)) {
-    return undefined;
-  }
-  return cloneRecord(pluginConfig.xSearch);
-}
-
-function resolvePluginWebSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
-  const pluginConfig = config?.plugins?.entries?.xai?.config;
-  if (!isRecord(pluginConfig?.webSearch)) {
-    return undefined;
-  }
-  return cloneRecord(pluginConfig.webSearch);
+  return isRecord(pluginConfig?.[key]) ? { ...pluginConfig[key] } : undefined;
 }
 
 function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {
@@ -34,8 +19,8 @@ function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {
 }
 
 export function resolveEffectiveXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
-  const pluginWebSearchBaseUrl = baseUrlFallback(resolvePluginWebSearchConfig(config));
-  const pluginOwned = resolvePluginXSearchConfig(config);
+  const pluginWebSearchBaseUrl = baseUrlFallback(resolvePluginSearchConfig(config, "webSearch"));
+  const pluginOwned = resolvePluginSearchConfig(config, "xSearch");
   const merged = {
     ...pluginWebSearchBaseUrl,
     ...pluginOwned,

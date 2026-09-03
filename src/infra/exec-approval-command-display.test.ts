@@ -1,10 +1,10 @@
 // Verifies shell command display strings for exec approval prompts.
 import { describe, expect, it } from "vitest";
+import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import {
-  resolveExecApprovalCommandDisplay,
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-} from "./exec-approval-command-display.js";
+} from "./exec-approval-text-sanitize.js";
 
 function hasLoneSurrogate(value: string): boolean {
   return Array.from(value).some((char) => {

@@ -1,0 +1,244 @@
+title: Agent progress evidence
+
+scenario:
+  id: agent-progress-evidence
+  surface: agent-runtime
+  coverage:
+    primary:
+      - agent-runtime.progress-visibility-evidence
+  objective: Verify a completion reply is backed by an exact read, read, write result chain and an artifact that predates the reply.
+  successCriteria:
+    - Two real reads and one real write execute in exact order with matched call and result identities.
+    - The written artifact contains the requested evidence and the write result reports success.
+    - Artifact modification time is no later than the final completion timestamp.
+    - Exactly one durable completion reply cites the artifact and marker, with none before the write result.
+  docsRefs:
+    - docs/concepts/qa-e2e-automation.md
+    - docs/channels/qa-channel.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
+    - src/agents/embedded-agent-runner/run/attempt.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Match an exact read, read, write chain to one artifact-backed completion reply.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: agent-progress-evidence
+      senderId: qa-progress-evidence-operator
+      promptSnippet: "Personal task followthrough check"
+      artifactFile: personal-task-status.txt
+      completionMarker: "Done:"
+      completionText: "Done: local evidence captured in personal-task-status.txt"
+      workspaceFiles:
+        PERSONAL_TASK_LEDGER.md: |-
+          # Personal task ledger
+
+          Required status contract:
+          1. Read PERSONAL_TASK_LEDGER.md.
+          2. Read FOLLOWTHROUGH_NOTE.md.
+          3. Write ./personal-task-status.txt.
+          4. Include these exact status fields:
+             Personal task followthrough
+             Pending: maintainer feedback before publishing.
+             Blocked: publishing needs explicit user approval.
+             Done: local evidence captured in personal-task-status.txt.
+          5. Reply with three labeled lines exactly once: Pending, Blocked, Done.
+
+          Do not mark the task done until the status artifact has been written.
+        FOLLOWTHROUGH_NOTE.md: |-
+          Task: prepare a local OpenClaw PR readiness note.
+          Pending: maintainer feedback before publishing.
+          Blocked: publishing needs explicit user approval.
+          Done: local evidence captured in personal-task-status.txt.
+      prompt: |-
+        Personal task followthrough check. Read PERSONAL_TASK_LEDGER.md and FOLLOWTHROUGH_NOTE.md first.
+        Then write ./personal-task-status.txt with the exact status fields from the files.
+        Report the final status only after the write succeeds.
+      expectedArtifactAll:
+        - personal task followthrough
+        - "pending:"
+        - maintainer feedback
+        - "blocked:"
+        - explicit user approval
+        - "done:"
+        - local evidence captured in personal-task-status.txt
+
+flow:
+  steps:
+    - name: gates one durable completion on exact artifact evidence
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - forEach:
+            items:
+              expr: "Object.entries(config.workspaceFiles ?? {})"
+            item: workspaceFile
+            actions:
+              - call: fs.writeFile
+                args:
+                  - expr: "path.join(env.gateway.workspaceDir, String(workspaceFile[0]))"
+                  - expr: "`${String(workspaceFile[1] ?? '').trimEnd()}\\n`"
+                  - utf8
+        - set: artifactPath
+          value:
+            expr: "path.join(env.gateway.workspaceDir, config.artifactFile)"
+        - call: fs.rm
+          args:
+            - ref: artifactPath
+            - force: true
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: busCursorBefore
+          value:
+            expr: "state.getSnapshot().cursor"
+        - set: outboundStartIndex
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            senderId:
+              ref: config.senderId
+            senderName: QA Progress Evidence Operator
+            text:
+              ref: config.prompt
+          saveAs: inbound
+        - waitForOutbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: direct
+            sinceIndex:
+              ref: outboundStartIndex
+            textIncludes:
+              ref: config.completionText
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 60000)
+        - call: fs.readFile
+          saveAs: artifact
+          args:
+            - ref: artifactPath
+            - utf8
+        - call: fs.stat
+          saveAs: artifactStat
+          args:
+            - ref: artifactPath
+        - set: normalizedArtifact
+          value:
+            expr: "normalizeLowercaseStringOrEmpty(artifact)"
+        - assert:
+            expr: "config.expectedArtifactAll.every((needle) => normalizedArtifact.includes(normalizeLowercaseStringOrEmpty(needle)))"
+            message:
+              expr: "`artifact omitted required evidence: ${artifact}`"
+        - set: scenarioRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.promptSnippet))"
+        - assert:
+            expr: "scenarioRequests.length === 4"
+            message:
+              expr: "`expected exactly four provider requests, got ${JSON.stringify(scenarioRequests)}`"
+        - set: firstReadRequest
+          value:
+            expr: "scenarioRequests[0]"
+        - set: secondReadRequest
+          value:
+            expr: "scenarioRequests[1]"
+        - set: writeRequest
+          value:
+            expr: "scenarioRequests[2]"
+        - set: writeResultRequest
+          value:
+            expr: "scenarioRequests[3]"
+        - assert:
+            expr: "firstReadRequest.plannedToolName === 'read' && firstReadRequest.plannedToolArgs?.path === 'PERSONAL_TASK_LEDGER.md' && typeof firstReadRequest.plannedToolCallId === 'string' && firstReadRequest.plannedToolCallId.length > 0 && !firstReadRequest.toolOutputCallId"
+            message:
+              expr: "`request 1 did not exclusively plan the ledger read: ${JSON.stringify(firstReadRequest)}`"
+        - assert:
+            expr: "secondReadRequest.toolOutputCallId === firstReadRequest.plannedToolCallId && secondReadRequest.toolOutputStructuredError !== true && String(secondReadRequest.toolOutput ?? '').includes('# Personal task ledger') && secondReadRequest.plannedToolName === 'read' && secondReadRequest.plannedToolArgs?.path === 'FOLLOWTHROUGH_NOTE.md' && typeof secondReadRequest.plannedToolCallId === 'string' && secondReadRequest.plannedToolCallId.length > 0 && secondReadRequest.plannedToolCallId !== firstReadRequest.plannedToolCallId"
+            message:
+              expr: "`request 2 did not consume read 1 and plan a distinct read 2: ${JSON.stringify(secondReadRequest)}`"
+        - assert:
+            expr: "writeRequest.toolOutputCallId === secondReadRequest.plannedToolCallId && writeRequest.toolOutputStructuredError !== true && String(writeRequest.toolOutput ?? '').includes('Task: prepare a local OpenClaw PR readiness note.') && writeRequest.plannedToolName === 'write' && writeRequest.plannedToolArgs?.path === config.artifactFile && typeof writeRequest.plannedToolCallId === 'string' && writeRequest.plannedToolCallId.length > 0 && writeRequest.plannedToolCallId !== secondReadRequest.plannedToolCallId"
+            message:
+              expr: "`request 3 did not consume read 2 and plan the artifact write: ${JSON.stringify(writeRequest)}`"
+        - assert:
+            expr: "writeResultRequest.toolOutputCallId === writeRequest.plannedToolCallId && writeResultRequest.toolOutputStructuredError !== true && /successfully (?:wrote|created|updated|replaced)/i.test(String(writeResultRequest.toolOutput ?? '')) && !writeResultRequest.plannedToolName"
+            message:
+              expr: "`request 4 did not consume the successful write result before terminal generation: ${JSON.stringify(writeResultRequest)}`"
+        - call: waitForCondition
+          saveAs: durableCompletionLifecycle
+          args:
+            - lambda:
+                expr: |-
+                  (() => {
+                    const snapshot = state.getSnapshot();
+                    const visible = snapshot.messages.filter((message) => message.accountId === transport.accountId && message.direction === "outbound" && !message.deleted && message.conversation.id === config.conversationId && message.conversation.kind === "direct" && message.text.includes(config.completionText));
+                    if (visible.length !== 1) return undefined;
+                    const candidate = visible[0];
+                    const events = snapshot.events.filter((event) => event.cursor > busCursorBefore && "message" in event && event.message.accountId === transport.accountId && event.message.direction === "outbound" && event.message.conversation.id === config.conversationId && event.message.conversation.kind === "direct" && event.message.text.includes(config.completionText));
+                    const finalSent = events.find((event) => event.kind === "outbound-message" && event.message.id === candidate.id);
+                    if (!finalSent) return undefined;
+                    const previewRetired = events.find((event) => event.kind === "message-deleted" && event.message.id !== candidate.id && event.cursor < finalSent.cursor);
+                    if (!previewRetired) return undefined;
+                    const previewSent = events.find((event) => event.kind === "outbound-message" && event.message.id === previewRetired.message.id && event.cursor < previewRetired.cursor);
+                    return previewSent ? { message: candidate, previewId: previewRetired.message.id, finalId: candidate.id, previewSentCursor: previewSent.cursor, previewDeletedCursor: previewRetired.cursor, finalSentCursor: finalSent.cursor } : undefined;
+                  })()
+            - expr: liveTurnTimeoutMs(env, 60000)
+        - set: durableCompletion
+          value:
+            expr: durableCompletionLifecycle.message
+        - set: allBusEvents
+          value:
+            expr: "state.getSnapshot().events.filter((event) => event.cursor > busCursorBefore && 'message' in event && event.message.accountId === transport.accountId && event.message.direction === 'outbound' && event.message.conversation.id === config.conversationId && event.message.conversation.kind === 'direct')"
+        - set: busEvents
+          value:
+            expr: "allBusEvents.filter((event) => event.kind === 'outbound-message' || event.kind === 'message-edited')"
+        - set: completionEvents
+          value:
+            expr: "busEvents.filter((event) => event.message.text.includes(config.completionText))"
+        - set: completionMessages
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.accountId === transport.accountId && message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'direct' && message.text.includes(config.completionText) && !message.deleted)"
+        - assert:
+            # Tool-backed finals replace their streamed preview; prove sent -> deleted -> final ordering first.
+            expr: "completionMessages.length === 1 && completionMessages[0].id === durableCompletion.id"
+            message:
+              expr: "`expected exactly one durable completion reply: ${JSON.stringify(completionMessages)}`"
+        - set: finalCompletionEvent
+          value:
+            expr: "completionEvents.findLast((event) => event.message.id === durableCompletion.id)"
+        - assert:
+            expr: "completionEvents.length >= 1 && finalCompletionEvent && completionEvents.every((event) => artifactStat.mtimeMs <= (event.message.editedAt ?? event.message.timestamp))"
+            message:
+              expr: "`completion appeared before the write-backed terminal request: artifactMtime=${artifactStat.mtimeMs} events=${JSON.stringify(completionEvents)}`"
+        - assert:
+            expr: "completionEvents.filter((event) => event.message.id !== durableCompletion.id).every((event) => allBusEvents.some((candidate) => candidate.kind === 'message-deleted' && candidate.cursor > event.cursor && candidate.message.id === event.message.id))"
+            message:
+              expr: "`a transient completion preview remained durable: ${JSON.stringify(allBusEvents)}`"
+        - assert:
+            expr: "durableCompletion.replyToId === inbound.id && durableCompletion.text.includes(config.artifactFile) && durableCompletion.text.includes(config.completionMarker)"
+            message:
+              expr: "`durable completion did not cite the artifact and marker: ${JSON.stringify(durableCompletion)}`"
+        - assert:
+            expr: "artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)"
+            message:
+              expr: "`artifact postdated the durable completion reply: artifactMtime=${artifactStat.mtimeMs} replyTimestamp=${finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp}`"
+      detailsExpr: "`read:${firstReadRequest.plannedToolCallId} -> read:${secondReadRequest.plannedToolCallId} -> write:${writeRequest.plannedToolCallId} -> result:${writeResultRequest.toolOutputCallId}; artifactBeforeReply=${artifactStat.mtimeMs <= (finalCompletionEvent.message.editedAt ?? finalCompletionEvent.message.timestamp)}; durableCompletions=${completionMessages.length}; lifecycle=${JSON.stringify({ previewId: durableCompletionLifecycle.previewId, previewSentCursor: durableCompletionLifecycle.previewSentCursor, previewDeletedCursor: durableCompletionLifecycle.previewDeletedCursor, finalId: durableCompletionLifecycle.finalId, finalSentCursor: durableCompletionLifecycle.finalSentCursor })}`"

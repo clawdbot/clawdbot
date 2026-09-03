@@ -2,8 +2,14 @@
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import type { OpenClawConfig, TtsConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { TtsStreamResult } from "openclaw/plugin-sdk/tts-runtime";
 import { getDiscordRuntime } from "../runtime.js";
 import { sanitizeVoiceReplyTextForSpeech } from "./sanitize.js";
+
+type VoiceStreamFailure = Pick<
+  NonNullable<TtsStreamResult["attempts"]>[number],
+  "provider" | "reasonCode"
+>;
 
 type VoiceReplyAudioResult =
   | {
@@ -11,6 +17,7 @@ type VoiceReplyAudioResult =
       mode: "file";
       audioPath: string;
       speakText: string;
+      streamFailure?: VoiceStreamFailure;
     }
   | {
       status: "ok";
@@ -75,6 +82,10 @@ export async function synthesizeVoiceReplyAudio(params: {
       speakText,
     };
   }
+  const streamFailure =
+    streamResult && !streamResult.success
+      ? streamResult.attempts?.findLast((attempt) => attempt.outcome === "failed")
+      : undefined;
 
   const result = await runtime.tts.textToSpeech({
     text: speakText,
@@ -85,5 +96,15 @@ export async function synthesizeVoiceReplyAudio(params: {
   if (!result.success || !result.audioPath) {
     return { status: "failed", error: result.error ?? "unknown error" };
   }
-  return { status: "ok", mode: "file", audioPath: result.audioPath, speakText };
+  return {
+    status: "ok",
+    mode: "file",
+    audioPath: result.audioPath,
+    speakText,
+    ...(streamFailure
+      ? {
+          streamFailure: { provider: streamFailure.provider, reasonCode: streamFailure.reasonCode },
+        }
+      : {}),
+  };
 }

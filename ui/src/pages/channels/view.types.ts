@@ -53,6 +53,7 @@ export type ChannelsProps = {
   configForm: Record<string, unknown> | null;
   configUiHints: ConfigUiHints;
   configSaving: boolean;
+  configError: string | null;
   configFormDirty: boolean;
   showAdvancedSettings: boolean;
   nostrProfileFormState: NostrProfileFormState | null;
@@ -60,12 +61,16 @@ export type ChannelsProps = {
   selectedChannel: string | null;
   wizard: ChannelWizardState;
   wizardMultiselect: readonly unknown[];
+  wizardTextValue: string;
+  wizardSecretVisible: boolean;
   setupBlockedByDirtyConfig: boolean;
   onShowDetail: (channelId: string) => void;
   onCloseDetail: () => void;
   onStartSetup: (channelId: string | null) => void;
   onWizardAnswer: (value: unknown) => void;
   onWizardToggleMultiselect: (value: unknown) => void;
+  onWizardTextInput: (value: string) => void;
+  onWizardToggleSecretVisibility: () => void;
   onWizardClose: () => void;
   onRefresh: (probe: boolean) => void;
   onPairingRefresh: () => void;

@@ -60,6 +60,9 @@ describe("Google Meet node invoke policy", () => {
         launch: false,
         browserProfile: "Trusted Profile",
         joinTimeoutMs: 45_000,
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "g711-ulaw-8khz",
         audioInputCommand: ["trusted-capture", "--raw"],
         audioOutputCommand: ["trusted-play", "--raw"],
       },
@@ -118,7 +121,14 @@ describe("Google Meet node invoke policy", () => {
 
     await policy.handle(ctx);
 
-    expect(invokeNode).toHaveBeenCalledWith({ params: { action: "setup" } });
+    expect(invokeNode).toHaveBeenCalledWith({
+      params: {
+        action: "setup",
+        audioBackend: "auto",
+        audioBufferBytes: 4_096,
+        audioFormat: "pcm16-24khz",
+      },
+    });
   });
 
   it("rejects malformed bridge control before node dispatch", async () => {

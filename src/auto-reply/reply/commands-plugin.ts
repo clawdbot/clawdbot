@@ -6,12 +6,17 @@
  */
 
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
-import { matchPluginCommand, executePluginCommand } from "../../plugins/commands.js";
-import { DEFAULT_AGENT_ID, isUnscopedSessionKeySentinel } from "../../routing/session-key.js";
+import {
+  createPluginCommandRuntime,
+  executePluginCommandDispatch,
+  matchPluginCommandInvocation,
+  PLUGIN_COMMAND_DISPATCH,
+  type PluginCommandExecutionReplyOptions,
+} from "../../plugins/plugin-command-runtime.js";
+import { handleCompactCommand } from "./commands-compact.js";
 import type { CommandHandler, CommandHandlerResult } from "./commands-types.js";
 
 /**
@@ -23,14 +28,33 @@ export const handlePluginCommand: CommandHandler = async (
   params,
   allowTextCommands,
 ): Promise<CommandHandlerResult | null> => {
-  const { command, cfg } = params;
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const targetAgentId =
-    params.sessionKey && !isUnscopedSessionKeySentinel(params.sessionKey)
-      ? (resolveSessionAgentId({ sessionKey: params.sessionKey, config: cfg }) ??
-        params.agentId ??
-        DEFAULT_AGENT_ID)
-      : (params.agentId ?? DEFAULT_AGENT_ID);
+  const { command, cfg, agentId: targetAgentId } = params;
+  if (!allowTextCommands) {
+    return null;
+  }
+
+  const planned = (params.opts as PluginCommandExecutionReplyOptions | undefined)?.[
+    PLUGIN_COMMAND_DISPATCH
+  ];
+  if (planned?.kind === "non-plugin") {
+    return null;
+  }
+  if (!planned && !command.commandBodyNormalized.trim().startsWith("/")) {
+    return null;
+  }
+  const dispatch =
+    planned?.kind === "plugin"
+      ? planned
+      : matchPluginCommandInvocation(createPluginCommandRuntime(), command.commandBodyNormalized, {
+          channel: command.channel,
+        })?.dispatch;
+  if (!dispatch) {
+    return null;
+  }
+
+  const targetSessionEntry = structuredClone(
+    params.sessionStore?.[params.sessionKey] ?? params.sessionEntry,
+  );
   const sessionTarget = targetSessionEntry?.sessionId
     ? {
         agentId: targetAgentId,
@@ -40,25 +64,13 @@ export const handlePluginCommand: CommandHandler = async (
           agentId: targetAgentId,
           sessionKey: params.sessionKey,
           storePath:
-            params.storePath ?? resolveStorePath(cfg.session?.store, { agentId: targetAgentId }),
+            params.storePath ??
+            resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
         }),
       }
     : undefined;
 
-  if (!allowTextCommands) {
-    return null;
-  }
-
-  // Try to match a plugin command
-  const match = matchPluginCommand(command.commandBodyNormalized, { channel: command.channel });
-  if (!match) {
-    return null;
-  }
-
-  // Execute the plugin command (always returns a result)
-  const result = await executePluginCommand({
-    command: match.command,
-    args: match.args,
+  const result = await executePluginCommandDispatch(dispatch, {
     senderId: command.senderId,
     channel: command.channel,
     channelId: command.channelId,
@@ -83,6 +95,39 @@ export const handlePluginCommand: CommandHandler = async (
         ? params.ctx.MessageThreadId
         : undefined,
     threadParentId: normalizeOptionalString(params.ctx.ThreadParentId),
+    ...(sessionTarget
+      ? {
+          runtimeContext: {
+            compactCurrent: async (invocationSignal) => {
+              if (!params.command.isAuthorizedSender) {
+                return { compacted: false, reason: "compaction requires authorization" };
+              }
+              const compaction = await handleCompactCommand(
+                {
+                  ...params,
+                  command: { ...params.command, commandBodyNormalized: "/compact" },
+                  commandInvocationSignal: invocationSignal,
+                  compactionSessionEntry: targetSessionEntry,
+                  opts: {
+                    ...params.opts,
+                    abortSignal:
+                      invocationSignal && params.opts?.abortSignal
+                        ? AbortSignal.any([invocationSignal, params.opts.abortSignal])
+                        : (invocationSignal ?? params.opts?.abortSignal),
+                  },
+                },
+                true,
+              );
+              return (
+                compaction?.sessionCompaction ?? {
+                  compacted: false,
+                  reason: "compaction unavailable",
+                }
+              );
+            },
+          },
+        }
+      : {}),
   });
   const shouldContinue = result.continueAgent === true;
   const { continueAgent: _continueAgent, ...reply } = result;

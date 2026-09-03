@@ -6,6 +6,7 @@ import OpenAI from "openai";
 import type { ResolvedTtsConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { coerceErrorMessage as formatLiveOpenAIError } from "openclaw/plugin-sdk/error-runtime";
 import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import {
   registerProviderPlugin,
@@ -79,10 +80,6 @@ function createReferencePng(): Buffer {
   }
 
   return encodePngRgba(buf, width, height);
-}
-
-function formatLiveOpenAIError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveLiveOpenAISkipReason(error: unknown): string | null {

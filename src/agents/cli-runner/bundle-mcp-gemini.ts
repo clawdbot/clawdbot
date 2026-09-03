@@ -8,7 +8,7 @@ import {
   decodeHeaderEnvPlaceholder,
   isRecord,
   normalizeBundleMcpServerConfig,
-  normalizeStringRecord,
+  normalizeMcpStringRecord,
 } from "../bundle-mcp-adapter.js";
 import { withOpenClawMcpCaptureHeader, writeTemporaryBundleMcpJson } from "./bundle-mcp-runtime.js";
 
@@ -79,9 +79,9 @@ function normalizeGeminiServerConfig(
   server: BundleMcpServerConfig,
   inheritedEnv: Record<string, string> | undefined,
   deniedTools: readonly string[] | undefined,
-): Record<string, unknown> {
+): Record<string, unknown> | undefined {
   const next = normalizeBundleMcpServerConfig(server, GEMINI_MCP_SERVER_FIELDS);
-  const headers = normalizeStringRecord(server.headers);
+  const headers = normalizeMcpStringRecord(server.headers);
   if (headers) {
     next.headers = Object.fromEntries(
       Object.entries(headers).map(([name, value]) => [
@@ -90,11 +90,33 @@ function normalizeGeminiServerConfig(
       ]),
     );
   }
-  if (deniedTools?.length) {
+  const toolFilter = isRecord(server.toolFilter) ? server.toolFilter : {};
+  const included = Array.isArray(toolFilter.include)
+    ? toolFilter.include.filter((name): name is string => typeof name === "string")
+    : [];
+  if (included.length > 0) {
+    const existing = Array.isArray(server.includeTools)
+      ? server.includeTools.filter((name): name is string => typeof name === "string")
+      : [];
+    const finalIncluded =
+      existing.length > 0
+        ? included.filter((name) => existing.includes(name)).toSorted()
+        : [...new Set(included)].toSorted();
+    if (finalIncluded.length === 0) {
+      return undefined;
+    }
+    next.includeTools = finalIncluded;
+  }
+  const filteredDenied = Array.isArray(toolFilter.exclude)
+    ? toolFilter.exclude.filter((name): name is string => typeof name === "string")
+    : [];
+  if (deniedTools?.length || filteredDenied.length > 0) {
     const existing = Array.isArray(server.excludeTools)
       ? server.excludeTools.filter((name): name is string => typeof name === "string")
       : [];
-    next.excludeTools = [...new Set([...existing, ...deniedTools])].toSorted();
+    next.excludeTools = [
+      ...new Set([...existing, ...filteredDenied, ...(deniedTools ?? [])]),
+    ].toSorted();
   }
   return next;
 }
@@ -109,14 +131,14 @@ export async function writeGeminiSystemSettings(
   const base = await readGeminiBaseSettings(inheritedEnv);
   const normalizedConfig: BundleMcpConfig = {
     mcpServers: Object.fromEntries(
-      Object.entries(mergedConfig.mcpServers).map(([name, server]) => [
-        name,
-        normalizeGeminiServerConfig(
+      Object.entries(mergedConfig.mcpServers).flatMap(([name, server]) => {
+        const normalized = normalizeGeminiServerConfig(
           server,
           inheritedEnv,
           mcpToolsDeny && Object.hasOwn(mcpToolsDeny, name) ? mcpToolsDeny[name] : undefined,
-        ),
-      ]),
+        );
+        return normalized ? [[name, normalized]] : [];
+      }),
     ) as BundleMcpConfig["mcpServers"],
   };
   const settings = applyMergePatch(

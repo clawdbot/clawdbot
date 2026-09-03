@@ -63,6 +63,16 @@ dump_logs_on_error() {
       /tmp/cron-cli-edit-exact.json \
       /tmp/cron-cli-edit-timeout.json \
       /tmp/cron-cli-get-after-edit.json \
+      /tmp/cron-cli-script-add.json \
+      /tmp/cron-cli-script-before.json \
+      /tmp/cron-cli-script-generic-timeout.log \
+      /tmp/cron-cli-script-after-generic.json \
+      /tmp/cron-cli-script-edit-timeout.json \
+      /tmp/cron-cli-script-after-specific.json \
+      /tmp/cron-cli-event-add.json \
+      /tmp/cron-cli-event-before.json \
+      /tmp/cron-cli-event-generic-timeout.log \
+      /tmp/cron-cli-event-after.json \
       /tmp/cron-cli-list.json \
       /tmp/cron-cli-show.json \
       /tmp/cron-cli-disable.json \
@@ -388,6 +398,80 @@ node --input-type=module -e '
     throw new Error(`cron timeout-only edit changed command payload kind: ${JSON.stringify(value.payload)}`);
   }
 '
+
+cat > /tmp/cron-cli-script.js <<'SCRIPT'
+return { notify: "cron script timeout proof" };
+SCRIPT
+cron_cli add \
+  "script timeout smoke" \
+  --every 1h \
+  --session isolated \
+  --script /tmp/cron-cli-script.js \
+  --script-timeout-seconds 15 \
+  --no-deliver \
+  --json > /tmp/cron-cli-script-add.json
+script_job_id="$(read_json_field /tmp/cron-cli-script-add.json id)"
+cron_cli get "$script_job_id" > /tmp/cron-cli-script-before.json
+if cron_cli edit "$script_job_id" --timeout-seconds 30 > /tmp/cron-cli-script-generic-timeout.log 2>&1; then
+  echo "generic timeout unexpectedly succeeded for script job" >&2
+  exit 1
+fi
+grep -q -- "Use --script-timeout-seconds for script jobs" /tmp/cron-cli-script-generic-timeout.log
+cron_cli get "$script_job_id" > /tmp/cron-cli-script-after-generic.json
+cron_cli edit "$script_job_id" --script-timeout-seconds 30 > /tmp/cron-cli-script-edit-timeout.json
+cron_cli get "$script_job_id" > /tmp/cron-cli-script-after-specific.json
+node --input-type=module -e '
+  const fs = await import("node:fs/promises");
+  const before = JSON.parse(await fs.readFile("/tmp/cron-cli-script-before.json", "utf8"));
+  const afterGeneric = JSON.parse(
+    await fs.readFile("/tmp/cron-cli-script-after-generic.json", "utf8"),
+  );
+  const afterSpecific = JSON.parse(
+    await fs.readFile("/tmp/cron-cli-script-after-specific.json", "utf8"),
+  );
+  if (before.payload?.kind !== "script" || before.payload.timeoutSeconds !== 15) {
+    throw new Error(`script setup mismatch: ${JSON.stringify(before.payload)}`);
+  }
+  if (JSON.stringify(afterGeneric.payload) !== JSON.stringify(before.payload)) {
+    throw new Error(
+      `rejected generic timeout changed script payload: ${JSON.stringify(afterGeneric.payload)}`,
+    );
+  }
+  if (afterSpecific.payload?.kind !== "script" || afterSpecific.payload.timeoutSeconds !== 30) {
+    throw new Error(
+      `script-specific timeout did not persist: ${JSON.stringify(afterSpecific.payload)}`,
+    );
+  }
+'
+cron_cli rm "$script_job_id" --json >/dev/null
+
+cron_cli add \
+  "event timeout smoke" \
+  --every 1h \
+  --session main \
+  --system-event "cron event timeout proof" \
+  --json > /tmp/cron-cli-event-add.json
+event_job_id="$(read_json_field /tmp/cron-cli-event-add.json id)"
+cron_cli get "$event_job_id" > /tmp/cron-cli-event-before.json
+if cron_cli edit "$event_job_id" --timeout-seconds 30 > /tmp/cron-cli-event-generic-timeout.log 2>&1; then
+  echo "generic timeout unexpectedly succeeded for systemEvent job" >&2
+  exit 1
+fi
+grep -q -- "--timeout-seconds is not supported for systemEvent jobs" \
+  /tmp/cron-cli-event-generic-timeout.log
+cron_cli get "$event_job_id" > /tmp/cron-cli-event-after.json
+node --input-type=module -e '
+  const fs = await import("node:fs/promises");
+  const before = JSON.parse(await fs.readFile("/tmp/cron-cli-event-before.json", "utf8"));
+  const after = JSON.parse(await fs.readFile("/tmp/cron-cli-event-after.json", "utf8"));
+  if (before.payload?.kind !== "systemEvent") {
+    throw new Error(`event setup mismatch: ${JSON.stringify(before.payload)}`);
+  }
+  if (JSON.stringify(after.payload) !== JSON.stringify(before.payload)) {
+    throw new Error(`rejected generic timeout changed event payload: ${JSON.stringify(after.payload)}`);
+  }
+'
+cron_cli rm "$event_job_id" --json >/dev/null
 
 cron_cli list --all --json > /tmp/cron-cli-list.json
 node --input-type=module -e '

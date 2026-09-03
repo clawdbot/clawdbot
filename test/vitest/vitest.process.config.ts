@@ -1,7 +1,10 @@
 // Vitest process config wires the process test shard.
+import type { ViteUserConfig } from "vitest/config";
 import { createScopedVitestConfig } from "./vitest.scoped-config.ts";
 
-export function createProcessVitestConfig(env?: Record<string, string | undefined>) {
+export function createProcessVitestConfig(
+  env?: Record<string, string | undefined>,
+): ViteUserConfig {
   const config = createScopedVitestConfig(["src/process/**/*.test.ts"], {
     dir: "src",
     env,

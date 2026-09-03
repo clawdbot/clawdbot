@@ -1,6 +1,5 @@
 // Tests info-style command responses, including effective tool inventory.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { EffectiveToolInventoryResult } from "../../agents/tools-effective-inventory.types.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -50,16 +49,6 @@ vi.mock("./commands-status.js", () => ({
   buildStatusPluginsReply: vi.fn(async () => ({ text: "plugins status reply" })),
   buildStatusReply: vi.fn(async () => ({ text: "status reply" })),
 }));
-
-vi.mock("../../agents/agent-scope.js", async () => {
-  const actual = await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-    "../../agents/agent-scope.js",
-  );
-  return {
-    ...actual,
-    resolveSessionAgentId: vi.fn(actual.resolveSessionAgentId),
-  };
-});
 
 vi.mock("../../skills/discovery/chat-commands.js", async () => {
   const actual = await vi.importActual<typeof import("../../skills/discovery/chat-commands.js")>(
@@ -114,6 +103,7 @@ function buildInfoParams(
       to: "bot",
     },
     sessionKey: "agent:main:whatsapp:direct:12345",
+    agentId: "main",
     workspaceDir: "/tmp",
     provider: "whatsapp",
     model: "test-model",
@@ -491,9 +481,8 @@ describe("info command handlers", () => {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
-    params.agentId = "main";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:12345";
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
 
     const result = await handleCommandsListCommand(params, true);
 
@@ -503,6 +492,20 @@ describe("info command handlers", () => {
       "listSkillCommandsForAgents",
     ) as { agentIds?: string[] };
     expect(listParams.agentIds).toEqual(["target"]);
+  });
+
+  it("lists commands for the prepared owner of a global session", async () => {
+    const { handleCommandsListCommand } = await import("./commands-info.js");
+    const params = buildInfoParams("/commands", {
+      agents: { ownership: "explicit", entries: { main: {}, target: {} } },
+    });
+    params.agentId = "target";
+    params.sessionKey = "global";
+
+    expect((await handleCommandsListCommand(params, true))?.shouldContinue).toBe(false);
+    expect(listSkillCommandsForAgentsMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentIds: ["target"] }),
+    );
   });
 });
 
@@ -564,6 +567,7 @@ const toolsTestState = vi.hoisted(() => {
   return {
     resolveToolsImpl: defaultResolveTools,
     resolveToolsMock: vi.fn((..._args: unknown[]) => defaultResolveTools()),
+    resolveRuntimeModelContextMock: vi.fn(async (_params: unknown) => ({})),
     threadingContext: {
       currentChannelId: "channel-123",
       currentMessageId: "message-456",
@@ -574,6 +578,8 @@ const toolsTestState = vi.hoisted(() => {
 
 vi.mock("../../agents/tools-effective-inventory.js", () => ({
   resolveEffectiveToolInventory: (...args: unknown[]) => toolsTestState.resolveToolsMock(...args),
+  resolveEffectiveToolInventoryRuntimeModelContextAsync: (params: unknown) =>
+    toolsTestState.resolveRuntimeModelContextMock(params),
 }));
 
 vi.mock("./agent-runner-utils.js", () => ({
@@ -623,9 +629,10 @@ describe("handleToolsCommand", () => {
   });
 
   beforeEach(() => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("main");
     toolsTestState.resolveToolsMock.mockReset();
     toolsTestState.resolveToolsImpl = () => makeDefaultInventory();
+    toolsTestState.resolveRuntimeModelContextMock.mockReset();
+    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({});
     setActivePluginRegistry(createTestRegistry([]));
   });
 
@@ -777,6 +784,43 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Use /tools verbose for descriptions.");
   });
 
+  it("prepares dynamic model context before resolving the tool inventory", async () => {
+    const runtimeModel = {
+      id: "chat-latest",
+      name: "chat-latest",
+      provider: "openai",
+      api: "openai-responses",
+    };
+    toolsTestState.resolveRuntimeModelContextMock.mockResolvedValue({
+      modelApi: "openai-responses",
+      runtimeModel,
+    });
+    const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
+      await loadToolsHarness();
+    const params = buildCommandTestParamsLocal("/tools compact", buildConfig(), undefined, {
+      workspaceDir: "/tmp",
+    });
+    params.agentId = "main";
+    params.provider = "openai";
+    params.model = "chat-latest";
+
+    const result = await handleToolsCommandLocal(params, true);
+
+    expect(result?.reply?.text).toContain("exec");
+    expect(toolsTestState.resolveRuntimeModelContextMock).toHaveBeenCalledWith({
+      cfg: params.cfg,
+      agentId: "main",
+      agentDir: undefined,
+      workspaceDir: "/tmp",
+      modelProvider: "openai",
+      modelId: "chat-latest",
+    });
+    expect(resolveToolsArg(resolveToolsMock)).toMatchObject({
+      modelApi: "openai-responses",
+      runtimeModel,
+    });
+  });
+
   it("ignores unauthorized senders", async () => {
     const { buildCommandTestParamsLocal, handleToolsCommandLocal } = await loadToolsHarness();
     const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
@@ -865,13 +909,12 @@ describe("handleToolsCommand", () => {
   });
 
   it("uses the canonical target session agent for /tools inventory", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
     const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
       await loadToolsHarness();
     const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
-    params.agentId = "main";
+    params.agentId = "target";
     params.sessionKey = "agent:target:whatsapp:direct:12345";
 
     const result = await handleToolsCommandLocal(params, true);
@@ -883,13 +926,12 @@ describe("handleToolsCommand", () => {
   });
 
   it("does not forward a stale ambient agentDir for session-bound /tools", async () => {
-    vi.mocked(resolveSessionAgentId).mockReturnValue("target");
     const { buildCommandTestParamsLocal, handleToolsCommandLocal, resolveToolsMock } =
       await loadToolsHarness();
     const params = buildCommandTestParamsLocal("/tools", buildConfig(), undefined, {
       workspaceDir: "/tmp",
     });
-    params.agentId = "main";
+    params.agentId = "target";
     params.agentDir = "/tmp/agents/main/agent";
     params.sessionKey = "agent:target:whatsapp:direct:12345";
 

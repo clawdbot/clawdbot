@@ -134,6 +134,7 @@ function parseSignalAllowFromEntries(raw: string): { entries: string[]; error?: 
 }
 
 export function buildSignalSetupPatch(input: SignalSetupInput) {
+  const account = normalizeSignalAccountInput(input.signalNumber);
   const transport = input.httpUrl
     ? {
         // Bare --http-url is classified once by prepareAccountConfigInput. Keep the historical
@@ -150,7 +151,7 @@ export function buildSignalSetupPatch(input: SignalSetupInput) {
         }
       : undefined;
   return {
-    ...(input.signalNumber ? { account: input.signalNumber } : {}),
+    ...(account ? { account } : {}),
     ...(transport ? { transport } : {}),
   };
 }
@@ -331,6 +332,9 @@ const signalSetupAdapterBase = createPatchedAccountSetupAdapter<SignalSetupInput
         } catch {
           return "Signal --http-host must be a hostname or IP address.";
         }
+      }
+      if (input.signalNumber !== undefined && !normalizeSignalAccountInput(input.signalNumber)) {
+        return INVALID_SIGNAL_ACCOUNT_ERROR;
       }
       if (
         input.signalTransport === "container" &&

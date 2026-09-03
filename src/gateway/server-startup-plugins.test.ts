@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
+import "./server-startup-bootstrap.test-support.js";
 
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
@@ -14,6 +17,8 @@ const applyPluginAutoEnable = vi.hoisted(() =>
   })),
 );
 const initSubagentRegistry = vi.hoisted(() => vi.fn());
+const getActivePluginRegistry = vi.hoisted(() => vi.fn<() => PluginRegistry | undefined>());
+const setActivePluginRegistry = vi.hoisted(() => vi.fn());
 const loadGatewayStartupPlugins = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
     pluginRegistry: { diagnostics: [], gatewayHandlers: {}, plugins: [] },
@@ -39,20 +44,22 @@ const pluginManifestRegistry = vi.hoisted(
     diagnostics: [],
   }),
 );
-const pluginMetadataSnapshot = vi.hoisted(
-  (): PluginMetadataSnapshot => ({
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
     policyHash: "policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash: "policy",
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     plugins: [],
@@ -68,6 +75,7 @@ const pluginMetadataSnapshot = vi.hoisted(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -77,8 +85,8 @@ const pluginMetadataSnapshot = vi.hoisted(
       indexPluginCount: 0,
       manifestPluginCount: 0,
     },
-  }),
-);
+  };
+});
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
   registrySnapshotMs: 0,
   manifestRegistryMs: 0,
@@ -88,14 +96,13 @@ const pluginLookUpTableMetrics = vi.hoisted(() => ({
   indexPluginCount: 0,
   manifestPluginCount: 0,
   startupPluginCount: 1,
-  deferredChannelPluginCount: 0,
 }));
 const loadPluginLookUpTable = vi.hoisted(() =>
   vi.fn((_params: unknown) => ({
     manifestRegistry: pluginManifestRegistry,
     startup: {
-      configuredDeferredChannelPluginIds: [] as string[],
       pluginIds: ["telegram"] as string[],
+      channelPluginIds: ["telegram"] as string[],
     },
     metrics: pluginLookUpTableMetrics,
   })),
@@ -117,9 +124,15 @@ const migrateLegacyNodePairingStore = vi.hoisted(() =>
 vi.mock("../agents/agent-scope.js", () => ({
   resolveAgentWorkspaceDir: () => "/workspace",
   resolveDefaultAgentId: () => "default",
+  tryResolveConfiguredAgentWorkspaceDir: () => "/workspace",
+  tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
-vi.mock("../agents/subagent-registry.js", () => ({
+vi.mock("../agents/workspace-state-dirs.js", () => ({
+  assertConfiguredWorkspaceStateReady: () => {},
+}));
+
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
   initSubagentRegistry: () => initSubagentRegistry(),
 }));
 
@@ -153,26 +166,16 @@ vi.mock("../plugins/plugin-lookup-table.js", () => ({
   loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
 }));
 
-vi.mock("../plugins/registry.js", () => ({
-  createEmptyPluginRegistry: () => ({ diagnostics: [], gatewayHandlers: {}, plugins: [] }),
-}));
+vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
 
 vi.mock("../plugins/runtime.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/runtime.js")>()),
-  getActivePluginRegistry: () => undefined,
-  setActivePluginRegistry: vi.fn(),
+  getActivePluginRegistry,
+  setActivePluginRegistry,
 }));
 
 vi.mock("./server-methods-list.js", () => ({
   listGatewayMethods: () => ["ping"],
-}));
-
-vi.mock("./methods/core-descriptors.js", () => ({
-  listCoreGatewayMethodNames: () => ["ping", "config.openFile"],
-}));
-
-vi.mock("./server-methods.js", () => ({
-  coreGatewayHandlers: {},
 }));
 
 vi.mock("./server-plugin-bootstrap.js", () => ({
@@ -200,21 +203,6 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
   return call[0] as T;
 }
 
-function mockDeferredSlackStartupPlugins(): void {
-  loadPluginLookUpTable.mockReturnValueOnce({
-    manifestRegistry: pluginManifestRegistry,
-    startup: {
-      configuredDeferredChannelPluginIds: ["slack"] as string[],
-      pluginIds: ["slack", "memory-core"] as string[],
-    },
-    metrics: {
-      ...pluginLookUpTableMetrics,
-      startupPluginCount: 2,
-      deferredChannelPluginCount: 1,
-    },
-  });
-}
-
 function slackConfig(): OpenClawConfig {
   return {
     channels: {
@@ -226,8 +214,8 @@ function slackConfig(): OpenClawConfig {
 async function prepareBootstrapWithRuntimeConfig(
   cfg: OpenClawConfig,
   options: {
-    loadRuntimePlugins?: boolean;
-    loadSetupRuntimePlugins?: boolean;
+    minimalTestGateway?: boolean;
+    pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workerProviderIds?: readonly string[];
   } = {},
 ) {
@@ -240,23 +228,6 @@ async function prepareBootstrapWithRuntimeConfig(
     log,
     ...options,
   });
-}
-
-function expectStartupPluginLoad(params: {
-  pluginIds: string[];
-  preferSetupRuntimeForChannelPlugins: boolean;
-  suppressPluginInfoLogs: boolean;
-}): void {
-  const startupInput = firstCallArg<{
-    pluginIds?: string[];
-    preferSetupRuntimeForChannelPlugins?: boolean;
-    suppressPluginInfoLogs?: boolean;
-  }>(loadGatewayStartupPlugins);
-  expect(startupInput.pluginIds).toEqual(params.pluginIds);
-  expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(
-    params.preferSetupRuntimeForChannelPlugins,
-  );
-  expect(startupInput.suppressPluginInfoLogs).toBe(params.suppressPluginInfoLogs);
 }
 
 describe("runGatewayStartupMaintenance", () => {
@@ -338,6 +309,8 @@ describe("runGatewayStartupMaintenance", () => {
 
 describe("prepareGatewayPluginBootstrap startup plugins", () => {
   beforeEach(() => {
+    getActivePluginRegistry.mockReset();
+    setActivePluginRegistry.mockClear();
     applyPluginAutoEnable.mockClear();
     initSubagentRegistry.mockClear();
     loadGatewayStartupPlugins.mockClear();
@@ -345,8 +318,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockClear().mockReturnValue({
       manifestRegistry: pluginManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [] as string[],
         pluginIds: ["telegram"] as string[],
+        channelPluginIds: ["telegram"] as string[],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -363,6 +336,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     expect(runStartupSessionMigration).not.toHaveBeenCalled();
     expect(migrateLegacyDevicePairingStore).not.toHaveBeenCalled();
     expect(migrateLegacyNodePairingStore).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the subagent registry before plugin bootstrap", async () => {
+    await prepareBootstrapWithRuntimeConfig({});
+
+    expect(initSubagentRegistry).toHaveBeenCalledOnce();
+    expect(initSubagentRegistry.mock.invocationCallOrder[0]).toBeLessThan(
+      loadPluginLookUpTable.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("derives startup activation from source config instead of runtime plugin defaults", async () => {
@@ -458,56 +440,35 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       dreaming: { enabled: false },
     });
 
-    const startupInput = firstCallArg<{
-      activationSourceConfig?: OpenClawConfig;
-      cfg?: OpenClawConfig;
-      baseMethods?: string[];
-      coreGatewayMethodNames?: string[];
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.activationSourceConfig).toBe(sourceConfig);
-    expect(startupInput.baseMethods).toEqual(["ping"]);
-    expect(startupInput.coreGatewayMethodNames).toEqual(["ping", "config.openFile"]);
-    expect(startupInput.cfg?.channels?.telegram?.enabled).toBe(true);
-    expect(startupInput.cfg?.channels?.telegram?.dmPolicy).toBe("pairing");
-    expect(startupInput.cfg?.channels?.telegram?.groupPolicy).toBe("allowlist");
-    expect(startupInput.cfg?.plugins?.allow).toEqual(["bench-plugin"]);
-    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.enabled).toBe(true);
-    expect(startupInput.cfg?.plugins?.entries?.["bench-plugin"]?.config).toEqual({
-      runtimeDefault: true,
-    });
-    expect(startupInput.cfg?.plugins?.entries?.["memory-core"]?.config).toEqual({
-      dreaming: { enabled: false },
-    });
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 
-  it("loads only deferred setup-runtime plugins during pre-bind bootstrap", async () => {
-    mockDeferredSlackStartupPlugins();
+  it.each([
+    { minimalTestGateway: false, pluginsEnabled: true, reuseAmbientRegistry: false },
+    { minimalTestGateway: true, pluginsEnabled: undefined, reuseAmbientRegistry: true },
+    { minimalTestGateway: true, pluginsEnabled: true, reuseAmbientRegistry: true },
+    { minimalTestGateway: true, pluginsEnabled: false, reuseAmbientRegistry: false },
+  ])(
+    "publishes the startup registry without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
+    async ({ minimalTestGateway, pluginsEnabled, reuseAmbientRegistry }) => {
+      const ambientRegistry = createEmptyPluginRegistry();
+      ambientRegistry.gatewayHandlers.fixture = vi.fn();
+      getActivePluginRegistry.mockReturnValue(ambientRegistry);
 
-    const result = await prepareBootstrapWithRuntimeConfig(slackConfig(), {
-      loadRuntimePlugins: false,
-      loadSetupRuntimePlugins: true,
-    });
+      const result = await prepareBootstrapWithRuntimeConfig(
+        { ...slackConfig(), plugins: { enabled: pluginsEnabled } },
+        { minimalTestGateway },
+      );
 
-    expect(result.runtimePluginsLoaded).toBe(false);
-    expectStartupPluginLoad({
-      pluginIds: ["slack"],
-      preferSetupRuntimeForChannelPlugins: true,
-      suppressPluginInfoLogs: true,
-    });
-  });
-
-  it("does not use setup-runtime preference for full bootstrap loads", async () => {
-    mockDeferredSlackStartupPlugins();
-
-    const result = await prepareBootstrapWithRuntimeConfig(slackConfig());
-
-    expect(result.runtimePluginsLoaded).toBe(true);
-    expectStartupPluginLoad({
-      pluginIds: ["slack", "memory-core"],
-      preferSetupRuntimeForChannelPlugins: false,
-      suppressPluginInfoLogs: false,
-    });
-  });
+      if (reuseAmbientRegistry) {
+        expect(result.pluginRegistry).toBe(ambientRegistry);
+      } else {
+        expect(result.pluginRegistry.gatewayHandlers).toEqual({});
+      }
+      expect(setActivePluginRegistry).toHaveBeenCalledWith(result.pluginRegistry);
+      expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
+    },
+  );
 
   it("threads durable worker provider ids into startup lookup planning", async () => {
     await prepareBootstrapWithRuntimeConfig({ channels: {} } as OpenClawConfig, {
@@ -525,8 +486,8 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     loadPluginLookUpTable.mockReturnValueOnce({
       manifestRegistry: emptyManifestRegistry,
       startup: {
-        configuredDeferredChannelPluginIds: [],
         pluginIds: [],
+        channelPluginIds: [],
       },
       metrics: pluginLookUpTableMetrics,
     });
@@ -564,26 +525,16 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     } as OpenClawConfig;
 
     const result = await prepareBootstrapWithRuntimeConfig(cfg, {
+      pluginMetadataSnapshot,
       workerProviderIds: ["static-ssh"],
     });
     expect(result.startupPluginIds).toEqual([]);
-    expect(result.deferredConfiguredChannelPluginIds).toEqual([]);
+    expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
     expect(result.pluginLookUpTable).toBeUndefined();
     expect(result.baseGatewayMethods).toEqual(["ping"]);
 
     expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-    const startupInput = firstCallArg<{
-      cfg?: OpenClawConfig;
-      pluginIds?: string[];
-      pluginLookUpTable?: unknown;
-      preferSetupRuntimeForChannelPlugins?: boolean;
-      suppressPluginInfoLogs?: boolean;
-    }>(loadGatewayStartupPlugins);
-    expect(startupInput.cfg).toStrictEqual(cfg);
-    expect(startupInput.pluginIds).toEqual([]);
-    expect(startupInput.pluginLookUpTable).toBeUndefined();
-    expect(startupInput.preferSetupRuntimeForChannelPlugins).toBe(false);
-    expect(startupInput.suppressPluginInfoLogs).toBe(false);
+    expect(loadGatewayStartupPlugins).not.toHaveBeenCalled();
   });
 });
 
@@ -617,43 +568,22 @@ describe("loadGatewayStartupPluginRuntime", () => {
       startupPluginIds: ["voyage"],
     });
 
+    const startupInput = firstCallArg<{ channelPluginLoadIntent?: "full" | "setup" }>(
+      loadGatewayStartupPlugins,
+    );
+    expect(startupInput.channelPluginLoadIntent).toBe("full");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );
-  });
-
-  it("does not warn during setup-runtime pre-bind loads", async () => {
-    const log = createLog();
-    const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
-
-    await loadGatewayStartupPluginRuntime({
-      cfg: {
-        memory: {
-          search: {
-            provider: "voyage",
-          },
-        },
-
-        agents: {
-          defaults: {},
-        },
-      } as OpenClawConfig,
-      workspaceDir: "/workspace",
-      log,
-      baseMethods: ["ping"],
-      startupPluginIds: ["telegram"],
-      preferSetupRuntimeForChannelPlugins: true,
-    });
-
-    expect(log.warn).not.toHaveBeenCalled();
   });
 });
 
 describe("warnUnregisteredConfiguredMemoryEmbeddingProviders", () => {
   function registry(providerIds: string[], options: { embeddingProviderIds?: string[] } = {}) {
     return {
-      memoryEmbeddingProviders: providerIds.map((id) => ({ provider: { id } })),
-      embeddingProviders: (options.embeddingProviderIds ?? []).map((id) => ({ provider: { id } })),
+      embeddingProviders: [...providerIds, ...(options.embeddingProviderIds ?? [])].map((id) => ({
+        provider: { id },
+      })),
     } as never;
   }
 

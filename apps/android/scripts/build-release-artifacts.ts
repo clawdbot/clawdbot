@@ -18,7 +18,10 @@ import {
 } from "node:fs";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { resolveAndroidVersion, syncAndroidVersioning } from "../../../scripts/lib/android-version.ts";
+import {
+  checkAndroidVersioning,
+  resolveAndroidVersion,
+} from "../../../scripts/lib/android-version.ts";
 
 type ReleaseArtifact = {
   flavorName: "play" | "wear" | "third-party";
@@ -303,10 +306,9 @@ function resolveApkSignerFromSdk(sdkRoot: string | undefined): string | null {
 
   const candidates = readdirSync(buildToolsDir)
     .toSorted((left, right) => right.localeCompare(left))
-    .map((version) => join(buildToolsDir, version, "apksigner"))
-    .filter((candidate) => existsSync(candidate));
+    .map((version) => join(buildToolsDir, version, "apksigner"));
 
-  return candidates[0] ?? null;
+  return candidates.find((candidate) => existsSync(candidate)) ?? null;
 }
 
 function resolveApkSigner(): string {
@@ -391,7 +393,7 @@ function main() {
     return;
   }
 
-  syncAndroidVersioning({ mode: "check", rootDir });
+  checkAndroidVersioning({ rootDir });
   const version = resolveAndroidVersion(rootDir);
   const buildMetadata = resolveAndroidBuildMetadata();
   const artifacts = releaseArtifacts(version.canonicalVersion).filter(

@@ -1,6 +1,10 @@
 // Covers repair hints for official external plugin installs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "./official-external-plugin-repair-hints.js";
+import {
+  resolveExternalPluginRuntimeDependencyRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHint,
+  resolveMissingOfficialExternalChannelPluginRepairHints,
+} from "./official-external-plugin-repair-hints.js";
 
 const mocks = vi.hoisted(() => ({
   resolveConfiguredChannelPresencePolicy: vi.fn(),
@@ -44,7 +48,44 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
     });
   });
 
-  it("prefers the ClawHub install hint for externalized WhatsApp", () => {
+  it("resolves multiple channel hints with one presence-policy pass", () => {
+    mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
+      {
+        channelId: "feishu",
+        sources: ["explicit-config"],
+        effective: false,
+        pluginIds: [],
+        blockedReasons: ["no-channel-owner"],
+      },
+      {
+        channelId: "whatsapp",
+        sources: ["explicit-config"],
+        effective: false,
+        pluginIds: [],
+        blockedReasons: ["no-channel-owner"],
+      },
+    ]);
+
+    expect(
+      resolveMissingOfficialExternalChannelPluginRepairHints({
+        config: { channels: { feishu: {}, whatsapp: {} } },
+        channelIds: ["feishu", "whatsapp"],
+      }).map((hint) => hint.channelId),
+    ).toEqual(["feishu", "whatsapp"]);
+    expect(mocks.resolveConfiguredChannelPresencePolicy).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips presence policy when no channel ids need repair hints", () => {
+    expect(
+      resolveMissingOfficialExternalChannelPluginRepairHints({
+        config: {},
+        channelIds: [],
+      }),
+    ).toEqual([]);
+    expect(mocks.resolveConfiguredChannelPresencePolicy).not.toHaveBeenCalled();
+  });
+
+  it("prefers the npm install hint for externalized WhatsApp", () => {
     mocks.resolveConfiguredChannelPresencePolicy.mockReturnValue([
       {
         channelId: "whatsapp",
@@ -64,8 +105,8 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
       pluginId: "whatsapp",
       channelId: "whatsapp",
       label: "WhatsApp",
-      installSpec: "clawhub:@openclaw/whatsapp",
-      installCommand: "openclaw plugins install clawhub:@openclaw/whatsapp",
+      installSpec: "@openclaw/whatsapp",
+      installCommand: "openclaw plugins install @openclaw/whatsapp",
     });
   });
 
@@ -105,5 +146,37 @@ describe("resolveMissingOfficialExternalChannelPluginRepairHint", () => {
         channelId: "whatsapp",
       }),
     ).toBeNull();
+  });
+});
+
+describe("resolveExternalPluginRuntimeDependencyRepairHint", () => {
+  it.each([
+    {
+      name: "names the official install command for the package that owns the id",
+      candidate: { pluginId: "discord", packageName: "@openclaw/discord" },
+      expected: "openclaw plugins install @openclaw/discord",
+    },
+    {
+      name: "withholds the official install command from a foreign package reusing the id",
+      candidate: {
+        pluginId: "discord",
+        packageName: "@example/discord-fork",
+        packageBuild: { bundledDist: false },
+      },
+      expected: "reinstall or update the plugin package",
+    },
+  ])("$name", ({ candidate, expected }) => {
+    const hint = resolveExternalPluginRuntimeDependencyRepairHint(candidate);
+    expect(hint).toContain("runtime dependencies are missing");
+    expect(hint).toContain(expected);
+  });
+
+  it("stays silent for plugins shipped inside the root package", () => {
+    expect(
+      resolveExternalPluginRuntimeDependencyRepairHint({
+        pluginId: "telegram",
+        packageName: "@openclaw/telegram",
+      }),
+    ).toBeUndefined();
   });
 });

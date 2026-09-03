@@ -1,8 +1,9 @@
 // Matrix plugin module implements sdk behavior.
 import type { Room } from "matrix-js-sdk/lib/models/room.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { normalizeStringEntries, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixRoomKeyBackupReadinessError } from "./backup-health.js";
-import { formatMatrixErrorMessage, isMatrixNotFoundError } from "./errors.js";
+import { isMatrixNotFoundError } from "./errors.js";
 import {
   listMatrixOwnDevices,
   resolveMatrixCrossSigningPublicationStatus,
@@ -104,7 +105,7 @@ export class MatrixClient extends MatrixClientVerification {
         keyId: stagedKeyId,
       });
     } catch (err) {
-      return await fail(formatMatrixErrorMessage(err));
+      return await fail(formatErrorMessage(err));
     }
 
     const storedRecoveryKeyMatches =
@@ -260,7 +261,7 @@ export class MatrixClient extends MatrixClientVerification {
       };
     } catch (err) {
       this.recoveryKeyStore.discardStagedRecoveryKey();
-      return await fail(formatMatrixErrorMessage(err));
+      return await fail(formatErrorMessage(err));
     }
   }
 
@@ -335,7 +336,7 @@ export class MatrixClient extends MatrixClientVerification {
       };
     } catch (err) {
       this.recoveryKeyStore.discardStagedRecoveryKey();
-      return await fail(formatMatrixErrorMessage(err));
+      return await fail(formatErrorMessage(err));
     }
   }
 
@@ -437,7 +438,7 @@ export class MatrixClient extends MatrixClientVerification {
         backup,
       };
     } catch (err) {
-      return await fail(formatMatrixErrorMessage(err));
+      return await fail(formatErrorMessage(err));
     }
   }
 
@@ -510,7 +511,7 @@ export class MatrixClient extends MatrixClientVerification {
       await this.ensureRoomKeyBackupEnabled(crypto);
     } catch (err) {
       this.recoveryKeyStore.discardStagedRecoveryKey();
-      bootstrapError = formatMatrixErrorMessage(err);
+      bootstrapError = formatErrorMessage(err);
     }
 
     const verification = await this.getOwnDeviceVerificationStatus();
@@ -610,8 +611,9 @@ export class MatrixClient extends MatrixClientVerification {
       emitter: this.emitter,
       emitMembershipForRoom: (room) => this.emitMembershipForRoom(room),
       getSelfUserId: () => this.client.getUserId() ?? this.selfUserId ?? "",
-      setCurrentSyncState: (state) => {
+      setCurrentSyncState: (state, error) => {
         this.currentSyncState = state;
+        this.currentSyncError = error;
       },
     });
   }

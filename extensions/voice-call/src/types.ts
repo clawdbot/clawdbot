@@ -185,6 +185,8 @@ export type WebhookVerificationResult = {
   isReplay?: boolean;
   /** Stable key derived from authenticated request material. */
   verifiedRequestKey?: string;
+  /** Release only this delivery's replay reservation when processing fails. */
+  releaseReplay?: () => void;
 };
 
 export type WebhookParseOptions = {

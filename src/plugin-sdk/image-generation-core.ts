@@ -29,8 +29,8 @@ export {
 export {
   getImageGenerationProvider,
   listImageGenerationProviders,
-} from "../image-generation/provider-registry.js";
-export { parseImageGenerationModelRef } from "../image-generation/model-ref.js";
+} from "../media-generation/registry.js";
+export { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
 export { createSubsystemLogger } from "../logging/subsystem.js";
 export { normalizeGooglePreviewModelId as normalizeGoogleModelId } from "./provider-model-shared.js";
 export { getProviderEnvVars } from "../secrets/provider-env-vars.js";

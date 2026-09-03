@@ -2,25 +2,29 @@
 import type { Model, StreamFn } from "@openclaw/llm-core";
 import {
   type AgentCoreCompletionRuntimeDeps,
+  consumeAgentCoreStream,
   resolveAgentCoreCompleteFn,
 } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
+import { convertToLlm } from "../messages.js";
+import { projectSessionEntryMessage } from "../session/session.js";
 import {
-  asAgentMessage,
-  convertToLlm,
-  createBranchSummaryMessage,
-  createCompactionSummaryMessage,
-  createCustomMessage,
-} from "../messages.js";
-import type { BranchSummaryResult, SessionTreeEntry } from "../types.js";
-import { BranchSummaryError, err, ok, type Result } from "../types.js";
+  type BranchSummaryResult,
+  type SessionTreeEntry,
+  BranchSummaryError,
+  err,
+  ok,
+  type Result,
+} from "../types.js";
 import { estimateTokens, SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
 import {
   computeFileLists,
   createFileOps,
   extractFileOpsFromMessage,
+  extractSummaryText,
   type FileOperations,
   formatFileOperations,
+  mergeSummaryFileOperations,
   serializeConversation,
 } from "./utils.js";
 
@@ -101,43 +105,6 @@ export function collectEntriesForBranchSummaryFromBranches<TEntry extends Branch
   return { entries: oldBranch.slice(firstSummarizedIndex), commonAncestorId };
 }
 
-function getMessageFromEntry(entry: SessionTreeEntry): AgentMessage | undefined {
-  switch (entry.type) {
-    case "message":
-      return entry.message;
-
-    case "custom_message":
-      return asAgentMessage(
-        createCustomMessage(
-          entry.customType,
-          entry.content,
-          entry.display,
-          entry.details,
-          entry.timestamp,
-        ),
-      );
-
-    case "branch_summary":
-      return asAgentMessage(
-        createBranchSummaryMessage(entry.summary, entry.fromId, entry.timestamp),
-      );
-
-    case "compaction":
-      return asAgentMessage(
-        createCompactionSummaryMessage(entry.summary, entry.tokensBefore, entry.timestamp),
-      );
-    case "thinking_level_change":
-    case "model_change":
-    case "custom":
-    case "label":
-    case "session_info":
-    case "reset":
-    case "leaf":
-      return undefined;
-  }
-  return undefined;
-}
-
 /** Prepare branch entries for summarization within an optional token budget. */
 export function prepareBranchEntries(
   entries: SessionTreeEntry[],
@@ -148,21 +115,11 @@ export function prepareBranchEntries(
   let totalTokens = 0;
   for (const entry of entries) {
     if (entry.type === "branch_summary" && !entry.fromHook && entry.details) {
-      const details = entry.details as BranchSummaryDetails;
-      if (Array.isArray(details.readFiles)) {
-        for (const f of details.readFiles) {
-          fileOps.read.add(f);
-        }
-      }
-      if (Array.isArray(details.modifiedFiles)) {
-        for (const f of details.modifiedFiles) {
-          fileOps.edited.add(f);
-        }
-      }
+      mergeSummaryFileOperations(fileOps, entry.details as BranchSummaryDetails);
     }
   }
   for (const entry of entries.toReversed()) {
-    const message = getMessageFromEntry(entry);
+    const message = projectSessionEntryMessage(entry);
     if (!message) {
       continue;
     }
@@ -276,8 +233,10 @@ export async function generateBranchSummary(
   const context = { systemPrompt: SUMMARIZATION_SYSTEM_PROMPT, messages: summarizationMessages };
   const streamOptions = { apiKey, headers, signal, maxTokens: maxSummaryOutputTokens };
   const response = options.streamFn
-    ? await (await options.streamFn(model, context, streamOptions)).result()
+    ? await consumeAgentCoreStream(options.streamFn(model, context, streamOptions))
     : await resolveAgentCoreCompleteFn(options.runtime)(model, context, streamOptions);
+  // Usage belongs to the completed provider request even when its summary is invalid.
+  options.runtime?.internalUsageSink?.(response.usage);
   if (response.stopReason === "aborted") {
     return err(
       new BranchSummaryError("aborted", response.errorMessage || "Branch summary aborted"),
@@ -292,16 +251,22 @@ export async function generateBranchSummary(
     );
   }
 
-  let summary = response.content
-    .filter((c): c is { type: "text"; text: string } => c.type === "text")
-    .map((c) => c.text)
-    .join("\n");
-  summary = BRANCH_SUMMARY_PREAMBLE + summary;
+  const summaryText = extractSummaryText(response);
+  if (summaryText === undefined) {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary failed: model returned no summary text",
+      ),
+    );
+  }
+
+  let summary = BRANCH_SUMMARY_PREAMBLE + summaryText;
   const { readFiles, modifiedFiles } = computeFileLists(fileOps);
   summary += formatFileOperations(readFiles, modifiedFiles);
 
   return ok({
-    summary: summary || "No summary generated",
+    summary,
     readFiles,
     modifiedFiles,
   });

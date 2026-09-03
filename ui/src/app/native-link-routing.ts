@@ -1,6 +1,15 @@
 import { promoteToPopoverTopLayer } from "../components/menu-surface.ts";
 import { NativeLinkMenu, type NativeLinkMenuAction } from "../components/native-link-menu.ts";
+import {
+  BROWSER_PANEL_TOGGLE_EVENT,
+  type BrowserPanelToggleDetail,
+} from "../components/panel-toggle-contract.ts";
 import { copyToClipboard } from "../lib/clipboard.ts";
+import {
+  anchorFromNavigationEvent,
+  externalHttpLinkFromEvent,
+  shouldHandleNavigationClick,
+} from "../lib/navigation-click.ts";
 
 type NativeLinkTarget = "inline" | "external";
 
@@ -22,12 +31,18 @@ type WebKitUpdateMessageHandler = {
   postMessage(message: NativeUpdateMessage): void;
 };
 
-export const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
 export const NATIVE_UPDATE_AVAILABILITY_CHANGED_EVENT =
   "openclaw:native-update-availability-changed";
+const NATIVE_UPDATE_POSTED_EVENT = "openclaw:native-update-posted";
 
 type NativeLinkRouting = {
   dispose(): void;
+};
+
+type NativeLinkRoutingOptions = {
+  onNativeUpdateDeclined?: () => void;
+  shouldOpenInControlUiBrowser?: () => boolean;
 };
 
 function getNativeLinkPoster(): WebKitMessageHandler["postMessage"] | undefined {
@@ -61,40 +76,15 @@ export function postNativeUpdate(): boolean {
   // binding also keeps oxlint's targetOrigin rule out of the wrong context.
   const poster = handler.postMessage.bind(handler);
   poster({ type: "start-update" });
+  window.dispatchEvent(new CustomEvent(NATIVE_UPDATE_POSTED_EVENT));
   return true;
-}
-
-function anchorFromEvent(event: Event): HTMLAnchorElement | null {
-  for (const target of event.composedPath()) {
-    if (target instanceof HTMLAnchorElement) {
-      return target;
-    }
-  }
-  return event.target instanceof Element ? event.target.closest("a") : null;
-}
-
-function externalHttpUrl(event: Event): { anchor: HTMLAnchorElement; url: URL } | null {
-  const anchor = anchorFromEvent(event);
-  if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
-    return null;
-  }
-  let url: URL;
-  try {
-    url = new URL(anchor.href, window.location.href);
-  } catch {
-    return null;
-  }
-  if ((url.protocol !== "http:" && url.protocol !== "https:") || url.origin === location.origin) {
-    return null;
-  }
-  return { anchor, url };
 }
 
 function trustedExternalAppUrl(event: MouseEvent): { anchor: HTMLAnchorElement; url: URL } | null {
   if (!event.isTrusted) {
     return null;
   }
-  const anchor = anchorFromEvent(event);
+  const anchor = anchorFromNavigationEvent(event);
   if (!anchor || anchor.hasAttribute("download") || anchor.hasAttribute("data-file-path")) {
     return null;
   }
@@ -136,16 +126,37 @@ function postNativeLink(
   }
 }
 
-export function startNativeLinkRouting(): NativeLinkRouting {
+function shouldHandleControlUiBrowserActivation(event: MouseEvent): boolean {
+  return (
+    !event.defaultPrevented &&
+    !event.shiftKey &&
+    !event.altKey &&
+    ((event.type === "click" && event.button === 0) ||
+      (event.type === "auxclick" && event.button === 1))
+  );
+}
+
+export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): NativeLinkRouting {
   if (typeof window === "undefined" || typeof document === "undefined") {
     return { dispose() {} };
   }
   const postMessage = getNativeLinkPoster();
-  if (!postMessage) {
+  if (!postMessage && !options.shouldOpenInControlUiBrowser && !options.onNativeUpdateDeclined) {
     return { dispose() {} };
   }
 
   let menu: NativeLinkMenu | null = null;
+  let nativeUpdatePending = false;
+  const handleNativeUpdatePosted = () => {
+    nativeUpdatePending = true;
+  };
+  const handleNativeUpdateDeclined = () => {
+    if (!nativeUpdatePending) {
+      return;
+    }
+    nativeUpdatePending = false;
+    options.onNativeUpdateDeclined?.();
+  };
   const closeMenu = (expected?: NativeLinkMenu) => {
     if (expected && menu !== expected) {
       return;
@@ -154,6 +165,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     menu = null;
   };
   const showMenu = (
+    nativePostMessage: WebKitMessageHandler["postMessage"],
     anchor: HTMLAnchorElement,
     url: URL,
     x: number,
@@ -171,7 +183,7 @@ export function startNativeLinkRouting(): NativeLinkRouting {
         void copyToClipboard(url.href);
         return;
       }
-      postNativeLink(postMessage, url, action);
+      postNativeLink(nativePostMessage, url, action);
     };
     menu = nextMenu;
     container.append(nextMenu);
@@ -179,18 +191,25 @@ export function startNativeLinkRouting(): NativeLinkRouting {
   };
 
   const handleClick = (event: MouseEvent) => {
+    const webLink = externalHttpLinkFromEvent(event);
     if (
-      event.defaultPrevented ||
-      event.button !== 0 ||
-      event.metaKey ||
-      event.ctrlKey ||
-      event.shiftKey ||
-      event.altKey
+      webLink &&
+      shouldHandleControlUiBrowserActivation(event) &&
+      options.shouldOpenInControlUiBrowser?.()
     ) {
+      window.dispatchEvent(
+        new CustomEvent<BrowserPanelToggleDetail>(BROWSER_PANEL_TOGGLE_EVENT, {
+          detail: { open: true, url: webLink.url.href },
+        }),
+      );
+      closeMenu();
+      event.preventDefault();
+      return;
+    }
+    if (!postMessage || !shouldHandleNavigationClick(event)) {
       return;
     }
     const appLink = trustedExternalAppUrl(event);
-    const webLink = appLink ? null : externalHttpUrl(event);
     const link = appLink ?? webLink;
     const target = appLink ? "external" : "inline";
     if (!link || !postNativeLink(postMessage, link.url, target)) {
@@ -200,25 +219,41 @@ export function startNativeLinkRouting(): NativeLinkRouting {
     event.preventDefault();
   };
   const handleContextMenu = (event: MouseEvent) => {
-    if (event.defaultPrevented) {
+    if (!postMessage || event.defaultPrevented) {
       return;
     }
-    const link = externalHttpUrl(event);
+    const link = externalHttpLinkFromEvent(event);
     if (!link) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    showMenu(link.anchor, link.url, event.clientX, event.clientY, menuContainer(event));
+    showMenu(
+      postMessage,
+      link.anchor,
+      link.url,
+      event.clientX,
+      event.clientY,
+      menuContainer(event),
+    );
   };
 
-  document.addEventListener("click", handleClick, true);
+  // Run after target/document handlers so cancelled application actions remain authoritative.
+  window.addEventListener("click", handleClick);
+  window.addEventListener("auxclick", handleClick);
+  window.addEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
+  window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
   // Capture keeps message-level context menus from replacing native link actions.
-  document.addEventListener("contextmenu", handleContextMenu, true);
+  if (postMessage) {
+    document.addEventListener("contextmenu", handleContextMenu, true);
+  }
 
   return {
     dispose() {
-      document.removeEventListener("click", handleClick, true);
+      window.removeEventListener("click", handleClick);
+      window.removeEventListener("auxclick", handleClick);
+      window.removeEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
+      window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
       document.removeEventListener("contextmenu", handleContextMenu, true);
       closeMenu();
     },

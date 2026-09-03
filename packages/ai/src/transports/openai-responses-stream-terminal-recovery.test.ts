@@ -85,6 +85,127 @@ const rejectedTerminalToolBatchFixture = (params: {
   },
 });
 
+const rejectedStreamedToolFixture = (params: {
+  name: string;
+  status: "completed" | "incomplete";
+  arguments?: string;
+  error: string;
+  started?: boolean;
+}): ParityFixture => {
+  const item = {
+    id: "fc_rejected_streamed",
+    call_id: "call_rejected_streamed",
+    type: "function_call",
+    name: "lookup",
+    ...(params.arguments === undefined ? {} : { arguments: params.arguments }),
+    status: params.status,
+  };
+  const started = params.started
+    ? [
+        {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { ...item, arguments: "", status: "in_progress" },
+        },
+        {
+          type: "response.function_call_arguments.delta",
+          output_index: 0,
+          item_id: item.id,
+          delta: "{",
+        },
+      ]
+    : [];
+  return {
+    name: params.name,
+    events: [
+      ...started,
+      { type: "response.output_item.done", output_index: 0, item },
+      completed("resp_rejected_streamed_tool", [item]),
+    ],
+    canonical: {
+      events: params.started
+        ? [
+            { type: "toolcall_start", contentIndex: 0 },
+            { type: "toolcall_delta", contentIndex: 0, delta: "{" },
+          ]
+        : [],
+      content: params.started
+        ? [
+            {
+              type: "toolCall",
+              id: "call_rejected_streamed|fc_rejected_streamed",
+              name: "lookup",
+              arguments: {},
+              partialJson: false,
+            },
+          ]
+        : [],
+      responseId: null,
+      stopReason: "stop",
+      error: params.error,
+    },
+  };
+};
+
+const unsafeIntegerToolFixture = (source: "streamed" | "terminal"): ParityFixture => {
+  const item = {
+    id: "fc_unsafe_integer",
+    call_id: "call_unsafe_integer",
+    type: "function_call",
+    name: "send_message",
+    arguments:
+      '{"to":1481220477346119781,"safe":42,"maxSafe":9007199254740991,"nested":{"ids":[9007199254740993,-9007199254740992]}}',
+    status: "completed",
+  };
+  const streamed =
+    source === "streamed"
+      ? [
+          {
+            type: "response.output_item.added",
+            output_index: 0,
+            item: { ...item, arguments: "", status: "in_progress" },
+          },
+          {
+            type: "response.function_call_arguments.delta",
+            output_index: 0,
+            item_id: item.id,
+            delta: '{"to":',
+          },
+          { type: "response.output_item.done", output_index: 0, item },
+        ]
+      : [];
+  return {
+    name: `${source} completed tool arguments preserve unsafe integers`,
+    events: [...streamed, completed("resp_unsafe_integer_tool", [item])],
+    canonical: {
+      events: [
+        { type: "toolcall_start", contentIndex: 0 },
+        ...(source === "streamed"
+          ? [{ type: "toolcall_delta", contentIndex: 0, delta: '{"to":' }]
+          : []),
+        { type: "toolcall_end", contentIndex: 0 },
+      ],
+      content: [
+        {
+          type: "toolCall",
+          id: "call_unsafe_integer|fc_unsafe_integer",
+          name: "send_message",
+          arguments: {
+            to: "1481220477346119781",
+            safe: 42,
+            maxSafe: 9007199254740991,
+            nested: { ids: ["9007199254740993", "-9007199254740992"] },
+          },
+          partialJson: false,
+        },
+      ],
+      responseId: "resp_unsafe_integer_tool",
+      stopReason: "toolUse",
+      error: null,
+    },
+  };
+};
+
 const rejectedOutOfOrderTerminalFixture = (
   state: "completed" | "started" | "reasoning",
 ): ParityFixture => {
@@ -342,6 +463,32 @@ const fixtures: ParityFixture[] = [
     arguments: '{"q":',
     error: "Responses stream completed tool call with invalid JSON arguments",
   }),
+  rejectedStreamedToolFixture({
+    name: "streamed malformed tool arguments never complete their started call",
+    status: "completed",
+    arguments: '{"q":',
+    error: "Responses stream completed tool call with invalid JSON arguments",
+    started: true,
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed non-object tool arguments never start a call",
+    status: "completed",
+    arguments: "[]",
+    error: "Responses stream completed tool call with invalid JSON arguments",
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed missing tool arguments never fabricate an empty call",
+    status: "completed",
+    error: "Responses stream completed tool call with invalid JSON arguments",
+  }),
+  rejectedStreamedToolFixture({
+    name: "streamed incomplete tool calls never start a call",
+    status: "incomplete",
+    arguments: '{"q":"x"}',
+    error: "Responses stream completed with an incomplete terminal tool call",
+  }),
+  unsafeIntegerToolFixture("streamed"),
+  unsafeIntegerToolFixture("terminal"),
   rejectedTerminalToolBatchFixture({
     name: "terminal tool batch rejects a later incomplete call before executing earlier calls",
     status: "incomplete",
@@ -545,10 +692,124 @@ const fixtures: ParityFixture[] = [
       error: null,
     },
   },
+  {
+    name: "terminal reasoning backfill follows the completed output slot",
+    events: [
+      {
+        type: "response.output_item.added",
+        output_index: 0,
+        item: { id: "rs_backfill", type: "reasoning", summary: [] },
+      },
+      {
+        type: "response.output_item.done",
+        output_index: 0,
+        item: {
+          id: "rs_backfill",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Checking the answer." }],
+        },
+      },
+      completed("resp_reasoning_backfill", [
+        {
+          id: "rs_backfill",
+          type: "reasoning",
+          summary: [{ type: "summary_text", text: "Checking the answer." }],
+          encrypted_content: "fixture-reasoning-ciphertext",
+        },
+      ]),
+    ],
+    canonical: {
+      events: [
+        { type: "thinking_start", contentIndex: 0 },
+        { type: "thinking_end", contentIndex: 0, content: "Checking the answer." },
+      ],
+      content: [{ type: "thinking", thinking: "Checking the answer.", encrypted: true }],
+      responseId: "resp_reasoning_backfill",
+      stopReason: "stop",
+      error: null,
+    },
+  },
+  {
+    name: "equal text in distinct output slots remains distinct",
+    events: [
+      ...[0, 1].flatMap((outputIndex) => [
+        {
+          type: "response.output_item.added",
+          output_index: outputIndex,
+          item: { id: `msg_equal_${outputIndex}`, type: "message", content: [] },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: outputIndex,
+          item: {
+            id: `msg_equal_${outputIndex}`,
+            type: "message",
+            content: [{ type: "output_text", text: "Again." }],
+          },
+        },
+      ]),
+      completed(
+        "resp_equal_messages",
+        [0, 1].map((outputIndex) => ({
+          id: `msg_equal_${outputIndex}`,
+          type: "message",
+          content: [{ type: "output_text", text: "Again." }],
+        })),
+      ),
+    ],
+    canonical: {
+      events: [
+        { type: "text_start", contentIndex: 0 },
+        { type: "text_end", contentIndex: 0, content: "Again." },
+        { type: "text_start", contentIndex: 1 },
+        { type: "text_end", contentIndex: 1, content: "Again." },
+      ],
+      content: [
+        { type: "text", text: "Again." },
+        { type: "text", text: "Again." },
+      ],
+      responseId: "resp_equal_messages",
+      stopReason: "stop",
+      error: null,
+    },
+  },
 ];
 
-describe("Responses terminal recovery fixtures", () => {
+describe.each(["stable", "rotated"])("Responses terminal recovery with %s item IDs", (ids) => {
   it.each(fixtures)("$name", async (fixture) => {
-    expect(await runFixture(fixture.events)).toEqual(fixture.canonical);
+    let sequence = 0;
+    const events: ParityFixture["events"] = JSON.parse(
+      JSON.stringify(fixture.events),
+      (key, value: unknown) =>
+        ids === "rotated" &&
+        (key === "id" || key === "item_id") &&
+        typeof value === "string" &&
+        /^(msg|rs)_/.test(value)
+          ? `${value}_event_${sequence++}`
+          : value,
+    );
+    expect(await runFixture(events)).toEqual(fixture.canonical);
   });
+});
+
+it.each(["type", "call_id"])("rejects terminal output that changes its %s", async (field) => {
+  const streamed = {
+    type: "function_call",
+    id: "fc_original",
+    call_id: "call_original",
+    name: "lookup",
+    arguments: "{}",
+    status: "completed",
+  };
+  const terminal =
+    field === "type"
+      ? { type: "message", id: "msg_changed", content: [{ type: "output_text", text: "Changed" }] }
+      : { ...streamed, call_id: "call_changed" };
+  const result = await runFixture([
+    { type: "response.output_item.done", output_index: 0, item: streamed },
+    completed("resp_changed_identity", [terminal]),
+  ]);
+  expect(result.error).toBe("Responses stream changed output item identity");
+  expect(result.content).toHaveLength(1);
+  expect(result.events.filter((event) => event.type === "toolcall_end")).toHaveLength(1);
 });

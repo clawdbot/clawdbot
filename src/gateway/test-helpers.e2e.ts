@@ -3,9 +3,11 @@
 import { writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { WebSocket } from "ws";
 import { type HelloOk, PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/index.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import {
@@ -14,7 +16,7 @@ import {
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
-import { rawDataToString } from "../infra/ws.js";
+import { captureEnv } from "../test-utils/env.js";
 import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -25,9 +27,10 @@ import {
 import { GatewayClient } from "./client.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
 import { startGatewayServer } from "./server.js";
+import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 
 /** Reserve a deterministic free port block for Gateway E2E tests. */
-export async function getFreeGatewayPort(): Promise<number> {
+export async function getGatewayE2ePortBlock(): Promise<number> {
   return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
 }
 
@@ -52,7 +55,10 @@ export async function connectGatewayClient(params: {
   onEvent?: (evt: { event?: string; payload?: unknown }) => void;
   onHelloOk?: (hello: HelloOk) => void;
   connectChallengeTimeoutMs?: number;
+  preauthHandshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
+  minProtocol?: number;
+  maxProtocol?: number;
   timeoutMs?: number;
   timeoutMessage?: string;
 }) {
@@ -73,33 +79,40 @@ export async function connectGatewayClient(params: {
         return path.join(identityRoot, "test-device-identities", `${safe}.sqlite`);
       })(),
     });
-  return await new Promise<InstanceType<typeof GatewayClient>>((resolve, reject) => {
+  return await new Promise<GatewayClient>((resolve, reject) => {
     let settled = false;
-    const stop = (err?: Error, connectedClient?: InstanceType<typeof GatewayClient>) => {
+    const settle = (outcome: { client: GatewayClient } | { error: unknown }) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimeout(timer);
-      if (err) {
-        void client?.stopAndWait({ timeoutMs: 1_000 }).catch(() => {
-          client?.stop();
-        });
-        reject(err);
+      if ("error" in outcome) {
+        // Failed acquisition still owns the client. Reject only after stop settles,
+        // preserving both errors when shutdown also fails.
+        void runQaGatewayFixture(
+          async () => {
+            throw outcome.error;
+          },
+          () => client.stopAndWait({ timeoutMs: 1_000 }),
+        ).catch(reject);
       } else {
-        resolve(connectedClient as InstanceType<typeof GatewayClient>);
+        resolve(outcome.client);
       }
     };
-    const client: InstanceType<typeof GatewayClient> | undefined = new GatewayClient({
+    const client = new GatewayClient({
       url: params.url,
       token: params.token,
       deviceToken: params.deviceToken,
       ...(params.connectChallengeTimeoutMs !== undefined
         ? { connectChallengeTimeoutMs: params.connectChallengeTimeoutMs }
         : {}),
+      preauthHandshakeTimeoutMs: params.preauthHandshakeTimeoutMs ?? params.timeoutMs,
       ...(params.requestTimeoutMs !== undefined
         ? { requestTimeoutMs: params.requestTimeoutMs }
         : {}),
+      minProtocol: params.minProtocol,
+      maxProtocol: params.maxProtocol,
       clientName: params.clientName ?? GATEWAY_CLIENT_NAMES.TEST,
       clientDisplayName: params.clientDisplayName ?? "vitest",
       clientVersion: params.clientVersion ?? "dev",
@@ -116,18 +129,22 @@ export async function connectGatewayClient(params: {
       onEvent: params.onEvent,
       onHelloOk: (hello) => {
         params.onHelloOk?.(hello);
-        stop(undefined, client);
+        settle({ client });
       },
-      onConnectError: (err) => stop(err),
+      onConnectError: (error) => settle({ error }),
       onClose: (code, reason) =>
-        stop(new Error(`gateway closed during connect (${code}): ${reason}`)),
+        settle({ error: new Error(`gateway closed during connect (${code}): ${reason}`) }),
     });
     const timer = setTimeout(
-      () => stop(new Error(params.timeoutMessage ?? "gateway connect timeout")),
+      () => settle({ error: new Error(params.timeoutMessage ?? "gateway connect timeout") }),
       params.timeoutMs ?? 10_000,
     );
     timer.unref();
-    client.start();
+    try {
+      client.start();
+    } catch (error) {
+      settle({ error });
+    }
   });
 }
 
@@ -260,24 +277,53 @@ export async function startGatewayWithClient(params: {
   configPath: string;
   token: string;
   clientDisplayName?: string;
+  scopes?: string[];
+  onEvent?: (evt: { event?: string; payload?: unknown }) => void;
 }) {
-  await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
-  process.env.OPENCLAW_CONFIG_PATH = params.configPath;
-  clearRuntimeConfigSnapshot();
-  clearConfigCache();
-  clearSessionStoreCacheForTest();
+  const gatewayStartupEnv = captureEnv([...GATEWAY_STARTUP_MUTATED_ENV_KEYS]);
+  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  try {
+    await writeFile(params.configPath, `${JSON.stringify(params.cfg, null, 2)}\n`);
+    process.env.OPENCLAW_CONFIG_PATH = params.configPath;
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    clearSessionStoreCacheForTest();
 
-  const port = await getFreeGatewayPort();
-  const server = await startGatewayServer(port, {
-    bind: "loopback",
-    auth: { mode: "token", token: params.token },
-    controlUiEnabled: false,
-  });
-  const client = await connectGatewayClient({
-    url: `ws://127.0.0.1:${port}`,
-    token: params.token,
-    clientDisplayName: params.clientDisplayName,
-  });
+    const port = await getGatewayE2ePortBlock();
+    const startedServer = await startGatewayServer(port, {
+      bind: "loopback",
+      auth: { mode: "token", token: params.token },
+      controlUiEnabled: false,
+    });
+    server = startedServer;
+    const client = await connectGatewayClient({
+      url: `ws://127.0.0.1:${port}`,
+      token: params.token,
+      clientDisplayName: params.clientDisplayName,
+      scopes: params.scopes,
+      onEvent: params.onEvent,
+    });
 
-  return { port, server, client };
+    return {
+      port,
+      client,
+      server: {
+        startupSettled: startedServer.startupSettled,
+        close: async (...args: Parameters<typeof startedServer.close>) => {
+          try {
+            await startedServer.close(...args);
+          } finally {
+            gatewayStartupEnv.restore();
+          }
+        },
+      },
+    };
+  } catch (error) {
+    try {
+      await server?.close({ reason: "gateway E2E client setup failed" });
+    } finally {
+      gatewayStartupEnv.restore();
+    }
+    throw error;
+  }
 }

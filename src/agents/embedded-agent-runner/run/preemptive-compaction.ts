@@ -1,21 +1,22 @@
 /**
  * Estimates prompt pressure and decides pre-prompt compaction routing.
  */
+import { resolveCompactionReplayPressure } from "@openclaw/ai/transports";
+import type { Model } from "@openclaw/llm-core";
+import { estimateStringChars } from "@openclaw/normalization-core/cjk-chars";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
-import { estimateStringChars } from "../../../utils/cjk-chars.js";
-import {
-  MIN_PROMPT_BUDGET_RATIO,
-  MIN_PROMPT_BUDGET_TOKENS,
-} from "../../agent-compaction-constants.js";
+import { resolveEffectiveCompactionReserveTokens } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
 import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
   BRANCH_SUMMARY_SUFFIX,
   bashExecutionToText,
+  calculateContextTokens,
   COMPACTION_SUMMARY_PREFIX,
   COMPACTION_SUMMARY_SUFFIX,
+  IMAGE_BLOCK_TOKENS,
 } from "../../runtime/index.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
@@ -28,11 +29,9 @@ const TOOL_RESULT_CHARS_PER_TOKEN = 2;
 const JSON_PAYLOAD_CHARS_PER_TOKEN = 3;
 const MESSAGE_BOUNDARY_OVERHEAD_TOKENS = 12;
 const CONTENT_BLOCK_OVERHEAD_TOKENS = 6;
-const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 
-/** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
-export type PreemptiveCompactionDecision = {
+type CompactionPressureDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
@@ -41,6 +40,18 @@ export type PreemptiveCompactionDecision = {
   overflowTokens: number;
   toolResultReducibleChars: number;
   effectiveReserveTokens: number;
+};
+
+/** Diagnostic maximum plus the independently selected outgoing checkpoint's budget. */
+export type PreemptiveCompactionDecision = CompactionPressureDecision & {
+  compactionReplay?: CompactionPressureDecision;
+};
+
+export type CompactionReplayPressureContext = {
+  model: Model;
+  sessionId?: string;
+  authProfileId?: string;
+  enabled?: boolean;
 };
 
 /** Token pressure reported by the rendered provider-boundary prompt when available. */
@@ -155,49 +166,52 @@ function estimateContentTokenPressure(
 }
 
 function estimateMessageTokenPressure(message: AgentMessage): number {
-  const record = message as unknown as Record<string, unknown>;
+  if ("excludeFromContext" in message && message.excludeFromContext === true) {
+    return 0;
+  }
+  // Provider replay can carry legacy aliases outside the canonical AgentMessage union.
+  const legacy: Record<string, unknown> = isRecord(message) ? message : {};
   let tokens = MESSAGE_BOUNDARY_OVERHEAD_TOKENS;
 
-  if (record.role === "toolResult" || record.role === "tool" || record.type === "toolResult") {
-    tokens += estimateContentTokenPressure(record.content, "tool-result");
-    tokens += estimateIdentifierTokenPressure(record.toolName ?? record.tool_name);
+  if (message.role === "toolResult" || legacy.role === "tool" || legacy.type === "toolResult") {
+    const content = message.role === "toolResult" ? message.content : legacy.content;
+    const toolName = message.role === "toolResult" ? message.toolName : legacy.toolName;
+    tokens += estimateContentTokenPressure(content, "tool-result");
+    tokens += estimateIdentifierTokenPressure(toolName ?? legacy.tool_name);
     return tokens;
   }
 
-  if (record.role === "bashExecution") {
-    if (record.excludeFromContext === true) {
-      return 0;
-    }
-    tokens += estimateStringTokenPressure(
-      bashExecutionToText(record as unknown as BashExecutionMessage),
-    );
+  if (message.role === "bashExecution") {
+    const bashMessage: BashExecutionMessage = message;
+    tokens += estimateStringTokenPressure(bashExecutionToText(bashMessage));
     return tokens;
   }
 
-  if (record.role === "branchSummary" || record.role === "compactionSummary") {
-    const summary = typeof record.summary === "string" ? record.summary : "";
+  if (message.role === "branchSummary" || message.role === "compactionSummary") {
     const [prefix, suffix] =
-      record.role === "branchSummary"
+      message.role === "branchSummary"
         ? [BRANCH_SUMMARY_PREFIX, BRANCH_SUMMARY_SUFFIX]
         : [COMPACTION_SUMMARY_PREFIX, COMPACTION_SUMMARY_SUFFIX];
-    return tokens + estimateStringTokenPressure(prefix + summary + suffix);
+    return tokens + estimateStringTokenPressure(prefix + message.summary + suffix);
   }
 
-  if (record.role === "assistant") {
-    const content = record.content;
-    if (Array.isArray(content)) {
-      for (const block of content) {
-        if (isRecord(block) && (block.type === "toolCall" || block.type === "tool_use")) {
-          tokens += estimateAssistantToolCallTokenPressure(block);
-        } else {
-          tokens += estimateContentBlockTokenPressure(block);
+  if (message.role === "assistant") {
+    if (Array.isArray(message.content)) {
+      for (const block of message.content) {
+        if (isRecord(block)) {
+          const blockType: unknown = block.type;
+          if (blockType === "toolCall" || blockType === "tool_use") {
+            tokens += estimateAssistantToolCallTokenPressure(block);
+            continue;
+          }
         }
+        tokens += estimateContentBlockTokenPressure(block);
       }
     } else {
-      tokens += estimateContentTokenPressure(content);
+      tokens += estimateContentTokenPressure(message.content);
     }
 
-    const toolCalls = record.toolCalls ?? record.tool_calls;
+    const toolCalls = legacy.toolCalls ?? legacy.tool_calls;
     if (Array.isArray(toolCalls)) {
       for (const toolCall of toolCalls) {
         tokens += isRecord(toolCall)
@@ -208,7 +222,7 @@ function estimateMessageTokenPressure(message: AgentMessage): number {
     return tokens;
   }
 
-  tokens += estimateContentTokenPressure(record.content);
+  tokens += estimateContentTokenPressure(legacy.content);
   return tokens;
 }
 
@@ -227,19 +241,88 @@ function estimateRenderedPromptTokens(params: { systemPrompt?: string; prompt: s
   );
 }
 
+type TranscriptBoundaryTokenPressure = {
+  estimatedPromptTokens: number;
+  source: "provider_context_usage" | "transcript_estimate" | "provider_compaction_estimate";
+  messages: AgentMessage[];
+  hasCompactionReplay: boolean;
+};
+
+function isProviderContextUsageBarrier(message: AgentMessage): boolean {
+  if (message.role !== "assistant" || !message.usage) {
+    return false;
+  }
+  // Zero unavailable and legacy CLI records describe a newer context without
+  // provider provenance; scanning past them can undercount the active transcript.
+  return (
+    (message.api === "cli" && message.usage.contextUsage === undefined) ||
+    (message.usage.contextUsage?.state === "unavailable" &&
+      calculateContextTokens(message.usage) === 0)
+  );
+}
+
+function resolveProviderContextBoundary(
+  messages: AgentMessage[],
+): { index: number; totalTokens: number } | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message && isProviderContextUsageBarrier(message)) {
+      return undefined;
+    }
+    const contextUsage = message?.role === "assistant" ? message.usage?.contextUsage : undefined;
+    if (
+      contextUsage?.state === "available" &&
+      Number.isFinite(contextUsage.totalTokens) &&
+      contextUsage.totalTokens > 0
+    ) {
+      return { index, totalTokens: Math.ceil(contextUsage.totalTokens) };
+    }
+  }
+  return undefined;
+}
+
+function estimateTranscriptBoundaryTokenPressure(params: {
+  messages: AgentMessage[];
+  systemPrompt?: string;
+  prompt: string;
+  replay?: CompactionReplayPressureContext;
+}): TranscriptBoundaryTokenPressure {
+  const replay = params.replay
+    ? resolveCompactionReplayPressure(params.messages, params.replay.model, params.replay, {
+        text: estimateStringTokenPressure,
+        image: () => IMAGE_BLOCK_TOKENS,
+        json: estimateJsonPayloadTokenPressure,
+      })
+    : undefined;
+  const messages = replay?.messages ?? params.messages;
+  const boundary = resolveProviderContextBoundary(messages);
+  // The provider total owns transcript items through its assistant record. It has
+  // no system-prompt provenance, so the current rendered prompt stays local too.
+  const messagesForPressure = boundary ? messages.slice(boundary.index + 1) : messages;
+  const locallyEstimatedTokens = messagesForPressure.reduce(
+    (sum, message) => sum + estimateMessageTokenPressure(message),
+    estimateRenderedPromptTokens(params) + (boundary ? 0 : (replay?.prefixTokens ?? 0)),
+  );
+  return {
+    estimatedPromptTokens:
+      (boundary?.totalTokens ?? 0) + Math.ceil(locallyEstimatedTokens * SAFETY_MARGIN),
+    source: boundary
+      ? "provider_context_usage"
+      : replay
+        ? "provider_compaction_estimate"
+        : "transcript_estimate",
+    messages,
+    hasCompactionReplay: Boolean(replay),
+  };
+}
+
 export function estimateLlmBoundaryTokenPressure(params: {
   messages: AgentMessage[];
   systemPrompt?: string;
   prompt: string;
+  replay?: CompactionReplayPressureContext;
 }): number {
-  const historyTokens = params.messages.reduce(
-    (sum, message) => sum + estimateMessageTokenPressure(message),
-    0,
-  );
-  return Math.max(
-    0,
-    Math.ceil((historyTokens + estimateRenderedPromptTokens(params)) * SAFETY_MARGIN),
-  );
+  return estimateTranscriptBoundaryTokenPressure(params).estimatedPromptTokens;
 }
 
 /** Estimates only the rendered prompt/system portion when history has already been accounted for. */
@@ -280,46 +363,77 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   reserveTokens: number;
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
+  replay?: CompactionReplayPressureContext;
 }): PreemptiveCompactionDecision {
-  let messagesForPressure = params.messages;
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
     params.llmBoundaryTokenPressure,
   );
-  let estimatedPromptTokens =
-    llmBoundaryTokenPressure?.estimatedPromptTokens ??
-    estimateLlmBoundaryTokenPressure({
-      messages: params.messages,
-      systemPrompt: params.systemPrompt,
-      prompt: params.prompt,
-    });
-  let pressureSource = llmBoundaryTokenPressure?.source ?? "transcript_estimate";
+  const transcriptTokenPressure =
+    llmBoundaryTokenPressure && !params.replay
+      ? undefined
+      : estimateTranscriptBoundaryTokenPressure({
+          messages: params.messages,
+          systemPrompt: params.systemPrompt,
+          prompt: params.prompt,
+          replay: params.replay,
+        });
+  // The selected provider window owns its covered prefix, including when a
+  // context engine supplied an estimate of the raw transcript instead.
+  const boundaryPressure = transcriptTokenPressure?.hasCompactionReplay
+    ? undefined
+    : llmBoundaryTokenPressure;
+  const outgoingDecision = resolveCompactionPressureDecision(
+    {
+      messages: transcriptTokenPressure?.messages ?? params.messages,
+      estimatedPromptTokens:
+        boundaryPressure?.estimatedPromptTokens ??
+        transcriptTokenPressure?.estimatedPromptTokens ??
+        0,
+      source: boundaryPressure?.source ?? transcriptTokenPressure?.source ?? "transcript_estimate",
+    },
+    params,
+  );
+  let diagnosticDecision = outgoingDecision;
   if (params.unwindowedMessages && params.unwindowedMessages !== params.messages) {
-    const unwindowedEstimatedPromptTokens = estimateLlmBoundaryTokenPressure({
+    const unwindowedTokenPressure = estimateTranscriptBoundaryTokenPressure({
       messages: params.unwindowedMessages,
       systemPrompt: params.systemPrompt,
       prompt: params.prompt,
     });
-    if (unwindowedEstimatedPromptTokens > estimatedPromptTokens) {
-      estimatedPromptTokens = unwindowedEstimatedPromptTokens;
-      messagesForPressure = params.unwindowedMessages;
-      pressureSource = "unwindowed_transcript_estimate";
+    // Unwindowed history is diagnostic: neither its checkpoints nor its larger
+    // raw estimate may authorize recovery of a different outgoing window.
+    if (unwindowedTokenPressure.estimatedPromptTokens > outgoingDecision.estimatedPromptTokens) {
+      diagnosticDecision = resolveCompactionPressureDecision(
+        {
+          ...unwindowedTokenPressure,
+          source: `unwindowed_${unwindowedTokenPressure.source}`,
+        },
+        params,
+      );
     }
   }
+  return {
+    ...diagnosticDecision,
+    ...(transcriptTokenPressure?.hasCompactionReplay ? { compactionReplay: outgoingDecision } : {}),
+  };
+}
+
+function resolveCompactionPressureDecision(
+  pressure: Pick<TranscriptBoundaryTokenPressure, "messages" | "estimatedPromptTokens"> & {
+    source: string;
+  },
+  params: { contextTokenBudget: number; reserveTokens: number; toolResultMaxChars?: number },
+): CompactionPressureDecision {
+  const { estimatedPromptTokens } = pressure;
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
-  const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
-  const minPromptBudget = Math.min(
-    MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
-  );
-  // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
-  const effectiveReserveTokens = Math.min(
-    requestedReserveTokens,
-    Math.max(0, contextTokenBudget - minPromptBudget),
-  );
+  const effectiveReserveTokens = resolveEffectiveCompactionReserveTokens({
+    contextTokenBudget,
+    reserveTokens: params.reserveTokens,
+  });
   const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
-    messages: messagesForPressure,
+    messages: pressure.messages,
     contextWindowTokens: params.contextTokenBudget,
     maxCharsOverride: params.toolResultMaxChars,
   });
@@ -346,7 +460,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
-    pressureSource,
+    pressureSource: pressure.source,
     promptBudgetBeforeReserve,
     overflowTokens,
     toolResultReducibleChars,

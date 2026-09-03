@@ -1,7 +1,8 @@
 /**
  * Tests Windows spawn compatibility helpers.
  */
-import { writeFile } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import { copyFile, mkdir, realpath, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createPluginSdkTestHarness } from "./test-helpers.js";
@@ -15,16 +16,72 @@ const { createTempDir } = createPluginSdkTestHarness({
 });
 
 describe("resolveWindowsSpawnProgram", () => {
-  it("rejects node command strings that include inline entrypoint arguments on Windows", () => {
-    expect(() =>
-      resolveWindowsSpawnProgram({
-        command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+  it.runIf(process.platform === "win32")(
+    "resolves mixed-case PATH and PATHEXT keys for a native Windows spawn",
+    async () => {
+      const dir = await createTempDir("openclaw-windows-spawn-env-case-");
+      const executable = path.join(dir, "mixed-env-tool.MiXeD");
+      await copyFile(process.execPath, executable);
+      const env = { pAtH: dir, pAtHeXt: ".MiXeD" };
+
+      const program = resolveWindowsSpawnProgram({
+        command: "mixed-env-tool",
+        platform: "win32",
+        env,
+        execPath: process.execPath,
+      });
+      const invocation = materializeWindowsSpawnProgram(program, [
+        "-e",
+        'process.stdout.write("native-ok")',
+      ]);
+      const child = spawnSync(invocation.command, invocation.argv, { env, encoding: "utf8" });
+
+      expect(program).toMatchObject({ command: executable, resolution: "direct" });
+      expect(child.error).toBeUndefined();
+      expect(child.status).toBe(0);
+      expect(child.stdout).toBe("native-ok");
+    },
+  );
+
+  it.each(["node script.js", "pnpm exec tool", '"C:\\tools\\pnpm.cmd" exec tool'])(
+    "rejects command strings with inline arguments on Windows: %s",
+    (command) => {
+      expect(() =>
+        resolveWindowsSpawnProgram({
+          command,
+          platform: "win32",
+          env: {},
+          execPath: "C:\\node\\node.exe",
+        }),
+      ).toThrow("Windows spawn command must be an executable path only");
+    },
+  );
+
+  it.each(["pnpm checkout", "node tools"])(
+    "preserves an existing launcher path inside %s on Windows",
+    async (directory) => {
+      const root = await realpath(await createTempDir("openclaw-windows-spawn-test-"));
+      const dir = path.join(root, directory);
+      await mkdir(dir);
+      const launcher = path.join(dir, "launcher.js");
+      await writeFile(launcher, "process.exit(0);\n", "utf8");
+
+      const program = resolveWindowsSpawnProgram({
+        command: launcher,
         platform: "win32",
         env: {},
-        execPath: "C:\\node\\node.exe",
-      }),
-    ).toThrow("Windows spawn command must be an executable path only");
-  });
+        execPath: process.execPath,
+      });
+
+      expect(materializeWindowsSpawnProgram(program, ["--version"])).toEqual({
+        command: process.execPath,
+        argv: [launcher, "--version"],
+        resolution: "node-entrypoint",
+        shell: undefined,
+        windowsHide: true,
+      });
+    },
+  );
 
   it("allows executable paths with spaces on Windows", () => {
     const resolved = resolveWindowsSpawnProgram({

@@ -159,18 +159,12 @@ struct ExecApprovalsSocketPathGuardTests {
     }
 
     @Test
-    func `socket path resolves under the configured state directory`() async throws {
+    func `socket path resolves under the configured state directory`() async {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-socket-guard-\(UUID().uuidString)", isDirectory: true)
         defer { try? FileManager().removeItem(at: stateDir) }
 
-        // String-level assertion only. The isolation lock serializes env
-        // mutation but not env consumption: concurrent suites that resolve
-        // OPENCLAW_STATE_DIR mid-window would create this directory and the
-        // old filesystem assertions here flaked on their 0755 default
-        // (#104019). Creation-with-0700 is covered by the explicit-path
-        // tests in this suite.
-        await TestIsolation.withEnvValues(["OPENCLAW_STATE_DIR": stateDir.path]) {
+        await ExecApprovalsStore.withStateDirectory(stateDir) {
             let socketPath = ExecApprovalsStore.socketPath()
             #expect(socketPath == stateDir.appendingPathComponent("exec-approvals.sock").path)
         }
@@ -272,22 +266,65 @@ struct ExecApprovalsSocketPathGuardTests {
 
     @Test
     func `socket lease blocks replacement until current owner releases`() async throws {
-        let root = URL(fileURLWithPath: "/tmp", isDirectory: true)
-            .appendingPathComponent("ocsl-\(UUID().uuidString.prefix(12))", isDirectory: true)
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
         defer { try? FileManager().removeItem(at: root) }
-        try FileManager().createDirectory(
-            at: root,
-            withIntermediateDirectories: false,
-            attributes: [.posixPermissions: 0o700])
-        let socketPath = root.appendingPathComponent("exec-approvals.sock").path
-        #expect(socketPath.utf8.count < MemoryLayout.size(ofValue: sockaddr_un().sun_path))
+        let socketPath = root.appendingPathComponent("exec.sock").path
+        let started = AsyncStream<Void>.makeStream()
+        let release = AsyncStream<Void>.makeStream()
+        let released = Task.detached { for await _ in release.stream {} }
+        defer { release.continuation.finish() }
+        let first = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath) { _ in
+            // Hold admitted work through cancellation so stop must retain its lease until drain.
+            started.continuation.yield()
+            await released.value
+            return .allowOnce
+        }
+        let replacement = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath)
+        var request: Task<ExecApprovalDecision?, Never>?
+        do {
+            try #require(await first.start())
+            let firstIdentity = try #require(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath))
+            #expect(await !replacement.start())
+            request = Task {
+                await ExecApprovalsSocketTestSupport.requestDecision(socketPath: socketPath, timeoutMs: 1000)
+            }
+            let admitted = await withTaskGroup(of: Bool.self) { group in
+                group.addTask {
+                    var iterator = started.stream.makeAsyncIterator()
+                    return await iterator.next() != nil
+                }
+                group.addTask {
+                    try? await Task.sleep(for: .seconds(1))
+                    return false
+                }
+                defer { group.cancelAll() }
+                return await group.next() ?? false
+            }
+            try #require(admitted)
 
-        let result = await ExecApprovalsPromptServer._testSocketLeaseHandoff(socketPath: socketPath)
+            let drain = first.stop()
+            #expect(!first.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.pathKind(at: socketPath) == .missing)
+            #expect(await !replacement.start())
+            release.continuation.finish()
+            await drain.value
 
-        #expect(result.replacementBlockedWhileOwned)
-        #expect(result.replacementStartedAfterRelease)
-        #expect(result.replacementHasDistinctIdentity)
-        #expect(result.replacementPreserved)
+            #expect(await replacement.start())
+            let replacementIdentity = try #require(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath))
+            #expect(firstIdentity != replacementIdentity)
+            await first.stop().value
+            #expect(replacement.isListening)
+            #expect(try ExecApprovalsSocketPathGuard.socketIdentity(at: socketPath) == replacementIdentity)
+        } catch {
+            release.continuation.finish()
+            await first.stop().value
+            await replacement.stop().value
+            _ = await request?.value
+            throw error
+        }
+        await first.stop().value
+        await replacement.stop().value
+        _ = await request?.value
     }
 
     @Test

@@ -1,5 +1,5 @@
 // Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
 import { backupCreateCommand } from "./backup.js";
 
@@ -7,6 +7,7 @@ const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 const backupVerifyCommandMock = vi.hoisted(() => vi.fn());
 const writeRuntimeJsonMock = vi.hoisted(() => vi.fn());
 const formatBackupCreateSummaryMock = vi.hoisted(() => vi.fn(() => ["backup ok"]));
+const recordBackupRunOutcomeMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../infra/backup-create.js", () => ({
   createBackupArchive: createBackupArchiveMock,
@@ -25,6 +26,10 @@ vi.mock("../runtime.js", async () => {
   };
 });
 
+vi.mock("../state/backup-run-records.js", () => ({
+  recordBackupRunOutcome: recordBackupRunOutcomeMock,
+}));
+
 function createRuntime(): RuntimeEnv {
   return {
     log: vi.fn(),
@@ -42,6 +47,15 @@ function requireBackupVerifyCall(): [RuntimeEnv, Record<string, unknown>] {
 }
 
 describe("backupCreateCommand verify wrapper", () => {
+  beforeEach(() => {
+    createBackupArchiveMock.mockReset();
+    backupVerifyCommandMock.mockReset();
+    writeRuntimeJsonMock.mockReset();
+    formatBackupCreateSummaryMock.mockReset();
+    formatBackupCreateSummaryMock.mockReturnValue(["backup ok"]);
+    recordBackupRunOutcomeMock.mockReset();
+  });
+
   it("optionally verifies the archive after writing it", async () => {
     createBackupArchiveMock.mockResolvedValue({
       archivePath: "/tmp/openclaw-backup.tar.gz",
@@ -79,5 +93,20 @@ describe("backupCreateCommand verify wrapper", () => {
     });
     expect(verifyLog).not.toBe(runtime.log);
     expect(typeof verifyLog).toBe("function");
+  });
+
+  it("does not claim completion when both backup and outcome recording fail", async () => {
+    const backupError = new Error("snapshot failed");
+    createBackupArchiveMock.mockRejectedValue(backupError);
+    recordBackupRunOutcomeMock.mockImplementation(() => {
+      throw new Error("record failed");
+    });
+    const runtime = createRuntime();
+
+    await expect(backupCreateCommand(runtime)).rejects.toBe(backupError);
+
+    expect(runtime.error).toHaveBeenCalledWith(
+      "Warning: the backup outcome could not be recorded: record failed",
+    );
   });
 });

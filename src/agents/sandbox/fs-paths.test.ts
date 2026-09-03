@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   buildSandboxFsMounts,
+  findWritableSandboxBindSourceOutsideRoot,
   hasSandboxBindContainerPathAliases,
   hasSandboxBindReadonlyHostShadows,
   resolveSandboxFsPathWithMounts,
@@ -56,10 +57,47 @@ describe("sandbox bind mounts", () => {
   });
 
   it("detects bind mounts whose container path differs from the host path", () => {
-    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(false);
+    expect(hasSandboxBindContainerPathAliases(["/tmp/data:/tmp/data:rw"])).toBe(
+      process.platform === "win32",
+    );
     expect(hasSandboxBindContainerPathAliases(["/tmp/data:/data:rw"])).toBe(true);
     expect(hasSandboxBindContainerPathAliases(["invalid-bind"])).toBe(false);
   });
+
+  it.skipIf(process.platform === "win32")(
+    "judges writable bind containment on canonical paths, not on the spelled source",
+    () => {
+      const root = tempDirs.make("bind-containment-");
+      const workspace = path.join(root, "workspace");
+      const outside = path.join(root, "outside");
+      fs.mkdirSync(workspace, { recursive: true });
+      fs.mkdirSync(outside, { recursive: true });
+      const workspaceAlias = path.join(root, "workspace-alias");
+      fs.symlinkSync(workspace, workspaceAlias, "dir");
+      const escapeLink = path.join(workspace, "escape");
+      fs.symlinkSync(outside, escapeLink, "dir");
+
+      // An alias of the workspace itself resolves to the root and is not outside it.
+      expect(
+        findWritableSandboxBindSourceOutsideRoot([`${workspaceAlias}:/alias:rw`], workspace),
+      ).toBeUndefined();
+      // A link spelled inside the workspace that resolves outside it is reported as spelled.
+      expect(
+        findWritableSandboxBindSourceOutsideRoot([`${escapeLink}:/escape:rw`], workspace),
+      ).toBe(escapeLink);
+      // Read-only sources never widen the writable surface.
+      expect(
+        findWritableSandboxBindSourceOutsideRoot([`${outside}:/outside:ro`], workspace),
+      ).toBeUndefined();
+      expect(findWritableSandboxBindSourceOutsideRoot([`${outside}:/outside:rw`], workspace)).toBe(
+        outside,
+      );
+      // No writable workspace: every writable bind is external.
+      expect(findWritableSandboxBindSourceOutsideRoot([`${workspace}:/w:rw`], undefined)).toBe(
+        workspace,
+      );
+    },
+  );
 
   it("detects read-only bind shadows inside writable host roots", () => {
     expect(
@@ -185,6 +223,48 @@ describe("resolveSandboxFsPathWithMounts", () => {
     );
     expect(message).toContain("Use a path under /workspace/ instead.");
     expect(message).not.toContain(os.homedir());
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "does not expose real Windows home casing aliases in escape errors",
+    () => {
+      const homeAlias = os.homedir().toUpperCase();
+      expect(fs.statSync(homeAlias).isDirectory()).toBe(true);
+      const workspaceDir = path.join(homeAlias, "workspace-coder");
+      const sandbox = createSandbox({
+        workspaceDir,
+        agentWorkspaceDir: workspaceDir,
+      });
+
+      expect(() =>
+        resolveSandboxFsPathWithMounts({
+          filePath: "C:\\outside\\secret.txt",
+          cwd: sandbox.workspaceDir,
+          defaultWorkspaceRoot: sandbox.workspaceDir,
+          defaultContainerRoot: sandbox.containerWorkdir,
+          mounts: buildSandboxFsMounts(sandbox),
+        }),
+      ).toThrow("Path escapes sandbox root (~/workspace-coder; container root /workspace)");
+    },
+  );
+
+  it("keeps non-home workspace roots in the native host format", () => {
+    const root = path.parse(os.homedir()).root;
+    const workspaceDir = path.join(root, "openclaw-non-home-workspace");
+    const sandbox = createSandbox({
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+    });
+
+    expect(() =>
+      resolveSandboxFsPathWithMounts({
+        filePath: path.join(root, "openclaw-outside", "secret.txt"),
+        cwd: sandbox.workspaceDir,
+        defaultWorkspaceRoot: sandbox.workspaceDir,
+        defaultContainerRoot: sandbox.containerWorkdir,
+        mounts: buildSandboxFsMounts(sandbox),
+      }),
+    ).toThrow(`Path escapes sandbox root (${workspaceDir}; container root /workspace)`);
   });
 
   it("prefers custom bind mounts over default workspace mount at /workspace", () => {

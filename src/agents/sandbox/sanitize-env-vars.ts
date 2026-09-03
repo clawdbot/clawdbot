@@ -7,6 +7,7 @@
 import { getCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../../plugins/installed-plugin-index.js";
 import { listKnownSecretEnvVarNames } from "../../secrets/provider-env-vars.js";
+import { SECRET_ENV_NAME_RE } from "../../secrets/secret-env-name.js";
 import { SANDBOX_DOCKER_EXPLICIT_ENV_POLICY_EPOCH } from "./config-hash.js";
 
 const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -27,7 +28,7 @@ const BLOCKED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
   /^(GH|GITHUB)_TOKEN$/i,
   /^(AZURE|AZURE_OPENAI|COHERE|AI_GATEWAY|OPENROUTER)_API_KEY$/i,
   /_ADMIN_KEY$/i,
-  /_?(API_KEY|TOKEN|PASSWORD|PRIVATE_KEY|SECRET)$/i,
+  SECRET_ENV_NAME_RE,
 ];
 
 const ALLOWED_ENV_VAR_PATTERNS: ReadonlyArray<RegExp> = [
@@ -112,10 +113,9 @@ export function sanitizeEnvVars(
 
   const blockedPatterns = [...BLOCKED_ENV_VAR_PATTERNS, ...(options.customBlockedPatterns ?? [])];
   const allowedPatterns = [...ALLOWED_ENV_VAR_PATTERNS, ...(options.customAllowedPatterns ?? [])];
-  // Sandbox launches consume the Gateway-owned metadata snapshot so configured
-  // plugin paths cannot bypass manifest-declared credential scrubbing.
+  // Credential metadata belongs to the host; the candidate container environment
+  // must not redirect discovery to another state directory or plugin inventory.
   const metadataSnapshot = getCurrentPluginMetadataSnapshot({
-    env: envVars,
     allowScopedSnapshot: true,
     allowWorkspaceScopedSnapshot: true,
   });
@@ -128,8 +128,8 @@ export function sanitizeEnvVars(
       }
     : undefined;
   const knownSecretNames = new Set(
-    listKnownSecretEnvVarNames({ env: envVars, metadataSnapshot: activeMetadataSnapshot }).map(
-      (name) => name.trim().toUpperCase(),
+    listKnownSecretEnvVarNames({ metadataSnapshot: activeMetadataSnapshot }).map((name) =>
+      name.trim().toUpperCase(),
     ),
   );
 

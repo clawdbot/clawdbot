@@ -1,6 +1,6 @@
 ---
 name: command-logger
-description: "Log all command events to a centralized audit file"
+description: "Log emitted command events to a centralized audit file"
 homepage: https://docs.openclaw.ai/automation/hooks#command-logger
 metadata:
   {
@@ -15,11 +15,11 @@ metadata:
 
 # Command Logger Hook
 
-Logs all command events (`/new`, `/reset`, `/stop`, etc.) to a centralized audit log file for debugging and monitoring purposes.
+Logs emitted command events to a centralized audit log file for debugging and monitoring purposes. Current core actions are `/new`, `/reset`, and `/stop`; plugins may emit additional actions.
 
 ## What It Does
 
-Every time you issue a command to the agent:
+Every time OpenClaw emits a command event:
 
 1. **Captures event details** - Command action, timestamp, session key, sender ID, source
 2. **Appends to log file** - Writes a JSON line to `~/.openclaw/logs/commands.log`

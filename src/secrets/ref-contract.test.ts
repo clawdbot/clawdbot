@@ -10,6 +10,7 @@ import {
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretRef,
+  resolveDefaultSecretProviderAlias,
   validateExecSecretRefId,
 } from "./ref-contract.js";
 
@@ -67,5 +68,15 @@ describe("secret ref validation", () => {
         extra: "x",
       } as never),
     ).toBe(false);
+  });
+
+  it("uses env-name grammar and source-specific defaults for store refs", () => {
+    expect(isValidSecretRef({ source: "store", provider: "default", id: "STORED_API_KEY" })).toBe(
+      true,
+    );
+    expect(isValidSecretRef({ source: "store", provider: "default", id: "lowercase" })).toBe(false);
+    expect(
+      resolveDefaultSecretProviderAlias({ secrets: { defaults: { store: "teamstore" } } }, "store"),
+    ).toBe("teamstore");
   });
 });

@@ -32,6 +32,16 @@ describe("redactSensitiveUrl", () => {
     );
   });
 
+  it("redacts resource-scoped bearer token query params", () => {
+    expect(
+      redactSensitiveUrl(
+        `https://gateway.example.com/webhooks/sms?upstream-token=keep&__openclaw_mms_token_${"a".repeat(24)}=${"b".repeat(48)}`,
+      ),
+    ).toBe(
+      `https://gateway.example.com/webhooks/sms?upstream-token=***&__openclaw_mms_token_${"a".repeat(24)}=***`,
+    );
+  });
+
   it("redacts encoded and invisible-spliced sensitive query param names", () => {
     expect(
       redactSensitiveUrl("https://example.com/mcp?client%5Fse%E2%80%8Bcret=secret&safe=value"),
@@ -287,8 +297,11 @@ describe("isSensitiveUrlQueryParamName", () => {
     expect(isSensitiveUrlQueryParamName("X-Api-Key")).toBe(true);
     expect(isSensitiveUrlQueryParamName("x-access-token")).toBe(true);
     expect(isSensitiveUrlQueryParamName("x-auth-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName("upstream-token")).toBe(true);
+    expect(isSensitiveUrlQueryParamName(`__openclaw_mms_token_${"a".repeat(24)}`)).toBe(true);
     expect(isSensitiveUrlQueryParamName("signal")).toBe(false);
     expect(isSensitiveUrlQueryParamName("sigmoid")).toBe(false);
+    expect(isSensitiveUrlQueryParamName("token_count")).toBe(false);
     expect(isSensitiveUrlQueryParamName("x-api-version")).toBe(false);
     expect(isSensitiveUrlQueryParamName("x-request-id")).toBe(false);
     expect(isSensitiveUrlQueryParamName("safe")).toBe(false);

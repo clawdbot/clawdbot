@@ -27,6 +27,7 @@ import type {
 } from "./plugin-blob-store.types.js";
 import { PluginBlobStoreError } from "./plugin-blob-store.types.js";
 import {
+  createPluginStoreOptionPolicy,
   serializePluginStoreJson,
   validateOptionalPluginStoreTtlMs,
   validatePluginStoreKey,
@@ -55,8 +56,6 @@ type PreparedBlob = {
   metadataJson: string;
   ttlMs?: number;
 };
-
-const namespaceOptionSignatures = new Map<string, BlobStoreOptionSignature>();
 
 function invalidInput(
   message: string,
@@ -108,15 +107,10 @@ function validatePositiveLimit(value: number, label: string, maximum: number): n
   return normalized;
 }
 
-function validateOverflowPolicy(value: unknown): PluginBlobOverflowPolicy {
-  if (value === undefined || value === "evict-oldest") {
-    return "evict-oldest";
-  }
-  if (value === "reject-new") {
-    return value;
-  }
-  throw invalidInput("plugin blob overflowPolicy must be evict-oldest or reject-new", "open");
-}
+const optionPolicy = createPluginStoreOptionPolicy<BlobStoreOptionSignature>({
+  label: "plugin blob",
+  invalid: (message) => invalidInput(message, "open"),
+});
 
 function validateTtl(
   value: number | undefined,
@@ -127,33 +121,6 @@ function validateTtl(
     label: "plugin blob ttlMs",
     errors: validationErrors(operation),
   });
-}
-
-function assertConsistentOptions(
-  pluginId: string,
-  namespace: string,
-  signature: BlobStoreOptionSignature,
-): void {
-  const key = `${pluginId}\0${namespace}`;
-  const existing = namespaceOptionSignatures.get(key);
-  if (!existing) {
-    namespaceOptionSignatures.set(key, signature);
-    return;
-  }
-  if (
-    existing.maxEntries !== signature.maxEntries ||
-    existing.maxBytesPerEntry !== signature.maxBytesPerEntry ||
-    existing.maxBytesPerNamespace !== signature.maxBytesPerNamespace ||
-    existing.overflowPolicy !== signature.overflowPolicy ||
-    existing.defaultTtlMs !== signature.defaultTtlMs
-  ) {
-    // Namespace limits are a shared contract. Reopening with different limits
-    // would make quota and eviction behavior depend on call order.
-    throw invalidInput(
-      `plugin blob namespace ${namespace} for ${pluginId} was reopened with incompatible options`,
-      "open",
-    );
-  }
 }
 
 function prepareBlob(params: {
@@ -256,9 +223,9 @@ function createPluginBlobStoreInternal<TMetadata>(
   if (maxBytesPerEntry > maxBytesPerNamespace) {
     throw invalidInput("plugin blob maxBytesPerEntry must not exceed maxBytesPerNamespace", "open");
   }
-  const overflowPolicy = validateOverflowPolicy(options.overflowPolicy);
+  const overflowPolicy = optionPolicy.resolveOverflowPolicy(options.overflowPolicy);
   const defaultTtlMs = validateTtl(options.defaultTtlMs, "open");
-  assertConsistentOptions(pluginId, namespace, {
+  optionPolicy.assertConsistent(pluginId, namespace, {
     maxEntries,
     maxBytesPerEntry,
     maxBytesPerNamespace,
@@ -371,7 +338,7 @@ export function createPluginBlobStoreForTests<TMetadata>(
 
 /** Resets facade signatures and the shared state database handle for tests. */
 export function resetPluginBlobStoreForTests(options: { closeDatabase?: boolean } = {}): void {
-  namespaceOptionSignatures.clear();
+  optionPolicy.clear();
   if (options.closeDatabase !== false) {
     closeOpenClawStateDatabaseForTest();
   }

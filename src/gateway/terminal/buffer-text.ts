@@ -1,5 +1,5 @@
-// Renders a session's raw output ring as plain text for terminal.text — an
-// agent/LLM affordance that wants readable output, not escape sequences.
+// Renders a session's raw output ring as plain text for the agent terminal tool,
+// which needs readable output rather than escape sequences.
 import { stripAnsiSequences } from "../../../packages/terminal-core/src/ansi.js";
 
 // Built at runtime so the source stays free of literal control characters and

@@ -2,6 +2,7 @@
 import {
   type WebClient as SlackWebClient,
   WebAPIHTTPError,
+  WebAPIPlatformError,
   WebAPIRateLimitedError,
   WebAPIRequestError,
 } from "@slack/web-api";
@@ -18,6 +19,7 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { classifyTransientNetworkErrorCode } from "openclaw/plugin-sdk/retry-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString as normalizeThreadTs } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatSlackError } from "../errors.js";
 import type { SlackMessageEvent } from "../types.js";
 import type { SlackIngressTurnLifecycle } from "./ingress.js";
@@ -30,17 +32,12 @@ type ThreadTsCacheEntry = {
 const DEFAULT_THREAD_TS_CACHE_TTL_MS = 60_000;
 const DEFAULT_THREAD_TS_CACHE_MAX = 500;
 
-const normalizeThreadTs = (threadTs?: string | null) => {
-  const trimmed = threadTs?.trim();
-  return trimmed ? trimmed : undefined;
-};
-
 const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent => ({
   ...message,
   _ambiguousThreadReply: true,
 });
 
-function isTransientSlackThreadLookupError(error: unknown): boolean {
+export function isTransientSlackThreadLookupError(error: unknown): boolean {
   if (error instanceof WebAPIRateLimitedError) {
     return true;
   }
@@ -51,8 +48,16 @@ function isTransientSlackThreadLookupError(error: unknown): boolean {
       (error.statusCode >= 500 && error.statusCode < 600)
     );
   }
+  // Slack documents these users.info response codes as transient service failures.
+  if (error instanceof WebAPIPlatformError) {
+    return error.data.error === "internal_error" || error.data.error === "service_unavailable";
+  }
   if (!(error instanceof WebAPIRequestError)) {
     return false;
+  }
+  // Slack Web API 8.0.0 wraps exhausted 429 retries as this uncoded request error.
+  if (/^A rate limit was exceeded \(url: .+, retry-after: \d+\)$/.test(error.original.message)) {
+    return true;
   }
   return collectErrorGraphCandidates(error.original, (current) => [
     current.cause,

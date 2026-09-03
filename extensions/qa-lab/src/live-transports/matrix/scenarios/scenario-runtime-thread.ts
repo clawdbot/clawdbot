@@ -23,9 +23,6 @@ import type { MatrixQaCanaryArtifact, MatrixQaScenarioExecution } from "./scenar
 
 type MatrixQaThreadScenarioResult = Awaited<ReturnType<typeof runThreadScenario>>;
 
-const MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE =
-  /thread=true is unavailable because no channel plugin registered subagent_spawning hooks/i;
-
 function assertMatrixQaInReplyTarget(params: {
   actualEventId?: string;
   expectedEventId: string;
@@ -59,9 +56,6 @@ function buildMatrixQaThreadArtifacts(result: MatrixQaThreadScenarioResult) {
 
 function failIfMatrixSubagentThreadHookError(event: MatrixQaObservedEvent) {
   const body = event.body ?? "";
-  if (MATRIX_SUBAGENT_THREAD_HOOK_ERROR_RE.test(body)) {
-    throw new Error(`Matrix subagent thread spawn hit missing hook error: ${body || "<empty>"}`);
-  }
   if (/\bsessions_spawn failed:/i.test(body)) {
     throw new Error(`Matrix subagent thread spawn failed: ${body || "<empty>"}`);
   }

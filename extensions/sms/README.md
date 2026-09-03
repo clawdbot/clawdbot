@@ -1,6 +1,6 @@
-# SMS OpenClaw channel
+# SMS/MMS OpenClaw channel
 
-Official OpenClaw channel plugin for SMS.
+Official OpenClaw channel plugin for Twilio SMS and MMS.
 
 ## Install
 

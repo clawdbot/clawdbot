@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MeetingRealtimeAudioEngineHealth } from "openclaw/plugin-sdk/meeting-runtime";
 import { vi } from "vitest";
 import { resolveGoogleMeetConfig } from "../config.js";
@@ -120,6 +121,8 @@ export function meetBrowserState(overrides: Record<string, unknown> = {}) {
   return {
     inCall: true,
     micMuted: false,
+    audioInputRouted: true,
+    audioOutputRouted: true,
     title: "Meet call",
     url: MEET_URL,
     ...overrides,
@@ -193,10 +196,11 @@ export function meetAudioBridge(stop = vi.fn(async () => {})) {
 export function meetRuntime(
   config: Parameters<typeof resolveGoogleMeetConfig>[0],
   logger: ConstructorParameters<typeof GoogleMeetRuntime>[0]["logger"],
+  fullConfig: OpenClawConfig = {},
 ) {
   return new GoogleMeetRuntime({
     config: resolveGoogleMeetConfig(config),
-    fullConfig: {} as never,
+    fullConfig,
     runtime: {} as never,
     logger,
   });

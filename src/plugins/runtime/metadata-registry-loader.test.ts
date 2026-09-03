@@ -19,11 +19,24 @@ vi.mock("../../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../loader.js", () => ({
   loadOpenClawPlugins: (...args: unknown[]) => loadOpenClawPluginsMock(...args),
+  loadPluginRegistryHandle: (options: Record<string, unknown> = {}) =>
+    loadOpenClawPluginsMock({ ...options, activate: false }),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn<typeof import("../../agents/agent-scope.js").listAgentEntries>(() => []),
   resolveAgentWorkspaceDir: () => "/resolved-workspace",
+  tryResolveConfiguredAgentWorkspaceDir: vi.fn<
+    typeof import("../../agents/agent-scope.js").tryResolveConfiguredAgentWorkspaceDir
+  >(() => "/resolved-workspace"),
   resolveDefaultAgentId: () => "default",
+}));
+
+vi.mock("../control-plane-workspace.js", () => ({
+  resolvePluginControlPlaneWorkspace: (params: { workspaceDir?: string }) => ({
+    workspaceDir: params.workspaceDir ?? "/resolved-workspace",
+    workspaceScope: "selected",
+  }),
 }));
 
 function getOnlyLoadOpenClawPluginsOptions(): PluginLoadOptions {
@@ -170,6 +183,7 @@ describe("loadPluginMetadataRegistrySnapshot", () => {
       mode: "validate",
       loadModules: undefined,
       manifestRegistry,
+      installRecords: undefined,
     });
   });
 

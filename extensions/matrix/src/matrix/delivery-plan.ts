@@ -6,6 +6,7 @@ import type {
   MessageReceipt,
   MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import type { MatrixClient } from "./sdk.js";
 import type { MatrixMessageWireDispatch } from "./sdk/client-base.js";
@@ -383,13 +384,6 @@ function createReconciledMatrixReceipt(params: {
   };
 }
 
-function describeError(value: unknown): string {
-  if (value instanceof Error) {
-    return value.message;
-  }
-  return typeof value === "string" ? value : "unknown error";
-}
-
 async function requireTransactionScope(client: MatrixClient): Promise<string> {
   const scope = (await client.getTransactionScopeId()).trim();
   if (!scope) {
@@ -488,13 +482,19 @@ export async function reconcileMatrixUnknownSend(
         cleanupError = cleanupFailure;
       }
     }
-    const errorMessage = describeError(error);
+    const errorMessage = formatErrorMessage(
+      error instanceof Error || typeof error === "string" ? error : "unknown error",
+    );
     return {
       status: "unresolved",
       error:
         cleanupError === undefined
           ? errorMessage
-          : `${errorMessage}; Matrix delivery-plan cleanup failed: ${describeError(cleanupError)}`,
+          : `${errorMessage}; Matrix delivery-plan cleanup failed: ${formatErrorMessage(
+              cleanupError instanceof Error || typeof cleanupError === "string"
+                ? cleanupError
+                : "unknown error",
+            )}`,
       retryable,
     };
   }

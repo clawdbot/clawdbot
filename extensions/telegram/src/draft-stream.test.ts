@@ -41,7 +41,7 @@ function createForumDraftStream(api: ReturnType<typeof createMockDraftApi>) {
 
 function createThreadedDraftStream(
   api: ReturnType<typeof createMockDraftApi>,
-  thread: { id: number; scope: "forum" | "dm" },
+  thread: { id: number; scope: "direct-messages" | "dm" | "forum" },
 ) {
   return createDraftStream(api, { thread });
 }
@@ -122,6 +122,49 @@ function createForceNewMessageHarness(params: { throttleMs?: number } = {}) {
 }
 
 describe("createTelegramDraftStream", () => {
+  it("materializes only the newest lazy partial in a throttle window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    try {
+      const api = createMockDraftApi();
+      const stream = createDraftStream(api, { throttleMs: 250 });
+      let materializeCount = 0;
+
+      for (let index = 1; index <= 24; index += 1) {
+        stream.updateLazy(() => {
+          materializeCount += 1;
+          return `partial ${index}`;
+        });
+      }
+
+      expect(materializeCount).toBe(0);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(1);
+      expectPreviewSend(api, "partial 24");
+
+      vi.setSystemTime(500);
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return undefined;
+      });
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(materializeCount).toBe(2);
+      expect(api.sendMessage).toHaveBeenCalledTimes(1);
+      expect(api.editMessageText).not.toHaveBeenCalled();
+
+      stream.updateLazy(() => {
+        materializeCount += 1;
+        return "visible after empty";
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      expect(materializeCount).toBe(3);
+      expectPreviewEdit(api, "visible after empty");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reports the provider response after the first preview becomes durable", async () => {
     const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 99 }));
     const onProviderMessage = vi.fn();
@@ -140,6 +183,24 @@ describe("createTelegramDraftStream", () => {
     expect(onProviderMessage).toHaveBeenCalledWith(
       expect.objectContaining({ message_id: 101, message_thread_id: 99 }),
     );
+  });
+
+  it("stops before another preview when accepted-message validation fails", async () => {
+    const api = createMockDraftApi(async () => ({ message_id: 101, message_thread_id: 7 }));
+    const validationError = new Error("provider topic mismatch");
+    const validateProviderMessage = vi.fn(async () => {
+      throw validationError;
+    });
+    const stream = createDraftStream(api, { validateProviderMessage });
+
+    stream.update("First preview");
+    await expect(stream.waitForInFlight()).rejects.toBe(validationError);
+    stream.update("Second preview");
+    await expect(stream.flush()).rejects.toBe(validationError);
+
+    expect(validateProviderMessage).toHaveBeenCalledTimes(1);
+    expect(api.sendMessage).toHaveBeenCalledTimes(1);
+    expect(api.editMessageText).not.toHaveBeenCalled();
   });
 
   it("stops accepting updates before awaiting durable provider observation", async () => {
@@ -216,7 +277,7 @@ describe("createTelegramDraftStream", () => {
     await vi.waitFor(() => expectPreviewSend(api, "Hello"));
   });
 
-  it("uses text send/edit for dm thread previews", async () => {
+  it("uses message_thread_id for bot-private topic previews", async () => {
     const api = createMockDraftApi();
     const stream = createThreadedDraftStream(api, { id: 42, scope: "dm" });
 
@@ -230,9 +291,28 @@ describe("createTelegramDraftStream", () => {
     expectPreviewEdit(api, "Hello again");
   });
 
-  it.each(["forum", "dm"] as const)(
-    "does not retry %s message preview sends without the topic id",
-    async (scope) => {
+  it("uses direct_messages_topic_id only for channel Direct Messages previews", async () => {
+    const api = createMockDraftApi();
+    const stream = createThreadedDraftStream(api, { id: 77, scope: "direct-messages" });
+
+    stream.update("Hello");
+    await vi.waitFor(() => expectPreviewSend(api, "Hello", { direct_messages_topic_id: 77 }));
+    expect(api.editMessageText).not.toHaveBeenCalled();
+
+    stream.update("Hello again");
+    await stream.flush();
+
+    expectPreviewEdit(api, "Hello again");
+    expect(api.editMessageText.mock.calls[0]?.[3]).toBeUndefined();
+  });
+
+  it.each([
+    { scope: "forum" as const, expected: { message_thread_id: 42 } },
+    { scope: "dm" as const, expected: { message_thread_id: 42 } },
+    { scope: "direct-messages" as const, expected: { direct_messages_topic_id: 42 } },
+  ])(
+    "does not retry $scope message preview sends without the topic id",
+    async ({ scope, expected }) => {
       const api = createMockDraftApi();
       api.sendMessage.mockRejectedValueOnce(
         new Error("400: Bad Request: message thread not found"),
@@ -247,7 +327,7 @@ describe("createTelegramDraftStream", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalledTimes(1);
-      expectPreviewSend(api, "Hello", { message_thread_id: 42 });
+      expectPreviewSend(api, "Hello", expected);
       expect(warn).toHaveBeenCalledWith(
         "telegram stream preview failed: 400: Bad Request: message thread not found",
       );
@@ -378,99 +458,6 @@ describe("createTelegramDraftStream", () => {
 
     expect(api.sendMessage).toHaveBeenCalledWith(123, "see https://example.com", {});
     expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "see https://example.com now");
-  });
-
-  it("finalizeToPreview edits the live window message in place without deleting", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("🛠️ Exec: pnpm test");
-    await stream.flush();
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBe(17);
-    // The window message is EDITED into the bar, never deleted (no focus-jump).
-    expect(api.editMessageText).toHaveBeenCalledWith(123, 17, "🛠️ 1 tool call · ⏱️ 1s");
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview materializes a still-pending window before editing", async () => {
-    // A throttled preview may not have been sent yet when the collapse runs;
-    // finalizeToPreview must send it first so there is a message to edit into
-    // the bar, rather than returning undefined and forcing a delete + repost.
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, {
-      thread: { id: 42, scope: "dm" },
-      throttleMs: 10_000,
-    });
-
-    stream.update("🛠️ Exec: pnpm test");
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBe(17);
-    expect(api.sendMessage).toHaveBeenCalledTimes(1);
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview returns undefined when no window ever rendered", async () => {
-    const api = createMockDraftApi();
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.sendMessage).not.toHaveBeenCalled();
-    expect(api.editMessageText).not.toHaveBeenCalled();
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("finalizeToPreview returns undefined when the in-place collapse edit does not apply", async () => {
-    // Red-team F2: a flood-wait (429) on the collapse edit makes the underlying
-    // send return false without applying. finalizeToPreview must report that as
-    // "not collapsed in place" (undefined) so the dispatch falls back to posting
-    // a durable bar — otherwise it assumes success, clears state, posts no bar,
-    // and the tall window is left on screen.
-    const api = createMockDraftApi();
-    api.editMessageText.mockRejectedValueOnce(
-      Object.assign(
-        new Error("Call to 'editMessageText' failed! (429: Too Many Requests: retry after 5)"),
-        { error_code: 429, parameters: { retry_after: 5 } },
-      ),
-    );
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("🛠️ Exec: pnpm test");
-    await stream.flush();
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.editMessageText).toHaveBeenCalledTimes(1);
-    // The live window is NOT deleted (the caller posts the bar below it instead).
-    expect(api.deleteMessage).not.toHaveBeenCalled();
-  });
-
-  it("does not replay a rejected pending edit after collapse fallback", async () => {
-    const api = createMockDraftApi();
-    const retryableEditError = () =>
-      Object.assign(new Error("429: retry after 1"), {
-        error_code: 429,
-        parameters: { retry_after: 1 },
-      });
-    const stream = createDraftStream(api, { thread: { id: 42, scope: "dm" } });
-
-    stream.update("working");
-    await stream.flush();
-    api.editMessageText
-      .mockRejectedValueOnce(retryableEditError())
-      .mockRejectedValueOnce(retryableEditError());
-    stream.update("pending update");
-    const messageId = await stream.finalizeToPreview({ text: "🛠️ 1 tool call · ⏱️ 1s" });
-
-    expect(messageId).toBeUndefined();
-    expect(api.editMessageText).toHaveBeenCalledTimes(2);
-    await stream.stop();
-    await stream.flush();
-    expect(api.editMessageText).toHaveBeenCalledTimes(2);
   });
 
   it("deletes message preview on clear after finalization", async () => {
@@ -1240,6 +1227,34 @@ describe("createTelegramDraftStream", () => {
     });
   });
 
+  it("falls back to plain preview text when an HTML edit renders empty", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createDraftStream(api, { warn });
+
+    stream.updatePreview({ text: "<b>Working</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    api.editMessageText
+      .mockRejectedValueOnce(new Error("400: Bad Request: message text is empty"))
+      .mockResolvedValueOnce(true);
+    stream.updatePreview({ text: "<b>Done &lt;&amp;&gt;</b>", parseMode: "HTML" });
+    await stream.flush();
+
+    expect(api.editMessageText).toHaveBeenNthCalledWith(1, 123, 17, "<b>Done &lt;&amp;&gt;</b>", {
+      parse_mode: "HTML",
+    });
+    expect(api.editMessageText).toHaveBeenNthCalledWith(2, 123, 17, "Done <&>");
+    expect(stream.currentMessageSnapshot?.()).toEqual({
+      text: "Done <&>",
+      sourceText: "Done &lt;&amp;&gt;",
+      sourceTextMode: "html",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview edit degrade=plain-fallback:empty-content: 400: Bad Request: message text is empty",
+    );
+  });
+
   it("uses rich send and edit for previews when explicitly enabled", async () => {
     const api = createMockDraftApi();
     const stream = createDraftStream(api, { richMessages: true });
@@ -1282,7 +1297,7 @@ describe("createTelegramDraftStream", () => {
     expect(plain).toContain("Rank");
     expect(plain).toContain("Claude Opus");
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("rich-degrade=plain-fallback:rich-entity-invalid"),
+      "telegram stream preview degrade=plain-fallback:rich-entity-invalid: 400: Bad Request: RICH_MESSAGE_URL_INVALID",
     );
   });
 
@@ -1467,7 +1482,7 @@ describe("createTelegramDraftStream", () => {
       // Plain-fallback parity: each page must carry the durable funnel's plainText
       // projection so an HTML-parse 400 degrades both funnels to identical text.
       expect([...retainedPageTexts, stream.currentMessageSnapshot?.()?.text]).toEqual(
-        expectedChunks.map((chunk) => chunk.text),
+        expectedChunks.map((chunk) => telegramHtmlToPlainTextFallback(chunk.html)),
       );
     },
   );

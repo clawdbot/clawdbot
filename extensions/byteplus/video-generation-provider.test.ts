@@ -1,5 +1,6 @@
 // Byteplus tests cover video generation provider plugin behavior.
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { streamedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 // Submit/poll transport is mocked locally so each test can inject the BytePlus task JSON
@@ -189,20 +190,6 @@ function streamedVideoResponse(bytes: string): Response {
   );
 }
 
-// BytePlus submit/poll task JSON is now read through the byte-bounded reader, so the
-// mocked responses must expose a real readable body (not just a json() shortcut).
-function streamedJsonResponse(payload: unknown): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
-        controller.close();
-      },
-    }),
-    { status: 200, headers: { "content-type": "application/json" } },
-  );
-}
-
 // Builds a JSON body larger than the shared 16 MiB readProviderJsonResponse cap so the
 // bounded reader cancels the stream mid-flight; if the cap were removed the reader would
 // buffer the whole advertised payload before parsing. Tracks how many bytes were pulled
@@ -335,6 +322,60 @@ describe("byteplus video generation provider", () => {
       }),
     ).rejects.toThrow("BytePlus generated video download: malformed video response");
     expect(canceled).toHaveBeenCalledOnce();
+  });
+
+  it("releases a rejected download body without awaiting a debug-capture tee branch", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ id: "task-captured-response" }),
+      release: vi.fn(async () => {}),
+    });
+    // The debug proxy clones every captured response, so the caller-facing body is one
+    // branch of a live tee. Cancelling such a branch settles only once both branches
+    // cancel, so awaiting it here would hang the download instead of surfacing the error.
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode('{"error":"still streaming"}'));
+        },
+      }),
+      { headers: { "content-type": "application/json" } },
+    );
+    const captureClone = response.clone();
+    const captureReader = captureClone.body?.getReader();
+    await captureReader?.read();
+    fetchWithTimeoutMock
+      .mockResolvedValueOnce(
+        streamedJsonResponse({
+          id: "task-captured-response",
+          status: "succeeded",
+          content: { video_url: "https://example.com/invalid.mp4" },
+        }),
+      )
+      .mockResolvedValueOnce(response);
+
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await expect(
+        Promise.race([
+          buildBytePlusVideoGenerationProvider().generateVideo({
+            provider: "byteplus",
+            model: "seedance-1-0-pro-250528",
+            prompt: "captured invalid response",
+            cfg: {},
+          }),
+          new Promise<never>((_resolve, reject) => {
+            timeout = setTimeout(() => {
+              reject(new Error("BytePlus download waited for a captured response clone"));
+            }, 500);
+          }),
+        ]),
+      ).rejects.toThrow("BytePlus generated video download: malformed video response");
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
+      await captureReader?.cancel().catch(() => undefined);
+    }
   });
 
   it("rejects generated video downloads that exceed the configured media cap", async () => {

@@ -664,39 +664,5 @@ extension NodePairingApprovalPrompter {
     static func _testSilentPairingSSHOptions() -> [String] {
         self.silentPairingSSHOptions
     }
-
-    static func exerciseForTesting() async {
-        let prompter = NodePairingApprovalPrompter()
-        let pending = PendingRequest(
-            requestId: "req-1",
-            nodeId: "node-1",
-            displayName: "Node One",
-            platform: "macos",
-            version: "1.0.0",
-            coreVersion: "1.0.0",
-            deviceFamily: "Mac",
-            modelIdentifier: "MacBookPro18,3",
-            caps: ["screen"],
-            commands: ["system.run"],
-            remoteIp: "127.0.0.1",
-            silent: true,
-            ts: 1_700_000_000_000)
-        let paired = PairedNode(
-            nodeId: "node-1",
-            approvedAtMs: 1_700_000_000_000,
-            displayName: "Node One",
-            platform: "macOS",
-            version: "1.0.0",
-            remoteIp: "127.0.0.1")
-        let list = PairingList(pending: [pending], paired: [paired])
-
-        _ = prompter.card(for: pending)
-        _ = prompter.inferResolution(for: pending, list: list)
-
-        prompter.queue = [pending]
-        _ = prompter.shouldPoll
-        _ = await prompter.tryAutomaticApproveIfPossible(pending)
-        prompter.queue.removeAll()
-    }
 }
 #endif

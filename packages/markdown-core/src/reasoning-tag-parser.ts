@@ -12,6 +12,7 @@ export const REASONING_TAG_NAMES = [
   "thinking",
   "thought",
   "reasoning",
+  "internal",
   "antthinking",
   "antml:think",
   "antml:thinking",
@@ -32,6 +33,7 @@ type ReasoningTagMatch = {
   text: string;
   isClose: boolean;
   isSelfClosing: boolean;
+  isPrivate: boolean;
 };
 
 type ReasoningTagScan = {
@@ -127,6 +129,7 @@ export function parseReasoningTagAt(
           text: text.slice(start, end),
           isClose,
           isSelfClosing: !isClose && lastSignificant === "/",
+          isPrivate: partialName === "internal",
         },
       };
     }
@@ -179,19 +182,21 @@ type PositionedNode = {
 };
 
 type MarkdownOwnership = {
+  blockCodeSpans: Array<[number, number]>;
   codeSpans: Array<[number, number]>;
   retainStart: number;
 };
 
 export function parseMarkdownOwnership(text: string): MarkdownOwnership {
   if (!text) {
-    return { codeSpans: [], retainStart: 0 };
+    return { blockCodeSpans: [], codeSpans: [], retainStart: 0 };
   }
   const tree = fromMarkdown(text, {
     extensions: [DISABLE_HTML_MARKDOWN, gfmTable()],
     mdastExtensions: [gfmTableFromMarkdown()],
   }) as PositionedNode;
   const spans: Array<[number, number]> = [];
+  const blockSpans: Array<[number, number]> = [];
   const pending: PositionedNode[] = [tree];
   while (pending.length > 0) {
     const node = pending.pop();
@@ -203,6 +208,9 @@ export function parseMarkdownOwnership(text: string): MarkdownOwnership {
       const end = node.position?.end?.offset;
       if (start !== undefined && end !== undefined) {
         spans.push([start, end]);
+        if (node.type === "code") {
+          blockSpans.push([start, end]);
+        }
       }
     }
     const children = node.children ?? [];
@@ -215,13 +223,34 @@ export function parseMarkdownOwnership(text: string): MarkdownOwnership {
   }
   const rootChildren = tree.children ?? [];
   return {
+    blockCodeSpans: blockSpans.toSorted((left, right) => left[0] - right[0]),
     codeSpans: spans.toSorted((left, right) => left[0] - right[0]),
     retainStart: rootChildren.at(-1)?.position?.start?.offset ?? text.length,
   };
 }
 
+/** Returns parser-owned CommonMark/GFM code ranges with block ownership. */
+export function findMarkdownCodeRegions(
+  text: string,
+): Array<{ block: boolean; end: number; start: number }> {
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
+  const ownership = parseMarkdownOwnership(text);
+  const blockStarts = new Set(ownership.blockCodeSpans.map(([start]) => start));
+  return ownership.codeSpans.map(([start, end]) => ({
+    block: blockStarts.has(start),
+    end,
+    start,
+  }));
+}
+
 /** Returns parser-owned CommonMark/GFM code ranges, including their delimiters. */
 export function findMarkdownCodeSpans(text: string): Array<[number, number]> {
+  // CommonMark code needs a literal delimiter or indentation, even inside containers.
+  if (!/[`~\t]| {4}/u.test(text)) {
+    return [];
+  }
   return parseMarkdownOwnership(text).codeSpans;
 }
 
@@ -252,6 +281,7 @@ export type ReductionState = {
   visibleEver: boolean;
   pending?: {
     content: string;
+    containsPrivate: boolean;
     openTag: string;
     protectedClose: boolean;
     visibleBefore: boolean;
@@ -306,18 +336,20 @@ export function reduceReasoningText(
       index: scannedTag.index + start,
       isClose: scannedTag.isClose,
       isSelfClosing: scannedTag.isSelfClosing,
+      isPrivate: scannedTag.isPrivate,
       text: scannedTag.text,
     };
     if (!isInsideCode(tag.index, codeSpans)) {
       tags.push(tag);
     }
   }
-  const hasCloseAfter: boolean[] = [];
+  const mustParseRemainder: boolean[] = [];
   if (options.scope === "leading") {
-    let seenClose = false;
+    let mustParse = false;
     for (let index = tags.length - 1; index >= 0; index -= 1) {
-      hasCloseAfter[index] = seenClose;
-      seenClose ||= tags[index]?.isClose === true;
+      mustParse ||= tags[index]?.isPrivate === true;
+      mustParseRemainder[index] = mustParse;
+      mustParse ||= tags[index]?.isClose === true;
     }
   }
   let cursor = start;
@@ -346,7 +378,7 @@ export function reduceReasoningText(
         state.depth === 0 &&
         options.scope === "leading" &&
         state.visibleEver &&
-        !hasCloseAfter[tagIndex]
+        !mustParseRemainder[tagIndex]
       ) {
         emit("text", text.slice(tag.index));
         cursor = text.length;
@@ -355,10 +387,14 @@ export function reduceReasoningText(
       if (state.depth === 0) {
         state.pending = {
           content: "",
+          containsPrivate: tag.isPrivate,
           openTag: tag.text,
           protectedClose: false,
           visibleBefore: state.visibleEver,
         };
+      } else if (state.pending) {
+        // A nested private block makes the enclosing reasoning non-emitting.
+        state.pending.containsPrivate ||= tag.isPrivate;
       }
       state.depth += 1;
       cursor = tagEnd;
@@ -368,7 +404,9 @@ export function reduceReasoningText(
     if (state.depth > 0) {
       state.depth -= 1;
       if (state.depth === 0 && state.pending) {
-        emit("thinking", state.pending.content);
+        if (!state.pending.containsPrivate) {
+          emit("thinking", state.pending.content);
+        }
         state.pending = undefined;
       } else if (state.pending) {
         state.pending.protectedClose = true;
@@ -393,18 +431,20 @@ export function reduceReasoningText(
   append(text.slice(cursor));
   if (options.final && state.depth > 0 && state.pending) {
     const pending = state.pending;
-    const recoverAsText =
-      options.mode === "static-preserve" ||
-      (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
-      (options.mode === "visible" && !pending.protectedClose);
-    if (recoverAsText) {
-      const value =
-        options.mode === "visible" && pending.visibleBefore
-          ? pending.openTag + pending.content
-          : pending.content;
-      emit("text", value);
-    } else {
-      emit("thinking", pending.content);
+    if (!pending.containsPrivate) {
+      const recoverAsText =
+        options.mode === "static-preserve" ||
+        (options.mode === "static-strict" && !pending.visibleBefore && !pending.protectedClose) ||
+        (options.mode === "visible" && !pending.protectedClose);
+      if (recoverAsText) {
+        const value =
+          options.mode === "visible" && pending.visibleBefore
+            ? pending.openTag + pending.content
+            : pending.content;
+        emit("text", value);
+      } else {
+        emit("thinking", pending.content);
+      }
     }
     state.depth = 0;
     state.pending = undefined;
@@ -415,6 +455,7 @@ export function reduceReasoningText(
 type ReasoningTagStripOptions = {
   mode: "strict" | "preserve";
   scope: "all" | "leading";
+  recoverUnclosed?: boolean;
 };
 
 /** Strips reasoning tags using the same reducer as streamed partitioning. */
@@ -425,7 +466,12 @@ export function stripReasoningTagsFromMarkdown(
   const state: ReductionState = { depth: 0, visibleEver: false };
   return reduceReasoningText(text, findMarkdownCodeSpans(text), state, {
     final: true,
-    mode: options.mode === "preserve" ? "static-preserve" : "static-strict",
+    mode:
+      options.recoverUnclosed === false
+        ? "hide"
+        : options.mode === "preserve"
+          ? "static-preserve"
+          : "static-strict",
     scope: options.scope,
   })
     .filter((delta) => delta.kind === "text")

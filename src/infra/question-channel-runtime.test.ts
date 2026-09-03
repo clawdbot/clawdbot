@@ -1,6 +1,8 @@
 // Covers question message finalization lifecycle and delivery races.
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { QuestionRecord } from "../../packages/gateway-protocol/src/schema/questions.js";
+import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
 import { createQuestionChannelRuntime } from "./question-channel-runtime-internal.js";
 
 const record: QuestionRecord = {
@@ -19,6 +21,64 @@ const record: QuestionRecord = {
 };
 
 describe("question channel runtime", () => {
+  it("shares finalizers between separately evaluated gateway and plugin runtime modules", async () => {
+    const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+      import.meta.url,
+      "./question-channel-runtime.js?scope=question-gateway-owner",
+    );
+    const plugin = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+      import.meta.url,
+      "./question-channel-runtime.js?scope=question-plugin-sdk",
+    );
+    const finalize = vi.fn();
+
+    try {
+      gateway.handleQuestionChannelRequested(record);
+      plugin.registerQuestionChannelDelivery({
+        questionId: record.id,
+        deliveryId: "slack:default:C123:171234.001",
+        finalize,
+      });
+      gateway.handleQuestionChannelResolved({
+        id: record.id,
+        status: "answered",
+        answers: { answers: { target: ["Production"] } },
+      });
+
+      expect(finalize).toHaveBeenCalledExactlyOnceWith("Answered: Production");
+    } finally {
+      await drainGlobalSingletonLifecycleState("restart");
+    }
+  });
+
+  it("clears shared callbacks and retention timers when the gateway restarts", async () => {
+    vi.useFakeTimers();
+    try {
+      const gateway = await importFreshModule<typeof import("./question-channel-runtime.js")>(
+        import.meta.url,
+        "./question-channel-runtime.js?scope=question-gateway-lifecycle",
+      );
+      const staleFinalize = vi.fn();
+      gateway.handleQuestionChannelRequested(record);
+      gateway.registerQuestionChannelDelivery({
+        questionId: record.id,
+        deliveryId: "slack:default:C123:171234.002",
+        finalize: staleFinalize,
+      });
+      gateway.handleQuestionChannelResolved({ id: "ask_terminal", status: "expired" });
+
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      await drainGlobalSingletonLifecycleState("restart");
+      expect(vi.getTimerCount()).toBe(0);
+
+      gateway.handleQuestionChannelResolved({ id: record.id, status: "cancelled" });
+      expect(staleFinalize).not.toHaveBeenCalled();
+    } finally {
+      await drainGlobalSingletonLifecycleState("restart");
+      vi.useRealTimers();
+    }
+  });
+
   it("finalizes delivered messages once with canonical answer labels", async () => {
     const finalize = vi.fn();
     const runtime = createQuestionChannelRuntime();

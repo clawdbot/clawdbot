@@ -1,8 +1,11 @@
 // Matrix plugin module implements test runtime behavior.
+import fs from "node:fs";
+import path from "node:path";
 import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type {
   OpenBlobStoreOptions,
   OpenKeyedStoreOptions,
@@ -11,10 +14,25 @@ import {
   createPluginBlobStoreForTests,
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
+  resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { vi } from "vitest";
-import type { PluginRuntime } from "./runtime-api.js";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { afterAll, vi } from "vitest";
 import { setMatrixRuntime } from "./runtime.js";
+
+const defaultStateDir = fs.realpathSync(
+  fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-matrix-test-state-")),
+);
+
+afterAll(() => {
+  resetPluginStateStoreForTests();
+  fs.rmSync(defaultStateDir, {
+    recursive: true,
+    force: true,
+    maxRetries: 5,
+    retryDelay: 20,
+  });
+});
 
 type MatrixTestRuntimeOptions = {
   cfg?: Record<string, unknown>;
@@ -59,16 +77,15 @@ function createMatrixRuntimeMediaMock(
 }
 
 export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {}): void {
-  const osHomedirForTest = () => "/tmp";
+  const stateDir = options.stateDir ?? defaultStateDir;
   const defaultStateDirResolver: NonNullable<PluginRuntime["state"]>["resolveStateDir"] = (
     _env,
-    homeDir,
-  ) => options.stateDir ?? (homeDir ?? (() => "/tmp"))();
+    _homeDir,
+  ) => stateDir;
   const resolvePluginStateEnv = (storeOptions: OpenKeyedStoreOptions): NodeJS.ProcessEnv => ({
     ...(storeOptions.env ?? process.env),
     OPENCLAW_STATE_DIR:
-      storeOptions.env?.OPENCLAW_STATE_DIR?.trim() ||
-      defaultStateDirResolver(storeOptions.env, osHomedirForTest),
+      storeOptions.env?.OPENCLAW_STATE_DIR?.trim() || defaultStateDirResolver(storeOptions.env),
   });
   const getRuntimeConfig = () => options.cfg ?? {};
   const logging: PluginRuntime["logging"] | undefined = options.logging
@@ -96,7 +113,7 @@ export function installMatrixTestRuntime(options: MatrixTestRuntimeOptions = {})
       openBlobStore: (<T>(storeOptions: OpenBlobStoreOptions) =>
         createPluginBlobStoreForTests<T>("matrix", storeOptions, {
           ...process.env,
-          OPENCLAW_STATE_DIR: defaultStateDirResolver(process.env, osHomedirForTest),
+          OPENCLAW_STATE_DIR: defaultStateDirResolver(process.env),
         })) as PluginRuntime["state"]["openBlobStore"],
       openKeyedStore: (<T>(storeOptions: OpenKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests<T>("matrix", {

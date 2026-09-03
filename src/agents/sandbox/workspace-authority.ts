@@ -15,7 +15,7 @@ import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import {
   expandToolGroups,
   mergeAlsoAllowPolicy,
-  normalizeToolName,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
 } from "../tool-policy.js";
 import { resolveSandboxConfigForAgent } from "./config.js";
@@ -29,7 +29,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "apply_patch",
   "edit",
   "exec",
-  "image",
+  "view_image",
   "process",
   "read",
   "session_status",
@@ -37,7 +37,7 @@ const WORKSPACE_CONFINED_SANDBOX_TOOLS = new Set([
   "sessions_list",
   "sessions_search",
   "sessions_yield",
-  "update_plan",
+  "progress_card",
   "web_fetch",
   "web_search",
   "write",
@@ -55,7 +55,7 @@ function findUnconfinedAllowedTool(
   }
   for (const entry of candidatePolicy.allow) {
     for (const candidate of expandToolGroups([entry])) {
-      const normalized = normalizeToolName(candidate);
+      const normalized = normalizeToolPolicyName(candidate);
       if (!isToolAllowedByPolicies(normalized, policies)) {
         continue;
       }
@@ -162,7 +162,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   let confinementError: string | undefined;
   if (backend !== "docker" && backend !== "podman") {
     confinementError = "target sandbox backend does not provide local workspace confinement.";
-  } else if (sandbox.scope !== "session") {
+  } else if (runtime.sandboxRequired || sandbox.scope !== "session") {
     confinementError = "target sandbox is not exclusive to this worker session.";
   } else if (
     sandbox.docker.dangerouslyAllowExternalBindSources === true ||
@@ -171,12 +171,16 @@ export function resolveSandboxWorkspaceAuthority(params: {
   ) {
     confinementError = "target sandbox enables dangerous Docker isolation overrides.";
   } else {
+    // The rw agent workspace is the only host-writable surface a confined worker may have;
+    // with ro/none the agent workspace is never mounted writable, so any writable bind is external.
     const externalWritableBind = findWritableSandboxBindSourceOutsideRoot(
       sandbox.docker.binds,
-      resolveAgentWorkspaceDir(params.config, runtime.agentId),
+      sandbox.workspaceAccess === "rw"
+        ? resolveAgentWorkspaceDir(params.config, runtime.agentId)
+        : undefined,
     );
     if (externalWritableBind) {
-      confinementError = `target sandbox has writable bind source outside its workspace: ${externalWritableBind}.`;
+      confinementError = `target sandbox has writable bind source outside its writable workspace: ${externalWritableBind}.`;
     }
     const agentConfig = resolveAgentConfig(params.config, runtime.agentId);
     const elevated = agentConfig?.tools?.elevated;
@@ -228,14 +232,14 @@ export function resolveSandboxWorkspaceAuthority(params: {
         sandboxPolicy: sandbox.tools,
       });
       const unavailableTool = (params.requiredToolNames ?? [])
-        .map(normalizeToolName)
+        .map(normalizeToolPolicyName)
         .find((name) => !isToolAllowedByPolicies(name, policies));
       if (unavailableTool) {
         confinementError = `target tool policy blocks required tool ${unavailableTool}.`;
       } else {
         const unsafeTool = findUnconfinedAllowedTool(
           policies,
-          new Set((params.confinedToolNames ?? []).map(normalizeToolName)),
+          new Set((params.confinedToolNames ?? []).map(normalizeToolPolicyName)),
         );
         if (unsafeTool) {
           confinementError = `target sandbox allows unclassified tool surface ${unsafeTool}.`;
@@ -245,7 +249,7 @@ export function resolveSandboxWorkspaceAuthority(params: {
   }
   return {
     sandboxed: true,
-    workspaceAccess: sandbox.workspaceAccess,
+    workspaceAccess: runtime.sandboxRequired ? runtime.workspaceAccess : sandbox.workspaceAccess,
     ...(confinementError ? { confinementError } : {}),
   };
 }

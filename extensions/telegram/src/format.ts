@@ -16,6 +16,7 @@ import {
 } from "./format-assistant-transcript.js";
 import { decodeTelegramHtmlEntities, findTelegramHtmlEntityEnd } from "./format-html.js";
 import { renderTelegramMarkdownIR } from "./format-render.js";
+import { renderTelegramMonospaceGrid } from "./text-width.js";
 
 export type TelegramFormattedChunk = {
   html: string;
@@ -147,19 +148,22 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   return out.join("\n");
 }
 
-export function markdownToTelegramHtml(
-  markdown: string,
-  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
-): string {
-  const tableMode = options.tableMode === "block" ? "code" : options.tableMode;
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
+function parseTelegramLegacyMarkdown(markdown: string, tableMode?: MarkdownTableMode): MarkdownIR {
+  return markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
     assistantTranscriptRoleHeaders: true,
     linkify: true,
     enableSpoilers: true,
     headingStyle: "none",
     blockquotePrefix: "",
-    tableMode,
+    tableMode: tableMode === "block" ? "code" : tableMode,
   });
+}
+
+export function markdownToTelegramHtml(
+  markdown: string,
+  options: { tableMode?: MarkdownTableMode; wrapFileRefs?: boolean } = {},
+): string {
+  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   const html = renderTelegramHtml(ir);
   const telegramHtml = renderSupportedTelegramHtml(html);
   // Apply file reference wrapping if requested (for chunked rendering)
@@ -192,7 +196,7 @@ const TELEGRAM_RICH_HTML_TABLE_PATTERN = /<table\b[^>]*>[\s\S]*?<\/table>/gi;
 const TELEGRAM_RICH_HTML_TABLE_ROW_PATTERN = /<tr\b[^>]*>([\s\S]*?)<\/tr>/gi;
 const TELEGRAM_RICH_HTML_TABLE_CELL_PATTERN = /<(td|th)\b([^>]*)>([\s\S]*?)<\/\1>/gi;
 const TELEGRAM_HTML_CAPTION_PATTERN = /<caption\b[^>]*>([\s\S]*?)<\/caption>/i;
-const TELEGRAM_HTML_COLSPAN_PATTERN = /\bcolspan\s*=\s*(?:"(\d+)"|'(\d+)'|(\d+))/i;
+const TELEGRAM_HTML_COLSPAN_PATTERN = /(?:^|\s)colspan\s*=\s*(['"]?)\s*(\d+)\s*\1(?=\s|$)/i;
 const TELEGRAM_SIMPLE_HTML_TAGS = new Set([
   "b",
   "strong",
@@ -601,7 +605,7 @@ function normalizeTelegramLegacyHtmlTables(html: string): string {
 }
 
 function parseTelegramHtmlColspan(attrs: string): number {
-  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.slice(1).find(Boolean);
+  const raw = TELEGRAM_HTML_COLSPAN_PATTERN.exec(attrs)?.[2];
   const value = raw ? Number.parseInt(raw, 10) : 1;
   return Number.isFinite(value) && value > 1 ? Math.min(value, 21) : 1;
 }
@@ -633,13 +637,6 @@ function renderTelegramRichHtmlRawTableFallback(
   tableHtml: string,
   rows: readonly string[][],
 ): string {
-  const columnCount = Math.max(...rows.map((row) => row.length), 0);
-  const widths = Array.from({ length: columnCount }, () => 3);
-  for (const row of rows) {
-    for (let index = 0; index < columnCount; index += 1) {
-      widths[index] = Math.max(widths[index] ?? 3, row[index]?.length ?? 0);
-    }
-  }
   const caption =
     rows.length > 0
       ? telegramHtmlToPlainTextFallback(
@@ -648,12 +645,7 @@ function renderTelegramRichHtmlRawTableFallback(
       : "";
   const tableText =
     rows.length > 0
-      ? rows
-          .map(
-            (row) =>
-              `| ${widths.map((width, index) => (row[index] ?? "").padEnd(width)).join(" | ")} |`,
-          )
-          .join("\n")
+      ? renderTelegramMonospaceGrid(rows)
       : stripTelegramHtmlForPlainText(tableHtml).trim();
   return `<pre><code>${escapeHtml([caption, tableText].filter(Boolean).join("\n"))}</code></pre>\n\n`;
 }
@@ -910,14 +902,7 @@ export function markdownToTelegramChunks(
   limit: number,
   options: { tableMode?: MarkdownTableMode } = {},
 ): TelegramFormattedChunk[] {
-  const ir = markdownToIR(preserveTelegramListBoundarySpacing(markdown ?? ""), {
-    assistantTranscriptRoleHeaders: true,
-    linkify: true,
-    enableSpoilers: true,
-    headingStyle: "none",
-    blockquotePrefix: "",
-    tableMode: options.tableMode,
-  });
+  const ir = parseTelegramLegacyMarkdown(markdown, options.tableMode);
   return renderTelegramChunksWithinHtmlLimit(ir, limit);
 }
 

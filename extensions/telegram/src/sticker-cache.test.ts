@@ -9,6 +9,10 @@ import { setTelegramRuntime } from "./runtime.js";
 import { clearTelegramRuntimeForTest } from "./runtime.test-support.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import * as stickerCache from "./sticker-cache-store.js";
+import {
+  TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+  TELEGRAM_STICKER_CACHE_NAMESPACE,
+} from "./sticker-cache-store.legacy-state.js";
 
 vi.mock("openclaw/plugin-sdk/state-paths", () => ({
   resolveStateDir: () => "/tmp/openclaw-test-sticker-cache",
@@ -32,8 +36,8 @@ describe("sticker-cache", () => {
     resetPluginStateStoreForTests({ closeDatabase: false });
     installStore(
       createPluginStateSyncKeyedStoreForTests("telegram", {
-        namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
-        maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+        namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+        maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
       }),
     );
     store.clear();
@@ -89,8 +93,8 @@ describe("sticker-cache", () => {
     it("treats plugin-state lookup failures as cache misses", () => {
       installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
-          namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
         }),
         lookup() {
           throw new Error("lookup failed");
@@ -161,8 +165,8 @@ describe("sticker-cache", () => {
     it("does not throw when plugin-state writes fail", () => {
       installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
-          namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
         }),
         register() {
           throw new Error("write failed");
@@ -275,8 +279,8 @@ describe("sticker-cache", () => {
     it("returns no matches when plugin-state search reads fail", () => {
       installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
-          namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
         }),
         entries() {
           throw new Error("entries failed");
@@ -296,8 +300,8 @@ describe("sticker-cache", () => {
     it("returns empty array when plugin-state list reads fail", () => {
       installStore({
         ...createPluginStateSyncKeyedStoreForTests("telegram", {
-          namespace: stickerCache.TELEGRAM_STICKER_CACHE_NAMESPACE,
-          maxEntries: stickerCache.TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
+          namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
+          maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
         }),
         entries() {
           throw new Error("entries failed");

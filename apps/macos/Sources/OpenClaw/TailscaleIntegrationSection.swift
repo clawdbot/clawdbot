@@ -68,11 +68,9 @@ private typealias GatewayTailscaleSettingsSaver = @MainActor @Sendable (
 struct TailscaleIntegrationSection: View {
     let connectionMode: AppState.ConnectionMode
     let isPaused: Bool
+    let isActive: Bool
 
     @Environment(TailscaleService.self) private var tailscaleService
-    #if DEBUG
-    private var testingService: TailscaleService?
-    #endif
 
     @State private var hasLoaded = false
     @State private var tailscaleMode: GatewayTailscaleMode = .serve
@@ -80,23 +78,12 @@ struct TailscaleIntegrationSection: View {
     @State private var password: String = ""
     @State private var statusMessage: String?
     @State private var validationMessage: String?
-    @State private var statusTimer: Timer?
     @State private var lastAppliedSettings: GatewayTailscaleSettingsSnapshot?
 
-    init(connectionMode: AppState.ConnectionMode, isPaused: Bool) {
+    init(connectionMode: AppState.ConnectionMode, isPaused: Bool, isActive: Bool) {
         self.connectionMode = connectionMode
         self.isPaused = isPaused
-        #if DEBUG
-        self.testingService = nil
-        #endif
-    }
-
-    private var effectiveService: TailscaleService {
-        #if DEBUG
-        return self.testingService ?? self.tailscaleService
-        #else
-        return self.tailscaleService
-        #endif
+        self.isActive = isActive
     }
 
     var body: some View {
@@ -106,7 +93,7 @@ struct TailscaleIntegrationSection: View {
 
             self.statusRow
 
-            if !self.effectiveService.isInstalled {
+            if !self.tailscaleService.isInstalled {
                 self.installButtons
             } else {
                 self.modePicker
@@ -141,15 +128,16 @@ struct TailscaleIntegrationSection: View {
         .background(Color.gray.opacity(0.08))
         .cornerRadius(10)
         .disabled(self.connectionMode != .local)
-        .task {
-            guard !self.hasLoaded else { return }
-            await self.loadConfig()
-            self.hasLoaded = true
-            await self.effectiveService.checkTailscaleStatus()
-            self.startStatusTimer()
-        }
-        .onDisappear {
-            self.stopStatusTimer()
+        .task(id: self.isActive) {
+            guard self.isActive else { return }
+            if !self.hasLoaded {
+                await self.loadConfig()
+            }
+            guard !Task.isCancelled else { return }
+            // Cached settings panes stay mounted; only the active pane owns polling.
+            repeat {
+                await self.tailscaleService.checkTailscaleStatus()
+            } while await SimpleTaskSupport.waitForNextOperation(interval: 5)
         }
         .onChange(of: self.tailscaleMode) { _, _ in
             Task { await self.applySettings() }
@@ -168,7 +156,7 @@ struct TailscaleIntegrationSection: View {
                 .font(.callout)
             Spacer()
             Button("Refresh") {
-                Task { await self.effectiveService.checkTailscaleStatus() }
+                Task { await self.tailscaleService.checkTailscaleStatus() }
             }
             .buttonStyle(.bordered)
             .controlSize(.small)
@@ -176,24 +164,24 @@ struct TailscaleIntegrationSection: View {
     }
 
     private var statusColor: Color {
-        if !self.effectiveService.isInstalled { return .yellow }
-        if self.effectiveService.isRunning { return .green }
+        if !self.tailscaleService.isInstalled { return .yellow }
+        if self.tailscaleService.isRunning { return .green }
         return .orange
     }
 
     private var statusText: String {
-        if !self.effectiveService.isInstalled { return "Tailscale is not installed" }
-        if self.effectiveService.isRunning { return "Tailscale is installed and running" }
+        if !self.tailscaleService.isInstalled { return "Tailscale is not installed" }
+        if self.tailscaleService.isRunning { return "Tailscale is installed and running" }
         return "Tailscale is installed but not running"
     }
 
     private var installButtons: some View {
         HStack(spacing: 12) {
-            Button("App Store") { self.effectiveService.openAppStore() }
+            Button("App Store") { self.tailscaleService.openAppStore() }
                 .buttonStyle(.link)
-            Button("Direct Download") { self.effectiveService.openDownloadPage() }
+            Button("Direct Download") { self.tailscaleService.openDownloadPage() }
                 .buttonStyle(.link)
-            Button("Setup Guide") { self.effectiveService.openSetupGuide() }
+            Button("Setup Guide") { self.tailscaleService.openSetupGuide() }
                 .buttonStyle(.link)
         }
         .controlSize(.small)
@@ -217,7 +205,7 @@ struct TailscaleIntegrationSection: View {
 
     @ViewBuilder
     private var accessURLRow: some View {
-        if let host = self.effectiveService.tailscaleHostname {
+        if let host = self.tailscaleService.tailscaleHostname {
             let url = "https://\(host)/ui/"
             HStack(spacing: 8) {
                 Text("Dashboard URL:")
@@ -231,14 +219,14 @@ struct TailscaleIntegrationSection: View {
                         .font(.system(.caption, design: .monospaced))
                 }
             }
-        } else if !self.effectiveService.isRunning {
+        } else if !self.tailscaleService.isRunning {
             Text("Start Tailscale to get your tailnet hostname.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
 
-        if self.effectiveService.isAppInstalled, !self.effectiveService.isRunning {
-            Button("Start Tailscale") { self.effectiveService.openTailscaleApp() }
+        if self.tailscaleService.isAppInstalled, !self.tailscaleService.isRunning {
+            Button("Start Tailscale") { self.tailscaleService.openTailscaleApp() }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
         }
@@ -283,11 +271,13 @@ struct TailscaleIntegrationSection: View {
 
     private func loadConfig() async {
         let root = await ConfigStore.load()
+        guard !Task.isCancelled else { return }
         let loaded = TailscaleIntegrationSection.loadedSettings(from: root)
         self.tailscaleMode = loaded.snapshot.mode
         self.requireCredentialsForServe = loaded.snapshot.requireCredentialsForServe
         self.password = loaded.displayPassword
         self.lastAppliedSettings = loaded.snapshot
+        self.hasLoaded = true
     }
 
     private func applySettings() async {
@@ -505,43 +495,10 @@ struct TailscaleIntegrationSection: View {
             requireCredentialsForServe: settings.requireCredentialsForServe,
             password: settings.password)
     }
-
-    private func startStatusTimer() {
-        self.stopStatusTimer()
-        if ProcessInfo.processInfo.isRunningTests { return }
-        self.statusTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { _ in
-            Task { await self.effectiveService.checkTailscaleStatus() }
-        }
-    }
-
-    private func stopStatusTimer() {
-        self.statusTimer?.invalidate()
-        self.statusTimer = nil
-    }
 }
 
 #if DEBUG
 extension TailscaleIntegrationSection {
-    mutating func setTestingState(
-        mode: String,
-        requireCredentials: Bool,
-        password: String = "secret",
-        statusMessage: String? = nil,
-        validationMessage: String? = nil)
-    {
-        if let mode = GatewayTailscaleMode(rawValue: mode) {
-            self.tailscaleMode = mode
-        }
-        self.requireCredentialsForServe = requireCredentials
-        self.password = password
-        self.statusMessage = statusMessage
-        self.validationMessage = validationMessage
-    }
-
-    mutating func setTestingService(_ service: TailscaleService?) {
-        self.testingService = service
-    }
-
     static func simulateHydrationApplyForTesting(
         root: [String: Any],
         connectionMode: AppState.ConnectionMode,

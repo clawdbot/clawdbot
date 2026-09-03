@@ -1,3 +1,8 @@
+import { roleScopesAllow } from "../../../src/shared/operator-scope-compat.js";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+
+export type GatewayMethodOperatorScope = "operator.read" | "operator.write" | "operator.admin";
+
 export function isGatewayMethodAdvertised(
   host: {
     hello?: {
@@ -26,4 +31,31 @@ export function isGatewayCapabilityAdvertised(
     return null;
   }
   return capabilities.includes(capability);
+}
+
+/** Combines the active connection, advertised method catalog, and operator scopes. */
+export function canCallGatewayMethod(
+  snapshot: Pick<ApplicationGatewaySnapshot, "client" | "hello" | "phase"> | null | undefined,
+  method: string,
+  requiredScope: GatewayMethodOperatorScope,
+  options: { requireAdvertisement?: boolean } = {},
+): boolean {
+  if (!snapshot?.client || snapshot.phase !== "connected") {
+    return false;
+  }
+  if (
+    options.requireAdvertisement !== false &&
+    isGatewayMethodAdvertised(snapshot, method) !== true
+  ) {
+    return false;
+  }
+  const auth = snapshot.hello?.auth;
+  if (!auth || !Array.isArray(auth.scopes)) {
+    return false;
+  }
+  return roleScopesAllow({
+    role: auth.role,
+    requestedScopes: [requiredScope],
+    allowedScopes: auth.scopes,
+  });
 }

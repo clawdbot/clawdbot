@@ -1,4 +1,5 @@
 import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { consumeTooltipEscape } from "./tooltip.ts";
 import { trackDropdownKeyboardDismissal } from "./web-awesome.ts";
 
 type DropdownMenuHost = ReactiveControllerHost & HTMLElement;
@@ -29,6 +30,13 @@ export class DropdownMenuController implements ReactiveController {
   }
 
   private readonly handleDocumentKeydown = (event: KeyboardEvent) => {
+    if (event.defaultPrevented || consumeTooltipEscape(event, this.host.ownerDocument)) {
+      return;
+    }
+    this.options.onKeydown?.(event);
+    if (event.defaultPrevented) {
+      return;
+    }
     if (event.key !== "Escape") {
       // Nested dialogs and outside targets own their own Tab order; only menu
       // items need the durable trigger before Web Awesome dismisses them.
@@ -45,7 +53,6 @@ export class DropdownMenuController implements ReactiveController {
       ) {
         trackDropdownKeyboardDismissal(event, () => this.options.getTrigger()?.focus());
       }
-      this.options.onKeydown?.(event);
       return;
     }
     event.preventDefault();

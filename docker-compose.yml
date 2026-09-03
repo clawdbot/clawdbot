@@ -19,6 +19,8 @@ services:
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      # .env controls host publishing; in-container clients use the fixed listener.
+      OPENCLAW_GATEWAY_PORT: "18789"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       # Empty means auto: Bonjour disables itself in detected containers.
@@ -31,6 +33,9 @@ services:
       OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}
       OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
+      OTEL_EXPORTER_OTLP_TRACES_PROTOCOL: ${OTEL_EXPORTER_OTLP_TRACES_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_METRICS_PROTOCOL: ${OTEL_EXPORTER_OTLP_METRICS_PROTOCOL:-}
+      OTEL_EXPORTER_OTLP_LOGS_PROTOCOL: ${OTEL_EXPORTER_OTLP_LOGS_PROTOCOL:-}
       OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
       OTEL_SEMCONV_STABILITY_OPT_IN: ${OTEL_SEMCONV_STABILITY_OPT_IN:-}
       OPENCLAW_OTEL_PRELOADED: ${OPENCLAW_OTEL_PRELOADED:-}
@@ -109,6 +114,8 @@ services:
       OPENCLAW_CONFIG_PATH: /home/node/.openclaw/openclaw.json
       OPENCLAW_CONFIG_DIR: /home/node/.openclaw
       OPENCLAW_WORKSPACE_DIR: /home/node/.openclaw/workspace
+      # Shared gateway network namespace: use its listener, not the .env host port.
+      OPENCLAW_GATEWAY_PORT: "18789"
       OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
       OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
       BROWSER: echo

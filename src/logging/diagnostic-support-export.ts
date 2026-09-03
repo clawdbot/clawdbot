@@ -3,12 +3,16 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
+import { INCLUDE_KEY } from "../config/includes.js";
 import { parseConfigJson5 } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
-import { buildConfigSchema } from "../config/schema.js";
+import { buildConfigSchemaCore } from "../config/schema.js";
+import { isMissingPathError } from "../infra/errors.js";
 import { resolveHomeRelativePath } from "../infra/home-dir.js";
 import { readRegularFileSync } from "../infra/regular-file.js";
+import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
 import {
   readDiagnosticStabilityBundleFileSync,
@@ -208,28 +212,21 @@ function safeScalar(value: unknown): unknown {
 function resolveBonjourEnvOverride(
   env: NodeJS.ProcessEnv,
 ): NonNullable<ConfigShape["discovery"]>["bonjourEnvOverride"] {
-  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim().toLowerCase();
+  const raw = env.OPENCLAW_DISABLE_BONJOUR?.trim();
   if (!raw) {
     return "unset";
   }
-  switch (raw) {
-    case "1":
-    case "true":
-    case "yes":
-    case "on":
-      return "force-disabled";
-    case "0":
-    case "false":
-    case "no":
-    case "off":
-      return "force-enabled";
-    default:
-      return "unrecognized";
+  const disabled = parseBooleanValue(raw);
+  if (disabled === true) {
+    return "force-disabled";
   }
+  return disabled === false ? "force-enabled" : "unrecognized";
 }
 
-function sortedObjectKeys(value: unknown): string[] {
-  return Object.keys(asOptionalRecord(value) ?? {}).toSorted((a, b) => a.localeCompare(b));
+function sortedConfigEntryKeys(value: unknown): string[] {
+  return Object.keys(asOptionalRecord(value) ?? {})
+    .filter((key) => key !== INCLUDE_KEY)
+    .toSorted((a, b) => a.localeCompare(b));
 }
 
 function sanitizeConfigShape(
@@ -245,7 +242,7 @@ function sanitizeConfigShape(
   const mdns = asOptionalRecord(discovery?.mdns);
   const channels = asOptionalRecord(root.channels);
   const plugins = asOptionalRecord(root.plugins);
-  const agents = Array.isArray(root.agents) ? root.agents : undefined;
+  const agents = asOptionalRecord(asOptionalRecord(root.agents)?.entries);
 
   const shape: ConfigShape = {
     path: configPath,
@@ -253,7 +250,7 @@ function sanitizeConfigShape(
     parseOk: true,
     bytes: stat.size,
     mtime: stat.mtime.toISOString(),
-    topLevelKeys: sortedObjectKeys(root),
+    topLevelKeys: Object.keys(root).toSorted((a, b) => a.localeCompare(b)),
   };
 
   if (gateway) {
@@ -262,7 +259,7 @@ function sanitizeConfigShape(
       bind: safeScalar(gateway.bind),
       port: safeScalar(gateway.port),
       authMode: safeScalar(auth?.mode),
-      tailscale: safeScalar(gateway.tailscale),
+      tailscale: safeScalar(asOptionalRecord(gateway.tailscale)?.mode),
     };
   }
 
@@ -275,21 +272,17 @@ function sanitizeConfigShape(
   }
 
   if (channels) {
-    shape.channels = {
-      count: Object.keys(channels).length,
-      ids: sortedObjectKeys(channels),
-    };
+    const ids = sortedConfigEntryKeys(channels).filter((key) => !isChannelConfigMetadataKey(key));
+    shape.channels = { count: ids.length, ids };
   }
 
   if (plugins) {
-    shape.plugins = {
-      count: Object.keys(plugins).length,
-      ids: sortedObjectKeys(plugins),
-    };
+    const ids = sortedConfigEntryKeys(plugins.entries);
+    shape.plugins = { count: ids.length, ids };
   }
 
   if (agents) {
-    shape.agents = { count: agents.length };
+    shape.agents = { count: sortedConfigEntryKeys(agents).length };
   }
 
   return shape;
@@ -297,7 +290,7 @@ function sanitizeConfigShape(
 
 function sanitizeConfigDetails(parsed: unknown, redaction: SupportRedactionContext): unknown {
   return sanitizeSupportConfigValue(
-    redactConfigObject(parsed, buildConfigSchema().uiHints),
+    redactConfigObject(parsed, buildConfigSchemaCore().uiHints),
     redaction,
   );
 }
@@ -322,13 +315,6 @@ function configShapeReadFailure(params: {
     shape.error = redactSupportString(params.error, params.redaction);
   }
   return shape;
-}
-
-function isMissingPathError(error: unknown): boolean {
-  if (!error || typeof error !== "object" || !("code" in error)) {
-    return false;
-  }
-  return error.code === "ENOENT" || error.code === "ENOTDIR";
 }
 
 function configReadErrorMessage(error: unknown, stat?: fs.Stats): string | undefined {
@@ -811,14 +797,14 @@ export async function writeDiagnosticSupportExport(
     now,
   });
   const artifact = await buildDiagnosticSupportExport({ ...options, env, stateDir, now });
-  const bytes = await writeSupportBundleZip({
+  const published = await writeSupportBundleZip({
     outputPath,
     files: artifact.files,
     compressionLevel: 6,
   });
   return {
-    path: outputPath,
-    bytes,
+    path: published.path,
+    bytes: published.bytes,
     manifest: artifact.manifest,
   };
 }

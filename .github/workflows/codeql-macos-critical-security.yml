@@ -20,22 +20,37 @@ permissions:
 jobs:
   macos:
     name: Critical Security (macOS)
-    runs-on: blacksmith-6vcpu-macos-15
+    runs-on: blacksmith-12vcpu-macos-26
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Select Xcode
         run: |
-          sudo xcode-select -s /Applications/Xcode_26.1.app
+          set -euo pipefail
+          sudo xcode-select -s /Applications/Xcode_26.6.app/Contents/Developer
           xcodebuild -version
+          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
+            exit 1
+          fi
           swift --version
 
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          cache-mode: restore
+          install-bun: "false"
+
+      - name: Prepare Apple Mermaid assets
+        run: node scripts/prepare-apple-mermaid.mjs
+
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: swift
           build-mode: manual
@@ -46,7 +61,7 @@ jobs:
 
       - name: Analyze
         id: analyze
-        uses: github/codeql-action/analyze@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           output: sarif-results
           upload: failure-only
@@ -83,7 +98,7 @@ jobs:
           done
 
       - name: Upload filtered SARIF
-        uses: github/codeql-action/upload-sarif@7188fc363630916deb702c7fdcf4e481b751f97a # v4.37.1
+        uses: github/codeql-action/upload-sarif@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           sarif_file: sarif-results-filtered
           category: "/codeql-critical-security/macos"

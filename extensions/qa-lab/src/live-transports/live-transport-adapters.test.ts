@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "../bus-state.js";
 import { createQaChannelTransport } from "../qa-channel-transport.js";
 import { createQaTransportAdapter } from "../qa-transport-registry.js";
+import type { QaTransportAdapter } from "../qa-transport.js";
 
 const { createDiscord, createMatrix, createSlack, createTelegram, createWhatsApp } = vi.hoisted(
   () => ({
@@ -62,6 +63,14 @@ describe("live transport adapter factories", () => {
     expect(whatsappQaAdapterFactory.isolatesInstances).toBeUndefined();
   });
 
+  it("declares module-flow support only for adapters that prepare module context", () => {
+    expect(discordQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(matrixQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(slackQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(whatsappQaAdapterFactory.supportsModuleFlows).toBe(true);
+    expect(telegramQaAdapterFactory.supportsModuleFlows).toBeUndefined();
+  });
+
   it.each([
     ["discord", createDiscord],
     ["matrix", createMatrix],
@@ -73,7 +82,10 @@ describe("live transport adapter factories", () => {
     async (channelId, create) => {
       const adapterOptions = { sutAccountId: `${channelId}-sut` };
       const state = createQaBusState();
-      const adapter = createQaChannelTransport(state);
+      const adapter: QaTransportAdapter = createQaChannelTransport(state);
+      if (channelId !== "telegram") {
+        adapter.prepareFlow = async () => ({});
+      }
       create.mockResolvedValueOnce(adapter);
       const created = await createQaTransportAdapter(
         {

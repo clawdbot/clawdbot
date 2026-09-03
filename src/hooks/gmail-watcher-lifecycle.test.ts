@@ -31,21 +31,17 @@ describe("startGmailWatcherWithLogs", () => {
   });
 
   it("passes cancellation state to watcher startup", async () => {
-    const isCancelled = vi.fn(() => true);
     const abortController = new AbortController();
+    abortController.abort();
     startGmailWatcherMock.mockResolvedValue({ started: false, reason: "startup cancelled" });
 
     await startGmailWatcherWithLogs({
       cfg: {},
       log,
-      isCancelled,
       signal: abortController.signal,
     });
 
-    expect(startGmailWatcherMock).toHaveBeenCalledWith(
-      {},
-      { isCancelled, signal: abortController.signal },
-    );
+    expect(startGmailWatcherMock).toHaveBeenCalledWith({}, { signal: abortController.signal });
   });
 
   it("logs startup success", async () => {

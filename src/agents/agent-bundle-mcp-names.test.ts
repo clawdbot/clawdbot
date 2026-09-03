@@ -3,11 +3,21 @@ import { describe, expect, it } from "vitest";
 import {
   buildSafeToolName,
   normalizeReservedToolNames,
+  sanitizeNodeIdFragment,
   sanitizeServerName,
   TOOL_NAME_SEPARATOR,
 } from "./agent-bundle-mcp-names.js";
 
 describe("agent bundle MCP names", () => {
+  it.each([
+    { value: "", expected: "node" },
+    { value: " North !! Node ", expected: "north_node" },
+    { value: "123-node", expected: "node_123_node" },
+    { value: "a".repeat(40), expected: "a".repeat(32) },
+  ])("sanitizes node ID fragment $value", ({ value, expected }) => {
+    expect(sanitizeNodeIdFragment(value)).toBe(expected);
+  });
+
   it("sanitizes and disambiguates server names", () => {
     const usedNames = new Set<string>();
 

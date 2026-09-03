@@ -4,7 +4,7 @@ import path from "node:path";
 import { compileFunction } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
-import { cleanupTempDirs, makeTempRepoRoot } from "../helpers/temp-repo.js";
+import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 
 const WORKFLOW_CASES = [
   {
@@ -64,15 +64,27 @@ function readWorkflow(workflowPath: string): ScopeWorkflow {
   return parse(readFileSync(workflowPath, "utf8")) as ScopeWorkflow;
 }
 
-function scopeScript(workflowPath: string): string {
-  const step = readWorkflow(workflowPath).jobs?.scope?.steps?.find(
-    (candidate) => candidate.id === "scope",
-  );
-  if (!step?.with?.script) {
+function compileScopeWorkflow(workflowPath: string) {
+  const workflow = readWorkflow(workflowPath);
+  const step = workflow.jobs?.scope?.steps?.find((candidate) => candidate.id === "scope");
+  const script = step?.with?.script;
+  if (!script) {
     throw new Error(`missing Periphery scope script in ${workflowPath}`);
   }
-  return step.with.script;
+  const execute = compileFunction(`return (async () => {\n${script}\n})();`, [
+    "context",
+    "core",
+    "exec",
+  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+  return { workflow, script, execute };
 }
+
+const scopeWorkflows = new Map<string, ReturnType<typeof compileScopeWorkflow>>(
+  WORKFLOW_CASES.map(({ path: workflowPath }) => [
+    workflowPath,
+    compileScopeWorkflow(workflowPath),
+  ]),
+);
 
 async function runScope(workflowPath: string, options: ScopeOptions): Promise<string | undefined> {
   const outputs = new Map<string, string>();
@@ -102,11 +114,7 @@ async function runScope(workflowPath: string, options: ScopeOptions): Promise<st
       return { exitCode: changed ? 1 : 0 };
     },
   };
-  const execute = compileFunction(`return (async () => {\n${scopeScript(workflowPath)}\n})();`, [
-    "context",
-    "core",
-    "exec",
-  ]) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+  const { execute } = scopeWorkflows.get(workflowPath)!;
 
   await execute(
     context,
@@ -131,37 +139,49 @@ function writeFixture(repoRoot: string, relativePath: string, contents: string):
 }
 
 describe("Periphery scope workflows", () => {
-  it.each(WORKFLOW_CASES)("uses the synthetic merge parent for $name scope", ({ path }) => {
-    const workflow = readWorkflow(path);
-    const steps = workflow.jobs?.scope?.steps ?? [];
-    const checkout = steps.find((step) => step.name === "Checkout");
-    const script = scopeScript(path);
+  it.each(WORKFLOW_CASES)(
+    "uses the synthetic merge parent for $name scope",
+    ({ path: workflowPath }) => {
+      const { workflow, script } = scopeWorkflows.get(workflowPath)!;
+      const steps = workflow.jobs?.scope?.steps ?? [];
+      const checkout = steps.find((step) => step.name === "Checkout");
 
-    expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
-    expect(workflow.on?.pull_request?.paths).toBeUndefined();
-    expect(checkout?.with?.["fetch-depth"]).toBe(2);
-    expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
-    expect(script).toContain('"HEAD^1"');
-    expect(script).not.toContain("pulls.listFiles");
-    expect(() =>
-      compileFunction(`return (async () => {\n${script}\n})();`, ["context", "core", "exec"]),
-    ).not.toThrow();
-  });
+      expect(workflow.on?.pull_request?.types).toContain("converted_to_draft");
+      expect(workflow.on?.pull_request?.paths).toBeUndefined();
+      expect(checkout?.with?.["fetch-depth"]).toBe(2);
+      expect(steps.some((step) => step.name === "Ensure base commit")).toBe(false);
+      expect(script).toContain('"HEAD^1"');
+      expect(script).not.toContain("pulls.listFiles");
+      expect(() =>
+        compileFunction(`return (async () => {\n${script}\n})();`, ["context", "core", "exec"]),
+      ).not.toThrow();
+    },
+  );
 
-  it.each(WORKFLOW_CASES)("selects only $name scope changes", async ({ path, scopedPath }) => {
-    await expect(runScope(path, { files: [scopedPath] })).resolves.toBe("true");
-    await expect(runScope(path, { files: ["docs/index.md"] })).resolves.toBe("false");
-    await expect(runScope(path, { draft: true, files: [scopedPath] })).resolves.toBe("false");
-    await expect(runScope(path, { eventName: "workflow_dispatch" })).resolves.toBe("true");
-    await expect(
-      runScope(path, {
-        files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }],
-      }),
-    ).resolves.toBe("true");
-    await expect(runScope(path, { diffExitCode: 128 })).rejects.toThrow(
-      "git diff failed with exit code 128",
-    );
-  });
+  it.each(WORKFLOW_CASES)(
+    "selects only $name scope changes",
+    async ({ path: workflowPath, scopedPath }) => {
+      await expect(runScope(workflowPath, { files: [scopedPath] })).resolves.toBe("true");
+      await expect(
+        runScope(workflowPath, { files: ["scripts/install-periphery.sh"] }),
+      ).resolves.toBe("true");
+      await expect(runScope(workflowPath, { files: ["docs/index.md"] })).resolves.toBe("false");
+      await expect(runScope(workflowPath, { draft: true, files: [scopedPath] })).resolves.toBe(
+        "false",
+      );
+      await expect(runScope(workflowPath, { eventName: "workflow_dispatch" })).resolves.toBe(
+        "true",
+      );
+      await expect(
+        runScope(workflowPath, {
+          files: [{ filename: "docs/Moved.swift", previous_filename: scopedPath }],
+        }),
+      ).resolves.toBe("true");
+      await expect(runScope(workflowPath, { diffExitCode: 128 })).rejects.toThrow(
+        "git diff failed with exit code 128",
+      );
+    },
+  );
 
   it("ignores scoped files added only by base-branch drift", async () => {
     const repoRoot = makeTempRepoRoot(tempDirs, "openclaw-periphery-scope-");
@@ -197,10 +217,7 @@ describe("Periphery scope workflows", () => {
     expect(oldDiff.status).toBe(1);
 
     const outputs = new Map<string, string>();
-    const execute = compileFunction(
-      `return (async () => {\n${scopeScript(".github/workflows/shared-openclawkit-periphery.yml")}\n})();`,
-      ["context", "core", "exec"],
-    ) as (context: unknown, core: unknown, exec: unknown) => Promise<void>;
+    const { execute } = scopeWorkflows.get(".github/workflows/shared-openclawkit-periphery.yml")!;
     await execute(
       { eventName: "pull_request", payload: { pull_request: { draft: false, number: 123 } } },
       { setOutput: (name: string, value: string) => outputs.set(name, value) },

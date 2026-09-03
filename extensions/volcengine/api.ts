@@ -33,7 +33,6 @@ export function applyVolcengineToolSchemaCompat<T extends { compat?: ModelCompat
   });
 }
 
-export { buildDoubaoCodingProvider, buildDoubaoProvider } from "./provider-catalog.js";
 export {
   DOUBAO_BASE_URL,
   DOUBAO_CODING_BASE_URL,

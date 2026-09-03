@@ -1,8 +1,7 @@
-// Exa tests cover exa web search provider plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { testing } from "../test-api.js";
 import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
 import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { testing } from "./exa-web-search-provider.runtime.js";
 
 function cancelTrackedResponse(
   text: string,
@@ -54,6 +53,73 @@ function streamingJsonResponse(params: { chunkCount: number; chunkSize: number }
 }
 
 describe("exa web search provider", () => {
+  it("does not send or cache an already canceled search", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ results: [] }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const tool = createExaWebSearchProvider().createTool({
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("Exa caller canceled"));
+
+    try {
+      await expect(
+        tool.execute({ query: "exa pre-canceled" }, { signal: controller.signal }),
+      ).rejects.toThrow("Exa caller canceled");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("aborts the guarded Exa request without losing the caller's reason", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("Exa request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const tool = createExaWebSearchProvider().createTool({
+      config: {
+        plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    const result = tool.execute(
+      { query: "exa in-flight cancellation" },
+      { signal: controller.signal },
+    );
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("Exa request canceled in flight"));
+      await expect(result).rejects.toThrow("Exa request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it("exposes the expected metadata and selection wiring", () => {
     const provider = createExaWebSearchProvider();
     if (!provider.applySelectionConfig) {
@@ -71,7 +137,7 @@ describe("exa web search provider", () => {
     expect(pluginEntry.enabled).toBe(true);
   });
 
-  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+  it("keeps the contract export aligned with provider metadata", () => {
     const provider = createExaWebSearchProvider();
     const contractProvider = createContractExaWebSearchProvider();
     if (!contractProvider.applySelectionConfig) {
@@ -104,7 +170,13 @@ describe("exa web search provider", () => {
       autoDetectOrder: provider.autoDetectOrder,
       credentialPath: provider.credentialPath,
     });
-    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    const fetchMock = vi.spyOn(globalThis, "fetch");
+    try {
+      expect(contractProvider.createTool({ config: {}, searchConfig: {} })).not.toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
     const pluginEntry = applied.plugins?.entries?.exa;
     if (!pluginEntry) {
       throw new Error("expected contract Exa plugin entry");
@@ -173,6 +245,58 @@ describe("exa web search provider", () => {
     expect(new Set(disabledKeys).size).toBe(disabledKeys.length);
   });
 
+  it.each([0, 1])("honors the current cache TTL %s", async (cacheTtlMinutes) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let requestCount = 0;
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(
+        async () =>
+          new Response(
+            JSON.stringify({ results: [{ url: `https://example.com/result-${++requestCount}` }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      );
+    const provider = createExaWebSearchProvider();
+    const config = {
+      plugins: { entries: { exa: { config: { webSearch: { apiKey: "exa-test-key" } } } } },
+    };
+    const cachedTool = provider.createTool({ config, searchConfig: { cacheTtlMinutes: 15 } });
+    const currentTool = provider.createTool({ config, searchConfig: { cacheTtlMinutes } });
+    const args = { query: `exa cache TTL ${cacheTtlMinutes}` };
+
+    try {
+      if (!cachedTool || !currentTool) {
+        throw new Error("Expected tool definitions");
+      }
+      const original = await cachedTool.execute(args);
+      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+      expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(now + 60_000);
+      const fresh = await currentTool.execute(args);
+      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+      expect(fresh).not.toHaveProperty("cached");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        expect(await currentTool.execute(args)).toMatchObject({
+          results: [{ url: "https://example.com/result-3" }],
+        });
+        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+        expect(fetchMock).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      clock.mockRestore();
+      fetchMock.mockRestore();
+    }
+  });
+
   it("normalizes Exa result descriptions from highlights before text", () => {
     expect(
       testing.resolveExaDescription({
@@ -211,6 +335,25 @@ describe("exa web search provider", () => {
         },
         summary: { query: "launch details" },
       },
+    });
+  });
+
+  it.each([
+    { name: "a non-string value", query: { value: 123 } },
+    {
+      name: "a throwing getter",
+      query: {
+        get() {
+          throw new Error("Unrelated inherited contents option was accessed");
+        },
+      },
+    },
+  ])("ignores inherited text query with $name", ({ query }) => {
+    const prototype = Object.defineProperty({}, "query", query);
+    const text = Object.assign(Object.create(prototype), { maxCharacters: 1 });
+
+    expect(testing.parseExaContents({ text })).toEqual({
+      value: { text: { maxCharacters: 1 } },
     });
   });
 

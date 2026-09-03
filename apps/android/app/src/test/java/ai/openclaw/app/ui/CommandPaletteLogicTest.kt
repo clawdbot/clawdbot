@@ -71,14 +71,4 @@ class CommandPaletteLogicTest {
     assertEquals(CommandAction.Voice, item.action)
     assertEquals(listOf(CommandAction.Voice), calls)
   }
-
-  @Test
-  fun relativeTimeUsesCatalogBackedCompactLabels() {
-    val now = 10_000_000L
-
-    assertEquals("now", commandRelativeTime(updatedAtMs = now, nowMs = now))
-    assertEquals("5m", commandRelativeTime(updatedAtMs = now - 5 * 60_000L, nowMs = now))
-    assertEquals("3h", commandRelativeTime(updatedAtMs = now - 3 * 60 * 60_000L, nowMs = now))
-    assertEquals("2d", commandRelativeTime(updatedAtMs = now - 2 * 24 * 60 * 60_000L, nowMs = now))
-  }
 }

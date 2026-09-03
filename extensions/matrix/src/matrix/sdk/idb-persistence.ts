@@ -306,6 +306,8 @@ export async function persistIdbToDisk(params?: {
   // Production callers pass MatrixStoragePaths.idbSnapshotPath; explicit paths only isolate tests.
   snapshotPath?: string;
   databasePrefix?: string;
+  strict?: boolean;
+  abortSignal?: AbortSignal;
 }): Promise<void> {
   const snapshotPath = params?.snapshotPath ?? resolveDefaultIdbSnapshotPath();
   let callbackStarted = false;
@@ -329,7 +331,7 @@ export async function persistIdbToDisk(params?: {
         }
         throwIfLegacySnapshotNeedsDoctor(snapshotPath, storedSnapshotJson);
         const snapshot = await dumpIndexedDatabases(params?.databasePrefix);
-        if (snapshot.length === 0) {
+        if (params?.abortSignal?.aborted || snapshot.length === 0) {
           return 0;
         }
         writeMatrixIdbSnapshotJson({
@@ -355,6 +357,9 @@ export async function persistIdbToDisk(params?: {
       throwLegacySnapshotMigrationRequired();
     }
     LogService.warn("IdbPersistence", "Failed to persist IndexedDB snapshot:", err);
+    if (params?.strict) {
+      throw err;
+    }
   }
 }
 

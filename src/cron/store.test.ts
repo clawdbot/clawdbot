@@ -1,8 +1,9 @@
-// Cron store tests cover persisted scheduled job state and run metadata.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+// Cron store tests cover persisted scheduled job state and run metadata.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadLegacyCronQuarantineForMigration } from "../commands/doctor/cron/legacy-quarantine-migration.js";
 import {
@@ -12,7 +13,10 @@ import {
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
+  assertCronJobsStoreUnchanged,
+  CronJobsStoreChangedError,
   loadCronJobsStoreWithConfigJobs,
+  loadCronJobsStoreWithConfigJobsReadOnly,
   loadCronJobsStoreSync,
   loadCronQuarantinedJobs,
   loadCronStore,
@@ -21,6 +25,7 @@ import {
   saveCronQuarantinedJobs,
   saveCronStore,
 } from "./store.js";
+import { saveCronJobsStoreWithTransactionHooks } from "./store/transaction-hooks.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -69,6 +74,37 @@ function makeStore(jobId: string, enabled: boolean): CronStoreFile {
   };
 }
 
+function makeAuthorityStore(jobId: string): CronStoreFile {
+  const store = makeStore(jobId, true);
+  const job = expectDefined(store.jobs[0], `makeAuthorityStore(${jobId}) test invariant`);
+  job.owner = {
+    agentId: "main",
+    sessionKey: "agent:main:discord:group:ops",
+    accountId: "work",
+  };
+  job.sessionTarget = "isolated";
+  job.payload = {
+    kind: "agentTurn",
+    message: "scheduled continuation",
+    toolsAllow: ["read", "cron"],
+    toolsAllowIsDefault: true,
+  };
+  job.scheduledToolPolicy = {
+    version: 1,
+    mode: "account",
+    ownerSessionKey: "agent:main:discord:group:ops",
+    ownerAccountId: "work",
+  };
+  job.toolsAllowProvenance = { version: 1, source: "final-executable-surface" };
+  job.runtimeAuthority = {
+    version: 1,
+    runtimeId: "codex",
+    namespace: "codex.apps",
+    payload: { apps: [{ id: "calendar" }] },
+  };
+  return store;
+}
+
 async function expectPathMissing(targetPath: string): Promise<void> {
   try {
     await fs.stat(targetPath);
@@ -79,12 +115,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   throw new Error(`expected path to be missing: ${targetPath}`);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 describe("resolveCronStorePath", () => {
   const envSnapshot = captureEnv(["OPENCLAW_HOME", "HOME"]);
@@ -108,6 +139,75 @@ describe("cron store", () => {
     const loaded = await loadCronStore(store.storePath);
     expect(loaded).toEqual({ version: 1, jobs: [] });
   });
+
+  it.each([
+    {
+      name: "one-shot schedule without delivery",
+      schedule: { kind: "at", at: "2030-01-01T00:00:00.000Z" },
+      delivery: { mode: "none" },
+      failureAlert: false,
+    },
+    {
+      name: "interval schedule with an explicitly empty failure alert",
+      schedule: { kind: "every", everyMs: 60_000, anchorMs: 1_000 },
+      delivery: { mode: "announce", channel: "telegram", threadId: 42 },
+      failureAlert: {},
+    },
+    {
+      name: "cron schedule with webhook delivery and populated failure alert",
+      schedule: { kind: "cron", expr: "0 9 * * *", tz: "UTC", staggerMs: 0 },
+      delivery: { mode: "webhook", to: "https://example.invalid/cron" },
+      failureAlert: { after: 3, cooldownMs: 60_000, includeSkipped: true },
+    },
+    {
+      name: "process-exit schedule with explicit failure destination clears",
+      schedule: { kind: "on-exit", command: "./watch.sh", cwd: "/repo" },
+      delivery: {
+        mode: "announce",
+        channel: "telegram",
+        failureDestination: { channel: undefined, to: "slack:C123", accountId: undefined },
+      },
+      failureAlert: { channel: "slack", to: "slack:C123", mode: "announce" },
+    },
+    {
+      name: "stream schedule with completion webhook",
+      schedule: {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+      },
+      delivery: {
+        mode: "announce",
+        to: "telegram:chat",
+        completionDestination: { mode: "webhook", to: "https://example.invalid/complete" },
+      },
+      failureAlert: { accountId: "bot-1", mode: "webhook" },
+    },
+  ] satisfies Array<{
+    name: string;
+    schedule: CronStoreFile["jobs"][number]["schedule"];
+    delivery: NonNullable<CronStoreFile["jobs"][number]["delivery"]>;
+    failureAlert: NonNullable<CronStoreFile["jobs"][number]["failureAlert"]>;
+  }>)(
+    "preserves the complete job for $name",
+    async ({ name, schedule, delivery, failureAlert }) => {
+      const { storePath } = await makeStorePath();
+      const job = expectDefined(makeStore(name, true).jobs[0], "cron round-trip fixture");
+      Object.assign(job, {
+        schedule,
+        delivery,
+        failureAlert,
+        sessionTarget: "isolated",
+        payload: { kind: "agentTurn", message: "run" },
+      });
+
+      await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+      expect((await loadCronStore(storePath)).jobs[0]).toStrictEqual(job);
+    },
+  );
 
   it("throws when doctor migration reads invalid legacy JSON", async () => {
     const store = await makeStorePath();
@@ -353,6 +453,57 @@ describe("cron store", () => {
     }
   });
 
+  it("rolls back quarantine deletion when the restored cron row cannot commit", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("atomic-recovery-job", true);
+    await saveCronStore(storePath, store);
+    const entry = {
+      sourceIndex: 0,
+      reason: "invalid-schedule" as const,
+      job: { id: "atomic-recovery-job" },
+    };
+    saveCronQuarantinedJobs({ storePath, nowMs: 123, entries: [entry] });
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER fail_cron_recovery_update BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron recovery rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] }),
+      ).rejects.toThrow("cron recovery rejected");
+      expect(loadCronQuarantinedJobs(storePath)).toEqual([{ ...entry, quarantinedAtMs: 123 }]);
+      expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual([
+        "atomic-recovery-job",
+      ]);
+    } finally {
+      database.exec("DROP TRIGGER fail_cron_recovery_update");
+    }
+
+    await saveCronJobsStore(storePath, store, { deleteQuarantineEntries: [entry] });
+    expect(loadCronQuarantinedJobs(storePath)).toEqual([]);
+  });
+
+  it("runs post-commit hooks only after the cron write commits", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("post-commit-hook", true);
+    const afterCommit = vi.fn();
+    await saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit });
+    expect(afterCommit).toHaveBeenCalledOnce();
+
+    const database = openOpenClawStateDatabase().db;
+    database.exec(
+      "CREATE TEMP TRIGGER reject_cron_post_commit BEFORE UPDATE ON cron_jobs BEGIN SELECT RAISE(ABORT, 'cron update rejected'); END",
+    );
+    try {
+      await expect(
+        saveCronJobsStoreWithTransactionHooks(storePath, store, undefined, { afterCommit }),
+      ).rejects.toThrow("cron update rejected");
+      expect(afterCommit).toHaveBeenCalledOnce();
+    } finally {
+      database.exec("DROP TRIGGER reject_cron_post_commit");
+    }
+  });
+
   it("keeps valid cron row metadata aligned when an earlier SQLite row is malformed", async () => {
     const { storePath } = await makeStorePath();
     const malformed = expectDefined(
@@ -366,7 +517,9 @@ describe("cron store", () => {
     surviving.state = { nextRunAtMs: 987_654 };
     await saveCronStore(storePath, { version: 1, jobs: [malformed, surviving] });
     openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET schedule_kind = ? WHERE store_key = ? AND job_id = ?")
+      .db.prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.schedule.kind', ?) WHERE store_key = ? AND job_id = ?",
+      )
       .run("unsupported", path.resolve(storePath), malformed.id);
 
     const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
@@ -552,6 +705,45 @@ describe("cron store", () => {
     await expectPathMissing(`${store.storePath}.bak`);
   });
 
+  it("round-trips the auto-disable reason through runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("auto-disabled-job", false);
+    const job = expectDefined(payload.jobs[0], "payload.jobs[0] test invariant");
+    await saveCronStore(store.storePath, payload);
+
+    job.state = {
+      consecutiveErrors: 10,
+      autoDisabled: {
+        reason: "consecutive-failures",
+        atMs: job.updatedAtMs,
+        consecutiveErrors: 10,
+      },
+    };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject(job.state);
+  });
+
+  it("normalizes legacy run-status aliases into canonical runtime state JSON", async () => {
+    const store = await makeStorePath();
+    const payload = makeStore("legacy-run-status", true);
+    const job = expectDefined(payload.jobs[0], "legacy run-status fixture");
+    job.state = { lastStatus: "ok" };
+
+    await saveCronStore(store.storePath, payload);
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toEqual({
+      lastStatus: "ok",
+      lastRunStatus: "ok",
+    });
+
+    job.state = { lastStatus: "error" };
+    await saveCronStore(store.storePath, payload, { stateOnly: true });
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toEqual({
+      lastStatus: "error",
+      lastRunStatus: "error",
+    });
+  });
+
   it("stores queued reservations separately from active run markers", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-queued-phase", true);
@@ -566,10 +758,11 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
 
     const queuedRow = openOpenClawStateDatabase()
-      .db.prepare("SELECT running_at_ms, state_json FROM cron_jobs WHERE job_id = ?")
-      .get(job.id) as { running_at_ms: number | null; state_json: string };
-    expect(queuedRow.running_at_ms).toBeNull();
-    expect(JSON.parse(queuedRow.state_json)).toMatchObject({
+      .db.prepare("SELECT state_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { state_json: string };
+    const queuedState = JSON.parse(queuedRow.state_json) as Record<string, unknown>;
+    expect(queuedState.runningAtMs).toBeUndefined();
+    expect(queuedState).toMatchObject({
       queuedAtMs: job.createdAtMs + 1,
       startupCatchupAtMs: job.createdAtMs,
       pacedNextRunAtMs: job.createdAtMs,
@@ -624,24 +817,27 @@ describe("cron store", () => {
     );
   });
 
-  it("round-trips agent-turn external content provenance through SQLite", async () => {
-    const store = await makeStorePath();
-    const payload = makeStore("hook-job", true);
-    expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").sessionTarget = "isolated";
-    expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").payload = {
-      kind: "agentTurn",
-      message: "Summarize hook payload",
-      externalContentSource: "webhook",
-    };
+  it.each(["email", "webhook"] as const)(
+    "round-trips %s agent-turn external content provenance through SQLite",
+    async (externalContentSource) => {
+      const store = await makeStorePath();
+      const payload = makeStore("hook-job", true);
+      expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").sessionTarget = "isolated";
+      expectDefined(payload.jobs[0], "payload.jobs[0] test invariant").payload = {
+        kind: "agentTurn",
+        message: "Summarize hook payload",
+        externalContentSource,
+      };
 
-    await saveCronStore(store.storePath, payload);
+      await saveCronStore(store.storePath, payload);
 
-    expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
-      kind: "agentTurn",
-      message: "Summarize hook payload",
-      externalContentSource: "webhook",
-    });
-  });
+      expect((await loadCronStore(store.storePath)).jobs[0]?.payload).toMatchObject({
+        kind: "agentTurn",
+        message: "Summarize hook payload",
+        externalContentSource,
+      });
+    },
+  );
 
   it("round-trips the toolsAllow default-cap flag through SQLite", async () => {
     // The flag must survive a gateway restart: without it, a CLI-resolved run
@@ -663,6 +859,298 @@ describe("cron store", () => {
       toolsAllow: ["read", "cron"],
       toolsAllowIsDefault: true,
     });
+  });
+
+  it("preserves runtime authority when an older writer rewrites job_json", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("downgrade-authority-job");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    const row = database.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(job.id) as {
+      job_json: string;
+    };
+    const downgradedJob = JSON.parse(row.job_json) as Record<string, unknown>;
+    delete downgradedJob.runtimeAuthority;
+    delete downgradedJob.runtimeAuthorityRecoveryRequired;
+    downgradedJob.description = "edited by an older build";
+    database
+      .prepare("UPDATE cron_jobs SET description = ?, job_json = ? WHERE job_id = ?")
+      .run("edited by an older build", JSON.stringify(downgradedJob), job.id);
+
+    const reloaded = (await loadCronStore(storePath)).jobs[0];
+    expect(reloaded?.description).toBe("edited by an older build");
+    expect(reloaded?.runtimeAuthority).toEqual(job.runtimeAuthority);
+    expect(reloaded?.runtimeAuthorityRecoveryRequired).toBeUndefined();
+  });
+
+  it("stores authority outside job_json and restores it after reopen", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("authority-companion-row");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    const parent = database
+      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { job_json: string };
+    const parentJson = JSON.parse(parent.job_json) as Record<string, unknown>;
+    expect(parentJson).not.toHaveProperty("runtimeAuthority");
+    expect(parentJson).not.toHaveProperty("runtimeAuthorityRecoveryRequired");
+    const child = database
+      .prepare(
+        "SELECT authority_json, authority_input_fingerprint, recovery_required FROM cron_job_runtime_authorities WHERE job_id = ?",
+      )
+      .get(job.id) as {
+      authority_json: string;
+      authority_input_fingerprint: string;
+      recovery_required: number;
+    };
+    expect(JSON.parse(child.authority_json)).toEqual(job.runtimeAuthority);
+    expect(child.authority_input_fingerprint).toMatch(/^v1:[a-f0-9]{64}$/u);
+    expect(child.recovery_required).toBe(0);
+
+    const reloaded = (await loadCronStore(storePath)).jobs[0];
+    expect(reloaded?.runtimeAuthority).toEqual(job.runtimeAuthority);
+    expect(reloaded?.runtimeAuthorityRecoveryRequired).toBeUndefined();
+    const readOnly = (await loadCronJobsStoreWithConfigJobsReadOnly(storePath)).store.jobs[0];
+    expect(readOnly?.runtimeAuthority).toEqual(job.runtimeAuthority);
+  });
+
+  it("round-trips the restrict-only exec target and drops foreign shapes", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("exec-target-round-trip");
+    const job = expectDefined(authorityStore.jobs[0], "exec target job test invariant");
+    job.payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["exec", "read"],
+    };
+    job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };
+    job.toolsAllowExecTargetRequirement = {
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 0,
+    };
+
+    await saveCronStore(storePath, authorityStore);
+    const reloaded = (await loadCronStore(storePath)).jobs[0];
+    expect(reloaded?.payload.toolsAllow).toEqual(["exec", "read"]);
+    expect(reloaded?.toolsAllowExecTarget).toEqual({
+      version: 1,
+      host: "gateway",
+      ask: "always",
+    });
+    expect(reloaded?.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      target: { version: 1, host: "gateway", ask: "always" },
+      grantIndex: 0,
+    });
+
+    // A damaged target cannot rehydrate the private exec grant.
+    const database = openOpenClawStateDatabase().db;
+    const row = database.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(job.id) as {
+      job_json: string;
+    };
+    const edited = JSON.parse(row.job_json) as Record<string, unknown>;
+    expect((edited.payload as { toolsAllow?: string[] }).toolsAllow).toEqual(["read"]);
+    edited.toolsAllowExecTarget = { version: 1, host: "node" };
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(edited), job.id);
+    const rejected = (await loadCronStore(storePath)).jobs[0];
+    expect(rejected?.toolsAllowExecTarget).toBeUndefined();
+    expect(rejected?.payload.toolsAllow).toEqual(["read"]);
+
+    // Older writers may drop both private fields, but cannot restore broad exec.
+    const requirement = edited.toolsAllowExecTargetRequirement;
+    delete edited.toolsAllowExecTarget;
+    delete edited.toolsAllowExecTargetRequirement;
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(edited), job.id);
+    const downgraded = (await loadCronStore(storePath)).jobs[0];
+    expect(downgraded?.payload.toolsAllow).toEqual(["read"]);
+
+    // Extra keys from a newer writer are tolerated: known fields rebuild cleanly.
+    edited.toolsAllowExecTargetRequirement = requirement;
+    edited.toolsAllowExecTarget = {
+      version: 1,
+      host: "gateway",
+      ask: "always",
+      note: "future-field",
+    };
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(edited), job.id);
+    const tolerated = (await loadCronStore(storePath)).jobs[0];
+    expect(tolerated?.toolsAllowExecTarget).toEqual({
+      version: 1,
+      host: "gateway",
+      ask: "always",
+    });
+    expect(tolerated?.payload.toolsAllow).toEqual(["exec", "read"]);
+
+    edited.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "off" };
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(edited), job.id);
+    const nonRestrictiveAsk = (await loadCronStore(storePath)).jobs[0];
+    expect(nonRestrictiveAsk?.toolsAllowExecTarget).toEqual({ version: 1, host: "gateway" });
+    expect(nonRestrictiveAsk?.payload.toolsAllow).toEqual(["read"]);
+  });
+
+  it("never stores broad exec when a required target is already damaged", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("damaged-exec-target-save");
+    const job = expectDefined(authorityStore.jobs[0], "exec target job test invariant");
+    job.payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read", "exec"],
+    };
+    job.toolsAllowExecTarget = { version: 1, host: "gateway", ask: "always" };
+    job.toolsAllowExecTargetRequirement = { version: 1, recoveryRequired: true };
+
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    const row = database.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(job.id) as {
+      job_json: string;
+    };
+    const stored = JSON.parse(row.job_json) as { payload: { toolsAllow?: string[] } };
+    expect(stored.payload.toolsAllow).toEqual(["read"]);
+    const reloaded = (await loadCronStore(storePath)).jobs[0];
+    expect(reloaded?.payload.toolsAllow).toEqual(["read"]);
+    expect(reloaded?.toolsAllowExecTargetRequirement).toEqual({
+      version: 1,
+      recoveryRequired: true,
+    });
+  });
+
+  it("retires authority when an older writer changes its tool cap", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("downgrade-cap-change");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    database
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.payload.toolsAllow', json(?), '$.payload.toolsAllowIsDefault', json('false')) WHERE job_id = ?",
+      )
+      .run(JSON.stringify(["read"]), job.id);
+
+    const drifted = (await loadCronStore(storePath)).jobs[0];
+    expect(drifted?.runtimeAuthority).toBeUndefined();
+    expect(drifted?.runtimeAuthorityRecoveryRequired).toBe(true);
+    expect(
+      database
+        .prepare("SELECT recovery_required FROM cron_job_runtime_authorities WHERE job_id = ?")
+        .get(job.id),
+    ).toEqual({ recovery_required: 1 });
+
+    // Reverting the visible cap cannot revive the retired envelope.
+    database
+      .prepare(
+        "UPDATE cron_jobs SET job_json = json_set(job_json, '$.payload.toolsAllow', json(?), '$.payload.toolsAllowIsDefault', json('true')) WHERE job_id = ?",
+      )
+      .run(JSON.stringify(["read", "cron"]), job.id);
+    const reverted = (await loadCronStore(storePath)).jobs[0];
+    expect(reverted?.runtimeAuthority).toBeUndefined();
+    expect(reverted?.runtimeAuthorityRecoveryRequired).toBe(true);
+  });
+
+  it("fails closed and durably recovers malformed authority rows", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("malformed-authority-row");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    database
+      .prepare("UPDATE cron_job_runtime_authorities SET authority_json = ? WHERE job_id = ?")
+      .run("{not-json", job.id);
+
+    const loaded = (await loadCronStore(storePath)).jobs[0];
+    expect(loaded?.runtimeAuthority).toBeUndefined();
+    expect(loaded?.runtimeAuthorityRecoveryRequired).toBe(true);
+    expect(
+      database
+        .prepare(
+          "SELECT authority_json, authority_input_fingerprint, recovery_required FROM cron_job_runtime_authorities WHERE job_id = ?",
+        )
+        .get(job.id),
+    ).toEqual({
+      authority_json: null,
+      authority_input_fingerprint: null,
+      recovery_required: 1,
+    });
+  });
+
+  it("atomically rolls back parent changes when authority persistence fails", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("authority-atomic-write");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+    await saveCronStore(storePath, authorityStore);
+
+    const database = openOpenClawStateDatabase().db;
+    database.exec(`
+      CREATE TRIGGER reject_cron_runtime_authority_update
+      BEFORE UPDATE ON cron_job_runtime_authorities
+      BEGIN
+        SELECT RAISE(ABORT, 'authority write rejected');
+      END;
+    `);
+    const changed = structuredClone(authorityStore);
+    expectDefined(changed.jobs[0], "changed authority job test invariant").description =
+      "must roll back";
+
+    try {
+      await expect(saveCronStore(storePath, changed)).rejects.toThrow("authority write rejected");
+    } finally {
+      database.exec("DROP TRIGGER reject_cron_runtime_authority_update;");
+    }
+
+    const loaded = (await loadCronStore(storePath)).jobs[0];
+    expect(loaded?.description).toBeUndefined();
+    expect(loaded?.runtimeAuthority).toEqual(job.runtimeAuthority);
+  });
+
+  it("cascades authority deletion and permits a fresh recapture", async () => {
+    const { storePath } = await makeStorePath();
+    const authorityStore = makeAuthorityStore("authority-lifecycle");
+    const job = expectDefined(authorityStore.jobs[0], "authority job test invariant");
+    await saveCronStore(storePath, authorityStore);
+
+    const recoveryStore = structuredClone(authorityStore);
+    const recoveryJob = expectDefined(recoveryStore.jobs[0], "recovery job test invariant");
+    delete recoveryJob.runtimeAuthority;
+    recoveryJob.runtimeAuthorityRecoveryRequired = true;
+    await saveCronStore(storePath, recoveryStore);
+    expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthorityRecoveryRequired).toBe(true);
+
+    const recapturedStore = structuredClone(authorityStore);
+    const recapturedJob = expectDefined(recapturedStore.jobs[0], "recaptured job test invariant");
+    recapturedJob.runtimeAuthority = {
+      ...expectDefined(job.runtimeAuthority, "original runtime authority test invariant"),
+      payload: { apps: [{ id: "mail" }] },
+    };
+    delete recapturedJob.runtimeAuthorityRecoveryRequired;
+    await saveCronStore(storePath, recapturedStore);
+    expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthority).toEqual(
+      recapturedJob.runtimeAuthority,
+    );
+
+    await saveCronStore(storePath, { version: 1, jobs: [] });
+    expect(
+      openOpenClawStateDatabase()
+        .db.prepare("SELECT job_id FROM cron_job_runtime_authorities WHERE job_id = ?")
+        .get(job.id),
+    ).toBeUndefined();
   });
 
   it("does not persist a default-cap flag for an explicit toolsAllow restriction", async () => {
@@ -764,7 +1252,7 @@ describe("cron store", () => {
     });
   });
 
-  it("round-trips completion destinations through SQLite delivery columns", async () => {
+  it("round-trips completion destinations through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-webhook-delivery-job", true).jobs[0],
@@ -799,7 +1287,7 @@ describe("cron store", () => {
     });
   });
 
-  it("round-trips a numeric delivery thread id through SQLite delivery columns", async () => {
+  it("round-trips a numeric delivery thread id through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-numeric-thread-id-job", true).jobs[0],
@@ -820,7 +1308,7 @@ describe("cron store", () => {
   });
 
   it.each(["42", "1737500000.123456", "007"])(
-    "keeps a numeric-looking delivery thread id %s as a string through SQLite delivery columns",
+    "keeps a numeric-looking delivery thread id %s as a string through canonical cron job JSON",
     async (threadId) => {
       const { storePath } = await makeStorePath();
       const job = expectDefined(
@@ -842,51 +1330,7 @@ describe("cron store", () => {
     },
   );
 
-  it("does not resurrect a cleared thread id from the stored config copy", async () => {
-    const { storePath } = await makeStorePath();
-    const job = expectDefined(
-      makeStore("sqlite-early-row-thread-id-job", true).jobs[0],
-      'makeStore("sqlite-early-row-thread-id-job", true).jobs[0] test invariant',
-    );
-    job.delivery = {
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: 1008013,
-    };
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = NULL WHERE job_id = ?")
-      .run(job.id);
-
-    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
-    expect(loadedThreadId).toBeUndefined();
-  });
-
-  it("uses the normalized thread id when the stored config copy is stale", async () => {
-    const { storePath } = await makeStorePath();
-    const job = expectDefined(
-      makeStore("sqlite-stale-thread-id-job", true).jobs[0],
-      'makeStore("sqlite-stale-thread-id-job", true).jobs[0] test invariant',
-    );
-    job.delivery = {
-      mode: "announce",
-      channel: "telegram",
-      to: "telegram:chat-1",
-      threadId: 1008013,
-    };
-
-    await saveCronStore(storePath, { version: 1, jobs: [job] });
-    openOpenClawStateDatabase()
-      .db.prepare("UPDATE cron_jobs SET delivery_thread_id = ? WHERE job_id = ?")
-      .run("replacement", job.id);
-
-    const loadedThreadId = (await loadCronStore(storePath)).jobs[0]?.delivery?.threadId;
-    expect(loadedThreadId).toBe("replacement");
-  });
-
-  it("disambiguates identical thread id text using the normalized type marker", async () => {
+  it("preserves distinct numeric and string thread identities in canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const numberJob = expectDefined(
       makeStore("sqlite-thread-id-number", true).jobs[0],
@@ -913,7 +1357,7 @@ describe("cron store", () => {
     expect(typeof jobs[1]?.delivery?.threadId).toBe("string");
   });
 
-  it("round-trips explicit failure destination field clears through SQLite delivery columns", async () => {
+  it("round-trips explicit failure destination field clears through canonical cron job JSON", async () => {
     const { storePath } = await makeStorePath();
     const job = expectDefined(
       makeStore("sqlite-failure-destination-clear-job", true).jobs[0],
@@ -934,6 +1378,16 @@ describe("cron store", () => {
     };
 
     await saveCronStore(storePath, { version: 1, jobs: [job] });
+
+    const row = openOpenClawStateDatabase()
+      .db.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as { job_json: string };
+    expect(JSON.parse(row.job_json).delivery.failureDestination).toEqual({
+      channel: null,
+      to: "slack:C123",
+      accountId: null,
+      mode: null,
+    });
 
     const delivery = (await loadCronStore(storePath)).jobs[0]?.delivery;
     expect(delivery?.failureDestination).toEqual({
@@ -1328,4 +1782,205 @@ describe("saveCronStore", () => {
     await expectPathMissing(`${storePath}.bak`);
   });
 });
+describe("cron jobs fingerprint guard", () => {
+  it("refuses a replace after a concurrent order change and accepts a fresh snapshot", async () => {
+    const { storePath } = await makeStorePath();
+    const jobA = expectDefined(makeStore("job-a", true).jobs[0], "job-a fixture");
+    const jobB = expectDefined(makeStore("job-b", true).jobs[0], "job-b fixture");
+    await saveCronStore(storePath, { version: 1, jobs: [jobA, jobB] });
+    const staleFingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint after first save",
+    );
+    await saveCronStore(storePath, { version: 1, jobs: [jobB, jobA] });
+
+    await expect(
+      saveCronJobsStoreWithTransactionHooks(
+        storePath,
+        { version: 1, jobs: [jobA, jobB] },
+        undefined,
+        { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, staleFingerprint) },
+      ),
+    ).rejects.toBeInstanceOf(CronJobsStoreChangedError);
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-b", "job-a"]);
+
+    const freshFingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint after concurrent reorder",
+    );
+    expect(freshFingerprint).not.toBe(staleFingerprint);
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      { version: 1, jobs: [jobA, jobB] },
+      undefined,
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, freshFingerprint) },
+    );
+    expect((await loadCronStore(storePath)).jobs.map((job) => job.id)).toEqual(["job-a", "job-b"]);
+  });
+
+  it("preserves concurrent runtime state and authority through a definition repair", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("job-a");
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before runtime commit",
+    );
+    const concurrent = structuredClone(store);
+    const seeded = expectDefined(concurrent.jobs[0], "seeded job");
+    const runAtMs = seeded.updatedAtMs + 5_000;
+    seeded.updatedAtMs = runAtMs;
+    seeded.state = {
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+      consecutiveErrors: 0,
+    };
+    seeded.runtimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "mail" }] },
+    };
+    await saveCronStore(storePath, concurrent);
+
+    expect((await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint).toBe(fingerprint);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").enabled = false;
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      repair,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.enabled).toBe(false);
+    expect(repaired.state).toMatchObject({
+      queuedAtMs: runAtMs,
+      runningAtMs: runAtMs,
+      lastRunAtMs: runAtMs,
+      lastRunStatus: "ok",
+    });
+    expect(repaired.updatedAtMs).toBe(runAtMs);
+    expect(repaired.runtimeAuthority).toEqual(seeded.runtimeAuthority);
+  });
+
+  it("requires authority recovery when a repair changes its authorization inputs", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("job-a");
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before authority recapture",
+    );
+    const concurrent = structuredClone(store);
+    const concurrentJob = expectDefined(concurrent.jobs[0], "concurrent job");
+    concurrentJob.runtimeAuthority = {
+      version: 1,
+      runtimeId: "codex",
+      namespace: "codex.apps",
+      payload: { apps: [{ id: "mail" }] },
+    };
+    await saveCronStore(storePath, concurrent);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").payload = {
+      kind: "agentTurn",
+      message: "scheduled continuation",
+      toolsAllow: ["read"],
+    };
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      repair,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.runtimeAuthority).toBeUndefined();
+    expect(repaired.runtimeAuthorityRecoveryRequired).toBe(true);
+  });
+
+  it("preserves a concurrent runtime authority clear", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("job-a");
+    await saveCronStore(storePath, store);
+    const fingerprint = expectDefined(
+      (await loadCronJobsStoreWithConfigJobs(storePath)).jobsFingerprint,
+      "fingerprint before authority clear",
+    );
+    const cleared = structuredClone(store);
+    const clearedJob = expectDefined(cleared.jobs[0], "cleared job");
+    delete clearedJob.runtimeAuthority;
+    delete clearedJob.runtimeAuthorityRecoveryRequired;
+    await saveCronStore(storePath, cleared);
+    const repair = structuredClone(store);
+    expectDefined(repair.jobs[0], "repair job").enabled = false;
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      repair,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    const repaired = expectDefined((await loadCronStore(storePath)).jobs[0], "repaired job");
+    expect(repaired.enabled).toBe(false);
+    expect(repaired.runtimeAuthority).toBeUndefined();
+    expect(repaired.runtimeAuthorityRecoveryRequired).toBeUndefined();
+  });
+
+  it("migrates authority embedded by an older writer during a preserved repair", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeAuthorityStore("legacy-authority-job");
+    const job = expectDefined(store.jobs[0], "authority job");
+    await saveCronStore(storePath, store);
+    const database = openOpenClawStateDatabase().db;
+    const row = database.prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?").get(job.id) as {
+      job_json: string;
+    };
+    const legacyJob = JSON.parse(row.job_json) as Record<string, unknown>;
+    legacyJob.runtimeAuthority = job.runtimeAuthority;
+    database
+      .prepare("UPDATE cron_jobs SET job_json = ? WHERE job_id = ?")
+      .run(JSON.stringify(legacyJob), job.id);
+    database.prepare("DELETE FROM cron_job_runtime_authorities WHERE job_id = ?").run(job.id);
+    const loaded = await loadCronJobsStoreWithConfigJobs(storePath);
+    const fingerprint = expectDefined(loaded.jobsFingerprint, "legacy authority fingerprint");
+
+    await saveCronJobsStoreWithTransactionHooks(
+      storePath,
+      loaded.store,
+      { preserveRuntimeState: true },
+      { beforeWrite: (db) => assertCronJobsStoreUnchanged(db, storePath, fingerprint) },
+    );
+
+    expect((await loadCronStore(storePath)).jobs[0]?.runtimeAuthority).toEqual(
+      job.runtimeAuthority,
+    );
+    const parent = database
+      .prepare("SELECT job_json FROM cron_jobs WHERE job_id = ?")
+      .get(job.id) as {
+      job_json: string;
+    };
+    expect(JSON.parse(parent.job_json)).not.toHaveProperty("runtimeAuthority");
+  });
+
+  it("still writes runtime state for a full replace that does not opt into preservation", async () => {
+    const { storePath } = await makeStorePath();
+    const store = makeStore("job-a", true);
+    await saveCronStore(storePath, store);
+    const seeded = expectDefined(store.jobs[0], "seeded job");
+    seeded.state = { runningAtMs: seeded.updatedAtMs };
+    await saveCronStore(storePath, store, { stateOnly: true });
+
+    await saveCronStore(storePath, makeStore("job-a", false));
+
+    const replaced = expectDefined((await loadCronStore(storePath)).jobs[0], "replaced job");
+    expect(replaced.state.runningAtMs).toBeUndefined();
+  });
+});
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

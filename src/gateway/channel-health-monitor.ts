@@ -1,8 +1,11 @@
+import {
+  isFutureDateTimestampMs,
+  resolveTimerTimeoutMs,
+} from "@openclaw/normalization-core/number-coercion";
 // Gateway channel health monitor.
 // Periodically evaluates channel account health and restarts stale runtimes.
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import {
   DEFAULT_CHANNEL_CONNECT_GRACE_MS,
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
@@ -90,16 +93,24 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
   const rKey = (channelId: string, accountId: string) => `${channelId}:${accountId}`;
 
   function pruneOldRestarts(record: RestartRecord, now: number) {
-    record.restartsThisHour = record.restartsThisHour.filter((r) => now - r.at < ONE_HOUR_MS);
+    record.restartsThisHour = record.restartsThisHour.filter(
+      (r) => !isFutureDateTimestampMs(r.at, { nowMs: now }) && now - r.at < ONE_HOUR_MS,
+    );
   }
 
   async function runCheckWork() {
     try {
       const now = Date.now();
-      if (now - startedAt < timing.monitorStartupGraceMs) {
+      if (
+        !isFutureDateTimestampMs(startedAt, { nowMs: now }) &&
+        now - startedAt < timing.monitorStartupGraceMs
+      ) {
         return;
       }
 
+      if (channelManager.getAutostartSuppression() !== null) {
+        await channelManager.recoverAutostartSuppression();
+      }
       const snapshot = channelManager.getRuntimeSnapshot();
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
@@ -185,7 +196,11 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
           const continuingPendingRestart =
             pendingRestartState && record.pendingContinuationUsed !== true;
 
-          if (!continuingPendingRestart && now - record.lastRestartAt <= cooldownMs) {
+          if (
+            !continuingPendingRestart &&
+            !isFutureDateTimestampMs(record.lastRestartAt, { nowMs: now }) &&
+            now - record.lastRestartAt <= cooldownMs
+          ) {
             continue;
           }
 

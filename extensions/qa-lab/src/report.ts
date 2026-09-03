@@ -28,6 +28,7 @@ function formatQaReportCheck(check: QaReportCheck, indent = "") {
 
 export function renderQaMarkdownReport(params: {
   title: string;
+  inProgress?: boolean;
   startedAt: Date;
   finishedAt: Date;
   checks?: QaReportCheck[];
@@ -48,10 +49,11 @@ export function renderQaMarkdownReport(params: {
     scenarios.filter((scenario) => scenario.status === "skip").length;
 
   const lines = [
-    `# ${params.title}`,
+    `# ${params.title}${params.inProgress ? " (In Progress)" : ""}`,
     "",
+    ...(params.inProgress ? ["- Status: running"] : []),
     `- Started: ${params.startedAt.toISOString()}`,
-    `- Finished: ${params.finishedAt.toISOString()}`,
+    `- ${params.inProgress ? "Updated" : "Finished"}: ${params.finishedAt.toISOString()}`,
     `- Duration ms: ${params.finishedAt.getTime() - params.startedAt.getTime()}`,
     `- Passed: ${passCount}`,
     `- Failed: ${failCount}`,

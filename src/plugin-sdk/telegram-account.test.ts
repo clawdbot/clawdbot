@@ -16,12 +16,12 @@ const mocks = vi.hoisted(() => {
 
   return {
     apiModule,
-    loadBundledPluginPublicSurfaceModuleSync: vi.fn(() => apiModule),
+    loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn(() => apiModule),
   };
 });
 
 vi.mock("./facade-loader.js", () => ({
-  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
+  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
 }));
 
 describe("telegram account plugin-sdk compatibility facade", () => {
@@ -31,7 +31,7 @@ describe("telegram account plugin-sdk compatibility facade", () => {
 
     const account = resolveTelegramAccount({ cfg, accountId: "default" });
 
-    expect(mocks.loadBundledPluginPublicSurfaceModuleSync).toHaveBeenCalledWith({
+    expect(mocks.loadBundledPluginPublicSurfaceModuleSyncCore).toHaveBeenCalledWith({
       dirName: "telegram",
       artifactBasename: "api.js",
     });

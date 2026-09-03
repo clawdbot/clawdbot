@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../channels/message/runtime.js", () => ({
-  sendDurableMessageBatch: mocks.sendDurableMessageBatch,
+  sendDurableMessageBatchCore: mocks.sendDurableMessageBatch,
 }));
 
 vi.mock("../infra/outbound/deliver.js", () => ({

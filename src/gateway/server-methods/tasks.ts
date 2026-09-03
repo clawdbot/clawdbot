@@ -9,18 +9,25 @@ import {
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
+  validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
+import {
+  dismissSubagentCompletionDelivery,
+  retrySubagentCompletionDelivery,
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
+import { readGatewayAccessRevision } from "../gateway-access-revision.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { canAccessTaskRequesterSession } from "../task-session-access.js";
 import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
+const TASKS_LIST_MAX_ATTEMPTS = 3;
 
 type TaskLedgerStatus = TaskSummary["status"];
 
@@ -57,7 +64,7 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond, context }) => {
+  "tasks.list": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
@@ -73,41 +80,84 @@ export const tasksHandlers: GatewayRequestHandlers = {
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
     let sessionKey: string | undefined;
+    let sessionAgentId: string | undefined;
     if (requestedSessionKey) {
-      const cfg = context.getRuntimeConfig();
+      const sessionOwner = resolveRequestedSessionAgentId(
+        cfg,
+        requestedSessionKey,
+        normalizeOptionalString(params.agentId),
+      );
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      sessionAgentId = sessionOwner.agentId;
       sessionKey = canonicalizeMainSessionAlias({
         cfg,
-        agentId:
-          parseAgentSessionKey(requestedSessionKey)?.agentId ??
-          normalizeOptionalString(params.agentId) ??
-          resolveDefaultAgentId(cfg),
+        agentId: sessionOwner.agentId,
         sessionKey: requestedSessionKey,
       });
     }
     // The ledger pages by last activity so an old long-running task that just
     // finished still surfaces first. Selection stays inside the registry so
     // only the bounded wire page pays for defensive record cloning.
-    const page = listTaskRecordPage({
+    const canReadTask = (task: Readonly<TaskRecord>) =>
+      canAccessTaskRequesterSession({ cfg, client, task });
+    const pageParams = {
       offset: cursor,
       limit,
       statuses: statusFilter ? [...statusFilter] : undefined,
-      agentId: params.agentId,
+      agentId: sessionKey ? undefined : params.agentId,
       sessionKey,
-    });
-    const nextOffset = cursor + page.tasks.length;
-    respond(true, {
-      tasks: page.tasks.map((task) => mapTaskSummary(task)),
-      ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
-    });
+      sessionAgentId,
+      cfg,
+      filter: canReadTask,
+    };
+    for (let attempt = 0; attempt < TASKS_LIST_MAX_ATTEMPTS; attempt += 1) {
+      const accessRevision = readGatewayAccessRevision();
+      const pageResult = await listTaskRecordPage(pageParams);
+      if (!pageResult.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "task registry changed during tasks.list; retry"),
+        );
+        return;
+      }
+      const page = pageResult.value;
+      // Sharing changes invalidate every access decision made before a yield.
+      // Recheck selected rows in the final synchronous response turn as well.
+      if (
+        accessRevision !== readGatewayAccessRevision() ||
+        page.tasks.some((task) => !canReadTask(task))
+      ) {
+        continue;
+      }
+      const nextOffset = cursor + page.tasks.length;
+      respond(true, {
+        tasks: page.tasks.map((task) => mapTaskSummary(task)),
+        ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
+      });
+      return;
+    }
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "task access changed during tasks.list; retry"),
+    );
   },
-  "tasks.get": ({ params, respond }) => {
+  "tasks.get": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
     const task = getTaskById(taskId);
-    if (!task) {
+    if (
+      !task ||
+      !canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task })
+    ) {
       respond(
         false,
         undefined,
@@ -119,16 +169,22 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // stay compact while detail views can show the operator what was requested.
     respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
-  "tasks.cancel": async ({ params, respond, context }) => {
+  "tasks.cancel": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const { cancelDetachedTaskRunById } =
+    const { cancelDetachedTaskRunByIdCore } =
       await import("../../tasks/task-executor-cancel.runtime.js");
-    const result = await cancelDetachedTaskRunById({
-      cfg: context.getRuntimeConfig(),
+    const cfg = context.getRuntimeConfig();
+    const task = getTaskById(taskId);
+    if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+      respond(true, { found: false, cancelled: false });
+      return;
+    }
+    const result = await cancelDetachedTaskRunByIdCore({
+      cfg,
       taskId,
       ...(reason ? { reason } : {}),
     });
@@ -139,9 +195,53 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
     });
   },
+  "tasks.retry": async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
+      return;
+    }
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await retrySubagentCompletionDelivery(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
+  "tasks.dismiss": async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
+      return;
+    }
+    const { discardSubagentTerminalDelivery } =
+      await import("../../agents/subagents/registry/subagent-registry.js");
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await dismissSubagentCompletionDelivery(taskId, {
+        discardTerminalDelivery: discardSubagentTerminalDelivery,
+      });
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };

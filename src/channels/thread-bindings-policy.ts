@@ -1,5 +1,8 @@
 // Thread-binding policy resolution for channel/account session spawning.
-import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
+import {
+  asNonNegativeFiniteNumber,
+  MAX_DATE_TIMESTAMP_MS,
+} from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAccountId } from "../routing/session-key.js";
@@ -7,8 +10,8 @@ import {
   resolveThreadBindingLifecycle as resolveSharedThreadBindingLifecycle,
   type ThreadBindingLifecycleRecord,
 } from "../shared/thread-binding-lifecycle.js";
-import { getLoadedChannelPlugin } from "./plugins/index.js";
-import { resolveBundledChannelThreadBindingDefaultPlacement } from "./plugins/thread-binding-api.js";
+import { asBoolean } from "../utils/boolean.js";
+import { resolveChannelDefaultBindingPlacement } from "./conversation-resolution.js";
 
 export { resolveThreadBindingLifecycle } from "../shared/thread-binding-lifecycle.js";
 
@@ -49,53 +52,11 @@ function normalizeChannelId(value: string | undefined | null): string {
 
 /** Returns true when top-level commands should spawn in a child thread by default. */
 export function supportsAutomaticThreadBindingSpawn(channel: string): boolean {
-  return resolveDefaultTopLevelPlacement(channel) === "child";
-}
-
-/** Returns true when /thread here needs a native channel thread to exist first. */
-export function requiresNativeThreadContextForThreadHere(channel: string): boolean {
-  return resolveDefaultTopLevelPlacement(channel) === "child";
-}
-
-/** Resolves whether a thread binding should attach to the current thread or create a child. */
-export function resolveThreadBindingPlacementForCurrentContext(params: {
-  channel: string;
-  threadId?: string;
-}): "current" | "child" {
-  if (resolveDefaultTopLevelPlacement(params.channel) !== "child") {
-    return "current";
-  }
-  return params.threadId ? "current" : "child";
-}
-
-function resolveDefaultTopLevelPlacement(channel: string): "current" | "child" {
-  const normalized = normalizeChannelId(channel);
-  if (!normalized) {
-    return "current";
-  }
-  return (
-    // Loaded plugin metadata wins; bundled metadata is the startup-safe fallback.
-    getLoadedChannelPlugin(normalized)?.conversationBindings?.defaultTopLevelPlacement ??
-    resolveBundledChannelThreadBindingDefaultPlacement(normalized) ??
-    "current"
-  );
-}
-
-function normalizeBoolean(value: unknown): boolean | undefined {
-  if (typeof value !== "boolean") {
-    return undefined;
-  }
-  return value;
+  return resolveChannelDefaultBindingPlacement(channel) === "child";
 }
 
 function normalizeThreadBindingHours(raw: unknown): number | undefined {
-  if (typeof raw !== "number" || !Number.isFinite(raw)) {
-    return undefined;
-  }
-  if (raw < 0) {
-    return undefined;
-  }
-  return raw;
+  return asNonNegativeFiniteNumber(raw);
 }
 
 function resolveThreadBindingHoursMs(raw: unknown, fallbackHours: number): number {
@@ -144,9 +105,7 @@ export function resolveThreadBindingsEnabled(params: {
   channelEnabledRaw: unknown;
   sessionEnabledRaw: unknown;
 }): boolean {
-  return (
-    normalizeBoolean(params.channelEnabledRaw) ?? normalizeBoolean(params.sessionEnabledRaw) ?? true
-  );
+  return asBoolean(params.channelEnabledRaw) ?? asBoolean(params.sessionEnabledRaw) ?? true;
 }
 
 function resolveChannelThreadBindings(params: {
@@ -183,14 +142,14 @@ export function resolveThreadBindingSpawnPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   const { root, account } = resolveChannelThreadBindings({ cfg: params.cfg, channel, accountId });
   const enabled =
-    normalizeBoolean(account?.enabled) ??
-    normalizeBoolean(root?.enabled) ??
-    normalizeBoolean(params.cfg.session?.threadBindings?.enabled) ??
+    asBoolean(account?.enabled) ??
+    asBoolean(root?.enabled) ??
+    asBoolean(params.cfg.session?.threadBindings?.enabled) ??
     true;
   const spawnEnabledRaw =
-    normalizeBoolean(account?.spawnSessions) ??
-    normalizeBoolean(root?.spawnSessions) ??
-    normalizeBoolean(params.cfg.session?.threadBindings?.spawnSessions);
+    asBoolean(account?.spawnSessions) ??
+    asBoolean(root?.spawnSessions) ??
+    asBoolean(params.cfg.session?.threadBindings?.spawnSessions);
   const spawnEnabled = spawnEnabledRaw ?? true;
   const defaultSpawnContext =
     normalizeSpawnContext(account?.defaultSpawnContext) ??

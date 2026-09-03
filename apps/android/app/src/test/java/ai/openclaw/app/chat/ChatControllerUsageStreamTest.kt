@@ -112,6 +112,29 @@ class ChatControllerUsageStreamTest {
 
   @Test
   @OptIn(ExperimentalCoroutinesApi::class)
+  fun activeRunIdTombstoneClearsExactIdsWhileOmissionPreservesThem() =
+    runTest {
+      val gateway = ScriptedGateway(json)
+      val controller = ChatController(scope = backgroundScope, json = json, requestGateway = gateway::request)
+      controller.handleGatewayEvent("sessions.changed", advertise("run-exact"))
+      assertEquals("run-exact", controller.selectedActiveRunPresentation.value.runId)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true}}""",
+      )
+      assertEquals("run-exact", controller.selectedActiveRunPresentation.value.runId)
+
+      controller.handleGatewayEvent(
+        "sessions.changed",
+        """{"reason":"patch","session":{"key":"main","agentId":"main","hasActiveRun":true,"activeRunIds":null}}""",
+      )
+      assertEquals(1, controller.selectedActiveRunPresentation.value.count)
+      assertNull(controller.selectedActiveRunPresentation.value.runId)
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
   fun idlessReplacementRunGetsANewStartedAtClockKey() =
     runTest {
       val gateway = ScriptedGateway(json)

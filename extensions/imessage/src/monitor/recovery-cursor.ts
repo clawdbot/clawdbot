@@ -131,6 +131,24 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
   }
 }
 
+function reconcileRecoveryCursorToWatermark(
+  accountId: string,
+  dbIdentity: string,
+  cursorRowid: number | null,
+  watermarkRowid: number | null,
+): number | null {
+  if (cursorRowid === null || watermarkRowid === null || cursorRowid <= watermarkRowid) {
+    return cursorRowid;
+  }
+  try {
+    const store = openRecoveryCursorStore();
+    store.register(recoveryCursorStoreKey(accountId, dbIdentity), { lastRowid: watermarkRowid });
+  } catch {
+    return watermarkRowid;
+  }
+  return watermarkRowid;
+}
+
 /**
  * Last durably admitted rowid for this account on `dbIdentity`, or null when
  * none is recorded yet (including when the only stored cursor belongs to a
@@ -139,16 +157,25 @@ function migrateLegacyCatchupCursor(accountId: string, dbIdentity: string): numb
 export function loadIMessageRecoveryCursor(
   accountId: string,
   dbIdentity: string,
-  options: { migrateLegacyCatchup?: boolean } = {},
+  options: { migrateLegacyCatchup?: boolean; watermarkRowid?: number | null } = {},
 ): number | null {
+  const watermarkRowid =
+    typeof options.watermarkRowid === "number" && Number.isFinite(options.watermarkRowid)
+      ? options.watermarkRowid
+      : null;
   const current = readRecoveryCursor(accountId, dbIdentity);
   if (current !== null) {
-    return current;
+    return reconcileRecoveryCursorToWatermark(accountId, dbIdentity, current, watermarkRowid);
   }
   if (options.migrateLegacyCatchup === false) {
     return null;
   }
-  return migrateLegacyCatchupCursor(accountId, dbIdentity);
+  return reconcileRecoveryCursorToWatermark(
+    accountId,
+    dbIdentity,
+    migrateLegacyCatchupCursor(accountId, dbIdentity),
+    watermarkRowid,
+  );
 }
 
 /** Advance the cursor forward to `rowid` (monotonic per database; never rewinds). */

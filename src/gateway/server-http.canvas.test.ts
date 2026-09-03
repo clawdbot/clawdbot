@@ -104,10 +104,10 @@ function createConnectedClient(): GatewayWsClient {
   return {
     socket: {} as GatewayWsClient["socket"],
     connect: {
-      role: "operator",
-      client: { mode: "webchat" },
+      role: "node",
+      client: { mode: "node" },
     } as GatewayWsClient["connect"],
-    connId: "canvas-control-ui",
+    connId: "canvas-node",
     usesSharedGatewayAuth: false,
   };
 }
@@ -188,6 +188,32 @@ describe("core Canvas Gateway capability authorization", () => {
       const response = await fetch(`${scopedUrl}${document.entryUrl}`);
       expect(response.status).toBe(200);
       expect(await response.text()).toContain("hosted");
+    });
+  });
+
+  it("rejects an invalidated client's capability without extending its expiry", async () => {
+    await withHostedDocumentServer({ config: {} }, async ({ clients, document, origin }) => {
+      const client = createConnectedClient();
+      const capability = mintPluginNodeCapabilityToken();
+      const surface = requireCanvasCapability(document.entryUrl);
+      const expiresAtMs = Date.now() + 60_000;
+      const scopedUrl = installCanvasCapability({
+        capability,
+        client,
+        expiresAtMs,
+        origin,
+        surface,
+      });
+      clients.add(client);
+
+      const activeResponse = await fetch(`${scopedUrl}${document.entryUrl}`);
+      expect(activeResponse.status).toBe(200);
+      expect(await activeResponse.text()).toContain("hosted");
+
+      client.invalidated = true;
+      const expiryBeforeRejectedRequest = client.pluginNodeCapabilities?.canvas?.expiresAtMs;
+      await expectUnauthorized(await fetch(`${scopedUrl}${document.entryUrl}`));
+      expect(client.pluginNodeCapabilities?.canvas?.expiresAtMs).toBe(expiryBeforeRejectedRequest);
     });
   });
 

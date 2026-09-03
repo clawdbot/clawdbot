@@ -1,84 +1,40 @@
 ---
 name: skill-creator
-description: "Create, edit, audit, tidy, validate, or restructure AgentSkills and SKILL.md files."
+description: "Author or review AgentSkills: create, repair, validate, or restructure SKILL.md files and bundled resources."
 ---
 
 # Skill Creator
 
-Skills are compact triggerable workflows. Metadata is always visible; body loads only after trigger; references/scripts/assets load only as needed.
-
-## Hard rules
-
-- For durable OpenClaw skill creation or updates in an agent session, use
-  `skill_workshop` to create or revise a pending proposal. Do not scaffold or
-  apply live `SKILL.md` files with shell commands or helper scripts.
-- Keep `SKILL.md` lean; Codex is already capable.
-- Put only trigger-critical facts in frontmatter `description`.
-- Quote frontmatter `description`.
-- Frontmatter needs `name` + `description`; local OpenClaw skills may also use `metadata`, `homepage`, `allowed-tools`, `user-invocable`, `license`.
-- Prefer noun-phrase descriptions; short generic trigger phrase, not full workflow.
-- Move long examples/docs to `references/`; scripts to `scripts/`; templates/media to `assets/`.
-- No extra README/changelog/setup docs inside a skill unless they are actual task references.
-- Validate YAML frontmatter after edits.
-
-## Shape
-
-```text
-skill-name/
-  SKILL.md
-  scripts/      optional deterministic helpers
-  references/   optional docs loaded only when needed
-  assets/       optional output resources/templates
-  agents/       optional UI metadata
-```
-
-## Good SKILL.md
-
-```markdown
----
-name: pdf-tools
-description: "Inspect, split, merge, OCR, redact, or convert PDFs with local CLI tools."
----
-
-# PDF tools
-
-Use for PDF manipulation. Prefer deterministic scripts for page edits.
-
 ## Workflow
 
-1. Inspect file/page count.
-2. Choose exact operation.
-3. Write output beside input unless user asked otherwise.
-4. Render/verify changed pages.
-```
+1. Establish the contract.
+   - Read the existing skill and its resources, or collect concrete requests for a new skill.
+   - Separate actual workflow branches from synonyms for the same branch.
+   - **Done when:** every branch has a concrete trigger, expected outcome, and persistence target.
 
-## Edit workflow
+2. Choose invocation.
+   - Model-discoverable: write a model-facing `description`; omit `disable-model-invocation`.
+   - Manual-only: set `disable-model-invocation: true`; write a human-facing summary.
+   - Direct tool command: add `command-dispatch: tool`, `command-tool`, and `command-arg-mode` only when the command bypasses the model.
+   - **Done when:** frontmatter matches how the skill will actually be reached.
 
-1. Read existing skill and nearby resource names.
-2. Draft the proposed `SKILL.md` content.
-3. Create or revise the pending proposal through `skill_workshop` when the
-   change should persist as an OpenClaw skill.
-4. Remove generic advice the base model already knows.
-5. Keep brittle command syntax, auth caveats, safety rules, and validation.
-6. Replace tables with bullets unless a table is clearly needed.
-7. Relax prose; fragments ok.
-8. Validate frontmatter and run any script tests touched.
+3. Structure the skill.
+   - Map shared ordered procedure to `SKILL.md`; end every step with a checkable completion criterion and finish with verification.
+   - Keep routing conditions in `description`; start the body with execution.
+   - Map branch-only detail to `references/`, deterministic helpers to `scripts/`, output resources to `assets/`, and optional UI metadata to `agents/`.
+   - **Done when:** every planned resource has one purpose and a direct pointer from `SKILL.md`.
 
-## Validation
+4. Draft and persist.
+   - Live workspace skill: use `skill_workshop` to create or revise a pending proposal; keep live files unchanged until apply.
+   - Repository-owned skill source: use the repository's normal edit and review workflow.
+   - **Done when:** the proposal or source diff implements every branch from step 1 and contains every resource from step 3.
 
-```bash
-python skills/skill-creator/scripts/quick_validate.py skills/<name>
-python - <<'PY'
-from pathlib import Path
-import yaml
-for p in Path("skills").glob("*/SKILL.md"):
-    text=p.read_text()
-    if not text.startswith("---\n"):
-        raise SystemExit(f"missing frontmatter: {p}")
-    fm=text.split("---",2)[1]
-    yaml.safe_load(fm)
-print("ok")
-PY
-```
+5. Validate.
+   - Run `python {baseDir}/scripts/quick_validate.py <skill-directory>` and execute every touched helper's focused test.
+   - **Done when:** frontmatter passes, resource pointers resolve, and every touched helper passes its focused test.
 
-`quick_validate.py` is conservative; repo-local frontmatter may allow keys beyond public skill bundles.
+## Frontmatter
+
+Required: `name`, `description`.
+
+OpenClaw also supports `metadata`, `homepage`, `license`, `allowed-tools`, `user-invocable`, `disable-model-invocation`, `command-dispatch`, `command-tool`, and `command-arg-mode`. Add optional fields only when they change runtime behavior or discovery.

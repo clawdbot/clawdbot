@@ -6,6 +6,7 @@ import {
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
 } from "./accounts.js";
+import { zaloPlugin } from "./channel.js";
 
 describe("resolveZaloAccount", () => {
   it("resolves account config when account key casing differs from normalized id", () => {
@@ -93,6 +94,35 @@ describe("resolveZaloAccount", () => {
     expect(resolveDefaultZaloAccountId(cfg)).toBe("default");
     expect(resolveZaloAccount({ cfg, accountId: "default" }).enabled).toBe(true);
   });
+
+  it("carries account-owned unavailable credential diagnostics into the resolved account", () => {
+    const tokenFile = "/private/zalo-resolved-account-token";
+    const resolved = resolveZaloAccount({
+      cfg: {
+        channels: {
+          zalo: {
+            botToken: "lower-priority-token",
+            accounts: { work: { tokenFile } },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(resolved).toMatchObject({
+      token: "",
+      tokenSource: "configFile",
+      tokenStatus: "configured_unavailable",
+      credentialDiagnostics: [
+        {
+          code: "CREDENTIAL_FILE_UNAVAILABLE",
+          path: "channels.zalo.accounts.work.tokenFile",
+          reason: "not-found",
+        },
+      ],
+    });
+    expect(JSON.stringify(resolved.credentialDiagnostics)).not.toContain(tokenFile);
+  });
 });
 
 describe("Zalo account SecretRef inspection", () => {
@@ -103,6 +133,40 @@ describe("Zalo account SecretRef inspection", () => {
     provider: "default",
     id: "OPENCLAW_TEST_MISSING_ZALO_TOKEN",
   };
+
+  it.each([
+    { botToken: "bot-token", webhookUrl: undefined, configured: true, mode: "polling" },
+    {
+      botToken: unresolvedRef,
+      webhookUrl: "https://bot.example.com/zalo",
+      configured: true,
+      mode: "webhook",
+    },
+    { botToken: undefined, webhookUrl: undefined, configured: false, mode: "polling" },
+  ])("reports $mode inspection with configured=$configured", async (entry) => {
+    const cfg = {
+      channels: {
+        zalo: {
+          accounts: {
+            work: {
+              botToken: entry.botToken,
+              webhookUrl: entry.webhookUrl,
+              dmPolicy: "open" as const,
+            },
+          },
+        },
+      },
+    };
+    const account = inspectZaloAccount({ cfg, accountId: "work" });
+    expect(await zaloPlugin.config.isConfigured?.(account, cfg)).toBe(entry.configured);
+    expect(account).toMatchObject({
+      accountId: "work",
+      enabled: true,
+      configured: entry.configured,
+      mode: entry.mode,
+      dmPolicy: "open",
+    });
+  });
 
   it("keeps direct account resolution strict", () => {
     expect(() =>

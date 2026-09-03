@@ -30,6 +30,7 @@ import type {
   PermissionRequest as SdkPermissionRequest,
   PermissionRequestResult as SdkPermissionRequestResult,
 } from "@github/copilot-sdk";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 /** Request shape forwarded to host-implemented policies. */
 interface CopilotPermissionContext {
@@ -83,20 +84,9 @@ export function createPermissionBridge(
     } catch (error) {
       return {
         kind: "reject",
-        feedback: `copilot permission policy threw: ${formatError(error)}`,
+        feedback: `copilot permission policy threw: ${formatErrorMessage(error)}`,
       };
     }
     return { kind: "reject", feedback: REJECT_ALL_FEEDBACK };
   };
-}
-
-function formatError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  try {
-    return JSON.stringify(error);
-  } catch {
-    return String(error);
-  }
 }

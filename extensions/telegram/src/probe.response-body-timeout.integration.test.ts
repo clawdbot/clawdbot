@@ -3,7 +3,7 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { probeTelegram, resetTelegramProbeFetcherCacheForTests } from "./probe.js";
+import { probeTelegram } from "./probe.js";
 
 type ResponseMode = "stall" | "trickle";
 
@@ -62,7 +62,6 @@ describe("probeTelegram response body deadlines over real sockets", () => {
   });
 
   afterAll(async () => {
-    resetTelegramProbeFetcherCacheForTests();
     vi.unstubAllEnvs();
     for (const interval of activeIntervals) {
       clearInterval(interval);
@@ -75,12 +74,14 @@ describe("probeTelegram response body deadlines over real sockets", () => {
     });
   });
 
+  let probeIndex = 0;
+
   async function expectDeadlineFailure(mode: ResponseMode, expectedError: RegExp) {
     responseMode = mode;
     const previousRequestCount = requestCount;
     const previousClosedSocketCount = closedSocketCount;
 
-    const result = await probeTelegram("placeholder", 200, {
+    const result = await probeTelegram(`deadline-${mode}-${++probeIndex}`, 200, {
       apiRoot,
       includeWebhookInfo: false,
     });

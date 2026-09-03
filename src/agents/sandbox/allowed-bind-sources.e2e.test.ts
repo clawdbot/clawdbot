@@ -1,7 +1,8 @@
 // Proves the shared-directory topology on the Docker sandbox backend: each agent keeps a
 // private workspace no peer can reach, while one shared host directory is read-write for all
 // of them. The shared root is admitted by `docker.allowedBindSources` alone, so the
-// all-or-nothing external-source override stays unnecessary for this shape.
+// all-or-nothing external-source override stays unnecessary for this shape. The non-Docker
+// allowlist boundary cases live in src/agents/sandbox-create-args.test.ts.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -10,9 +11,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
-import { ensureSandboxContainer, resolveAllowedBindSourceRoots } from "./docker.js";
+import { ensureSandboxContainer } from "./docker.js";
 import type { SandboxConfig } from "./types.js";
-import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 
 const CONTAINER_PREFIX = "openclaw-bindproof-";
 // The default sandbox image carries the helpers the sandbox write/edit bridge needs, so this
@@ -69,7 +69,7 @@ const members: Record<"one" | "two", Member> = {
 
 let sharedDir = "";
 
-function buildSandboxConfig(params: { allowedBindSources?: string[] }): SandboxConfig {
+function buildSandboxConfig(): SandboxConfig {
   return {
     mode: "all",
     backend: "docker",
@@ -86,7 +86,7 @@ function buildSandboxConfig(params: { allowedBindSources?: string[] }): SandboxC
       network: "none",
       capDrop: [],
       binds: [`${sharedDir}:${SHARED_MOUNT}:rw`],
-      ...(params.allowedBindSources ? { allowedBindSources: params.allowedBindSources } : {}),
+      allowedBindSources: [sharedDir],
     },
     ssh: {
       command: "ssh",
@@ -118,7 +118,7 @@ async function startMember(member: Member): Promise<string> {
     scopeKey: member.id,
     workspaceDir: member.workspaceDir,
     agentWorkspaceDir: member.agentWorkspaceDir,
-    cfg: buildSandboxConfig({ allowedBindSources: [sharedDir] }),
+    cfg: buildSandboxConfig(),
   });
   containerNames.push(name);
   return name;
@@ -158,72 +158,6 @@ afterAll(async () => {
 }, 120_000);
 
 describe("sandbox allowed bind sources", () => {
-  function ownRoots() {
-    return [members.one.workspaceDir, members.one.agentWorkspaceDir];
-  }
-
-  it("blocks a shared bind that no configured root allows", () => {
-    const cfg = buildSandboxConfig({});
-    expect(() =>
-      validateSandboxSecurity({
-        ...cfg.docker,
-        allowedSourceRoots: resolveAllowedBindSourceRoots(cfg.docker, ownRoots()),
-        allowSourcesOutsideAllowedRoots: false,
-      }),
-    ).toThrow(/outside allowed roots/);
-  });
-
-  it("admits the shared bind once its root is allowlisted, with no dangerous override", () => {
-    const cfg = buildSandboxConfig({ allowedBindSources: [sharedDir] });
-    expect(cfg.docker.dangerouslyAllowExternalBindSources).toBeUndefined();
-    expect(() =>
-      validateSandboxSecurity({
-        ...cfg.docker,
-        allowedSourceRoots: resolveAllowedBindSourceRoots(cfg.docker, ownRoots()),
-        allowSourcesOutsideAllowedRoots: false,
-      }),
-    ).not.toThrow();
-  });
-
-  it("keeps every non-allowlisted source blocked while an allowlist is in force", () => {
-    const cfg = buildSandboxConfig({ allowedBindSources: [sharedDir] });
-    expect(() =>
-      validateSandboxSecurity({
-        ...cfg.docker,
-        binds: [`${members.two.workspaceDir}:/peek:rw`],
-        allowedSourceRoots: resolveAllowedBindSourceRoots(cfg.docker, ownRoots()),
-        allowSourcesOutsideAllowedRoots: false,
-      }),
-    ).toThrow(/outside allowed roots/);
-  });
-
-  it("leaves the gate off when the caller supplies no roots at all", () => {
-    const cfg = buildSandboxConfig({ allowedBindSources: [sharedDir] });
-    expect(resolveAllowedBindSourceRoots(cfg.docker, undefined)).toBeUndefined();
-  });
-
-  it.each(["/", "/srv/..", "C:/", "c:\\shared\\..", "\\\\?\\C:\\"])(
-    "rejects configured filesystem root %s at the runtime boundary",
-    (configuredRoot) => {
-      const cfg = buildSandboxConfig({ allowedBindSources: [configuredRoot] });
-      expect(() => resolveAllowedBindSourceRoots(cfg.docker, ownRoots())).toThrow(
-        /filesystem root/,
-      );
-    },
-  );
-
-  it("rejects a configured root whose canonical path is the filesystem root", async () => {
-    if (process.platform === "win32") {
-      return;
-    }
-    const rootAlias = path.join(root, "filesystem-root-alias");
-    await fs.symlink("/", rootAlias, "dir");
-    const cfg = buildSandboxConfig({ allowedBindSources: [rootAlias] });
-    expect(() => resolveAllowedBindSourceRoots(cfg.docker, ownRoots())).toThrow(
-      /resolves to filesystem root/,
-    );
-  });
-
   it("gives each agent a private workspace and one shared directory", async (ctx) => {
     if (!dockerAvailable) {
       ctx.skip(`docker daemon or ${IMAGE} unavailable`);

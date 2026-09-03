@@ -75,6 +75,21 @@ describe("resolveSlackUserAllowlist", () => {
     });
   });
 
+  it("preserves workspace-qualified user ids without listing a workspace", async () => {
+    const list = vi.fn();
+    const res = await resolveSlackUserAllowlist({
+      token: "xoxb-test",
+      entries: ["team:T11111111:user:U01234567", "team:T22222222:user:U01234567"],
+      client: { users: { list } } as never,
+    });
+
+    expect(res.map((entry) => entry.id)).toEqual([
+      "team:T11111111:user:U01234567",
+      "team:T22222222:user:U01234567",
+    ]);
+    expect(list).not.toHaveBeenCalled();
+  });
+
   it("keeps unresolved users", async () => {
     const client = {
       users: {

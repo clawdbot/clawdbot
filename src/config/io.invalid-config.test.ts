@@ -72,7 +72,7 @@ describe("config io invalid config formatting", () => {
     );
     expect(logger.error).toHaveBeenCalledOnce();
     expect(logger.error).toHaveBeenCalledWith(
-      "Invalid config at /tmp/openclaw.json:\\n- nope: Unknown key(s): nope",
+      "Invalid config at /tmp/openclaw.json:\n- nope: Unknown key(s): nope",
     );
   });
 });

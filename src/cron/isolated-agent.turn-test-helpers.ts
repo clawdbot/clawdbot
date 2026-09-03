@@ -44,7 +44,7 @@ export function mockEmbeddedOk() {
   mockEmbeddedTexts(["ok"]);
 }
 
-export async function readSessionEntry(storePath: string, key: string) {
+export async function readCronSessionEntry(storePath: string, key: string) {
   return loadSessionEntry({ storePath, sessionKey: key });
 }
 

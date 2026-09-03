@@ -12,4 +12,4 @@ export {
   stripInvalidGoogleThinkingBudget,
   type GoogleThinkingInputLevel,
   type GoogleThinkingLevel,
-} from "./thinking.js";
+} from "openclaw/plugin-sdk/provider-stream-shared";

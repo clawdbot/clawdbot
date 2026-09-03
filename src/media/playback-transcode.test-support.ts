@@ -1,16 +1,5 @@
-type PlaybackMediaKind = "audio" | "video";
-type PlaybackMode = "native" | "transcode";
-
-type PlaybackPolicyEntry = {
-  nativeMimeTypes: readonly string[];
-  codecProbeInputFormats: Readonly<Record<string, string>>;
-  transcodeInputFormats: Readonly<Record<string, string>>;
-  target: { contentType: string; extension: `.${string}` };
-};
-
 type PlaybackTranscodeTestApi = {
-  PLAYBACK_TRANSCODE_POLICY: Record<PlaybackMediaKind, PlaybackPolicyEntry>;
-  resolvePlaybackMode(mimeType: string, policy: PlaybackPolicyEntry): PlaybackMode | undefined;
+  getPlaybackTranscodeJobs(): Promise<void>[];
 };
 
 function getTestApi(): PlaybackTranscodeTestApi {
@@ -23,14 +12,17 @@ function getTestApi(): PlaybackTranscodeTestApi {
   return api as PlaybackTranscodeTestApi;
 }
 
-export function getPlaybackTranscodePolicyForTest(): PlaybackTranscodeTestApi["PLAYBACK_TRANSCODE_POLICY"] {
-  return getTestApi().PLAYBACK_TRANSCODE_POLICY;
+export async function waitForPlaybackTranscodeJobsForTest(mode: "next" | "all"): Promise<number> {
+  const jobs = getTestApi().getPlaybackTranscodeJobs();
+  if (jobs.length === 0) {
+    throw new Error("No active playback transcode jobs");
+  }
+  await (mode === "next" ? Promise.race(jobs) : Promise.all(jobs));
+  return jobs.length;
 }
 
-export function resolvePlaybackModeForTest(
-  mimeType: string,
-  kind: PlaybackMediaKind,
-): PlaybackMode | undefined {
-  const api = getTestApi();
-  return api.resolvePlaybackMode(mimeType, api.PLAYBACK_TRANSCODE_POLICY[kind]);
+// Stop issuing requests and release every fixture gate before calling; this joins
+// the existing jobs for cleanup and does not assert that conversion succeeded.
+export async function settlePlaybackTranscodeJobsForTest(): Promise<void> {
+  await Promise.allSettled(getTestApi().getPlaybackTranscodeJobs());
 }

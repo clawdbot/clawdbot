@@ -8,6 +8,7 @@ describe("Telegram QA profiles", () => {
     (providerMode) => {
       const scenarioIds = resolveTelegramQaScenarioIds({ providerMode });
 
+      expect(scenarioIds).toContain("channel-canary");
       expect(scenarioIds).toContain("telegram-other-bot-command-gating");
       expect(scenarioIds).not.toContain("telegram-startup-getme-live");
       expect(() =>
@@ -25,7 +26,7 @@ describe("Telegram QA profiles", () => {
 
     expect(live).not.toContain("telegram-long-final-reuses-preview");
     expect(mock).toContain("telegram-long-final-reuses-preview");
-    expect(mock).toContain("telegram-assistant-transcript-role-boundary");
+    expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
     expect(mock).not.toContain("telegram-startup-getme-live");
   });
 
@@ -36,13 +37,12 @@ describe("Telegram QA profiles", () => {
     });
 
     expect(scenarioIds).toContain("channel-message-flows");
-    expect(scenarioIds).toContain("native-command-session-target");
+    expect(scenarioIds).not.toContain("native-command-session-target");
   });
 
   it("lets explicit scenarios override profile selection", () => {
     expect(
       resolveTelegramQaScenarioIds({
-        profile: "release",
         providerMode: "live-frontier",
         scenarioIds: ["telegram-help-command"],
       }),
@@ -54,6 +54,13 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-startup-getme-live"],
       }),
     ).toThrow("execution.kind=flow");
+    expect(
+      resolveTelegramQaScenarioIds({
+        profile: "release",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-canary"],
+      }),
+    ).toEqual(["channel-canary"]);
   });
 
   it("selects the native queue-validation regression as an explicit live scenario", () => {
@@ -64,6 +71,15 @@ describe("Telegram QA profiles", () => {
         scenarioIds: ["telegram-queue-invalid-mode"],
       }),
     ).toEqual(["telegram-queue-invalid-mode"]);
+  });
+
+  it("selects the Claude CLI compaction final-priority regression explicitly", () => {
+    expect(
+      resolveTelegramQaScenarioIds({
+        providerMode: "live-frontier",
+        scenarioIds: ["telegram-claude-cli-compaction-final-priority"],
+      }),
+    ).toEqual(["telegram-claude-cli-compaction-final-priority"]);
   });
 
   it("rejects unknown profiles and channel-ineligible explicit scenarios", () => {

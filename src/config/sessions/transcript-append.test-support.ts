@@ -3,15 +3,12 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { redactSecrets } from "../../logging/redact.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
-import {
-  acquireSessionWriteLock,
-  resolveSessionWriteLockOptions,
-} from "../../plugin-sdk/session-write-lock-runtime.js";
 import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
@@ -122,7 +119,7 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
     if (parsed.type === "session") {
       return { isNonSessionEntry: false, hasParentLinkedEntry: false };
     }
-    const entryId = normalizeEntryId(parsed.id);
+    const entryId = readNonBlankString(parsed.id);
     if (!entryId) {
       return { isNonSessionEntry: true, hasParentLinkedEntry: false };
     }
@@ -138,13 +135,13 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
       };
     }
     if (parsed.type === "leaf") {
-      const targetId = parsed.targetId === null ? null : normalizeEntryId(parsed.targetId);
+      const targetId = parsed.targetId === null ? null : readNonBlankString(parsed.targetId);
       const appendParentId =
         parsed.appendParentId === undefined
           ? undefined
           : parsed.appendParentId === null
             ? null
-            : normalizeEntryId(parsed.appendParentId);
+            : readNonBlankString(parsed.appendParentId);
       if (
         (parsed.targetId !== null && targetId === undefined) ||
         (parsed.appendParentId !== undefined && appendParentId === undefined) ||
@@ -181,10 +178,6 @@ function readTranscriptLineInfo(line: string): TranscriptLineInfo {
   } catch {
     return { isNonSessionEntry: false, hasParentLinkedEntry: false };
   }
-}
-
-function normalizeEntryId(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function generateEntryId(existingIds: Set<string>): string {
@@ -394,7 +387,7 @@ async function migrateLinearTranscriptToParentLinked(transcriptPath: string): Pr
       output.push(serializeJsonlLine({ ...record, version: CURRENT_SESSION_VERSION }));
       continue;
     }
-    const id = normalizeEntryId(record.id) ?? generateEntryId(existingIds);
+    const id = readNonBlankString(record.id) ?? generateEntryId(existingIds);
     existingIds.add(id);
     record.id = id;
     if (!Object.hasOwn(record, "parentId")) {
@@ -446,8 +439,6 @@ async function withSessionTranscriptAppendQueue<T>(
   fn: () => Promise<T>,
 ): Promise<T> {
   const queueKey = await resolveTranscriptAppendQueueKey(transcriptPath);
-  // Per-file queue is in-process only; the external session write lock still owns cross-process
-  // ordering.
   return await transcriptAppendQueue.enqueue(queueKey, fn);
 }
 
@@ -460,7 +451,7 @@ type AppendSessionTranscriptMessageParams<TMessage = unknown> = {
   useRawWhenLinear?: boolean;
   /** Opt into transcript idempotency lookup; default append stays O(1) for fresh keyed messages. */
   idempotencyLookup?: "scan" | "caller-checked";
-  /** Runs under the transcript write lock after idempotency replay checks and before append. */
+  /** Runs in the transcript append queue after idempotency replay checks and before append. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   config?: OpenClawConfig;
   /** Internal owned-batch hook for publishing a newly created transcript header. */
@@ -494,7 +485,7 @@ export async function appendSessionTranscriptMessage<TMessage>(
   params: AppendSessionTranscriptMessageParams<TMessage>,
 ): Promise<AppendSessionTranscriptMessageResult<TMessage> | undefined> {
   return await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptMessageLocked(params)),
+    appendSessionTranscriptMessageLocked(params),
   );
 }
 
@@ -504,29 +495,13 @@ type AppendSessionTranscriptEventParams = {
   transcriptPath: string;
 };
 
-/** Appends a raw transcript event using the same write lock and FIFO as message appends. */
+/** Appends a raw transcript event using the same FIFO as message appends. */
 export async function appendSessionTranscriptEvent(
   params: AppendSessionTranscriptEventParams,
 ): Promise<void> {
   await withSessionTranscriptAppendQueue(params.transcriptPath, () =>
-    withSessionTranscriptWriteLock(params, () => appendSessionTranscriptEventLocked(params)),
+    appendSessionTranscriptEventLocked(params),
   );
-}
-
-async function withSessionTranscriptWriteLock<T>(
-  params: Pick<AppendSessionTranscriptMessageParams, "transcriptPath" | "config">,
-  run: () => Promise<T> | T,
-): Promise<T> {
-  const lock = await acquireSessionWriteLock({
-    sessionFile: params.transcriptPath,
-    ...resolveSessionWriteLockOptions(params.config),
-    reentrantOwner: `session:${path.resolve(params.transcriptPath)}:append:${randomUUID()}`,
-  });
-  try {
-    return await run();
-  } finally {
-    await lock.release();
-  }
 }
 
 async function appendSessionTranscriptEventLocked(

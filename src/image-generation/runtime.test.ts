@@ -51,6 +51,16 @@ function runGenerateImage(params: GenerateImageParams) {
   return generateImage({ ...params, cfg }, runtimeDeps);
 }
 
+function createBufferedImageProvider(id: string, buffers: Buffer[]): ImageGenerationProvider {
+  return {
+    id,
+    capabilities: { generate: {}, edit: { enabled: false } },
+    generateImage: async () => ({
+      images: buffers.map((buffer) => ({ buffer, mimeType: "image/png" })),
+    }),
+  };
+}
+
 describe("image-generation runtime", () => {
   beforeEach(() => {
     providers = [];
@@ -286,6 +296,63 @@ describe("image-generation runtime", () => {
     ]);
     expect(warnings).toContain(
       "image-generation candidate failed: openai/gpt-image-1: OpenAI API key missing",
+    );
+  });
+
+  it("falls through when an image provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedImageProvider("empty", [Buffer.from("partial"), Buffer.alloc(0)]),
+      createBufferedImageProvider("valid", [Buffer.from("png-bytes")]),
+    ];
+
+    const result = await runGenerateImage({
+      cfg: {
+        agents: {
+          defaults: {
+            mediaModels: {
+              image: { primary: "empty/img-v1", fallbacks: ["valid/img-v2"] },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      prompt: "draw a cat",
+    });
+
+    expect(result.provider).toBe("valid");
+    expect(result.images[0]?.buffer).toEqual(Buffer.from("png-bytes"));
+    expect(result.attempts).toEqual([
+      {
+        provider: "empty",
+        model: "img-v1",
+        error: "Image generation provider returned an empty image buffer at index 1.",
+      },
+    ]);
+  });
+
+  it("fails visibly when every image provider returns an empty buffer", async () => {
+    providers = [
+      createBufferedImageProvider("empty-primary", [Buffer.alloc(0)]),
+      createBufferedImageProvider("empty-fallback", [Buffer.alloc(0)]),
+    ];
+
+    await expect(
+      runGenerateImage({
+        cfg: {
+          agents: {
+            defaults: {
+              mediaModels: {
+                image: {
+                  primary: "empty-primary/img-v1",
+                  fallbacks: ["empty-fallback/img-v2"],
+                },
+              },
+            },
+          },
+        } as OpenClawConfig,
+        prompt: "draw a cat",
+      }),
+    ).rejects.toThrow(
+      "All image generation models failed (2): empty-primary/img-v1: Image generation provider returned an empty image buffer at index 0. | empty-fallback/img-v2: Image generation provider returned an empty image buffer at index 0.",
     );
   });
 
@@ -753,6 +820,94 @@ describe("image-generation runtime", () => {
     expect(result.metadata.normalizedAspectRatio).toBe("16:9");
     expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
   });
+
+  it.each([
+    {
+      name: "landscape aspect-ratio hint",
+      aspectRatio: "16:9",
+      expectedSize: "2048x1152",
+      modelSizes: [],
+    },
+    {
+      name: "portrait aspect-ratio hint",
+      aspectRatio: "9:16",
+      expectedSize: "1152x2048",
+      modelSizes: [],
+    },
+    {
+      name: "portrait reference-image edit",
+      aspectRatio: "9:16",
+      expectedSize: "1152x2048",
+      modelSizes: [],
+      edit: true,
+    },
+    {
+      name: "explicit arbitrary dimensions",
+      size: "1536x864",
+      expectedSize: "1536x864",
+      modelSizes: [],
+    },
+    {
+      name: "restricted model-specific dimensions",
+      aspectRatio: "16:9",
+      expectedSize: "1536x1024",
+      modelSizes: ["1536x1024"],
+    },
+  ])(
+    "preserves flexible-model geometry for $name",
+    async ({
+      aspectRatio,
+      edit,
+      expectedSize,
+      modelSizes,
+      size,
+    }: {
+      aspectRatio?: string;
+      edit?: boolean;
+      expectedSize: string;
+      modelSizes: string[];
+      size?: string;
+    }) => {
+      let seenRequest: { aspectRatio?: string; size?: string } | undefined;
+      providers = [
+        {
+          id: "canvas",
+          capabilities: {
+            generate: { supportsSize: true, supportsAspectRatio: false },
+            edit: { enabled: true, supportsSize: true, supportsAspectRatio: false },
+            geometry: {
+              sizes: ["1024x1024", "2048x1152", "1152x2048", "1536x1024"],
+              sizesByModel: { "flexible-image": modelSizes },
+            },
+          },
+          async generateImage(request) {
+            seenRequest = { aspectRatio: request.aspectRatio, size: request.size };
+            return {
+              images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
+            };
+          },
+        },
+      ];
+
+      const result = await runGenerateImage({
+        cfg: {
+          agents: { defaults: { imageGenerationModel: { primary: "canvas/flexible-image" } } },
+        } as OpenClawConfig,
+        prompt: "preserve the requested image geometry",
+        aspectRatio,
+        size,
+        ...(edit
+          ? { inputImages: [{ buffer: Buffer.from("reference"), mimeType: "image/png" }] }
+          : {}),
+      });
+
+      expect(seenRequest).toEqual({ aspectRatio: undefined, size: expectedSize });
+      expect(result.ignoredOverrides).toStrictEqual([]);
+      expect(result.normalization?.size).toEqual(
+        aspectRatio ? { applied: expectedSize, derivedFrom: "aspectRatio" } : undefined,
+      );
+    },
+  );
 
   it("uses model-specific geometry lists before provider normalization", async () => {
     let seenRequest:

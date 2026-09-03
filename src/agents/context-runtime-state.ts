@@ -5,11 +5,7 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createLazyImportLoader, type LazyPromiseLoader } from "../shared/lazy-promise.js";
-import {
-  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE,
-  MODEL_CONTEXT_TOKEN_CACHE,
-  MODEL_CONTEXT_WINDOW_CACHE,
-} from "./context-cache.js";
+import { clearContextWindowCaches, REUSED_CONTEXT_WINDOW_CACHE_STATE } from "./context-cache.js";
 
 const CONTEXT_WINDOW_RUNTIME_STATE_KEY = Symbol.for("openclaw.contextWindowRuntimeState");
 
@@ -47,6 +43,12 @@ export const CONTEXT_WINDOW_RUNTIME_STATE = (() => {
     };
     globalState[CONTEXT_WINDOW_RUNTIME_STATE_KEY] = state as ContextWindowRuntimeState;
   } else {
+    if (!REUSED_CONTEXT_WINDOW_CACHE_STATE) {
+      // Released modules kept cache maps outside this singleton. Force one fresh load
+      // instead of pairing their completed marker with newly introduced empty maps.
+      state.loadPromise = null;
+      state.loadGeneration = null;
+    }
     // Normalize the exact state shape held by released gateways before this
     // module added generation tracking; otherwise refresh increments NaN.
     if (typeof state.generation !== "number") {
@@ -76,9 +78,7 @@ export function beginContextWindowCacheRefresh(): void {
 function resetContextWindowCache(): void {
   beginContextWindowCacheRefresh();
   CONTEXT_WINDOW_RUNTIME_STATE.modelsConfigRuntimeLoader.clear();
-  MODEL_CONFIGURED_CONTEXT_TOKEN_CACHE.clear();
-  MODEL_CONTEXT_TOKEN_CACHE.clear();
-  MODEL_CONTEXT_WINDOW_CACHE.clear();
+  clearContextWindowCaches();
 }
 
 /** Reset context-window runtime state and token cache for isolated tests. */

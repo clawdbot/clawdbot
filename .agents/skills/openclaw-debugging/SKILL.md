@@ -1,6 +1,6 @@
 ---
 name: openclaw-debugging
-description: Debug OpenClaw model, provider, tool-surface, code-mode, streaming, and live/Crabbox behavior by choosing the right logs, probes, and proof path before changing code.
+description: Debug OpenClaw model, provider, tool-surface, code-mode, streaming, and live/Crabbox behavior by choosing the right logs, probes, and proof path before changing code, including fetching stored sessions, transcripts, and attachments as evidence.
 ---
 
 # OpenClaw Debugging
@@ -77,6 +77,66 @@ openclaw logs --follow
   before saying live proof is blocked. Env checks are presence-only; never print
   secrets.
 
+## Fetching Sessions and Transcripts
+
+Use these paths when a bug report references a chat session and you need the
+actual transcript, sender attribution, or attachments as evidence.
+
+CLI first (needs a configured install; safe against a live gateway):
+
+```bash
+openclaw sessions list --agent <agentId> --json
+openclaw sessions tail
+openclaw sessions export-trajectory
+```
+
+Docs: `docs/reference/database-schemas.md` for the store layout,
+https://docs.openclaw.ai/cli/sessions for the CLI.
+
+Raw store (when the CLI is unavailable, e.g. inspecting a remote host over
+SSH, or you need event-level detail):
+
+- Per-agent data plane: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`.
+  Canonical schema: `src/state/openclaw-agent-schema.sql`.
+- Hosted/systemd installs keep state under the service user's home (e.g.
+  `/home/openclaw/.openclaw/...`), not root's — root may carry a separate
+  stray install with different agents. If the expected agent dir is missing,
+  locate the real DB: `find / -maxdepth 6 -name openclaw-agent.sqlite`.
+- Web chat URLs end in a session-id fragment: `/chat/<agentId>/<slug>-<hex>`.
+  Resolve it in `session_nodes`: `session_key LIKE '%<hex>%'` →
+  `current_session_id`, `display_name`. Key shape is
+  `agent:<agentId>:<surface>:<uuid>`; subagent sessions use surface `subagent`.
+- Transcript: `transcript_events` (`session_id`, `seq`, `event_json`).
+  `event_json.message` has `role` (`user`/`assistant`/`toolResult`) and
+  `content` (string, or parts of type `text`/`toolCall`/`image`).
+- Sender provenance: real user messages carry `message.__openclaw`
+  (`senderId`, `senderName`, `senderIsOwner`); runtime-synthesized inputs do
+  not. Use this to separate operator-authored text from injected prompts.
+- Full-text search across transcripts: `session_transcript_fts`.
+- Attachments: `media://inbound/<file>` URLs map to
+  `<state-dir>/media/inbound/<file>`.
+- User-attached images are not `image` content parts. They ride the message
+  envelope: `message.__openclaw.media[]` entries with `url`
+  (`media://inbound/<file>`), `contentType`, `kind`, `fileName`. A parts-only
+  extractor misses every image — grep raw `event_json` for `media://`. On a
+  remote host, scp the files locally (one remote path per scp argument) and
+  read them there.
+
+Hosts without a `sqlite3` binary still have Node: `node:sqlite` needs no
+dependencies.
+
+```bash
+node -e 'const {DatabaseSync}=require("node:sqlite");
+const db=new DatabaseSync(process.argv[1],{readOnly:true});
+console.log(JSON.stringify(db.prepare(
+  "SELECT seq,event_json FROM transcript_events WHERE session_id=? ORDER BY seq"
+).all(process.argv[2])))' <db-path> <session-id>
+```
+
+Always open live stores `readOnly: true`; never write a running gateway's
+state (see Validation rules in the root `AGENTS.md`). For realistic-data
+work, copy the DB into a dev state dir first.
+
 ## Code Pointers
 
 - Model payload + Responses stream:
@@ -100,7 +160,8 @@ openclaw logs --follow
 - Worker/dist/lazy import/package surface: targeted tests plus `pnpm build`.
 - Live provider/model behavior: same provider/model with debug flags and a real
   key if available.
-- Docker/package/Linux/CI-parity: `$crabbox`.
+- Docker/package/Linux/CI-parity: current dedicated Linux worker when capable;
+  otherwise `$crabbox`.
 - CI failure: exact SHA, relevant job only, logs only after failure/completion.
 
 ## Output Habit

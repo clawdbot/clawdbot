@@ -2,16 +2,12 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { compareOpenClawVersions } from "../config/version.js";
+import { clearBundledDiscoveryModeMemo } from "../plugins/bundled-discovery-state.js";
 import {
   importConfigMachineState,
   readConfigMachineState,
   updateConfigMachineState,
 } from "../state/config-machine-state.js";
-import {
-  CONTROL_UI_DEVICE_AUTH_MIGRATION_STATE_KEY,
-  isLegacyControlUiDeviceAuthMigrationInput,
-  type ControlUiDeviceAuthMigrationState,
-} from "../state/control-ui-device-auth-migration.js";
 
 const BUNDLED_DISCOVERY_STATE_CUTOVER_VERSION = "2026.7.2";
 
@@ -22,22 +18,7 @@ export function migrateLegacyConfigMachineState(params: {
 }): { changes: string[]; warnings: string[] } {
   const raw = params.config as Record<string, unknown>;
   const entries: Array<readonly [string, unknown]> = [];
-  const controlUi = asOptionalRecord(asOptionalRecord(raw.gateway)?.controlUi);
   const meta = asOptionalRecord(raw.meta);
-  if (
-    isLegacyControlUiDeviceAuthMigrationInput({
-      disabledDeviceAuth: controlUi?.dangerouslyDisableDeviceAuth === true,
-      lastTouchedVersion:
-        typeof meta?.lastTouchedVersion === "string" ? meta.lastTouchedVersion : undefined,
-    })
-  ) {
-    const pending: ControlUiDeviceAuthMigrationState = {
-      version: 1,
-      status: "pending",
-      detectedAtMs: Date.now(),
-    };
-    entries.push([CONTROL_UI_DEVICE_AUTH_MIGRATION_STATE_KEY, pending]);
-  }
   if (meta && Object.hasOwn(meta, "lastTouchedAt")) {
     entries.push(["config.lastTouchedAt", meta.lastTouchedAt]);
   }
@@ -84,6 +65,11 @@ export function migrateLegacyConfigMachineState(params: {
     return { changes: [], warnings: [] };
   }
   const result = importConfigMachineState(entries, { env: params.env });
+  if (entries.some(([key]) => key === "plugins.bundledDiscovery")) {
+    // Same-process readers must not keep the pre-migration absent mode cached,
+    // or doctor rebuilds plugin indexes against stale strict-gate decisions.
+    clearBundledDiscoveryModeMemo();
+  }
   const changes = result.imported.map((key) => `Migrated ${key} → shared SQLite state`);
   changes.push(...result.kept.map((key) => `Kept existing shared SQLite ${key} state`));
   if (installs && hasInstalls) {

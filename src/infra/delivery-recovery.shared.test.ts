@@ -2,8 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   createDeliveryRecoveryCoordinator,
   isDeliveryRecoveryRetryEligible,
+  resolveDeliveryNotSentRetryability,
   resolveDeliveryRecoveryDeadlineMs,
 } from "./delivery-recovery.shared.js";
+import {
+  OutboundDeliveryError,
+  PlatformMessageNotDispatchedError,
+} from "./outbound/deliver-types.js";
 
 type RecoveryTestEntry = {
   id: string;
@@ -16,6 +21,37 @@ type RecoveryTestEntry = {
 function createEntry(id: string, enqueuedAt: number): RecoveryTestEntry {
   return { id, enqueuedAt, retryCount: 0 };
 }
+
+describe("typed no-send retryability", () => {
+  const retryableMarker = () =>
+    new PlatformMessageNotDispatchedError("Outbound not configured for channel: proof", {
+      cause: new Error("adapter unavailable"),
+    });
+
+  it("lets a retryable typed marker override permanent-looking text", () => {
+    expect(resolveDeliveryNotSentRetryability(retryableMarker())).toBe(true);
+  });
+
+  it("keeps typed provider rejection permanent", () => {
+    expect(
+      resolveDeliveryNotSentRetryability(
+        new PlatformMessageNotDispatchedError("chat not found", {
+          cause: new Error("invalid recipient"),
+          retryable: false,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not decide untyped or already-dispatched failures", () => {
+    const alreadyDispatched = new OutboundDeliveryError("delivery failed after dispatch", {
+      cause: retryableMarker(),
+      results: [{ channel: "telegram", messageId: "sent" }],
+    });
+    expect(resolveDeliveryNotSentRetryability(new Error("chat not found"))).toBeUndefined();
+    expect(resolveDeliveryNotSentRetryability(alreadyDispatched)).toBeUndefined();
+  });
+});
 
 describe("shared durable delivery recovery coordinator", () => {
   it("shares active claims between live delivery and recovery scans", async () => {

@@ -6,6 +6,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import {
   formatToolExecutionErrorMessage,
+  protectNetworkToolExecutionError,
   resolveToolExecutionErrorKind,
   resolveToolResultFailureKind,
 } from "../agents/tool-result-error.js";
@@ -198,7 +199,14 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
-        const result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        let result: Awaited<ReturnType<typeof tool.execute>>;
+        try {
+          result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+        } catch (error) {
+          throw tool.resultContentSource === "network"
+            ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)
+            : error;
+        }
         const failureKind = resolveToolResultFailureKind(result);
         reportToolCallResult(
           failureKind === "blocked"

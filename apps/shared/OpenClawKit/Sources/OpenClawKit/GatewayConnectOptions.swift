@@ -1,6 +1,9 @@
+import OpenClawProtocol
+
 public enum OpenClawGatewayClientCapability {
     public static let agentKind = "agent-kind"
     public static let inlineWidgets = "inline-widgets"
+    public static let usageRefreshing = "usage-refreshing"
 }
 
 public struct GatewayConnectOptions: Sendable {
@@ -9,6 +12,7 @@ public struct GatewayConnectOptions: Sendable {
     public var scopesAreExplicit: Bool
     public var caps: [String]
     public var commands: [String]
+    public var computerUse: AnyCodable?
     public var pathEnv: String?
     public var permissions: [String: Bool]
     public var clientId: String
@@ -32,6 +36,7 @@ public struct GatewayConnectOptions: Sendable {
         scopesAreExplicit: Bool = false,
         caps: [String],
         commands: [String],
+        computerUse: AnyCodable? = nil,
         pathEnv: String? = nil,
         permissions: [String: Bool],
         clientId: String,
@@ -47,6 +52,7 @@ public struct GatewayConnectOptions: Sendable {
         self.scopesAreExplicit = scopesAreExplicit
         self.caps = caps
         self.commands = commands
+        self.computerUse = computerUse
         self.pathEnv = pathEnv
         self.permissions = permissions
         self.clientId = clientId
@@ -56,6 +62,22 @@ public struct GatewayConnectOptions: Sendable {
         self.includeDeviceIdentity = includeDeviceIdentity
         self.allowStoredDeviceAuth = allowStoredDeviceAuth
         self.deviceAuthGatewayID = deviceAuthGatewayID
+    }
+}
+
+public struct GatewayNodeSessionCredentials: Sendable, Equatable {
+    public let token: String?
+    public let bootstrapToken: String?
+    public let password: String?
+
+    public init(
+        token: String? = nil,
+        bootstrapToken: String? = nil,
+        password: String? = nil)
+    {
+        self.token = token
+        self.bootstrapToken = bootstrapToken
+        self.password = password
     }
 }
 
@@ -72,4 +94,25 @@ public enum GatewayAuthSource: String, Sendable {
 public struct GatewayAuthBinding: Equatable, Sendable {
     public let source: GatewayAuthSource
     public let credentialFingerprint: String?
+}
+
+extension GatewayConnectOptions {
+    /// Additive connect-frame fields, sent only when this node declares them.
+    /// Lives here so `GatewayChannel.sendConnect` stays within its body budget.
+    func applyOptionalConnectParams(to params: inout [String: OpenClawProtocol.AnyCodable]) {
+        if !self.commands.isEmpty {
+            params["commands"] = OpenClawProtocol.AnyCodable(self.commands)
+        }
+        if let computerUse = self.computerUse {
+            params["computerUse"] = computerUse
+        }
+        if let pathEnv = self.pathEnv?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !pathEnv.isEmpty
+        {
+            params["pathEnv"] = OpenClawProtocol.AnyCodable(pathEnv)
+        }
+        if !self.permissions.isEmpty {
+            params["permissions"] = OpenClawProtocol.AnyCodable(self.permissions)
+        }
+    }
 }

@@ -21,6 +21,8 @@ export class BoundedSerialQueue {
   private active = false;
   private sealed = false;
   private overflowed = false;
+  private failed = false;
+  private firstFailure: unknown;
   private settledPrefix: Promise<void> = Promise.resolve();
 
   constructor(
@@ -104,9 +106,18 @@ export class BoundedSerialQueue {
    *
    * Later admissions do not extend this barrier, which keeps consult flushes
    * finite while close can seal first to drain the entire accepted prefix.
+   * Close owners can require that prefix to have completed without failures.
    */
-  flush(): Promise<void> {
-    return this.settledPrefix;
+  flush(options: { requireSuccess?: boolean } = {}): Promise<void> {
+    const prefix = this.settledPrefix;
+    if (options.requireSuccess !== true) {
+      return prefix;
+    }
+    return prefix.then(() => {
+      if (this.failed) {
+        throw this.firstFailure;
+      }
+    });
   }
 
   private startTask(task: BoundedSerialQueueTask): void {
@@ -117,6 +128,10 @@ export class BoundedSerialQueue {
     try {
       task.resolve(await task.run());
     } catch (error) {
+      if (!this.failed) {
+        this.failed = true;
+        this.firstFailure = error;
+      }
       task.reject(error);
     } finally {
       const next = this.pending.shift();

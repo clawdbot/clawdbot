@@ -1,18 +1,23 @@
 // Codex plugin module implements command account behavior.
 import {
   ensureAuthProfileStore,
-  findNormalizedProviderValue,
   resolveAuthProfileEligibility,
-  resolveAuthProfileOrder,
   resolveProfileUnusableUntilForDisplay,
   type AuthProfileCredential,
   type AuthProfileFailureReason,
   type AuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeUniqueStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  findNormalizedProviderValue,
+  resolveAuthProfileOrder,
+} from "openclaw/plugin-sdk/provider-auth";
+import {
+  normalizeOptionalString,
+  normalizeUniqueStringEntries,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
   summarizeCodexAccountUsage,
   type CodexAccountUsageSummary,
@@ -78,11 +83,11 @@ export async function readCodexAccountAuthOverview(params: {
     limits: params.limits,
     now,
   });
-  const subscriptionProfileId = order.find((profileId) =>
-    isChatGptSubscriptionProfile(store.profiles[profileId]),
-  );
   const activeIsSubscription =
     activeProfileId !== undefined && isChatGptSubscriptionProfile(store.profiles[activeProfileId]);
+  const subscriptionProfileId = activeIsSubscription
+    ? activeProfileId
+    : order.find((profileId) => isChatGptSubscriptionProfile(store.profiles[profileId]));
   const activeUsage =
     activeIsSubscription && params.limits.ok
       ? summarizeCodexAccountUsage(params.limits.value, now)
@@ -278,25 +283,35 @@ function resolveLiveAccountProfileId(params: {
   const account = isJsonObject(params.account.value.account)
     ? params.account.value.account
     : params.account.value;
-  const type = readString(account, "type")?.toLowerCase();
+  const type = normalizeOptionalString(account.type)?.toLowerCase();
   if (type === "chatgpt") {
-    const email = readString(account, "email")?.toLowerCase();
-    const firstSubscription = params.order.find((profileId) =>
+    const email = normalizeOptionalString(account.email)?.toLowerCase();
+    const accountId = normalizeOptionalString(account.accountId ?? account.chatgptAccountId);
+    const subscriptionProfiles = params.order.filter((profileId) =>
       isChatGptSubscriptionProfile(params.store.profiles[profileId]),
     );
-    if (!email) {
-      return firstSubscription;
-    }
-    return (
-      params.order.find((profileId) => {
+    if (accountId) {
+      const exactWorkspace = subscriptionProfiles.find((profileId) => {
         const credential = params.store.profiles[profileId];
-        if (!credential || !isChatGptSubscriptionProfile(credential)) {
-          return false;
-        }
-        const profileEmail =
-          credential.email?.trim().toLowerCase() ?? extractEmailFromProfileId(profileId);
-        return profileEmail?.toLowerCase() === email;
-      }) ?? firstSubscription
+        return credential && "accountId" in credential && credential.accountId === accountId;
+      });
+      if (exactWorkspace) {
+        return exactWorkspace;
+      }
+    }
+    const matchingProfiles = email
+      ? subscriptionProfiles.filter((profileId) => {
+          const credential = params.store.profiles[profileId];
+          const profileEmail =
+            credential?.email?.trim().toLowerCase() ?? extractEmailFromProfileId(profileId);
+          return profileEmail?.toLowerCase() === email;
+        })
+      : subscriptionProfiles;
+    const lastGood = params.store.lastGood?.[OPENAI_PROVIDER_ID];
+    return (
+      (lastGood && matchingProfiles.includes(lastGood) ? lastGood : undefined) ??
+      matchingProfiles[0] ??
+      subscriptionProfiles[0]
     );
   }
   if (type === "apikey" || type === "api_key") {
@@ -435,11 +450,6 @@ function formatSubscriptionUsageLine(
 
 function formatUsageLineForDisplay(value: string): string {
   return value.replace(/^weekly\b/u, "Weekly").replace(/\bshort-term\b/u, "Short-term");
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {

@@ -3,13 +3,18 @@
  */
 export type {
   TranscriptImportRequest,
+  TranscriptOccupancyWatchRequest,
+  TranscriptOccupancyWatchHandle,
   TranscriptParticipant,
   TranscriptSessionDescriptor,
   TranscriptSourceKind,
   TranscriptSourceLocator,
+  TranscriptSourceAccessControl,
   TranscriptSourceProvider,
   TranscriptSourceStatus,
   TranscriptStartRequest,
+  TranscriptToolAction,
+  TranscriptToolCaller,
   TranscriptsStartResult,
   TranscriptStopRequest,
   TranscriptsStopResult,

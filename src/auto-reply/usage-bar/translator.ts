@@ -1,14 +1,12 @@
 import {
   asSafeIntegerInRange,
   expectDefined,
+  isRecord as isObject,
   parseStrictInteger,
 } from "@openclaw/normalization-core";
 export type UsageBarTemplate = Record<string, unknown>;
 export type UsageContract = Record<string, unknown>;
 type Vocab = Record<string, unknown>;
-
-const isObject = (v: unknown): v is Record<string, unknown> =>
-  typeof v === "object" && v !== null && !Array.isArray(v);
 
 function toGlyphs(scale: unknown): string[] {
   if (Array.isArray(scale)) {

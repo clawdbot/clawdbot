@@ -1,5 +1,5 @@
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
-import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import type { PluginToolMcpMeta } from "../plugins/tool-metadata.js";
 
 type McpApiParamDoc = {
   name: string;
@@ -140,7 +140,7 @@ function schemaType(schema: unknown): string {
     case "boolean":
       return "boolean";
     case "array":
-      return `${schemaType(schema.items)}[]`;
+      return `Array<${schemaType(schema.items)}>`;
     case "object":
       return renderInlineObjectType(schema);
     case "null":
@@ -199,11 +199,18 @@ function renderMcpToolSignature(
   tool: McpApiToolDoc,
   functionName = tool.path.at(-1) ?? tool.method,
 ): string[] {
+  const resultType = {
+    tool: "McpToolResult",
+    resources_list: "McpResourcesListResult",
+    resources_read: "McpResourcesReadResult",
+    prompts_list: "McpPromptsListResult",
+    prompts_get: "McpPromptsGetResult",
+  }[tool.operation];
   return [
     ...renderDocComment(tool.description, tool.params),
     `function ${functionName}(`,
     ...renderMcpInputType(tool.params).map((line) => `  ${line}`),
-    "): Promise<McpToolResult>;",
+    `): Promise<${resultType}>;`,
   ];
 }
 
@@ -212,11 +219,14 @@ function renderMcpServerHeader(server: McpApiServerDoc, tools: readonly McpApiTo
     "type McpApiHeader = { header: string; tools?: unknown[]; schemas?: Record<string, unknown> };",
     "",
     "type McpToolResult = {",
-    "  content?: unknown[];",
+    "  content: unknown[];",
     "  structuredContent?: unknown;",
     "  isError?: boolean;",
-    "  [key: string]: unknown;",
     "};",
+    "type McpResourcesListResult = { resources: unknown[]; nextCursor?: string };",
+    "type McpResourcesReadResult = { contents: unknown[] };",
+    "type McpPromptsListResult = { prompts: unknown[]; nextCursor?: string };",
+    "type McpPromptsGetResult = { messages: unknown[]; description?: string };",
     "",
     `declare namespace MCP.${server.identifier} {`,
     "  /** Return this TypeScript-style API header. */",

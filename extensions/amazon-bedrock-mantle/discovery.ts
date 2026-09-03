@@ -8,11 +8,11 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -116,6 +116,10 @@ export function resolveMantleBearerToken(env: NodeJS.ProcessEnv = process.env): 
 
 /** Token cache for IAM-derived bearer tokens, keyed by region. */
 const iamTokenCache = new Map<string, { token: string; expiresAt: number }>();
+/** Last emitted IAM token failure per region, retained until token generation succeeds. */
+const iamTokenFailureDetailByRegion = new Map<string, string>();
+/** Success epoch per region; failures spanning a recovery cannot restore stale diagnostics. */
+const iamTokenSuccessEpochByRegion = new Map<string, number>();
 const IAM_TOKEN_TTL_MS = 7200_000; // Matches the 2h token lifetime we request below.
 
 function resolveMantleRegion(env: NodeJS.ProcessEnv): string {
@@ -156,6 +160,7 @@ export async function generateBearerTokenFromIam(params: {
     return cached.token;
   }
 
+  const successEpoch = iamTokenSuccessEpochByRegion.get(params.region) ?? 0;
   try {
     const getTokenProvider =
       params.tokenProviderFactory ?? (await loadMantleBearerTokenProviderFactory());
@@ -167,12 +172,27 @@ export async function generateBearerTokenFromIam(params: {
     if (expiresAt !== undefined) {
       iamTokenCache.set(params.region, { token, expiresAt });
     }
+    iamTokenSuccessEpochByRegion.set(
+      params.region,
+      (iamTokenSuccessEpochByRegion.get(params.region) ?? 0) + 1,
+    );
+    iamTokenFailureDetailByRegion.delete(params.region);
     return token;
   } catch (error) {
-    log.debug?.("Mantle IAM token generation unavailable", {
-      region: params.region,
-      error: formatErrorMessage(error),
-    });
+    if (successEpoch !== (iamTokenSuccessEpochByRegion.get(params.region) ?? 0)) {
+      return undefined;
+    }
+    // Keep retrying the credential chain while surfacing each distinct failure cause once.
+    if (log.isEnabled("debug")) {
+      const errorMessage = formatErrorMessage(error);
+      if (iamTokenFailureDetailByRegion.get(params.region) !== errorMessage) {
+        iamTokenFailureDetailByRegion.set(params.region, errorMessage);
+        log.debug("Mantle IAM token generation unavailable", {
+          region: params.region,
+          error: errorMessage,
+        });
+      }
+    }
     return undefined;
   }
 }
@@ -222,11 +242,6 @@ export async function resolveMantleRuntimeBearerToken(params: {
     ...(expiresAt === undefined ? {} : { expiresAt }),
   };
 }
-/** Clear the IAM token cache for tests. */
-export function resetIamTokenCacheForTest(): void {
-  iamTokenCache.clear();
-}
-
 // ---------------------------------------------------------------------------
 // OpenAI-format model list response
 // ---------------------------------------------------------------------------
@@ -263,18 +278,14 @@ function inferReasoningSupport(modelId: string): boolean {
 }
 
 async function readMantleModelDiscoveryJson(response: Response): Promise<OpenAIModelsResponse> {
-  const bytes = await readResponseWithLimit(response, MANTLE_DISCOVERY_RESPONSE_MAX_BYTES, {
+  const body = await readProviderJsonResponse<unknown>(response, "Mantle model discovery", {
+    maxBytes: MANTLE_DISCOVERY_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: MANTLE_DISCOVERY_TIMEOUT_MS,
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `Mantle model discovery response exceeded ${maxBytes} bytes (${size} bytes received)`,
-      ),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(
         `Mantle model discovery response stalled: no data received for ${chunkTimeoutMs}ms`,
       ),
   });
-  const body = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     return {};
   }
@@ -295,11 +306,6 @@ type MantleDiscoveryConfig = {
 };
 
 const discoveryCache = new Map<string, MantleCacheEntry>();
-
-/** Clear the Mantle discovery cache for tests. */
-export function resetMantleDiscoveryCacheForTest(): void {
-  discoveryCache.clear();
-}
 
 // ---------------------------------------------------------------------------
 // Model discovery

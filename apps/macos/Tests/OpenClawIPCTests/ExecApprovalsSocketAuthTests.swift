@@ -22,9 +22,36 @@ struct ExecApprovalsSocketAuthTests {
     }
 
     @Test
-    func `minimum timestamp is rejected before authentication without overflow`() async {
+    func `minimum timestamp is rejected before authentication without overflow`() async throws {
         #expect(!execHostTimestampIsFresh(nowMs: 1_700_000_000_000, requestMs: Int.min))
-        #expect(await ExecApprovalsPromptServer._testExecHostTimestampFailureReason(Int.min) == "ttl")
+        let root = try ExecApprovalsSocketTestSupport.makeRoot()
+        defer { try? FileManager().removeItem(at: root) }
+        let socketPath = root.appendingPathComponent("exec.sock").path
+        let server = ExecApprovalsSocketTestSupport.makeServer(socketPath: socketPath)
+        do {
+            try #require(await server.start())
+            let payload = try JSONEncoder().encode(ExecHostRequest(command: ["/usr/bin/true"]))
+            let requestJson = try #require(String(data: payload, encoding: .utf8))
+            let response = try await ExecApprovalsSocketTestSupport.roundTrip(
+                socketPath: socketPath,
+                message: ExecHostSocketRequest(
+                    type: "exec",
+                    id: "timestamp-test",
+                    nonce: "nonce",
+                    ts: Int.min,
+                    hmac: "unauthenticated",
+                    requestJson: requestJson),
+                response: ExecHostResponse.self)
+            #expect(response.type == "exec-res")
+            #expect(response.id == "timestamp-test")
+            #expect(!response.ok)
+            #expect(response.error?.code == "INVALID_REQUEST")
+            #expect(response.error?.reason == "ttl")
+        } catch {
+            await server.stop().value
+            throw error
+        }
+        await server.stop().value
     }
 
     @Test
@@ -46,11 +73,11 @@ struct ExecApprovalsSocketAuthTests {
     func `exec host limiter keeps escaped output below the jsonl cap`() throws {
         let escaped = String(repeating: "\u{0}", count: 2 * 1024 * 1024)
         let limited = ExecHostOutputLimiter.truncate(escaped)
-        let response = EncodedExecHostResponse(
+        let response = ExecHostResponse(
             type: "exec-res",
             id: "test",
             ok: true,
-            payload: EncodedExecHostRunResult(
+            payload: ExecHostRunResult(
                 exitCode: 0,
                 timedOut: false,
                 success: true,
@@ -184,21 +211,4 @@ struct ExecApprovalsSocketAuthTests {
         askFallback: .deny,
         autoAllowSkills: false,
         allowlistRules: [])
-
-    private struct EncodedExecHostResponse: Codable {
-        var type: String
-        var id: String
-        var ok: Bool
-        var payload: EncodedExecHostRunResult?
-        var error: String?
-    }
-
-    private struct EncodedExecHostRunResult: Codable {
-        var exitCode: Int?
-        var timedOut: Bool
-        var success: Bool
-        var stdout: String
-        var stderr: String
-        var error: String?
-    }
 }

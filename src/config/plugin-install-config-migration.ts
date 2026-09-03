@@ -1,13 +1,10 @@
 // Migrates plugin install config entries into canonical config shape.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { z } from "zod";
+import {
+  inspectPluginInstallRecordMap,
+  type PluginInstallRecordMapState,
+} from "./plugin-install-record-map.js";
 import type { PluginInstallRecord } from "./types.plugins.js";
-import { PluginInstallRecordShape } from "./zod-schema.installs.js";
-
-const PluginInstallRecordsSchema = z.record(
-  z.string(),
-  z.object(PluginInstallRecordShape).passthrough(),
-);
 
 function pruneEmptyPluginsObject(plugins: Record<string, unknown>): unknown {
   const { installs: _installs, ...rest } = plugins;
@@ -23,13 +20,17 @@ function pruneEmptyPluginsObject(plugins: Record<string, unknown>): unknown {
 export function extractShippedPluginInstallConfigRecords(
   config: unknown,
 ): Record<string, PluginInstallRecord> {
+  const state = inspectShippedPluginInstallConfigRecords(config);
+  return state.status === "valid" ? state.records : {};
+}
+
+export function inspectShippedPluginInstallConfigRecords(
+  config: unknown,
+): PluginInstallRecordMapState {
   if (!isRecord(config) || !isRecord(config.plugins)) {
-    return {};
+    return { status: "missing" };
   }
-  const parsed = PluginInstallRecordsSchema.safeParse(config.plugins.installs);
-  return parsed.success
-    ? (structuredClone(parsed.data) as Record<string, PluginInstallRecord>)
-    : {};
+  return inspectPluginInstallRecordMap(config.plugins.installs);
 }
 
 /** Removes legacy shipped `plugins.installs` without mutating the original config object. */

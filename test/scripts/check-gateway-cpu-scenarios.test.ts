@@ -1,9 +1,9 @@
 // Check Gateway Cpu Scenarios tests cover check gateway cpu scenarios script behavior.
-import { spawnSync } from "node:child_process";
+import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { testing } from "../../scripts/check-gateway-cpu-scenarios.mjs";
+import { testing } from "../../scripts/check-gateway-cpu-scenarios.mts";
 
 const tempRoots: string[] = [];
 
@@ -16,10 +16,14 @@ function makeTempRoot(): string {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/check-gateway-cpu-scenarios.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/check-gateway-cpu-scenarios.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -38,7 +42,11 @@ function writeQaSuiteSummary(
     `${JSON.stringify({
       counts,
       metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
-      run: { completedAt: "2026-01-01T00:00:01.000Z", startedAt: "2026-01-01T00:00:00.000Z" },
+      run: {
+        status: "completed",
+        completedAt: "2026-01-01T00:00:01.000Z",
+        startedAt: "2026-01-01T00:00:00.000Z",
+      },
       scenarios: [
         {
           id: "channel-chat-baseline",
@@ -46,6 +54,21 @@ function writeQaSuiteSummary(
           ...(counts.failed > 0 ? {} : { steps: [{ name: "mock step", status: "pass" }] }),
         },
       ],
+    })}\n`,
+  );
+}
+
+function writeConcurrencyReport(outputDir: string): void {
+  writeFileSync(
+    path.join(outputDir, "gateway-concurrency-bench.json"),
+    `${JSON.stringify({
+      mode: "mock-streaming-agent",
+      runs: [{ turnCount: 8 }],
+      summary: {
+        eventLoopDelayP99Ms: { max: 20 },
+        sessionsListLatencyMs: { p99: 30 },
+        controlUiLatencyMs: { p99: 25 },
+      },
     })}\n`,
   );
 }
@@ -155,23 +178,30 @@ describe("gateway CPU scenario guard", () => {
     const result = await testing.runGatewayCpuScenarios(options, {
       env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
-      spawnSync: (command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+      spawnSync: (command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
         calls.push({ args, command, env: opts?.env });
         if (args.includes("scripts/bench-gateway-startup.ts")) {
           writeFileSync(startupOutput, `${JSON.stringify({ results: [{ id: "default" }] })}\n`);
+        }
+        if (args.includes("scripts/bench-gateway-concurrency.ts")) {
+          writeConcurrencyReport(outputDir);
         }
         return { status: 0 };
       },
     });
 
     expect(result.exitCode).toBe(0);
-    expect(calls.map((call) => call.args[0])).toEqual([
-      "scripts/ensure-cli-startup-build.mjs",
-      "--import",
+    expect(calls.map((call) => call.args[0])).toEqual(["--import", "--import", "--import"]);
+    expect(calls.map((call) => call.args[2])).toEqual([
+      "scripts/ensure-cli-startup-build.mts",
+      "scripts/bench-gateway-startup.ts",
+      "scripts/bench-gateway-concurrency.ts",
     ]);
     expect(calls[1]?.args).toContain("scripts/bench-gateway-startup.ts");
+    expect(calls[2]?.args).toContain("scripts/bench-gateway-concurrency.ts");
     expect(calls[0]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
     expect(calls[1]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
+    expect(calls[2]?.env?.PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN).toBe("false");
   });
 
   it("fails successful startup benches that do not write a report", async () => {
@@ -244,10 +274,11 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(calls).toEqual([["scripts/ensure-cli-startup-build.mjs"]]);
+    expect(calls).toEqual([["--import", "tsx", "scripts/ensure-cli-startup-build.mts"]]);
     expect(result.summary.steps).toEqual([
       { name: "startup build", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -269,10 +300,11 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(1);
-    expect(calls).toEqual([["scripts/ensure-cli-startup-build.mjs"]]);
+    expect(calls).toEqual([["--import", "tsx", "scripts/ensure-cli-startup-build.mts"]]);
     expect(result.summary.steps).toEqual([
       { name: "startup build", error: "spawn ENOENT", signal: null, status: 1 },
       { name: "startup bench", signal: null, status: 1 },
+      { name: "concurrency bench", signal: null, status: 1 },
     ]);
   });
 
@@ -292,9 +324,9 @@ describe("gateway CPU scenario guard", () => {
       cwd,
       env: { ...process.env, PNPM_CONFIG_VERIFY_DEPS_BEFORE_RUN: "install" },
       silent: true,
-      spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+      spawnSync: (_command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
         calls.push({ args, env: opts?.env });
-        if (args[0] === "scripts/build-all.mjs") {
+        if (args[0] === "scripts/build-all.mts") {
           const pluginSdkDist = path.join(cwd, "dist", "plugin-sdk");
           mkdirSync(pluginSdkDist, { recursive: true });
           writeFileSync(path.join(pluginSdkDist, "qa-lab.js"), "export {};\n");
@@ -308,8 +340,12 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.summary.steps.map((step) => step.name)).toEqual(["private QA build", "qa suite"]);
-    expect(calls[0]?.args).toEqual(["scripts/build-all.mjs", "qaRuntime"]);
+    expect(result.summary.steps.map((step) => step.name)).toEqual([
+      "private QA build",
+      "node worker finalization gate",
+      "qa suite",
+    ]);
+    expect(calls[0]?.args).toEqual(["--import", "tsx", "scripts/build-all.mts", "qaRuntime"]);
     expect(calls[0]?.env).toMatchObject({
       HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_BUILD_PRIVATE_QA: "1",
@@ -350,7 +386,7 @@ describe("gateway CPU scenario guard", () => {
         OPENCLAW_STATE_DIR: "/real/user/.openclaw",
       },
       silent: true,
-      spawnSync: (_command: string, args: string[], opts?: { env?: Record<string, string> }) => {
+      spawnSync: (_command: string, args: string[], opts?: Pick<SpawnSyncOptions, "env">) => {
         calls.push({ args, env: opts?.env });
         if (args.includes("openclaw") && args.includes("qa")) {
           writeQaSuiteSummary(outputDir);
@@ -360,8 +396,11 @@ describe("gateway CPU scenario guard", () => {
     });
 
     expect(result.exitCode).toBe(0);
-    expect(result.summary.steps.map((step) => step.name)).toEqual(["qa suite"]);
-    expect(calls.some((call) => call.args[0] === "scripts/build-all.mjs")).toBe(false);
+    expect(result.summary.steps.map((step) => step.name)).toEqual([
+      "node worker finalization gate",
+      "qa suite",
+    ]);
+    expect(calls.some((call) => call.args[0] === "scripts/build-all.mts")).toBe(false);
     expect(calls[0]?.env).toMatchObject({
       HOME: path.join(outputDir, "qa-state-root", "home"),
       OPENCLAW_CONFIG_PATH: path.join(outputDir, "qa-state-root", "state", "openclaw.json"),

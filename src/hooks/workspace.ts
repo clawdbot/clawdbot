@@ -1,19 +1,19 @@
 // Hook workspace helpers resolve hook roots and workspace-local hook files.
 import fs from "node:fs";
 import path from "node:path";
+import { safeParseJson } from "@openclaw/normalization-core";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
+import { openRootFileSync, readFileDescriptorBoundedSync } from "../infra/boundary-file-read.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isPathInsideWithRealpath } from "../security/scan-paths.js";
 import { CONFIG_DIR, resolveUserPath } from "../utils.js";
 import { resolveBundledHooksDir } from "./bundled-dir.js";
 import {
-  parseFrontmatter,
+  parseHookFrontmatter,
   resolveHookInvocationPolicy,
-  resolveOpenClawMetadata,
+  resolveHookManifestMetadata,
 } from "./frontmatter.js";
 import { resolvePluginHookDirs } from "./plugin-hooks.js";
 import { resolveHookEntries } from "./policy.js";
@@ -44,11 +44,7 @@ function readHookPackageManifest(dir: string): HookPackageManifest | null {
   if (raw === null) {
     return null;
   }
-  try {
-    return JSON.parse(raw) as HookPackageManifest;
-  } catch {
-    return null;
-  }
+  return (safeParseJson(raw) as HookPackageManifest | undefined) ?? null;
 }
 
 function resolvePackageHooks(manifest: HookPackageManifest): string[] {
@@ -72,7 +68,6 @@ function loadHookFromDir(params: {
   hookDir: string;
   source: HookSource;
   pluginId?: string;
-  nameHint?: string;
 }): LoadedHook | null {
   const hookMdPath = path.join(params.hookDir, "HOOK.md");
   const content = readRootFileUtf8({
@@ -85,9 +80,9 @@ function loadHookFromDir(params: {
     return null;
   }
   try {
-    const frontmatter = parseFrontmatter(content);
+    const frontmatter = parseHookFrontmatter(content);
 
-    const name = frontmatter.name || params.nameHint || path.basename(params.hookDir);
+    const name = frontmatter.name || path.basename(params.hookDir);
     const description = frontmatter.description || "";
 
     const handlerCandidates = ["handler.ts", "handler.js", "index.ts", "index.js"];
@@ -136,64 +131,36 @@ function loadHookFromDir(params: {
   }
 }
 
-/**
- * Scan a directory for hooks (subdirectories containing HOOK.md)
- */
-function loadHooksFromDir(params: {
-  dir: string;
+function loadHooksFromCandidate(params: {
+  hookDir: string;
   source: HookSource;
   pluginId?: string;
-}): LoadedHook[] {
-  const { dir, source, pluginId } = params;
-
-  if (!fs.existsSync(dir)) {
-    return [];
-  }
-
-  const stat = fs.statSync(dir);
-  if (!stat.isDirectory()) {
-    return [];
+}): LoadedHook[] | null {
+  const { hookDir, source, pluginId } = params;
+  const manifest = readHookPackageManifest(hookDir);
+  const packageHooks = manifest ? resolvePackageHooks(manifest) : [];
+  if (packageHooks.length === 0) {
+    if (!fs.existsSync(path.join(hookDir, "HOOK.md"))) {
+      return null;
+    }
+    const hook = loadHookFromDir(params);
+    return hook ? [hook] : [];
   }
 
   const hooks: LoadedHook[] = [];
-  const entries = fs.readdirSync(dir, { withFileTypes: true });
-
-  for (const entry of entries) {
-    if (!entry.isDirectory()) {
+  for (const hookPath of packageHooks) {
+    const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
+    if (!resolvedHookDir) {
+      log.warn(
+        `Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
+      );
       continue;
     }
-
-    const hookDir = path.join(dir, entry.name);
-    const manifest = readHookPackageManifest(hookDir);
-    const packageHooks = manifest ? resolvePackageHooks(manifest) : [];
-
-    if (packageHooks.length > 0) {
-      for (const hookPath of packageHooks) {
-        const resolvedHookDir = resolveContainedDir(hookDir, hookPath);
-        if (!resolvedHookDir) {
-          log.warn(
-            `Ignoring out-of-package hook path "${hookPath}" in ${hookDir} (must be within package directory)`,
-          );
-          continue;
-        }
-        const hook = loadHookFromDir({
-          hookDir: resolvedHookDir,
-          source,
-          pluginId,
-          nameHint: path.basename(resolvedHookDir),
-        });
-        if (hook) {
-          hooks.push(hook);
-        }
-      }
-      continue;
-    }
-
+    // Pack entries are hook leaves, never another pack or a collection to scan.
     const hook = loadHookFromDir({
-      hookDir,
+      hookDir: resolvedHookDir,
       source,
       pluginId,
-      nameHint: entry.name,
     });
     if (hook) {
       hooks.push(hook);
@@ -207,25 +174,33 @@ function loadHookEntriesFromDir(params: {
   dir: string;
   source: HookSource;
   pluginId?: string;
+  includeRoot?: boolean;
 }): HookEntry[] {
-  const hooks = loadHooksFromDir({
-    dir: params.dir,
-    source: params.source,
-    pluginId: params.pluginId,
-  });
-  return hooks.map(({ hook, frontmatter }) => {
-    const entry: HookEntry = {
-      hook: {
-        ...hook,
-        source: params.source,
-        pluginId: params.pluginId,
-      },
-      frontmatter,
-      metadata: resolveOpenClawMetadata(frontmatter),
-      invocation: resolveHookInvocationPolicy(frontmatter),
-    };
-    return entry;
-  });
+  const { dir, source, pluginId } = params;
+  if (!fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
+    return [];
+  }
+  const rootHooks = params.includeRoot
+    ? loadHooksFromCandidate({ hookDir: dir, source, pluginId })
+    : null;
+  // null means a collection. A recognized root with rejected hooks stays empty;
+  // falling back to children would execute code its manifest did not select.
+  const hooks =
+    rootHooks ??
+    fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
+      if (!entry.isDirectory()) {
+        return [];
+      }
+      return (
+        loadHooksFromCandidate({ hookDir: path.join(dir, entry.name), source, pluginId }) ?? []
+      );
+    });
+  return hooks.map(({ hook, frontmatter }) => ({
+    hook,
+    frontmatter,
+    metadata: resolveHookManifestMetadata(frontmatter),
+    invocation: resolveHookInvocationPolicy(frontmatter),
+  }));
 }
 
 function discoverWorkspaceHookEntries(
@@ -257,6 +232,7 @@ function discoverWorkspaceHookEntries(
     return loadHookEntriesFromDir({
       dir: resolved,
       source: "openclaw-managed",
+      includeRoot: true,
     });
   });
   const pluginHooks = pluginHookDirs.flatMap(({ dir, pluginId }) =>
@@ -328,6 +304,9 @@ function withOpenedRootFileSync<T>(
     absolutePath: params.absolutePath,
     rootPath: params.rootPath,
     boundaryLabel: params.boundaryLabel,
+    // Operator hook dirs are commonly symlinked; fs-safe still rejects hops
+    // whose canonical target escapes the hook root.
+    rejectSymlinks: false,
   });
   if (!opened.ok) {
     return null;

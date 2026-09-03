@@ -4,8 +4,13 @@ import {
   renderMessagePresentationTableFallbackText,
   type MessagePresentationTableBlock,
 } from "openclaw/plugin-sdk/interactive-runtime";
+import {
+  asOptionalRecord,
+  readNonBlankString as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 import { renderSlackMessagePresentationTableFallbackText } from "./presentation-fallback.js";
+import { renderSlackRichText } from "./rich-text.js";
 
 const SLACK_DATA_TABLE_COLUMNS_MAX = 20;
 const SLACK_DATA_TABLE_ROWS_MAX = 100;
@@ -43,88 +48,12 @@ type ParsedSlackDataTable = {
   cellCharacterCount: number;
 };
 
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
 function countCharacters(value: string): number {
   return Array.from(value).length;
 }
 
-function readRichTextLeaf(record: Record<string, unknown>): string {
-  if (record.type === "text" && typeof record.text === "string") {
-    return record.text;
-  }
-  const text = readNonEmptyString(record.text);
-  if (text) {
-    return text;
-  }
-  switch (record.type) {
-    case "link":
-      return readNonEmptyString(record.url) ?? "";
-    case "user": {
-      const userId = readNonEmptyString(record.user_id);
-      return userId ? `<@${userId}>` : "";
-    }
-    case "channel": {
-      const channelId = readNonEmptyString(record.channel_id);
-      return channelId ? `<#${channelId}>` : "";
-    }
-    case "usergroup": {
-      const usergroupId = readNonEmptyString(record.usergroup_id);
-      return usergroupId ? `<!subteam^${usergroupId}>` : "";
-    }
-    case "broadcast": {
-      const range = readNonEmptyString(record.range);
-      return range ? `<!${range}>` : "";
-    }
-    case "emoji": {
-      const name = readNonEmptyString(record.name);
-      return name ? `:${name}:` : "";
-    }
-    case "date":
-      return readNonEmptyString(record.fallback) ?? "";
-    default:
-      return "";
-  }
-}
-
-function readRichTextElements(value: unknown, separator = ""): string {
-  if (!Array.isArray(value)) {
-    return "";
-  }
-  const parts: string[] = [];
-  for (const rawElement of value) {
-    const element = asRecord(rawElement);
-    if (!element) {
-      continue;
-    }
-    if (Array.isArray(element.elements)) {
-      const rendered = readRichTextElements(
-        element.elements,
-        element.type === "rich_text_list" ? "\n" : "",
-      );
-      if (rendered) {
-        parts.push(rendered);
-      }
-      continue;
-    }
-    const rendered = readRichTextLeaf(element);
-    if (rendered) {
-      parts.push(rendered);
-    }
-  }
-  return parts.join(separator);
-}
-
 function readSlackBasicTableCell(value: unknown): string {
-  const cell = asRecord(value);
+  const cell = asOptionalRecord(value);
   if (!cell) {
     return "";
   }
@@ -140,11 +69,11 @@ function readSlackBasicTableCell(value: unknown): string {
     }
     return typeof cell.value === "string" ? cell.value : "";
   }
-  return cell.type === "rich_text" ? readRichTextElements(cell.elements, "\n") : "";
+  return cell.type === "rich_text" ? renderSlackRichText(cell.elements, "table", "\n") : "";
 }
 
 function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "table" || !Array.isArray(block.rows)) {
     return undefined;
   }
@@ -172,7 +101,7 @@ function parseSlackBasicTableRows(value: unknown): string[][] | undefined {
 }
 
 function readSlackDataTableCell(value: unknown, allowRichText: boolean): string | undefined {
-  const cell = asRecord(value);
+  const cell = asOptionalRecord(value);
   if (!cell) {
     return undefined;
   }
@@ -185,7 +114,7 @@ function readSlackDataTableCell(value: unknown, allowRichText: boolean): string 
       : undefined;
   }
   if (allowRichText && cell.type === "rich_text") {
-    return readNonEmptyString(readRichTextElements(cell.elements));
+    return readNonEmptyString(renderSlackRichText(cell.elements, "table"));
   }
   return undefined;
 }
@@ -194,7 +123,7 @@ function parseSlackDataTable(
   value: unknown,
   options: { enforceNativeLimits?: boolean } = {},
 ): ParsedSlackDataTable | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   const caption = readNonEmptyString(block?.caption);
   if (block?.type !== "data_table" || !caption || !Array.isArray(block.rows)) {
     return undefined;
@@ -237,7 +166,7 @@ function parseSlackDataTable(
 
 /** Detect current native table blocks without depending on unreleased Slack SDK types. */
 export function hasSlackDataTableBlock(blocks?: readonly unknown[]): boolean {
-  return blocks?.some((block) => asRecord(block)?.type === "data_table") ?? false;
+  return blocks?.some((block) => asOptionalRecord(block)?.type === "data_table") ?? false;
 }
 
 /** Count display characters in one structurally valid native table. */
@@ -352,7 +281,7 @@ export function buildSlackDataTableBlock(
 
 /** Extract a deterministic accessible summary from a native Slack table block. */
 export function renderSlackDataTableFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_table") {
     return undefined;
   }
@@ -401,7 +330,7 @@ export function renderSlackTableMrkdwnFallbackText(value: unknown): string | und
 
 /** Render each native table cell once for bounded, formatting-disabled delivery. */
 export function renderSlackDataTableCompactPlainTextFallback(value: unknown): string | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_table") {
     return undefined;
   }
@@ -418,7 +347,7 @@ export function renderSlackDataTableCompactPlainTextFallback(value: unknown): st
 
 /** Render a native table as mrkdwn without activating raw cell control tokens. */
 export function renderSlackDataTableMrkdwnFallbackText(value: unknown): string | undefined {
-  const block = asRecord(value);
+  const block = asOptionalRecord(value);
   if (block?.type !== "data_table") {
     return undefined;
   }

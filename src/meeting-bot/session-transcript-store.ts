@@ -1,3 +1,4 @@
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import type {
   MeetingSessionRecord,
   MeetingTranscriptLine,
@@ -69,7 +70,7 @@ export class MeetingTranscriptDeliveryError extends Error {
 
 export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord> {
   readonly #transcripts = new Map<string, RetainedTranscriptSnapshot>();
-  readonly #captures = new Map<string, Promise<void>>();
+  readonly #captures = new KeyedAsyncQueue();
   readonly #finalizing = new Set<string>();
   readonly #pendingLines = new Map<string, PendingTranscriptLine[]>();
   readonly #retired = new Set<string>();
@@ -162,93 +163,91 @@ export class MeetingSessionTranscriptStore<TSession extends MeetingSessionRecord
   ): Promise<void> {
     // Live reads, periodic notes, and finalization share this per-session chain.
     // Keep cursor reads inside it so overlapping snapshots cannot deliver twice.
-    const previous = this.#captures.get(session.id) ?? Promise.resolve();
-    const capture = previous
-      .catch(() => {})
-      .then(async () => {
-        let pendingError: MeetingTranscriptDeliveryError | undefined;
-        try {
-          await this.#flushPending(session);
-        } catch (error) {
-          if (pendingOnly) {
-            throw error;
-          }
-          pendingError = error as MeetingTranscriptDeliveryError;
-        }
-        if (pendingOnly) {
-          return;
-        }
-        if (
-          !this.options.isBrowserSession(session) ||
-          (requireTranscribeMode && !this.options.isTranscribeSession(session)) ||
-          !this.options.hasBrowserTab(session)
-        ) {
-          if (pendingError) {
-            throw pendingError;
-          }
-          return;
-        }
-        let snapshot: MeetingTranscriptSnapshot | undefined;
-        try {
-          snapshot = await this.options.capture(session, options);
-        } catch (error) {
-          if (pendingError) {
-            throw new MeetingTranscriptDeliveryError(pendingError.cause ?? pendingError, error);
-          }
-          throw error;
-        }
-        if (snapshot) {
-          if (this.options.isTranscribeSession(session)) {
-            this.#merge(session.id, snapshot);
-          }
-          const pending = this.#pendingLines.get(session.id);
-          const cursor = pending?.at(-1)?.cursor ?? this.#streamCursors.get(session.id);
-          const delta = this.#snapshotDelta(cursor, snapshot);
-          if (pendingError) {
-            if (delta.lines.length > 0) {
-              this.#queuePending(session.id, snapshot, delta, 0, delta.prefixKeys, true);
-            } else if (delta.commitEmpty) {
-              this.#queuePendingCursor(session.id, {
-                pageEpoch: snapshot.epoch,
-                pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
-                tailKeys: delta.prefixKeys,
-              });
-            }
-            throw pendingError;
-          }
-          let tailKeys = [...delta.prefixKeys];
-          for (const [index, line] of delta.lines.entries()) {
-            try {
-              await this.options.onLines?.(session, [line]);
-            } catch (error) {
-              this.#queuePending(session.id, snapshot, delta, index, tailKeys);
-              throw new MeetingTranscriptDeliveryError(error);
-            }
-            tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
-            this.#streamCursors.set(session.id, {
-              pageEpoch: snapshot.epoch,
-              pageNextIndex: delta.startIndex + index + 1,
-              tailKeys,
-            });
-          }
-          if (delta.lines.length === 0 && delta.commitEmpty) {
-            this.#streamCursors.set(session.id, {
-              pageEpoch: snapshot.epoch,
-              pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
-              tailKeys: delta.prefixKeys,
-            });
-          }
-        } else if (pendingError) {
-          throw pendingError;
-        }
-      });
-    this.#captures.set(session.id, capture);
+    await this.#captures.enqueue(session.id, async () => {
+      await this.#captureTask(session, options, requireTranscribeMode, pendingOnly);
+    });
+  }
+
+  async #captureTask(
+    session: TSession,
+    options: { finalize?: boolean },
+    requireTranscribeMode: boolean,
+    pendingOnly: boolean,
+  ): Promise<void> {
+    let pendingError: MeetingTranscriptDeliveryError | undefined;
     try {
-      await capture;
-    } finally {
-      if (this.#captures.get(session.id) === capture) {
-        this.#captures.delete(session.id);
+      await this.#flushPending(session);
+    } catch (error) {
+      if (pendingOnly) {
+        throw error;
       }
+      pendingError = error as MeetingTranscriptDeliveryError;
+    }
+    if (pendingOnly) {
+      return;
+    }
+    if (
+      !this.options.isBrowserSession(session) ||
+      (requireTranscribeMode && !this.options.isTranscribeSession(session)) ||
+      !this.options.hasBrowserTab(session)
+    ) {
+      if (pendingError) {
+        throw pendingError;
+      }
+      return;
+    }
+    let snapshot: MeetingTranscriptSnapshot | undefined;
+    try {
+      snapshot = await this.options.capture(session, options);
+    } catch (error) {
+      if (pendingError) {
+        throw new MeetingTranscriptDeliveryError(pendingError.cause ?? pendingError, error);
+      }
+      throw error;
+    }
+    if (snapshot) {
+      if (this.options.isTranscribeSession(session)) {
+        this.#merge(session.id, snapshot);
+      }
+      const pending = this.#pendingLines.get(session.id);
+      const cursor = pending?.at(-1)?.cursor ?? this.#streamCursors.get(session.id);
+      const delta = this.#snapshotDelta(cursor, snapshot);
+      if (pendingError) {
+        if (delta.lines.length > 0) {
+          this.#queuePending(session.id, snapshot, delta, 0, delta.prefixKeys, true);
+        } else if (delta.commitEmpty) {
+          this.#queuePendingCursor(session.id, {
+            pageEpoch: snapshot.epoch,
+            pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
+            tailKeys: delta.prefixKeys,
+          });
+        }
+        throw pendingError;
+      }
+      let tailKeys = [...delta.prefixKeys];
+      for (const [index, line] of delta.lines.entries()) {
+        try {
+          await this.options.onLines?.(session, [line]);
+        } catch (error) {
+          this.#queuePending(session.id, snapshot, delta, index, tailKeys);
+          throw new MeetingTranscriptDeliveryError(error);
+        }
+        tailKeys = [...tailKeys, transcriptLineKey(line)].slice(-TRANSCRIPT_CURSOR_TAIL);
+        this.#streamCursors.set(session.id, {
+          pageEpoch: snapshot.epoch,
+          pageNextIndex: delta.startIndex + index + 1,
+          tailKeys,
+        });
+      }
+      if (delta.lines.length === 0 && delta.commitEmpty) {
+        this.#streamCursors.set(session.id, {
+          pageEpoch: snapshot.epoch,
+          pageNextIndex: snapshot.droppedLines + snapshot.lines.length,
+          tailKeys: delta.prefixKeys,
+        });
+      }
+    } else if (pendingError) {
+      throw pendingError;
     }
   }
 

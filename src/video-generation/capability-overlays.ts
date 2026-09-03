@@ -17,7 +17,7 @@ function isVideoGenerationTransformCapabilities(
   return Boolean(capabilities && "enabled" in capabilities);
 }
 
-export function buildReferenceInputCapabilityFailure(params: {
+export function buildVideoGenerationCapabilityFailure(params: {
   providerId: string;
   model: string;
   provider: VideoGenerationProvider;
@@ -27,12 +27,22 @@ export function buildReferenceInputCapabilityFailure(params: {
 }): string | undefined {
   const { providerId, model, provider, inputImageCount, inputVideoCount, inputAudioCount } = params;
   const label = `${providerId}/${model}`;
-  const { capabilities } = resolveVideoGenerationModeCapabilities({
+  const { mode, capabilities } = resolveVideoGenerationModeCapabilities({
     provider,
     model,
     inputImageCount,
     inputVideoCount,
   });
+  const catalogModes = provider.catalogByModel?.[model]?.modes;
+  if (mode && catalogModes && !catalogModes.includes(mode)) {
+    const modeLabel =
+      mode === "generate"
+        ? "text-to-video generation"
+        : mode === "imageToVideo"
+          ? "image-to-video generation"
+          : "video-to-video generation";
+    return `${label} does not support ${modeLabel}; skipping`;
+  }
 
   if (inputImageCount > 0 || inputVideoCount > 0) {
     // Reference inputs must be explicitly supported. Falling back to a provider
@@ -81,6 +91,31 @@ export function buildReferenceInputCapabilityFailure(params: {
   return undefined;
 }
 
+function mergeVideoGenerationCapabilities<T extends VideoGenerationModeCapabilities>(
+  base: T,
+  overlay: T,
+): T {
+  const overlayOptions = overlay.providerOptions;
+  // Explicit empty providerOptions means "clear inherited options"; undefined
+  // means "inherit base declaration".
+  const mergedProviderOptions =
+    Object.hasOwn(overlay, "providerOptions") &&
+    overlayOptions &&
+    Object.keys(overlayOptions).length === 0
+      ? overlayOptions
+      : base.providerOptions || overlayOptions
+        ? {
+            ...base.providerOptions,
+            ...overlayOptions,
+          }
+        : undefined;
+  return {
+    ...base,
+    ...overlay,
+    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
+  } as T;
+}
+
 function mergeVideoGenerationModeCapabilities<
   T extends VideoGenerationModeCapabilities | VideoGenerationTransformCapabilities | undefined,
 >(base: T, overlay: T): T {
@@ -90,47 +125,15 @@ function mergeVideoGenerationModeCapabilities<
   if (!base) {
     return overlay;
   }
-  const overlayOptions = overlay.providerOptions;
-  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
-  // Explicit empty providerOptions means "clear inherited options"; undefined
-  // means "inherit base declaration".
-  const mergedProviderOptions =
-    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
-      ? overlayOptions
-      : base.providerOptions || overlayOptions
-        ? {
-            ...base.providerOptions,
-            ...overlayOptions,
-          }
-        : undefined;
-
-  return {
-    ...base,
-    ...overlay,
-    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
-  } as T;
+  return mergeVideoGenerationCapabilities(base, overlay);
 }
 
 function mergeVideoGenerationProviderCapabilities(
   base: VideoGenerationProviderCapabilities,
   overlay: VideoGenerationProviderCapabilities,
 ): VideoGenerationProviderCapabilities {
-  const overlayOptions = overlay.providerOptions;
-  const hasOverlayOptions = Object.hasOwn(overlay, "providerOptions");
-  const mergedProviderOptions =
-    hasOverlayOptions && overlayOptions && Object.keys(overlayOptions).length === 0
-      ? overlayOptions
-      : base.providerOptions || overlayOptions
-        ? {
-            ...base.providerOptions,
-            ...overlayOptions,
-          }
-        : undefined;
-
   return {
-    ...base,
-    ...overlay,
-    ...(mergedProviderOptions ? { providerOptions: mergedProviderOptions } : {}),
+    ...mergeVideoGenerationCapabilities(base, overlay),
     generate: mergeVideoGenerationModeCapabilities(base.generate, overlay.generate),
     imageToVideo: mergeVideoGenerationModeCapabilities(base.imageToVideo, overlay.imageToVideo),
     videoToVideo: mergeVideoGenerationModeCapabilities(base.videoToVideo, overlay.videoToVideo),

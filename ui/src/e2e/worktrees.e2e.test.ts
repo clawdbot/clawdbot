@@ -1,21 +1,14 @@
 // Control UI tests cover Worktrees mutation failures through the rendered settings page.
-import { chromium, type Browser } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import {
-  canRunPlaywrightChromium,
-  installMockGateway,
-  resolvePlaywrightChromiumExecutablePath,
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { expect, it } from "vitest";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
-const chromiumAvailable = canRunPlaywrightChromium(chromiumExecutablePath);
-const allowMissingChromium = process.env.OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM === "1";
-const describeControlUiE2e = chromiumAvailable || !allowMissingChromium ? describe : describe.skip;
-
-let browser: Browser;
-let server: ControlUiE2eServer;
+const suite = createControlUiE2eSuite({
+  name: "Control UI Worktrees mocked Gateway E2E",
+  startServerBeforeBrowser: true,
+  unavailableMessage: (executablePath) =>
+    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
+});
 
 const restorableWorktree = {
   baseRef: "main",
@@ -32,34 +25,17 @@ const restorableWorktree = {
   snapshotRef: "refs/openclaw/worktree-snapshots/test",
 };
 
-describeControlUiE2e("Control UI Worktrees mocked Gateway E2E", () => {
-  beforeAll(async () => {
-    if (!chromiumAvailable) {
-      throw new Error(
-        `Playwright Chromium is not installed or cannot start at ${chromiumExecutablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
-      );
-    }
-    server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
-  });
-
-  afterAll(async () => {
-    await browser?.close();
-    await server?.close();
-  });
-
+suite.define(() => {
   it("keeps a restore failure visible after the automatic list refresh succeeds", async () => {
-    const context = await browser.newContext();
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      deferredMethods: ["worktrees.restore"],
-      methodResponses: {
-        "worktrees.list": { worktrees: [restorableWorktree] },
-      },
-    });
+    await suite.withPage(undefined, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        deferredMethods: ["worktrees.restore"],
+        methodResponses: {
+          "worktrees.list": { worktrees: [restorableWorktree] },
+        },
+      });
 
-    try {
-      const response = await page.goto(`${server.baseUrl}settings/worktrees`);
+      const response = await page.goto(`${suite.server.baseUrl}settings/worktrees`);
       expect(response?.status()).toBe(200);
       await page.getByRole("button", { name: "Restore" }).click();
       await gateway.waitForRequest("worktrees.restore");
@@ -73,9 +49,8 @@ describeControlUiE2e("Control UI Worktrees mocked Gateway E2E", () => {
       await expect(page.locator(".callout.danger").textContent()).resolves.toContain(
         "source repository is unavailable",
       );
+      await expect(page.getByRole("alert").count()).resolves.toBe(1);
       await expect(page.getByRole("button", { name: "Restore" }).count()).resolves.toBe(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

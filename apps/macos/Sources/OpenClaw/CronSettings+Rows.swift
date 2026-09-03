@@ -120,7 +120,8 @@ extension CronSettings {
             }
             LabeledContent("Last run") {
                 if let date = job.lastRunDate {
-                    Text("\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
+                    Text(
+                        verbatim: "\(date.formatted(date: .abbreviated, time: .standard)) · \(relativeAge(from: date))")
                 } else {
                     Text("—").foregroundStyle(.secondary)
                 }
@@ -149,7 +150,7 @@ extension CronSettings {
                     .font(.headline)
                 Spacer()
                 Button {
-                    Task { await self.store.refreshRuns(jobId: job.id) }
+                    self.store.refreshRuns(jobId: job.id)
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -188,7 +189,7 @@ extension CronSettings {
                     .foregroundStyle(.secondary)
                 Spacer()
                 if let ms = entry.durationMs {
-                    Text("\(ms)ms")
+                    Text(String(format: String(localized: "%lldms"), ms))
                         .font(.caption2.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
@@ -231,8 +232,8 @@ extension CronSettings {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
                         if job.supportsAnnounceDelivery {
-                            let delivery = job.delivery
-                            if let delivery {
+                            if let delivery = job.delivery {
+                                self.advancedDeliveryPills(delivery)
                                 if delivery.mode == .announce {
                                     StatusPill(text: "announce", tint: .secondary)
                                     if let channel = delivery.channel, !channel.isEmpty {
@@ -269,6 +270,25 @@ extension CronSettings {
                     }
                 }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func advancedDeliveryPills(_ delivery: CronDelivery) -> some View {
+        if let threadId = delivery.threadId?.value {
+            StatusPill.verbatim(
+                "threadId \(String(describing: threadId))",
+                tint: .secondary)
+        }
+        if let to = delivery.completionDestination?["to"]?.value as? String {
+            StatusPill.verbatim("completionDestination \(to)", tint: .secondary)
+        }
+        if let failure = delivery.failureDestination {
+            let target = failure["to"]?.value as? String
+                ?? failure["channel"]?.value as? String
+                ?? failure["accountId"]?.value as? String
+            let suffix = target.map { " \($0)" } ?? ""
+            StatusPill.verbatim("failureDestination" + suffix, tint: .secondary)
         }
     }
 }

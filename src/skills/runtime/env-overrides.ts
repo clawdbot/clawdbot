@@ -31,7 +31,7 @@ type ActiveSkillEnvEntry = {
 const activeSkillEnvEntries = new Map<string, ActiveSkillEnvEntry>();
 
 /** Returns a snapshot of env var keys currently injected by skill overrides. */
-export function getActiveSkillEnvKeys(): ReadonlySet<string> {
+export function getActiveSkillEnvKeysCore(): ReadonlySet<string> {
   return new Set(activeSkillEnvEntries.keys());
 }
 

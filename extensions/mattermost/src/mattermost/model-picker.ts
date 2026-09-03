@@ -9,8 +9,10 @@ import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import {
+  asFiniteNumber,
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
+  readStringField,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MattermostInteractiveButtonInput } from "./interactions.js";
 
@@ -59,19 +61,12 @@ function splitModelRef(modelRef?: string | null): { provider: string; model: str
 }
 
 function readContextString(context: Record<string, unknown>, key: string, fallback = ""): string {
-  const value = context[key];
-  return typeof value === "string" ? value : fallback;
+  return readStringField(context, key) ?? fallback;
 }
 
 function readContextNumber(context: Record<string, unknown>, key: string): number | undefined {
   const value = context[key];
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return parseStrictInteger(value);
-  }
-  return undefined;
+  return asFiniteNumber(value) ?? parseStrictInteger(value);
 }
 
 function normalizePage(value: number | undefined): number {

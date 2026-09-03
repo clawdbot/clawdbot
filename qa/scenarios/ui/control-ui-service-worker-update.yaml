@@ -1,0 +1,31 @@
+title: Control UI production service-worker update
+
+scenario:
+  id: control-ui-service-worker-update
+  surface: control-ui
+  coverage:
+    primary:
+      - control-ui.service-worker-updates
+  objective: >-
+    Prove a production Control UI worker updates in place on one browser origin
+    and serves the newly built application assets.
+  successCriteria:
+    - Chromium loads a production Control UI build and becomes controlled by its activated worker.
+    - A second production build is published at the same origin.
+    - The installed registration discovers and activates the updated worker.
+    - The updated worker claims the page and the production update message reloads it.
+    - A build-specific asset fetched while controlled matches the second build, not stale output.
+  docsRefs:
+    - docs/web/control-ui.md
+  codeRefs:
+    - ui/src/main.ts
+    - ui/public/sw.js
+    - ui/src/e2e/service-worker-update.e2e.test.ts
+    - ui/src/test-helpers/control-ui-e2e.ts
+  execution:
+    kind: playwright
+    path: ui/src/e2e/service-worker-update.e2e.test.ts
+    testNamePattern: refreshes a same-version build on reconnect before restoring an owned terminal
+    summary: >-
+      Real Chromium proof across two production Control UI builds, native worker
+      update and activation, page takeover, reload, and refreshed hashed assets.

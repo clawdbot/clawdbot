@@ -40,6 +40,34 @@ describe("compaction real conversation classification", () => {
     },
   );
 
+  it.each([
+    { excludeFromContext: true, expected: false },
+    { excludeFromContext: false, expected: true },
+  ])(
+    "classifies custom conversation according to context eligibility ($excludeFromContext)",
+    ({ excludeFromContext, expected }) => {
+      const custom = {
+        role: "custom",
+        customType: "display-note",
+        content: "A visible administrative event.",
+        display: true,
+        excludeFromContext,
+        timestamp: 1,
+      } satisfies AgentMessage;
+      const toolResult = {
+        role: "toolResult",
+        toolCallId: "call-1",
+        toolName: "exec",
+        content: [{ type: "text", text: "audit output" }],
+      } as AgentMessage;
+      const messages = [custom, toolResult];
+
+      expect(hasMeaningfulConversationContent(custom)).toBe(expected);
+      expect(isRealConversationMessage(custom, messages, 0)).toBe(expected);
+      expect(isRealConversationMessage(toolResult, messages, 1)).toBe(expected);
+    },
+  );
+
   it("rejects tool-call-only messages and orphan tool results", () => {
     const toolCall = {
       role: "assistant",

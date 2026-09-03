@@ -5,18 +5,23 @@ import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseImageGenerationModelRef } from "../media-generation/model-ref.js";
+import {
+  getImageGenerationProvider,
+  listImageGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
+  recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveReferenceImageCapabilityError,
   resolveMediaProviderRequestTimeoutMs,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
 import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
-import { parseImageGenerationModelRef } from "./model-ref.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
-import { getImageGenerationProvider, listImageGenerationProviders } from "./provider-registry.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
 import type { ImageGenerationResult } from "./types.js";
 
@@ -81,8 +86,8 @@ export async function generateImage(
   const attempts: FallbackAttempt[] = [];
   let lastError: unknown;
 
-  // Try configured/fallback models in order and return the first provider that
-  // yields at least one image; failed attempts are preserved for diagnostics.
+  // Try configured/fallback models in order and return the first provider whose
+  // entire image batch is present and non-empty; preserve failed attempts for diagnostics.
   for (const candidate of candidates) {
     const provider = getProvider(candidate.provider, params.cfg);
     if (!provider) {
@@ -104,15 +109,23 @@ export async function generateImage(
       provider,
       model: candidate.model,
     });
-    if (maxInputImages !== undefined && inputImageCount > maxInputImages) {
-      const error = `${candidate.provider}/${candidate.model} supports at most ${maxInputImages} reference image${maxInputImages === 1 ? "" : "s"}, ${inputImageCount} requested`;
-      attempts.push({
+    const referenceImageError = resolveReferenceImageCapabilityError({
+      candidateRef: `${candidate.provider}/${candidate.model}`,
+      inputImageCount,
+      edit: {
+        enabled: provider.capabilities.edit.enabled,
+        ...(maxInputImages !== undefined ? { maxInputImages } : {}),
+      },
+    });
+    if (referenceImageError) {
+      recordCapabilityCandidateFailure({
+        attempts,
         provider: candidate.provider,
         model: candidate.model,
-        error,
+        error: referenceImageError,
       });
-      lastError = new Error(error);
-      logger.warn(`image-generation candidate skipped: ${error}`);
+      lastError = new Error(referenceImageError);
+      logger.warn(`image-generation candidate skipped: ${referenceImageError}`);
       continue;
     }
 
@@ -164,6 +177,12 @@ export async function generateImage(
       });
       if (!Array.isArray(result.images) || result.images.length === 0) {
         throw new Error("Image generation provider returned no images.");
+      }
+      const emptyImageIndex = result.images.findIndex((image) => image.buffer.byteLength === 0);
+      if (emptyImageIndex >= 0) {
+        throw new Error(
+          `Image generation provider returned an empty image buffer at index ${emptyImageIndex}.`,
+        );
       }
       return {
         images: result.images,

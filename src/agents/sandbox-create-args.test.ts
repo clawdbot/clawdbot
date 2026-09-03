@@ -1,10 +1,14 @@
 // Verifies Docker create arguments for sandbox hardening and configured passthrough.
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 
 const OPENCLAW_CLI_ENV_VALUE = "1";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("buildSandboxCreateArgs", () => {
   function createSandboxConfig(
@@ -89,7 +93,7 @@ describe("buildSandboxCreateArgs", () => {
       extraHosts: ["internal.service:10.0.0.5"],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args, env } = buildSandboxCreateArgs({
       name: "openclaw-sbx-test",
       cfg,
       scopeKey: "main",
@@ -122,7 +126,8 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--memory", ["512m"]);
     expectFlagValues(args, "--memory-swap", ["1024"]);
     expectFlagValues(args, "--cpus", ["1.5"]);
-    expectFlagValues(args, "--env", ["LANG=C.UTF-8", `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`]);
+    expect(args).not.toContain("--env");
+    expect(env).toEqual({ LANG: "C.UTF-8", OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE });
     expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
   });
 
@@ -144,7 +149,7 @@ describe("buildSandboxCreateArgs", () => {
       },
     });
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-non-finite-limits",
       cfg,
       scopeKey: "main",
@@ -174,25 +179,18 @@ describe("buildSandboxCreateArgs", () => {
       },
     });
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args, env } = buildSandboxCreateArgs({
       name: "openclaw-sbx-marker",
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
     });
 
-    expectFlagValues(args, "--env", [
-      "ANTHROPIC_ADMIN_KEY=dummy-anthropic-admin-key",
-      "GEMINI_API_KEY=dummy-gemini-api-key",
-      "GOOGLE_CLIENT_ID=dummy-google-client-id",
-      "GOOGLE_CLIENT_SECRET=dummy-google-client-secret",
-      "HIMALAYA_CONFIG=dummy-himalaya-config",
-      "HIMALAYA_PASSWORD=dummy-himalaya-password",
-      "OURA_CLIENT_ID=dummy-oura-client-id",
-      "OURA_CLIENT_SECRET=dummy-oura-client-secret",
-      "RESEND_API_KEY=dummy-resend-api-key",
-      `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
-    ]);
+    expect(args).not.toContain("--env");
+    expect(env).toEqual({
+      ...cfg.env,
+      OPENCLAW_CLI: OPENCLAW_CLI_ENV_VALUE,
+    });
   });
 
   it("emits Docker GPU passthrough as a separate argument", () => {
@@ -200,7 +198,7 @@ describe("buildSandboxCreateArgs", () => {
       gpus: "device=GPU-123",
     });
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-gpu",
       cfg,
       scopeKey: "main",
@@ -222,7 +220,7 @@ describe("buildSandboxCreateArgs", () => {
       binds: ["/home/user/source:/source:rw", "/var/data/myapp:/data:ro"],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-binds",
       cfg,
       scopeKey: "main",
@@ -302,7 +300,7 @@ describe("buildSandboxCreateArgs", () => {
       binds: [],
     };
 
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-no-binds",
       cfg,
       scopeKey: "main",
@@ -337,7 +335,7 @@ describe("buildSandboxCreateArgs", () => {
 
   it("allows bind sources outside runtime allowlist with explicit override", () => {
     const cfg = createSandboxConfig({}, ["/opt/external:/data:rw"]);
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-outside-roots-override",
       cfg,
       scopeKey: "main",
@@ -348,6 +346,73 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "-v", ["/opt/external:/data:rw"]);
   });
 
+  describe("allowedBindSources", () => {
+    const ownRoots = ["/tmp/workspace", "/tmp/agent"];
+    function buildWithOwnRoots(name: string, cfg: SandboxDockerConfig) {
+      return buildSandboxCreateArgs({
+        name,
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+        bindSourceRoots: ownRoots,
+      });
+    }
+
+    it("admits a bind under a configured root with no dangerous override", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/srv/shared/team:/team:rw",
+      ]);
+      expect(cfg.dangerouslyAllowExternalBindSources).toBeUndefined();
+      const { argv } = buildWithOwnRoots("openclaw-sbx-allowlisted", cfg);
+      expectFlagValues(argv, "-v", ["/srv/shared/team:/team:rw"]);
+    });
+
+    it("keeps every non-allowlisted source blocked while an allowlist is in force", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/opt/external:/data:rw",
+      ]);
+      expect(() => buildWithOwnRoots("openclaw-sbx-allowlist-other", cfg)).toThrow(
+        /outside allowed roots.*allowedBindSources/,
+      );
+    });
+
+    it("leaves the gate off when the caller supplies no roots at all", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/shared"] }, [
+        "/opt/external:/data:rw",
+      ]);
+      const { argv } = buildSandboxCreateArgs({
+        name: "openclaw-sbx-gate-off",
+        cfg,
+        scopeKey: "main",
+        createdAtMs: 1700000000000,
+      });
+      expectFlagValues(argv, "-v", ["/opt/external:/data:rw"]);
+    });
+
+    it("rejects a configured filesystem root at the runtime boundary", () => {
+      const cfg = createSandboxConfig({ allowedBindSources: ["/srv/.."] }, [
+        "/srv/shared/team:/team:rw",
+      ]);
+      expect(() => buildWithOwnRoots("openclaw-sbx-root-allowlist", cfg)).toThrow(
+        /names a filesystem root/,
+      );
+    });
+
+    it.skipIf(process.platform === "win32")(
+      "rejects a configured root whose canonical path is the filesystem root",
+      () => {
+        const rootAlias = path.join(tempDirs.make("bind-root-alias-"), "root");
+        fs.symlinkSync("/", rootAlias, "dir");
+        const cfg = createSandboxConfig({ allowedBindSources: [rootAlias] }, [
+          "/srv/shared/team:/team:rw",
+        ]);
+        expect(() => buildWithOwnRoots("openclaw-sbx-root-alias", cfg)).toThrow(
+          /resolves to filesystem root/,
+        );
+      },
+    );
+  });
+
   it("blocks reserved /workspace target bind mounts by default", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
     expectBuildToThrow("openclaw-sbx-reserved-target", cfg, /reserved container path/);
@@ -355,7 +420,7 @@ describe("buildSandboxCreateArgs", () => {
 
   it("allows reserved /workspace target bind mounts with explicit dangerous override", () => {
     const cfg = createSandboxConfig({}, ["/tmp/override:/workspace:rw"]);
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-reserved-target-override",
       cfg,
       scopeKey: "main",
@@ -370,7 +435,7 @@ describe("buildSandboxCreateArgs", () => {
       network: "container:peer",
       dangerouslyAllowContainerNamespaceJoin: true,
     });
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-container-network-override",
       cfg,
       scopeKey: "main",
@@ -381,7 +446,7 @@ describe("buildSandboxCreateArgs", () => {
 
   it("passes one --init flag so Docker reaps orphaned processes", () => {
     const cfg = createSandboxConfig();
-    const args = buildSandboxCreateArgs({
+    const { argv: args } = buildSandboxCreateArgs({
       name: "openclaw-sbx-init",
       cfg,
       scopeKey: "main",

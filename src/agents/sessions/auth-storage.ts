@@ -16,7 +16,7 @@ import type {
   OAuthLoginCallbacks,
   OAuthProviderId,
 } from "../../llm/utils/oauth/types.js";
-import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import { AUTH_STORE_VERSION, OAUTH_REFRESH_LOCK_OPTIONS } from "../auth-profiles/constants.js";
 import {
   assertAuthProfileMigrationReady,
@@ -25,21 +25,26 @@ import {
 } from "../auth-profiles/legacy-source-diagnostic.js";
 import { resolveOAuthRefreshLockPath } from "../auth-profiles/paths.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
-import { getRuntimeAuthProfileStoreSnapshot } from "../auth-profiles/runtime-snapshots.js";
+import { getRuntimeAuthProfileStoreSnapshotCore } from "../auth-profiles/runtime-snapshots.js";
 import {
   inspectPersistedAuthProfileStateRaw,
   inspectPersistedAuthProfileStoreRaw,
   resolveAuthProfileDatabasePath,
   runAuthProfileWriteTransaction,
+  type AuthProfileDatabase,
 } from "../auth-profiles/sqlite.js";
 import { loadPersistedAuthProfileState } from "../auth-profiles/state.js";
 import {
   loadAuthProfileStoreForSecretsRuntime,
-  saveAuthProfileStore,
+  saveAuthProfileStoreWithPreparedOwner,
 } from "../auth-profiles/store.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { getAgentDir } from "../config.js";
-import { getAuthStorageOAuthProviderRegistry } from "./auth-storage-oauth-registry.js";
+import {
+  getAuthStorageOAuthProviderRegistry,
+  loginAuthStorageOAuthProvider,
+  resolveAuthStoragePluginOAuthCredential,
+} from "./auth-storage-oauth-registry.js";
 import { resolveConfigValue } from "./resolve-config-value.js";
 
 export type ApiKeyCredential = {
@@ -60,6 +65,7 @@ export type TokenCredential = {
 export type AuthCredential = ApiKeyCredential | OAuthCredential | TokenCredential;
 
 export type AuthStorageData = Record<string, AuthCredential>;
+export { OAuthProviderConfiguredUnavailableError };
 export const AUTH_STORAGE_CREATE_DEPRECATION_CODE = "AUTH_STORAGE_CREATE_DEPRECATED" as const;
 export const FILE_AUTH_STORAGE_BACKEND_DEPRECATION_CODE =
   "FILE_AUTH_STORAGE_BACKEND_DEPRECATED" as const;
@@ -263,13 +269,15 @@ function collectStateOnlyAuthProfileIds(store: AuthProfileStore): string[] {
 
 function loadSqliteAuthStorageStore(
   agentDir: string,
-  database?: OpenClawAgentDatabase,
+  database?: AuthProfileDatabase,
 ): AuthProfileStore {
   const inspection = inspectPersistedAuthProfileStoreRaw(agentDir, database);
   if (inspection.status === "missing") {
     const stateInspection = inspectPersistedAuthProfileStateRaw(agentDir, database);
     if (stateInspection.status === "unreadable") {
-      throw new AuthProfileStoreUnreadableError(agentDir);
+      throw new AuthProfileStoreUnreadableError(
+        database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+      );
     }
     return {
       version: AUTH_STORE_VERSION,
@@ -279,7 +287,9 @@ function loadSqliteAuthStorageStore(
   }
   const store = loadPersistedAuthProfileStore(agentDir, database ? { database } : undefined);
   if (inspection.status === "unreadable" || !store) {
-    throw new AuthProfileStoreUnreadableError(agentDir);
+    throw new AuthProfileStoreUnreadableError(
+      database?.path ?? resolveAuthProfileDatabasePath(agentDir),
+    );
   }
   return store;
 }
@@ -291,7 +301,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
   ) {}
 
   private resolveMaterializedRuntimeStores(): AuthProfileStore[] {
-    const current = getRuntimeAuthProfileStoreSnapshot(this.agentDir);
+    const current = getRuntimeAuthProfileStoreSnapshotCore(this.agentDir);
     // A current lifecycle snapshot is authoritative, including an unresolved
     // ref after failed/revoked secrets reload. Prepared data is bootstrap-only.
     return current ? [current] : this.preparedStore ? [this.preparedStore] : [];
@@ -306,12 +316,12 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
     assertAuthProfileMigrationReady(this.agentDir);
     const snapshots = this.resolveMaterializedRuntimeStores();
     assertAuthProfileMigrationReady(this.agentDir);
-    return runAuthProfileWriteTransaction(this.agentDir, (database) => {
+    return runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
       const store = loadSqliteAuthStorageStore(this.agentDir, database);
       const materializedData = projectAuthoritativeAuthStorageData(store, snapshots);
       const { result, next } = fn(JSON.stringify(materializedData));
       if (next !== undefined) {
-        saveAuthProfileStore(
+        saveAuthProfileStoreWithPreparedOwner(
           applyAuthStorageData(store, JSON.parse(next) as AuthStorageData, materializedData),
           this.agentDir,
           {
@@ -320,6 +330,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
             syncExternalCli: false,
           },
           database,
+          owner,
         );
       }
       return result;
@@ -342,7 +353,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
           return result;
         }
         assertAuthProfileMigrationReady(this.agentDir);
-        runAuthProfileWriteTransaction(this.agentDir, (database) => {
+        runAuthProfileWriteTransaction(this.agentDir, (database, owner) => {
           const authoritative = loadSqliteAuthStorageStore(this.agentDir, database);
           if (!isDeepStrictEqual(authoritative.profiles, initialRaw.profiles)) {
             throw new AuthStoragePersistenceError(
@@ -350,7 +361,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               undefined,
             );
           }
-          saveAuthProfileStore(
+          saveAuthProfileStoreWithPreparedOwner(
             applyAuthStorageData(authoritative, JSON.parse(next) as AuthStorageData, initialData),
             this.agentDir,
             {
@@ -359,6 +370,7 @@ class SqliteAuthStorageBackend implements AuthStorageBackend {
               syncExternalCli: false,
             },
             database,
+            owner,
           );
         });
         return result;
@@ -440,7 +452,7 @@ export class AuthStorage {
   static forAgent(agentDir: string = getAgentDir()): AuthStorage {
     assertAuthProfileMigrationReady(agentDir);
     const preparedStore =
-      getRuntimeAuthProfileStoreSnapshot(agentDir) ??
+      getRuntimeAuthProfileStoreSnapshotCore(agentDir) ??
       loadAuthProfileStoreForSecretsRuntime(agentDir);
     assertAuthStorageSecretRefsMaterialized(preparedStore);
     return new AuthStorage(new SqliteAuthStorageBackend(agentDir, preparedStore), agentDir);
@@ -674,12 +686,7 @@ export class AuthStorage {
    * Login to an OAuth provider.
    */
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
-      throw new Error(`Unknown OAuth provider: ${providerId}`);
-    }
-
-    const credentials = await provider.login(callbacks);
+    const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
     this.set(providerId, { type: "oauth", ...credentials });
   }
 
@@ -698,9 +705,6 @@ export class AuthStorage {
     providerId: OAuthProviderId,
   ): Promise<{ apiKey: string; newCredentials: OAuthCredentials } | null> {
     const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-    if (!provider) {
-      return null;
-    }
 
     const refresh = async () =>
       await this.storage.withLockAsync(async (current) => {
@@ -714,7 +718,10 @@ export class AuthStorage {
         }
 
         if (Date.now() < cred.expires) {
-          return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          if (provider) {
+            return { result: { apiKey: provider.getApiKey(cred), newCredentials: cred } };
+          }
+          return { result: await resolveAuthStoragePluginOAuthCredential(providerId, cred, false) };
         }
 
         const oauthCreds: Record<string, OAuthCredentials> = {};
@@ -724,10 +731,9 @@ export class AuthStorage {
           }
         }
 
-        const refreshed = await getAuthStorageOAuthProviderRegistry(this).getApiKey(
-          providerId,
-          oauthCreds,
-        );
+        const refreshed = provider
+          ? await getAuthStorageOAuthProviderRegistry(this).getApiKey(providerId, oauthCreds)
+          : await resolveAuthStoragePluginOAuthCredential(providerId, cred, true);
         if (!refreshed) {
           return { result: null };
         }
@@ -800,10 +806,6 @@ export class AuthStorage {
 
     if (cred?.type === "oauth") {
       const provider = getAuthStorageOAuthProviderRegistry(this).get(providerId);
-      if (!provider) {
-        // Unknown OAuth provider, can't get API key
-        return undefined;
-      }
 
       // Check if token needs refresh
       const needsRefresh = Date.now() >= cred.expires;
@@ -816,6 +818,9 @@ export class AuthStorage {
             return result.apiKey;
           }
         } catch (error) {
+          if (error instanceof OAuthProviderConfiguredUnavailableError) {
+            throw error;
+          }
           this.recordError(error);
           // Refresh failed - re-read file to check if another instance succeeded
           this.reload();
@@ -831,7 +836,11 @@ export class AuthStorage {
 
           if (updatedCred?.type === "oauth" && Date.now() < updatedCred.expires) {
             // Another instance refreshed successfully, use those credentials
-            return provider.getApiKey(updatedCred);
+            if (provider) {
+              return provider.getApiKey(updatedCred);
+            }
+            return (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
+              ?.apiKey;
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
@@ -839,8 +848,10 @@ export class AuthStorage {
           return undefined;
         }
       } else {
-        // Token not expired, use current access token
-        return provider.getApiKey(cred);
+        if (provider) {
+          return provider.getApiKey(cred);
+        }
+        return (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey;
       }
     }
 

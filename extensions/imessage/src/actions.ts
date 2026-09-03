@@ -15,6 +15,7 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { normalizePollInput } from "openclaw/plugin-sdk/poll-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -33,6 +34,7 @@ import {
 } from "./monitor-reply-cache.js";
 import { imessageRpcSupportsMethod } from "./private-api-status.js";
 import { getCachedIMessagePrivateApiStatus, probeIMessagePrivateApi } from "./probe.js";
+import { resolveIMessageRemoteHost } from "./remote-host.js";
 import { parseIMessageTarget, type IMessageService, type IMessageTarget } from "./targets.js";
 
 const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
@@ -64,10 +66,19 @@ function readMessageText(params: Record<string, unknown>): string | undefined {
   return readStringParam(params, "text") ?? readStringParam(params, "message");
 }
 
+function rejectRedactedIMessageTarget(value: string | undefined): string | undefined {
+  if (value === "***") {
+    throw new Error(
+      "iMessage action target is a redacted display value. Omit the target to use the current conversation.",
+    );
+  }
+  return value;
+}
+
 function resolveIMessageDeliveryTarget(args: Record<string, unknown>): string | undefined {
-  const chatGuid = readStringParam(args, "chatGuid");
+  const chatGuid = rejectRedactedIMessageTarget(readStringParam(args, "chatGuid"));
   const chatId = readPositiveIntegerParam(args, "chatId");
-  const chatIdentifier = readStringParam(args, "chatIdentifier");
+  const chatIdentifier = rejectRedactedIMessageTarget(readStringParam(args, "chatIdentifier"));
   const targets = [
     chatGuid ? `chat_guid:${chatGuid}` : undefined,
     chatId !== undefined ? `chat_id:${chatId}` : undefined,
@@ -88,6 +99,7 @@ function resolveIMessageActionTarget(params: {
     readStringParam(params.actionParams, "to") ??
     readStringParam(params.actionParams, "target") ??
     (params.currentChannelId?.trim() || undefined);
+  rejectRedactedIMessageTarget(rawTarget);
   return rawTarget ? parseIMessageTarget(rawTarget) : null;
 }
 
@@ -179,6 +191,7 @@ async function resolveChatGuid(params: {
   options: {
     cliPath: string;
     dbPath?: string;
+    remoteHost?: string;
     timeoutMs?: number;
   };
 }): Promise<string> {
@@ -285,7 +298,11 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   if (!base64Buffer) {
     throw new Error(`iMessage ${action} requires buffer (base64) parameter.`);
   }
-  return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
+  const canonical = canonicalizeBase64(base64Buffer.replaceAll("-", "+").replaceAll("_", "/"));
+  if (!canonical) {
+    throw new Error(`iMessage ${action} buffer must be valid base64.`);
+  }
+  return Uint8Array.from(Buffer.from(canonical, "base64"));
 }
 
 // Path-shaped attachment params the message-tool schema declares. We only
@@ -319,7 +336,7 @@ function extractReplyAttachment(
     return {
       spec: {
         kind: "buffer",
-        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        buffer: decodeBase64Buffer(params, "reply attachment"),
         filename,
       },
       sourceParam: "buffer",
@@ -455,6 +472,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     });
     assertActionEnabled(action, account.config.actions);
     const cliPathForProbe = account.config.cliPath?.trim() || "imsg";
+    const remoteHost = await resolveIMessageRemoteHost({
+      cliPath: cliPathForProbe,
+      remoteHost: account.config.remoteHost,
+    });
     let privateApiStatus = getCachedIMessagePrivateApiStatus(cliPathForProbe);
     const probePrivateApiStatus = async (forceRefresh = false) => {
       privateApiStatus = await probeIMessagePrivateApi(
@@ -495,7 +516,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     const opts = {
       cliPath: account.config.cliPath?.trim() || "imsg",
       dbPath: account.config.dbPath?.trim() || undefined,
-      remoteHost: account.config.remoteHost?.trim() || undefined,
+      remoteHost,
       timeoutMs: account.config.probeTimeoutMs,
       chatGuid: "",
     };
@@ -533,6 +554,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
             account,
             cliPath: opts.cliPath,
             dbPath: opts.dbPath,
+            remoteHost: opts.remoteHost,
           }),
           remoteHost: opts.remoteHost,
           conversationReadOrigin: attestedConversationReadOrigin,
@@ -631,7 +653,10 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         // refuse loudly here rather than letting send-rich ship the text
         // alone and silently drop the attachment — the original symptom
         // of openclaw/openclaw#79822.
-        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+        if (
+          !opts.remoteHost &&
+          privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true
+        ) {
           throw new Error(
             "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
               "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +
@@ -745,7 +770,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
     if (action === "sendAttachment" || action === "upload-file") {
       await assertPrivateApiEnabled();
       const filename = readStringParam(params, "filename", { required: true });
-      const asVoice = readBooleanParam(params, "asVoice") ?? readBooleanParam(params, "as_voice");
+      const asVoice = readBooleanParam(params, "asVoice");
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendAttachment({
         chatGuid: resolvedChatGuid,

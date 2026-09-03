@@ -2,6 +2,7 @@
 import { createServer } from "node:http";
 import type { Socket } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loginMiniMaxPortalOAuth } from "./oauth.js";
 
@@ -189,28 +190,81 @@ async function expectFetchWithoutDeadlineToStayPending(params: {
   expect(result).toBe("pending");
 }
 
-async function loginOutcomeWithin(
-  promise: Promise<unknown>,
-  timeoutMs: number,
-): Promise<
-  | { status: "pending" }
-  | { status: "resolved" }
-  | {
-      status: "rejected";
-      error: unknown;
-    }
-> {
-  return await Promise.race([
+async function loginOutcomeWithin(promise: Promise<unknown>, timeoutMs: number) {
+  return await withTimeout(
     promise.then(
       () => ({ status: "resolved" as const }),
       (error: unknown) => ({ status: "rejected" as const, error }),
     ),
-    timeoutResult({ status: "pending" as const }, timeoutMs),
-  ]);
+    timeoutMs,
+    { message: "MiniMax OAuth did not settle within the test deadline" },
+  );
 }
 
 function expectAbortOrTimeoutError(error: unknown) {
   expect(error).toHaveProperty("name", expect.stringMatching(/^(AbortError|TimeoutError)$/));
+}
+
+type FetchResponder =
+  | Response
+  | ((input: RequestInfo | URL, init?: RequestInit) => Response | Promise<Response>);
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function formBody(init?: RequestInit): URLSearchParams {
+  return init?.body instanceof URLSearchParams
+    ? init.body
+    : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
+}
+
+function authorizationResponse(
+  init?: RequestInit,
+  overrides: Record<string, unknown> = {},
+): Response {
+  return jsonResponse({
+    user_code: "CODE",
+    verification_uri: "https://example.com/device",
+    expired_in: Date.now() + 10_000,
+    state: formBody(init).get("state"),
+    ...overrides,
+  });
+}
+
+function tokenResponse(overrides: Record<string, unknown> = {}): Response {
+  return jsonResponse({
+    status: "success",
+    access_token: "access",
+    refresh_token: "refresh",
+    expired_in: 3600,
+    ...overrides,
+  });
+}
+
+function stubOAuthFetch(...responders: FetchResponder[]) {
+  let responseIndex = 0;
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const responder = responders[responseIndex++];
+    if (!responder) {
+      throw new Error(`unexpected MiniMax OAuth fetch #${responseIndex}`);
+    }
+    return typeof responder === "function" ? await responder(input, init) : responder;
+  });
+  vi.stubGlobal("fetch", fetchMock);
+  return fetchMock;
+}
+
+function loginMiniMax(overrides: Partial<Parameters<typeof loginMiniMaxPortalOAuth>[0]> = {}) {
+  return loginMiniMaxPortalOAuth({
+    openUrl: vi.fn(async () => undefined),
+    note: vi.fn(async () => undefined),
+    progress: { update: vi.fn(), stop: vi.fn() },
+    ...overrides,
+  });
 }
 
 afterEach(() => {
@@ -226,192 +280,81 @@ describe("loginMiniMaxPortalOAuth", () => {
     [1_700_000_000_000, 1_700_000_000_000],
   ])("normalizes token expiry %s through the OAuth flow", async (expiredIn, expectedExpires) => {
     vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
-    let callCount = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        callCount += 1;
-        const body =
-          init?.body instanceof URLSearchParams
-            ? init.body
-            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-        return new Response(
-          JSON.stringify(
-            callCount === 1
-              ? {
-                  user_code: "CODE",
-                  verification_uri: "https://example.com/device",
-                  expired_in: Date.now() + 10_000,
-                  state: body.get("state"),
-                }
-              : {
-                  status: "success",
-                  access_token: "access",
-                  refresh_token: "refresh",
-                  expired_in: expiredIn,
-                },
-          ),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }),
+    stubOAuthFetch(
+      (_input, init) => authorizationResponse(init),
+      tokenResponse({ expired_in: expiredIn }),
     );
 
-    await expect(
-      loginMiniMaxPortalOAuth({
-        openUrl: vi.fn(async () => undefined),
-        note: vi.fn(async () => undefined),
-        progress: { update: vi.fn(), stop: vi.fn() },
-      }),
-    ).resolves.toMatchObject({ expires: expectedExpires });
+    await expect(loginMiniMax()).resolves.toMatchObject({ expires: expectedExpires });
   });
 
   it("rejects malformed token expiry through the OAuth flow", async () => {
-    let callCount = 0;
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        callCount += 1;
-        const body =
-          init?.body instanceof URLSearchParams
-            ? init.body
-            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-        return new Response(
-          JSON.stringify(
-            callCount === 1
-              ? {
-                  user_code: "CODE",
-                  verification_uri: "https://example.com/device",
-                  expired_in: Date.now() + 10_000,
-                  state: body.get("state"),
-                }
-              : {
-                  status: "success",
-                  access_token: "access",
-                  refresh_token: "refresh",
-                  expired_in: "3600s",
-                },
-          ),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }),
+    stubOAuthFetch(
+      (_input, init) => authorizationResponse(init),
+      tokenResponse({ expired_in: "3600s" }),
     );
 
-    await expect(
-      loginMiniMaxPortalOAuth({
-        openUrl: vi.fn(async () => undefined),
-        note: vi.fn(async () => undefined),
-        progress: { update: vi.fn(), stop: vi.fn() },
-      }),
-    ).rejects.toThrow("invalid token expiry");
+    await expect(loginMiniMax()).rejects.toThrow("invalid token expiry");
   });
 
-  it("times out authorization code HTTP requests against a hanging loopback server", async () => {
-    const realFetch = fetch;
-    const server = await startHangingLoopbackServer();
-    const oauthTimeout = captureMiniMaxOAuthFetchTimeout();
-    let loginPromise: Promise<unknown> | undefined;
+  it.each([
+    {
+      phase: "authorization code",
+      path: "/device-code",
+      controlBody: "response_type=code",
+      fetchIndex: 0,
+    },
+    {
+      phase: "token polling",
+      path: "/token",
+      controlBody: "grant_type=user_code",
+      fetchIndex: 1,
+    },
+  ])(
+    "times out $phase HTTP requests against a hanging loopback server",
+    async ({ phase, path, controlBody, fetchIndex }) => {
+      const realFetch = fetch;
+      const server = await startHangingLoopbackServer();
+      const oauthTimeout = captureMiniMaxOAuthFetchTimeout();
+      let loginPromise: Promise<unknown> | undefined;
 
-    try {
-      await expectFetchWithoutDeadlineToStayPending({
-        url: `${server.origin}/control`,
-        init: { method: "POST", body: "response_type=code" },
-        waitForRequest: () => server.waitForRequestCount(1),
-      });
+      try {
+        await expectFetchWithoutDeadlineToStayPending({
+          url: `${server.origin}/control`,
+          init: { method: "POST", body: controlBody },
+          waitForRequest: () => server.waitForRequestCount(1),
+        });
 
-      const fetchMock = vi.fn(
-        async (_input: RequestInfo | URL, init?: RequestInit) =>
-          await realFetch(`${server.origin}/device-code`, init),
-      );
-      vi.stubGlobal("fetch", fetchMock);
+        const hangingResponse: FetchResponder = async (_input, init) =>
+          await realFetch(`${server.origin}${path}`, init);
+        const fetchMock =
+          fetchIndex === 0
+            ? stubOAuthFetch(hangingResponse)
+            : stubOAuthFetch((_input, init) => authorizationResponse(init), hangingResponse);
 
-      loginPromise = loginMiniMaxPortalOAuth({
-        openUrl: vi.fn(async () => undefined),
-        note: vi.fn(async () => undefined),
-        progress: { update: vi.fn(), stop: vi.fn() },
-      });
-      loginPromise.catch(() => undefined);
+        loginPromise = loginMiniMax();
+        loginPromise.catch(() => undefined);
 
-      await server.waitForRequestCount(2);
-      oauthTimeout.fire();
-      const result = await loginOutcomeWithin(loginPromise, 2_000);
-      if (result.status !== "rejected") {
-        throw new Error(`expected authorization code request to reject, got ${result.status}`);
-      }
-      expectAbortOrTimeoutError(result.error);
-      expect(server.requests).toContain("/device-code");
-      expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(
-        oauthTimeout.setTimeoutSpy.mock.calls.some(
-          ([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
-        ),
-      ).toBe(true);
-    } finally {
-      await server.close();
-      await loginPromise?.catch(() => undefined);
-    }
-  });
-
-  it("times out token polling HTTP requests against a hanging loopback server", async () => {
-    const realFetch = fetch;
-    const server = await startHangingLoopbackServer();
-    const oauthTimeout = captureMiniMaxOAuthFetchTimeout();
-    let loginPromise: Promise<unknown> | undefined;
-
-    try {
-      await expectFetchWithoutDeadlineToStayPending({
-        url: `${server.origin}/control`,
-        init: { method: "POST", body: "grant_type=user_code" },
-        waitForRequest: () => server.waitForRequestCount(1),
-      });
-
-      let callCount = 0;
-      const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-        callCount += 1;
-        const body =
-          init?.body instanceof URLSearchParams
-            ? init.body
-            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-        if (callCount === 1) {
-          return new Response(
-            JSON.stringify({
-              user_code: "CODE",
-              verification_uri: "https://example.com/device",
-              expired_in: Date.now() + 10_000,
-              state: body.get("state"),
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
+        await server.waitForRequestCount(2);
+        oauthTimeout.fire();
+        const result = await loginOutcomeWithin(loginPromise, 2_000);
+        if (result.status !== "rejected") {
+          throw new Error(`expected ${phase} request to reject, got ${result.status}`);
         }
-        return await realFetch(`${server.origin}/token`, init);
-      });
-      vi.stubGlobal("fetch", fetchMock);
-
-      loginPromise = loginMiniMaxPortalOAuth({
-        openUrl: vi.fn(async () => undefined),
-        note: vi.fn(async () => undefined),
-        progress: { update: vi.fn(), stop: vi.fn() },
-      });
-      loginPromise.catch(() => undefined);
-
-      await server.waitForRequestCount(2);
-      oauthTimeout.fire();
-      const result = await loginOutcomeWithin(loginPromise, 2_000);
-      if (result.status !== "rejected") {
-        throw new Error(`expected token polling request to reject, got ${result.status}`);
+        expectAbortOrTimeoutError(result.error);
+        expect(server.requests).toContain(path);
+        expect(fetchMock.mock.calls[fetchIndex]?.[1]?.signal).toBeInstanceOf(AbortSignal);
+        expect(
+          oauthTimeout.setTimeoutSpy.mock.calls.some(
+            ([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
+          ),
+        ).toBe(true);
+      } finally {
+        await server.close();
+        await loginPromise?.catch(() => undefined);
       }
-      expectAbortOrTimeoutError(result.error);
-      expect(server.requests).toContain("/token");
-      expect(fetchMock.mock.calls[1]?.[1]?.signal).toBeInstanceOf(AbortSignal);
-      expect(
-        oauthTimeout.setTimeoutSpy.mock.calls.some(
-          ([, timeout]) => timeout === MINIMAX_OAUTH_FETCH_TIMEOUT_MS,
-        ),
-      ).toBe(true);
-    } finally {
-      await server.close();
-      await loginPromise?.catch(() => undefined);
-    }
-  });
+    },
+  );
 
   it("bounds authorization error bodies without using response.text()", async () => {
     const tracked = cancelTrackedResponse(
@@ -422,16 +365,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       },
     );
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () => tracked.response),
-    );
+    stubOAuthFetch(tracked.response);
 
-    const error = await loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    }).catch((cause: unknown) => cause);
+    const error = await loginMiniMax().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toMatch(
@@ -448,33 +384,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       headers: { "Content-Type": "text/plain" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    let callCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      callCount += 1;
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            user_code: "CODE",
-            verification_uri: "https://example.com/device",
-            expired_in: Date.now() + 10_000,
-            state: body.get("state"),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return tracked.response;
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch((_input, init) => authorizationResponse(init), tracked.response);
 
-    const error = await loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    }).catch((cause: unknown) => cause);
+    const error = await loginMiniMax().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toContain("minimax token unavailable");
@@ -489,33 +401,9 @@ describe("loginMiniMaxPortalOAuth", () => {
       headers: { "Content-Type": "application/json" },
     });
     const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
-    let callCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      callCount += 1;
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            user_code: "CODE",
-            verification_uri: "https://example.com/device",
-            expired_in: Date.now() + 10_000,
-            state: body.get("state"),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return tracked.response;
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch((_input, init) => authorizationResponse(init), tracked.response);
 
-    const error = await loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    }).catch((cause: unknown) => cause);
+    const error = await loginMiniMax().catch((cause: unknown) => cause);
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe("MiniMax OAuth failed to parse response.");
@@ -540,122 +428,49 @@ describe("loginMiniMaxPortalOAuth", () => {
         ],
       ],
     ] as const) {
-      const requestedUrls: string[] = [];
-      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-        requestedUrls.push(input instanceof Request ? input.url : String(input));
-        const body =
-          init?.body instanceof URLSearchParams
-            ? init.body
-            : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-        if (requestedUrls.length === 1) {
-          return new Response(
-            JSON.stringify({
-              user_code: "CODE",
-              verification_uri: "https://example.com/device",
-              expired_in: Date.now() + 10_000,
-              state: body.get("state"),
-            }),
-            { status: 200, headers: { "Content-Type": "application/json" } },
-          );
-        }
-        return new Response(
-          JSON.stringify({
-            status: "success",
-            access_token: "access",
-            refresh_token: "refresh",
-            expired_in: 3600,
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      });
-      vi.stubGlobal("fetch", fetchMock);
+      const fetchMock = stubOAuthFetch(
+        (_input, init) => authorizationResponse(init),
+        tokenResponse(),
+      );
 
-      await expect(
-        loginMiniMaxPortalOAuth({
-          region,
-          openUrl: vi.fn(async () => undefined),
-          note: vi.fn(async () => undefined),
-          progress: { update: vi.fn(), stop: vi.fn() },
-        }),
-      ).resolves.toMatchObject({ access: "access", refresh: "refresh" });
-      expect(requestedUrls).toEqual(expectedHosts);
+      await expect(loginMiniMax({ region })).resolves.toMatchObject({
+        access: "access",
+        refresh: "refresh",
+      });
+      expect(
+        fetchMock.mock.calls.map(([input]) =>
+          input instanceof Request ? input.url : String(input),
+        ),
+      ).toEqual(expectedHosts);
 
       vi.unstubAllGlobals();
     }
   });
 
   it("rejects Date-invalid authorization expiries before formatting instructions", async () => {
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      return new Response(
-        JSON.stringify({
-          user_code: "CODE",
-          verification_uri: "https://example.com/device",
-          expired_in: 8_700_000_000_000_000,
-          state: body.get("state"),
-        }),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch((_input, init) =>
+      authorizationResponse(init, { expired_in: 8_700_000_000_000_000 }),
+    );
     const note = vi.fn(async () => undefined);
 
-    await expect(
-      loginMiniMaxPortalOAuth({
-        openUrl: vi.fn(async () => undefined),
-        note,
-        progress: { update: vi.fn(), stop: vi.fn() },
-      }),
-    ).rejects.toThrow("invalid expired_in");
+    await expect(loginMiniMax({ note })).rejects.toThrow("invalid expired_in");
     expect(note).not.toHaveBeenCalled();
   });
 
   it("caps oversized authorization poll intervals before scheduling", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    let callCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      callCount += 1;
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            user_code: "CODE",
-            verification_uri: "https://example.com/device",
-            expired_in: Date.now() + MAX_TIMER_TIMEOUT_MS + 10_000,
-            interval: Number.MAX_SAFE_INTEGER,
-            state: body.get("state"),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify(
-          callCount === 2
-            ? { status: "pending" }
-            : {
-                status: "success",
-                access_token: "access",
-                refresh_token: "refresh",
-                expired_in: 3600,
-              },
-        ),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch(
+      (_input, init) =>
+        authorizationResponse(init, {
+          expired_in: Date.now() + MAX_TIMER_TIMEOUT_MS + 10_000,
+          interval: Number.MAX_SAFE_INTEGER,
+        }),
+      jsonResponse({ status: "pending" }),
+      tokenResponse(),
+    );
 
-    const result = loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    });
+    const result = loginMiniMax();
 
     await vi.waitFor(() => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
@@ -668,37 +483,12 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("does not sleep past the authorization expiry deadline", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    let callCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      callCount += 1;
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            user_code: "CODE",
-            verification_uri: "https://example.com/device",
-            expired_in: Date.now() + 10_000,
-            interval: Number.MAX_SAFE_INTEGER,
-            state: body.get("state"),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(JSON.stringify({ status: "pending" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch(
+      (_input, init) => authorizationResponse(init, { interval: Number.MAX_SAFE_INTEGER }),
+      jsonResponse({ status: "pending" }),
+    );
 
-    const result = loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    });
+    const result = loginMiniMax();
 
     await vi.waitFor(() => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 10_000);
@@ -712,46 +502,13 @@ describe("loginMiniMaxPortalOAuth", () => {
   it("keeps the default poll delay for zero authorization intervals", async () => {
     vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    let callCount = 0;
-    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      callCount += 1;
-      const body =
-        init?.body instanceof URLSearchParams
-          ? init.body
-          : new URLSearchParams(typeof init?.body === "string" ? init.body : "");
-      if (callCount === 1) {
-        return new Response(
-          JSON.stringify({
-            user_code: "CODE",
-            verification_uri: "https://example.com/device",
-            expired_in: Date.now() + 10_000,
-            interval: 0,
-            state: body.get("state"),
-          }),
-          { status: 200, headers: { "Content-Type": "application/json" } },
-        );
-      }
-      return new Response(
-        JSON.stringify(
-          callCount === 2
-            ? { status: "pending" }
-            : {
-                status: "success",
-                access_token: "access",
-                refresh_token: "refresh",
-                expired_in: 3600,
-              },
-        ),
-        { status: 200, headers: { "Content-Type": "application/json" } },
-      );
-    });
-    vi.stubGlobal("fetch", fetchMock);
+    stubOAuthFetch(
+      (_input, init) => authorizationResponse(init, { interval: 0 }),
+      jsonResponse({ status: "pending" }),
+      tokenResponse(),
+    );
 
-    const result = loginMiniMaxPortalOAuth({
-      openUrl: vi.fn(async () => undefined),
-      note: vi.fn(async () => undefined),
-      progress: { update: vi.fn(), stop: vi.fn() },
-    });
+    const result = loginMiniMax();
 
     await vi.waitFor(() => {
       expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), 2_000);

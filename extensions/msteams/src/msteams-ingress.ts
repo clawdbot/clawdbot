@@ -6,6 +6,7 @@ import {
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { classifyMSTeamsSendError } from "./errors.js";
@@ -132,10 +133,6 @@ function parseClaimedActivity(
   return parsed;
 }
 
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIngress {
   const queue =
     options.queue ??
@@ -193,14 +190,14 @@ export function createMSTeamsIngress(options: MSTeamsIngressOptions): MSTeamsIng
         }
         const classification = classifyMSTeamsSendError(error);
         return classification.kind === "auth"
-          ? { reason: "authentication-failed", message: errorText(error) }
+          ? { reason: "authentication-failed", message: formatErrorMessage(error) }
           : null;
       },
       onLog: (message) => options.runtime.error?.(`msteams: ${message}`),
     },
     createStoppedError: () => new Error("Microsoft Teams ingress stopped."),
     onError: (error) =>
-      options.runtime.error?.(`msteams ingress drain failed: ${errorText(error)}`),
+      options.runtime.error?.(`msteams ingress drain failed: ${formatErrorMessage(error)}`),
   });
   let stopTask: Promise<void> | undefined;
 

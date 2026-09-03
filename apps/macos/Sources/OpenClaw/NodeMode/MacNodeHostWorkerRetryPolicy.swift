@@ -2,8 +2,7 @@ import Foundation
 
 struct MacNodeHostWorkerRetryPolicy: Sendable {
     struct Input: Equatable, Sendable {
-        let command: [String]
-        let configurationGeneration: UInt64
+        let launch: MacNodeHostWorkerLaunch
     }
 
     enum UnexpectedExitDisposition: Equatable, Sendable {

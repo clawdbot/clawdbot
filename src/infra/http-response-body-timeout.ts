@@ -4,6 +4,12 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 
 type TimeoutErrorFactory = (params: { timeoutMs: number }) => Error;
 
+function createResponseBodyTimeoutError(message: string): Error {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
 async function withCancellableTimeout<T>(params: {
   timeoutMs: number;
   onTimeout: TimeoutErrorFactory;
@@ -62,7 +68,7 @@ export async function readChunkWithIdleTimeout(
     timeoutMs: chunkTimeoutMs,
     onTimeout: ({ timeoutMs }) =>
       onIdleTimeout?.({ chunkTimeoutMs: timeoutMs }) ??
-      new Error(`Media download stalled: no data received for ${timeoutMs}ms`),
+      createResponseBodyTimeoutError(`Media download stalled: no data received for ${timeoutMs}ms`),
     // Cancellation releases fetch sockets and buffers instead of letting the
     // pending read continue after the caller has failed.
     cancel: async (error) => await reader.cancel(error),
@@ -83,7 +89,7 @@ export async function withResponseBodyTimeout<T>(params: {
     timeoutMs: params.timeoutMs,
     onTimeout: ({ timeoutMs }) =>
       params.onTimeout?.({ timeoutMs }) ??
-      new Error(`Response body timed out after ${timeoutMs}ms`),
+      createResponseBodyTimeoutError(`Response body timed out after ${timeoutMs}ms`),
     // Fetch resolves at headers. Body cancellation owns socket cleanup when
     // the separate whole-body deadline wins.
     cancel: params.cancel,

@@ -105,7 +105,7 @@ function resolveChannelPlugins(registry?: ActivePluginChannelRegistry): ChannelP
     entriesById,
   };
   if (currentRegistry) {
-    // Runtime snapshots invalidate the single active, pinned-registry view.
+    // Runtime snapshots invalidate the single process-root registry view.
     cachedChannelPluginView = view;
   }
   return view;
@@ -144,10 +144,13 @@ export function getLoadedChannelPluginForRead(id: ChannelId): ChannelPlugin | un
 /**
  * Returns the loaded channel registry entry by normalized plugin id.
  */
-export function getLoadedChannelPluginEntryById(id: string): LoadedChannelPluginEntry | undefined {
+export function getLoadedChannelPluginEntryById(
+  id: string,
+  registry?: ActivePluginChannelRegistry,
+): LoadedChannelPluginEntry | undefined {
   const resolvedId = normalizeOptionalString(id) ?? "";
   if (!resolvedId) {
     return undefined;
   }
-  return resolveChannelPlugins().entriesById.get(resolvedId);
+  return resolveChannelPlugins(registry).entriesById.get(resolvedId);
 }

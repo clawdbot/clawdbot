@@ -31,7 +31,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -112,6 +117,55 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
+  it.each(["agent:voice:home", "global"])(
+    "keeps the acknowledgement alive and cancels its exact %s target",
+    async (agentSessionKey) => {
+      type Acknowledgement = { runId: string; agentId: string; agentSessionKey: string };
+      let acknowledge!: (value: Acknowledgement) => void;
+      const pendingAcknowledgement = new Promise<Acknowledgement>((resolve) => {
+        acknowledge = resolve;
+      });
+      const request = vi.fn(
+        async (method: string, _params: unknown, options?: { signal?: AbortSignal }) => {
+          if (method === "talk.client.toolCall") {
+            expect(options).toBeUndefined();
+            return await pendingAcknowledgement;
+          }
+          if (method === "chat.abort") {
+            return { ok: true, aborted: true };
+          }
+          throw new Error(`unexpected request: ${method}`);
+        },
+      );
+      const submit = vi.fn();
+      const controller = new AbortController();
+
+      const consult = submitRealtimeTalkConsult({
+        ctx: {
+          client: { request },
+          sessionKey: "main",
+          callbacks: {},
+        } as never,
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+        signal: controller.signal,
+      });
+      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+
+      controller.abort();
+      acknowledge({ runId: "run-1", agentId: "voice", agentSessionKey });
+      await consult;
+
+      expect(request).toHaveBeenCalledWith("chat.abort", {
+        sessionKey: agentSessionKey,
+        agentId: "voice",
+        runId: "run-1",
+      });
+      expect(submit).toHaveBeenCalledOnce();
+    },
+  );
+
   it("prefers source-reply final text over an earlier empty Talk consult final", async () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string) => {
@@ -139,7 +193,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       if (method === "agent.wait") {
         return { runId: "run-1", status: "ok" };
@@ -201,7 +260,12 @@ describe("RealtimeTalkSession consult handoff", () => {
               });
             }, 300);
           }, 0);
-          return { runId: "run-1" };
+          return {
+            runId: "run-1",
+            idempotencyKey: "run-1",
+            agentId: "main",
+            agentSessionKey: "agent:main:main",
+          };
         }
         if (method === "agent.wait") {
           return new Promise(() => {});
@@ -273,7 +337,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             });
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       if (method === "agent.wait") {
         return await waitResult;
@@ -342,7 +411,12 @@ describe("RealtimeTalkSession consult handoff", () => {
               });
             }, 300);
           }, 0);
-          return { runId: "run-1" };
+          return {
+            runId: "run-1",
+            idempotencyKey: "run-1",
+            agentId: "main",
+            agentSessionKey: "agent:main:main",
+          };
         }
         if (method === "agent.wait") {
           return { runId: "run-1", status: "ok" };
@@ -394,7 +468,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       if (method === "agent.wait") {
         return { runId: "run-1", status: "ok" };
@@ -484,7 +563,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       if (method === "agent.wait") {
         return waitResult;
@@ -535,7 +619,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       throw new Error(`unexpected request: ${method}`);
     });
@@ -580,7 +669,12 @@ describe("RealtimeTalkSession consult handoff", () => {
             },
           });
         });
-        return { runId: "run-1" };
+        return {
+          runId: "run-1",
+          idempotencyKey: "run-1",
+          agentId: "main",
+          agentSessionKey: "agent:main:main",
+        };
       }
       throw new Error(`unexpected request: ${method}`);
     });

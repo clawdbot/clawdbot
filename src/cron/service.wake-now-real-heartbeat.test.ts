@@ -3,15 +3,17 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveAgentMainSessionKey } from "../config/sessions.js";
 import { runHeartbeatOnce } from "../infra/heartbeat-runner.js";
 import {
   seedMainSessionStore,
   setupTelegramHeartbeatPluginRuntimeForTests,
 } from "../infra/heartbeat-runner.test-utils.js";
 import {
-  consumeSelectedSystemEventEntries,
-  enqueueSystemEventEntry,
+  enqueueSystemEventWithReceipt,
+  peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { getQueueSize } from "../process/command-queue.js";
@@ -42,7 +44,11 @@ function makeSandbox() {
 
 type WakeNowRunMode = "direct" | "queued" | "scheduled";
 
-async function runWakeNowCase(mode: WakeNowRunMode) {
+async function runMainCronCase(
+  mode: WakeNowRunMode,
+  wakeMode: "now" | "next-heartbeat" = "now",
+  options: { heartbeatEvery?: string; deleteAfterRun?: boolean } = {},
+) {
   const sandbox = makeSandbox();
   const getReplySpy = vi.fn().mockResolvedValue({ text: "Handled the reminder" });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1", chatId: "155462274" });
@@ -56,12 +62,13 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
     agents: {
       defaults: {
         workspace: sandbox.dir,
-        heartbeat: { every: "5m", target: "telegram" },
+        heartbeat: { every: options.heartbeatEvery ?? "5m", target: "telegram" },
       },
     },
     channels: { telegram: { allowFrom: ["*"] } },
     session: { store: sandbox.sessionStorePath },
   };
+  const expectedMainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: "main" });
   await seedMainSessionStore(sandbox.sessionStorePath, cfg, {
     lastChannel: "telegram",
     lastProvider: "telegram",
@@ -80,18 +87,14 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
     cronEnabled: true,
     log: noopLogger,
     enqueueSystemEvent: (text, opts) => {
-      const event = enqueueSystemEventEntry(text, {
-        sessionKey: opts?.sessionKey as string,
+      const agentId = opts?.agentId ?? "main";
+      const sessionKey = opts?.sessionKey ?? resolveAgentMainSessionKey({ cfg, agentId });
+      const remove = enqueueSystemEventWithReceipt(text, {
+        sessionKey,
         contextKey: opts?.contextKey,
         deliveryContext: opts?.deliveryContext,
       });
-      return event
-        ? {
-            accepted: true,
-            remove: () =>
-              consumeSelectedSystemEventEntries(opts?.sessionKey as string, [event]).length > 0,
-          }
-        : { accepted: false };
+      return remove ? { accepted: true, remove } : { accepted: false };
     },
     requestHeartbeat,
     runHeartbeatOnce: runHeartbeatOnceReal,
@@ -115,8 +118,9 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
         at: new Date(Date.now() + (mode === "scheduled" ? 250 : 60 * 60_000)).toISOString(),
       },
       sessionTarget: "main",
-      wakeMode: "now",
+      wakeMode,
       payload: { kind: "systemEvent", text: "Reminder: Send the nightly report" },
+      ...(options.deleteAfterRun === undefined ? {} : { deleteAfterRun: options.deleteAfterRun }),
     });
 
     if (mode === "direct") {
@@ -139,14 +143,38 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
       }),
     ]).finally(() => clearTimeout(finishTimeout));
     expect(terminal.status).toBe("ok");
+    if (wakeMode === "next-heartbeat") {
+      expect(getReplySpy).not.toHaveBeenCalled();
+      expect(requestHeartbeat).toHaveBeenCalledTimes(1);
+      await expect(
+        runHeartbeatOnce({
+          cfg,
+          source: "interval",
+          intent: "scheduled",
+          reason: "interval",
+          agentId: "main",
+          scheduledEveryMs: 5 * 60_000,
+          deps: { getReplyFromConfig: getReplySpy, telegram: sendTelegram },
+        }),
+      ).resolves.toMatchObject({ status: "ran" });
+    } else {
+      expect(requestHeartbeat).not.toHaveBeenCalled();
+    }
     expect(getReplySpy).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
 
     const [ctx] = getReplySpy.mock.calls[0] ?? [];
-    const replyCtx = ctx as { Provider?: string; SessionKey?: string; Body?: string };
-    expect(replyCtx.Provider).toBe("cron-event");
-    expect(replyCtx.SessionKey).toContain(`:cron:${job.id}:run:`);
+    const replyCtx = ctx as Pick<
+      MsgContext,
+      "InternalTurnSource" | "Provider" | "SessionKey" | "Body"
+    >;
+    expect(replyCtx.InternalTurnSource).toBe("cron");
+    expect(replyCtx.Provider).toBeUndefined();
+    expect(replyCtx.SessionKey).toBe(expectedMainSessionKey);
     expect(replyCtx.Body).toContain("Reminder: Send the nightly report");
+    expect(peekSystemEventEntries(expectedMainSessionKey)).toHaveLength(0);
+    if (options.deleteAfterRun) {
+      expect(cron.getJob(job.id)).toBeUndefined();
+    }
   } finally {
     cron.stop();
     const drained = await waitForActiveCronJobs(5_000);
@@ -155,16 +183,24 @@ async function runWakeNowCase(mode: WakeNowRunMode) {
   }
 }
 
-describe("wakeMode:now main cron with the real heartbeat runner", () => {
+describe("main cron with the real heartbeat runner", () => {
   it("delivers during a direct manual run", async () => {
-    await runWakeNowCase("direct");
+    await runMainCronCase("direct");
   });
 
   it("delivers before a command-lane queued run finishes", async () => {
-    await runWakeNowCase("queued");
+    await runMainCronCase("queued");
   });
 
   it("delivers during a natural scheduled run", async () => {
-    await runWakeNowCase("scheduled");
+    await runMainCronCase("scheduled");
+  });
+
+  it("delivers a next-heartbeat event through a later scheduled main-session heartbeat", async () => {
+    await runMainCronCase("direct", "next-heartbeat");
+  });
+
+  it("delivers and removes an immediate one-shot when heartbeat cadence is disabled", async () => {
+    await runMainCronCase("scheduled", "now", { heartbeatEvery: "0m", deleteAfterRun: true });
   });
 });

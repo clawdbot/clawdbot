@@ -8,14 +8,20 @@ import {
 } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
+import { resolveBrowserNavigationTimeoutMs } from "./act-policy.js";
 import {
-  CHROME_MCP_NAVIGATE_TIMEOUT_MS,
   rethrowChromeMcpDocumentError,
   type ChromeMcpOperationOptions,
   type ChromeMcpProfileOptions,
   type ChromeMcpTargetOperation,
 } from "./chrome-mcp-contracts.js";
-import { extractJsonMessage, extractSnapshot } from "./chrome-mcp-result.js";
+import {
+  extractJsonMessage,
+  extractSnapshot,
+  extractStructuredPages,
+  extractToolErrorMessage,
+  formatChromeMcpToolErrorMessage,
+} from "./chrome-mcp-result.js";
 import {
   callTargetTool,
   callTool,
@@ -76,7 +82,7 @@ export async function closeChromeMcpTab(
       ...options,
     },
     async (target) => {
-      await callTool(
+      const result = await callTool(
         profileName,
         target.profileOptions,
         "close_page",
@@ -84,6 +90,16 @@ export async function closeChromeMcpTab(
         options,
         target.lease,
       );
+      if (extractStructuredPages(result).some((page) => page.id === target.pageId)) {
+        throw new Error(
+          formatChromeMcpToolErrorMessage({
+            profileName,
+            options: target.profileOptions,
+            toolName: "close_page",
+            message: extractToolErrorMessage(result, "close_page"),
+          }),
+        );
+      }
       // Retire inside the same operation lock so queued work cannot dispatch
       // against a closed page id. A later list gets a new opaque handle even if
       // Chrome reuses that numeric id.
@@ -104,7 +120,7 @@ export async function navigateChromeMcpPage(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<{ url: string }> {
-  const resolvedTimeoutMs = params.timeoutMs ?? CHROME_MCP_NAVIGATE_TIMEOUT_MS;
+  const resolvedTimeoutMs = resolveBrowserNavigationTimeoutMs(params.timeoutMs);
   const callTimeoutMs = resolveChromeMcpNavigateCallTimeoutMs(resolvedTimeoutMs);
   return await withChromeMcpTarget({ ...params, timeoutMs: callTimeoutMs }, async (target) => {
     await callTool(

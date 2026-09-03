@@ -240,8 +240,6 @@ export {
   DEFAULT_PROMOTION_MIN_RECALL_COUNT,
   DEFAULT_PROMOTION_MIN_SCORE,
   DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES,
-  SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH,
-  SHORT_TERM_STORE_RELATIVE_PATH,
   type PromotionCandidate,
   type RepairShortTermPromotionArtifactsResult,
   type ShortTermAuditSummary,
@@ -249,8 +247,6 @@ export {
   type ShortTermDreamingStatsEntry,
   type ShortTermRecallEntry,
 } from "./short-term-promotion-types.js";
-export { normalizeShortTermPhaseSignalStore } from "./short-term-promotion-store.js";
-export { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 export {
   filterFreshLightDreamingEntries,
   loadShortTermPromotionDreamingStats,

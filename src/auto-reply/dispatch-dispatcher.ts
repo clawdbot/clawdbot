@@ -1,5 +1,5 @@
 // Reply dispatcher lifecycle helpers used by auto-reply dispatch paths.
-import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import type { ReplyDispatchReceipt, ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
 
 type ReplyDispatcherSettledTask = () => Promise<void> | void;
 
@@ -30,11 +30,12 @@ async function runReplyDispatcherSettledTasks(dispatcher: ReplyDispatcher): Prom
 export async function settleReplyDispatcher(params: {
   dispatcher: ReplyDispatcher;
   onSettled?: () => void | Promise<void>;
-}): Promise<void> {
+}): Promise<ReplyDispatchReceipt | undefined> {
   params.dispatcher.markComplete();
   try {
-    await params.dispatcher.waitForIdle();
+    const receipt = await params.dispatcher.waitForIdle();
     await runReplyDispatcherSettledTasks(params.dispatcher);
+    return receipt || undefined;
   } finally {
     settledTasksByDispatcher.delete(params.dispatcher);
     await params.onSettled?.();
@@ -46,10 +47,12 @@ export async function withReplyDispatcher<T>(params: {
   dispatcher: ReplyDispatcher;
   run: () => Promise<T>;
   onSettled?: () => void | Promise<void>;
+  onSettledReceipt?: (receipt: ReplyDispatchReceipt | undefined) => void;
 }): Promise<T> {
   try {
     return await params.run();
   } finally {
-    await settleReplyDispatcher(params);
+    const receipt = await settleReplyDispatcher(params);
+    params.onSettledReceipt?.(receipt);
   }
 }

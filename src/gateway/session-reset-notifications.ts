@@ -1,6 +1,11 @@
-type GatewaySessionResetListener = (sessionKey: string) => void;
+import { resolveGlobalSet } from "../shared/global-singleton.js";
 
-const listeners = new Set<GatewaySessionResetListener>();
+type GatewaySessionResetListener = (sessionKey: string, agentId?: string) => void;
+
+const listeners = resolveGlobalSet<GatewaySessionResetListener>(
+  Symbol.for("openclaw.gatewaySessionResetListeners"),
+  "close-and-restart",
+);
 
 /** Subscribes process-local lifecycle services to committed session resets. */
 export function onGatewaySessionReset(listener: GatewaySessionResetListener): () => void {
@@ -9,10 +14,10 @@ export function onGatewaySessionReset(listener: GatewaySessionResetListener): ()
 }
 
 /** Notifies lifecycle-owned in-memory services after the session reset commits. */
-export function notifyGatewaySessionReset(sessionKey: string): void {
+export function notifyGatewaySessionReset(sessionKey: string, agentId?: string): void {
   for (const listener of listeners) {
     try {
-      listener(sessionKey);
+      listener(sessionKey, agentId);
     } catch {
       // A process-local cleanup listener must not turn a committed reset into
       // an apparent failure or prevent the remaining lifecycle owners running.

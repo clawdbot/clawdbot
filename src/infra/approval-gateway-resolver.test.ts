@@ -30,12 +30,25 @@ vi.mock("../gateway/operator-approvals-client.js", () => ({
   withOperatorApprovalsGatewayClient: hoisted.withOperatorApprovalsGatewayClient,
 }));
 
-function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }, label: string): T[] {
+function requireFirstMockCall<T>(mock: { mock: { calls: T[][] } }): T[] {
   const call = mock.mock.calls[0];
   if (!call) {
-    throw new Error(`expected ${label} call`);
+    throw new Error("expected gateway client call");
   }
   return call;
+}
+
+function withApprovalAccountContext<T>(run: () => T): T {
+  return withGatewayNativeApprovalRuntime(
+    {
+      request: async <TResult>(method: string, params: Record<string, unknown>) =>
+        (await hoisted.clientRequest(method, params)) as TResult,
+      requestRoute: vi.fn(),
+      routeCoordinator: {} as never,
+      subscribe: vi.fn(),
+    },
+    run,
+  );
 }
 
 describe("resolveApprovalOverGateway", () => {
@@ -62,7 +75,6 @@ describe("resolveApprovalOverGateway", () => {
     expect(hoisted.withOperatorApprovalsGatewayClient).toHaveBeenCalledTimes(1);
     const [gatewayClientOptions, gatewayClientRunner] = requireFirstMockCall(
       hoisted.withOperatorApprovalsGatewayClient,
-      "gateway client",
     );
     expect(gatewayClientOptions).toEqual({
       config: { gateway: { auth: { token: "cfg-token" } } },
@@ -76,6 +88,97 @@ describe("resolveApprovalOverGateway", () => {
       decision: "allow-once",
     });
     expect(result).toEqual({ applied: true, approval: recordedApproval });
+  });
+
+  it("sends complete reviewer facts directly to the canonical owner", async () => {
+    await expect(
+      withApprovalAccountContext(() =>
+        resolveApprovalOverGateway({
+          cfg: {} as never,
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+          channel: "telegram",
+          accountId: "ops",
+          senderId: "owner",
+        }),
+      ),
+    ).resolves.toEqual({ applied: true, approval: recordedApproval });
+    expect(hoisted.clientRequest).toHaveBeenCalledWith("approval.resolve", {
+      id: "approval-1",
+      kind: "exec",
+      decision: "deny",
+      reviewer: { channel: "telegram", accountId: "ops", senderId: "owner" },
+    });
+  });
+
+  it.each([
+    { channel: "telegram" },
+    { accountId: "ops" },
+    { senderId: "owner" },
+    { channel: "telegram", accountId: "ops" },
+    { channel: "telegram", senderId: "owner" },
+    { accountId: "ops", senderId: "owner" },
+  ])("rejects partial reviewer identity: %j", async (reviewer) => {
+    await expect(
+      resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        ...reviewer,
+      }),
+    ).rejects.toThrow("channel approval resolution requires channel, account, and sender identity");
+    expect(hoisted.clientRequest).not.toHaveBeenCalled();
+    expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["signal", "Signal"],
+    ["whatsapp", "WhatsApp"],
+    ["matrix", "Matrix"],
+    ["imessage", "iMessage"],
+    ["telegram", "Telegram"],
+    ["discord", "Discord"],
+    ["googlechat", "Google Chat"],
+    ["slack", "Slack"],
+  ] as const)(
+    "derives the %s approval client label from channel metadata",
+    async (channel, label) => {
+      await resolveApprovalOverGateway({
+        cfg: {} as never,
+        approvalId: "approval-1",
+        approvalKind: "exec",
+        decision: "deny",
+        channel,
+        accountId: "default",
+        senderId: "owner",
+      });
+
+      const [gatewayClientOptions] = requireFirstMockCall(
+        hoisted.withOperatorApprovalsGatewayClient,
+      );
+      expect(gatewayClientOptions).toMatchObject({
+        clientDisplayName: `${label} approval (owner)`,
+      });
+    },
+  );
+
+  it("preserves the raw id in the approval label for unknown channels", async () => {
+    await resolveApprovalOverGateway({
+      cfg: {} as never,
+      approvalId: "approval-1",
+      approvalKind: "exec",
+      decision: "deny",
+      channel: "external-chat",
+      accountId: "default",
+      senderId: "owner",
+    });
+
+    const [gatewayClientOptions] = requireFirstMockCall(hoisted.withOperatorApprovalsGatewayClient);
+    expect(gatewayClientOptions).toMatchObject({
+      clientDisplayName: "external-chat approval (owner)",
+    });
   });
 
   it("uses explicit plugin kind without inspecting the approval id", async () => {
@@ -143,6 +246,47 @@ describe("resolveApprovalOverGateway", () => {
       { clientDisplayName: "Approval (unknown)" },
     );
     expect(hoisted.withOperatorApprovalsGatewayClient).not.toHaveBeenCalled();
+  });
+
+  it("sends channel custody to an injected canonical runtime", async () => {
+    const injectedRequest = vi.fn(async () => ({ applied: true, approval: recordedApproval }));
+    const scopedRequest = vi.fn();
+    const runtime = {
+      request: async <T>(): Promise<T> => {
+        scopedRequest();
+        throw new Error("unexpected scoped approval request");
+      },
+      requestRoute: vi.fn(),
+      routeCoordinator: { doesAccountHandleRequest: () => true } as never,
+      subscribe: vi.fn(),
+    } satisfies GatewayNativeApprovalRuntime;
+
+    await expect(
+      withGatewayNativeApprovalRuntime(runtime, () =>
+        resolveApprovalOverGateway({
+          cfg: {} as never,
+          approvalId: "approval-1",
+          approvalKind: "exec",
+          decision: "deny",
+          channel: "imessage",
+          accountId: "personal",
+          senderId: "owner",
+          gatewayRuntime: { request: injectedRequest },
+        }),
+      ),
+    ).resolves.toEqual({ applied: true, approval: recordedApproval });
+
+    expect(injectedRequest).toHaveBeenCalledWith(
+      "approval.resolve",
+      {
+        id: "approval-1",
+        kind: "exec",
+        decision: "deny",
+        reviewer: { channel: "imessage", accountId: "personal", senderId: "owner" },
+      },
+      { clientDisplayName: "iMessage approval (owner)" },
+    );
+    expect(scopedRequest).not.toHaveBeenCalled();
   });
 
   it("preserves protocol-valid boundary whitespace in canonical approval ids", async () => {

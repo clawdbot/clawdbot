@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import type { TelegramBotInfo } from "./bot-info.js";
 
 type DispatchReplyWithBufferedBlockDispatcher =
@@ -21,21 +22,72 @@ export const telegramBotInfoForTest = {
   allows_users_to_create_topics: false,
 } satisfies TelegramBotInfo;
 
+export type TelegramMentionPolicyForTest = {
+  mode: "allow" | "deny";
+  allowIn?: string[];
+  denyIn?: string[];
+};
+
+export type TelegramIngestGroupForTest = {
+  requireMention: boolean;
+  ingest?: boolean;
+  topics?: Record<string, { ingest: boolean }>;
+};
+
+export function telegramIngestGroupForTest(
+  ingest?: boolean,
+  topics?: Record<string, { ingest: boolean }>,
+): TelegramIngestGroupForTest {
+  return {
+    requireMention: true,
+    ...(ingest === undefined ? {} : { ingest }),
+    ...(topics ? { topics } : {}),
+  };
+}
+
+export type TelegramMentionCaseForTest = [
+  string,
+  TelegramMentionPolicyForTest,
+  TelegramMentionPolicyForTest | undefined,
+  number | undefined,
+  boolean,
+  number,
+];
+
+export async function waitForTelegramMockCalls(
+  mock: { mock: { calls: unknown[] } },
+  count: number,
+) {
+  for (let index = 0; index < 80; index++) {
+    if (mock.mock.calls.length >= count) {
+      return;
+    }
+    await delay(25);
+  }
+}
+
 export function createTelegramNativeCommandTestDeps(
   dispatchReply: DispatchReplyWithBufferedBlockDispatcher,
 ): { dispatchChannelInboundTurn: DispatchChannelInboundTurn } {
   return {
     dispatchChannelInboundTurn: async (plan) => {
+      const delivery = plan.delivery;
       const dispatchResult = await dispatchReply({
         ctx: plan.ctxPayload,
         cfg: plan.cfg,
         dispatcherOptions: {
           ...plan.dispatcherOptions,
           deliver:
-            "deliverWithProviderMessageSending" in plan.delivery
-              ? plan.delivery.deliverWithProviderMessageSending
-              : plan.delivery.deliver,
-          onError: plan.delivery.onError,
+            "deliverWithProviderMessageSending" in delivery
+              ? (payload, info) =>
+                  delivery.deliverWithProviderMessageSending(payload, {
+                    ...info,
+                    onPlatformSendDispatch: info.onPlatformSendDispatch ?? (async () => undefined),
+                    assertPlatformSendAuthorized:
+                      info.assertPlatformSendAuthorized ?? (() => undefined),
+                  })
+              : delivery.deliver,
+          onError: delivery.onError,
         },
         replyOptions: plan.replyOptions,
       });

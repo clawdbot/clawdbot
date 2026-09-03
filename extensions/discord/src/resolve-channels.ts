@@ -1,5 +1,6 @@
 // Discord plugin module implements resolve channels behavior.
 import { DISCORD_DIRECTORY_LOOKUP_TIMEOUT_MS, DiscordApiError, fetchDiscord } from "./api.js";
+import { isDiscordThreadChannelType } from "./channel-type.js";
 import { listGuilds } from "./guilds.js";
 import { normalizeDiscordSlug } from "./monitor/allow-list.js";
 import {
@@ -145,7 +146,7 @@ function preferActiveMatch(candidates: DiscordChannelSummary[]): DiscordChannelS
     return undefined;
   }
   const scored = candidates.map((channel) => {
-    const isThread = channel.type === 11 || channel.type === 12;
+    const isThread = isDiscordThreadChannelType(channel.type);
     const archived = Boolean(channel.archived);
     const score = (archived ? 0 : 2) + (isThread ? 0 : 1);
     return { channel, score };

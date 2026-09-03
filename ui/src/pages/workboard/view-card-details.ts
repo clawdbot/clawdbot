@@ -2,6 +2,8 @@ import { html, nothing } from "lit";
 import { ensureCustomElementDefined } from "../../app/lazy-custom-element.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   addWorkboardCardComment,
   getWorkboardDependencyState,
@@ -166,7 +168,14 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     [t("workboard.fieldLabels"), card.labels],
     [
       t("workboard.badgeAttempts", { count: String(attempts.length) }),
-      detailValues(attempts, "status", "model", "sessionKey", "error"),
+      attempts.map((entry) =>
+        joinDetailParts(
+          entry.status,
+          entry.model,
+          entry.sessionKey,
+          formatUiExternalText(entry.error),
+        ),
+      ),
     ],
     [
       t("workboard.badgeLinks", { count: String(links.length) }),
@@ -187,14 +196,14 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
     ],
     [
       t("workboard.detailWorkerLogs"),
-      workerLogs.map((entry) => `${entry.level}: ${entry.message}`),
+      workerLogs.map((entry) => `${entry.level}: ${formatUiExternalText(entry.message)}`),
     ],
     [
       t("workboard.detailWorkerProtocol"),
       workerProtocol
         ? [
             workerProtocol.state,
-            workerProtocol.detail ?? "",
+            formatUiExternalText(workerProtocol.detail),
             workerProtocol.updatedAt
               ? t("workboard.detailUpdatedValue", {
                   time: formatUpdatedTime(workerProtocol.updatedAt),
@@ -265,7 +274,7 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
             <div>
               <span class="workboard-card__priority">${formatPriorityLabel(card.priority)}</span>
               <h2 id=${workboardCardDetailTitleId}>
-                <span class="workboard-sr-only">${t("workboard.detailTitle")}: </span>${card.title}
+                <span class="sr-only">${t("workboard.detailTitle")}: </span>${card.title}
               </h2>
             </div>
             <openclaw-tooltip .content=${t("common.cancel")}>
@@ -318,7 +327,10 @@ export function renderCardDetailsPanel(props: WorkboardProps) {
           ${linkedSessionKey
             ? html`
                 <openclaw-workboard-card-dashboard
-                  .sessionKey=${linkedSessionKey}
+                  .session=${{
+                    sessionKey: linkedSessionKey,
+                    agentId: parseAgentSessionKey(linkedSessionKey)?.agentId ?? card.agentId,
+                  }}
                   .client=${props.client}
                   .connected=${props.connected}
                   .canMutate=${props.canWrite !== false}

@@ -612,7 +612,7 @@ describe("runtime context prompt submission", () => {
       role: "custom",
       customType: "openclaw.runtime-context",
       content: [
-        "OpenClaw runtime context for the immediately preceding user message.",
+        "OpenClaw runtime context for the active user request in this turn. Do not reply to or describe this context. Use it to continue answering the active user request now. Do not wait for another message.",
         "This context is runtime-generated, not user-authored. Keep internal details private.",
         "",
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>",

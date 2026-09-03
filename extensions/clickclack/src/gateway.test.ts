@@ -1,6 +1,7 @@
 // Clickclack tests cover gateway plugin behavior.
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
@@ -61,6 +62,7 @@ vi.mock("./resolve.js", () => ({
 }));
 
 import { startClickClackGatewayAccount } from "./gateway.js";
+import { ClickClackHttpError } from "./http-client.js";
 
 function createGatewayContext(
   abortSignal: AbortSignal,
@@ -178,6 +180,31 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("publishes ready only after the realtime socket opens", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    expect(ctx.setStatus).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+
+    socket.emit("open");
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      running: true,
+      connected: true,
+      lifecycle: "ready",
+      lastConnectedAt: expect.any(Number),
+      lastError: null,
+      terminalDisconnect: undefined,
+    });
+
+    abort.abort();
+    await run;
+  });
+
   it.each([
     { label: "unset", commandMenu: undefined },
     { label: "enabled", commandMenu: true },
@@ -222,23 +249,28 @@ describe("ClickClack gateway", () => {
 
   it.each([
     {
-      label: "missing command scope",
-      error: { status: 403 },
+      label: "workspace command permission rejection",
+      error: new ClickClackHttpError(
+        403,
+        "workspace role no longer permits command updates",
+        new Headers(),
+      ),
       level: "warn" as const,
-      message: "ClickClack command menu sync skipped: bot token lacks commands:write",
+      message:
+        "[default] ClickClack command menu sync skipped: ClickClack 403: workspace role no longer permits command updates; verify token/workspace command permissions or set commandMenu: false if menus are not needed",
     },
     {
       label: "older server",
       error: { status: 404 },
       level: "debug" as const,
       message:
-        "ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
+        "[default] ClickClack command menu sync skipped: server does not support /api/bots/self/commands",
     },
     {
       label: "network failure",
       error: new Error("network unavailable"),
       level: "warn" as const,
-      message: "ClickClack command menu sync failed: network unavailable",
+      message: "[default] ClickClack command menu sync failed: network unavailable",
     },
   ])("continues startup after $label", async ({ error, level, message }) => {
     mocks.client.setBotCommands.mockRejectedValueOnce(error);
@@ -254,6 +286,7 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith({
       accountId: "default",
       running: true,
+      lifecycle: "starting",
       configured: true,
       enabled: true,
       baseUrl: "https://clickclack.example",
@@ -395,6 +428,83 @@ describe("ClickClack gateway", () => {
     abort.abort();
     await run;
   });
+
+  it("does not dispatch queued websocket events after the account stops", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    const firstDispatch = createDeferred<void>();
+    mocks.handleClickClackInbound.mockImplementationOnce(() => firstDispatch.promise);
+    const abort = new AbortController();
+    const ctx = createGatewayContext(abort.signal);
+    const run = startClickClackGatewayAccount(ctx);
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+    emitMessageEvent(socket, 1);
+    emitMessageEvent(socket, 2);
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce());
+
+    abort.abort();
+    await run;
+    expect(ctx.setStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ lifecycle: "stopped" }),
+    );
+
+    firstDispatch.resolve();
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(mocks.client.message).toHaveBeenCalledOnce();
+    expect(mocks.handleClickClackInbound).toHaveBeenCalledOnce();
+  });
+
+  it.each(["authoritative message fetch", "sender access resolution"] as const)(
+    "does not begin an inbound turn when shutdown interrupts %s",
+    async (interruptedStep) => {
+      const socket = new FakeSocket();
+      mocks.client.websocket.mockReturnValue(socket);
+      const stepStarted = createDeferred<void>();
+      const releaseStep = createDeferred<void>();
+      const waitForShutdown = async () => {
+        stepStarted.resolve();
+        await releaseStep.promise;
+      };
+      if (interruptedStep === "authoritative message fetch") {
+        mocks.client.message.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { id: "msg-1", author_id: "human-1", channel_id: "chan-1" };
+        });
+      } else {
+        mocks.resolveClickClackInboundAccess.mockImplementationOnce(async () => {
+          await waitForShutdown();
+          return { shouldDispatch: true, commandAuthorized: true };
+        });
+      }
+      const abort = new AbortController();
+      const ctx = createGatewayContext(abort.signal);
+      const run = startClickClackGatewayAccount(ctx);
+
+      await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledOnce());
+      emitMessageEvent(socket, 1);
+      await stepStarted.promise;
+
+      abort.abort();
+      await run;
+      expect(ctx.setStatus).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lifecycle: "stopped" }),
+      );
+
+      releaseStep.resolve();
+      await new Promise((resolve) => {
+        setImmediate(resolve);
+      });
+
+      expect(mocks.handleClickClackInbound).not.toHaveBeenCalled();
+      if (interruptedStep === "authoritative message fetch") {
+        expect(mocks.resolveClickClackInboundAccess).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("replays a failed websocket event on reconnect without processing later queued events", async () => {
     const firstSocket = new FakeSocket();
@@ -541,6 +651,39 @@ describe("ClickClack gateway", () => {
     await run;
   });
 
+  it("passes other bot-authored messages to ClickClack access policy", async () => {
+    const socket = new FakeSocket();
+    mocks.client.websocket.mockReturnValue(socket);
+    mocks.client.message.mockResolvedValueOnce({
+      id: "msg-1",
+      workspace_id: "workspace-1",
+      channel_id: "chan-1",
+      author_id: "other-bot",
+      thread_root_id: "msg-1",
+      body: "coordinate",
+      body_format: "markdown",
+      created_at: "2026-01-01T00:00:00.000Z",
+      author: {
+        id: "other-bot",
+        kind: "bot",
+        display_name: "Other bot",
+        handle: "other-bot",
+        avatar_url: "",
+        created_at: "2026-01-01T00:00:00.000Z",
+      },
+    });
+    const abort = new AbortController();
+    const run = startClickClackGatewayAccount(createGatewayContext(abort.signal));
+
+    await waitForGatewayState(() => expect(mocks.client.websocket).toHaveBeenCalledTimes(1));
+    emitMessageEvent(socket, 1, { author_id: "other-bot" });
+
+    await waitForGatewayState(() => expect(mocks.handleClickClackInbound).toHaveBeenCalledTimes(1));
+    expect(mocks.resolveClickClackInboundAccess).toHaveBeenCalledTimes(1);
+    abort.abort();
+    await run;
+  });
+
   it("carries validated event correlation through the authoritative fetch and inbound turn", async () => {
     const socket = new FakeSocket();
     mocks.client.websocket.mockReturnValue(socket);
@@ -603,6 +746,12 @@ describe("ClickClack gateway", () => {
     expect(ctx.log?.warn).toHaveBeenCalledWith(
       "[default] ClickClack websocket error; reconnecting: gateway dropped",
     );
+    expect(ctx.setStatus).toHaveBeenCalledWith({
+      accountId: "default",
+      connected: false,
+      lifecycle: "recovering",
+      lastError: "gateway dropped",
+    });
     abort.abort();
     await run;
   });
@@ -623,6 +772,11 @@ describe("ClickClack gateway", () => {
       firstSocket.emit("close");
       await vi.advanceTimersByTimeAsync(0);
       expect(vi.getTimerCount()).toBe(1);
+      expect(ctx.setStatus).toHaveBeenCalledWith({
+        accountId: "default",
+        connected: false,
+        lifecycle: "recovering",
+      });
 
       abort.abort();
       await run;
@@ -632,6 +786,8 @@ describe("ClickClack gateway", () => {
       expect(ctx.setStatus).toHaveBeenLastCalledWith({
         accountId: "default",
         running: false,
+        connected: false,
+        lifecycle: "stopped",
       });
     } finally {
       vi.useRealTimers();
@@ -667,6 +823,7 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenCalledWith({
       accountId: "default",
       running: true,
+      lifecycle: "starting",
       configured: true,
       enabled: true,
       baseUrl: "https://clickclack.example",
@@ -674,6 +831,8 @@ describe("ClickClack gateway", () => {
     expect(ctx.setStatus).toHaveBeenLastCalledWith({
       accountId: "default",
       running: false,
+      connected: false,
+      lifecycle: "stopped",
     });
   });
 

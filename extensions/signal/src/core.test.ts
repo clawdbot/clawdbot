@@ -218,6 +218,26 @@ describe("probeSignal", () => {
     expect(res.status).toBe(200);
   });
 
+  it("returns ok=false when the version RPC fails after a successful check", async () => {
+    vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
+      ok: true,
+      status: 204,
+      error: null,
+    });
+    vi.spyOn(clientModule, "signalRpcRequest").mockRejectedValueOnce(
+      new Error("Signal RPC returned malformed JSON"),
+    );
+
+    const res = await probeSignal("http://127.0.0.1:8080", 1000);
+
+    expect(res).toMatchObject({
+      ok: false,
+      status: 204,
+      error: "Signal RPC returned malformed JSON",
+      version: null,
+    });
+  });
+
   it("preserves every version reported by a Signal REST container", async () => {
     vi.spyOn(clientModule, "signalCheck").mockResolvedValueOnce({
       ok: true,
@@ -1240,6 +1260,37 @@ describe("signal outbound", () => {
           });
           expect(result?.receipt.platformMessageIds).toEqual(["signal-media-1"]);
         },
+        payload: () => {
+          expect(signalPlugin.outbound?.renderPresentation).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.sendFormattedText).toBeTypeOf("function");
+        },
+        replyTo: async () => {
+          await registerSignalReplyContext({
+            to: "signal:+15555550123",
+            replyToId: "1700000000001",
+            author: "+15555550123",
+            body: "original message",
+          });
+          await signalPlugin.message?.send?.text?.({
+            cfg: {} as OpenClawConfig,
+            to: "signal:+15555550123",
+            text: "reply",
+            replyToId: "1700000000001",
+            deps,
+          } as Parameters<NonNullable<typeof signalPlugin.message.send.text>>[0] & {
+            deps: typeof deps;
+          });
+          expect(send).toHaveBeenLastCalledWith(
+            "+15555550123",
+            "reply",
+            expect.objectContaining({ replyToId: "1700000000001" }),
+          );
+        },
+        messageSendingHooks: () => {
+          expect(signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.renderPresentation).toBeTypeOf("function");
+          expect(signalPlugin.outbound?.afterDeliverPayload).toBeTypeOf("function");
+        },
       },
     });
 
@@ -1247,12 +1298,12 @@ describe("signal outbound", () => {
       { capability: "text", status: "verified" },
       { capability: "media", status: "verified" },
       { capability: "poll", status: "not_declared" },
-      { capability: "payload", status: "not_declared" },
+      { capability: "payload", status: "verified" },
       { capability: "silent", status: "not_declared" },
-      { capability: "replyTo", status: "not_declared" },
+      { capability: "replyTo", status: "verified" },
       { capability: "thread", status: "not_declared" },
       { capability: "nativeQuote", status: "not_declared" },
-      { capability: "messageSendingHooks", status: "not_declared" },
+      { capability: "messageSendingHooks", status: "verified" },
       { capability: "batch", status: "not_declared" },
       { capability: "reconcileUnknownSend", status: "not_declared" },
       { capability: "afterSendSuccess", status: "not_declared" },

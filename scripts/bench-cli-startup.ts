@@ -5,7 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
-import { parseStrictIntegerOption } from "./lib/dev-tooling-safety.ts";
+import {
+  inspectManagedProcessGroup,
+  terminateManagedChild,
+  waitForManagedProcessGroupExit,
+} from "./lib/managed-child-process.mts";
 
 type CommandCase = {
   id: string;
@@ -117,7 +121,6 @@ const DEFAULT_WARMUP = 1;
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_TIMEOUT_KILL_GRACE_MS = 1_000;
 const TIMEOUT_KILL_GRACE_MS = resolveTimeoutKillGraceMs(process.env);
-const PROCESS_GROUP_EXIT_POLL_MS = 25;
 const DEFAULT_ENTRY = "openclaw.mjs";
 const MAX_RSS_MARKER = "__OPENCLAW_MAX_RSS_KB__=";
 
@@ -454,17 +457,18 @@ const COMMAND_CASES: readonly CommandCase[] = [
     expectedNonzeroOutputIncludes: ['"ok"', '"gateway_transport_error"'],
   },
   {
-    id: "gatewayHealthJsonConnected",
-    name: "gateway health --json (connected)",
+    id: "gatewayHealthJsonWarmState",
+    name: "gateway health --json (warm state)",
     args: ["gateway", "health", "--json"],
     presets: [],
     stateScope: "case",
   },
   {
-    id: "gatewayHealthJsonFirstDevice",
-    name: "gateway health --json (first device)",
+    id: "gatewayHealthJsonFreshState",
+    name: "gateway health --json (fresh state)",
     args: ["gateway", "health", "--json"],
     presets: [],
+    stateScope: "sample",
   },
   {
     id: "configGetGatewayPort",
@@ -529,11 +533,33 @@ function validateCliArgs(argv: readonly string[] = process.argv.slice(2)): void 
 }
 
 function parsePositiveInt(raw: string | undefined, fallback: number, label = "value"): number {
-  return parseStrictIntegerOption({ fallback, label, min: 1, raw });
+  return parseIntegerOption(raw, fallback, label, 1);
 }
 
 function parseNonNegativeInt(raw: string | undefined, fallback: number, label = "value"): number {
-  return parseStrictIntegerOption({ fallback, label, min: 0, raw });
+  return parseIntegerOption(raw, fallback, label, 0);
+}
+
+// This runner is checked out from trusted main beside frozen candidates, whose
+// root dependencies need not include current workspace packages.
+function parseIntegerOption(
+  raw: string | undefined,
+  fallback: number,
+  label: string,
+  min: number,
+): number {
+  const value = raw?.trim();
+  if (!value) {
+    return fallback;
+  }
+  if (!/^\d+$/u.test(value)) {
+    throw new Error(`${label} must be an integer >= ${min}; got ${JSON.stringify(raw)}`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < min) {
+    throw new Error(`${label} must be an integer >= ${min}; got ${JSON.stringify(raw)}`);
+  }
+  return parsed;
 }
 
 function parseGatewayPortEnv(raw: string | undefined): number {
@@ -668,11 +694,13 @@ function collectExitSummary(samples: Sample[]): string {
 }
 
 function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> | null {
+  const usesSharedToken =
+    commandCase.id === "gatewayHealthJsonWarmState" ||
+    commandCase.id === "gatewayHealthJsonFreshState";
   if (
     commandCase.id !== "configGetGatewayPort" &&
     commandCase.id !== "gatewayHealthJson" &&
-    commandCase.id !== "gatewayHealthJsonConnected" &&
-    commandCase.id !== "gatewayHealthJsonFirstDevice" &&
+    !usesSharedToken &&
     commandCase.id !== "health" &&
     commandCase.id !== "healthJson"
   ) {
@@ -681,7 +709,7 @@ function buildConfigFixture(commandCase: CommandCase): Record<string, unknown> |
   const port = parseGatewayPortEnv(process.env.OPENCLAW_GATEWAY_PORT);
   return {
     gateway: {
-      auth: { mode: "none" },
+      auth: { mode: usesSharedToken ? "token" : "none" },
       bind: "loopback",
       mode: "local",
       port,
@@ -775,10 +803,9 @@ async function runSample(params: {
 
   try {
     return await new Promise<Sample>((resolve) => {
-      const useProcessGroup = process.platform !== "win32";
       const proc = spawn(process.execPath, nodeArgs, {
         cwd: process.cwd(),
-        detached: useProcessGroup,
+        detached: process.platform !== "win32",
         env: {
           ...process.env,
           HOME: runRoot,
@@ -822,10 +849,10 @@ async function runSample(params: {
 
       const timeout = setTimeout(() => {
         timedOut = true;
-        signalSampleProcess(proc, "SIGTERM", useProcessGroup);
+        signalSampleProcess(proc, "SIGTERM");
         forceKillAt = Date.now() + TIMEOUT_KILL_GRACE_MS;
         forceKillTimer = setTimeout(() => {
-          signalSampleProcess(proc, "SIGKILL", useProcessGroup);
+          signalSampleProcess(proc, "SIGKILL");
         }, TIMEOUT_KILL_GRACE_MS).unref?.();
       }, params.timeoutMs);
       timeout.unref?.();
@@ -865,12 +892,11 @@ async function runSample(params: {
                   stderrTail: tailLines(stderr, 20),
                 }),
           });
-        if (timedOut && isSampleProcessGroupAlive(proc, useProcessGroup)) {
+        if (timedOut && isSampleProcessGroupAlive(proc)) {
           void finishAfterTimeoutCleanup({
             complete,
             forceKillAt,
             proc,
-            useProcessGroup,
           });
           return;
         }
@@ -888,74 +914,48 @@ async function finishAfterTimeoutCleanup(params: {
   complete: () => void;
   forceKillAt: number | null;
   proc: ReturnType<typeof spawn>;
-  useProcessGroup: boolean;
 }): Promise<void> {
   const graceRemainingMs =
     params.forceKillAt === null
       ? TIMEOUT_KILL_GRACE_MS
       : Math.max(0, params.forceKillAt - Date.now());
   if (graceRemainingMs > 0) {
-    await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, graceRemainingMs);
+    await waitForSampleProcessGroupExit(params.proc, graceRemainingMs);
   }
-  if (isSampleProcessGroupAlive(params.proc, params.useProcessGroup)) {
-    signalSampleProcess(params.proc, "SIGKILL", params.useProcessGroup);
+  if (isSampleProcessGroupAlive(params.proc)) {
+    signalSampleProcess(params.proc, "SIGKILL");
   }
-  await waitForSampleProcessGroupExit(params.proc, params.useProcessGroup, TIMEOUT_KILL_GRACE_MS);
+  await waitForSampleProcessGroupExit(params.proc, TIMEOUT_KILL_GRACE_MS);
   params.complete();
 }
 
-function signalSampleProcess(
-  proc: ReturnType<typeof spawn>,
-  signal: NodeJS.Signals,
-  useProcessGroup: boolean,
-): void {
+function signalSampleProcess(proc: ReturnType<typeof spawn>, signal: NodeJS.Signals): void {
   if (!proc.pid) {
     return;
   }
-  try {
-    if (useProcessGroup) {
-      process.kill(-proc.pid, signal);
-    } else {
-      proc.kill(signal);
-    }
-  } catch (error) {
+  const handleSignalError = (error: unknown) => {
     const code = (error as NodeJS.ErrnoException | undefined)?.code;
     if (code !== "ESRCH" && code !== "EPERM") {
       throw error;
     }
-  }
+  };
+  terminateManagedChild(proc, signal, {
+    onChildSignalError: handleSignalError,
+    onProcessGroupSignalError: handleSignalError,
+    processGroupFallback: "never",
+    useWindowsTaskkill: false,
+  });
 }
 
-function isSampleProcessGroupAlive(
-  proc: ReturnType<typeof spawn>,
-  useProcessGroup: boolean,
-): boolean {
-  if (!useProcessGroup || !proc.pid) {
-    return false;
-  }
-  try {
-    process.kill(-proc.pid, 0);
-    return true;
-  } catch (error) {
-    return (error as NodeJS.ErrnoException | undefined)?.code === "EPERM";
-  }
+function isSampleProcessGroupAlive(proc: ReturnType<typeof spawn>): boolean {
+  return inspectManagedProcessGroup(proc, { errorPolicy: "alive-on-eperm" }) === "live";
 }
 
-async function waitForSampleProcessGroupExit(
+function waitForSampleProcessGroupExit(
   proc: ReturnType<typeof spawn>,
-  useProcessGroup: boolean,
   timeoutMs: number,
 ): Promise<boolean> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isSampleProcessGroupAlive(proc, useProcessGroup)) {
-      return true;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
-    });
-  }
-  return !isSampleProcessGroupAlive(proc, useProcessGroup);
+  return waitForManagedProcessGroupExit(proc, timeoutMs, { errorPolicy: "alive-on-eperm" });
 }
 
 async function runCase(params: {

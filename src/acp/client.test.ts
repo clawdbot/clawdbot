@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RequestPermissionRequest } from "@agentclientprotocol/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
   listKnownProviderAuthEnvVarNames: () => [
@@ -80,12 +80,7 @@ function makePermissionRequest(
   };
 }
 
-const tempDirs = createTrackedTempDirs();
-const createTempDir = () => tempDirs.make("openclaw-acp-client-test-");
-
-afterEach(async () => {
-  await tempDirs.cleanup();
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("resolveAcpClientSpawnEnv", () => {
   it("sets OPENCLAW_SHELL marker and preserves existing env values", () => {
@@ -291,7 +286,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("unwraps .cmd shim entrypoint on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const scriptPath = path.join(dir, "openclaw", "dist", "entry.js");
     const shimPath = path.join(dir, "openclaw.cmd");
     await mkdir(path.dirname(scriptPath), { recursive: true });
@@ -313,7 +308,7 @@ describe("resolveAcpClientSpawnInvocation", () => {
   });
 
   it("fails closed for unresolved wrappers on windows", async () => {
-    const dir = await createTempDir();
+    const dir = tempDirs.make("openclaw-acp-client-test-");
     const shimPath = path.join(dir, "openclaw.cmd");
     await writeFile(shimPath, "@ECHO off\r\necho wrapper\r\n", "utf8");
 
@@ -664,6 +659,27 @@ describe("resolvePermissionRequest", () => {
       cwd: "/tmp/openclaw-acp-cwd",
     });
   });
+
+  it.each(["FILE:///tmp/outside/marker.txt", "file:/tmp/outside/marker.txt"])(
+    "prompts for read when non-canonical file URL escapes cwd: %s",
+    async (fileUrl) => {
+      const prompt = vi.fn(async () => false);
+      const res = await resolvePermissionRequest(
+        makePermissionRequest({
+          toolCall: {
+            toolCallId: "tool-read-file-url-escape-cwd",
+            title: "read: ignored-by-raw-input",
+            status: "pending",
+            rawInput: { path: fileUrl },
+          },
+        }),
+        { prompt, log: () => {}, cwd: "/tmp/openclaw-acp-cwd" },
+      );
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledWith("read", "read: ignored-by-raw-input");
+      expect(res).toEqual({ outcome: { outcome: "selected", optionId: "reject" } });
+    },
+  );
 
   it("prompts for read when rawInput path escapes cwd via traversal", async () => {
     const prompt = vi.fn(async () => false);

@@ -6,6 +6,7 @@ import type {
   WorkboardTemplateId,
 } from "@openclaw/workboard-contract";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { TaskSummary } from "../tasks/task-summary.ts";
 
 export * from "@openclaw/workboard-contract";
 export type { WorkboardBoardSummary } from "@openclaw/workboard-contract";
@@ -14,6 +15,7 @@ type WorkboardLifecycleState =
   | "unlinked"
   | "missing"
   | "idle"
+  | "queued"
   | "running"
   | "stale"
   | "succeeded"
@@ -26,30 +28,7 @@ export type WorkboardLifecycle = {
   sourceUpdatedAt?: number;
 };
 
-export type WorkboardTaskStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "timed_out";
-
-export type WorkboardTaskSummary = {
-  id: string;
-  taskId: string;
-  status: WorkboardTaskStatus;
-  title?: string;
-  agentId?: string;
-  sessionKey?: string;
-  childSessionKey?: string;
-  ownerKey?: string;
-  runId?: string;
-  sourceId?: string;
-  updatedAt?: number | string;
-  progressSummary?: string;
-  terminalSummary?: string;
-  error?: string;
-};
+export type WorkboardTaskSummary = TaskSummary;
 
 type WorkboardDependencyParent = {
   id: string;
@@ -118,7 +97,9 @@ export type WorkboardUiState = {
   activeHealthHighlight: WorkboardHealthKey | null;
   showArchived: boolean;
   layout: "comfortable" | "compact";
-  hideEmptyColumns: boolean;
+  emptyColumnMode: "show" | "collapse" | "hide";
+  collapsedStatuses: Set<WorkboardStatus>;
+  expandedEmptyStatuses: Set<WorkboardStatus>;
   lastRefreshAt: number | null;
   lastRefreshStartedAt: number | null;
   lastRefreshError: string | null;
@@ -134,6 +115,7 @@ export type WorkboardUiState = {
   draftOpen: boolean;
   draftSaving: boolean;
   editingCardId: string | null;
+  editingCardBase: WorkboardCard | null;
   draftTitle: string;
   draftNotes: string;
   draftStatus: WorkboardStatus;
@@ -147,7 +129,6 @@ export type WorkboardUiState = {
   detailCommentBody: string;
   busyCardIds: Set<string>;
   draggedCardId: string | null;
-  syncingCardIds: Set<string>;
   capturingSessionKeys: Set<string>;
 };
 

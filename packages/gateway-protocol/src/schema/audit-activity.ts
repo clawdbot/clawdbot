@@ -5,26 +5,68 @@ import { NonEmptyString } from "./primitives.js";
 
 const AuditActivitySchemaVersionV1Schema = Type.Integer({ minimum: 1, maximum: 1 });
 
-const AuditActivityStatusV1Schema: TSchema = Type.Union([
-  Type.Literal("started"),
-  Type.Literal("succeeded"),
-  Type.Literal("failed"),
-  Type.Literal("cancelled"),
-  Type.Literal("timed_out"),
-  Type.Literal("blocked"),
-  Type.Literal("unknown"),
-]);
+export const AUDIT_ACTIVITY_STATUSES = [
+  "started",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "blocked",
+  "unknown",
+] as const;
+export const AUDIT_ACTIVITY_MESSAGE_KIND = "message" as const;
+export const AUDIT_ACTIVITY_KINDS = [
+  "agent_run",
+  "tool_action",
+  AUDIT_ACTIVITY_MESSAGE_KIND,
+] as const;
+export const AUDIT_ACTIVITY_DIRECTIONS = ["inbound", "outbound"] as const;
 
-const AuditActivityKindV1Schema: TSchema = Type.Union([
-  Type.Literal("agent_run"),
-  Type.Literal("tool_action"),
-  Type.Literal("message"),
-]);
+type AuditActivityKind = (typeof AUDIT_ACTIVITY_KINDS)[number];
+const AUDIT_ACTIVITY_NON_MESSAGE_KINDS = ["agent_run", "tool_action"] as const;
 
-const AuditActivityDirectionV1Schema: TSchema = Type.Union([
-  Type.Literal("inbound"),
-  Type.Literal("outbound"),
-]);
+export function findAuditActivityFilterConflict(filters: {
+  kind?: AuditActivityKind;
+  sessionKey?: string;
+  direction?: string;
+  channel?: string;
+}) {
+  const messageField =
+    filters.direction !== undefined
+      ? "direction"
+      : filters.channel !== undefined
+        ? "channel"
+        : undefined;
+  const hasSessionFilter = filters.sessionKey !== undefined;
+  if (filters.kind === AUDIT_ACTIVITY_MESSAGE_KIND && hasSessionFilter) {
+    return {
+      type: "kind",
+      field: "sessionKey",
+      supportedKinds: AUDIT_ACTIVITY_NON_MESSAGE_KINDS,
+    } as const;
+  }
+  if (filters.kind !== undefined && filters.kind !== AUDIT_ACTIVITY_MESSAGE_KIND && messageField) {
+    return {
+      type: "kind",
+      field: messageField,
+      supportedKinds: [AUDIT_ACTIVITY_MESSAGE_KIND],
+    } as const;
+  }
+  if (filters.kind === undefined && hasSessionFilter && messageField) {
+    return { type: "filter", field: messageField, conflictingField: "sessionKey" } as const;
+  }
+  return undefined;
+}
+
+const AuditActivityStatusV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_STATUSES.map((value) => Type.Literal(value)),
+);
+const AuditActivityKindV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_KINDS.map((value) => Type.Literal(value)),
+);
+const AuditActivityDirectionV1Schema: TSchema = Type.Union(
+  AUDIT_ACTIVITY_DIRECTIONS.map((value) => Type.Literal(value)),
+);
 
 const AuditActivityConversationKindV1Schema = Type.Union([
   Type.Literal("direct"),
@@ -259,6 +301,7 @@ const inboundCompletedReasonSchema = Type.Union([
   Type.Literal("before_dispatch_handled"),
   Type.Literal("acp_dispatch_completed"),
   Type.Literal("acp_dispatch_empty"),
+  Type.Literal("active_run_injected"),
 ]);
 
 const inboundSkippedReasonSchema = Type.Union([
@@ -524,7 +567,8 @@ type AuditActivityInboundMessageV1Terminal =
         | "plugin_bound_declined"
         | "before_dispatch_handled"
         | "acp_dispatch_completed"
-        | "acp_dispatch_empty";
+        | "acp_dispatch_empty"
+        | "active_run_injected";
     }
   | {
       status: "blocked";
@@ -605,9 +649,9 @@ export type AuditActivityListParams = {
   agentId?: string;
   sessionKey?: string;
   runId?: string;
-  kind?: "agent_run" | "tool_action" | "message";
-  status?: "started" | "succeeded" | "failed" | "cancelled" | "timed_out" | "blocked" | "unknown";
-  direction?: "inbound" | "outbound";
+  kind?: (typeof AUDIT_ACTIVITY_KINDS)[number];
+  status?: (typeof AUDIT_ACTIVITY_STATUSES)[number];
+  direction?: (typeof AUDIT_ACTIVITY_DIRECTIONS)[number];
   channel?: string;
   after?: number;
   before?: number;

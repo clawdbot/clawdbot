@@ -1,14 +1,14 @@
 /**
  * Meta model provider builder.
  */
+import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { buildMetaCatalogModels, META_BASE_URL } from "./models.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 /** Builds the Meta OpenAI-compatible model provider config. */
 export function buildMetaProvider(): ModelProviderConfig {
-  return {
-    baseUrl: META_BASE_URL,
-    api: "openai-responses",
-    models: buildMetaCatalogModels(),
-  };
+  return buildManifestModelProviderConfig({
+    providerId: "meta",
+    catalog: manifest.modelCatalog.providers.meta,
+  });
 }

@@ -69,3 +69,10 @@ export type ProviderNormalizeModelCatalogIdContext = {
   provider: string;
   modelId: string;
 };
+
+/** Compares reported response identity without rewriting authored route identity. */
+export type ProviderResponseModelEquivalenceContext = {
+  provider: string;
+  requestedModelId: string;
+  responseModelId: string;
+};

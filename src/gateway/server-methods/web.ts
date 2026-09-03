@@ -9,7 +9,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
-import { resolveMissingOfficialExternalChannelPluginRepairHint } from "../../plugins/official-external-plugin-repair-hints.js";
+import { resolveMissingOfficialExternalChannelPluginRepairHints } from "../../plugins/official-external-plugin-repair-hints.js";
 import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -41,14 +41,10 @@ function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): strin
   if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
     return null;
   }
-  const hints = Object.keys(channels)
-    .map((channelId) =>
-      resolveMissingOfficialExternalChannelPluginRepairHint({
-        config: cfg,
-        channelId,
-      }),
-    )
-    .filter((hint): hint is NonNullable<typeof hint> => Boolean(hint));
+  const hints = resolveMissingOfficialExternalChannelPluginRepairHints({
+    config: cfg,
+    channelIds: Object.keys(channels),
+  });
   if (hints.length === 0) {
     return null;
   }

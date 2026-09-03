@@ -1,3 +1,4 @@
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 // Native Apple Messages poll bindings for approval prompts.
 //
 // Native polls replace tapback controls when the imsg bridge supports them.
@@ -9,17 +10,19 @@ import {
 } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import type { ExecApprovalReplyDecision } from "openclaw/plugin-sdk/approval-reply-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { isApprovalNotFoundError } from "openclaw/plugin-sdk/error-runtime";
+import { createLazyRuntimeSurface } from "openclaw/plugin-sdk/lazy-runtime";
 import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import { createPluginStateErrorReporter } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getIMessageApprovalApprovers, imessageApprovalAuth } from "./approval-auth.js";
-import type { IMessageApprovalGatewayRuntime } from "./approval-resolver.js";
+import type { IMessageApprovalGatewayRuntime } from "./approval-gateway-types.js";
 import {
   buildIMessageApprovalConversationKeyForInbound,
   enumerateApprovalTargetKeys,
   normalizeConversationKey,
-  normalizeIMessageGuid,
   type IMessageApprovalConversationKey,
 } from "./approval-target-keys.js";
+import { normalizeIMessageGuid } from "./message-guid.js";
 import type { IMessagePayload, IMessagePoll } from "./monitor/types.js";
 import { getOptionalIMessageRuntime } from "./runtime.js";
 import { normalizeIMessageHandle } from "./targets.js";
@@ -45,23 +48,23 @@ const APPROVAL_DECISIONS = new Set<ExecApprovalReplyDecision>([
 /** JSON-safe: option pairs stay an array so the persistent store round-trips. */
 type IMessageApprovalPollTarget = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
 };
 
 type IMessageApprovalPollTombstone = { approvalId: string };
 
-const loadApprovalResolver = createLazyRuntimeModule(() => import("./approval-resolver.js"));
+const loadResolveApprovalOverGateway = createLazyRuntimeSurface(
+  () => import("openclaw/plugin-sdk/approval-gateway-runtime"),
+  (runtime) => runtime.resolveApprovalOverGateway,
+);
 
-function reportPersistentError(error: unknown): void {
-  try {
-    getOptionalIMessageRuntime()
-      ?.logging.getChildLogger({ plugin: "imessage", feature: "approval-poll-state" })
-      .warn("iMessage persistent approval poll state failed", { error: String(error) });
-  } catch {
-    // Best effort only: persistent state must never break poll approvals.
-  }
-}
+const reportPersistentError = createPluginStateErrorReporter(
+  getOptionalIMessageRuntime,
+  "imessage",
+  "approval-poll-state",
+  "iMessage persistent approval poll state failed",
+);
 
 function readPersistedTarget(value: unknown): IMessageApprovalPollTarget | null {
   const target = value as Partial<IMessageApprovalPollTarget> | undefined;
@@ -159,7 +162,7 @@ function registerIMessageApprovalPollTarget(params: {
   conversation: IMessageApprovalConversationKey;
   pollGuid?: string;
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   optionDecisions: ReadonlyArray<readonly [string, ExecApprovalReplyDecision]>;
   expiresAtMs: number;
 }): boolean {
@@ -533,13 +536,15 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
     return true;
   }
 
-  const { isApprovalNotFoundError, resolveIMessageApproval } = await loadApprovalResolver();
+  const resolveApprovalOverGateway = await loadResolveApprovalOverGateway();
   try {
-    const result = await resolveIMessageApproval({
+    const result = await resolveApprovalOverGateway({
       cfg: params.cfg,
       approvalId: target.approvalId,
       approvalKind: target.approvalKind,
       decision,
+      channel: "imessage",
+      accountId: params.accountId,
       senderId: event.actorHandle,
       gatewayUrl: params.gatewayUrl,
       ...(params.gatewayRuntime ? { gatewayRuntime: params.gatewayRuntime } : {}),
@@ -581,7 +586,7 @@ export async function maybeResolveIMessageApprovalPollVote(params: {
 function clearIMessageApprovalPollTargetsForTest(): void {
   pollTargets.clearForTest();
   pollTombstones.clearForTest();
-  loadApprovalResolver.clear();
+  loadResolveApprovalOverGateway.clear();
 }
 
 export const iMessageApprovalPollTargets = {

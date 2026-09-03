@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
@@ -27,9 +28,7 @@ const validPngImage = Buffer.from(
   "hex",
 );
 
-vi.mock("./client.js", () => ({
-  createFeishuClient: createFeishuClientMock,
-}));
+vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
 
 vi.mock("./accounts.js", () => ({
   resolveFeishuAccount: resolveFeishuAccountMock,
@@ -42,11 +41,7 @@ vi.mock("./targets.js", () => ({
 }));
 
 vi.mock("./runtime.js", () => ({
-  getFeishuRuntime: () => ({
-    media: {
-      loadWebMedia: loadWebMediaMock,
-    },
-  }),
+  getFeishuRuntime: () => ({ media: { loadWebMedia: loadWebMediaMock } }),
 }));
 
 vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
@@ -119,21 +114,21 @@ async function withIsolatedHome<T>(run: () => Promise<T>): Promise<T> {
   });
 }
 
+beforeAll(async () => {
+  ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
+    await import("./media.js"));
+});
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./accounts.js");
+  vi.doUnmock("./targets.js");
+  vi.doUnmock("./runtime.js");
+  vi.doUnmock("openclaw/plugin-sdk/media-runtime");
+  vi.resetModules();
+});
+
 describe("sendMediaFeishu msg_type routing", () => {
-  beforeAll(async () => {
-    ({ saveMessageResourceFeishu, sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } =
-      await import("./media.js"));
-  });
-
-  afterAll(() => {
-    vi.doUnmock("./client.js");
-    vi.doUnmock("./accounts.js");
-    vi.doUnmock("./targets.js");
-    vi.doUnmock("./runtime.js");
-    vi.doUnmock("openclaw/plugin-sdk/media-runtime");
-    vi.resetModules();
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     mockResolvedFeishuAccount();
@@ -143,40 +138,17 @@ describe("sendMediaFeishu msg_type routing", () => {
 
     createFeishuClientMock.mockReturnValue({
       im: {
-        file: {
-          create: fileCreateMock,
-        },
-        image: {
-          create: imageCreateMock,
-        },
-        message: {
-          create: messageCreateMock,
-          reply: messageReplyMock,
-        },
-        messageResource: {
-          get: messageResourceGetMock,
-        },
+        file: { create: fileCreateMock },
+        image: { create: imageCreateMock },
+        message: { create: messageCreateMock, reply: messageReplyMock },
+        messageResource: { get: messageResourceGetMock },
       },
     });
 
-    fileCreateMock.mockResolvedValue({
-      code: 0,
-      data: { file_key: "file_key_1" },
-    });
-    imageCreateMock.mockResolvedValue({
-      code: 0,
-      data: { image_key: "image_key_1" },
-    });
-
-    messageCreateMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "msg_1" },
-    });
-
-    messageReplyMock.mockResolvedValue({
-      code: 0,
-      data: { message_id: "reply_1" },
-    });
+    fileCreateMock.mockResolvedValue({ code: 0, data: { file_key: "file_key_1" } });
+    imageCreateMock.mockResolvedValue({ code: 0, data: { image_key: "image_key_1" } });
+    messageCreateMock.mockResolvedValue({ code: 0, data: { message_id: "msg_1" } });
+    messageReplyMock.mockResolvedValue({ code: 0, data: { message_id: "reply_1" } });
 
     loadWebMediaMock.mockResolvedValue({
       buffer: Buffer.from("remote-audio"),
@@ -419,32 +391,35 @@ describe("sendMediaFeishu msg_type routing", () => {
 
   it("falls back to file when voice-intent audio cannot be transcoded", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("remote-mp3"),
-      fileName: "reply.mp3",
-      kind: "audio",
-      contentType: "audio/mpeg",
-    });
+    try {
+      runFfmpegMock.mockRejectedValueOnce(new Error("ffmpeg missing"));
+      loadWebMediaMock.mockResolvedValueOnce({
+        buffer: Buffer.from("remote-mp3"),
+        fileName: "reply.mp3",
+        kind: "audio",
+        contentType: "audio/mpeg",
+      });
 
-    const result = await sendMediaFeishu({
-      cfg: emptyConfig,
-      to: "user:ou_target",
-      mediaUrl: "https://example.com/reply.mp3",
-      audioAsVoice: true,
-    });
+      const result = await sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaUrl: "https://example.com/reply.mp3",
+        audioAsVoice: true,
+      });
 
-    const fileData = callData<{ file?: Buffer; file_name?: string; file_type?: string }>(
-      fileCreateMock,
-    );
-    expect(fileData.file_type).toBe("stream");
-    expect(fileData.file_name).toBe("reply.mp3");
-    expect(fileData.file).toEqual(Buffer.from("remote-mp3"));
-    expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
-    expect(result.voiceIntentDegradedToFile).toBe(true);
-    expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("audioAsVoice transcode failed");
-    expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
-    warnSpy.mockRestore();
+      const fileData = callData<{ file?: Buffer; file_name?: string; file_type?: string }>(
+        fileCreateMock,
+      );
+      expect(fileData.file_type).toBe("stream");
+      expect(fileData.file_name).toBe("reply.mp3");
+      expect(fileData.file).toEqual(Buffer.from("remote-mp3"));
+      expect(callData<{ msg_type?: string }>(messageCreateMock).msg_type).toBe("file");
+      expect(result.voiceIntentDegradedToFile).toBe(true);
+      expect(mockCallArg<string>(warnSpy, 0, 0)).toContain("audioAsVoice transcode failed");
+      expect(mockCallArg<unknown>(warnSpy, 0, 1)).toBeInstanceOf(Error);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("configures the media client timeout for image uploads", async () => {
@@ -650,14 +625,56 @@ describe("sendMediaFeishu msg_type routing", () => {
     });
 
     expect(mockCallArg(loadWebMediaMock, 0, 0)).toBe("/allowed/workspace/file.pdf");
-    const options = mockCallArg<{
-      localRoots?: string[];
-      maxBytes?: number;
-      optimizeImages?: boolean;
-    }>(loadWebMediaMock, 0, 1);
-    expect(typeof options.maxBytes).toBe("number");
-    expect(options.optimizeImages).toBe(false);
+    const options = mockCallArg<{ localRoots: readonly string[] }>(loadWebMediaMock, 0, 1);
+    expect(options).toEqual({
+      maxBytes: expect.any(Number),
+      optimizeImages: false,
+      localRoots: roots,
+    });
     expect(options.localRoots).toBe(roots);
+  });
+
+  it("keeps approved workspace access authoritative over legacy access", async () => {
+    const readFile = vi.fn(async () => Buffer.from("approved image"));
+    const legacyReadFile = vi.fn(async () => Buffer.from("legacy image"));
+    const localRoots = ["/approved/workspace"];
+    const mediaAccess = { localRoots, workspaceDir: "/approved/workspace", readFile };
+    await sendMediaFeishu({
+      cfg: emptyConfig,
+      to: "user:ou_target",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: ["/legacy/workspace"],
+      mediaReadFile: legacyReadFile,
+    });
+    expect(mockCallArg(loadWebMediaMock, 0, 0)).toBe("chart.png");
+    const options = mockCallArg<{ localRoots: readonly string[] }>(loadWebMediaMock, 0, 1);
+    expect(options).toEqual({
+      maxBytes: expect.any(Number),
+      localRoots,
+      readFile,
+      hostReadCapability: true,
+      optimizeImages: false,
+      workspaceDir: "/approved/workspace",
+    });
+    expect(options.localRoots).toBe(localRoots);
+  });
+
+  it("rejects host readers without approved roots before any media dispatch", async () => {
+    const readFile = vi.fn(async () => Buffer.from("unapproved image"));
+    await expect(
+      sendMediaFeishu({
+        cfg: emptyConfig,
+        to: "user:ou_target",
+        mediaUrl: "chart.png",
+        mediaAccess: { readFile, workspaceDir: "/unapproved/workspace" },
+      }),
+    ).rejects.toThrow("Host media read requires explicit localRoots");
+    expect(loadWebMediaMock).not.toHaveBeenCalled();
+    expect(readFile).not.toHaveBeenCalled();
+    expect(fileCreateMock).not.toHaveBeenCalled();
+    expect(imageCreateMock).not.toHaveBeenCalled();
+    expect(messageCreateMock).not.toHaveBeenCalled();
   });
 
   it("fails closed when media URL fetch is blocked", async () => {
@@ -1051,49 +1068,48 @@ describe("saveMessageResourceFeishu", () => {
 
   it("keeps the shipped 120-second media timeout for stalled stream bodies", async () => {
     vi.useFakeTimers();
-    let markReadStarted: (() => void) | undefined;
-    const readStarted = new Promise<void>((resolve) => {
-      markReadStarted = resolve;
-    });
-    const stalled = new Readable({
-      read() {
-        markReadStarted?.();
-      },
-    });
-    messageResourceGetMock.mockResolvedValueOnce({
-      getReadableStream: () => stalled,
-      headers: { "content-type": "image/jpeg" },
-    });
-
     try {
-      let settled = false;
-      const download = withIsolatedHome(() =>
-        saveMessageResourceFeishu({
+      await withIsolatedHome(async () => {
+        const { promise: readStarted, resolve: markReadStarted } = createDeferred<void>();
+        const stalled = new Readable({
+          read() {
+            markReadStarted();
+          },
+        });
+        messageResourceGetMock.mockResolvedValueOnce({
+          getReadableStream: () => stalled,
+          headers: { "content-type": "image/jpeg" },
+        });
+
+        let settled = false;
+        const download = saveMessageResourceFeishu({
           cfg: emptyConfig,
           messageId: "om_stalled_stream",
           fileKey: "img_key_stalled",
           type: "image",
           maxBytes: 1024,
-        }),
-      );
-      void download.then(
-        () => {
+        });
+        const markSettled = () => {
           settled = true;
-        },
-        () => {
-          settled = true;
-        },
-      );
+        };
+        const downloadSettled = download.then(markSettled, markSettled);
 
-      await readStarted;
-      await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
-      expect(settled).toBe(false);
-      await vi.advanceTimersByTimeAsync(1);
-      await expect(download).rejects.toMatchObject({
-        name: "FeishuInboundMediaTimeoutError",
-        chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+        try {
+          await Promise.race([readStarted, download]);
+          await vi.advanceTimersByTimeAsync(FEISHU_MEDIA_HTTP_TIMEOUT_MS - 1);
+          expect(settled).toBe(false);
+          await vi.advanceTimersByTimeAsync(1);
+          await expect(download).rejects.toMatchObject({
+            name: "FeishuInboundMediaTimeoutError",
+            chunkTimeoutMs: FEISHU_MEDIA_HTTP_TIMEOUT_MS,
+          });
+          expect(stalled.destroyed).toBe(true);
+        } finally {
+          // Join the writer before its HOME and directory owners are released on assertion failure.
+          stalled.destroy();
+          await downloadSettled;
+        }
       });
-      expect(stalled.destroyed).toBe(true);
     } finally {
       vi.useRealTimers();
     }

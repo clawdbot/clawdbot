@@ -22,6 +22,15 @@ export type MediaAttachment = {
   path?: string;
   url?: string;
   mime?: string;
+  kind?: "image" | "audio" | "video" | "document" | "sticker" | "unknown";
+  /**
+   * Name the sender gave the file, when the channel recorded one. Channels stage
+   * a download under a generated name, so `path` cannot answer "what's in
+   * notes.txt?"; this is the only name the user can refer to. Untrusted input:
+   * display only, never format detection.
+   */
+  fileName?: string;
+  workspaceDir?: string;
   index: number;
   alreadyTranscribed?: boolean;
 };
@@ -33,15 +42,6 @@ export type MediaUnderstandingOutput = {
   text: string;
   provider: string;
   model?: string;
-};
-
-/** Provider shape used for capability discovery and dispatch. */
-export type MediaUnderstandingProvider = {
-  id: string;
-  capabilities?: MediaUnderstandingCapability[];
-  transcribeAudio?: unknown;
-  describeVideo?: unknown;
-  describeImage?: unknown;
-  describeImages?: unknown;
-  extractStructured?: unknown;
+  requestedBackend?: string;
+  observedBackend?: string;
 };

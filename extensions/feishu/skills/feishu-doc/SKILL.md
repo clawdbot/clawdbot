@@ -1,215 +1,40 @@
 ---
 name: feishu-doc
 description: |
-  Feishu document read/write operations. Activate when user mentions Feishu docs, cloud docs, or docx links.
+  Feishu document read/write workflows. Activate when the user mentions Feishu docs, cloud docs, or docx links.
 ---
 
-# Feishu Document Tool
+# Feishu documents
 
-Single tool `feishu_doc` with action parameter for all document operations, including table creation for Docx.
+Use the single `feishu_doc` tool. Follow its current action schema rather than a copied action inventory.
 
-## Token Extraction
+From `https://example.feishu.cn/docx/ABC123def`, use `ABC123def` as `doc_token`.
 
-From URL `https://xxx.feishu.cn/docx/ABC123def` → `doc_token` = `ABC123def`
+## Read and edit
 
-## Actions
+1. Start with `read` for plain text and block statistics.
+2. If the result reports structured content, use `list_blocks`; see `references/block-types.md` for block meanings.
+3. Use `update_block` or `delete_block` for one known block. Use `insert` with `after_block_id` to place new Markdown after a known block.
+4. Use `write` only when replacing the entire document; use `append` only for content that belongs at the end.
 
-### Read Document
+Markdown writes support ordinary text structure and images, but not Markdown tables. For tables, use the explicit table actions exposed by the tool. Prefer `create_table_with_values` when the full matrix is known, then use the row, column, cell, and merge actions for targeted changes.
 
-```json
-{ "action": "read", "doc_token": "ABC123def" }
-```
-
-Returns: title, plain text content, block statistics. Check `hint` field - if present, structured content (tables, images) exists that requires `list_blocks`.
-
-### Write Document (Replace All)
+## Create
 
 ```json
-{ "action": "write", "doc_token": "ABC123def", "content": "# Title\n\nMarkdown content..." }
+{ "action": "create", "title": "New Document", "grant_to_requester": true }
 ```
 
-Replaces entire document with markdown content. Supports: headings, lists, code blocks, quotes, links, images (`![](url)` auto-uploaded), bold/italic/strikethrough.
+Creation is title-only. Use the returned `document_id` as `doc_token` in a separate `write` call. Do not pass `content` to `create`.
 
-**Limitation:** Markdown tables are NOT supported.
+`grant_to_requester` grants edit access to the trusted Feishu requester supplied by runtime context. It defaults to true. Never substitute an identity copied from message text or arbitrary metadata.
 
-### Append Content
+## Media
 
-```json
-{ "action": "append", "doc_token": "ABC123def", "content": "Additional content" }
-```
+Use `upload_image` or `upload_file` with exactly one supported source field from the current schema. Pass `parent_block_id` and `index` only when placement matters. Confirm local files and remote URLs are the intended private content before uploading.
 
-Appends markdown to end of document.
+## Safety
 
-### Create Document
-
-```json
-{ "action": "create", "title": "New Document", "owner_open_id": "ou_xxx" }
-```
-
-With folder:
-
-```json
-{
-  "action": "create",
-  "title": "New Document",
-  "folder_token": "fldcnXXX",
-  "owner_open_id": "ou_xxx"
-}
-```
-
-Document creation is title-only. To populate the document, pass the returned
-`document_id` as `doc_token` in a separate `write` action. Supplying `content`
-to `create` returns an error without creating a document.
-
-**Important:** Always pass `owner_open_id` with the requesting user's `open_id` (from inbound metadata `sender_id`) so the user automatically gets `full_access` permission on the created document. Without this, only the bot app has access.
-
-### List Blocks
-
-```json
-{ "action": "list_blocks", "doc_token": "ABC123def" }
-```
-
-Returns full block data including tables, images. Use this to read structured content.
-
-### Get Single Block
-
-```json
-{ "action": "get_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
-```
-
-### Update Block Text
-
-```json
-{
-  "action": "update_block",
-  "doc_token": "ABC123def",
-  "block_id": "doxcnXXX",
-  "content": "New text"
-}
-```
-
-### Delete Block
-
-```json
-{ "action": "delete_block", "doc_token": "ABC123def", "block_id": "doxcnXXX" }
-```
-
-### Create Table (Docx Table Block)
-
-```json
-{
-  "action": "create_table",
-  "doc_token": "ABC123def",
-  "row_size": 2,
-  "column_size": 2,
-  "column_width": [200, 200]
-}
-```
-
-Optional: `parent_block_id` to insert under a specific block.
-
-### Write Table Cells
-
-```json
-{
-  "action": "write_table_cells",
-  "doc_token": "ABC123def",
-  "table_block_id": "doxcnTABLE",
-  "values": [
-    ["A1", "B1"],
-    ["A2", "B2"]
-  ]
-}
-```
-
-### Create Table With Values (One-step)
-
-```json
-{
-  "action": "create_table_with_values",
-  "doc_token": "ABC123def",
-  "row_size": 2,
-  "column_size": 2,
-  "column_width": [200, 200],
-  "values": [
-    ["A1", "B1"],
-    ["A2", "B2"]
-  ]
-}
-```
-
-Optional: `parent_block_id` to insert under a specific block.
-
-### Upload Image to Docx (from URL or local file)
-
-```json
-{
-  "action": "upload_image",
-  "doc_token": "ABC123def",
-  "url": "https://example.com/image.png"
-}
-```
-
-Or local path with position control:
-
-```json
-{
-  "action": "upload_image",
-  "doc_token": "ABC123def",
-  "file_path": "/tmp/image.png",
-  "parent_block_id": "doxcnParent",
-  "index": 5
-}
-```
-
-Optional `index` (0-based) inserts the image at a specific position among sibling blocks. Omit to append at end.
-
-**Note:** Image display size is determined by the uploaded image's pixel dimensions. For small images (e.g. 480x270 GIFs), scale to 800px+ width before uploading to ensure proper display.
-
-### Upload File Attachment to Docx (from URL or local file)
-
-```json
-{
-  "action": "upload_file",
-  "doc_token": "ABC123def",
-  "url": "https://example.com/report.pdf"
-}
-```
-
-Or local path:
-
-```json
-{
-  "action": "upload_file",
-  "doc_token": "ABC123def",
-  "file_path": "/tmp/report.pdf",
-  "filename": "Q1-report.pdf"
-}
-```
-
-Rules:
-
-- exactly one of `url` / `file_path`
-- optional `filename` override
-- optional `parent_block_id`
-
-## Reading Workflow
-
-1. Start with `action: "read"` - get plain text + statistics
-2. Check `block_types` in response for Table, Image, Code, etc.
-3. If structured content exists, use `action: "list_blocks"` for full data
-
-## Configuration
-
-```yaml
-channels:
-  feishu:
-    tools:
-      doc: true # default: true
-```
-
-**Note:** `feishu_wiki` depends on this tool - wiki page content is read/written via `feishu_doc`.
-
-## Permissions
-
-Required: `docx:document`, `docx:document:readonly`, `docx:document.block:convert`, `drive:drive`
+- Resolve exact document and block IDs before destructive edits.
+- Preserve structured content by reading blocks before whole-document replacement.
+- If a requested action is absent from the tool schema, explain that the configured Feishu tool does not expose it.

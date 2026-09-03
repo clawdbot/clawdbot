@@ -8,10 +8,12 @@ import { formatCliCommand } from "../../cli/command-format.js";
 import { getConfiguredChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
 import { collectChannelStatusIssues } from "../../infra/channels-status-issues.js";
+import { formatDurationCompact } from "../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { formatPhoneNumberForCli } from "../../infra/phone-number-presentation.js";
 import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { requireValidConfig } from "../config-validation.js";
 import {
   appendBaseUrlBit,
   appendEnabledConfiguredLinkedBits,
@@ -19,7 +21,7 @@ import {
   appendTokenSourceBits,
   buildChannelAccountLine,
   type ChatChannel,
-  requireValidConfigSnapshot,
+  NO_CONFIGURED_CHAT_CHANNELS_LINE,
 } from "./shared.js";
 import { formatConfigChannelsStatusLines } from "./status-config-format.js";
 import type { ChannelsStatusOptions } from "./status.js";
@@ -47,7 +49,17 @@ function formatEventLoopBits(value: unknown): string | null {
     typeof record.cpuCoreRatio === "number" && Number.isFinite(record.cpuCoreRatio)
       ? record.cpuCoreRatio
       : null;
+  const degradedSinceMs =
+    typeof record.degradedSinceMs === "number" && Number.isFinite(record.degradedSinceMs)
+      ? Math.max(0, record.degradedSinceMs)
+      : null;
+  const delayP99Ms =
+    typeof record.delayP99Ms === "number" && Number.isFinite(record.delayP99Ms)
+      ? Math.round(record.delayP99Ms)
+      : null;
   return [
+    degradedSinceMs != null ? `for ${formatDurationCompact(degradedSinceMs) ?? "0s"}` : null,
+    delayP99Ms != null ? `(p99 ${delayP99Ms}ms)` : null,
     reasons.length ? `reasons=${reasons.join(",")}` : null,
     delayMaxMs != null ? `eventLoopDelayMaxMs=${delayMaxMs}` : null,
     utilization != null ? `eventLoopUtilization=${utilization}` : null,
@@ -63,7 +75,21 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
   lines.push(theme.success("Gateway reachable."));
   const eventLoopLine = formatEventLoopBits(payload.eventLoop);
   if (eventLoopLine) {
-    lines.push(theme.warn(`Gateway event loop degraded: ${eventLoopLine}`));
+    lines.push(theme.warn(`Gateway event loop degraded ${eventLoopLine}`));
+  }
+  const statusWarnings = Array.isArray(payload.warnings)
+    ? payload.warnings
+        .filter(
+          (warning): warning is string => typeof warning === "string" && warning.trim().length > 0,
+        )
+        .slice(0, 50)
+    : [];
+  if (payload.partial === true || statusWarnings.length > 0) {
+    lines.push(theme.warn("Channel status is partial:"));
+    for (const warning of statusWarnings) {
+      lines.push(`- ${warning.slice(0, 500)}`);
+    }
+    lines.push("");
   }
   const channelLabels =
     payload.channelLabels && typeof payload.channelLabels === "object"
@@ -168,11 +194,15 @@ export function formatGatewayChannelsStatusLines(payload: Record<string, unknown
       accountPayloads[channelId] = raw as Array<Record<string, unknown>>;
     }
   }
+  const accountLinesStart = lines.length;
   for (const channelId of Object.keys(accountPayloads).toSorted()) {
     const accounts = accountPayloads[channelId];
     if (accounts && accounts.length > 0) {
       lines.push(...accountLines(channelId, accounts));
     }
+  }
+  if (lines.length === accountLinesStart) {
+    lines.push(theme.muted(NO_CONFIGURED_CHAT_CHANNELS_LINE));
   }
 
   lines.push("");
@@ -198,15 +228,19 @@ export async function renderChannelsStatusFallback(params: {
   runtime: RuntimeEnv;
   safeError: string;
   gatewayAuthUnavailable: boolean;
+  expectedErrorOutput?: string;
 }): Promise<void> {
-  const { opts, runtime, safeError, gatewayAuthUnavailable } = params;
+  const { opts, runtime, safeError, gatewayAuthUnavailable, expectedErrorOutput } = params;
   const fallbackReason = gatewayAuthUnavailable
     ? "Gateway auth unavailable; showing config-only status."
     : "Gateway not reachable; showing config-only status.";
-  runtime.error(
-    `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
-  );
-  const cfg = await requireValidConfigSnapshot(runtime);
+  if (!opts.json) {
+    runtime.error(
+      expectedErrorOutput ??
+        `${gatewayAuthUnavailable ? "Gateway auth unavailable" : "Gateway not reachable"}: ${safeError}`,
+    );
+  }
+  const cfg = await requireValidConfig(runtime, { observe: false });
   if (!cfg) {
     return;
   }
@@ -217,7 +251,7 @@ export async function renderChannelsStatusFallback(params: {
     mode: "read_only_status",
     runtime,
   });
-  const snapshot = await readConfigFileSnapshot();
+  const snapshot = await readConfigFileSnapshot({ observe: false });
   const mode = cfg.gateway?.mode === "remote" ? "remote" : "local";
   const requestedChannel = opts.channel
     ? (normalizeChannelId(opts.channel) ?? normalizeOptionalLowercaseString(opts.channel))

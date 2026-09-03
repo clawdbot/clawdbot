@@ -220,7 +220,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
       configSchema: { type: "object" },
     });
 
-    await maybeRepairLegacyPluginManifestContracts({
+    const changed = await maybeRepairLegacyPluginManifestContracts({
       config: configWithPluginLoadPath(pluginsRoot),
       env: {
         ...process.env,
@@ -230,6 +230,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
       prompter: createPrompter(),
       note: vi.fn(),
     });
+    expect(changed).toBe(true);
 
     const next = JSON.parse(fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8")) as {
       speechProviders?: string[];

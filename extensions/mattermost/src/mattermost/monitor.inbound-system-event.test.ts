@@ -1,9 +1,19 @@
 // Mattermost tests cover monitor.inbound system event plugin behavior.
 import { once } from "node:events";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
-import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import {
+  createMessageReceiptFromOutboundResults,
+  DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createTestInboundDebounceFlush } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -96,6 +106,7 @@ const mockState = vi.hoisted(() => ({
   enqueueSystemEvent: vi.fn(),
   fetchMattermostMe: vi.fn(),
   getGlobalHookRunner: vi.fn(),
+  ingressQueue: undefined as unknown,
   progressDrafts: [] as Array<{ getSnapshot: () => { lines: readonly unknown[] } }>,
   registerMattermostMonitorSlashCommands: vi.fn(),
   registerPluginHttpRoute: vi.fn(),
@@ -180,27 +191,40 @@ vi.mock("./monitor-ingress.js", async (importOriginal) => {
     ...actual,
     createMattermostIngressMonitor: (
       options: Parameters<typeof actual.createMattermostIngressMonitor>[0],
-    ) => ({
-      receive: async (rawEvent: string) => {
-        const payload = JSON.parse(rawEvent) as MattermostEventPayload;
-        const post =
-          typeof payload.data?.post === "string"
-            ? (JSON.parse(payload.data.post) as MattermostPost)
-            : (payload.data?.post as MattermostPost | undefined);
-        if (payload.event !== "posted" || !post) {
-          return;
-        }
-        await options.dispatch(post, payload, {
-          abortSignal: new AbortController().signal,
-          onAdopted: async () => {},
-          onDeferred: () => {},
-          onAdoptionFinalizing: () => {},
-          onAbandoned: async () => {},
+    ) => {
+      if (mockState.ingressQueue) {
+        return actual.createMattermostIngressMonitor({
+          ...options,
+          queue: mockState.ingressQueue as NonNullable<typeof options.queue>,
+          pollIntervalMs: 60_000,
         });
-      },
-      stop: async () => {},
-      waitForIdle: async () => {},
-    }),
+      }
+      return {
+        receive: async (rawEvent: string) => {
+          const payload = JSON.parse(rawEvent) as MattermostEventPayload;
+          const post =
+            typeof payload.data?.post === "string"
+              ? (JSON.parse(payload.data.post) as MattermostPost)
+              : (payload.data?.post as MattermostPost | undefined);
+          if (payload.event !== "posted" || !post) {
+            return;
+          }
+          const senderId = post.user_id?.trim();
+          if (!senderId) {
+            throw new Error("Mattermost posted event is missing post.user_id");
+          }
+          await options.dispatch({ ...post, user_id: senderId }, payload, {
+            abortSignal: new AbortController().signal,
+            onAdopted: async () => {},
+            onDeferred: () => {},
+            onAdoptionFinalizing: () => {},
+            onAbandoned: async () => {},
+          });
+        },
+        stop: async () => {},
+        waitForIdle: async () => {},
+      };
+    },
   };
 });
 
@@ -483,6 +507,7 @@ const testConfig: OpenClawConfig = {
 
 vi.mock("../runtime.js", () => ({
   getMattermostRuntime: () => mockState.runtimeCore,
+  getOptionalMattermostRuntime: () => mockState.runtimeCore,
 }));
 
 const testRuntime = (): RuntimeEnv =>
@@ -503,6 +528,7 @@ async function emitMattermostChannelPost(
     senderId?: string;
     senderName?: string;
     createAt?: number;
+    type?: string;
   },
 ) {
   const senderId = params.senderId ?? "user-1";
@@ -520,6 +546,7 @@ async function emitMattermostChannelPost(
         message: params.message,
         root_id: params.rootId,
         create_at: params.createAt ?? 1_714_000_000_000,
+        type: params.type,
       }),
     },
     broadcast: {
@@ -533,6 +560,7 @@ describe("mattermost inbound user posts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockState.abortController = undefined;
+    mockState.ingressQueue = undefined;
     mockState.progressDrafts.length = 0;
     mockState.getGlobalHookRunner.mockReturnValue(null);
     mockState.runtimeCore = createRuntimeCore(testConfig);
@@ -567,56 +595,316 @@ describe("mattermost inbound user posts", () => {
     });
   });
 
-  it("does not enqueue regular user posts as system events", async () => {
-    const socket = new FakeWebSocket();
+  it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {
+    vi.useFakeTimers();
+    const now = Date.UTC(2026, 0, 2);
+    vi.setSystemTime(now);
+    const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-mattermost-abandon-"));
+    const stateDir = await fs.realpath(created);
+    type Payload = { version: 1; receivedAt: number; rawEvent: string };
+    const queue = createChannelIngressQueueForTests<Payload>({
+      channelId: "mattermost",
+      accountId: "default",
+      stateDir,
+    });
+    mockState.ingressQueue = queue;
+    mockState.runtimeCore = createRuntimeCore(testConfig, undefined, {
+      inboundDebounceMs: 0,
+      createInboundDebouncer,
+    });
+    mockState.dispatchInboundMessage.mockRejectedValue(
+      new Error("Mattermost dispatch failed before adoption"),
+    );
+
+    const activeProviders: Array<{ stop: () => Promise<void> }> = [];
+    const startProvider = async () => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      const monitor = monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
+      for (let tick = 0; tick < 20 && socket.openListenerCount === 0; tick += 1) {
+        await Promise.resolve();
+      }
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+      socket.emitOpen();
+      let stopped = false;
+      const provider = {
+        socket,
+        stop: async () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          abortController.abort();
+          socket.emitClose(1000);
+          await monitor;
+        },
+      };
+      activeProviders.push(provider);
+      return provider;
+    };
+    const send = async (provider: Awaited<ReturnType<typeof startProvider>>) => {
+      await emitMattermostChannelPost(provider.socket, {
+        id: "post-abandon-retry",
+        message: "retry me",
+      });
+    };
+    const pendingAttempt = async (attempts: number) => {
+      let observed: Awaited<ReturnType<typeof queue.listPending>>[number] | undefined;
+      await vi.waitFor(async () => {
+        const pending = await queue.listPending({ limit: "all" });
+        expect(pending).toEqual([
+          expect.objectContaining({
+            id: "post-abandon-retry",
+            attempts,
+            lastAttemptAt: expect.any(Number),
+            lastError: "turn-abandoned",
+          }),
+        ]);
+        observed = pending[0];
+      });
+      const lastAttemptAt = observed?.lastAttemptAt;
+      if (lastAttemptAt === undefined) {
+        throw new Error(`Missing Mattermost retry timestamp for attempt ${attempts}`);
+      }
+      return { ...observed, lastAttemptAt };
+    };
+
+    try {
+      const first = await startProvider();
+      await send(first);
+      const firstAttempt = await pendingAttempt(1);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      await first.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 999);
+      const blocked = await startProvider();
+      await send(blocked);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      await blocked.stop();
+
+      vi.setSystemTime(firstAttempt.lastAttemptAt + 1_001);
+      const second = await startProvider();
+      await send(second);
+      const secondAttempt = await pendingAttempt(2);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(2);
+      await second.stop();
+
+      for (let attempt = 3; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
+        const claim = await queue.claim("post-abandon-retry", { ownerId: `seed-${attempt}` });
+        if (!claim) {
+          throw new Error(`Expected Mattermost seed claim ${attempt}`);
+        }
+        await queue.release(claim, {
+          lastError: "turn-abandoned",
+          releasedAt: secondAttempt.lastAttemptAt,
+        });
+      }
+
+      vi.setSystemTime(secondAttempt.lastAttemptAt + 64_001);
+      const threshold = await startProvider();
+      await send(threshold);
+      const thresholdAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(3);
+      await threshold.stop();
+
+      vi.setSystemTime(thresholdAttempt.lastAttemptAt + 128_001);
+      const beyond = await startProvider();
+      await send(beyond);
+      const beyondAttempt = await pendingAttempt(DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS + 1);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(4);
+      await beyond.stop();
+
+      vi.setSystemTime(beyondAttempt.lastAttemptAt + 1_000);
+      const blockedRestart = await startProvider();
+      await send(blockedRestart);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(4);
+      await blockedRestart.stop();
+    } finally {
+      await Promise.allSettled(activeProviders.map(async (provider) => await provider.stop()));
+      mockState.ingressQueue = undefined;
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(stateDir, { recursive: true, force: true });
+      vi.useRealTimers();
+    }
+  });
+
+  it("publishes recovering while API authentication retries, including 401", async () => {
     const abortController = new AbortController();
-    mockState.abortController = abortController;
+    const statusSink = vi.fn();
+    mockState.fetchMattermostMe.mockRejectedValue(new Error("HTTP 401 Unauthorized"));
 
     const monitor = monitorMattermostProvider({
       config: testConfig,
       runtime: testRuntime(),
       abortSignal: abortController.signal,
-      webSocketFactory: () => socket,
+      statusSink,
     });
 
     await vi.waitFor(() => {
-      expect(socket.openListenerCount).toBeGreaterThan(0);
+      expect(statusSink).toHaveBeenCalledWith({
+        connected: false,
+        lifecycle: "recovering",
+        lastError: "Error: HTTP 401 Unauthorized",
+      });
     });
-    socket.emitOpen();
+    abortController.abort();
+    await monitor;
+  });
 
-    await socket.emitMessage({
-      event: "posted",
-      data: {
-        channel_id: "chan-1",
-        channel_name: "town-square",
-        channel_display_name: "Town Square",
-        sender_name: "alice",
-        post: JSON.stringify({
-          id: "post-inbound-system-event-regular",
+  it("rejects startup before opening the websocket when interactions cannot bind", async () => {
+    const statusSink = vi.fn();
+    const webSocketFactory = vi.fn(() => new FakeWebSocket());
+    mockState.registerPluginHttpRoute.mockImplementationOnce(() => {
+      throw new Error("Mattermost interactions route conflict");
+    });
+
+    await expect(
+      monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: new AbortController().signal,
+        statusSink,
+        webSocketFactory,
+      }),
+    ).rejects.toThrow("Mattermost interactions route conflict");
+
+    expect(mockState.registerPluginHttpRoute).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        pluginId: "mattermost",
+        source: "mattermost-interactions",
+        throwOnFailure: true,
+      }),
+    );
+    expect(mockState.registerPluginHttpRoute.mock.calls[0]?.[0]).not.toHaveProperty(
+      "replaceExisting",
+    );
+    expect(mockState.registerMattermostMonitorSlashCommands).not.toHaveBeenCalled();
+    expect(webSocketFactory).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
+  it("unregisters interactions when slash command startup rejects", async () => {
+    const unregisterInteractions = vi.fn();
+    const statusSink = vi.fn();
+    const webSocketFactory = vi.fn(() => new FakeWebSocket());
+    mockState.registerPluginHttpRoute.mockReturnValueOnce(unregisterInteractions);
+    mockState.registerMattermostMonitorSlashCommands.mockRejectedValueOnce(
+      new Error("Mattermost slash setup failed"),
+    );
+
+    await expect(
+      monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: new AbortController().signal,
+        statusSink,
+        webSocketFactory,
+      }),
+    ).rejects.toThrow("Mattermost slash setup failed");
+
+    expect(unregisterInteractions).toHaveBeenCalledOnce();
+    expect(webSocketFactory).not.toHaveBeenCalled();
+    expect(statusSink).not.toHaveBeenCalledWith(expect.objectContaining({ lifecycle: "ready" }));
+  });
+
+  it.each([
+    {
+      label: "plain text",
+      fileIds: [],
+      failedMedia: [],
+      expectedBody: "hello from mattermost",
+    },
+    {
+      label: "an unavailable named attachment",
+      fileIds: ["file-1"],
+      failedMedia: [
+        {
+          contentType: "application/pdf",
+          fileName: "quarterly report.pdf",
+          kind: "document",
+        },
+      ],
+      expectedBody:
+        'hello from mattermost\n\n[mattermost attachment unavailable] "quarterly report.pdf"',
+    },
+  ])(
+    "does not enqueue regular posts with $label as system events",
+    async ({ fileIds, failedMedia, expectedBody }) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      mockState.resolveMattermostMedia.mockResolvedValueOnce(failedMedia);
+
+      const monitor = monitorMattermostProvider({
+        config: testConfig,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
+
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
+
+      await socket.emitMessage({
+        event: "posted",
+        data: {
+          channel_id: "chan-1",
+          channel_name: "town-square",
+          channel_display_name: "Town Square",
+          sender_name: "alice",
+          post: JSON.stringify({
+            id: "post-inbound-system-event-regular",
+            channel_id: "chan-1",
+            user_id: "user-1",
+            message: "hello from mattermost",
+            ...(fileIds.length > 0 ? { file_ids: fileIds } : {}),
+            create_at: 1_714_000_000_000,
+          }),
+        },
+        broadcast: {
           channel_id: "chan-1",
           user_id: "user-1",
-          message: "hello from mattermost",
-          create_at: 1_714_000_000_000,
-        }),
-      },
-      broadcast: {
-        channel_id: "chan-1",
-        user_id: "user-1",
-      },
-    });
-    socket.emitClose(1000);
-    await monitor;
+        },
+      });
+      socket.emitClose(1000);
+      await monitor;
 
-    expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
-    expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
-    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
-    expect(ctx?.BodyForAgent).toBe("hello from mattermost");
-    expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
-    expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
-    expect(ctx?.OriginatingChannel).toBe("mattermost");
-    expect(ctx?.Provider).toBe("mattermost");
-  });
+      expect(mockState.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+      expect(mockState.deliveryPlanObserver).toHaveBeenCalledExactlyOnceWith(true);
+      const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+      expect(ctx?.BodyForAgent).toBe(expectedBody);
+      if (failedMedia.length > 0) {
+        expect(ctx?.media).toEqual([
+          expect.objectContaining({
+            contentType: "application/pdf",
+            fileName: "quarterly report.pdf",
+          }),
+        ]);
+        expect(ctx?.media?.[0]?.path).toBeUndefined();
+        expect(ctx?.media?.[0]?.url).toBeUndefined();
+      }
+      expect(ctx?.ConversationLabel).toBe("Town Square id:chan-1");
+      expect(ctx?.MessageSid).toBe("post-inbound-system-event-regular");
+      expect(ctx?.ConversationRouteContextObserved).toBe(true);
+      expect(ctx?.ConversationRoutePeerId).toBe("chan-1");
+      expect(ctx?.GroupSpace).toBe("team-1");
+      expect(ctx?.NativeChannelId).toBe("chan-1");
+      expect(ctx?.InboundAccessAuthorized).toBe(true);
+      expect(ctx?.OriginatingChannel).toBe("mattermost");
+      expect(ctx?.Provider).toBe("mattermost");
+    },
+  );
 
   it("formats current and pending-history timestamps in the configured user timezone", async () => {
     const socket = new FakeWebSocket();
@@ -1050,6 +1338,73 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.Provider).toBe("mattermost");
   });
 
+  it.each([
+    { message: "@openclawdia hello", expectedBody: null },
+    { message: "@openclaw:remote.example hello", expectedBody: null },
+    { message: "hello.@openclaw", expectedBody: "hello." },
+    { message: "hello-@openclaw", expectedBody: "hello-" },
+    { message: "hello:@openclaw", expectedBody: "hello:" },
+    { message: "@openclaw.", expectedBody: "." },
+    { message: "@openclaw-", expectedBody: "-" },
+    { message: "@openclaw: hello", expectedBody: ": hello" },
+  ])(
+    "dispatches only genuine mention-required posts: $message",
+    async ({ message, expectedBody }) => {
+      const socket = new FakeWebSocket();
+      const abortController = new AbortController();
+      mockState.abortController = abortController;
+      const verboseDebug = vi.fn();
+      const config: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            baseUrl: "https://mattermost.example.com",
+            botToken: "bot-token",
+            // No chatmode: "onmessage" would force requireMention off (accounts.ts).
+            dmPolicy: "open",
+            groupPolicy: "open",
+            requireMention: true,
+          },
+        },
+      };
+      mockState.runtimeCore = createRuntimeCore(config, undefined, { verboseDebug });
+
+      const monitor = monitorMattermostProvider({
+        config,
+        runtime: testRuntime(),
+        abortSignal: abortController.signal,
+        webSocketFactory: () => socket,
+      });
+
+      await vi.waitFor(() => {
+        expect(socket.openListenerCount).toBeGreaterThan(0);
+      });
+      socket.emitOpen();
+
+      await emitMattermostChannelPost(socket, {
+        id: "post-mention-boundary",
+        message,
+      });
+
+      if (expectedBody === null) {
+        await vi.waitFor(() => {
+          expect(verboseDebug).toHaveBeenCalledWith(
+            expect.stringContaining("drop group message (missing mention"),
+          );
+        });
+        expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
+      } else {
+        expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+        expect(mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx.BodyForAgent).toBe(
+          expectedBody,
+        );
+      }
+      abortController.abort();
+      socket.emitClose(1000);
+      await monitor;
+    },
+  );
+
   it("merges Mattermost progress preview updates and clears after message-tool delivery", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();
@@ -1420,6 +1775,74 @@ describe("mattermost inbound user posts", () => {
 
     expect(mockState.dispatchInboundMessage).not.toHaveBeenCalled();
     expect(runtimeCore.channel.session.recordInboundSession).not.toHaveBeenCalled();
+  });
+
+  it("does not debounce denied senders or system posts into an allowed turn", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    const config: OpenClawConfig = {
+      channels: {
+        defaults: { contextVisibility: "allowlist" },
+        mattermost: {
+          enabled: true,
+          baseUrl: "https://mattermost.example.com",
+          botToken: "bot-token",
+          chatmode: "onmessage",
+          dmPolicy: "open",
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["allowed-user"],
+        },
+      },
+    };
+    mockState.runtimeCore = createRuntimeCore(config, undefined, {
+      inboundDebounceMs: 10,
+      createInboundDebouncer,
+    });
+
+    const monitor = monitorMattermostProvider({
+      config,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await emitMattermostChannelPost(socket, {
+      id: "post-denied",
+      message: "denied text",
+      senderId: "denied-user",
+      senderName: "mallory",
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "post-system",
+      message: "system text",
+      senderId: "allowed-user",
+      senderName: "alice",
+      type: "system_join_channel",
+    });
+    await emitMattermostChannelPost(socket, {
+      id: "post-allowed",
+      message: "allowed text",
+      senderId: "allowed-user",
+      senderName: "alice",
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchInboundMessage).toHaveBeenCalledTimes(1);
+    });
+    abortController.abort();
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchInboundMessage.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.SenderId).toBe("allowed-user");
+    expect(ctx?.BodyForAgent).toBe("allowed text");
+    expect(ctx?.Body).not.toContain("denied text");
+    expect(ctx?.Body).not.toContain("system text");
   });
 
   it("flushes pending group text before authorizing a bare abort without a mention", async () => {
@@ -1800,7 +2223,10 @@ describe("mattermost inbound user posts", () => {
           chatmode: "onmessage",
           dmPolicy: "open",
           groupPolicy: "open",
-          streaming: { mode: "block", preview: { toolProgress: true } },
+          streaming: {
+            mode: "block",
+            preview: { toolProgress: true, commandText: "raw" },
+          },
         },
       },
     };

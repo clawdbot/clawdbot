@@ -1,6 +1,6 @@
 // Media generation provider builders create bundled provider fixtures for tests.
 import type { OpenClawPluginApi } from "../../../src/plugins/types.js";
-import { loadBundledPluginPublicSurface } from "../../../src/test-utils/bundled-plugin-public-surface.js";
+import { loadBundledPluginFacade } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 
 // Public-surface loader for bundled media provider plugin tests.
 
@@ -14,7 +14,7 @@ type BundledPluginEntryModule = {
 export async function loadBundledProviderPlugin(
   pluginId: string,
 ): Promise<BundledPluginEntryModule["default"]> {
-  const module = await loadBundledPluginPublicSurface<BundledPluginEntryModule>({
+  const module = await loadBundledPluginFacade<BundledPluginEntryModule>({
     pluginId,
     artifactBasename: "index.js",
   });

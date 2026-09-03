@@ -101,14 +101,10 @@ function createSupportRecord(): Record<string, unknown> {
   return Object.create(null) as Record<string, unknown>;
 }
 
-function hasOwnRecordKey(record: Record<string, unknown>, key: string): boolean {
-  return Object.hasOwn(record, key);
-}
-
 function countOwnObjectEntries(record: Record<string, unknown>): number {
   let count = 0;
   for (const key in record) {
-    if (hasOwnRecordKey(record, key)) {
+    if (Object.hasOwn(record, key)) {
       count += 1;
     }
   }
@@ -122,7 +118,7 @@ function limitedSupportObjectEntries(record: Record<string, unknown>): {
   let count = 0;
   const entries: SupportObjectEntry[] = [];
   for (const key in record) {
-    if (!hasOwnRecordKey(record, key)) {
+    if (!Object.hasOwn(record, key)) {
       continue;
     }
     count += 1;
@@ -324,10 +320,13 @@ function redactContactIdentifiersForSupport(value: string): string {
 }
 
 function redactServiceIdentifiersForSupport(value: string): string {
+  // Saved support artifacts can pass through redaction again; preserve our exact path marker.
   return value
     .replace(MATRIX_USER_ID_RE, "<redacted-matrix-user>")
     .replace(MATRIX_ROOM_ID_RE, "<redacted-matrix-room>")
-    .replace(MATRIX_EVENT_ID_RE, "<redacted-matrix-event>");
+    .replace(MATRIX_EVENT_ID_RE, (eventId) =>
+      eventId === "$OPENCLAW_STATE_DIR" ? eventId : "<redacted-matrix-event>",
+    );
 }
 
 function redactLongIdentifiersForSupport(value: string): string {

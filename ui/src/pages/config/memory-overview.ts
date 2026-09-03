@@ -1,11 +1,11 @@
 import { html, nothing } from "lit";
 import type { DoctorMemoryStatusPayload } from "../../../../src/gateway/server-methods/doctor.ts";
+import { lobsterPetSeed } from "../../components/lobster-pet-contract.ts";
 import {
   createLobsterPetLook,
   lobsterLookStyle,
-  lobsterPetSeed,
   renderLobsterSvg,
-} from "../../components/lobster-pet.ts";
+} from "../../components/lobster-pet-look.ts";
 import {
   renderSettingsNavRow,
   renderSettingsRow,
@@ -251,7 +251,13 @@ function renderEngineHealth(payload: DoctorMemoryStatusPayload, props: MemoryOve
               [
                 payload.embeddingRuntime.engine,
                 payload.embeddingRuntime.backend,
-                payload.embeddingRuntime.deviceNames?.join(", "),
+                payload.embeddingRuntime.buildInfo,
+                payload.embeddingRuntime.model?.id,
+                payload.embeddingRuntime.endpoints
+                  ? Object.entries(payload.embeddingRuntime.endpoints)
+                      .map(([name, state]) => `${name}=${state}`)
+                      .join(" ")
+                  : undefined,
               ]
                 .filter(Boolean)
                 .join(" · "),

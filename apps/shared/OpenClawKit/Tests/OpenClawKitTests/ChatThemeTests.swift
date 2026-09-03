@@ -14,6 +14,19 @@ private func luminance(_ color: NSColor) throws -> CGFloat {
 #endif
 
 @Suite struct ChatThemeTests {
+    @Test(arguments: ["red", "blue", "green", "yellow", "purple", "orange", "pink", "cyan"])
+    func `session colors normalize and adapt`(name: String) throws {
+        let color = try #require(OpenClawSessionColor(name: " \(name.uppercased()) "))
+        #expect(color.rawValue == name)
+        #expect(OpenClawChatTheme.relativeLuminance(of: color.tint(in: .dark)) >
+            OpenClawChatTheme.relativeLuminance(of: color.tint(in: .light)))
+    }
+
+    @Test(arguments: [nil, "", "gray", "grey", "default", "reset", "none", "#ff0000"] as [String?])
+    func `unknown session color has no decoration`(name: String?) {
+        #expect(OpenClawSessionColor(name: name) == nil)
+    }
+
     @Test func assistantBubbleResolvesForLightAndDark() throws {
         #if os(macOS)
         let lightAppearance = try #require(NSAppearance(named: .aqua))

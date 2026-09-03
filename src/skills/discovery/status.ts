@@ -22,7 +22,7 @@ import {
   resolveSkillConfig,
   resolveSkillsInstallPreferences,
 } from "../loading/config.js";
-import { loadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import type {
   SkillEntry,
@@ -97,42 +97,22 @@ export function resolveSkillStatusEntry(
 
   const lower = raw.toLowerCase();
   const normalized = normalizeSkillIndexName(raw);
-  let caseInsensitiveMatch: SkillStatusEntry | null = null;
-  let caseInsensitiveMatches = 0;
-  let normalizedMatch: SkillStatusEntry | null = null;
-  let normalizedMatches = 0;
-
-  for (const skill of skills) {
-    if (skill.name === raw || skill.skillKey === raw) {
-      return skill;
-    }
-
-    const nameLower = skill.name.toLowerCase();
-    const keyLower = skill.skillKey.toLowerCase();
-    if (nameLower === lower || keyLower === lower) {
-      caseInsensitiveMatch = skill;
-      caseInsensitiveMatches += 1;
-      continue;
-    }
-
-    if (
-      normalized &&
+  // Names outrank metadata aliases. A tie at the strongest matching level
+  // must not redirect inspection or Workshop updates to the first loaded skill.
+  const matchers: Array<(skill: SkillStatusEntry) => boolean> = [
+    (skill) => skill.name === raw,
+    (skill) => skill.skillKey === raw,
+    (skill) => skill.name.toLowerCase() === lower || skill.skillKey.toLowerCase() === lower,
+    (skill) =>
+      Boolean(normalized) &&
       (normalizeSkillIndexName(skill.name) === normalized ||
-        normalizeSkillIndexName(skill.skillKey) === normalized)
-    ) {
-      normalizedMatch = skill;
-      normalizedMatches += 1;
+        normalizeSkillIndexName(skill.skillKey) === normalized),
+  ];
+  for (const matches of matchers) {
+    const candidates = skills.filter(matches);
+    if (candidates.length > 0) {
+      return candidates.length === 1 ? candidates[0]! : null;
     }
-  }
-
-  if (caseInsensitiveMatches > 1) {
-    return null;
-  }
-  if (caseInsensitiveMatches === 1) {
-    return caseInsensitiveMatch;
-  }
-  if (normalizedMatches === 1) {
-    return normalizedMatch;
   }
   return null;
 }
@@ -361,11 +341,14 @@ export function buildWorkspaceSkillStatus(
   // the loader must stay unfiltered; node-hosted skills merge in separately.
   const skillEntries = mergeRemoteNodeSkillEntries(
     opts?.entries ??
-      loadWorkspaceSkillEntries(workspaceDir, {
+      loadWorkspaceSkills(workspaceDir, {
         config: opts?.config,
+        // agentId scopes custodian-source discovery only; the "ignore" mode
+        // keeps the entry list unfiltered per the invariant above.
+        agentId: opts?.agentId,
+        agentSkillFilter: "ignore",
         managedSkillsDir,
         bundledSkillsDir: bundledContext.dir,
-        includeArchived: true,
       }),
     {
       canExec: opts?.eligibility?.nodeSkills?.canExec,

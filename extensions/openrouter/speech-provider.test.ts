@@ -2,29 +2,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 
-const {
-  assertOkOrThrowHttpErrorMock,
-  postJsonRequestMock,
-  readProviderBinaryResponseMock,
-  resolveProviderHttpRequestConfigMock,
-} = vi.hoisted(() => ({
-  assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
-  postJsonRequestMock: vi.fn(),
-  readProviderBinaryResponseMock: vi.fn(async (response: Response) => {
-    return new Uint8Array(await response.arrayBuffer());
-  }),
-  resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
-    baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
-    allowPrivateNetwork: false,
-    headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
-    dispatcherPolicy: undefined,
-  })),
-}));
+const { assertOkOrThrowHttpErrorMock, postJsonRequestMock, resolveProviderHttpRequestConfigMock } =
+  vi.hoisted(() => ({
+    assertOkOrThrowHttpErrorMock: vi.fn(async () => {}),
+    postJsonRequestMock: vi.fn(),
+    resolveProviderHttpRequestConfigMock: vi.fn((params: Record<string, unknown>) => ({
+      baseUrl: params.baseUrl ?? params.defaultBaseUrl ?? "https://openrouter.ai/api/v1",
+      allowPrivateNetwork: false,
+      headers: new Headers(params.defaultHeaders as HeadersInit | undefined),
+      dispatcherPolicy: undefined,
+    })),
+  }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+vi.mock("openclaw/plugin-sdk/provider-http", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-http")>()),
   assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
   postJsonRequest: postJsonRequestMock,
-  readProviderBinaryResponse: readProviderBinaryResponseMock,
   resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
 }));
 
@@ -63,7 +56,6 @@ describe("openrouter speech provider", () => {
   afterEach(() => {
     assertOkOrThrowHttpErrorMock.mockClear();
     postJsonRequestMock.mockReset();
-    readProviderBinaryResponseMock.mockClear();
     resolveProviderHttpRequestConfigMock.mockClear();
     vi.unstubAllEnvs();
   });
@@ -184,15 +176,91 @@ describe("openrouter speech provider", () => {
       dispatcherPolicy: undefined,
     });
     expect(result.audioBuffer).toEqual(Buffer.from([1, 2, 3]));
-    expect(readProviderBinaryResponseMock).toHaveBeenCalledWith(
-      expect.any(Response),
-      "OpenRouter TTS API error",
-      "audio",
-    );
     expect(result.outputFormat).toBe("mp3");
     expect(result.fileExtension).toBe(".mp3");
     expect(result.voiceCompatible).toBe(true);
     expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("never sends a custom model-provider credential to the public speech endpoint", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1]), { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterSpeechProvider().synthesize({
+      text: "private proxy speech",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              apiKey: "synthetic-private-proxy-key",
+              baseUrl: "https://private.example.invalid/router/v1///",
+            },
+          },
+        },
+      } as never,
+      providerConfig: {},
+      target: "voice-note",
+      timeoutMs: 5000,
+    });
+
+    const request = requireOpenRouterPostRequest();
+    expect(request.url).toBe("https://private.example.invalid/router/v1/audio/speech");
+    expect(requireHeaders(request.headers).get("authorization")).toBe(
+      "Bearer synthetic-private-proxy-key",
+    );
+  });
+
+  it("preserves a speech-specific custom destination over the model-provider base URL", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: new Response(new Uint8Array([1]), { status: 200 }),
+      release: vi.fn(async () => {}),
+    });
+
+    await buildOpenRouterSpeechProvider().synthesize({
+      text: "speech-specific private proxy",
+      cfg: {
+        models: {
+          providers: {
+            openrouter: {
+              apiKey: "synthetic-private-proxy-key",
+              baseUrl: "https://model-proxy.example.invalid/v1",
+            },
+          },
+        },
+      } as never,
+      providerConfig: { baseUrl: "https://speech-proxy.example.invalid/router/v1///" },
+      target: "voice-note",
+      timeoutMs: 5000,
+    });
+
+    const request = requireOpenRouterPostRequest();
+    expect(request.url).toBe("https://speech-proxy.example.invalid/router/v1/audio/speech");
+    expect(requireHeaders(request.headers).get("authorization")).toBe(
+      "Bearer synthetic-private-proxy-key",
+    );
+  });
+
+  it("does not synthesize when a configured private destination has no credential", async () => {
+    vi.stubEnv("OPENROUTER_API_KEY", "");
+
+    await expect(
+      buildOpenRouterSpeechProvider().synthesize({
+        text: "missing private key",
+        cfg: {
+          models: {
+            providers: {
+              openrouter: { baseUrl: "https://private.example.invalid/v1" },
+            },
+          },
+        } as never,
+        providerConfig: {},
+        target: "voice-note",
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow("OpenRouter API key missing");
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("defaults to a live-proven OpenRouter TTS model", () => {

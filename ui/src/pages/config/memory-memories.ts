@@ -4,6 +4,7 @@ import type { AgentsWorkspaceGetResult } from "../../../../packages/gateway-prot
 import type { MemorySearchResponse } from "../../../../src/gateway/server-methods/memory-search.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import "../../styles/memory-memories.css";
 
@@ -18,10 +19,6 @@ type DetailState =
   | { kind: "ready"; content: string }
   | { kind: "error"; message: string };
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function resultKey(result: SearchResult, index: number): string {
   return `${index}:${result.path}:${result.startLine}:${result.endLine}`;
 }
@@ -35,7 +32,7 @@ function isExpandableWorkspaceResult(result: SearchResult): boolean {
     normalizedPath.split("/").every((segment) => segment && segment !== "." && segment !== "..");
   const workspaceMemoryPath =
     normalizedPath === "MEMORY.md" || normalizedPath.startsWith("memory/");
-  // workspace.get is workspace-contained; sessions/* and qmd/* are logical manager paths.
+  // workspace.get is workspace-contained; sessions/* are logical manager paths.
   return result.source === "memory" && safeRelativePath && workspaceMemoryPath;
 }
 
@@ -113,7 +110,11 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       if (this.searchRequest !== request || this.agentId !== agentId || this.client !== client) {
         return;
       }
-      this.searchState = { kind: "error", query: normalizedQuery, message: errorMessage(error) };
+      this.searchState = {
+        kind: "error",
+        query: normalizedQuery,
+        message: formatUiError(error),
+      };
     }
   }
 
@@ -157,7 +158,7 @@ class MemoryMemoriesElement extends OpenClawLightDomElement {
       }
       this.details = new Map(this.details).set(key, {
         kind: "error",
-        message: errorMessage(error),
+        message: formatUiError(error),
       });
     } finally {
       if (this.detailRequests.get(key) === request) {

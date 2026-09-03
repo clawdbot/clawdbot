@@ -51,13 +51,15 @@ Read the app's scoped owner guide. Record whether macOS app signing, physical
 iOS/Android devices, simulators, Android emulators, or hosted runners were
 actually available and exercised. Source inspection is not runtime proof.
 
-## Remote execution
+## Execution host
 
-Follow `.agents/skills/crabbox/SKILL.md` for heavy trusted-source suites,
-packaging, Docker, browser, and live provider proof. Acquire a trusted lease
-only when needed and execute **one command at a time per lease**. Sync and
-verify the exact candidate SHA before running. A 780-second timeout bounds an
-individual subagent scenario after its setup completes.
+Follow `.agents/skills/openclaw-testing/SKILL.md` for the current-host gate.
+Run capable trusted-source Linux suites, packaging, Docker, browser, and live
+provider proof directly on a dedicated Linux worker. When another capability
+or boundary requires Crabbox, acquire a trusted lease only when needed and
+execute **one command at a time per lease**. Sync and verify the exact candidate
+SHA before running. A 780-second timeout bounds an individual subagent scenario
+after its setup completes.
 
 If an orchestrator process or session disappears, inspect the original remote
 job, recorded command, and authoritative exit status before retrying. A missing

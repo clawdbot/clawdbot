@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   deriveApprovalBadgeSnapshot,
   findInlineApproval,
-  modalApprovalQueue,
   sessionHasPendingApproval,
 } from "./approval-presentation.ts";
 import type { ExecApprovalRequest } from "./exec-approval.ts";
@@ -22,7 +21,7 @@ function approval(
 }
 
 describe("approval presentation", () => {
-  it("puts the oldest matching active-session request inline and suppresses only it", () => {
+  it("puts the oldest matching active-session request inline", () => {
     const queue = [
       approval("approval-1", { sessionKey: "agent:main:current" }),
       approval("approval-2", { sessionKey: "agent:main:other" }),
@@ -32,28 +31,22 @@ describe("approval presentation", () => {
     const inline = findInlineApproval(queue, "agent:main:current");
 
     expect(inline?.id).toBe("approval-1");
-    expect(modalApprovalQueue(queue, inline?.id).map((entry) => entry.id)).toEqual([
-      "approval-2",
-      "approval-3",
-    ]);
   });
 
-  it("keeps every request in the modal when the active session does not match", () => {
+  it("does not select an inline request when the active session does not match", () => {
     const queue = [approval("approval-1", { sessionKey: "agent:main:other" })];
 
     const inline = findInlineApproval(queue, "agent:main:current");
 
     expect(inline).toBeNull();
-    expect(modalApprovalQueue(queue, inline?.id)).toBe(queue);
   });
 
-  it("keeps catalog-session requests modal because catalog chat cannot render them inline", () => {
+  it("does not select catalog-session requests because catalog chat cannot render them inline", () => {
     const queue = [approval("approval-1", { sessionKey: "catalog:codex:host:thread" })];
 
     const inline = findInlineApproval(queue, "catalog:codex:host:thread");
 
     expect(inline).toBeNull();
-    expect(modalApprovalQueue(queue, inline?.id)).toBe(queue);
   });
 
   it("derives per-agent counts and per-session flags from one queue snapshot", () => {

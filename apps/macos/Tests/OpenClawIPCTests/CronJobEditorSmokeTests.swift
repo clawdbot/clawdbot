@@ -15,17 +15,7 @@ struct CronJobEditorSmokeTests {
             onSave: { _ in })
     }
 
-    @Test func `status pill builds body`() {
-        _ = StatusPill(text: "ok", tint: .green).body
-        _ = StatusPill(text: "disabled", tint: .secondary).body
-    }
-
-    @Test func `cron job editor builds body for new job`() {
-        let view = self.makeEditor()
-        _ = view.body
-    }
-
-    @Test func `cron job editor builds body for existing job`() {
+    @Test func `cron job editor preserves advanced delivery routes`() {
         let channelsStore = ChannelsStore(isPreview: true)
         let job = CronJob(
             id: "job-1",
@@ -47,7 +37,22 @@ struct CronJobEditorSmokeTests {
                 channel: nil,
                 to: nil,
                 bestEffortDeliver: nil),
-            delivery: CronDelivery(mode: .announce, channel: "whatsapp", to: "+15551234567", bestEffort: true),
+            delivery: CronDelivery(
+                mode: .announce,
+                channel: "whatsapp",
+                to: "+15551234567",
+                bestEffort: true,
+                threadId: AnyCodable(42),
+                completionDestination: [
+                    "mode": AnyCodable("webhook"),
+                    "to": AnyCodable("https://example.test/complete"),
+                ],
+                failureDestination: [
+                    "mode": AnyCodable("announce"),
+                    "channel": AnyCodable("telegram"),
+                    "to": AnyCodable("ops"),
+                    "accountId": AnyCodable("alerts"),
+                ]),
             state: CronJobState(
                 nextRunAtMs: 1_700_000_100_000,
                 runningAtMs: nil,
@@ -57,12 +62,11 @@ struct CronJobEditorSmokeTests {
                 lastDurationMs: 1000))
 
         let view = self.makeEditor(job: job, channelsStore: channelsStore)
-        _ = view.body
-    }
-
-    @Test func `cron job editor exercises builders`() {
-        var view = self.makeEditor()
-        view.exerciseForTesting()
+        let delivery = view.buildDelivery()
+        #expect(delivery["threadId"] as? Int == 42)
+        #expect((delivery["completionDestination"] as? [String: Any])?["to"] as? String ==
+            "https://example.test/complete")
+        #expect((delivery["failureDestination"] as? [String: Any])?["accountId"] as? String == "alerts")
     }
 
     @Test func `cron job editor includes delete after run for at schedule`() {

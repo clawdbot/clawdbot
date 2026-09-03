@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import {
   resolveNpmPackArchiveMetadata,
   type NpmSpecResolution,
@@ -25,9 +25,11 @@ import {
   loadPluginInstallRuntime,
   resolveEffectiveInstallMode,
 } from "./install-shared.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
 import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
+  type PluginInstallArtifactConsentHandler,
   type PluginInstallErrorCode,
   type PluginInstallLogger,
   type PluginNpmIntegrityDriftParams,
@@ -80,7 +82,7 @@ async function stageNpmPackArchiveInManagedRoot(params: {
 > {
   const archiveStoreDir = path.join(params.npmRoot, MANAGED_NPM_PACK_ARCHIVE_DIR);
   const identity = params.integrity ?? params.shasum ?? params.tarballName;
-  const identitySlug = sha256HexPrefix(identity, 16);
+  const identitySlug = sha256HexPrefixCore(identity, 16);
   const packageSlug = safePluginInstallFileName(params.packageName) || "plugin";
   const versionSlug = safePluginInstallFileName(params.version ?? "pack") || "pack";
   const archiveFileName = `${packageSlug}-${versionSlug}-${identitySlug}.tgz`;
@@ -161,12 +163,14 @@ export async function installPluginFromNpmPackArchive(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
     expectedPluginId?: string;
     expectedIntegrity?: string;
     onIntegrityDrift?: (params: PluginNpmIntegrityDriftParams) => boolean | Promise<boolean>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<InstallPluginResult & { npmTarballName?: string }> {
   const runtime = await loadPluginInstallRuntime();
@@ -177,6 +181,7 @@ export async function installPluginFromNpmPackArchive(
   const metadataResult = await resolveNpmPackArchiveMetadata({
     archivePath: params.archivePath,
     timeoutMs,
+    signal: params.signal,
   });
   if (!metadataResult.ok) {
     return metadataResult;
@@ -230,50 +235,55 @@ export async function installPluginFromNpmPackArchive(
         ? "install"
         : targetMode;
 
-  const result = await installPluginFromManagedNpmRoot({
-    dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-    trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
-    config: params.config,
-    packageName,
-    prepareDependencySpec: async ({ npmRoot }) => {
-      try {
-        return {
-          ok: true,
-          ...(await stageNpmPackArchiveInManagedRoot({
-            archivePath: metadataResult.archivePath,
-            npmRoot,
-            packageName,
-            version: metadataResult.metadata.version,
-            integrity: metadataResult.metadata.integrity,
-            shasum: metadataResult.metadata.shasum,
-            tarballName: metadataResult.tarballName,
-          })),
-        };
-      } catch (error) {
-        return {
-          ok: false,
-          error: `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
-        };
-      }
-    },
-    displaySpec: metadataResult.archivePath,
-    installPolicyRequest: {
-      kind: "plugin-npm",
-      requestedSpecifier: `npm-pack:${metadataResult.archivePath}`,
-      source: { kind: "archive", authority: "user", mutable: true, network: false },
-    },
-    policyPreflightSourcePath: metadataResult.archivePath,
-    policyPreflightSourcePathKind: "file",
-    extensionsDir: params.extensionsDir,
-    npmDir: npmBaseDir,
-    timeoutMs,
-    logger,
-    mode,
-    dryRun,
-    expectedPluginId: params.expectedPluginId,
-    npmResolution,
-    ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
-  });
+  const result = await installPluginFromManagedNpmRoot(
+    copyPluginInstallTransactionRequest(params, {
+      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+      onInstallPolicyWarning: params.onInstallPolicyWarning,
+      trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      config: params.config,
+      packageName,
+      prepareDependencySpec: async ({ npmRoot }) => {
+        try {
+          return {
+            ok: true,
+            ...(await stageNpmPackArchiveInManagedRoot({
+              archivePath: metadataResult.archivePath,
+              npmRoot,
+              packageName,
+              version: metadataResult.metadata.version,
+              integrity: metadataResult.metadata.integrity,
+              shasum: metadataResult.metadata.shasum,
+              tarballName: metadataResult.tarballName,
+            })),
+          };
+        } catch (error) {
+          return {
+            ok: false,
+            error: `Failed to stage npm pack archive in managed npm root: ${String(error)}`,
+          };
+        }
+      },
+      displaySpec: metadataResult.archivePath,
+      installPolicyRequest: {
+        kind: "plugin-npm",
+        requestedSpecifier: `npm-pack:${metadataResult.archivePath}`,
+        source: { kind: "archive", authority: "user", mutable: true, network: false },
+      },
+      policyPreflightSourcePath: metadataResult.archivePath,
+      policyPreflightSourcePathKind: "file",
+      extensionsDir: params.extensionsDir,
+      npmDir: npmBaseDir,
+      timeoutMs,
+      signal: params.signal,
+      logger,
+      mode,
+      dryRun,
+      expectedPluginId: params.expectedPluginId,
+      onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+      npmResolution,
+      ...(driftResult.integrityDrift ? { integrityDrift: driftResult.integrityDrift } : {}),
+    }),
+  );
   emitSuccessfulPluginInstallSecurityEvent(result, {
     dryRun,
     mode: policyMode,

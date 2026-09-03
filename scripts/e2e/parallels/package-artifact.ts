@@ -3,7 +3,9 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { resolveNpmJsonEntries } from "../../lib/npm-json-output.mts";
 import { sleep as delay } from "../../lib/sleep.mjs";
+import { createPrepublishPluginRegistryArtifact } from "../../prepublish-plugin-registry-artifact.mjs";
 import { readPositiveIntEnv } from "./env-limits.ts";
 import { exists, readJson } from "./filesystem.ts";
 import { die, repoRoot, run, say, sh } from "./host-command.ts";
@@ -28,12 +30,7 @@ export async function packageBuildCommitFromTgz(tgzPath: string): Promise<string
 }
 
 function resolveNpmPackTarballFilename(value: unknown): string {
-  // npm 10/11 return arrays; npm 12 keys local-workspace results by package name.
-  const result = Array.isArray(value)
-    ? value.at(-1)
-    : value && typeof value === "object" && "openclaw" in value
-      ? value.openclaw
-      : value;
+  const result = resolveNpmJsonEntries(value).at(-1);
   const filename =
     result &&
     typeof result === "object" &&
@@ -141,6 +138,7 @@ export async function packOpenClaw(input: {
   destination: string;
   packageSpec?: string;
   requireControlUi?: boolean;
+  requiredCompanionPackages?: readonly string[];
 }): Promise<PackageArtifact> {
   await mkdir(input.destination, { recursive: true });
   if (input.packageSpec) {
@@ -197,8 +195,32 @@ export async function packOpenClaw(input: {
     if (!buildCommit) {
       die(`failed to read packed build commit from ${tgzPath}`);
     }
+    const version = await packageVersionFromTgz(tgzPath);
+    const registryDir = path.join(input.destination, "plugins");
+    // Source-built core and required official plugins must describe one exact
+    // checkout; the canonical artifact creator rejects dirty or mismatched sources.
+    const registry = input.requiredCompanionPackages?.length
+      ? createPrepublishPluginRegistryArtifact({
+          repoRoot,
+          outputDir: registryDir,
+          sourceSha: buildCommit,
+          candidateVersion: version,
+          requiredPackages: [...input.requiredCompanionPackages],
+        })
+      : undefined;
+    const registryPackages = registry?.manifest.packages.map((entry) => ({
+      name: entry.name,
+      version: entry.version,
+      tarballPath: path.join(registryDir, entry.tarball),
+    }));
     say(`Packed ${tgzPath}`);
-    return { buildCommit, buildCommitShort: buildCommit.slice(0, 7), path: tgzPath };
+    return {
+      buildCommit,
+      buildCommitShort: buildCommit.slice(0, 7),
+      path: tgzPath,
+      version,
+      registryPackages,
+    };
   });
 }
 

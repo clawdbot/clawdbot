@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
+  publishSlackBlockedStatus,
   publishSlackConnectedStatus,
   publishSlackDisconnectedStatus,
   startSlackSocketAndWaitForDisconnect,
@@ -63,9 +64,11 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledTimes(1);
     const status = statusCallAt(setStatus, 0);
     expect(status?.connected).toBe(true);
+    expect(status?.running).toBe(true);
     expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
     expect(status?.lifecycle).toBe("ready");
     expect(status?.lastError).toBeNull();
+    expect(status?.terminalDisconnect).toBeUndefined();
     expect(status).not.toHaveProperty("lastEventAt");
   });
 
@@ -82,8 +85,22 @@ describe("slack socket reconnect helpers", () => {
     expect(setStatus).toHaveBeenCalledWith({
       connected: true,
       lastConnectedAt: 1_711_406_400_500,
+      terminalDisconnect: true,
       lifecycle: "blocked",
       lastError: "auth.test returned no user_id",
+    });
+  });
+
+  it("marks non-recoverable socket authentication failures blocked", () => {
+    const setStatus = vi.fn();
+
+    publishSlackBlockedStatus(setStatus, new Error("invalid_auth"));
+
+    expect(setStatus).toHaveBeenCalledWith({
+      connected: false,
+      lifecycle: "blocked",
+      terminalDisconnect: true,
+      lastError: "invalid_auth",
     });
   });
 
@@ -212,17 +229,6 @@ describe("slack socket reconnect helpers", () => {
     client.emit("disconnected");
 
     await expect(waiter).resolves.toEqual({ event: "disconnect" });
-  });
-
-  it("resolves disconnect waiter on socket error event", async () => {
-    const client = new FakeEmitter();
-    const app = { receiver: { client } };
-    const err = new Error("dns down");
-
-    const waiter = waitForSlackSocketDisconnect(app as never);
-    client.emit("error", err);
-
-    await expect(waiter).resolves.toEqual({ event: "error", error: err });
   });
 
   it("installs the disconnect waiter before socket start completes", async () => {

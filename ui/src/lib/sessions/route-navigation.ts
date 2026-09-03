@@ -3,7 +3,6 @@ import { pathForRoute } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import type { ApplicationNavigationOptions, ApplicationContext } from "../../app/context.ts";
 import type { BoardFace } from "../board/settings.ts";
-import { normalizeOptionalString } from "../string-coerce.ts";
 import { catalogSessionSearch, parseCatalogSessionKey } from "./catalog-key.ts";
 import {
   areUiSessionKeysEquivalent,
@@ -25,8 +24,13 @@ export function composerDraftSearch(draft: string): string {
 const SESSION_KEY_UUID_SUFFIX_RE =
   /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
+type SessionNavigationContext<TRouteId extends string> = Pick<
+  ApplicationContext<TRouteId>,
+  "agents" | "agentSelection" | "basePath" | "gateway" | "sessions"
+>;
+
 type ContextSessionNavigationTargetParams<TRouteId extends string> = {
-  context: ApplicationContext<TRouteId>;
+  context: SessionNavigationContext<TRouteId>;
   face: BoardFace;
   sessionKey: string;
   agentId?: string;
@@ -35,7 +39,9 @@ type ContextSessionNavigationTargetParams<TRouteId extends string> = {
   row?: never;
   mainKey?: never;
   shortIdLength?: number;
+  exactKey?: boolean;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -48,8 +54,10 @@ type ExplicitSessionNavigationTargetParams = {
   row?: Pick<GatewaySessionRow, "displayName" | "key">;
   mainKey?: string | null;
   shortIdLength?: number;
+  exactKey?: boolean;
   agentId?: never;
   preferenceDerivedFace?: boolean;
+  focusComposer?: boolean;
   navigationKey?: string;
 };
 
@@ -107,30 +115,6 @@ export function resolveSessionNavigationAgentId<TRouteId extends string>(
   );
 }
 
-function pathForNonCatalogSessionKey(params: {
-  face: BoardFace;
-  sessionKey: string;
-  fallbackAgentId: string;
-  basePath: string;
-  row?: Pick<GatewaySessionRow, "displayName" | "key">;
-  mainKey?: string | null;
-  shortIdLength?: number;
-}): string {
-  const key = params.row?.key ?? params.sessionKey;
-  const agentId =
-    parseAgentSessionKey(key)?.agentId ?? normalizeOptionalString(params.fallbackAgentId);
-  if (!agentId) {
-    return pathForRoute(params.face, params.basePath);
-  }
-  return (
-    pathForSession(params.face, normalizeAgentId(agentId), key, params.basePath, {
-      displayName: params.row?.displayName,
-      mainKey: params.mainKey,
-      shortIdLength: params.shortIdLength,
-    }) ?? pathForRoute(params.face, params.basePath)
-  );
-}
-
 export function sessionNavigationTarget<TRouteId extends string>(
   params: ContextSessionNavigationTargetParams<TRouteId> | ExplicitSessionNavigationTargetParams,
 ): SessionNavigationTarget {
@@ -158,16 +142,18 @@ export function sessionNavigationTarget<TRouteId extends string>(
 
   const catalogKey = parseCatalogSessionKey(row?.key ?? sessionKey);
   const targetKey = catalogKey
-    ? buildAgentMainSessionKey({ agentId: fallbackAgentId, mainKey: mainKey ?? "main" })
+    ? buildAgentMainSessionKey({
+        agentId: parseAgentSessionKey(sessionKey)?.agentId ?? fallbackAgentId,
+        mainKey: mainKey ?? "main",
+      })
     : (row?.key ?? sessionKey);
-  const pathname = pathForNonCatalogSessionKey({
-    face: params.face,
-    sessionKey: targetKey,
-    fallbackAgentId,
-    basePath,
+  const sessionPath = pathForSession(params.face, fallbackAgentId, targetKey, basePath, {
+    displayName: catalogKey ? undefined : row?.displayName,
+    exactKey: params.exactKey,
+    mainKey,
     shortIdLength: params.shortIdLength,
-    ...(catalogKey ? { mainKey } : { row, mainKey }),
   });
+  const pathname = sessionPath ?? pathForRoute(params.face, basePath);
   const search = catalogKey ? catalogSessionSearch(catalogKey) : undefined;
   // A cached row carries the authoritative boardFace, so the caller's face is already
   // correct. Only an uncached key made it a guess: mark the in-app navigation so the
@@ -182,6 +168,9 @@ export function sessionNavigationTarget<TRouteId extends string>(
   const navigationParams = new URLSearchParams(search ?? "");
   if (params.preferenceDerivedFace && !row) {
     navigationParams.set(SESSION_FACE_PREFERENCE_PARAM, "1");
+  }
+  if (params.focusComposer) {
+    navigationParams.set(SESSION_COMPOSER_FOCUS_PARAM, "1");
   }
   const navigationKey = params.navigationKey?.trim() || row?.key;
   if (navigationKey && SESSION_KEY_UUID_SUFFIX_RE.test(navigationKey)) {

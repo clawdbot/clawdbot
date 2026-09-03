@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { COHERE_LIVE_MODEL_DISCOVERY } from "./provider-catalog.js";
-import { createCohereCompletionsWrapper } from "./stream.js";
+import { wrapCohereProviderStream } from "./stream.js";
 
 const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
 const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
@@ -50,11 +50,17 @@ function captureCoherePayload(
     return {} as ReturnType<StreamFn>;
   };
 
-  const wrappedStreamFn = createCohereCompletionsWrapper(baseStreamFn);
+  const model = requireCohereModel(settings?.modelId);
+  const wrappedStreamFn = wrapCohereProviderStream({
+    provider: "cohere",
+    modelId: model.id,
+    model,
+    streamFn: baseStreamFn,
+  });
   if (!wrappedStreamFn) {
     throw new Error("Cohere wrapper did not return a stream function");
   }
-  void wrappedStreamFn(requireCohereModel(settings?.modelId), context, {
+  void wrappedStreamFn(model, context, {
     onPayload: (payload) => {
       captured = payload as Record<string, unknown>;
     },

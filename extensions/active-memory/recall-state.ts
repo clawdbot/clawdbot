@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { closeActiveMemorySearchManager } from "openclaw/plugin-sdk/memory-host-search";
 import {
   asDateTimestampMs,
@@ -42,13 +43,25 @@ function isCircuitBreakerOpen(key: string, maxTimeouts: number, cooldownMs: numb
   return true;
 }
 
-function recordCircuitBreakerTimeout(key: string): void {
+function recordCircuitBreakerTimeout(key: string, cooldownMs: number): void {
+  const now = Date.now();
+  for (const [entryKey, entry] of timeoutCircuitBreaker) {
+    if (now - entry.lastTimeoutAt >= cooldownMs) {
+      timeoutCircuitBreaker.delete(entryKey);
+    }
+  }
   const entry = timeoutCircuitBreaker.get(key);
-  if (entry) {
-    entry.consecutiveTimeouts++;
-    entry.lastTimeoutAt = Date.now();
-  } else {
-    timeoutCircuitBreaker.set(key, { consecutiveTimeouts: 1, lastTimeoutAt: Date.now() });
+  // Reinsertion keeps refreshed keys newer than peers when capacity eviction runs.
+  timeoutCircuitBreaker.delete(key);
+  timeoutCircuitBreaker.set(key, {
+    consecutiveTimeouts: (entry?.consecutiveTimeouts ?? 0) + 1,
+    lastTimeoutAt: now,
+  });
+  if (timeoutCircuitBreaker.size > DEFAULT_MAX_CACHE_ENTRIES) {
+    const oldestKey = timeoutCircuitBreaker.keys().next().value;
+    if (oldestKey !== undefined) {
+      timeoutCircuitBreaker.delete(oldestKey);
+    }
   }
 }
 
@@ -69,9 +82,7 @@ function scheduleMemorySearchCleanupAfterTimeout(
           api.logger.debug?.(`${logPrefix} released memory search managers after timeout`);
         })
         .catch((error: unknown) => {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
+          const message = toSingleLineErrorMessage(error);
           api.logger.warn?.(
             `${logPrefix} failed to release memory search managers after timeout: ${message}`,
           );
@@ -126,7 +137,11 @@ async function resolveActiveRecallForRun(
 
 function forgetActiveRecallRun(runId: string | undefined): void {
   if (runId) {
-    activeRecallRuns.delete(runId);
+    for (const key of activeRecallRuns.keys()) {
+      if (key === runId || key.startsWith(`${runId}:`)) {
+        activeRecallRuns.delete(key);
+      }
+    }
   }
 }
 
@@ -135,8 +150,29 @@ function buildCacheKey(params: {
   sessionKey?: string;
   sessionId?: string;
   query: string;
+  authorityFingerprint: string;
+  memorySlot?: string;
+  activeProjectKeys?: string[];
+  modelProviderId?: string;
+  modelId?: string;
+  recallToolNames: string[];
+  resourceScope?: string;
 }): string {
-  const hash = crypto.createHash("sha1").update(params.query).digest("hex");
+  const hash = crypto
+    .createHash("sha256")
+    .update(
+      JSON.stringify({
+        query: params.query,
+        authorityFingerprint: params.authorityFingerprint,
+        memorySlot: params.memorySlot,
+        activeProjectKeys: [...(params.activeProjectKeys ?? [])].toSorted(),
+        modelProviderId: params.modelProviderId,
+        modelId: params.modelId,
+        recallToolNames: [...params.recallToolNames].toSorted(),
+        resourceScope: params.resourceScope,
+      }),
+    )
+    .digest("hex");
   return `${params.agentId}:${params.sessionKey ?? params.sessionId ?? "none"}:${hash}`;
 }
 
@@ -223,6 +259,10 @@ function toSingleLineLogValue(value: unknown): string {
     : singleLine;
 }
 
+function toSingleLineErrorMessage(error: unknown): string {
+  return toSingleLineLogValue(coerceErrorMessage(error));
+}
+
 function shouldCacheResult(result: ActiveRecallResult): boolean {
   return result.status === "ok" && result.summary.length > 0;
 }
@@ -252,5 +292,6 @@ export {
   scheduleMemorySearchCleanupAfterTimeout,
   setCachedResult,
   shouldCacheResult,
+  toSingleLineErrorMessage,
   toSingleLineLogValue,
 };

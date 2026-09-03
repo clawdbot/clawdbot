@@ -46,9 +46,29 @@ public struct DeviceIdentity: Codable, Sendable, Equatable {
     }
 }
 
+struct DeviceIdentityStateRootState {
+    private(set) var url: URL?
+    private(set) var used = false
+
+    mutating func configure(_ url: URL) -> Bool {
+        let normalized = url.standardizedFileURL
+        if let configured = self.url { return configured == normalized }
+        guard !self.used else { return false }
+        self.url = normalized
+        return true
+    }
+
+    mutating func resolve() -> URL? {
+        self.used = true
+        return self.url
+    }
+}
+
 enum DeviceIdentityPaths {
     private static let stateDirEnv = ["OPENCLAW_STATE_DIR"]
     @TaskLocal static var scopedStateDirURL: URL?
+    private static let configuredStateLock = NSLock()
+    private nonisolated(unsafe) static var configuredState = DeviceIdentityStateRootState()
 
     /// Entitlements are baked into the code signature, so resolve the gate once per process.
     /// Every identity load and DeviceAuthStore read/write resolves the state dir through here;
@@ -63,6 +83,10 @@ enum DeviceIdentityPaths {
             appGroupStateDirURL: self.appGroupStateDirURL(),
             appGroupStateDirAvailable: self.appGroupStateDirAvailable,
             temporaryDirectory: FileManager.default.temporaryDirectory)
+    }
+
+    static func configureStateDirURL(_ url: URL) -> Bool {
+        self.configuredStateLock.withLock { self.configuredState.configure(url) }
     }
 
     static func stateDirURL(
@@ -89,6 +113,9 @@ enum DeviceIdentityPaths {
         // otherwise race whenever another suite temporarily swaps OPENCLAW_STATE_DIR.
         if let scopedStateDirURL {
             return scopedStateDirURL
+        }
+        if let configured = self.configuredStateLock.withLock({ self.configuredState.resolve() }) {
+            return configured
         }
         for key in self.stateDirEnv {
             if let raw = getenv(key) {
@@ -204,6 +231,11 @@ public enum DeviceIdentityStore {
         self.loadOrCreate(profile: .primary)
     }
 
+    @discardableResult
+    public static func configureStateDirectory(_ url: URL) -> Bool {
+        DeviceIdentityPaths.configureStateDirURL(url)
+    }
+
     #if compiler(>=6.4)
     nonisolated(nonsending) static func withStateDirectory<T>(
         _ url: URL,
@@ -227,22 +259,41 @@ public enum DeviceIdentityStore {
     #endif
 
     public static func loadOrCreate(profile: GatewayDeviceIdentityProfile) -> DeviceIdentity {
-        guard let identity = loadOrCreatePersisted(profile: profile) else {
-            preconditionFailure("Could not persist the OpenClaw device identity")
+        do {
+            return try self.loadOrCreatePersistedOrThrow(profile: profile)
+        } catch {
+            preconditionFailure("Could not persist the OpenClaw device identity: \(error.localizedDescription)")
         }
-        return identity
     }
 
     /// Loads or creates an identity, returning nil unless its key material was durably persisted.
     public static func loadOrCreatePersisted(
         profile: GatewayDeviceIdentityProfile = .primary) -> DeviceIdentity?
     {
+        try? self.loadOrCreatePersistedOrThrow(profile: profile)
+    }
+
+    /// Loads or creates an identity and preserves the storage failure for callers that can report it.
+    static func loadOrCreatePersistedOrThrow(
+        profile: GatewayDeviceIdentityProfile = .primary) throws -> DeviceIdentity
+    {
         let stateDirURL = DeviceIdentityPaths.stateDirURL()
-        return try? DeviceIdentitySQLiteStore.loadOrCreate(
-            databaseURL: self.databaseURL(stateDirURL: stateDirURL),
-            destinationStateDirURL: stateDirURL,
-            profile: profile,
-            legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
+        do {
+            return try DeviceIdentitySQLiteStore.loadOrCreate(
+                databaseURL: self.databaseURL(stateDirURL: stateDirURL),
+                destinationStateDirURL: stateDirURL,
+                profile: profile,
+                legacySources: DeviceIdentityPaths.legacyIdentitySources(profile: profile))
+        } catch {
+            throw NSError(
+                domain: "ai.openclaw.device-identity-store",
+                code: 2,
+                userInfo: [
+                    NSLocalizedDescriptionKey:
+                        "Could not access the persisted device identity: \(error.localizedDescription)",
+                    NSUnderlyingErrorKey: error,
+                ])
+        }
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {

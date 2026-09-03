@@ -2,7 +2,7 @@
 import { html } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import { resolveGatewayTokenForUrlEdit, type UiSettings } from "../../app/settings.ts";
+import type { UiSettings } from "../../app/settings.ts";
 import {
   renderSettingsPage,
   renderSettingsRow,
@@ -47,7 +47,10 @@ function renderSecretRow(params: {
   onToggle: () => void;
 }) {
   const { label, ...secret } = params;
-  return renderSettingsRow({ title: label, control: renderSettingsSecretInput(secret) });
+  return renderSettingsRow({
+    title: label,
+    control: renderSettingsSecretInput({ ...secret, ariaLabel: label }),
+  });
 }
 
 export function renderConnection(props: ConnectionProps) {
@@ -68,14 +71,11 @@ export function renderConnection(props: ConnectionProps) {
       control: html`
         <input
           class="settings-input"
+          aria-label=${t("connection.access.wsUrl")}
           .value=${props.settings.gatewayUrl}
           @input=${(e: Event) => {
-            const settings = props.settings;
             const v = (e.target as HTMLInputElement).value;
-            props.onConnectionChange({
-              gatewayUrl: v,
-              token: resolveGatewayTokenForUrlEdit(settings.gatewayUrl, v, settings.token),
-            });
+            props.onConnectionChange({ gatewayUrl: v });
           }}
           placeholder="ws://100.x.y.z:18789"
         />
@@ -112,6 +112,7 @@ export function renderConnection(props: ConnectionProps) {
       control: html`
         <input
           class="settings-input"
+          aria-label=${t("connection.access.sessionKey")}
           .value=${props.settings.sessionKey}
           @input=${(e: Event) => props.onSessionKeyChange((e.target as HTMLInputElement).value)}
         />

@@ -147,8 +147,8 @@ rescue JSON::ParserError => e
   UI.user_error!("Invalid JSON from Android version helper: #{e.message}")
 end
 
-def sync_android_versioning!
-  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--root", repo_root]))
+def check_android_versioning!
+  sh(shell_join(["node", "--import", "tsx", File.join(repo_root, "scripts", "android-sync-versioning.ts"), "--check", "--require-mobile-release", "--root", repo_root]))
 end
 
 def android_release_notes_path
@@ -157,7 +157,7 @@ end
 
 def validate_android_release_notes!
   release_notes_path = android_release_notes_path
-  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run `pnpm android:version:sync`.") unless File.exist?(release_notes_path)
+  UI.user_error!("Missing Android release notes at #{release_notes_path}. Run the shared mobile cutter and commit its outputs.") unless File.exist?(release_notes_path)
   UI.user_error!("Android release notes at #{release_notes_path} are empty.") unless env_present?(File.read(release_notes_path))
 end
 
@@ -446,8 +446,16 @@ def prepare_android_release_signing!
 end
 
 def validate_android_release_signing!
+  build_commit = release_git_sha
+  build_timestamp = Time.now.utc.strftime("%Y-%m-%dT%H:%M:%SZ")
   Dir.chdir(android_root) do
-    sh(shell_join(["./gradlew", ":app:bundlePlayRelease", ":wear:bundleRelease", "--dry-run"]))
+    sh(shell_join([
+      "./gradlew",
+      ":app:validateSigningPlayRelease",
+      ":wear:validateSigningRelease",
+      "-PopenclawBuildCommit=#{build_commit}",
+      "-PopenclawBuildTimestamp=#{build_timestamp}"
+    ]))
   end
 end
 
@@ -563,7 +571,7 @@ platform :android do
 
   desc "Validate Android Play release auth, signing, versioning, and release notes"
   lane :release_preflight do
-    sync_android_versioning!
+    check_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
     UI.success("Android Play release preflight passed for #{version_metadata[:version]} (#{version_metadata[:version_code]}).")
@@ -571,7 +579,7 @@ platform :android do
 
   desc "Upload Google Play metadata, changelog, and optional screenshots"
   lane :metadata do
-    sync_android_versioning!
+    check_android_versioning!
     version_metadata = read_android_version_metadata
     ENV["SUPPLY_UPLOAD_METADATA"] = "1" unless ENV.key?("SUPPLY_UPLOAD_METADATA")
     upload_play_store_metadata!(version_metadata)
@@ -580,7 +588,7 @@ platform :android do
 
   desc "Build signed Android release artifacts locally without uploading"
   lane :play_store_archive do
-    sync_android_versioning!
+    check_android_versioning!
     prepare_android_release_signing!
     build_release_artifacts!
   end
@@ -592,7 +600,7 @@ platform :android do
 
   desc "Upload the signed Play AAB to Google Play"
   lane :play_store do
-    sync_android_versioning!
+    check_android_versioning!
     version_metadata = read_android_version_metadata
     upload_play_store_build!(version_metadata)
     UI.success("Uploaded Android Play build to #{play_track}: version=#{version_metadata[:version]} code=#{version_metadata[:version_code]}")
@@ -600,7 +608,7 @@ platform :android do
 
   desc "Upload Android metadata, archive release artifacts, then upload the Play AAB"
   lane :release_upload do
-    sync_android_versioning!
+    check_android_versioning!
     version_metadata = read_android_version_metadata
     validate_android_release_preflight!(version_metadata)
     screenshots

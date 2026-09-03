@@ -1,13 +1,13 @@
 // Real WebSocket coverage for abort ownership when an in-flight dispatch rejects.
 import path from "node:path";
+import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { rawDataToString } from "../infra/ws.js";
 import { interruptSessionWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
-import { createDeferred } from "../test-utils/deferred.js";
 import {
   connectOk,
   createGatewaySuiteHarness,

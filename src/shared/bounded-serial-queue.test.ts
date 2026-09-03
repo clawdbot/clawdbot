@@ -104,8 +104,7 @@ describe("BoundedSerialQueue", () => {
     const queue = new BoundedSerialQueue({ maxPendingCount: 2, maxPendingWeight: 2 });
     const active = queue.enqueue(async () => await first.promise);
     const flush = queue.flush();
-    const repeatedFlushes = Array.from({ length: 10_000 }, () => queue.flush());
-    expect(new Set([flush, ...repeatedFlushes]).size).toBe(1);
+    expect(queue.flush()).toBe(flush);
     const late = queue.enqueue(async () => await second.promise);
     const flushed = vi.fn();
     void flush.then(flushed);
@@ -123,6 +122,22 @@ describe("BoundedSerialQueue", () => {
     }
     if (late.accepted) {
       await late.completion;
+    }
+  });
+
+  it("can require every task in the accepted prefix to succeed", async () => {
+    const failure = new Error("persistence failed");
+    const queue = new BoundedSerialQueue({ maxPendingCount: 1, maxPendingWeight: 1 });
+    const task = queue.enqueue(async () => {
+      throw failure;
+    });
+    const ordinaryFlush = queue.flush();
+    const strictFlush = queue.flush({ requireSuccess: true });
+
+    await expect(ordinaryFlush).resolves.toBeUndefined();
+    await expect(strictFlush).rejects.toBe(failure);
+    if (task.accepted) {
+      await expect(task.completion).rejects.toBe(failure);
     }
   });
 

@@ -10,15 +10,16 @@ const hoisted = vi.hoisted(() => ({ callGateway: vi.fn() }));
 vi.mock("../gateway/call.js", () => ({ callGateway: hoisted.callGateway }));
 
 const questionId = "ask_0123456789abcdef0123456789abcdef";
+const optionButtons = ["Staging", "Production"].map((label) => ({
+  label,
+  action: { type: "question" as const, questionId, optionValue: label },
+}));
 const presentation = {
   blocks: [
     { type: "text" as const, text: "Deploy where?" },
     {
       type: "buttons" as const,
-      buttons: ["Staging", "Production"].map((label) => ({
-        label,
-        action: { type: "question" as const, questionId, optionValue: label },
-      })),
+      buttons: optionButtons,
     },
   ],
 };
@@ -37,6 +38,38 @@ describe("question reaction runtime", () => {
       questionId,
       optionValues: ["Staging", "Production"],
     });
+  });
+
+  it("keeps declared choices when the presentation also offers custom input", () => {
+    const presentationWithCustomInput = {
+      ...presentation,
+      blocks: [
+        presentation.blocks[0]!,
+        {
+          type: "buttons" as const,
+          buttons: [
+            ...optionButtons,
+            {
+              label: "Other…",
+              action: { type: "question" as const, questionId, intent: "custom-input" as const },
+            },
+          ],
+        },
+      ],
+    };
+    const payload = prepareQuestionReactionPayloadForDelivery({
+      payload: {
+        channelData: { askUser: { questionId } },
+        presentation: presentationWithCustomInput,
+      },
+      presentation: presentationWithCustomInput,
+    });
+
+    expect(readQuestionReactionBinding(payload ?? {})).toEqual({
+      questionId,
+      optionValues: ["Staging", "Production"],
+    });
+    expect(payload?.text).toContain("Or reply with your own answer.");
   });
 
   it("keeps a one-option prompt reaction-eligible", () => {

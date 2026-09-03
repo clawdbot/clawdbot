@@ -5,7 +5,7 @@
  * native provider tool call can still arrive later. This coordinator prevents
  * duplicate consults and keeps late native calls correlated to forced handles.
  */
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   matchRealtimeVoiceConsultQuestions,
   readRealtimeVoiceConsultQuestion,

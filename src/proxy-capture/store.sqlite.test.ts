@@ -6,6 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -77,6 +79,24 @@ describe("DebugProxyCaptureStore", () => {
     expect(() => rebound.endSession("exit-session")).not.toThrow();
   });
 
+  it("fences a shared store that was opened before external ownership was claimed", () => {
+    const env = makeStateEnv("openclaw-proxy-capture-preclaim-");
+    const store = new DebugProxyCaptureStore({ env });
+    env.OPENCLAW_SUPERVISOR_MODE = "external";
+    claimOpenClawStateOwnership("gateway-supervisor", { env });
+    delete env.OPENCLAW_SUPERVISOR_MODE;
+
+    expect(() =>
+      store.upsertSession({
+        id: "preclaim-session",
+        startedAt: 1,
+        mode: "proxy-run",
+        sourceScope: "openclaw",
+        sourceProcess: "cli",
+      }),
+    ).toThrow(OpenClawStateOwnershipError);
+  });
+
   it("tracks and closes cached stores independently across paths", () => {
     const first = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-first-"),
@@ -99,6 +119,14 @@ describe("DebugProxyCaptureStore", () => {
     const dbPath = path.join(root, "capture.sqlite");
     const blobDir = path.join(root, "blobs");
     const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
+    lease.store.db.exec(`
+      CREATE TABLE config_machine_state (
+        state_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO config_machine_state VALUES ('gateway.supervision', '{"malformed":true}', 1);
+    `);
 
     expect(getDebugProxyCaptureStore(dbPath, blobDir)).toBe(lease.store);
     lease.store.upsertSession({
@@ -138,6 +166,7 @@ describe("DebugProxyCaptureStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
+    lease.store.db.exec("DROP TABLE config_machine_state;");
     expect(
       lease.store.db
         .prepare(

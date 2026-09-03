@@ -144,17 +144,6 @@ Use [scheduled tasks](/automation/cron-jobs) for exact reminders, timed checks,
 and recurring work. Memory can still summarize the durable context around that
 work.
 
-## Retired inferred commitments
-
-Some future follow-ups are not durable facts. If a future event should trigger
-an action, use a [standing intent](/concepts/standing-intents). If a clock time
-should trigger it, use a [scheduled task](/automation/cron-jobs).
-
-The inferred commitments experiment is retired. OpenClaw no longer extracts or
-delivers those follow-ups. Use [scheduled tasks](/automation/cron-jobs) for
-future actions; the legacy `openclaw commitments` command remains available to
-inspect or dismiss existing stored rows.
-
 ## Memory tools
 
 The agent has three tools for working with memory:
@@ -184,16 +173,12 @@ a generic OpenAI-compatible endpoint.
 See [Memory search](/concepts/memory-search) for how search works, tuning
 options, and provider setup.
 
-## Memory backends
+## Memory engines
 
 <CardGroup cols={3}>
 <Card title="Builtin (default)" icon="database" href="/concepts/memory-builtin">
 SQLite-based. Works out of the box with keyword search, vector similarity, and
 hybrid search. No extra dependencies.
-</Card>
-<Card title="QMD" icon="search" href="/concepts/memory-qmd">
-Local-first sidecar with reranking, query expansion, and the ability to index
-directories outside the workspace.
 </Card>
 <Card title="Honcho" icon="brain" href="/concepts/memory-honcho">
 AI-native cross-session memory with user modeling, semantic search, and
@@ -233,6 +218,10 @@ Before [compaction](/concepts/compaction) summarizes your conversation,
 OpenClaw runs a silent turn that reminds the agent to save important context
 to memory files. This is on by default; set
 `agents.defaults.compaction.memoryFlush.enabled: false` to turn it off.
+
+Memory flushing requires writable workspace access. Sessions whose sandbox
+requires read-only or no workspace access skip the flush, including sessions
+with a persisted sandbox requirement that overrides the agent's configuration.
 
 To keep that housekeeping turn on a local model, set an exact override that
 applies only to the memory-flush turn (it does not inherit the active
@@ -289,9 +278,10 @@ Dream Diary details.
 
 The dreaming system has two related review lanes:
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses to decide what
-  graduates into `MEMORY.md`.
+- **Live dreaming** works from short-term dreaming state in SQLite plugin
+  storage and is what the normal deep phase uses to decide what graduates into
+  `MEMORY.md`. Doctor owns migration of legacy dreaming JSON state from
+  `memory/.dreams/`; run `openclaw doctor --fix` before using that old state.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
 
@@ -330,11 +320,11 @@ openclaw memory index --force   # Rebuild the index
 
 - [Memory search](/concepts/memory-search): search pipeline, providers, and tuning.
 - [Builtin memory engine](/concepts/memory-builtin): default SQLite backend.
-- [QMD memory engine](/concepts/memory-qmd): advanced local-first sidecar.
 - [Honcho memory](/concepts/memory-honcho): AI-native cross-session memory.
 - [Memory LanceDB](/plugins/memory-lancedb): LanceDB-backed plugin with OpenAI-compatible embeddings.
 - [Memory Wiki](/plugins/memory-wiki): compiled knowledge vault and wiki-native tools.
 - [Dreaming](/concepts/dreaming): background promotion from short-term recall to long-term memory.
+- [Memory provenance and deletion](/concepts/memory-provenance): session lineage, admission policy, and `memory forget`.
 - [Memory configuration reference](/reference/memory-config): all config knobs.
 - [Compaction](/concepts/compaction): how compaction interacts with memory.
 - [Active memory](/concepts/active-memory): sub-agent memory for interactive chat sessions.

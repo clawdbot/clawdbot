@@ -1,6 +1,7 @@
 /** Caches plugin tool descriptors by plugin source, contract names, and runtime context. */
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { JsonObject, ToolDescriptor } from "../tools/types.js";
 import type { PluginLoadOptions } from "./loader.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -14,7 +15,9 @@ const PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT = 256;
 export type CachedPluginToolDescriptor = {
   descriptor: ToolDescriptor;
   displaySummary?: string;
+  hideFromChannelProgress?: AnyAgentTool["hideFromChannelProgress"];
   requiredClientCaps?: string[];
+  resultContentSource?: AnyAgentTool["resultContentSource"];
   optional: boolean;
 };
 
@@ -112,6 +115,7 @@ function buildDescriptorContextCacheKey(params: {
     agentAccountId: ctx.agentAccountId ?? null,
     nativeChannelId: ctx.nativeChannelId ?? null,
     deliveryContext: ctx.deliveryContext ?? null,
+    deliveryAvailable: ctx.delivery !== undefined,
     requesterSenderId: ctx.requesterSenderId ?? null,
     senderIsOwner: ctx.senderIsOwner ?? null,
     sandboxed: ctx.sandboxed ?? null,
@@ -156,8 +160,12 @@ export function capturePluginToolDescriptor(params: {
   const title = typeof label === "string" && label.trim() ? label.trim() : undefined;
   return {
     ...(params.tool.displaySummary ? { displaySummary: params.tool.displaySummary } : {}),
+    ...(params.tool.hideFromChannelProgress === true ? { hideFromChannelProgress: true } : {}),
     ...(params.tool.requiredClientCaps
       ? { requiredClientCaps: [...params.tool.requiredClientCaps] }
+      : {}),
+    ...(params.tool.resultContentSource
+      ? { resultContentSource: params.tool.resultContentSource }
       : {}),
     optional: params.optional,
     descriptor: {
@@ -186,10 +194,10 @@ export function writeCachedPluginToolDescriptors(params: {
     !pluginToolDescriptorCacheState.descriptors.has(params.cacheKey) &&
     pluginToolDescriptorCacheState.descriptors.size >= PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT
   ) {
-    const oldestKey = pluginToolDescriptorCacheState.descriptors.keys().next().value;
-    if (oldestKey !== undefined) {
-      pluginToolDescriptorCacheState.descriptors.delete(oldestKey);
-    }
+    pruneMapToMaxSize(
+      pluginToolDescriptorCacheState.descriptors,
+      PLUGIN_TOOL_DESCRIPTOR_CACHE_LIMIT - 1,
+    );
   }
   pluginToolDescriptorCacheState.descriptors.set(params.cacheKey, [...params.descriptors]);
 }

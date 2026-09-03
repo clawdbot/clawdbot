@@ -1,10 +1,11 @@
-// Discord tests cover message utils plugin behavior.
 import {
   type APIAttachment,
   type APIStickerItem,
   MessageReferenceType,
   StickerFormatType,
 } from "discord-api-types/v10";
+// Discord tests cover message utils plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Message } from "../internal/discord.js";
 
@@ -46,11 +47,11 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   };
 });
 
-let resolveForwardedMediaList: typeof import("./message-utils.js").resolveForwardedMediaList;
-let resolveMediaList: typeof import("./message-utils.js").resolveMediaList;
+let resolveForwardedMediaList: typeof import("./message-media.js").resolveForwardedMediaList;
+let resolveMediaList: typeof import("./message-media.js").resolveMediaList;
 
 beforeAll(async () => {
-  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-utils.js"));
+  ({ resolveForwardedMediaList, resolveMediaList } = await import("./message-media.js"));
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -97,12 +98,7 @@ const DISCORD_CDN_HOSTNAMES = [
   "*.discordapp.net",
 ];
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -158,6 +154,7 @@ function expectSinglePngDownload(params: {
     {
       path: params.expectedPath,
       contentType: "image/png",
+      fileName: params.filePathHint,
       ...(params.kind ? { kind: params.kind } : {}),
     },
   ]);
@@ -419,6 +416,7 @@ describe("resolveMediaList", () => {
         {
           path: "/tmp/voice.ogg",
           contentType: undefined,
+          fileName: "voice.ogg",
           kind: "audio",
         },
       ]);
@@ -468,6 +466,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "image.ogg",
       },
     ]);
   });
@@ -484,6 +483,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/voice",
         contentType: "audio/ogg",
+        fileName: "voice",
         kind: "audio",
       },
     ]);
@@ -519,6 +519,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/image.png",
         contentType: "image/png",
+        fileName: "voice.ogg",
       },
     ]);
   });
@@ -577,6 +578,7 @@ describe("resolveMediaList", () => {
       {
         path: "/tmp/good.png",
         contentType: "image/png",
+        fileName: "good.png",
       },
       {
         contentType: "application/pdf",

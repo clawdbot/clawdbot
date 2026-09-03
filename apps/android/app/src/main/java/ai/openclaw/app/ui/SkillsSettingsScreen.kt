@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayClawHubSkillSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.isClawHubSkillInstalled
 import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawDetailRow
@@ -14,7 +15,6 @@ import ai.openclaw.app.ui.design.ClawIconButton
 import ai.openclaw.app.ui.design.ClawListPanel
 import ai.openclaw.app.ui.design.ClawPanel
 import ai.openclaw.app.ui.design.ClawPill
-import ai.openclaw.app.ui.design.ClawPrimaryButton
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawSegmentedControl
 import ai.openclaw.app.ui.design.ClawStatus
@@ -82,16 +82,14 @@ internal fun SkillsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
-  val skillsRefreshing by viewModel.skillsRefreshing.collectAsState()
-  val skillsErrorText by viewModel.skillsErrorText.collectAsState()
+  val skillsState by viewModel.skillsState.collectAsState()
   val skillMutationKeys by viewModel.skillMutationKeys.collectAsState()
   val clawHubState by viewModel.clawHubSkillSearchState.collectAsState()
   val clawHubMethodsAvailable by viewModel.clawHubSkillMethodsAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
-  val skills = skillsSummary.skills
+  val skills = skillsState.summary.skills
   val readyCount = skills.count { skillReady(it) }
   val needsSetupCount = skills.count { skillNeedsSetup(it) }
   val disabledCount = skills.count { it.disabled }
@@ -140,7 +138,7 @@ internal fun SkillsSettingsScreen(
       readyCount = readyCount,
       needsSetupCount = needsSetupCount,
       disabledCount = disabledCount,
-      refreshing = skillsRefreshing,
+      refreshing = skillsState.refreshing,
       canRefresh = isConnected,
       onRefresh = viewModel::refreshSkills,
     )
@@ -155,9 +153,9 @@ internal fun SkillsSettingsScreen(
       },
       modifier = Modifier.fillMaxWidth(),
     )
-    skillsErrorText?.let { errorText ->
+    skillsState.errorText?.let { errorText ->
       ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = errorText.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
     if (isConnected && !operatorAdminScopeAvailable) {
@@ -170,7 +168,7 @@ internal fun SkillsSettingsScreen(
       }
     }
     when (selectedTab) {
-      SkillsTab.Installed ->
+      SkillsTab.Installed -> {
         InstalledSkillsPane(
           skills = skills,
           visibleSkills = visibleSkills,
@@ -184,7 +182,9 @@ internal fun SkillsSettingsScreen(
           onSkillClick = { selectedSkillKey = it.skillKey },
           onSkillEnabledChange = viewModel::setSkillEnabled,
         )
-      SkillsTab.Browse ->
+      }
+
+      SkillsTab.Browse -> {
         ClawHubSkillSearchPanel(
           state = clawHubState,
           installedSkills = skills,
@@ -195,11 +195,9 @@ internal fun SkillsSettingsScreen(
           onQueryChange = { clawHubQuery = it },
           onSearch = { viewModel.searchClawHubSkills(clawHubQuery) },
           onReviewInstall = viewModel::reviewClawHubSkillInstall,
-          onAcknowledgeInstall = { slug, version ->
-            viewModel.installClawHubSkill(slug, acknowledgeClawHubRisk = true, version = version)
-          },
           onClearMessage = viewModel::clearClawHubSkillMessage,
         )
+      }
     }
   }
   clawHubState.installReview?.let { review ->
@@ -388,22 +386,28 @@ private fun InstalledSkillsPane(
     }
   }
   when {
-    !isConnected ->
+    !isConnected -> {
       ClawPanel {
         Text(text = nativeString("Connect the gateway to load skills."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-    skills.isEmpty() ->
+    }
+
+    skills.isEmpty() -> {
       ClawPanel {
         Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
           Text(text = nativeString("No skills installed."), style = ClawTheme.type.section, color = ClawTheme.colors.text)
           Text(text = nativeString("Skills installed on the gateway will appear here."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
         }
       }
-    visibleSkills.isEmpty() ->
+    }
+
+    visibleSkills.isEmpty() -> {
       ClawPanel {
         Text(text = nativeString("No installed skills match this search."), style = ClawTheme.type.body, color = ClawTheme.colors.textMuted)
       }
-    else ->
+    }
+
+    else -> {
       SkillsPanel(
         skills = visibleSkills,
         canManageSkills = canManageSkills,
@@ -411,6 +415,7 @@ private fun InstalledSkillsPane(
         onSkillClick = onSkillClick,
         onSkillEnabledChange = onSkillEnabledChange,
       )
+    }
   }
 }
 
@@ -546,7 +551,6 @@ private fun ClawHubSkillSearchPanel(
   onQueryChange: (String) -> Unit,
   onSearch: () -> Unit,
   onReviewInstall: (GatewayClawHubSkillSummary) -> Unit,
-  onAcknowledgeInstall: (String, String?) -> Unit,
   onClearMessage: () -> Unit,
 ) {
   ClawPanel {
@@ -588,36 +592,52 @@ private fun ClawHubSkillSearchPanel(
     ClawHubNoticeCard(
       errorText = state.errorText,
       messageText = state.messageText,
-      acknowledgeSlug = state.acknowledgeSlug,
-      acknowledgeVersion = state.acknowledgeVersion,
-      canAcknowledge = methodsAvailable && canManageSkills,
-      installingSlugs = state.installingSlugs,
-      onAcknowledgeInstall = onAcknowledgeInstall,
       onDismiss = onClearMessage,
     )
   }
   if (state.results.isNotEmpty()) {
     ClawListPanel(items = state.results) { skill ->
-      val installed =
-        skill.version?.let { version -> isClawHubSkillInstalled(installedSkills, skill.slug, version) }
-          ?: isClawHubSkillInstalled(installedSkills, skill.slug)
+      val installed = isClawHubSkillInstalled(installedSkills, skill)
+      val subtitleParts =
+        listOfNotNull(
+          skill.summary,
+          skill.reference,
+          skill.version?.let { nativeString("Version \$it", it) },
+          // An install-only row never opens a review dialog, so the warning has to show here.
+          nativeString("Not scanned by ClawHub").takeIf { skill.isUnscannedSource },
+        )
       ClawDetailRow(
         title = skill.displayName,
-        subtitle = listOfNotNull(skill.summary, skill.version?.let { nativeString("Version \$it", it) }).joinToString(" · "),
+        subtitle = subtitleParts.joinToString(" · "),
         leading = { ClawTextBadge(text = skillBadge(skill.displayName)) },
         trailing = {
-          val reviewing = state.reviewingSlug == skill.slug
-          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.slug)
+          val reviewing = state.reviewingSlug == skill.reference
+          val installing = isClawHubSkillOperationActive(state.installingSlugs, skill.reference)
+          val canActOnResult =
+            isConnected &&
+              methodsAvailable &&
+              !installed &&
+              !reviewing &&
+              !installing &&
+              (skill.canReadDetails || canManageSkills)
           ClawSecondaryButton(
             text =
               when {
                 installed -> nativeString("Installed")
+
                 installing -> nativeString("Installing")
+
                 reviewing -> nativeString("Loading")
-                else -> nativeString("Review")
+
+                // The Gateway cannot answer detail for install-only sources, so no Review offer.
+                skill.canReadDetails -> nativeString("Review")
+
+                else -> nativeString("Install")
               },
             onClick = { onReviewInstall(skill) },
-            enabled = isConnected && methodsAvailable && !installed && !reviewing && !installing,
+            // Reviewing only needs read access, but an install-only row installs on the first tap,
+            // so it stays disabled without admin instead of erroring after the tap.
+            enabled = canActOnResult,
           )
         },
       )
@@ -629,54 +649,21 @@ private fun ClawHubSkillSearchPanel(
 private fun ClawHubNoticeCard(
   errorText: String?,
   messageText: String?,
-  acknowledgeSlug: String?,
-  acknowledgeVersion: String?,
-  canAcknowledge: Boolean,
-  installingSlugs: Set<String>,
-  onAcknowledgeInstall: (String, String?) -> Unit,
   onDismiss: () -> Unit,
 ) {
-  val requiresAcknowledgement = acknowledgeSlug != null
-  val status =
-    when {
-      requiresAcknowledgement -> ClawStatus.Warning
-      errorText != null -> ClawStatus.Danger
-      else -> ClawStatus.Success
-    }
+  val isError = errorText != null
   val rawText = errorText ?: messageText.orEmpty()
-  val summary =
-    if (requiresAcknowledgement) {
-      nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying.")
-    } else {
-      rawText.substringBefore("\n\n").trim()
-    }
+  val summary = rawText.substringBefore("\n\n").trim()
   val details =
-    when {
-      requiresAcknowledgement -> rawText.takeIf(String::isNotBlank)
-      "\n\n" in rawText -> rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
-      else -> null
+    if ("\n\n" in rawText) {
+      rawText.substringAfter("\n\n").trim().takeIf(String::isNotBlank)
+    } else {
+      null
     }
   var detailsExpanded by rememberSaveable(rawText) { mutableStateOf(false) }
-  val accent =
-    when (status) {
-      ClawStatus.Success -> ClawTheme.colors.success
-      ClawStatus.Warning -> ClawTheme.colors.warning
-      ClawStatus.Danger -> ClawTheme.colors.danger
-      ClawStatus.Neutral -> ClawTheme.colors.textSubtle
-    }
-  val background =
-    when (status) {
-      ClawStatus.Success -> ClawTheme.colors.successSoft
-      ClawStatus.Warning -> ClawTheme.colors.warningSoft
-      ClawStatus.Danger -> ClawTheme.colors.dangerSoft
-      ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
-    }
-  val title =
-    when {
-      requiresAcknowledgement -> nativeString("Needs attention")
-      errorText != null -> nativeString("Blocked")
-      else -> nativeString("Installed")
-    }
+  val accent = if (isError) ClawTheme.colors.danger else ClawTheme.colors.success
+  val background = if (isError) ClawTheme.colors.dangerSoft else ClawTheme.colors.successSoft
+  val title = if (isError) nativeString("Blocked") else nativeString("Installed")
 
   Surface(
     modifier = Modifier.fillMaxWidth(),
@@ -722,14 +709,6 @@ private fun ClawHubNoticeCard(
           modifier = Modifier.weight(1f),
         )
       }
-      acknowledgeSlug?.let { slug ->
-        ClawPrimaryButton(
-          text = nativeString("Acknowledge Gateway warning and install"),
-          onClick = { onAcknowledgeInstall(slug, acknowledgeVersion) },
-          enabled = canAcknowledge && slug !in installingSlugs && (details == null || detailsExpanded),
-          modifier = Modifier.fillMaxWidth(),
-        )
-      }
     }
   }
 }
@@ -753,7 +732,7 @@ private fun ClawHubInstallReviewDialog(
         ReviewLine(label = nativeString("Version"), value = review.version)
         ReviewLine(label = nativeString("Publisher"), value = review.author)
         Text(
-          text = nativeString("The Gateway will verify this exact release with ClawHub before download. If the release needs explicit risk acknowledgement, Android will show the Gateway warning before retrying."),
+          text = nativeString("The Gateway verifies this exact release with ClawHub before download. Review findings appear in the install result. Blocked releases or unavailable security verification prevent installation."),
           style = ClawTheme.type.body,
           color = ClawTheme.colors.textMuted,
         )

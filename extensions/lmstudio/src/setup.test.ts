@@ -1,4 +1,3 @@
-// Lmstudio tests cover setup plugin behavior.
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   createNonExitingRuntimeEnv,
@@ -17,7 +16,8 @@ import {
   type ProviderCatalogContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+// Lmstudio tests cover setup plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -44,8 +44,8 @@ vi.mock("./models.fetch.js", () => ({
   ensureLmstudioModelLoaded: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>();
+vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>();
   return {
     ...actual,
     removeProviderAuthProfilesWithLock: (...args: unknown[]) =>
@@ -106,7 +106,12 @@ function createWireModel(
   key: string,
   overrides: Omit<LmstudioModelWire, "key"> = {},
 ): LmstudioModelWire {
-  return { type: "llm", key, ...overrides };
+  return {
+    type: "llm",
+    key,
+    loaded_instances: [{ id: `${key}-loaded`, config: { context_length: 32_768 } }],
+    ...overrides,
+  };
 }
 
 function mockFetchedModels(models: LmstudioModelWire[]): void {
@@ -260,12 +265,7 @@ function createMethodBoundWizardPrompterHarness(values: WizardPromptValues = {})
   return { prompter: new MethodBoundWizardPrompter(), note, text };
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!isRecord(value)) {
-    throw new Error(`expected ${label} to be an object`);
-  }
-  return value;
-}
+const requireRecord = createRequireRecord("record", "expected-label-object");
 
 function expectRecordFields(
   value: unknown,
@@ -411,13 +411,41 @@ describe("lmstudio setup", () => {
 
   it.each([
     {
-      name: "prefers the strongest tool-calling family among installed models",
+      name: "prefers the strongest tool-calling family among loaded models",
       models: [
-        { key: "llama3.3-70b-instruct", max_context_length: 65_536 },
-        { key: "qwen3.5-4b-instruct", max_context_length: 65_536 },
-        { key: "nomic-embed-text", max_context_length: 65_536 },
+        {
+          key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "llama", config: { context_length: 32_768 } }],
+        },
+        {
+          key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "qwen", config: { context_length: 32_768 } }],
+        },
+        {
+          key: "nomic-embed-text",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "nomic", config: { context_length: 32_768 } }],
+        },
       ],
       expectedModel: "lmstudio/qwen3.5-4b-instruct",
+    },
+    {
+      name: "ignores a preferred downloaded model when another model is loaded",
+      models: [
+        {
+          key: "qwen3.5-4b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [],
+        },
+        {
+          key: "llama3.3-70b-instruct",
+          max_context_length: 65_536,
+          loaded_instances: [{ id: "llama", config: { context_length: 32_768 } }],
+        },
+      ],
+      expectedModel: "lmstudio/llama3.3-70b-instruct",
     },
     {
       name: "skips a preferred model loaded with less than 16k context",
@@ -677,6 +705,24 @@ describe("lmstudio setup", () => {
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
       `LM Studio model missing-model was not found at ${expectedBaseUrl}.\nAvailable models: qwen3-8b-instruct`,
+    );
+    expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
+    expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
+  });
+
+  it("non-interactive setup rejects an installed model that is not loaded", async () => {
+    mockFetchedModelsOnce([
+      createWireModel("qwen3-8b-instruct", { loaded_instances: [] }),
+      createWireModel("phi-4"),
+    ]);
+    const ctx = buildNonInteractiveContext({
+      customModelId: "qwen3-8b-instruct",
+    });
+
+    await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
+
+    expect(ctx.runtime.error).toHaveBeenCalledWith(
+      "LM Studio model qwen3-8b-instruct is installed but not loaded at http://localhost:1234/v1.\nLoad that model in LM Studio, then re-run setup.",
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
@@ -1007,7 +1053,16 @@ describe("lmstudio setup", () => {
           status: 200,
           models: [{ type: "embedding", key: "text-embedding-nomic-embed-text-v1.5" }],
         },
-        expectedError: "No LM Studio models found",
+        expectedError: "No loaded LM Studio models found",
+      },
+      {
+        name: "only unloaded llm models",
+        discovery: {
+          reachable: true,
+          status: 200,
+          models: [createWireModel("qwen3-8b-instruct", { loaded_instances: [] })],
+        },
+        expectedError: "No loaded LM Studio models found",
       },
     ];
 

@@ -1,25 +1,28 @@
 import type { ReactiveController } from "lit";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import type { AnnotationStroke } from "./browser-annotation.ts";
+import type {
+  BrowserRequestClient,
+  BrowserInspectedNode,
+  BrowserPanelTab,
+} from "./browser-client.ts";
 import {
   captureBrowserScreenshot,
-  clickBrowserCoords,
   closeBrowserTab,
   fetchBrowserScreenshotDataUrl,
   focusBrowserTab,
   goBrowserHistory,
-  inspectBrowserElementAt,
   isBrowserEvaluateDisabledError,
+  isBrowserNavigationBlockedError,
   listBrowserTabs,
   navigateBrowser,
   openBrowserTab,
-  pressBrowserKey,
-  scrollBrowserBy,
+  resizeBrowserViewport,
   startBrowser,
-  type BrowserInspectedNode,
-  type BrowserPanelTab,
 } from "./browser-client.ts";
+import { BrowserPanelInputController } from "./browser-panel-controller-input.ts";
 import {
   BrowserPanelOperationOwnership,
   readBrowserPanelOwnedMetrics,
@@ -27,20 +30,14 @@ import {
   type BrowserPanelSnapshotOutcome,
 } from "./browser-panel-operation-ownership.ts";
 import { BrowserPanelPendingInput } from "./browser-panel-pending-input.ts";
-import {
-  browserPanelInspectHighlightRegion,
-  browserPanelNormalizedPoint,
-  browserPanelRemotePoint,
-  browserPanelShouldForwardKey,
-  dispatchCompositedBrowserAnnotation,
-  loadBrowserPanelImage,
-  paintBrowserPanelOverlay,
-  type BrowserPanelView,
-} from "./browser-panel-surface.ts";
+import { loadBrowserPanelImage, type BrowserPanelView } from "./browser-panel-surface.ts";
+import { browserRouteKey, type BrowserRoute } from "./browser-target.ts";
 import { normalizeBrowserUrlDraft } from "./browser-url.ts";
 
-const INSPECT_THROTTLE_MS = 120;
 const ACTION_REFRESH_DELAY_MS = 350;
+const VIEWPORT_RESIZE_DELAY_MS = 300;
+const MIN_VIEWPORT_DIMENSION = 100;
+const MAX_VIEWPORT_DIMENSION = 8192;
 
 type BrowserPanelMode = "interact" | "annotate" | "inspect";
 
@@ -64,24 +61,27 @@ export class BrowserPanelController implements ReactiveController {
   urlDraft = "";
   pendingNewTab = false;
 
-  private readonly operations: BrowserPanelOperationOwnership;
-  private readonly pendingInput = new BrowserPanelPendingInput();
+  readonly operations: BrowserPanelOperationOwnership;
+  readonly pendingInput = new BrowserPanelPendingInput();
+  private readonly input: BrowserPanelInputController;
   private activeClient: GatewayBrowserClient | null = null;
-  private drawingStroke: AnnotationStroke | null = null;
-  private suppressStageClick = false;
   private urlDraftEditing = false;
+  private observedViewportSize: { width: number; height: number } | null = null;
+  private lastRequestedViewport: { targetId: string; width: number; height: number } | null = null;
 
-  constructor(private readonly host: BrowserPanelControllerHost) {
+  constructor(readonly host: BrowserPanelControllerHost) {
     this.operations = new BrowserPanelOperationOwnership(host);
+    this.input = new BrowserPanelInputController(this);
     host.addController(this);
   }
 
   hostDisconnected(): void {
+    this.input.cancelOverlayPointerGesture();
     this.invalidateViewOperations();
     this.setState("loading", false);
   }
 
-  private setState<Key extends keyof this>(key: Key, value: this[Key]): void {
+  setState<Key extends keyof this>(key: Key, value: this[Key]): void {
     if (Object.is(this[key], value)) {
       return;
     }
@@ -89,22 +89,47 @@ export class BrowserPanelController implements ReactiveController {
     this.host.requestUpdate();
   }
 
-  synchronizeHostProperties(changed: Map<string, unknown>): void {
-    if (!changed.has("client") && !changed.has("available")) {
-      return;
-    }
+  synchronizeClient(): boolean {
     if (this.host.client !== this.activeClient) {
       this.activeClient = this.host.client;
+      this.operations.resetRoute();
       this.resetBrowserState();
-      if (this.host.browserPanelIsOpen() && this.host.available && this.host.client) {
-        void this.refreshAll();
-      }
+      return true;
     }
+    return false;
+  }
+
+  get unavailableTabText(): string | null {
+    const reason = this.tabs.find((tab) => tab.id === this.activeTargetId)?.urlUnavailableReason;
+    return reason
+      ? t(
+          reason === "navigation_blocked"
+            ? "browser.navigationBlocked"
+            : "browser.navigationCheckFailed",
+        )
+      : null;
+  }
+
+  private clearUnavailableView(): boolean {
+    if (!this.unavailableTabText) {
+      return false;
+    }
+    this.invalidateViewOperations();
+    this.setState("view", null);
+    this.setState("loading", false);
+    this.setState("urlDraft", "");
+    this.setState("errorText", null);
+    this.exitCaptureModes();
+    return true;
   }
 
   private invalidateViewOperations(): void {
     this.operations.invalidate();
     this.pendingInput.clear();
+    // The resize guard is per-document: after a tab or document change the
+    // remote viewport may have been changed by an agent, so a previously
+    // requested size must not suppress the next sync for the same target.
+    this.lastRequestedViewport = null;
   }
 
   resetBrowserState(): void {
@@ -118,16 +143,20 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("noticeText", null);
     this.setState("mode", "interact");
     this.setState("strokes", []);
-    this.drawingStroke = null;
+    this.input.resetCaptureState();
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
+    this.urlDraftEditing = false;
+    this.setState("urlDraft", "");
     this.setState("pendingNewTab", false);
     // Re-probe per connection: another gateway may have evaluate enabled.
     this.setState("evaluateUnavailable", false);
   }
 
-  private reportError(error: unknown): void {
-    const detail = error instanceof Error ? error.message : String(error);
+  reportError(error: unknown): void {
+    const detail = isBrowserNavigationBlockedError(error)
+      ? t("browser.navigationBlocked")
+      : formatUiError(error);
     this.setState("errorText", t("browser.errors.requestFailed", { error: detail }));
   }
 
@@ -141,13 +170,17 @@ export class BrowserPanelController implements ReactiveController {
     this.setState("loading", true);
     try {
       const snapshot = await listBrowserTabs(client);
+      // Tool results carry raw targets; preserve that selection when the list supplies its alias.
+      const selected = snapshot.tabs.find(
+        (tab) => tab.id === this.activeTargetId || tab.targetId === this.activeTargetId,
+      );
       const active =
-        snapshot.tabs.find((tab) => tab.id === this.activeTargetId) ?? snapshot.tabs[0];
+        selected ?? snapshot.tabs.find((tab) => !tab.urlUnavailableReason) ?? snapshot.tabs[0];
       if (!this.operations.acceptSnapshot(invocation, this.activeTargetId, active?.id ?? null)) {
         return;
       }
       this.setState("running", snapshot.running);
-      this.setState("tabs", snapshot.tabs);
+      this.setState("tabs", this.operations.retainTabSnapshot(client, snapshot.tabs));
       // A mutation may adopt the same tab while this snapshot is pending.
       // Reconcile its tab strip, but never let it own document or loading state.
       if (!this.operations.canCaptureSnapshot(invocation)) {
@@ -156,7 +189,7 @@ export class BrowserPanelController implements ReactiveController {
       if (!snapshot.running) {
         this.setState("view", null);
       }
-      if (this.activeTargetId !== null && active?.id !== this.activeTargetId) {
+      if (this.activeTargetId !== null && !selected) {
         this.invalidateViewOperations();
         invocation.epoch = this.operations.epoch;
         this.setState("view", null);
@@ -184,7 +217,10 @@ export class BrowserPanelController implements ReactiveController {
 
   private async refreshView(targetId: string, epoch = this.operations.epoch): Promise<void> {
     const client = this.operations.captureClient();
-    if (!client) {
+    if (!client || !this.operations.isLive(epoch, client) || this.activeTargetId !== targetId) {
+      return;
+    }
+    if (this.clearUnavailableView()) {
       return;
     }
     const current = this.operations.beginCapture(
@@ -203,10 +239,13 @@ export class BrowserPanelController implements ReactiveController {
         return;
       }
       const dataUrl = await fetchBrowserScreenshotDataUrl({
-        basePath: this.host.basePath,
+        resourceBasePath: this.host.resourceBasePath,
         authToken: this.host.authToken,
         path: shot.path,
       });
+      if (!current()) {
+        return;
+      }
       const image = await loadBrowserPanelImage(dataUrl);
       const observedMetrics = await readBrowserPanelOwnedMetrics(
         client,
@@ -223,13 +262,47 @@ export class BrowserPanelController implements ReactiveController {
         shot.url && observedMetrics?.url && shot.url !== observedMetrics.url
           ? null
           : observedMetrics;
-      this.setState("view", { targetId, dataUrl, image, url: shot.url, metrics });
+      // Tab snapshots can lag history and in-page navigation. Keep the stable
+      // identity aligned with the document this capture owns.
+      this.setState("tabs", this.operations.capturedTabs(this.tabs, targetId, metrics, shot.url));
+      this.setState("view", {
+        targetId,
+        dataUrl,
+        image,
+        url: shot.url,
+        metrics,
+        ...(this.operations.route ? { browserTab: { ...this.operations.route, targetId } } : {}),
+      });
+      if (
+        metrics &&
+        this.observedViewportSize &&
+        (Math.abs(metrics.cssWidth - this.observedViewportSize.width) > 1 ||
+          Math.abs(metrics.cssHeight - this.observedViewportSize.height) > 1)
+      ) {
+        this.scheduleViewportSync();
+      }
       if (!this.urlDraftEditing && shot.url) {
         this.setState("urlDraft", shot.url);
       }
     } catch (error) {
       if (current()) {
-        this.reportError(error);
+        // A capture denial describes the selected tab; a denied navigation
+        // describes the destination and must keep the valid source screenshot.
+        if (isBrowserNavigationBlockedError(error)) {
+          this.setState(
+            "tabs",
+            this.tabs.map((tab) =>
+              tab.id === targetId
+                ? { ...tab, url: "", urlUnavailableReason: "navigation_blocked" }
+                : tab,
+            ),
+          );
+          if (!this.clearUnavailableView()) {
+            this.reportError(error);
+          }
+        } else {
+          this.reportError(error);
+        }
       }
     } finally {
       if (current()) {
@@ -239,8 +312,8 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  private async runAction(
-    action: (client: GatewayBrowserClient) => Promise<void>,
+  async runAction(
+    action: (client: BrowserRequestClient) => Promise<void>,
     refreshView = true,
   ): Promise<boolean> {
     const client = this.operations.captureClient();
@@ -273,6 +346,62 @@ export class BrowserPanelController implements ReactiveController {
       }
       return false;
     }
+  }
+
+  handleViewportResize(width: number, height: number): void {
+    this.observedViewportSize = { width, height };
+    this.scheduleViewportSync();
+  }
+
+  private scheduleViewportSync(): void {
+    this.pendingInput.scheduleViewportResize(VIEWPORT_RESIZE_DELAY_MS, () => this.syncViewport());
+  }
+
+  private syncViewport(): void {
+    const targetId = this.activeTargetId;
+    const observed = this.observedViewportSize;
+    // A debounced sync can outlive an ordinary dock close; a hidden panel must
+    // never resize the agent-controlled browser.
+    if (!this.host.browserPanelIsOpen() || !this.operations.captureClient()) {
+      return;
+    }
+    if (!targetId || !observed) {
+      return;
+    }
+    const width = Math.min(
+      MAX_VIEWPORT_DIMENSION,
+      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.width)),
+    );
+    const height = Math.min(
+      MAX_VIEWPORT_DIMENSION,
+      Math.max(MIN_VIEWPORT_DIMENSION, Math.round(observed.height)),
+    );
+    const currentView = this.view?.targetId === targetId ? this.view : null;
+    // A failed or still-pending capture has not established the surface that
+    // owns pointer coordinates. Wait for a successful view before syncing its
+    // viewport, otherwise error-state layout changes can create a resize and
+    // recapture loop.
+    if (!currentView) {
+      return;
+    }
+    const metrics = currentView.metrics;
+    if (
+      metrics &&
+      Math.abs(metrics.cssWidth - width) <= 1 &&
+      Math.abs(metrics.cssHeight - height) <= 1
+    ) {
+      return;
+    }
+    // A remote that cannot honor the exact size is not re-asked until the panel size or tab changes.
+    if (
+      this.lastRequestedViewport?.targetId === targetId &&
+      this.lastRequestedViewport.width === width &&
+      this.lastRequestedViewport.height === height
+    ) {
+      return;
+    }
+    this.lastRequestedViewport = { targetId, width, height };
+    void this.runAction((client) => resizeBrowserViewport(client, { targetId, width, height }));
   }
 
   async startBrowserNow(): Promise<void> {
@@ -349,32 +478,31 @@ export class BrowserPanelController implements ReactiveController {
       }
     } catch (error) {
       if (invocation.isCurrent()) {
-        this.reportError(error);
         if (previousNavigationQueued && this.activeTargetId) {
           const targetId = this.activeTargetId;
-          const navigationErrorText = this.errorText;
           // An earlier queued navigation may already have committed remotely.
           // Recover its actual document without replacing an unchanged view.
-          try {
-            const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
-            const active = this.tabs.find((tab) => tab.id === targetId);
-            if (refreshed === "accepted" && invocation.isCurrent() && active) {
-              await this.refreshView(targetId, invocation.epoch);
-              if (
-                invocation.isCurrent() &&
-                this.view?.targetId === targetId &&
-                this.errorText === navigationErrorText
-              ) {
-                this.operations.markNavigationReconciled(client, targetId);
-              }
+          const refreshed = await this.refreshTabsOnly(client, () => invocation.isCurrent());
+          const active = this.tabs.find((tab) => tab.id === targetId);
+          if (refreshed === "accepted" && invocation.isCurrent() && active) {
+            this.setState("view", null);
+            await this.refreshView(targetId, invocation.epoch);
+            if (invocation.isCurrent() && this.view?.targetId === targetId) {
+              this.operations.markNavigationReconciled(client, targetId);
             }
-          } catch {
-            // Recovery is best-effort; retain the original navigation failure.
           }
-          if (invocation.isCurrent()) {
-            this.reportError(error);
+          if (
+            invocation.isCurrent() &&
+            this.operations.hasUnreconciledNavigation(client, targetId)
+          ) {
+            this.setState("activeTargetId", null);
+            this.setState("view", null);
+            if (!this.urlDraftEditing) {
+              this.setState("urlDraft", "");
+            }
           }
         }
+        this.reportError(error);
       }
     } finally {
       if (invocation.isCurrent()) {
@@ -384,7 +512,7 @@ export class BrowserPanelController implements ReactiveController {
   }
 
   private async refreshTabsOnly(
-    client: GatewayBrowserClient,
+    client: BrowserRequestClient,
     current: () => boolean,
   ): Promise<BrowserPanelSnapshotOutcome> {
     const invocation = this.operations.beginSnapshot(client);
@@ -395,7 +523,8 @@ export class BrowserPanelController implements ReactiveController {
         this.operations.acceptSnapshot(invocation, this.activeTargetId, this.activeTargetId)
       ) {
         this.setState("running", snapshot.running);
-        this.setState("tabs", snapshot.tabs);
+        this.setState("tabs", this.operations.retainTabSnapshot(client, snapshot.tabs));
+        this.clearUnavailableView();
         return "accepted";
       }
       return "rejected";
@@ -406,21 +535,64 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  async selectTab(targetId: string): Promise<void> {
-    if (targetId === this.activeTargetId) {
+  async selectTab(targetId: string, route?: BrowserRoute): Promise<void> {
+    if (route && browserRouteKey(this.operations.route) !== browserRouteKey(route)) {
+      this.operations.resetRoute(route);
+      this.resetBrowserState();
+    } else if (targetId === this.activeTargetId && !route) {
       return;
     }
+    const client = this.operations.captureClient();
     const previous = { targetId: this.activeTargetId, view: this.view };
     this.invalidateViewOperations();
     const epoch = this.operations.epoch;
     this.setState("activeTargetId", targetId);
     this.setState("view", null);
     this.exitCaptureModes();
-    const focused = await this.runAction(async (client) => {
-      await focusBrowserTab(client, targetId);
-      await this.refreshView(targetId);
+    if (!route && this.clearUnavailableView()) {
+      return;
+    }
+    const focused = await this.runAction(async (actionClient) => {
+      if (route) {
+        // Listing is safe for blocked tabs; focus is not. Resolve the alias and
+        // current access observation before attempting to activate the target.
+        await this.refreshTabsOnly(actionClient, () => this.operations.isLive(epoch, actionClient));
+        if (!this.operations.isLive(epoch, actionClient)) {
+          return;
+        }
+        const selected = this.tabs.find((tab) => tab.id === targetId || tab.targetId === targetId);
+        this.setState("activeTargetId", selected?.id ?? targetId);
+        if (this.clearUnavailableView()) {
+          return;
+        }
+      }
+      const selectedTargetId = this.activeTargetId;
+      if (!selectedTargetId) {
+        return;
+      }
+      await focusBrowserTab(actionClient, selectedTargetId);
+      if (!this.operations.isLive(epoch, actionClient)) {
+        return;
+      }
+      await this.refreshView(selectedTargetId, epoch);
+      if (
+        this.operations.isLive(epoch, actionClient) &&
+        this.activeTargetId === selectedTargetId &&
+        this.view?.targetId === selectedTargetId
+      ) {
+        this.operations.markNavigationReconciled(actionClient, selectedTargetId);
+      }
     }, false);
     if (!focused && this.operations.isLive(epoch) && this.activeTargetId === targetId) {
+      if (this.operations.hasPendingNavigation(client, previous.targetId)) {
+        // The prior remote document changed while selection failed. Expose an
+        // unavailable state instead of restoring a screenshot that no longer owns it.
+        this.setState("activeTargetId", null);
+        if (!this.urlDraftEditing) {
+          this.setState("urlDraft", "");
+        }
+        return;
+      }
       this.setState("activeTargetId", previous.targetId);
       this.setState("view", previous.view);
     }
@@ -430,6 +602,7 @@ export class BrowserPanelController implements ReactiveController {
     await this.runAction(async (client) => {
       const epoch = this.operations.epoch;
       await closeBrowserTab(client, targetId);
+      this.operations.forgetNavigation(client, targetId);
       if (!this.operations.isLive(epoch, client)) {
         if (this.operations.isLive(this.operations.epoch, client)) {
           await this.refreshAll();
@@ -454,7 +627,7 @@ export class BrowserPanelController implements ReactiveController {
         }
         return;
       }
-      const next = this.tabs[0] ?? null;
+      const next = this.tabs.find((tab) => !tab.urlUnavailableReason) ?? this.tabs[0] ?? null;
       this.invalidateViewOperations();
       this.setState("activeTargetId", next?.id ?? null);
       this.setState("view", null);
@@ -465,11 +638,16 @@ export class BrowserPanelController implements ReactiveController {
         this.setState("loading", false);
       }
     }, false);
+    await this.host.updateComplete;
   }
 
   /** Real page reload: re-navigate to the current URL, then re-capture. A bare
    * screenshot refresh would leave the remote document untouched. */
   reloadPage(): void {
+    if (this.unavailableTabText) {
+      void this.refreshAll();
+      return;
+    }
     const url = this.view?.metrics?.url || this.view?.url || this.urlDraft;
     const normalized = normalizeBrowserUrlDraft(url);
     if (!this.activeTargetId) {
@@ -484,7 +662,7 @@ export class BrowserPanelController implements ReactiveController {
 
   goHistory(delta: -1 | 1): void {
     const targetId = this.activeTargetId;
-    if (!targetId) {
+    if (!targetId || !this.view) {
       return;
     }
     void this.runAction((client) => goBrowserHistory(client, { targetId, delta }));
@@ -501,9 +679,12 @@ export class BrowserPanelController implements ReactiveController {
   beginNewTab(): void {
     this.setState("pendingNewTab", true);
     this.setState("urlDraft", "");
-    void this.host.updateComplete.then(() =>
-      this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus(),
-    );
+    const epoch = this.operations.epoch;
+    void this.host.updateComplete.then(() => {
+      if (this.operations.isLive(epoch)) {
+        this.host.renderRoot.querySelector<HTMLInputElement>(".bp-url")?.focus();
+      }
+    });
   }
 
   setUrlDraft(value: string): void {
@@ -520,10 +701,9 @@ export class BrowserPanelController implements ReactiveController {
 
   exitCaptureModes(): void {
     this.operations.invalidateInspection();
-    this.pendingInput.clearInput();
+    this.input.resetCaptureState();
     this.setState("mode", "interact");
     this.setState("strokes", []);
-    this.drawingStroke = null;
     this.setState("inspected", null);
     this.setState("inspectPointer", null);
   }
@@ -542,206 +722,51 @@ export class BrowserPanelController implements ReactiveController {
     }
   }
 
-  private stageElement(): HTMLElement | null {
-    return this.host.renderRoot.querySelector<HTMLElement>(".bp-stage");
-  }
-
-  private remotePoint(event: MouseEvent): { x: number; y: number } | null {
-    return browserPanelRemotePoint(this.stageElement(), event, this.view);
-  }
-
   inspectHighlightRegion() {
-    return browserPanelInspectHighlightRegion(this.view, this.inspected);
+    return this.input.inspectHighlightRegion();
   }
 
   handleStageClick(event: MouseEvent): void {
-    if (this.suppressStageClick) {
-      // The click that follows an inspect-capture pointerdown lands after the
-      // mode already returned to interact; it must not reach the remote page.
-      this.suppressStageClick = false;
-      return;
-    }
-    if (this.mode !== "interact") {
-      return;
-    }
-    // Keep keyboard forwarding live after a click; the canvas itself is not
-    // focusable, so focus the surrounding viewport explicitly.
-    this.host.renderRoot.querySelector<HTMLElement>(".bp-viewport")?.focus({ preventScroll: true });
-    const point = this.remotePoint(event);
-    const targetId = this.activeTargetId;
-    if (!point || !targetId) {
-      return;
-    }
-    void this.runAction((client) =>
-      clickBrowserCoords(client, { targetId, x: point.x, y: point.y }),
-    );
+    this.input.handleStageClick(event);
   }
 
   handleWheel(event: WheelEvent): void {
-    if (this.mode !== "interact" || !this.view) {
-      return;
-    }
-    const client = this.operations.captureClient();
-    const targetId = this.activeTargetId;
-    if (!client || !targetId) {
-      return;
-    }
-    event.preventDefault();
-    const epoch = this.operations.epoch;
-    this.pendingInput.queueWheel(event.deltaX, event.deltaY, 150, (deltaX, deltaY) => {
-      if (
-        !this.operations.isLive(epoch, client) ||
-        this.activeTargetId !== targetId ||
-        this.mode !== "interact"
-      ) {
-        return;
-      }
-      void this.runAction(async (actionClient) => {
-        if (this.evaluateUnavailable) {
-          // No page JS allowed: fall back to a coarse keyboard scroll.
-          await pressBrowserKey(actionClient, {
-            targetId,
-            key: deltaY >= 0 ? "PageDown" : "PageUp",
-          });
-          return;
-        }
-        await scrollBrowserBy(actionClient, { targetId, deltaX, deltaY });
-      });
-    });
+    this.input.handleWheel(event);
   }
 
   handleViewportKeydown(event: KeyboardEvent): void {
-    if (this.mode !== "interact" || !this.view) {
-      return;
-    }
-    if (event.metaKey || event.ctrlKey || event.altKey) {
-      return;
-    }
-    const key = event.key;
-    const targetId = this.activeTargetId;
-    if (!browserPanelShouldForwardKey(key) || !targetId) {
-      return;
-    }
-    event.preventDefault();
-    void this.runAction((client) => pressBrowserKey(client, { targetId, key }));
+    this.input.handleViewportKeydown(event);
   }
 
   handleOverlayPointerDown(event: PointerEvent): void {
-    if (this.mode === "inspect") {
-      this.suppressStageClick = true;
-      void this.sendAnnotation({ element: this.inspected });
-      return;
-    }
-    if (this.mode !== "annotate") {
-      return;
-    }
-    const point = browserPanelNormalizedPoint(this.stageElement(), event);
-    if (!point) {
-      return;
-    }
-    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
-    this.drawingStroke = { points: [point] };
-    this.setState("strokes", [...this.strokes, this.drawingStroke]);
-    this.paintOverlay();
+    this.input.handleOverlayPointerDown(event);
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
-    if (this.mode === "annotate") {
-      if (!this.drawingStroke) {
-        return;
-      }
-      const point = browserPanelNormalizedPoint(this.stageElement(), event);
-      if (point) {
-        this.drawingStroke.points.push(point);
-        this.paintOverlay();
-      }
-      return;
-    }
-    if (this.mode === "inspect") {
-      this.queueInspect(event);
-    }
+    this.input.handleOverlayPointerMove(event);
   }
 
-  handleOverlayPointerUp(): void {
-    this.drawingStroke = null;
+  handleOverlayPointerUp(event: PointerEvent): void {
+    this.input.handleOverlayPointerUp(event);
   }
 
-  private queueInspect(event: PointerEvent): void {
-    const client = this.operations.captureClient();
-    const point = this.remotePoint(event);
-    const stagePoint = browserPanelNormalizedPoint(this.stageElement(), event);
-    const targetId = this.activeTargetId;
-    if (!client || !point || !stagePoint || !targetId || this.evaluateUnavailable) {
-      return;
-    }
-    const current = this.operations.beginInspection(
-      client,
-      () =>
-        this.activeTargetId === targetId &&
-        this.view?.targetId === targetId &&
-        this.mode === "inspect",
-    );
-    this.setState("inspectPointer", stagePoint);
-    this.pendingInput.queueInspection(INSPECT_THROTTLE_MS, current, () => {
-      void inspectBrowserElementAt(client, { targetId, x: point.x, y: point.y })
-        .then((node) => {
-          if (current()) {
-            this.setState("inspected", node);
-            this.paintOverlay();
-          }
-        })
-        .catch((error: unknown) => {
-          if (current() && isBrowserEvaluateDisabledError(error)) {
-            this.setState("evaluateUnavailable", true);
-            this.setState("errorText", t("browser.inspectUnavailable"));
-            this.setState("mode", "interact");
-          }
-        });
-    });
+  cancelOverlayPointerGesture(): void {
+    this.input.cancelOverlayPointerGesture();
   }
 
   undoStroke(): void {
-    this.setState("strokes", this.strokes.slice(0, -1));
-    this.drawingStroke = null;
-    this.paintOverlay();
+    this.input.undoStroke();
   }
 
   clearStrokes(): void {
-    this.setState("strokes", []);
-    this.drawingStroke = null;
-    this.paintOverlay();
+    this.input.clearStrokes();
   }
 
   async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
-    const view = this.view;
-    const tab = this.tabs.find((entry) => entry.id === this.activeTargetId);
-    const element = params.element ?? null;
-    if (!view || (this.strokes.length === 0 && !element)) {
-      return;
-    }
-    const highlight = element ? this.inspectHighlightRegion() : null;
-    let handled: boolean;
-    try {
-      handled = dispatchCompositedBrowserAnnotation(view, tab, this.strokes, element, highlight);
-    } catch (error) {
-      this.reportError(error);
-      return;
-    }
-    if (!handled) {
-      this.setState("errorText", t("browser.noChatTarget"));
-      return;
-    }
-    this.setState("noticeText", t("browser.annotationSent"));
-    this.exitCaptureModes();
+    await this.input.sendAnnotation(params);
   }
 
-  /** Repaints the live stroke/highlight overlay; cheap, runs after render. */
   paintOverlay(): void {
-    paintBrowserPanelOverlay(
-      this.host.renderRoot.querySelector<HTMLCanvasElement>(".bp-overlay"),
-      this.stageElement(),
-      this.strokes,
-      this.mode === "inspect" ? this.inspectHighlightRegion() : null,
-    );
+    this.input.paintOverlay();
   }
 }

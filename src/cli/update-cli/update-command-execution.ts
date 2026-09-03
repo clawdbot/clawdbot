@@ -1,27 +1,42 @@
-import type { ResolvedGlobalInstallTarget } from "../../infra/update-global.js";
+import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
+import {
+  verifyPackageUpdateRecovery,
+  type ResolvedGlobalInstallTarget,
+} from "../../infra/update-global.js";
+import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { replaceCliName, resolveCliName } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { createUpdateProgress } from "./progress.js";
-import { resolveGitInstallDir, type UpdateCommandOptions } from "./shared.js";
 import {
   checkTargetDatabaseSchemas,
-  createBeforeGitMutation,
   formatSchemaRefusalLines,
   hasSchemaRefusal,
-  runGitUpdate,
-} from "./update-command-git.js";
-import { runPackageInstallUpdate } from "./update-command-package.js";
+} from "./schema-preflight.js";
 import {
-  createAggregateErrorWithCause,
+  normalizeTag,
+  resolveGitInstallDir,
+  UpdatePreMutationError,
+  type UpdateCommandOptions,
+} from "./shared.js";
+import { createBeforeGitMutation, updateGitInstall } from "./update-command-git.js";
+import { handoffUpdateFromGateway } from "./update-command-handoff.js";
+import {
+  captureOwnedManagedUpdateContext,
+  type OwnedManagedUpdateContext,
+} from "./update-command-managed-context.js";
+import { runPackageInstallUpdate } from "./update-command-package.js";
+import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
+import {
   maybeRestartServiceAfterFailedMutableUpdate,
-  maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
+  resolvePreparedGatewayUpdatePolicy,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
-  type ManagedServiceRootRedirect,
   type PreManagedServiceStop,
   type UpdateCommandRecoveryState,
 } from "./update-command-service.js";
@@ -30,7 +45,10 @@ const CLI_NAME = resolveCliName();
 
 type MutableUpdateExecutionResult = {
   result: UpdateRunResult;
+  failure?: { cause: unknown; detail: string };
   preManagedServiceStop: PreManagedServiceStop | undefined;
+  ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  recoveryEnv: NodeJS.ProcessEnv | undefined;
 };
 
 export async function executeMutableUpdate(params: {
@@ -45,10 +63,9 @@ export async function executeMutableUpdate(params: {
   stop: () => void;
   channel: "stable" | "extended-stable" | "beta" | "dev";
   tag: string;
-  showProgress: boolean;
   opts: UpdateCommandOptions;
   shouldRestart: boolean;
-  devTargetRef?: string;
+  devTarget?: DevUpdateTarget;
   packageInstallSpec: string | null;
   packageInstallEnv?: NodeJS.ProcessEnv;
   packageInstallTarget?: ResolvedGlobalInstallTarget;
@@ -60,7 +77,21 @@ export async function executeMutableUpdate(params: {
   recoveryState: UpdateCommandRecoveryState;
 }): Promise<MutableUpdateExecutionResult | null> {
   let preManagedServiceStop: PreManagedServiceStop | undefined;
-  let schemaRefusalAfterStop = false;
+  let ownedManagedUpdateContext: OwnedManagedUpdateContext | undefined;
+  let recoveryEnv: NodeJS.ProcessEnv | undefined;
+  const originalRecovery = () =>
+    params.installKind === "git"
+      ? readCurrentGitUpdateRecovery(params.root)
+      : verifyPackageUpdateRecovery(params.root);
+  const recoverStoppedService = async () =>
+    maybeRestartServiceAfterFailedMutableUpdate({
+      recovery: await originalRecovery(),
+      preManagedServiceStop,
+      jsonMode: Boolean(params.opts.json),
+      nodeRunner: params.packageUpdateNodeRunner,
+      timeoutMs: params.updateStepTimeoutMs,
+      invocationCwd: params.invocationCwd,
+    });
   const gitMutationRoots =
     params.updateInstallKind === "git"
       ? params.switchToGit
@@ -69,6 +100,7 @@ export async function executeMutableUpdate(params: {
       : null;
   const stopManagedServiceBeforeMutableUpdate = async (
     mutationRoots: readonly string[] = [params.root],
+    phase: "inspect" | "prepare" = "prepare",
   ) => {
     if (params.updateInstallKind !== "package" && params.updateInstallKind !== "git") {
       return;
@@ -81,6 +113,29 @@ export async function executeMutableUpdate(params: {
           root: mutationRoot,
           shouldRestart: params.shouldRestart,
           jsonMode: Boolean(params.opts.json),
+          timeoutMs: params.updateStepTimeoutMs,
+          phase,
+          handoffFromGateway: (state) =>
+            handoffUpdateFromGateway({
+              state,
+              root: mutationRoot,
+              opts: params.opts,
+              // Pin the inspected package. Extended-stable resolves its protected
+              // selector again because its public CLI contract forbids --tag.
+              tag:
+                params.updateInstallKind === "package" && params.channel !== "extended-stable"
+                  ? (normalizeTag(params.packageInstallSpec) ?? undefined)
+                  : undefined,
+              mode:
+                params.updateInstallKind === "git"
+                  ? "git"
+                  : (params.packageInstallTarget?.manager ?? "unknown"),
+              timeoutMs: params.updateStepTimeoutMs,
+              devTarget: params.devTarget,
+              nodeRunner: params.packageUpdateNodeRunner,
+              invocationCwd: params.invocationCwd,
+              stopProgress: params.stop,
+            }),
         });
         if (preManagedServiceStop.windowsTaskAutoStartRecovery) {
           params.recoveryState.windowsTaskAutoStartRecovery =
@@ -98,158 +153,167 @@ export async function executeMutableUpdate(params: {
         }
       }
     } catch (err) {
-      if (err instanceof UpdateCommandAbort) {
+      if (err instanceof ScheduledTaskAutoStartRecoveryError) {
+        recoveryEnv = err.serviceEnv;
+        params.recoveryState.triageTarget.env = err.serviceEnv;
+        throw err;
+      }
+      if (err instanceof UpdateCommandAbort || err instanceof UpdatePreMutationError) {
         throw err;
       }
       params.stop();
-      defaultRuntime.error(`Failed to stop managed gateway service before update: ${String(err)}`);
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      throw new Error(`Failed to stop managed gateway service before update: ${String(err)}`, {
+        cause: err,
+      });
     }
 
-    if (preManagedServiceStop?.blockMessage) {
+    if (phase === "inspect" && preManagedServiceStop?.serviceUpdateVerdict?.kind === "foreign") {
+      preManagedServiceStop = undefined;
+    }
+
+    try {
+      ownedManagedUpdateContext = await captureOwnedManagedUpdateContext({
+        stopState: preManagedServiceStop,
+        processEnv: process.env,
+        invocationCwd: params.invocationCwd,
+      });
+      if (ownedManagedUpdateContext) {
+        params.recoveryState.triageTarget.env = ownedManagedUpdateContext.env;
+      }
+    } catch (err) {
       params.stop();
-      defaultRuntime.error(preManagedServiceStop.blockMessage);
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+      await recoverStoppedService();
+      throw new Error(`Failed to capture managed gateway update state: ${String(err)}`, {
+        cause: err,
+      });
     }
 
     if (shouldBlockMutableUpdateFromGatewayServiceEnv({ preManagedServiceStop })) {
       params.stop();
       const updateLabel = params.updateInstallKind === "git" ? "Git updates" : "Package updates";
-      defaultRuntime.error(
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
         [
           `${updateLabel} cannot run from inside the gateway service process.`,
           "That path replaces the active OpenClaw dist tree while the live gateway may still lazy-load old chunks.",
           `Run \`${replaceCliName(formatCliCommand("openclaw update"), CLI_NAME)}\` from a shell outside the gateway service, or stop the gateway service first and then update.`,
         ].join("\n"),
       );
-      defaultRuntime.exit(1);
-      throw new UpdateCommandAbort();
+    }
+
+    if (preManagedServiceStop?.blockMessage) {
+      params.stop();
+      throw new UpdatePreMutationError(
+        "managed-service-preflight",
+        preManagedServiceStop.blockMessage,
+      );
     }
   };
 
-  if (params.updateInstallKind === "package") {
-    try {
-      await stopManagedServiceBeforeMutableUpdate();
-    } catch (err) {
-      if (err instanceof UpdateCommandAbort) {
-        return null;
-      }
-      throw err;
-    }
-  }
-
-  const postStopPackageSchemaPreflight =
-    params.updateInstallKind === "package"
-      ? checkTargetDatabaseSchemas(
-          params.packageTargetSchemaVersions,
-          preManagedServiceStop?.serviceEnv ?? process.env,
-        )
-      : { incompatible: [], indeterminate: [] };
-  if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
-    schemaRefusalAfterStop = true;
-    defaultRuntime.error(formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"));
-  }
-
   let result: UpdateRunResult;
+  let failure: MutableUpdateExecutionResult["failure"];
   try {
+    if (params.updateInstallKind === "package" || params.updateInstallKind === "git") {
+      await stopManagedServiceBeforeMutableUpdate(
+        gitMutationRoots ?? undefined,
+        params.updateInstallKind === "git" ? "inspect" : "prepare",
+      );
+    }
+    const postStopPackageSchemaPreflight =
+      params.updateInstallKind === "package"
+        ? checkTargetDatabaseSchemas(
+            params.packageTargetSchemaVersions,
+            preManagedServiceStop?.serviceEnv ?? process.env,
+          )
+        : { incompatible: [], indeterminate: [] };
+    if (hasSchemaRefusal(postStopPackageSchemaPreflight)) {
+      throw new UpdatePreMutationError(
+        "database-schema-preflight",
+        formatSchemaRefusalLines(postStopPackageSchemaPreflight).join("\n"),
+      );
+    }
+    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     result =
-      params.updateInstallKind === "package" && hasSchemaRefusal(postStopPackageSchemaPreflight)
-        ? {
-            status: "error",
-            mode: params.packageInstallTarget?.manager ?? "unknown",
+      params.updateInstallKind === "package"
+        ? await runPackageInstallUpdate({
             root: params.root,
-            reason: "database-schema-preflight",
-            steps: [],
-            durationMs: Date.now() - params.startedAt,
-          }
-        : params.updateInstallKind === "package"
-          ? await runPackageInstallUpdate({
-              root: params.root,
-              installKind: params.installKind,
-              tag: params.tag,
-              installSpec: params.packageInstallSpec ?? undefined,
-              timeoutMs: params.updateStepTimeoutMs,
-              startedAt: params.startedAt,
-              progress: params.progress,
-              jsonMode: Boolean(params.opts.json),
-              allowGatewayServiceRepair: preManagedServiceStop?.serviceMatchesMutationRoot === true,
-              allowGatewayActivation:
-                params.shouldRestart &&
-                preManagedServiceStop?.stopped === true &&
-                preManagedServiceStop.serviceMatchesMutationRoot === true,
-              managedServiceEnv: preManagedServiceStop?.serviceEnv,
-              invocationCwd: params.invocationCwd,
-              honorPackageRoot:
-                params.managedServiceRootRedirect !== null ||
-                params.managedServiceNodeRunner !== undefined,
-              nodeRunner: params.packageUpdateNodeRunner,
-              installEnv: params.packageInstallEnv,
-              installTarget: params.packageInstallTarget,
-            })
-          : await runGitUpdate({
-              root: params.root,
-              switchToGit: params.switchToGit,
-              installKind: params.installKind,
-              timeoutMs: params.timeoutMs,
-              startedAt: params.startedAt,
-              progress: params.progress,
-              channel: params.channel,
-              tag: params.tag,
-              showProgress: params.showProgress,
-              opts: params.opts,
-              stop: params.stop,
-              devTargetRef: params.devTargetRef,
-              beforeGitMutation:
-                params.updateInstallKind === "git"
-                  ? createBeforeGitMutation({
-                      roots: gitMutationRoots ?? [params.root],
-                      shouldRestart: params.shouldRestart,
-                      stopManagedService: stopManagedServiceBeforeMutableUpdate,
-                      getPreManagedServiceStop: () => preManagedServiceStop,
-                      markSchemaRefusalAfterStop: () => {
-                        schemaRefusalAfterStop = true;
-                      },
-                    })
-                  : undefined,
-              allowGatewayServiceRepair: false,
-              allowGatewayActivation: false,
-            });
+            installKind: params.installKind,
+            tag: params.tag,
+            installSpec: params.packageInstallSpec ?? undefined,
+            timeoutMs: params.updateStepTimeoutMs,
+            startedAt: params.startedAt,
+            progress: params.progress,
+            jsonMode: Boolean(params.opts.json),
+            ...resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart),
+            managedServiceEnv: preManagedServiceStop?.serviceEnv,
+            invocationCwd: params.invocationCwd,
+            honorPackageRoot:
+              params.managedServiceRootRedirect !== null ||
+              params.managedServiceNodeRunner !== undefined,
+            nodeRunner: params.packageUpdateNodeRunner,
+            installEnv: params.packageInstallEnv,
+            installTarget: params.packageInstallTarget,
+          })
+        : await updateGitInstall({
+            root: params.root,
+            switchToGit: params.switchToGit,
+            installKind: params.installKind,
+            timeoutMs: params.timeoutMs,
+            startedAt: params.startedAt,
+            progress: params.progress,
+            channel: params.channel,
+            tag: params.tag,
+            devTarget: params.devTarget,
+            beforeGitMutation:
+              params.updateInstallKind === "git"
+                ? createBeforeGitMutation({
+                    roots: gitMutationRoots ?? [params.root],
+                    shouldRestart: params.shouldRestart,
+                    stopManagedService: stopManagedServiceBeforeMutableUpdate,
+                    getPreManagedServiceStop: () => preManagedServiceStop,
+                    switchToGit: params.switchToGit,
+                  })
+                : undefined,
+            allowGatewayServiceRepair: false,
+            allowGatewayActivation: false,
+          });
   } catch (err) {
     params.stop();
     if (err instanceof UpdateCommandAbort) {
-      if (schemaRefusalAfterStop) {
-        if (preManagedServiceStop?.stopped === true) {
-          await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop).catch(
-            () => undefined,
-          );
-          await maybeRestartServiceAfterFailedMutableUpdate({
-            preManagedServiceStop,
-            jsonMode: Boolean(params.opts.json),
-          });
-        }
-        defaultRuntime.exit(1);
-      }
       return null;
     }
-    try {
-      await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(preManagedServiceStop);
-    } catch (resumeErr) {
-      params.recoveryState.windowsTaskAutoStartRecovery?.complete();
-      params.recoveryState.windowsTaskAutoStartRecovery = undefined;
-      throw createAggregateErrorWithCause(
-        [err, resumeErr],
-        `Update failed (${String(err)}) and Windows Scheduled Task autostart could not be restored (${String(resumeErr)})`,
-        err,
-      );
-    }
-    await maybeRestartServiceAfterFailedMutableUpdate({
-      preManagedServiceStop,
-      jsonMode: Boolean(params.opts.json),
-    });
-    throw err;
+    const preMutationFailure = err instanceof UpdatePreMutationError;
+    const message = formatErrorMessage(err);
+    failure = { cause: err, detail: message };
+    defaultRuntime.error(message);
+    const durationMs = Date.now() - params.startedAt;
+    // Only an explicit pre-mutation refusal can recover the original runtime.
+    // An exception after entering mutable work carries an unsafe observed outcome
+    // through the same cleanup, report, and triage path as a failed update step.
+    result = {
+      status: "error",
+      mode:
+        params.updateInstallKind === "git"
+          ? "git"
+          : (params.packageInstallTarget?.manager ?? "unknown"),
+      root: params.root,
+      reason: preMutationFailure ? err.reason : "update-failed",
+      recovery: preMutationFailure
+        ? await originalRecovery()
+        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
+      steps: [
+        {
+          name: preMutationFailure ? err.reason : "update",
+          command: "openclaw update",
+          cwd: params.root,
+          durationMs,
+          exitCode: 1,
+          stderrTail: message,
+        },
+      ],
+      durationMs,
+    };
   }
 
-  return { result, preManagedServiceStop };
+  return { result, failure, preManagedServiceStop, ownedManagedUpdateContext, recoveryEnv };
 }

@@ -47,7 +47,7 @@ const coreTools = [
   stubTool("image_generate"),
   stubTool("video_generate"),
   stubTool("web_fetch"),
-  stubTool("image"),
+  stubTool("view_image"),
   stubTool("pdf"),
 ];
 

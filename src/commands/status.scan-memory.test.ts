@@ -22,6 +22,8 @@ vi.mock("./status.scan.shared.js", () => ({
 function createMainAgentStatus() {
   return {
     defaultId: "main",
+    ownership: "sole" as const,
+    selectionRequired: false,
     totalSessions: 0,
     bootstrapPendingCount: 0,
     agents: [

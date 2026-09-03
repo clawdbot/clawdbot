@@ -39,8 +39,8 @@ export async function applySessionHints(params: {
       });
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        const { patchSessionEntry } = await loadSessionAccessorRuntime();
-        await patchSessionEntry(
+        const { patchSessionEntryCore } = await loadSessionAccessorRuntime();
+        await patchSessionEntryCore(
           {
             storePath: params.storePath,
             sessionKey,
@@ -59,8 +59,8 @@ export async function applySessionHints(params: {
       params.sessionStore[params.sessionKey] = sessionEntry;
       if (params.storePath) {
         const sessionKey = params.sessionKey;
-        const { patchSessionEntry } = await loadSessionAccessorRuntime();
-        await patchSessionEntry(
+        const { patchSessionEntryCore } = await loadSessionAccessorRuntime();
+        await patchSessionEntryCore(
           {
             storePath: params.storePath,
             sessionKey,

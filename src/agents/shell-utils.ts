@@ -1,17 +1,14 @@
 /**
  * Shell execution helpers.
  *
- * Resolves platform shell commands, sanitizes binary output, and exposes process-tree cleanup.
+ * Resolves platform shell commands and sanitizes binary output.
  */
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { AnsiSequenceStripper } from "../../packages/terminal-core/src/ansi-sequences.js";
 import { stripAnsiForStreamChunk } from "../../packages/terminal-core/src/ansi.js";
-import {
-  killProcessTree as killProcessTreeGracefully,
-  type KillProcessTreeOptions,
-} from "../process/kill-tree.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { getBinDir } from "./config.js";
 
 type ShellConfig = {
@@ -133,12 +130,7 @@ function resolveWindowsGitBashUsrBin(shellPath: string): string | undefined {
     fs.existsSync(usrBin)
       ? usrBin
       : undefined;
-  if (windowsGitBashUsrBinCache.size >= WINDOWS_GIT_BASH_CACHE_LIMIT) {
-    const oldestKey = windowsGitBashUsrBinCache.keys().next().value;
-    if (oldestKey) {
-      windowsGitBashUsrBinCache.delete(oldestKey);
-    }
-  }
+  pruneMapToMaxSize(windowsGitBashUsrBinCache, WINDOWS_GIT_BASH_CACHE_LIMIT - 1);
   windowsGitBashUsrBinCache.set(cacheKey, resolved);
   return resolved;
 }
@@ -443,8 +435,4 @@ export function getBashShellEnv(
     ...pathEntries.filter((entry) => entry.toLowerCase() !== normalizedUsrBin),
   ].join(path.delimiter);
   return env;
-}
-
-export function killProcessTree(pid: number, opts?: KillProcessTreeOptions): void {
-  killProcessTreeGracefully(pid, { force: true, ...opts });
 }

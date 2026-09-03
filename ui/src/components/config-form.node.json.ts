@@ -1,11 +1,10 @@
 // Control UI renderer for JSON-backed config form nodes.
-import { html, nothing, type TemplateResult } from "lit";
+import { nothing, type TemplateResult } from "lit";
 import {
   getSensitiveRenderState,
   jsonValue,
   renderFieldRow,
   renderJsonTextareaControl,
-  renderRestoreDefaultButton,
   renderSchemaDefaultDescription,
   type ConfigNodeRenderParams,
 } from "./config-form.node.shared.ts";
@@ -25,27 +24,21 @@ export function renderJsonTextarea(params: ConfigNodeRenderParams): TemplateResu
     revealSensitive: params.revealSensitive ?? false,
     isSensitivePathRevealed: params.isSensitivePathRevealed,
   });
-  const control = html`
-    ${renderJsonTextareaControl({
-      schema,
-      path,
-      ariaLabel: label,
-      descriptionId: helpId,
-      sourceValue: params.sourceIdentity ?? value,
-      rowIdentity: params.rowIdentity,
-      fallback,
-      rows: 3,
-      sensitiveState,
-      disabled,
-      isRequired: params.isRequired,
-      onToggleSensitivePath: params.onToggleSensitivePath,
-      onPatch,
-    })}
-    ${renderRestoreDefaultButton({
-      ...params,
-      disabled: disabled || sensitiveState.isRedacted,
-    })}
-  `;
+  const control = renderJsonTextareaControl({
+    schema,
+    path,
+    ariaLabel: label,
+    descriptionId: helpId,
+    sourceValue: params.sourceIdentity ?? value,
+    rowIdentity: params.rowIdentity,
+    fallback,
+    rows: 3,
+    sensitiveState,
+    disabled,
+    isRequired: params.isRequired,
+    onToggleSensitivePath: params.onToggleSensitivePath,
+    onPatch,
+  });
 
   return renderFieldRow({
     label,

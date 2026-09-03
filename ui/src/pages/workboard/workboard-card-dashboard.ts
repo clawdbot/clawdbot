@@ -1,3 +1,4 @@
+import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -13,7 +14,6 @@ import {
   type BoardProviderLease,
   type BoardViewCallbacks,
 } from "../../lib/board/provider.ts";
-import type { BoardViewSnapshot } from "../../lib/board/view-types.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 function ensureBoardViewElement(): Promise<void> {
@@ -24,7 +24,7 @@ function ensureBoardViewElement(): Promise<void> {
 }
 
 class WorkboardCardDashboard extends OpenClawLightDomElement {
-  @property({ attribute: false }) sessionKey = "";
+  @property({ attribute: false }) session: BoardGetParams | null = null;
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   @property({ attribute: false }) connected = false;
   @property({ attribute: false }) canMutate = false;
@@ -33,11 +33,15 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
   @state() private provider: BoardProvider | null = null;
   @state() private expanded = false;
   @state() private activeTabId = "";
-  private lease:
-    | (BoardProviderLease & { client: GatewayBrowserClient; sessionKey: string })
-    | null = null;
+  private lease: (BoardProviderLease & { client: GatewayBrowserClient; cacheKey: string }) | null =
+    null;
   private unsubscribeSnapshot: (() => void) | null = null;
   private expansionInitialized = false;
+
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.requestUpdate();
+  }
 
   override updated(): void {
     void ensureBoardViewElement().catch(() => undefined);
@@ -50,14 +54,15 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
   }
 
   private synchronizeProvider(): void {
-    const sessionKey = this.sessionKey.trim();
+    const session = this.session;
     const client = this.client;
-    if (!sessionKey || !client) {
+    // Lit still drains queued updates after removal; only a mounted card may own a lease.
+    if (!this.isConnected || !session?.sessionKey.trim() || !client) {
       this.releaseProvider();
       return;
     }
-    const key = boardProviderCacheKey(sessionKey);
-    if (this.lease?.client === client && this.lease.sessionKey === key) {
+    const key = boardProviderCacheKey(session);
+    if (this.lease?.client === client && this.lease.cacheKey === key) {
       this.lease.update(client, this.connected, {
         canPinWidgets: false,
         canPinMcpApps: false,
@@ -71,7 +76,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
     this.expansionInitialized = false;
     this.activeTabId = "";
     const lease = acquireBoardProviderForSession(
-      key,
+      session,
       client,
       this.connected,
       false,
@@ -79,7 +84,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
       this.canMutate,
       this.canGrant,
     );
-    this.lease = { ...lease, client, sessionKey: key };
+    this.lease = { ...lease, client, cacheKey: key };
     this.provider = lease.provider;
     this.unsubscribeSnapshot = lease.provider.snapshot$.subscribe(() => {
       this.reconcileSnapshot(lease.provider);
@@ -115,6 +120,7 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
     const hasBoard = Boolean(snapshot && boardExists(snapshot));
     const callbacks = provider
       ? ({
+          appViewGeneration: provider.appViewGeneration,
           applyOps: (ops) => provider.applyOps(ops),
           grant: (name, decision) => provider.grant(name, decision),
           selectTab: (tabId) => {
@@ -125,7 +131,6 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           refreshWidgetAppView: (name, revision) => provider.refreshWidgetAppView(name, revision),
         } satisfies BoardViewCallbacks)
       : null;
-    const boardSnapshot = snapshot as BoardViewSnapshot | undefined;
 
     return html`
       <section class="workboard-detail__section workboard-card-dashboard">
@@ -146,10 +151,11 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
           >
         </button>
         <div class="workboard-card-dashboard__body" ?hidden=${!this.expanded}>
-          ${hasBoard && provider && boardSnapshot && callbacks
+          ${hasBoard && provider && snapshot && callbacks
             ? html`
                 <openclaw-board-view
-                  .snapshot=${boardSnapshot}
+                  .active=${this.expanded}
+                  .snapshot=${snapshot}
                   .activeTabId=${this.activeTabId}
                   .widgetFrameUrl=${(name: string, revision: number) =>
                     provider.widgetFrameUrl(name, revision)}
@@ -157,7 +163,6 @@ class WorkboardCardDashboard extends OpenClawLightDomElement {
                   .sessions=${[]}
                   .canMutate=${this.canMutate}
                   .canGrant=${this.canGrant}
-                  .ticketRefreshEnabled=${this.expanded}
                 ></openclaw-board-view>
               `
             : html`<p class="workboard-card-dashboard__empty">${t("workboard.dashboardEmpty")}</p>`}

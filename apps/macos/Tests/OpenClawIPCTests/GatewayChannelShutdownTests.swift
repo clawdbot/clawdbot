@@ -50,7 +50,8 @@ struct GatewayChannelShutdownTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
-            session: WebSocketSessionBox(session: session))
+            session: WebSocketSessionBox(session: session),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions)
 
         // Establish a connection so `listen()` is active.
         try await channel.connect()
@@ -110,7 +111,9 @@ struct GatewayChannelShutdownTests {
             await #expect(throws: (any Error).self) {
                 try await connect.value
             }
-            #expect(await channel.currentIssuedDeviceAuthRoles().isEmpty)
+            let authRoles = await channel.currentDeviceAuthRoles()
+            #expect(authRoles.received.isEmpty)
+            #expect(authRoles.persisted.isEmpty)
             #expect(DeviceAuthStore.loadToken(deviceId: identity.deviceId, role: "operator") == nil)
             #expect(await snapshots.value() == 0)
         }

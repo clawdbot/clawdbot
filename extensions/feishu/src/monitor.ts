@@ -29,6 +29,8 @@ type MonitorFeishuOpts = {
  */
 export type FeishuStatusSink = (patch: {
   connected?: boolean;
+  lifecycle?: "ready" | "recovering" | "blocked";
+  terminalDisconnect?: boolean;
   lastConnectedAt?: number | null;
   lastEventAt?: number | null;
   lastTransportActivityAt?: number | null;

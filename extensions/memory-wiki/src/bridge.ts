@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import {
   getMemoryCapabilityRegistration,
   listActiveMemoryPublicArtifacts,
@@ -114,7 +115,7 @@ async function collectBridgeArtifacts(
       continue;
     }
     const syncKey = await resolveArtifactKey(artifact.absolutePath);
-    if (isPathInsideOrEqual(vaultRootKey, syncKey)) {
+    if (isPathInside(vaultRootKey, syncKey)) {
       continue;
     }
     collected.push({
@@ -130,14 +131,6 @@ async function collectBridgeArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return [...deduped.values()];
-}
-
-function isPathInsideOrEqual(parentPath: string, candidatePath: string): boolean {
-  const relative = path.relative(parentPath, candidatePath);
-  return (
-    relative === "" ||
-    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
-  );
 }
 
 function resolveBridgeTitle(artifact: BridgeArtifact, agentIds: string[]): string {
@@ -187,6 +180,7 @@ async function writeBridgeSourcePage(params: {
   sourceUpdatedAtMs: number;
   sourceSize: number;
   state: Awaited<ReturnType<typeof readMemoryWikiSourceSyncState>>;
+  prepareWrite: () => Promise<unknown>;
 }): Promise<{ pagePath: string; changed: boolean; created: boolean }> {
   const { pageId, pagePath } = resolveBridgePagePath({
     workspaceDir: params.artifact.workspaceDir,
@@ -213,6 +207,7 @@ async function writeBridgeSourcePage(params: {
     pagePath,
     group: "bridge",
     state: params.state,
+    prepareWrite: params.prepareWrite,
     buildRendered: (raw, updatedAt) => {
       const contentLanguage =
         params.artifact.artifactType === "memory-events" ? "json" : "markdown";
@@ -258,9 +253,9 @@ async function writeBridgeSourcePage(params: {
 export async function syncMemoryWikiBridgeSources(params: {
   config: ResolvedMemoryWikiConfig;
   appConfig?: OpenClawConfig;
+  signal?: AbortSignal;
 }): Promise<BridgeMemoryWikiResult> {
   resolveMemoryWikiVaultAgentId(params.config);
-  await initializeMemoryWikiVault(params.config);
   if (
     params.config.vaultMode !== "bridge" ||
     !params.config.bridge.enabled ||
@@ -292,6 +287,16 @@ export async function syncMemoryWikiBridgeSources(params: {
     publicArtifacts,
   );
   const state = await readMemoryWikiSourceSyncState(params.config.vault.path);
+  let initializePromise: ReturnType<typeof initializeMemoryWikiVault> | undefined;
+  const prepareWrite = async () => {
+    params.signal?.throwIfAborted();
+    const result = await (initializePromise ??= initializeMemoryWikiVault(
+      params.config,
+      params.signal ? { signal: params.signal } : undefined,
+    ));
+    params.signal?.throwIfAborted();
+    return result;
+  };
   assertMemoryWikiSourceSyncStateCapacity({
     state,
     group: "bridge",
@@ -313,6 +318,7 @@ export async function syncMemoryWikiBridgeSources(params: {
         sourceUpdatedAtMs: stats.mtimeMs,
         sourceSize: stats.size,
         state,
+        prepareWrite,
       }),
     );
   }
@@ -327,6 +333,7 @@ export async function syncMemoryWikiBridgeSources(params: {
         group: "bridge",
         activeKeys,
         state,
+        prepareWrite,
       })
     : 0;
   await writeMemoryWikiSourceSyncState(params.config.vault.path, state);

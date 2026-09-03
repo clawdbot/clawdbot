@@ -2,8 +2,8 @@
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { resolveChannelDefaultAccountId } from "../channels/plugins/helpers.js";
 import { getChannelSetupPlugin } from "../channels/plugins/setup-registry.js";
-import type { ChannelSetupPlugin } from "../channels/plugins/setup-wizard-types.js";
 import type {
+  ChannelSetupPlugin,
   ChannelSetupDmPolicy,
   ChannelSetupWizardAdapter,
 } from "../channels/plugins/setup-wizard-types.js";

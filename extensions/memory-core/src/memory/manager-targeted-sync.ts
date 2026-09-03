@@ -41,6 +41,7 @@ export async function runMemoryTargetedSessionSync(params: {
   reason?: string;
   progress?: TargetedSyncProgress;
   sessionsFullRetryDirty?: boolean;
+  sessionsReconcileDirty?: boolean;
   sessionsDirtyFiles: Set<string>;
   syncArchiveFiles: (params: {
     needsFullReindex: boolean;
@@ -49,11 +50,17 @@ export async function runMemoryTargetedSessionSync(params: {
   }) => Promise<void>;
   shouldFallbackOnError: (err: unknown) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-}): Promise<{ handled: boolean; sessionsDirty: boolean }> {
+}): Promise<
+  | { handled: false; sessionsDirty: boolean }
+  | { handled: true; sessionsDirty: boolean; failure?: never }
+  | { handled: true; sessionsDirty: boolean; failure: { error: unknown } }
+> {
+  const hasPendingSessionWork = (hasDirtyFiles = params.sessionsDirtyFiles.size > 0) =>
+    params.sessionsFullRetryDirty || params.sessionsReconcileDirty || hasDirtyFiles;
   if (!params.hasSessionSource || !params.targetArchiveFiles) {
     return {
       handled: false,
-      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || params.sessionsDirtyFiles.size > 0,
+      sessionsDirty: hasPendingSessionWork(),
     };
   }
 
@@ -69,7 +76,7 @@ export async function runMemoryTargetedSessionSync(params: {
     });
     return {
       handled: true,
-      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
+      sessionsDirty: hasPendingSessionWork(remainingSessionsDirty),
     };
   } catch (err) {
     const reason = formatErrorMessage(err);
@@ -84,7 +91,8 @@ export async function runMemoryTargetedSessionSync(params: {
     });
     return {
       handled: true,
-      sessionsDirty: Boolean(params.sessionsFullRetryDirty) || remainingSessionsDirty,
+      sessionsDirty: hasPendingSessionWork(remainingSessionsDirty),
+      failure: { error: err },
     };
   }
 }

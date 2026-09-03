@@ -1,7 +1,7 @@
 // Proves when a new state root cannot contain legacy state migration work.
 import fs from "node:fs";
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   resolveConfigPath,
   resolveLegacyStateDirs,
@@ -15,7 +15,7 @@ import {
   inspectPluginStartupMetadata,
 } from "../../../plugins/bundled-plugin-startup-metadata.js";
 import { discoverConfiguredPluginLoadPaths } from "../../../plugins/discovery.js";
-import { loadPluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import { loadPluginManifestRegistryCore } from "../../../plugins/manifest-registry.js";
 import { configMayRequireStartupPluginConvergence } from "./startup-plugin-convergence-plan.js";
 
 const STATEFUL_CONFIG_KEYS = new Set([
@@ -86,9 +86,7 @@ function hasOnlyMigrationSafeInternalHooks(config: Record<string, unknown>): boo
     if (entry.env === undefined) {
       return true;
     }
-    return (
-      isRecord(entry.env) && Object.values(entry.env).every((value) => typeof value === "string")
-    );
+    return isStringRecord(entry.env);
   });
 }
 
@@ -140,7 +138,7 @@ function hasOnlyMigrationSafePluginEntries(
       }
       // Discovery alone cannot prove host compatibility or rule out a fallback
       // doctor owner; use the same candidate acceptance as normal plugin startup.
-      const registry = loadPluginManifestRegistry({
+      const registry = loadPluginManifestRegistryCore({
         config: config as OpenClawConfig,
         discovery,
         env,
@@ -265,16 +263,20 @@ export function planPristineStartupStateMigrations(
   if (!homeDir) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const legacyStateAbsent = resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
-    if (path.resolve(legacyDir) === path.resolve(stateDir)) {
-      return false;
-    }
-    return !fs.existsSync(legacyDir);
-  });
+  const explicitStateDir = env.OPENCLAW_STATE_DIR?.trim();
+  const legacyStateAbsent =
+    Boolean(explicitStateDir) ||
+    resolveLegacyStateDirs(() => homeDir).every((legacyDir) => {
+      if (path.resolve(legacyDir) === path.resolve(stateDir)) {
+        return false;
+      }
+      return !fs.existsSync(legacyDir);
+    });
   if (!legacyStateAbsent) {
     return { skipAllStateMigrations: false, skipCoreStateMigrations: false };
   }
-  const configPlan = planPristineStartupConfigMigrations(tryReadJsonSync(configPath), env);
+  const config = fs.existsSync(configPath) ? tryReadJsonSync(configPath) : {};
+  const configPlan = planPristineStartupConfigMigrations(config, env);
   return {
     skipAllStateMigrations: configPlan.skipAllStateMigrations,
     skipCoreStateMigrations: configPlan.skipCoreStateMigrations,

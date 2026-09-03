@@ -8,6 +8,7 @@ import {
   resolveTimestampMsToIsoString,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { runExec } from "../process/exec.js";
 
 const LIVE_CRON_PROBE_DELAY_SECONDS = 7 * 24 * 60 * 60;
@@ -61,15 +62,7 @@ export function assertLiveImageProbeReply(text: string): void {
 export function shouldRunLiveImageProbe(params: { agent: string; override?: string }): boolean {
   const override = params.override?.trim();
   if (override) {
-    switch (normalizeOptionalLowercaseString(override)) {
-      case "1":
-      case "on":
-      case "true":
-      case "yes":
-        return true;
-      default:
-        return false;
-    }
+    return isTruthyEnvValue(override);
   }
   return normalizeOptionalLowercaseString(params.agent) !== "opencode";
 }

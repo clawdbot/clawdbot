@@ -22,7 +22,7 @@ import {
 registerCodexEventProjectorTestLifecycle();
 
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
-  it("emits verbose tool summaries through onToolResult", async () => {
+  it("hides command details from ordinary verbose tool summaries", async () => {
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
@@ -50,7 +50,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ `run tests (workspace)`",
+      text: "🛠️ Bash",
     });
   });
 
@@ -58,7 +58,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       toolProgressDetail: "raw",
       onToolResult,
     });
@@ -90,7 +90,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const onToolResult = vi.fn();
     const projector = await createProjector({
       ...(await createParams()),
-      verboseLevel: "on",
+      verboseLevel: "full",
       toolProgressDetail: "raw",
       onToolResult,
     });
@@ -146,6 +146,34 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     expect(onToolResult).toHaveBeenCalledWith({
       text: "🧩 Lcm Grep: `inProgress text`",
     });
+  });
+
+  it("hides command arguments from dynamic tool summaries unless verbose is full", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "tool-command-1",
+          namespace: null,
+          tool: "server.exec",
+          arguments: { command: "cat /private/operator-file" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({ text: "🧩 Server.exec" });
+    expect(JSON.stringify(onToolResult.mock.calls)).not.toContain("private/operator-file");
   });
 
   it("emits completed tool output only when verbose full is enabled", async () => {
@@ -309,11 +337,26 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
       { step: "step two", status: "pending" },
     ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
-    expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
 
   it("fires before_compaction and after_compaction hooks for codex compaction items", async () => {
-    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks();
+    const agentHookContext = {
+      runId: "run-1",
+      sessionId: "session-1",
+      accountId: "account-a",
+      channel: "telegram",
+      channelId: "chat-a",
+      chatId: "chat-a",
+      senderId: "sender-a",
+      channelContext: {
+        sender: { id: "sender-a" },
+        chat: { id: "chat-a" },
+      },
+    };
+    const { projector, beforeCompaction, afterCompaction } = await createProjectorWithHooks({
+      agentHookContext,
+    });
     const openSpy = vi.spyOn(SessionManager, "open");
 
     await projector.handleNotification(
@@ -342,6 +385,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
     expect(beforeContext.runId).toBe("run-1");
     expect(beforeContext.sessionId).toBe("session-1");
+    expect(beforeContext).toMatchObject(agentHookContext);
     const afterPayload = requireRecord(
       mockCallArg(afterCompaction, 0, 0, "afterCompaction"),
       "after payload",
@@ -355,6 +399,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     );
     expect(afterContext.runId).toBe("run-1");
     expect(afterContext.sessionId).toBe("session-1");
+    expect(afterContext).toMatchObject(agentHookContext);
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {

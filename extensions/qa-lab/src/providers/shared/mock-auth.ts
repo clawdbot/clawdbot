@@ -2,7 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { applyAuthProfileConfig } from "openclaw/plugin-sdk/provider-auth-api-key";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveQaAgentAuthDir, writeQaAuthProfiles } from "./auth-store.js";
+import { writeQaAuthProfiles } from "./auth-store.js";
 
 /** Providers the mock harness stages placeholder credentials for by default. */
 const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
@@ -10,15 +10,31 @@ const QA_MOCK_AUTH_PROVIDERS = Object.freeze(["openai", "anthropic"] as const);
 /** Agent IDs the mock harness stages credentials under. */
 const QA_MOCK_AUTH_AGENT_IDS = Object.freeze(["main", "qa"] as const);
 
-function buildQaMockProfileId(provider: string): string {
+export function buildQaMockProfileId(provider: string): string {
   return `qa-mock-${provider}`;
+}
+
+export function applyQaMockAuthProfileConfig(params: {
+  cfg: OpenClawConfig;
+  providers?: readonly string[];
+}): OpenClawConfig {
+  let next = params.cfg;
+  for (const provider of uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS)) {
+    next = applyAuthProfileConfig(next, {
+      profileId: buildQaMockProfileId(provider),
+      provider,
+      mode: "api_key",
+      displayName: `QA mock ${provider} credential`,
+    });
+  }
+  return next;
 }
 
 /**
  * In mock provider modes the qa suite runs against an embedded mock server
  * instead of a real provider API. The mock does not validate credentials, but
  * the agent auth layer still needs a matching `api_key` auth profile in
- * `auth-profiles.json` before it will route the request through
+ * the canonical SQLite auth store before it will route the request through
  * `providerBaseUrl`. Without this staging step, every scenario fails with
  * `FailoverError: No API key found for provider "openai"` before the mock
  * server ever sees a request.
@@ -41,10 +57,9 @@ export async function stageQaMockAuthProfiles(params: {
 }): Promise<OpenClawConfig> {
   const agentIds = uniqueStrings(params.agentIds ?? QA_MOCK_AUTH_AGENT_IDS);
   const providers = uniqueStrings(params.providers ?? QA_MOCK_AUTH_PROVIDERS);
-  let next = params.cfg;
   for (const agentId of agentIds) {
     await writeQaAuthProfiles({
-      agentDir: resolveQaAgentAuthDir({ stateDir: params.stateDir, agentId }),
+      agentId,
       profiles: Object.fromEntries(
         providers.map((provider) => [
           buildQaMockProfileId(provider),
@@ -56,15 +71,8 @@ export async function stageQaMockAuthProfiles(params: {
           },
         ]),
       ),
+      stateDir: params.stateDir,
     });
   }
-  for (const provider of providers) {
-    next = applyAuthProfileConfig(next, {
-      profileId: buildQaMockProfileId(provider),
-      provider,
-      mode: "api_key",
-      displayName: `QA mock ${provider} credential`,
-    });
-  }
-  return next;
+  return applyQaMockAuthProfileConfig({ cfg: params.cfg, providers });
 }

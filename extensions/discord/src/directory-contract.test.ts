@@ -1,21 +1,12 @@
 // Discord tests cover directory contract plugin behavior.
-import type { BaseProbeResult, BaseTokenResolution } from "openclaw/plugin-sdk/channel-contract";
 import { expectDirectoryIds } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe, expect, expectTypeOf, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   listDiscordDirectoryGroupsFromConfig,
   listDiscordDirectoryPeersFromConfig,
 } from "../directory-contract-api.js";
-import type { DiscordProbe } from "./probe.js";
-import type { DiscordTokenResolution } from "./token.js";
-
 describe("Discord directory contract", () => {
-  it("keeps public probe and token resolution aligned with base contracts", () => {
-    expectTypeOf<DiscordProbe>().toMatchTypeOf<BaseProbeResult>();
-    expectTypeOf<DiscordTokenResolution>().toMatchTypeOf<BaseTokenResolution>();
-  });
-
   it("lists peers/groups from config (numeric ids only)", async () => {
     const cfg = {
       channels: {

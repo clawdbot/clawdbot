@@ -259,10 +259,6 @@ function assertResourceArray<T extends { name?: string }>(
   return resources;
 }
 
-export function getErrorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function requestGoogleMeetApi(params: {
   accessToken: string;
   path: string;

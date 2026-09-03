@@ -1,0 +1,34 @@
+title: Gateway loopback and LAN access
+
+scenario:
+  id: gateway-loopback-lan-access
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.loopback-and-lan-access
+  objective: Prove that loopback binding stays host-local while LAN binding is reachable through a real non-loopback interface with Gateway authentication enforced.
+  successCriteria:
+    - A loopback-bound Gateway serves HTTP health and authenticated WebSocket health on 127.0.0.1.
+    - The same loopback listener rejects a connection addressed through the host's non-loopback IPv4 interface.
+    - A LAN-bound Gateway serves HTTP health and authenticated WebSocket health through the host's actual non-loopback IPv4 interface.
+    - Invalid shared tokens are rejected and the valid shared token is accepted on both listener modes.
+  docsRefs:
+    - docs/gateway/index.md
+    - docs/gateway/protocol.md
+    - docs/gateway/security/index.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/gateway/net.ts
+    - src/gateway/server.ts
+    - src/gateway/server-runtime-config.ts
+    - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.ts
+    - test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts
+  execution:
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-loopback-lan-access.ts
+    summary: Starts real loopback and LAN Gateway listeners, then probes their HTTP and WebSocket surfaces from loopback and the host's real LAN interface.
+    args:
+      - --artifact-base
+      - ${outputDir}
+    timeoutMs: 120000

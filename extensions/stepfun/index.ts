@@ -1,4 +1,3 @@
-// Stepfun plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
   type OpenClawConfig,
@@ -151,6 +150,7 @@ function createStepFunApiKeyMethod(params: {
     profileIds: resolveProfileIds(params.region),
     allowProfile: false,
     defaultModel: params.defaultModel,
+    preserveExistingPrimary: true,
     expectedProviders: [STEPFUN_PROVIDER_ID, STEPFUN_PLAN_PROVIDER_ID],
     applyConfig: params.applyConfig,
     wizard: {

@@ -2,7 +2,7 @@
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
-import { parseStrictPositiveInteger } from "../src/infra/parse-finite-number.js";
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 
 const options = {
   help: { type: "boolean", short: "h" },

@@ -69,7 +69,8 @@ function isWorkboardStatus(value: string): value is WorkboardStatus {
 function formatCardLine(card: WorkboardCard): string {
   const boardId = card.metadata?.automation?.boardId ?? "default";
   const agent = card.agentId ? ` ${card.agentId}` : "";
-  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}`;
+  const archived = card.metadata?.archivedAt ? " (archived)" : "";
+  return `${card.id.slice(0, 8)}  ${card.status.padEnd(8)}  ${card.priority.padEnd(6)}  ${boardId}${agent}  ${card.title}${archived}`;
 }
 
 function redactDispatchResult(result: WorkboardDispatchResult): WorkboardDispatchResult {

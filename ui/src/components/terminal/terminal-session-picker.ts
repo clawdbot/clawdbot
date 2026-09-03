@@ -1,5 +1,7 @@
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
+import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import type { TerminalSessionInfo } from "./terminal-connection.ts";
 
 type TerminalSessionPickerProps = {
@@ -20,7 +22,7 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
   return html`
     <div class="tp-session-picker" @focusout=${props.onFocusOut}>
       <button
-        class="tp-icon"
+        class="rail-header__action tp-icon"
         type="button"
         title=${t("terminal.sessions")}
         aria-label=${t("terminal.sessions")}
@@ -29,18 +31,7 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
         aria-controls=${TERMINAL_SESSION_PICKER_ID}
         @click=${props.onToggle}
       >
-        <svg
-          viewBox="0 0 16 16"
-          width="14"
-          height="14"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="1.3"
-          aria-hidden="true"
-        >
-          <path d="M3 3.25h10v3.5H3zM3 9.25h10v3.5H3z" />
-          <path d="m5 4.5 1 1-1 1m0 4 1 1-1 1" />
-        </svg>
+        ${icons.server}
       </button>
       ${props.open
         ? html`<div
@@ -64,16 +55,19 @@ export function renderTerminalSessionPicker(props: TerminalSessionPickerProps) {
               </button>
             </div>
             ${props.loading
-              ? html`<div class="tp-session-empty">${t("terminal.loadingSessions")}</div>`
+              ? renderPanelLoadingSkeleton("terminal", t("terminal.loadingSessions"), true)
               : props.sessions.length === 0
                 ? html`<div class="tp-session-empty">${t("terminal.noSessions")}</div>`
                 : props.sessions.map((session) => {
                     const current = props.currentSessionIds.has(session.sessionId);
-                    const state = current
-                      ? t("terminal.currentSession")
-                      : session.attached
-                        ? t("terminal.sessionAttached")
-                        : t("terminal.detached");
+                    const agentOwned = session.owner?.startsWith("agent:") === true;
+                    const state = `${agentOwned ? `${t("terminal.agentOwnedBadge")} · ` : ""}${
+                      current
+                        ? t("terminal.currentSession")
+                        : session.attached
+                          ? t("terminal.sessionAttached")
+                          : t("terminal.detached")
+                    }`;
                     return html`<button
                       class="tp-session"
                       type="button"

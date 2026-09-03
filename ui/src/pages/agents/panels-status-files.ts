@@ -1,9 +1,6 @@
 // Control UI view renders agents panels status files screen content.
-import { applyPreviewTheme } from "@create-markdown/preview";
-import DOMPurify from "dompurify";
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import { marked } from "marked";
 import type {
   AgentFileEntry,
   AgentsFilesListResult,
@@ -15,6 +12,7 @@ import type {
 import { renderCronJobsPagination } from "../../components/cron-jobs-pagination.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
+import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/modal-dialog.ts";
 import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
 import "../../components/tooltip.ts";
@@ -305,6 +303,7 @@ export function renderAgentCron(params: {
   scopedNextWakeAtMs: number | null;
   loading: boolean;
   error: string | null;
+  canRunNow: boolean;
   onRefresh: () => void;
   onLoadMore: () => void;
   onRunNow: (jobId: string) => void;
@@ -376,7 +375,7 @@ export function renderAgentCron(params: {
                   })}
                   <button
                     class="btn btn--sm"
-                    ?disabled=${!job.enabled}
+                    ?disabled=${!params.canRunNow || !job.enabled}
                     @click=${() => params.onRunNow(job.id)}
                   >
                     ${t("agents.cronPanel.runNow")}
@@ -406,6 +405,7 @@ export function renderAgentFiles(params: {
   agentFileContents: Record<string, string>;
   agentFileDrafts: Record<string, string>;
   agentFileSaving: boolean;
+  canWrite: boolean;
   onLoadFiles: (agentId: string) => void;
   onSelectFile: (name: string) => void;
   onFileDraftChange: (name: string, content: string) => void;
@@ -426,9 +426,7 @@ export function renderAgentFiles(params: {
   const draft = active ? (params.agentFileDrafts[active] ?? baseContent) : "";
   const isDirty = active ? draft !== baseContent : false;
   const previewHtml = activeEntry
-    ? applyPreviewTheme(marked.parse(draft, { gfm: true, breaks: true }) as string, {
-        sanitize: (h: string) => DOMPurify.sanitize(h),
-      })
+    ? toSanitizedMarkdownHtml(draft, { codeBlockChrome: "none", mode: "document" })
     : "";
   const draftByteSize = formatBytes(new TextEncoder().encode(draft).length);
   const draftWordCount = countWords(draft);
@@ -554,14 +552,14 @@ export function renderAgentFiles(params: {
                             </button>
                             <button
                               class="btn btn--sm"
-                              ?disabled=${!isDirty}
+                              ?disabled=${!params.canWrite || !isDirty}
                               @click=${() => params.onFileReset(activeEntry.name)}
                             >
                               ${t("common.reset")}
                             </button>
                             <button
                               class="btn btn--sm primary"
-                              ?disabled=${params.agentFileSaving || !isDirty}
+                              ?disabled=${!params.canWrite || params.agentFileSaving || !isDirty}
                               @click=${() => params.onFileSave(activeEntry.name)}
                             >
                               ${params.agentFileSaving ? t("common.saving") : t("common.save")}
@@ -579,6 +577,7 @@ export function renderAgentFiles(params: {
                           <span>${t("agents.files.content")}</span>
                           <textarea
                             class="agent-file-textarea"
+                            ?disabled=${!params.canWrite}
                             .value=${draft}
                             @input=${(e: Event) =>
                               params.onFileDraftChange(

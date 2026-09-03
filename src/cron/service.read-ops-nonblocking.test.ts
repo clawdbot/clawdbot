@@ -6,6 +6,22 @@ import { describe, expect, it, vi } from "vitest";
 import { withTimeout } from "../utils/with-timeout.js";
 import { CronService } from "./service.js";
 import { writeCronStoreSnapshot } from "./service.test-harness.js";
+import type { CronJob } from "./types.js";
+
+const sqliteTransactionLabels = vi.hoisted(() => [] as string[]);
+
+vi.mock("../state/openclaw-state-db.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../state/openclaw-state-db.js")>();
+  const runOpenClawStateWriteTransaction: typeof actual.runOpenClawStateWriteTransaction = (
+    operation,
+    options,
+    transactionOptions,
+  ) => {
+    sqliteTransactionLabels.push(transactionOptions?.operationLabel ?? "state.write");
+    return actual.runOpenClawStateWriteTransaction(operation, options, transactionOptions);
+  };
+  return { ...actual, runOpenClawStateWriteTransaction };
+});
 
 const noopLogger = {
   debug: vi.fn(),
@@ -76,7 +92,84 @@ function expectCronStatus(
   }
 }
 
+function futureJob(id: string, nowMs: number, withNextRun = true): CronJob {
+  return {
+    id,
+    name: id,
+    enabled: true,
+    createdAtMs: nowMs,
+    updatedAtMs: nowMs,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: nowMs },
+    sessionTarget: "isolated",
+    wakeMode: "next-heartbeat",
+    payload: { kind: "agentTurn", message: id },
+    state: withNextRun ? { nextRunAtMs: nowMs + 60_000 } : {},
+  };
+}
+
 describe("CronService read ops while job is running", () => {
+  it("keeps started read operations observational across a large stable store", async () => {
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const store = await makeStorePath();
+    const jobs = Array.from({ length: 100 }, (_, index) => futureJob(`stable-${index}`, nowMs));
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs });
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      await cron.start();
+      sqliteTransactionLabels.length = 0;
+
+      await cron.status();
+      await cron.list({ includeDisabled: true });
+      await cron.listPage({ limit: 25 });
+      await cron.readJob(jobs[0]!.id);
+
+      expect(
+        sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
+      ).toHaveLength(0);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
+  it("retains one durable missing-schedule repair before the scheduler starts", async () => {
+    const nowMs = Date.parse("2026-08-30T12:00:00.000Z");
+    const store = await makeStorePath();
+    const job = futureJob("unstarted-missing-next", nowMs, false);
+    await writeCronStoreSnapshot({ storePath: store.storePath, jobs: [job] });
+    const cron = new CronService({
+      storePath: store.storePath,
+      cronEnabled: true,
+      log: noopLogger,
+      nowMs: () => nowMs,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    try {
+      sqliteTransactionLabels.length = 0;
+      await expect(cron.readJob(job.id)).resolves.toMatchObject({
+        state: { nextRunAtMs: nowMs + 60_000 },
+      });
+      expect(
+        sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned"),
+      ).toHaveLength(1);
+    } finally {
+      cron.stop();
+      await store.cleanup();
+    }
+  });
+
   it.each([
     { deleteAfterRun: true, status: "ok" },
     { deleteAfterRun: false, status: "ok" },

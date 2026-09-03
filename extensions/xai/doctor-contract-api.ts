@@ -1,6 +1,8 @@
 // Xai doctor contract repairs plugin-owned model configuration.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { asObjectRecord } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isLegacyXaiBuiltinModel } from "./model-definitions.js";
+import { isXaiProviderId } from "./provider-id.js";
 
 type LegacyConfigRule = {
   path: Array<string | number>;
@@ -54,18 +56,12 @@ const PLUGIN_MODEL_MIGRATIONS: PluginModelMigration[] = [
     ["plugins", "entries", "xai", "config", "xSearch"],
   ].map((path) => ({ path, retiredModels: RETIRED_CODE_MODELS, targetModel: "grok-build-0.1" })),
 ];
-const XAI_STT_MODEL_LIST_PATHS = [["tools", "media", "models"]] as const;
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
+const XAI_MEDIA_MODEL_LIST_PATHS = [["tools", "media", "models"]] as const;
 
 function readPath(root: unknown, path: readonly string[]): unknown {
   let current = root;
   for (const segment of path) {
-    current = asRecord(current)?.[segment];
+    current = asObjectRecord(current)?.[segment];
     if (current === undefined) {
       return undefined;
     }
@@ -74,7 +70,7 @@ function readPath(root: unknown, path: readonly string[]): unknown {
 }
 
 function isRetiredToolModel(value: unknown, retiredModels: ReadonlySet<string>): boolean {
-  const model = asRecord(value)?.model;
+  const model = asObjectRecord(value)?.model;
   return typeof model === "string" && retiredModels.has(model.trim().toLowerCase());
 }
 
@@ -82,17 +78,51 @@ function hasLegacyBuiltinCatalogRows(value: unknown): boolean {
   return Array.isArray(value) && value.some((model) => isLegacyXaiBuiltinModel(model));
 }
 
-function isLegacyXaiSttEntry(value: unknown): boolean {
-  const entry = asRecord(value);
-  if (!entry || (entry.type !== undefined && entry.type !== "provider")) {
-    return false;
+function asXaiProviderMediaEntry(value: unknown) {
+  const entry = asObjectRecord(value);
+  // An omitted type plus a command is a CLI entry at runtime. Its model is an arbitrary label.
+  if (
+    !entry ||
+    (entry.type !== undefined && entry.type !== "provider") ||
+    (entry.type === undefined && entry.command)
+  ) {
+    return undefined;
   }
+  if (!isXaiProviderId(entry.provider)) {
+    return undefined;
+  }
+  return entry;
+}
+
+function hasImageCapability(entry: { capabilities?: unknown }): boolean {
   return (
-    typeof entry.provider === "string" &&
-    entry.provider.trim().toLowerCase() === "xai" &&
-    typeof entry.model === "string" &&
-    entry.model.trim().toLowerCase() === "grok-stt"
+    Array.isArray(entry.capabilities) &&
+    entry.capabilities.some(
+      (capability) => typeof capability === "string" && capability.trim().toLowerCase() === "image",
+    )
   );
+}
+
+function isRetiredXaiImageMediaEntry(value: unknown): boolean {
+  const entry = asXaiProviderMediaEntry(value);
+  // Media entries cannot preserve "reasoning disabled", so migrate only compatible redirects.
+  // Shared xAI media entries without capabilities infer audio from provider
+  // metadata, so rewriting them to grok-4.3 would mutate audio config.
+  // Require an explicit capabilities tag that includes image.
+  return (
+    typeof entry?.model === "string" &&
+    RETIRED_REASONING_MODELS.has(entry.model.trim().toLowerCase()) &&
+    hasImageCapability(entry)
+  );
+}
+
+function hasRetiredXaiImageMediaEntries(value: unknown): boolean {
+  return Array.isArray(value) && value.some(isRetiredXaiImageMediaEntry);
+}
+
+function isLegacyXaiSttEntry(value: unknown): boolean {
+  const entry = asXaiProviderMediaEntry(value);
+  return typeof entry?.model === "string" && entry.model.trim().toLowerCase() === "grok-stt";
 }
 
 function hasLegacyXaiSttEntries(value: unknown): boolean {
@@ -105,7 +135,12 @@ export const legacyConfigRules: LegacyConfigRule[] = [
     message: `${migration.path.join(".")}.model uses a retired xAI model; run "openclaw doctor --fix" to use ${migration.targetModel}.`,
     match: (value: unknown) => isRetiredToolModel(value, migration.retiredModels),
   })),
-  ...XAI_STT_MODEL_LIST_PATHS.map((path) => ({
+  ...XAI_MEDIA_MODEL_LIST_PATHS.map((path) => ({
+    path: [...path],
+    message: `${path.join(".")} contains an xAI image entry with a retired model; run "openclaw doctor --fix" to migrate it to grok-4.3.`,
+    match: hasRetiredXaiImageMediaEntries,
+  })),
+  ...XAI_MEDIA_MODEL_LIST_PATHS.map((path) => ({
     path: [...path],
     message: `${path.join(".")} contains the obsolete xAI grok-stt model selector; run "openclaw doctor --fix" to remove it.`,
     match: hasLegacyXaiSttEntries,
@@ -133,7 +168,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (next === cfg) {
       next = structuredClone(cfg);
     }
-    const target = asRecord(readPath(next, migration.path));
+    const target = asObjectRecord(readPath(next, migration.path));
     if (!target) {
       continue;
     }
@@ -144,8 +179,11 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     );
   }
 
-  for (const path of XAI_STT_MODEL_LIST_PATHS) {
-    if (!hasLegacyXaiSttEntries(readPath(next, path))) {
+  for (const path of XAI_MEDIA_MODEL_LIST_PATHS) {
+    const currentEntries = readPath(next, path);
+    const hasRetiredImages = hasRetiredXaiImageMediaEntries(currentEntries);
+    const hasLegacyStt = hasLegacyXaiSttEntries(currentEntries);
+    if (!hasRetiredImages && !hasLegacyStt) {
       continue;
     }
     if (next === cfg) {
@@ -155,17 +193,30 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (!Array.isArray(entries)) {
       continue;
     }
+    let migrated = 0;
     let removed = 0;
     for (const entry of entries) {
-      if (!isLegacyXaiSttEntry(entry)) {
+      const rec = asObjectRecord(entry);
+      if (isRetiredXaiImageMediaEntry(entry) && rec) {
+        rec.model = "grok-4.3";
+        migrated += 1;
         continue;
       }
-      delete asRecord(entry)?.model;
-      removed += 1;
+      if (isLegacyXaiSttEntry(entry) && rec) {
+        delete rec.model;
+        removed += 1;
+      }
     }
-    changes.push(
-      `Removed the obsolete xAI grok-stt model selector from ${removed} ${path.join(".")} entr${removed === 1 ? "y" : "ies"}.`,
-    );
+    if (migrated > 0) {
+      changes.push(
+        `Migrated ${migrated} retired xAI image model${migrated === 1 ? "" : "s"} in ${path.join(".")} to grok-4.3.`,
+      );
+    }
+    if (removed > 0) {
+      changes.push(
+        `Removed the obsolete xAI grok-stt model selector from ${removed} ${path.join(".")} entr${removed === 1 ? "y" : "ies"}.`,
+      );
+    }
   }
 
   const modelsPath = ["models", "providers", "xai", "models"];
@@ -174,7 +225,7 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
     if (next === cfg) {
       next = structuredClone(cfg);
     }
-    const provider = asRecord(readPath(next, ["models", "providers", "xai"]));
+    const provider = asObjectRecord(readPath(next, ["models", "providers", "xai"]));
     const models = provider?.models;
     if (provider && Array.isArray(models)) {
       const retained = models.filter((model) => !isLegacyXaiBuiltinModel(model));

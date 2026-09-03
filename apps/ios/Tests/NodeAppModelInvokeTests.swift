@@ -1,11 +1,13 @@
 import Foundation
-import OpenClawKit
+import Observation
 import OpenClawProtocol
 import Testing
 import UIKit
 import UserNotifications
+import XCTest
 @testable import OpenClaw
 @testable import OpenClawChatUI
+@testable import OpenClawKit
 
 @MainActor
 private final class MockVoiceNoteAudioCapture: VoiceNoteAudioCapture {
@@ -360,16 +362,27 @@ private func makeProjectedWatchChatRawMessage(
     text: String,
     timestamp: Double,
     serverId: String,
+    runID: String? = nil,
+    idempotencyKey: String? = nil,
+    stopReason: String? = nil,
     isMessageToolMirror: Bool = false) throws -> AnyCodable
 {
+    var metadata = ["id": serverId]
+    metadata["runId"] = runID
     var object: [String: Any] = [
         "role": role,
         "content": [["type": "text", "text": text]],
         "timestamp": timestamp,
-        "__openclaw": ["id": serverId],
+        "__openclaw": metadata,
     ]
+    object["idempotencyKey"] = idempotencyKey
+    object["stopReason"] = stopReason
     if isMessageToolMirror {
-        object["openclawMessageToolMirror"] = ["toolName": "message"]
+        object["openclawMessageToolMirror"] = [
+            "toolName": "message",
+            "sourceReplySink": "internal-ui",
+            "sourceMessageSeq": 42,
+        ]
     }
     let data = try JSONSerialization.data(withJSONObject: object)
     return try JSONDecoder().decode(AnyCodable.self, from: data)
@@ -650,14 +663,6 @@ private func waitForMainActorWork(
 }
 
 @MainActor
-private func mountScreen(_ screen: ScreenController) throws -> ScreenWebViewCoordinator {
-    let coordinator = ScreenWebViewCoordinator(controller: screen)
-    _ = coordinator.makeContainerView()
-    _ = try #require(coordinator.managedWebView)
-    return coordinator
-}
-
-@MainActor
 private final class MockWatchMessagingService: @preconcurrency WatchMessagingServicing, @unchecked Sendable {
     var currentStatus = WatchMessagingStatus(
         supported: true,
@@ -670,6 +675,7 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         queuedForDelivery: false,
         transport: "sendMessage")
     var sendError: Error?
+    var sendNotificationHandler: (() async throws -> WatchNotificationSendResult)?
     var lastSent: (id: String, params: OpenClawWatchNotifyParams, gatewayStableID: String?)?
     var lastDirectNodeSetupCode: String?
     var lastSentExecApprovalPrompt: OpenClawWatchExecApprovalPromptMessage?
@@ -730,6 +736,9 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
         gatewayStableID: String?) async throws -> WatchNotificationSendResult
     {
         self.lastSent = (id: id, params: params, gatewayStableID: gatewayStableID)
+        if let sendNotificationHandler {
+            return try await sendNotificationHandler()
+        }
         if let sendError {
             throw sendError
         }
@@ -827,6 +836,28 @@ private final class MockWatchMessagingService: @preconcurrency WatchMessagingSer
 
     func emitAppCommand(_ event: WatchAppCommandEvent) {
         self.appCommandHandler?(event)
+    }
+}
+
+@MainActor
+private final class WatchMessageSendGate {
+    private(set) var commandIDs: [String] = []
+    private var continuation: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    func holdFirstSend(commandID: String) async -> Int {
+        self.commandIDs.append(commandID)
+        let attempt = self.commandIDs.count { $0 == commandID }
+        if self.commandIDs.count == 1, !self.released {
+            await withCheckedContinuation { self.continuation = $0 }
+        }
+        return attempt
+    }
+
+    func release() {
+        self.released = true
+        self.continuation?.resume()
+        self.continuation = nil
     }
 }
 
@@ -982,19 +1013,159 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 }
 
+@MainActor
+private final class BatteryMonitoringDevice: UIDevice {
+    private var monitoringEnabled: Bool
+    private(set) var monitoringStatesDuringBatteryReads: [Bool] = []
+
+    init(monitoringEnabled: Bool) {
+        self.monitoringEnabled = monitoringEnabled
+        super.init()
+    }
+
+    override var isBatteryMonitoringEnabled: Bool {
+        get { self.monitoringEnabled }
+        set { self.monitoringEnabled = newValue }
+    }
+
+    override var batteryLevel: Float {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return 0.5
+    }
+
+    override var batteryState: UIDevice.BatteryState {
+        self.monitoringStatesDuringBatteryReads.append(self.monitoringEnabled)
+        return .charging
+    }
+}
+
+@MainActor
+private final class TimingOutDeviceStatusService: DeviceStatusServicing {
+    func status() async throws -> OpenClawDeviceStatusPayload {
+        throw URLError(.timedOut)
+    }
+
+    func info() -> OpenClawDeviceInfoPayload {
+        DeviceStatusService().info()
+    }
+}
+
 @Suite(.serialized) struct NodeAppModelInvokeTests {
-    @Test @MainActor func `decode params fails without JSON`() {
-        #expect(throws: Error.self) {
-            _ = try NodeAppModel._test_decodeParams(OpenClawCanvasNavigateParams.self, from: nil)
+    @Test @MainActor func `throttled silent push reports no data while background refresh remains successful`() async {
+        let lastSuccessKey = "gateway.backgroundAlive.lastSuccessAtMs"
+        let previousSuccess = UserDefaults.standard.object(forKey: lastSuccessKey)
+        defer {
+            if let previousSuccess {
+                UserDefaults.standard.set(previousSuccess, forKey: lastSuccessKey)
+            } else {
+                UserDefaults.standard.removeObject(forKey: lastSuccessKey)
+            }
+        }
+        UserDefaults.standard.set(Date().timeIntervalSince1970 * 1000, forKey: lastSuccessKey)
+
+        let appModel = NodeAppModel()
+        appModel.isBackgrounded = true
+        appModel.gatewayConnected = true
+        let delegate = OpenClawAppDelegate()
+        delegate.appModel = appModel
+
+        let result = await withCheckedContinuation { continuation in
+            delegate.application(
+                UIApplication.shared,
+                didReceiveRemoteNotification: ["aps": ["content-available": 1]],
+                fetchCompletionHandler: { continuation.resume(returning: $0) })
+        }
+
+        #expect(result == .noData)
+        #expect(await appModel.handleBackgroundRefreshWake())
+
+        let expiredRefresh = Task { @MainActor in
+            await appModel.handleBackgroundRefreshWake()
+        }
+        expiredRefresh.cancel()
+        #expect(await expiredRefresh.value == false)
+    }
+
+    @Test @MainActor func `expired background refresh settles unsuccessful exactly once`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.expire()
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [false])
+        #expect(wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `completed background refresh ignores later expiration`() {
+        let wakeTask = Task { true }
+        var completions: [Bool] = []
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) {
+            completions.append($0)
+        }
+
+        attempt.complete(success: true)
+        attempt.expire()
+
+        #expect(completions == [true])
+        #expect(!wakeTask.isCancelled)
+    }
+
+    @Test @MainActor func `replaced background refresh settles before its successor`() {
+        let replacedTask = Task { true }
+        let replacementTask = Task { true }
+        var completions: [Bool] = []
+        let replaced = BackgroundWakeRefreshAttempt(wakeTask: replacedTask) {
+            completions.append($0)
+        }
+        let replacement = BackgroundWakeRefreshAttempt(wakeTask: replacementTask) {
+            completions.append($0)
+        }
+
+        replaced.expire()
+        replacement.complete(success: true)
+        replaced.complete(success: true)
+
+        #expect(completions == [false, true])
+        #expect(replacedTask.isCancelled)
+        #expect(!replacementTask.isCancelled)
+    }
+
+    @Test func `network status timeout never invents offline network facts`() async {
+        await #expect(throws: URLError(.timedOut)) {
+            try await NetworkStatusService().currentStatus(timeoutMs: 0)
         }
     }
 
-    @Test @MainActor func `encode payload emits JSON`() throws {
-        struct Payload: Codable, Equatable {
-            var value: String
+    @Test @MainActor func `device status reports unavailable when its network observation times out`() async {
+        let appModel = NodeAppModel(deviceStatusService: TimingOutDeviceStatusService())
+        let request = BridgeInvokeRequest(
+            id: "device-status-network-timeout",
+            command: OpenClawDeviceCommand.status.rawValue,
+            paramsJSON: "{}")
+
+        let response = await appModel.handleInvoke(request)
+
+        #expect(response.ok == false)
+        #expect(response.error?.code == .unavailable)
+    }
+
+    @Test @MainActor func `device status battery snapshot preserves monitoring ownership`() {
+        for initial in [false, true] {
+            let device = BatteryMonitoringDevice(monitoringEnabled: initial)
+
+            let payload = DeviceStatusService.batteryStatus(device: device)
+
+            #expect(payload.level == 0.5)
+            #expect(payload.state == .charging)
+            #expect(!device.monitoringStatesDuringBatteryReads.isEmpty)
+            #expect(!device.monitoringStatesDuringBatteryReads.contains(false))
+            #expect(device.isBatteryMonitoringEnabled == initial)
         }
-        let json = try NodeAppModel._test_encodePayload(Payload(value: "ok"))
-        #expect(json.contains("\"value\""))
     }
 
     @Test @MainActor func `health summary routes a fixed period to the health service`() async throws {
@@ -1005,7 +1176,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawHealthCommand.summary.rawValue,
             paramsJSON: #"{"period":"today"}"#)
 
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
         let payload = try decodeTalkPayload(OpenClawHealthSummaryPayload.self, from: response)
 
         #expect(response.ok)
@@ -1022,7 +1193,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawHealthCommand.summary.rawValue,
             paramsJSON: #"{"period":"90d"}"#)
 
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .invalidRequest)
@@ -1035,18 +1206,24 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel.chatDeliveryAgentId == nil)
     }
 
-    @Test @MainActor func `chat delivery owner requires persisted or gateway ownership`() {
+    @Test @MainActor func `chat delivery owner and refresh identity follow gateway ownership`() {
         let appModel = NodeAppModel()
+        let ownerlessIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == nil)
 
         appModel.gatewayDefaultAgentId = " Agent-A "
+        let defaultIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-a")
+        #expect(defaultIdentity != ownerlessIdentity)
 
         appModel.setSelectedAgentId(" Agent-B ")
+        let selectedIdentity = appModel.chatViewModelIdentityID
         #expect(appModel.chatDeliveryAgentId == "agent-b")
+        #expect(selectedIdentity != defaultIdentity)
 
         appModel.openChat(sessionKey: "agent:Agent-C:incident")
         #expect(appModel.chatDeliveryAgentId == "agent-c")
+        #expect(appModel.chatViewModelIdentityID != selectedIdentity)
     }
 
     @Test @MainActor func `init preserves saved talk mode preference`() {
@@ -1190,7 +1367,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     commandText: "echo first",
                     expiresAtMs: 1)))
 
-        let firstPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        let firstPrompt = try #require(appModel.pendingExecApprovalPrompt)
         #expect(firstPrompt.id == "approval-1")
         #expect(firstPrompt.commandText == "echo first")
         #expect(firstPrompt.allowsAllowAlways == false)
@@ -1205,19 +1382,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     agentId: nil,
                     expiresAtMs: 2)))
 
-        let secondPrompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        let secondPrompt = try #require(appModel.pendingExecApprovalPrompt)
         #expect(secondPrompt.id == "approval-2")
         #expect(secondPrompt.commandText == "echo second")
         #expect(secondPrompt.allowsAllowAlways)
 
-        appModel._test_dismissPendingExecApprovalPrompt()
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        appModel.dismissPendingExecApprovalPrompt()
+        #expect(appModel.pendingExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `explicit notification tap replaces visible approval after canonical fetch`() async throws {
         let fetchGate = WatchSnapshotSendGate()
         let appModel = makeNodeModelWithMockServices()
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-a",
@@ -1237,11 +1414,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             await Task.yield()
         }
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-a")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-visible-a")
         await fetchGate.resume()
         await fetching.value
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-tapped-b")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "echo tapped-b")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-tapped-b")
+        #expect(appModel.pendingExecApprovalPrompt?.commandText == "echo tapped-b")
     }
 
     @Test @MainActor func `unified approval get accepts matching exec and plugin presentations`() throws {
@@ -1347,7 +1524,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let capture = ApprovalResolutionCapture()
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(pluginJSON)
         appModel._test_setExecApprovalResolutionSuccessHandler { _, kind, _, _ in
             await capture.record(kind: kind)
@@ -1358,7 +1535,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             gatewayDeviceId: nil,
             kind: .plugin))
 
-        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        let prompt = try #require(appModel.pendingExecApprovalPrompt)
         #expect(prompt.kind == "plugin")
         #expect(prompt.commandText == "Allow guarded plugin tool?")
         #expect(prompt.descriptionText == "The plugin wants to perform a guarded action.")
@@ -1380,7 +1557,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         let firstWatchService = MockWatchMessagingService()
         let firstModel = NodeAppModel(watchMessagingService: firstWatchService)
-        firstModel._test_setConnectedGatewayID("test-gateway")
+        firstModel.connectedGatewayID = "test-gateway"
         try firstModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-plugin-restored",
@@ -1396,7 +1573,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         let restoredWatchService = MockWatchMessagingService()
         let restoredModel = NodeAppModel(watchMessagingService: restoredWatchService)
-        restoredModel._test_setConnectedGatewayID("test-gateway")
+        restoredModel.connectedGatewayID = "test-gateway"
 
         #expect(restoredModel._test_pendingExecApprovalInboxItems().map(\.id) == [
             "approval-plugin-restored",
@@ -1404,7 +1581,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         restoredModel._test_presentPendingExecApprovalFromInbox(
             approvalID: "approval-plugin-restored",
             gatewayStableID: "test-gateway")
-        #expect(restoredModel._test_pendingExecApprovalPrompt()?.kind == "plugin")
+        #expect(restoredModel.pendingExecApprovalPrompt?.kind == "plugin")
         #expect(restoredWatchService.lastSentExecApprovalPrompt == nil)
     }
 
@@ -1517,7 +1694,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             responseJSON,
             approvalID: "approval-race",
             attemptedDecision: .deny))
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-race")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-race")
         #expect(appModel._test_pendingExecApprovalState().resolved ==
             "This approval was already set to Always Allow.")
         #expect(appModel._test_pendingExecApprovalState().tone == .success)
@@ -1546,7 +1723,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             ownWinnerResponse,
             approvalID: "approval-race",
             attemptedDecision: .allowAlways))
-        #expect(ownWinnerModel._test_pendingExecApprovalPrompt()?.id == "approval-race")
+        #expect(ownWinnerModel.pendingExecApprovalPrompt?.id == "approval-race")
         #expect(ownWinnerModel._test_pendingExecApprovalState().resolved ==
             "Approval set to Always Allow.")
         #expect(ownWinnerModel._test_pendingExecApprovalInboxItems().isEmpty)
@@ -1576,7 +1753,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             approvalID: "approval-legacy-ack",
             decision: .deny)
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-legacy-ack")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-legacy-ack")
         #expect(appModel._test_pendingExecApprovalState().resolved == "Approval denied.")
         #expect(watchService.lastSentExecApprovalResolved?.source == "gateway")
         #expect(watchService.lastSentExecApprovalResolved?.outcome == .denied)
@@ -1660,7 +1837,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             await Task.yield()
         }
 
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs().isEmpty)
         #expect(watchService.lastSentExecApprovalSnapshot?.approvals.isEmpty == true)
         #expect(notificationCenter.pendingRemovedIdentifiers.contains([
@@ -1714,8 +1891,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         #expect(appModel._test_pendingExecApprovalState().resolving)
         #expect(appModel._test_pendingExecApprovalState().canDismiss)
-        appModel._test_dismissPendingExecApprovalPrompt()
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        appModel.dismissPendingExecApprovalPrompt()
+        #expect(appModel.pendingExecApprovalPrompt == nil)
 
         appModel._test_presentPendingExecApprovalFromInbox(
             approvalID: approvalID,
@@ -1729,7 +1906,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(restoredModel._test_pendingExecApprovalState().error == uncertainMessage)
 
         restoredModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
-        await restoredModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await restoredModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         #expect(!restoredModel._test_pendingExecApprovalState().resolving)
         #expect(restoredModel._test_pendingExecApprovalState().error ==
             "The previous decision was not recorded. Review and try again.")
@@ -1751,7 +1928,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             beforeResponse: { await fetchGate.wait() })
 
         let reconciliation = Task { @MainActor in
-            await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+            await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
@@ -1782,15 +1959,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(firstModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
 
         let restoredModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
-        restoredModel._test_setConnectedGatewayID(prompt.gatewayStableID)
+        restoredModel.connectedGatewayID = prompt.gatewayStableID
         #expect(restoredModel._test_watchExecApprovalCacheIDs().isEmpty)
         #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().map(\.approvalId) == [approvalID])
         restoredModel._test_setUnifiedExecApprovalGetResponse(makeExpiredExecApprovalJSON(approvalID))
-        await restoredModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await restoredModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
 
         #expect(restoredModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
         restoredModel._test_presentExecApprovalPrompt(prompt)
-        #expect(restoredModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(restoredModel.pendingExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `canonical pending readback resumes queued watch decision`() async throws {
@@ -1811,7 +1988,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             decision: .deny,
             sentAtMs: 123,
             transport: "test")
-        let resolvedImmediately = await appModel._test_handleWatchExecApprovalResolve(watchEvent)
+        let resolvedImmediately = await appModel.handleWatchExecApprovalResolve(watchEvent)
         #expect(!resolvedImmediately)
 
         let writeGate = ExecApprovalResolutionGate()
@@ -1819,7 +1996,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             await writeGate.waitForFirstCall()
         }
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         let deadline = ContinuousClock().now.advanced(by: .seconds(10))
         while await !writeGate.hasStarted(), ContinuousClock().now < deadline {
             try await Task.sleep(for: .milliseconds(10))
@@ -1860,8 +2037,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await writeGate.resume()
         await firstWrite.value
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == secondPrompt.id)
-        appModel._test_dismissPendingExecApprovalPrompt()
+        #expect(appModel.pendingExecApprovalPrompt?.id == secondPrompt.id)
+        appModel.dismissPendingExecApprovalPrompt()
         appModel._test_presentPendingExecApprovalFromInbox(
             approvalID: firstPrompt.id,
             gatewayStableID: firstPrompt.gatewayStableID)
@@ -1941,7 +2118,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         // The invalidated attempt must not surface UI on the newly selected gateway,
         // but the lost outcome must survive as an owner-scoped readback candidate.
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingPersistedExecApprovalReadbacks().contains { readback in
             readback.approvalId == approvalID && readback.gatewayStableID == gatewayA.effectiveStableID
         })
@@ -2081,7 +2258,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             beforeResponse: { _ = await fetchGate.waitForFirstCall() })
 
         let watchResolve = Task { @MainActor in
-            await appModel._test_handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
+            await appModel.handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
                 replyId: "watch-unknown-ack-retry",
                 approvalId: approvalID,
                 gatewayStableID: prompt.gatewayStableID,
@@ -2138,7 +2315,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         let watchResolve = Task { @MainActor in
-            await appModel._test_handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
+            await appModel.handleWatchExecApprovalResolve(WatchExecApprovalResolveEvent(
                 replyId: "watch-switch-mid-uncertain",
                 approvalId: approvalID,
                 gatewayStableID: gatewayA.effectiveStableID,
@@ -2192,14 +2369,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "echo composed",
                 expiresAtMs: 4_000_000_000_000)))
         switchModel.applyGatewayConnectConfig(decomposedGateway)
-        #expect(switchModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(switchModel.pendingExecApprovalPrompt == nil)
         #expect(switchModel._test_watchExecApprovalCacheIDs().isEmpty)
 
         let watchService = MockWatchMessagingService()
         let resolveModel = NodeAppModel(
             notificationCenter: MockBootstrapNotificationCenter(),
             watchMessagingService: watchService)
-        resolveModel._test_setConnectedGatewayID(composedGatewayID)
+        resolveModel.connectedGatewayID = composedGatewayID
         try resolveModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-exact-gateway-resolve",
@@ -2207,14 +2384,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "echo resolve",
                 allowedDecisions: ["deny"],
                 expiresAtMs: 4_000_000_000_000)))
-        resolveModel._test_setConnectedGatewayID(decomposedGatewayID)
+        resolveModel.connectedGatewayID = decomposedGatewayID
 
         let applied = await resolveModel._test_applyLegacyExecApprovalTerminal(
             approvalID: "approval-exact-gateway-resolve",
             decision: .deny,
             expectedGatewayStableID: composedGatewayID)
         #expect(!applied)
-        #expect(resolveModel._test_pendingExecApprovalPrompt()?.id == "approval-exact-gateway-resolve")
+        #expect(resolveModel.pendingExecApprovalPrompt?.id == "approval-exact-gateway-resolve")
         #expect(watchService.lastSentExecApprovalResolved == nil)
     }
 
@@ -2237,7 +2414,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let firstModel = NodeAppModel(notificationCenter: notificationCenter)
 
         #expect(await firstModel.handleExecApprovalResolvedRemotePush(push))
-        #expect(firstModel._test_pendingExecApprovalResolvedPushes() == [push])
+        #expect(firstModel.pendingExecApprovalResolvedPushes == [push])
         #expect(notificationCenter.pendingRemovedIdentifiers == [[
             "exec.approval-v2.16:gateway-device-a.approval-resolved-offline",
             "exec.approval.gateway-device-a.approval-resolved-offline",
@@ -2245,7 +2422,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(notificationCenter.deliveredRemovedIdentifiers == [["offline-request-alert"]])
 
         let restoredModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
-        #expect(restoredModel._test_pendingExecApprovalResolvedPushes() == [push])
+        #expect(restoredModel.pendingExecApprovalResolvedPushes == [push])
     }
 
     @Test @MainActor func `offline approval request remains durable until its gateway reconnects`() async {
@@ -2285,7 +2462,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let request = BridgeInvokeRequest(
             id: "ptt-start",
             command: OpenClawTalkCommand.pttStart.rawValue)
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
 
         #expect(response.ok == false)
         #expect(response.error?.message.contains("Gateway not connected") == true)
@@ -2304,7 +2481,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let request = BridgeInvokeRequest(
             id: "ptt-start-with-voice-note",
             command: OpenClawTalkCommand.pttStart.rawValue)
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
 
         #expect(response.ok == false)
         #expect(response.error?.message.contains("active voice note") == true)
@@ -2317,23 +2494,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
         let active = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "ptt-active", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "ptt-active", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         let queued = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "ptt-queued", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "ptt-queued", command: .pttStart))
         }
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 1 }
 
         queued.cancel()
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 0 }
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 0 }
         barrier.release()
 
         let activeResponse = await active.value
@@ -2343,28 +2520,28 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(!queuedResponse.ok)
         #expect(talkMode._test_activePushToTalkCaptureId() == activePayload.captureId)
 
-        #expect(await appModel._test_handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
+        #expect(await appModel.handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
     }
 
     @Test @MainActor func `PTT cancel invalidates suspended preparation without waiting`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
         let start = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "stale-start", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "stale-start", command: .pttStart))
         }
         await barrier.waitUntilEntered()
-        let epoch = appModel._test_talkPttCommandEpoch()
+        let epoch = appModel.talkPttCommandEpoch
 
-        let cancel = await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
+        let cancel = await appModel.handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
         #expect(cancel.ok)
-        #expect(appModel._test_talkPttCommandEpoch() == epoch + 1)
+        #expect(appModel.talkPttCommandEpoch == epoch + 1)
         barrier.release()
 
         #expect(await start.value.ok == false)
@@ -2376,21 +2553,21 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
         let stale = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "old-epoch", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "old-epoch", command: .pttStart))
         }
         await barrier.waitUntilEntered()
-        #expect(await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel)).ok)
+        #expect(await appModel.handleInvoke(talkRequest(id: "cancel", command: .pttCancel)).ok)
         let fresh = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "new-epoch", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "new-epoch", command: .pttStart))
         }
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 1 }
         barrier.release()
 
         #expect(await stale.value.ok == false)
@@ -2399,7 +2576,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(freshResponse.ok)
         #expect(talkMode._test_activePushToTalkCaptureId() == freshPayload.captureId)
 
-        #expect(await appModel._test_handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
+        #expect(await appModel.handleInvoke(talkRequest(id: "cleanup", command: .pttCancel)).ok)
     }
 
     @Test @MainActor func `chat focus switch invalidates reserved and queued PTT starts`() async {
@@ -2414,18 +2591,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         let reserved = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "focus-reserved", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "focus-reserved", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         let queued = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "focus-queued", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "focus-queued", command: .pttStart))
         }
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
-        let epoch = appModel._test_talkPttCommandEpoch()
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 1 }
+        let epoch = appModel.talkPttCommandEpoch
 
         appModel.focusChatSession("agent:main:focused-replacement")
 
-        #expect(appModel._test_talkPttCommandEpoch() == epoch + 1)
+        #expect(appModel.talkPttCommandEpoch == epoch + 1)
         #expect(talkMode.isUsingMainSessionKey("agent:main:focused-replacement"))
         barrier.release()
         #expect(await reserved.value.ok == false)
@@ -2446,23 +2623,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         let reserved = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "route-reserved", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "route-reserved", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         let queued = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "route-queued", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "route-queued", command: .pttStart))
         }
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
-        let epoch = appModel._test_talkPttCommandEpoch()
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 1 }
+        let epoch = appModel.talkPttCommandEpoch
 
-        appModel._test_invalidateOperatorTalkRoute()
+        appModel.invalidateOperatorTalkRoute()
         talkMode.updateGatewayConnected(true)
 
-        #expect(appModel._test_talkPttCommandEpoch() == epoch + 1)
+        #expect(appModel.talkPttCommandEpoch == epoch + 1)
         barrier.release()
         #expect(await reserved.value.ok == false)
         #expect(await queued.value.ok == false)
-        #expect(appModel._test_talkPreparationWaiterCount() == 0)
+        #expect(appModel.talkPreparationWaiters.count == 0)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
 
@@ -2479,21 +2656,21 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
-        appModel._test_setChatSessionRoutingRestoreHandler {
+        appModel.testChatSessionRoutingRestoreHandler = {
             await barrier.suspendFirstPreparation()
         }
         defer {
             barrier.release()
-            appModel._test_setChatSessionRoutingRestoreHandler(nil)
+            appModel.testChatSessionRoutingRestoreHandler = nil
             try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
 
-        appModel._test_prepareForGatewayConnect(stableID: stableID)
+        appModel.prepareForGatewayConnect(stableID: stableID)
         await barrier.waitUntilEntered()
-        appModel._test_invalidateOperatorTalkRoute()
+        appModel.invalidateOperatorTalkRoute()
 
-        #expect(appModel._test_hasChatSessionRoutingRestoreTask())
+        #expect(appModel.chatSessionRoutingRestoreTask != nil)
         #expect(!talkMode.isGatewayConnected)
         #expect(appModel.chatSessionRoutingContract == nil)
 
@@ -2518,13 +2695,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let store = databases.store(gatewayID: stableID)
         await store.storeSessionRoutingIdentity(identity)
         await store.retire()
-        appModel._test_setConnectedGatewayID(stableID)
-        appModel._test_setChatSessionRoutingRestoreHandler {
+        appModel.connectedGatewayID = stableID
+        appModel.testChatSessionRoutingRestoreHandler = {
             await barrier.suspendFirstPreparation()
         }
         defer {
             barrier.release()
-            appModel._test_setChatSessionRoutingRestoreHandler(nil)
+            appModel.testChatSessionRoutingRestoreHandler = nil
             try? databases.removeGatewayData(gatewayID: stableID)
             appModel.voiceWake.stop()
         }
@@ -2554,12 +2731,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             appModel.cancelChatOfflineDataRemoval(gatewayID: composedGatewayID)
         }
 
-        appModel._test_setConnectedGatewayID(composedGatewayID)
+        appModel.connectedGatewayID = composedGatewayID
         let composedStore = try #require(appModel.makeChatOfflineStore())
         let composedOwnerID = appModel.chatViewModelOwnerID
         #expect(await appModel.stageChatOfflineDataRemoval(gatewayID: composedGatewayID))
 
-        appModel._test_setConnectedGatewayID(decomposedGatewayID)
+        appModel.connectedGatewayID = decomposedGatewayID
         let decomposedStore = try #require(appModel.makeChatOfflineStore())
 
         #expect(ObjectIdentifier(composedStore) != ObjectIdentifier(decomposedStore))
@@ -2575,13 +2752,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `failed full offline reset never reuses retired facade`() async throws {
         let appModel = NodeAppModel()
         let gatewayID = "offline-reset-failure-\(UUID().uuidString)"
-        appModel._test_setConnectedGatewayID(gatewayID)
+        appModel.connectedGatewayID = gatewayID
         let originalStore = try #require(appModel.makeChatOfflineStore())
-        appModel._test_setRemoveAllChatDatabaseFilesHandler {
+        appModel.testRemoveAllChatDatabaseFilesHandler = {
             throw CocoaError(.fileWriteUnknown)
         }
         defer {
-            appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+            appModel.testRemoveAllChatDatabaseFilesHandler = nil
         }
 
         let didPurge = await appModel.purgeChatTranscriptCache()
@@ -2589,40 +2766,40 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let replacementStore = try #require(appModel.makeChatOfflineStore())
 
         #expect(ObjectIdentifier(originalStore) != ObjectIdentifier(replacementStore))
-        appModel._test_setRemoveAllChatDatabaseFilesHandler(nil)
+        appModel.testRemoveAllChatDatabaseFilesHandler = nil
         _ = await appModel.purgeChatTranscriptCache(gatewayID: gatewayID)
     }
 
     @Test @MainActor func `gateway main key refresh preserves focused Talk session`() {
         let (talkMode, appModel) = makeTalkModel()
         appModel.focusChatSession("agent:focused:thread")
-        let epoch = appModel._test_talkPttCommandEpoch()
+        let epoch = appModel.talkPttCommandEpoch
 
-        appModel._test_applyMainSessionKey("gateway-main")
+        appModel.applyMainSessionKey("gateway-main")
 
         #expect(appModel.chatSessionKey == "agent:focused:thread")
         #expect(talkMode.isUsingMainSessionKey("agent:focused:thread"))
-        #expect(appModel._test_talkPttCommandEpoch() == epoch)
+        #expect(appModel.talkPttCommandEpoch == epoch)
     }
 
     @Test @MainActor func `gateway replacement waits for final Talk session before admission`() async {
         let (talkMode, appModel) = makeTalkModel()
         appModel.focusChatSession("agent:old:thread")
-        let epoch = appModel._test_talkPttCommandEpoch()
+        let epoch = appModel.talkPttCommandEpoch
         let stableID = "talk-session-replacement-\(UUID().uuidString)"
         defer { GatewaySettingsStore.saveGatewaySelectedAgentId(stableID: stableID, agentId: nil) }
 
-        appModel._test_prepareForGatewayConnect(stableID: stableID)
+        appModel.prepareForGatewayConnect(stableID: stableID)
 
         #expect(appModel.chatSessionKey != "agent:old:thread")
         #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
-        #expect(appModel._test_talkPttCommandEpoch() > epoch)
+        #expect(appModel.talkPttCommandEpoch > epoch)
         #expect(!talkMode.isGatewayConnected)
-        let blocked = await appModel._test_handleInvoke(
+        let blocked = await appModel.handleInvoke(
             talkRequest(id: "pre-hydration", command: .pttStart))
         #expect(!blocked.ok)
 
-        appModel._test_applyMainSessionKey("custom-main")
+        appModel.applyMainSessionKey("custom-main")
         appModel.gatewayDefaultAgentId = "main"
         appModel.setSelectedAgentId("worker")
         await appModel._test_admitTalkAfterSessionHydration()
@@ -2630,10 +2807,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(talkMode.isGatewayConnected)
         #expect(appModel.chatSessionKey == "agent:worker:custom-main")
         #expect(talkMode.isUsingMainSessionKey(appModel.chatSessionKey))
-        let admitted = await appModel._test_handleInvoke(
+        let admitted = await appModel.handleInvoke(
             talkRequest(id: "post-hydration", command: .pttStart))
         #expect(admitted.ok)
-        _ = await appModel._test_handleInvoke(
+        _ = await appModel.handleInvoke(
             talkRequest(id: "post-hydration-cleanup", command: .pttCancel))
     }
 
@@ -2641,14 +2818,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCaptureStartedHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCaptureStartedHandler = { await barrier.suspendFirstPreparation() }
         defer {
-            appModel._test_setTalkCaptureStartedHandler(nil)
+            appModel.testTalkCaptureStartedHandler = nil
             appModel.voiceWake.stop()
         }
 
         let start = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "cancel-after-start", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "cancel-after-start", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         #expect(talkMode._test_activePushToTalkCaptureId() != nil)
@@ -2665,15 +2842,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCaptureStartedHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCaptureStartedHandler = { await barrier.suspendFirstPreparation() }
         defer {
             barrier.release()
-            appModel._test_setTalkCaptureStartedHandler(nil)
+            appModel.testTalkCaptureStartedHandler = nil
             appModel.voiceWake.stop()
         }
 
         let start = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "session-switch-after-start", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "session-switch-after-start", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         #expect(talkMode._test_activePushToTalkCaptureId() != nil)
@@ -2698,7 +2875,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         let once = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "session-switch-once", command: .pttOnce))
+            await appModel.handleInvoke(talkRequest(id: "session-switch-once", command: .pttOnce))
         }
         await barrier.waitUntilEntered()
         #expect(talkMode._test_activePushToTalkCaptureId() != nil)
@@ -2717,27 +2894,27 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         talkMode.updateGatewayConnected(true)
         defer {
             barrier.release()
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
-        let activeResponse = await appModel._test_handleInvoke(
+        let activeResponse = await appModel.handleInvoke(
             talkRequest(id: "node-route-active", command: .pttStart))
         let active = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: activeResponse)
         #expect(talkMode._test_activePushToTalkCaptureId() == active.captureId)
 
-        appModel._test_invalidateNodePushToTalkRoute()
+        appModel.invalidateNodePushToTalkRoute()
 
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
 
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         let preparing = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "node-route-preparing", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "node-route-preparing", command: .pttStart))
         }
         await barrier.waitUntilEntered()
 
-        appModel._test_invalidateNodePushToTalkRoute()
+        appModel.invalidateNodePushToTalkRoute()
         barrier.release()
 
         #expect(await preparing.value.ok == false)
@@ -2753,12 +2930,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             barrier.release()
             _ = talkMode.cancelPushToTalk()
         }
-        let startResponse = await appModel._test_handleInvoke(
+        let startResponse = await appModel.handleInvoke(
             talkRequest(id: "fresh-before-stale-cancel", command: .pttStart))
         let active = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: startResponse)
         let staleCancel = Task { @MainActor in
             await barrier.suspendFirstPreparation()
-            return await appModel._test_handleInvoke(
+            return await appModel.handleInvoke(
                 talkRequest(id: "stale-route-cancel", command: .pttCancel))
         }
         await barrier.waitUntilEntered()
@@ -2836,11 +3013,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { appModel.voiceWake.stop() }
 
         let cancelledOnce = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "once-cancel", command: .pttOnce))
+            await appModel.handleInvoke(talkRequest(id: "once-cancel", command: .pttOnce))
         }
         await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
         let cancelledCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
-        let cancelResponse = await appModel._test_handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
+        let cancelResponse = await appModel.handleInvoke(talkRequest(id: "cancel", command: .pttCancel))
         let cancelPayload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: cancelResponse)
         let cancelledOncePayload = try await decodeTalkPayload(
             OpenClawTalkPTTStopPayload.self,
@@ -2850,11 +3027,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(cancelledOncePayload == cancelPayload)
 
         let stoppedOnce = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "once-stop", command: .pttOnce))
+            await appModel.handleInvoke(talkRequest(id: "once-stop", command: .pttOnce))
         }
         await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
         let stoppedCaptureId = try #require(talkMode._test_activePushToTalkCaptureId())
-        let stopResponse = await appModel._test_handleInvoke(talkRequest(id: "stop", command: .pttStop))
+        let stopResponse = await appModel.handleInvoke(talkRequest(id: "stop", command: .pttStop))
         let stopPayload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: stopResponse)
         let stoppedOncePayload = try await decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: stoppedOnce.value)
         #expect(stopPayload.captureId == stoppedCaptureId)
@@ -2989,7 +3166,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 clientId: "openclaw-ios",
                 clientMode: "node",
                 clientDisplayName: nil))
-        appModel._test_setActiveGatewayConnectConfig(config)
+        appModel.activeGatewayConnectConfig = config
         talkMode.gatewayTalkPermissionState = .missingScope("operator.talk.secrets")
         defer {
             appModel.setTalkEnabled(false)
@@ -3087,13 +3264,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await waitForTalkCondition { appModel.isChatDictationActive }
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
 
-        let remoteStart = await appModel._test_handleInvoke(
+        let remoteStart = await appModel.handleInvoke(
             talkRequest(id: "remote-start-during-dictation", command: .pttStart))
         #expect(!remoteStart.ok)
         #expect(remoteStart.error?.message.contains("PTT_BUSY") == true)
 
         for command in [OpenClawTalkCommand.pttStop, .pttCancel] {
-            let response = await appModel._test_handleInvoke(
+            let response = await appModel.handleInvoke(
                 talkRequest(id: "remote-\(command.rawValue)-during-dictation", command: command))
             let payload = try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: response)
             #expect(payload.status == "idle")
@@ -3179,10 +3356,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `route and remote PTT invalidation preserve dictation preparation`() async throws {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
             barrier.release()
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
@@ -3191,8 +3368,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
         await barrier.waitUntilEntered()
 
-        #expect(await appModel._test_handleInvoke(talkRequest(id: "remote-cancel", command: .pttCancel)).ok)
-        appModel._test_invalidateOperatorTalkRoute()
+        #expect(await appModel.handleInvoke(talkRequest(id: "remote-cancel", command: .pttCancel)).ok)
+        appModel.invalidateOperatorTalkRoute()
         barrier.release()
 
         await waitForTalkCondition { appModel.isChatDictationActive }
@@ -3211,10 +3388,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `backgrounding invalidates dictation preparation`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
             barrier.release()
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.setScenePhase(.active)
             appModel.voiceWake.stop()
         }
@@ -3238,10 +3415,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test @MainActor func `cancelling invalidates dictation preparation before capture reservation`() async {
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
             barrier.release()
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.voiceWake.stop()
         }
 
@@ -3543,7 +3720,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { appModel.voiceWake.stop() }
 
         let once = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "once-background", command: .pttOnce))
+            await appModel.handleInvoke(talkRequest(id: "once-background", command: .pttOnce))
         }
         await waitForTalkCondition { talkMode._test_activePushToTalkCaptureId() != nil }
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
@@ -3566,7 +3743,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel.voiceWake.statusText = "Listening"
         defer { appModel.voiceWake.stop() }
 
-        let startResponse = await appModel._test_handleInvoke(talkRequest(id: "background-start", command: .pttStart))
+        let startResponse = await appModel.handleInvoke(talkRequest(id: "background-start", command: .pttStart))
         let start = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: startResponse)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [start.captureId])
 
@@ -3601,7 +3778,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             talkMode.stop()
         }
 
-        let response = await appModel._test_handleInvoke(talkRequest(id: "background-pref-start", command: .pttStart))
+        let response = await appModel.handleInvoke(talkRequest(id: "background-pref-start", command: .pttStart))
         let start = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: response)
         #expect(talkMode._test_activePushToTalkCaptureId() == start.captureId)
 
@@ -3677,14 +3854,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             appModel.voiceWake.stop()
         }
 
-        let startResponse = await appModel._test_handleInvoke(
+        let startResponse = await appModel.handleInvoke(
             talkRequest(id: "background-finalizer-start", command: .pttStart))
         let start = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: startResponse)
         await talkMode._test_handlePushToTalkTranscript(
             "finish in background",
             isFinal: false,
             captureId: start.captureId)
-        let stopResponse = await appModel._test_handleInvoke(
+        let stopResponse = await appModel.handleInvoke(
             talkRequest(id: "background-finalizer-stop", command: .pttStop))
         #expect(try decodeTalkPayload(OpenClawTalkPTTStopPayload.self, from: stopResponse).status == "queued")
         await barrier.waitUntilEntered()
@@ -3732,7 +3909,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         appModel.setScenePhase(.background)
         appModel.setScenePhase(.inactive)
-        let response = await appModel._test_handleInvoke(
+        let response = await appModel.handleInvoke(
             talkRequest(id: "inactive-ptt-start", command: .pttStart))
 
         #expect(!response.ok)
@@ -3753,8 +3930,39 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
 
         #expect(appModel.isBackgrounded)
-        #expect(!appModel._test_backgroundReconnectIsSuppressed())
+        #expect(!appModel.backgroundReconnectSuppressed)
         #expect(appModel.gatewayStatusText != "Background idle")
+    }
+
+    @Test @MainActor func `retired foreground health probe cannot reconnect after rebackgrounding`() async throws {
+        let firstURL = try #require(URL(string: "ws://127.0.0.1:1"))
+        let secondURL = try #require(URL(string: "ws://127.0.0.1:2"))
+        let (config, _) = try makeGatewayPair(firstURL: firstURL, secondURL: secondURL)
+        let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
+        defer {
+            appModel.disconnectGateway()
+            appModel.setScenePhase(.active)
+        }
+        appModel.activeGatewayConnectConfig = config
+        appModel.gatewayConnected = true
+        appModel.gatewayStatusText = "Connected"
+        appModel.setOperatorConnected(true)
+
+        appModel.setScenePhase(.background)
+        try await Task.sleep(for: .milliseconds(3100))
+        appModel.setScenePhase(.active)
+        appModel.setScenePhase(.background)
+
+        for _ in 0..<80 {
+            await Task.yield()
+        }
+
+        #expect(appModel.isBackgrounded)
+        #expect(appModel.gatewayConnected)
+        #expect(appModel.isOperatorGatewayConnected)
+        #expect(appModel.gatewayStatusText == "Connected")
+        #expect(!appModel._test_hasGatewayLoopTasks().node)
+        #expect(!appModel._test_hasGatewayLoopTasks().operator)
     }
 
     @Test @MainActor func `stale foreground resume cannot reopen Talk after rebackgrounding`() async {
@@ -3814,7 +4022,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         talkMode.updateGatewayConnected(true)
 
-        let response = await appModel._test_handleInvoke(
+        let response = await appModel.handleInvoke(
             talkRequest(id: "disconnect-ptt-start", command: .pttStart))
         let start = try decodeTalkPayload(OpenClawTalkPTTStartPayload.self, from: response)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == [start.captureId])
@@ -3830,28 +4038,28 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let (talkMode, appModel) = makeTalkModel()
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             appModel.setScenePhase(.active)
             appModel.voiceWake.stop()
         }
 
         let active = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "background-active", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "background-active", command: .pttStart))
         }
         await barrier.waitUntilEntered()
         let queued = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "background-queued", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "background-queued", command: .pttStart))
         }
-        await waitForTalkCondition { appModel._test_talkPreparationWaiterCount() == 1 }
+        await waitForTalkCondition { appModel.talkPreparationWaiters.count == 1 }
 
         appModel.setScenePhase(.background)
         barrier.release()
 
         #expect(await active.value.ok == false)
         #expect(await queued.value.ok == false)
-        #expect(appModel._test_talkPreparationWaiterCount() == 0)
+        #expect(appModel.talkPreparationWaiters.count == 0)
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds().isEmpty)
     }
@@ -3862,16 +4070,16 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel.voiceWake.isListening = true
         appModel.voiceWake.statusText = "Listening"
 
-        appModel._test_acquirePttVoiceWakeLease(captureId: "capture-a")
+        appModel.acquirePttVoiceWakeLease(for: "capture-a")
         #expect(appModel.isTalkCaptureActive == true)
-        appModel._test_acquirePttVoiceWakeLease(captureId: "capture-a")
+        appModel.acquirePttVoiceWakeLease(for: "capture-a")
         #expect(appModel.voiceWake._test_isSuppressedByPushToTalk())
         #expect(appModel._test_pttVoiceWakeLeaseCaptureIds() == ["capture-a"])
 
-        appModel._test_releasePttVoiceWakeLease(captureId: "stale-capture")
+        appModel.releasePttVoiceWakeLease(for: "stale-capture")
         #expect(appModel.voiceWake._test_isSuppressedByPushToTalk())
 
-        appModel._test_releasePttVoiceWakeLease(captureId: "capture-a")
+        appModel.releasePttVoiceWakeLease(for: "capture-a")
         #expect(!appModel.voiceWake._test_isSuppressedByPushToTalk())
         #expect(appModel.isTalkCaptureActive == false)
         appModel.voiceWake.stop()
@@ -3879,7 +4087,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `enabling Voice Wake during standalone PTT remains suppressed`() async {
         let appModel = NodeAppModel(talkMode: TalkModeManager(allowSimulatorCapture: true))
-        appModel._test_acquirePttVoiceWakeLease(captureId: "standalone-ptt")
+        appModel.acquirePttVoiceWakeLease(for: "standalone-ptt")
 
         appModel.setVoiceWakeEnabled(true)
         await appModel.voiceWake._test_waitForScheduledStart()
@@ -3887,7 +4095,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(appModel.voiceWake.statusText == "Paused")
         #expect(!appModel.voiceWake.isListening)
 
-        appModel._test_releasePttVoiceWakeLease(captureId: "standalone-ptt")
+        appModel.releasePttVoiceWakeLease(for: "standalone-ptt")
         await appModel.voiceWake._test_waitForScheduledStart()
         #expect(appModel.voiceWake.statusText == "Voice Wake isn’t supported on Simulator")
         appModel.voiceWake.stop()
@@ -3899,13 +4107,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(
             talkMode: TalkModeManager(allowSimulatorCapture: true),
             voiceNoteRecorder: recorder)
-        appModel._test_acquirePttVoiceWakeLease(captureId: "voice-note-race")
+        appModel.acquirePttVoiceWakeLease(for: "voice-note-race")
 
         #expect(await recorder.start() == false)
         #expect(recorder.isRecording == false)
         #expect(capture.permissionRequestCount == 0)
 
-        appModel._test_releasePttVoiceWakeLease(captureId: "voice-note-race")
+        appModel.releasePttVoiceWakeLease(for: "voice-note-race")
     }
 
     @Test @MainActor func `voice note cannot start after the app backgrounds`() async {
@@ -3929,15 +4137,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(talkMode: talkMode, voiceNoteRecorder: recorder)
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
-        appModel._test_setTalkCapturePreparationHandler { await barrier.suspendFirstPreparation() }
+        appModel.testTalkCapturePreparationHandler = { await barrier.suspendFirstPreparation() }
         defer {
             barrier.release()
-            appModel._test_setTalkCapturePreparationHandler(nil)
+            appModel.testTalkCapturePreparationHandler = nil
             _ = talkMode.cancelPushToTalk()
         }
 
         let start = Task { @MainActor in
-            await appModel._test_handleInvoke(talkRequest(id: "voice-note-preparation", command: .pttStart))
+            await appModel.handleInvoke(talkRequest(id: "voice-note-preparation", command: .pttStart))
         }
         await barrier.waitUntilEntered()
 
@@ -3954,15 +4162,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(
             camera: camera,
             talkMode: TalkModeManager(allowSimulatorCapture: true))
-        appModel._test_acquirePttVoiceWakeLease(captureId: "camera-audio-ptt")
-        defer { appModel._test_releasePttVoiceWakeLease(captureId: "camera-audio-ptt") }
+        appModel.acquirePttVoiceWakeLease(for: "camera-audio-ptt")
+        defer { appModel.releasePttVoiceWakeLease(for: "camera-audio-ptt") }
         let params = try JSONEncoder().encode(OpenClawCameraClipParams(includeAudio: true))
         let request = try BridgeInvokeRequest(
             id: "camera-audio-during-ptt",
             command: OpenClawCameraCommand.clip.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
 
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
 
         #expect(!response.ok)
         #expect(response.error?.message.contains("Finish the active audio capture") == true)
@@ -3988,10 +4196,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "blocking-camera-audio",
             command: OpenClawCameraCommand.clip.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
-        let clip = Task { @MainActor in await appModel._test_handleInvoke(clipRequest) }
+        let clip = Task { @MainActor in await appModel.handleInvoke(clipRequest) }
         await barrier.waitUntilEntered()
 
-        let ptt = await appModel._test_handleInvoke(
+        let ptt = await appModel.handleInvoke(
             talkRequest(id: "ptt-during-camera-audio", command: .pttStart))
         appModel.setTalkEnabled(true)
         let voiceNoteStarted = await voiceNoteRecorder.start()
@@ -4024,10 +4232,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "blocking-screen-audio",
             command: OpenClawScreenCommand.record.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
-        let recording = Task { @MainActor in await appModel._test_handleInvoke(recordRequest) }
+        let recording = Task { @MainActor in await appModel.handleInvoke(recordRequest) }
         await barrier.waitUntilEntered()
 
-        let ptt = await appModel._test_handleInvoke(
+        let ptt = await appModel.handleInvoke(
             talkRequest(id: "ptt-during-screen-audio", command: .pttStart))
 
         #expect(!ptt.ok)
@@ -4055,11 +4263,11 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 command: OpenClawScreenCommand.record.rawValue,
                 paramsJSON: #require(String(data: secondParams, encoding: .utf8)))
 
-            let first = Task { @MainActor in await appModel._test_handleInvoke(firstRequest) }
+            let first = Task { @MainActor in await appModel.handleInvoke(firstRequest) }
             await barrier.waitUntilEntered()
             #expect(appModel.screenRecordActive)
 
-            let second = await appModel._test_handleInvoke(secondRequest)
+            let second = await appModel.handleInvoke(secondRequest)
 
             #expect(!second.ok)
             #expect(second.error?.message.contains("screen recording already active") == true)
@@ -4086,7 +4294,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "background-camera-audio",
             command: OpenClawCameraCommand.clip.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
-        let capture = Task { @MainActor in await appModel._test_handleInvoke(request) }
+        let capture = Task { @MainActor in await appModel.handleInvoke(request) }
         await barrier.waitUntilEntered()
 
         appModel.setScenePhase(.background)
@@ -4110,7 +4318,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "background-screen-no-audio",
             command: OpenClawScreenCommand.record.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
-        let capture = Task { @MainActor in await appModel._test_handleInvoke(request) }
+        let capture = Task { @MainActor in await appModel.handleInvoke(request) }
         await barrier.waitUntilEntered()
 
         appModel.setScenePhase(.background)
@@ -4138,7 +4346,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "late-cancelled-screen",
             command: OpenClawScreenCommand.record.rawValue,
             paramsJSON: #require(String(data: params, encoding: .utf8)))
-        let capture = Task { @MainActor in await appModel._test_handleInvoke(request) }
+        let capture = Task { @MainActor in await appModel.handleInvoke(request) }
         await barrier.waitUntilEntered()
 
         appModel.setScenePhase(.background)
@@ -4221,7 +4429,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         appModel.dismissPendingExecApprovalPrompt(approvalId: "approval-stale")
 
-        let prompt = try #require(appModel._test_pendingExecApprovalPrompt())
+        let prompt = try #require(appModel.pendingExecApprovalPrompt)
         #expect(prompt.id == "approval-active")
     }
 
@@ -4254,6 +4462,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
+        let (snapshotEvents, snapshotEventContinuation) = AsyncStream.makeStream(
+            of: OpenClawWatchExecApprovalSnapshotMessage.self)
+        defer { snapshotEventContinuation.finish() }
+        watchService.syncExecApprovalSnapshotHandler = { message in
+            snapshotEventContinuation.yield(message)
+            return watchService.nextSendResult
+        }
+        var snapshots = snapshotEvents.makeAsyncIterator()
         let futureExpiryMs = Int64(Date().timeIntervalSince1970 * 1000) + 60000
         try appModel._test_presentExecApprovalPrompt(
             #require(
@@ -4266,29 +4482,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             "approval-watch-snapshot",
             commandText: "echo from watch",
             agentID: nil))
-        let initialSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.contains { snapshot in
-                snapshot.requestId == nil &&
-                    snapshot.approvals.map(\.id) == ["approval-watch-snapshot"]
-            }
-        }
-        try #require(initialSnapshotPublished)
+        let initialSnapshot = try #require(await snapshots.next())
+        #expect(initialSnapshot.requestId == nil)
+        #expect(initialSnapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
 
         appModel.setScenePhase(.background)
-        let snapshotCount = watchService.sentExecApprovalSnapshots.count
         watchService.emitExecApprovalSnapshotRequest(
             makeWatchApprovalSnapshotRequest("snapshot-1", sentAt: 111))
-        let correlatedSnapshotPublished = await waitForMainActorWork {
-            watchService.sentExecApprovalSnapshots.dropFirst(snapshotCount).contains { snapshot in
-                snapshot.requestId == "snapshot-1" &&
-                    snapshot.requestGatewayStableID == "test-gateway"
-            }
-        }
-        try #require(correlatedSnapshotPublished)
-
-        let snapshot = try #require(watchService.sentExecApprovalSnapshots
-            .dropFirst(snapshotCount)
-            .first { $0.requestId == "snapshot-1" })
+        let snapshot = try #require(await snapshots.next())
         #expect(snapshot.approvals.map(\.id) == ["approval-watch-snapshot"])
         #expect(snapshot.requestId == "snapshot-1")
         #expect(snapshot.requestGatewayStableID == "test-gateway")
@@ -4371,7 +4572,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         let approvalID = "approval-held-pending"
         let resolutionAttemptID = "attempt-e\u{0301}-\u{0085}"
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(approvalID))
@@ -4397,7 +4598,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(#"{"invalid":true}"#)
         let snapshotCount = watchService.sentExecApprovalSnapshots.count
 
@@ -4417,7 +4618,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         let approvalIDs = ["approval-held-b", "approval-held-a"]
         appModel._test_setUnifiedExecApprovalGetResponses(approvalIDs.map {
             (approvalID: $0, json: makePendingExecApprovalJSON($0))
@@ -4454,7 +4655,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         """#)
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-cached-owner",
@@ -4502,7 +4703,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(GatewayStableIdentifier.key(composedGatewayID) !=
             GatewayStableIdentifier.key(decomposedGatewayID))
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID(composedGatewayID)
+        appModel.connectedGatewayID = composedGatewayID
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-exact-owner",
@@ -4536,7 +4737,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-not-found",
@@ -4561,7 +4762,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-watch-stale-cache",
@@ -4589,12 +4790,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(makeDeniedExecApprovalJSON(
             "approval-watch-terminal-readback",
             commandText: "echo guarded"))
 
-        let handled = await appModel._test_handleWatchExecApprovalResolve(
+        let handled = await appModel.handleWatchExecApprovalResolve(
             WatchExecApprovalResolveEvent(
                 replyId: "watch-terminal-readback",
                 approvalId: "approval-watch-terminal-readback",
@@ -4616,14 +4817,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel(
             notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-watch-pending-readback",
             commandText: "echo guarded",
             warningText: "Review this command",
             allowedDecisions: [.deny]))
 
-        let handled = await appModel._test_handleWatchExecApprovalResolve(
+        let handled = await appModel.handleWatchExecApprovalResolve(
             WatchExecApprovalResolveEvent(
                 replyId: "watch-pending-readback",
                 approvalId: "approval-watch-pending-readback",
@@ -4645,7 +4846,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
         let appModel = makeNodeModelWithMockServices()
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
                 id: "approval-visible-b",
@@ -4656,18 +4857,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             beforeResponse: { await fetchGate.wait() })
 
         let fetching = Task { @MainActor in
-            await appModel._test_presentExecApprovalGatewayEventPrompt("approval-terminal-a")
+            await appModel.presentExecApprovalGatewayEventPrompt(approvalId: "approval-terminal-a")
         }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
             await Task.yield()
         }
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-b")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-visible-b")
         #expect(appModel._test_pendingExecApprovalState().resolving == false)
         await fetchGate.resume()
         await fetching.value
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-visible-b")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-visible-b")
         #expect(appModel._test_pendingExecApprovalState().resolving == false)
         #expect(appModel._test_pendingExecApprovalState().resolved == nil)
     }
@@ -4677,12 +4878,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(
             makePendingExecApprovalJSON("approval-delayed-a", commandText: "echo delayed-a"),
             beforeResponse: { await fetchGate.wait() })
         let fetching = Task { @MainActor in
-            await appModel._test_presentExecApprovalGatewayEventPrompt("approval-delayed-a")
+            await appModel.presentExecApprovalGatewayEventPrompt(approvalId: "approval-delayed-a")
         }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
@@ -4696,7 +4897,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
         await fetchGate.resume()
         await fetching.value
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-newer-b")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-newer-b")
         #expect(appModel._test_pendingExecApprovalState().resolving == false)
     }
 
@@ -4705,7 +4906,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let fetchGate = WatchSnapshotSendGate()
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         let approvalID = "approval-terminal-interleave"
         try appModel._test_presentExecApprovalPrompt(#require(
             NodeAppModel._test_makeExecApprovalPrompt(
@@ -4720,7 +4921,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         })
 
         let reconciling = Task { @MainActor in
-            await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+            await appModel.reconcileWatchExecApprovalCache(reason: "watch_request")
         }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !fetchGate.hasStarted(), ContinuousClock().now < deadline {
@@ -4740,7 +4941,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         _ = await reconciling.value
 
         #expect(appModel._test_pendingExecApprovalInboxItems().isEmpty)
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == approvalID)
+        #expect(appModel.pendingExecApprovalPrompt?.id == approvalID)
         #expect(appModel._test_pendingExecApprovalState().resolved == "Approval allowed once.")
         #expect(watchService.sentExecApprovalPrompts.isEmpty)
         #expect(watchService.lastSentExecApprovalResolved?.approvalId == approvalID)
@@ -4750,7 +4951,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         let prompt = try #require(NodeAppModel._test_makeExecApprovalPrompt(
             id: "approval-reconnect-restore",
             commandText: "echo restore",
@@ -4758,15 +4959,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             expiresAtMs: 4_000_000_000_000))
         appModel._test_presentExecApprovalPrompt(prompt)
         appModel.dismissPendingExecApprovalPrompt()
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-reconnect-restore",
             commandText: "echo restore",
             warningText: "Review after reconnect"))
 
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
 
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == ["approval-reconnect-restore"])
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
         #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-reconnect-restore")
@@ -4774,7 +4975,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel._test_presentPendingExecApprovalFromInbox(
             approvalID: "approval-reconnect-restore",
             gatewayStableID: "test-gateway")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-reconnect-restore")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-reconnect-restore")
     }
 
     @Test @MainActor func `watch reconciliation does not reopen dismissed phone presentation`() async throws {
@@ -4788,18 +4989,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 commandText: "echo reconcile",
                 expiresAtMs: 4_000_000_000_000)))
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
-        appModel._test_dismissPendingExecApprovalPrompt()
+        appModel.dismissPendingExecApprovalPrompt()
         watchService.lastSentExecApprovalPrompt = nil
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-watch-reconcile",
             commandText: "echo reconcile"))
 
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
 
         await waitForMainActorWork { watchService.lastSentExecApprovalPrompt != nil }
         #expect(watchService.lastSentExecApprovalPrompt?.approval.id == "approval-watch-reconcile")
         #expect(watchService.lastSentExecApprovalPrompt?.resetResolutionAttemptId == nil)
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == ["approval-watch-reconcile"])
     }
 
@@ -4832,7 +5033,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(initialWriteCount == 1)
         #expect(appModel._test_pendingExecApprovalState().resolving)
 
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+        await appModel.reconcileWatchExecApprovalCache(reason: "watch_request")
         #expect(appModel._test_pendingExecApprovalState().resolving)
         #expect(appModel._test_pendingExecApprovalState().error == nil)
 
@@ -4871,7 +5072,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         while await probe.snapshot().calls.count < 1, ContinuousClock().now < deadline {
             await Task.yield()
         }
-        let queuedWatchDecision = await appModel._test_handleWatchExecApprovalResolve(
+        let queuedWatchDecision = await appModel.handleWatchExecApprovalResolve(
             WatchExecApprovalResolveEvent(
                 replyId: "watch-lease-attempt",
                 approvalId: approvalID,
@@ -4902,7 +5103,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         for approvalID in ["approval-b", "approval-a"] {
             try appModel._test_presentExecApprovalPrompt(#require(
                 NodeAppModel._test_makeExecApprovalPrompt(
@@ -4920,10 +5121,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         ]
         appModel._test_setUnifiedExecApprovalGetResponses(responses)
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "canonical approval-a")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-a")
+        await appModel.reconcileWatchExecApprovalCache(reason: "watch_request")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-a")
+        #expect(appModel.pendingExecApprovalPrompt?.commandText == "canonical approval-a")
 
         let fetchGate = WatchSnapshotSendGate()
         appModel._test_setUnifiedExecApprovalGetResponses(responses, beforeResponse: { approvalID in
@@ -4932,7 +5133,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             }
         })
         let reconciling = Task { @MainActor in
-            await appModel._test_reconcileWatchExecApprovalCache(reason: "watch_request")
+            await appModel.reconcileWatchExecApprovalCache(reason: "watch_request")
         }
         let deadline = ContinuousClock().now.advanced(by: .seconds(2))
         while await !(fetchGate.hasStarted()), ContinuousClock().now < deadline {
@@ -4945,13 +5146,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 expiresAtMs: 4_000_000_000_000)))
         await fetchGate.resume()
         _ = await reconciling.value
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-b")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "newer visible b")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-b")
+        #expect(appModel.pendingExecApprovalPrompt?.commandText == "newer visible b")
 
-        appModel._test_dismissPendingExecApprovalPrompt()
+        appModel.dismissPendingExecApprovalPrompt()
         appModel._test_setUnifiedExecApprovalGetResponses(responses)
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-a")
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-a")
     }
 
     @Test @MainActor func `watch app snapshot request publishes current dashboard state`() async throws {
@@ -4959,9 +5160,9 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let (watchService, appModel) = makeWatchModel()
         let gatewayStableID = " gateway-watch-snapshot "
-        appModel._test_setGatewayConnected(true)
-        appModel._test_setOperatorConnected(true)
-        appModel._test_setConnectedGatewayID(gatewayStableID)
+        appModel.gatewayConnected = true
+        appModel.setOperatorConnected(true)
+        appModel.connectedGatewayID = gatewayStableID
         appModel.gatewayStatusText = "Connected"
         appModel.talkMode.setEnabled(true)
         appModel.talkMode.statusText = "Listening"
@@ -4993,7 +5194,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `watch gateway problem keeps localization semantics`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_applyOperatorGatewayConnectionProblem(GatewayConnectionProblem(
+        appModel.applyOperatorGatewayConnectionProblem(GatewayConnectionProblem(
             kind: .pairingRequired,
             owner: .gateway,
             title: "Pairing approval required",
@@ -5024,8 +5225,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `watch app snapshot publishes offline when operator disconnects`() async {
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setGatewayConnected(true)
-        appModel._test_setOperatorConnected(true)
+        appModel.gatewayConnected = true
+        appModel.setOperatorConnected(true)
         appModel.gatewayStatusText = "Connected"
 
         watchService.emitAppSnapshotRequest(
@@ -5142,7 +5343,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `watch app snapshot publishes online when operator reconnects`() async {
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         appModel.gatewayStatusText = "Connected"
 
         watchService.emitAppSnapshotRequest(
@@ -5158,7 +5359,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
         #expect(watchService.lastSentAppSnapshot?.gatewayConnected == false)
 
-        appModel._test_setOperatorConnected(true)
+        appModel.setOperatorConnected(true)
         for _ in 0..<20 {
             if watchService.lastSentAppSnapshot?.gatewayConnected == true {
                 break
@@ -5258,7 +5459,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let watchService = MockWatchMessagingService()
         let talkMode = TalkModeManager(allowSimulatorCapture: true)
         let appModel = NodeAppModel(watchMessagingService: watchService, talkMode: talkMode)
-        appModel._test_setConnectedGatewayID("gateway-current")
+        appModel.connectedGatewayID = "gateway-current"
         appModel.setTalkEnabled(false)
 
         for command in [OpenClawWatchAppCommand.openChat, .startTalk] {
@@ -5335,7 +5536,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     timestamp: 2000 + Double(index)))
         }
 
-        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.map(\.text) == ["Still worth reading"])
     }
@@ -5348,7 +5549,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 timestamp: Double(index + 1))
         }
 
-        let items = WatchChatPresentation.makeItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.map(\.text) == (2..<7).map { "Readable message \($0)" })
     }
@@ -5368,7 +5569,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 isMessageToolMirror: true),
         ]
 
-        let reply = WatchChatPresentation.replyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
             runID: "watch-run",
             submittedText: "Send the update",
@@ -5377,18 +5578,28 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(reply == "Update sent")
     }
 
-    @Test func `watch chat preview reads responses output text`() throws {
-        let rawMessages = try [
-            makeWatchChatRawMessage(
-                role: "assistant",
-                text: "Responses reply",
-                type: "output_text",
-                timestamp: 1000),
-        ]
+    @Test func `watch chat uses shared responses text projection`() throws {
+        for type in ["input_text", "output_text"] {
+            let runID = "watch-\(type)"
+            let rawMessages = try [
+                makeWatchChatRawMessage(
+                    role: "assistant",
+                    text: "Responses \(type)",
+                    type: type,
+                    timestamp: 1000,
+                    idempotencyKey: runID),
+            ]
 
-        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+            let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
+            let reply = OpenClawChatHistoryPresentation.replyText(
+                from: rawMessages,
+                runID: runID,
+                submittedText: "Question",
+                submittedAtMs: 500)
 
-        #expect(items.map(\.text) == ["Responses reply"])
+            #expect(items.map(\.text) == ["Responses \(type)"])
+            #expect(reply == "Responses \(type)")
+        }
     }
 
     @Test func `watch voice reply matches direct run instead of newest assistant`() throws {
@@ -5405,13 +5616,67 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 idempotencyKey: "other-run"),
         ]
 
-        let reply = NodeAppModel._test_watchChatReplyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
-            runId: "watch-run",
+            runID: "watch-run",
             submittedText: "Question",
             submittedAtMs: 1000)
 
         #expect(reply == "Matching reply")
+    }
+
+    @Test func `watch voice reply prefers canonical run metadata over idempotency keys`() throws {
+        let rawMessages = try [
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Matching reply",
+                timestamp: 2000,
+                serverId: "matching-assistant",
+                runID: "watch-run",
+                idempotencyKey: "cli-assistant:watch-run",
+                stopReason: "stop"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Unrelated reply",
+                timestamp: 3000,
+                serverId: "unrelated-assistant",
+                runID: "other-run",
+                idempotencyKey: "watch-run",
+                stopReason: "stop"),
+        ]
+
+        let reply = OpenClawChatHistoryPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Question",
+            submittedAtMs: 1000)
+
+        #expect(reply == "Matching reply")
+    }
+
+    @Test func `watch voice reply rejects a different canonical run after its user turn`() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(
+                role: "user",
+                text: "Watch question",
+                timestamp: 3000,
+                idempotencyKey: "watch-run:user"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Unrelated reply",
+                timestamp: 4000,
+                serverId: "unrelated-assistant",
+                runID: "other-run",
+                stopReason: "stop"),
+        ]
+
+        let reply = OpenClawChatHistoryPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Watch question",
+            submittedAtMs: 2500)
+
+        #expect(reply == nil)
     }
 
     @Test func `watch voice reply anchors queued run after persisted user turn`() throws {
@@ -5430,16 +5695,55 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             makeWatchChatRawMessage(role: "assistant", text: "Queued reply", timestamp: 4000),
         ]
 
-        let reply = NodeAppModel._test_watchChatReplyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
-            runId: "watch-run",
+            runID: "watch-run",
             submittedText: "Watch question",
             submittedAtMs: 2500)
 
         #expect(reply == "Queued reply")
     }
 
-    @Test func `watch voice reply finds collected queued turn`() throws {
+    @Test(arguments: ["Another question", nil] as [String?], [false, true])
+    func `watch voice reply does not cross a later user turn`(
+        laterUserText: String?,
+        hasReceipt: Bool) throws
+    {
+        let rawMessages = try [
+            makeProjectedWatchChatRawMessage(
+                role: "user",
+                text: "Watch question",
+                timestamp: 3000,
+                serverId: "watch-user",
+                idempotencyKey: "watch-run:user"),
+            makeWatchChatRawMessage(
+                role: "user",
+                text: laterUserText,
+                type: laterUserText == nil ? "image" : "text",
+                timestamp: 3500,
+                idempotencyKey: "other-run:user"),
+            makeWatchChatRawMessage(
+                role: "assistant",
+                text: "Unrelated later reply",
+                timestamp: 4000),
+        ]
+
+        let reply = OpenClawChatHistoryPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Watch question",
+            submittedAtMs: 2500,
+            inputConsumptions: hasReceipt
+                ? [.init(runId: "watch-run", consumedByEventId: "watch-user")]
+                : nil)
+
+        #expect(reply == nil)
+    }
+
+    @Test(arguments: [false, true])
+    func `watch voice reply only guesses a legacy collected turn without receipt support`(
+        supportsReceipts: Bool) throws
+    {
         let rawMessages = try [
             makeWatchChatRawMessage(role: "assistant", text: "Active reply", timestamp: 2000),
             makeWatchChatRawMessage(
@@ -5450,37 +5754,68 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             makeWatchChatRawMessage(role: "assistant", text: "Collected reply", timestamp: 4000),
         ]
 
-        let reply = NodeAppModel._test_watchChatReplyText(
+        let reply = OpenClawChatHistoryPresentation.replyText(
             from: rawMessages,
-            runId: "watch-run",
+            runID: "watch-run",
+            submittedText: "Watch question",
+            submittedAtMs: 2500,
+            inputConsumptions: supportsReceipts ? [] : nil)
+
+        #expect(reply == (supportsReceipts ? nil : "Collected reply"))
+    }
+
+    @Test(arguments: ["collected-user", "outside-history-window", nil] as [String?])
+    func `watch voice reply follows the consumed user event instead of queued prompt wording`(
+        consumedEventID: String?) throws
+    {
+        let rawMessages = try [
+            makeProjectedWatchChatRawMessage(
+                role: "user",
+                text: "Combined and rewritten queued input",
+                timestamp: 3000,
+                serverId: "collected-user",
+                idempotencyKey: "followup-collect:session:hash"),
+            makeProjectedWatchChatRawMessage(
+                role: "assistant",
+                text: "Collected reply",
+                timestamp: 4000,
+                serverId: "collected-assistant",
+                runID: "new-followup-run",
+                stopReason: "stop"),
+            makeWatchChatRawMessage(role: "user", text: "Another question", timestamp: 5000),
+            makeWatchChatRawMessage(role: "assistant", text: "Unrelated reply", timestamp: 6000),
+        ]
+        var receipts: [OpenClawChatHistoryPayload.InputConsumption] = [
+            .init(runId: "other-source", consumedByEventId: "collected-user"),
+        ]
+        if let consumedEventID {
+            receipts.append(.init(runId: "watch-run", consumedByEventId: consumedEventID))
+        }
+
+        let reply = OpenClawChatHistoryPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
+            submittedText: "Original Watch question",
+            submittedAtMs: 2500,
+            inputConsumptions: receipts)
+
+        #expect(reply == (consumedEventID == "collected-user" ? "Collected reply" : nil))
+    }
+
+    @Test func `watch voice reply does not guess between matching legacy user turns`() throws {
+        let rawMessages = try [
+            makeWatchChatRawMessage(role: "user", text: "Watch question", timestamp: 3000),
+            makeWatchChatRawMessage(role: "user", text: "Watch question", timestamp: 4000),
+            makeWatchChatRawMessage(role: "assistant", text: "Unrelated reply", timestamp: 5000),
+        ]
+
+        let reply = OpenClawChatHistoryPresentation.replyText(
+            from: rawMessages,
+            runID: "watch-run",
             submittedText: "Watch question",
             submittedAtMs: 2500)
 
-        #expect(reply == "Collected reply")
-    }
-
-    @Test func `watch voice reply accepts terminal message tool mirror`() throws {
-        let rawMessages = try [
-            makeWatchChatRawMessage(
-                role: "user",
-                text: "Send the update",
-                timestamp: 3000,
-                idempotencyKey: "watch-run:user"),
-            makeProjectedWatchChatRawMessage(
-                role: "assistant",
-                text: "Update sent",
-                timestamp: 4000,
-                serverId: "tool-result-1",
-                isMessageToolMirror: true),
-        ]
-
-        let reply = NodeAppModel._test_watchChatReplyText(
-            from: rawMessages,
-            runId: "watch-run",
-            submittedText: "Send the update",
-            submittedAtMs: 2500)
-
-        #expect(reply == "Update sent")
+        #expect(reply == nil)
     }
 
     @Test func `watch chat completion bounds reply text`() {
@@ -5501,7 +5836,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             makeWatchChatRawMessage(role: "assistant", text: "Same", timestamp: 1000),
         ]
 
-        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.count == 2)
         #expect(items[0].id != items[1].id)
@@ -5522,7 +5857,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 isMessageToolMirror: true),
         ]
 
-        let items = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        let items = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(items.count == 2)
         #expect(items[0].id != items[1].id)
@@ -5538,24 +5873,24 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     timestamp: Double(1000 + index)))
         }
 
-        let before = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        let before = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
         try rawMessages.append(
             makeWatchChatRawMessage(
                 role: "user",
                 text: "Next question",
                 timestamp: 2000))
-        let after = NodeAppModel._test_makeWatchChatItems(from: rawMessages)
+        let after = OpenClawChatHistoryPresentation.makeWatchItems(from: rawMessages)
 
         #expect(before.last?.id == after.dropLast().last?.id)
         #expect(after.last?.role == "user")
     }
 
     @Test @MainActor func `watch app command queues chat message when operator offline`() async {
-        NodeAppModel._test_resetPersistedWatchChatQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
         let gatewayID = "gateway-watch-chat-offline"
-        appModel._test_setConnectedGatewayID(gatewayID)
+        appModel.connectedGatewayID = gatewayID
 
         watchService.emitAppCommand(
             makeWatchAppCommand(
@@ -5566,7 +5901,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sentAt: 127))
         await Task.yield()
 
-        #expect(appModel._test_queuedWatchChatCommandCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .chat) == 1)
 
         watchService.emitAppCommand(
             makeWatchAppCommand(
@@ -5577,12 +5912,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sentAt: 128))
         await Task.yield()
 
-        #expect(appModel._test_queuedWatchChatCommandCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .chat) == 1)
     }
 
     @Test @MainActor func `watch app command queues until cold launch restores its gateway`() async {
-        NodeAppModel._test_resetPersistedWatchChatQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
 
         watchService.emitAppCommand(
@@ -5593,17 +5928,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 text: "Keep this until startup restores the route",
                 sentAt: 127,
                 transport: "transferUserInfo"))
-        await waitForMainActorWork { appModel._test_queuedWatchChatCommandCount() == 1 }
+        await waitForMainActorWork { appModel.watchMessageOutbox.queuedCount(kind: .chat) == 1 }
 
-        #expect(appModel._test_queuedWatchChatCommandCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .chat) == 1)
         #expect(watchService.lastSentAppSnapshot == nil)
     }
 
     @Test @MainActor func `watch app command drops chat message for stale gateway snapshot`() async {
-        NodeAppModel._test_resetPersistedWatchChatQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("gateway-current")
+        appModel.connectedGatewayID = "gateway-current"
 
         watchService.emitAppCommand(
             makeWatchAppCommand(
@@ -5615,17 +5950,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "transferUserInfo"))
         await Task.yield()
 
-        #expect(appModel._test_queuedWatchChatCommandCount() == 0)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .chat) == 0)
     }
 
     @Test @MainActor func `watch app command restores queued chat message after model restart`() async {
-        NodeAppModel._test_resetPersistedWatchChatQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
 
         let gatewayID = "gateway-watch-chat-restore"
         let firstWatchService = MockWatchMessagingService()
         let firstAppModel = NodeAppModel(watchMessagingService: firstWatchService)
-        firstAppModel._test_setConnectedGatewayID(gatewayID)
+        firstAppModel.connectedGatewayID = gatewayID
         firstWatchService.emitAppCommand(
             makeWatchAppCommand(
                 "watch-send-chat-restore",
@@ -5635,13 +5970,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sentAt: 129))
         await Task.yield()
 
-        #expect(firstAppModel._test_queuedWatchChatCommandIds() == ["watch-send-chat-restore"])
+        #expect(firstAppModel.watchMessageOutbox.queuedMessageIDs(kind: .chat) == ["watch-send-chat-restore"])
 
         let secondWatchService = MockWatchMessagingService()
         let secondAppModel = NodeAppModel(watchMessagingService: secondWatchService)
-        secondAppModel._test_setConnectedGatewayID(gatewayID)
+        secondAppModel.connectedGatewayID = gatewayID
 
-        #expect(secondAppModel._test_queuedWatchChatCommandIds() == ["watch-send-chat-restore"])
+        #expect(secondAppModel.watchMessageOutbox.queuedMessageIDs(kind: .chat) == ["watch-send-chat-restore"])
 
         secondWatchService.emitAppCommand(
             makeWatchAppCommand(
@@ -5653,10 +5988,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "transferUserInfo"))
         await Task.yield()
 
-        #expect(secondAppModel._test_queuedWatchChatCommandIds() == ["watch-send-chat-restore"])
+        #expect(secondAppModel.watchMessageOutbox.queuedMessageIDs(kind: .chat) == ["watch-send-chat-restore"])
     }
 
-    @Test @MainActor func `watch chat queue scopes and orders commands by gateway`() throws {
+    @Test(arguments: [
+        ("gateway-a", "gateway-b"),
+        (" gateway-a ", "gateway-a"),
+        ("gateway-e\u{301}", "gateway-\u{E9}"),
+    ])
+    @MainActor func `watch chat queue scopes and orders commands by gateway`(
+        owner: String,
+        otherOwner: String) throws
+    {
         let suiteName = "watch-chat-queue-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defaults.removePersistentDomain(forName: suiteName)
@@ -5668,84 +6011,101 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let first = makeWatchAppCommand(
             "watch-send-chat-gateway-a-1",
             .sendChat,
-            gateway: "gateway-a",
+            gateway: owner,
             text: "First for gateway A",
             sentAt: 131)
         let second = makeWatchAppCommand(
             "watch-send-chat-gateway-a-2",
             .sendChat,
-            gateway: "gateway-a",
+            gateway: owner,
             text: "Second for gateway A",
             sentAt: 132)
 
-        if case .queue = coordinator.ingest(first, isAvailable: false, gatewayStableID: "gateway-a") {
+        if case .queue = coordinator.ingest(first, gatewayStableID: owner) {
         } else {
             Issue.record("expected first gateway A command to queue")
         }
-        if case .queue = coordinator.ingest(second, isAvailable: false, gatewayStableID: "gateway-a") {
+        if case .queue = coordinator.ingest(second, gatewayStableID: owner) {
         } else {
             Issue.record("expected second gateway A command to queue")
         }
 
-        #expect(coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-b") == nil)
+        coordinator.recordPromptRoute(promptID: "prompt-a", gatewayStableID: owner)
+        #expect(coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: otherOwner) == nil)
         coordinator.removeQueuedMessage(
             messageID: "watch-send-chat-gateway-a-1",
-            gatewayStableID: "gateway-b")
+            gatewayStableID: otherOwner)
 
         #expect(
-            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
-                "watch-send-chat-gateway-a-1")
-        #expect(
-            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: owner)?.commandId ==
                 "watch-send-chat-gateway-a-1")
 
-        coordinator.removeQueuedMessage(
+        let restored = WatchMessageOutbox(defaults: defaults)
+        let queued = try #require(restored.nextQueuedMessage(isAvailable: true, gatewayStableID: owner))
+        #expect(queued.commandId == "watch-send-chat-gateway-a-1")
+        #expect(GatewayStableIdentifier.matches(queued.gatewayStableID, owner))
+        #expect(GatewayStableIdentifier.matches(restored.gatewayStableID(forPromptID: "prompt-a"), owner))
+        #expect(restored.nextQueuedMessage(isAvailable: true, gatewayStableID: otherOwner) == nil)
+
+        restored.removeQueuedMessage(
             messageID: "watch-send-chat-gateway-a-1",
-            gatewayStableID: "gateway-a")
+            gatewayStableID: owner)
         #expect(
-            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
+            restored.nextQueuedMessage(isAvailable: true, gatewayStableID: owner)?.commandId ==
                 "watch-send-chat-gateway-a-2")
     }
 
-    @Test @MainActor func `watch chat requeue keeps original gateway owner`() throws {
-        let suiteName = "watch-chat-requeue-\(UUID().uuidString)"
+    @Test @MainActor func `watch pending replay preserves queued payload until delivery`() throws {
+        let suiteName = "watch-pending-replay-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
-        defaults.removePersistentDomain(forName: suiteName)
-        defer {
-            defaults.removePersistentDomain(forName: suiteName)
-        }
-
-        let coordinator = WatchMessageOutbox(defaults: defaults)
-        let event = makeWatchAppCommand(
-            "watch-send-chat-retry-gateway-a",
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let outbox = WatchMessageOutbox(defaults: defaults)
+        let original = makeWatchAppCommand(
+            "pending-watch-message",
             .sendChat,
             gateway: "gateway-a",
-            text: "Retry for gateway A",
-            sentAt: 133)
+            text: "Original admitted message",
+            sentAt: 1)
+        _ = outbox.ingest(original, gatewayStableID: "gateway-a")
+        var replay = original
+        replay.text = "A replay must not replace admitted text"
 
-        coordinator.requeueFront(event, gatewayStableID: event.gatewayStableID)
+        if case let .queue(event) = outbox.ingest(replay, gatewayStableID: "gateway-a") {
+            #expect(event == original)
+        } else {
+            Issue.record("pending replay must remain queued so admission can resume delivery")
+        }
+        if case .deduped = outbox.ingest(replay, gatewayStableID: "gateway-b") {
+        } else {
+            Issue.record("a replay cannot move pending work to another owner")
+        }
 
-        #expect(coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-b") == nil)
-        #expect(
-            coordinator.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a")?.commandId ==
-                "watch-send-chat-retry-gateway-a")
+        let restored = WatchMessageOutbox(defaults: defaults)
+        #expect(restored.queuedCount() == 1)
+        #expect(restored.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == original)
+        restored.removeQueuedMessage(messageID: original.commandId, gatewayStableID: "gateway-a")
+        if case .deduped = restored.ingest(replay, gatewayStableID: "gateway-a") {
+        } else {
+            Issue.record("delivered replay must not queue another send")
+        }
+        #expect(restored.queuedCount() == 0)
     }
 
     @Test @MainActor func `watch message retry budget resets only on reconnect`() {
         let appModel = NodeAppModel(watchMessagingService: MockWatchMessagingService())
         let messageID = "watch-message-exhausted"
 
-        appModel._test_setWatchMessageRetryAttempts(3, messageID: messageID)
-        appModel._test_setOperatorConnected(true)
-        #expect(appModel._test_watchMessageRetryAttempts(messageID: messageID) == nil)
+        appModel.watchMessageRetryAttempts[messageID] = 3
+        appModel.setOperatorConnected(true)
+        #expect(appModel.watchMessageRetryAttempts[messageID] == nil)
 
-        appModel._test_setWatchMessageRetryAttempts(2, messageID: messageID)
-        appModel._test_setOperatorConnected(true)
-        #expect(appModel._test_watchMessageRetryAttempts(messageID: messageID) == 2)
+        appModel.watchMessageRetryAttempts[messageID] = 2
+        appModel.setOperatorConnected(true)
+        #expect(appModel.watchMessageRetryAttempts[messageID] == 2)
 
-        appModel._test_setOperatorConnected(false)
-        appModel._test_setOperatorConnected(true)
-        #expect(appModel._test_watchMessageRetryAttempts(messageID: messageID) == nil)
+        appModel.setOperatorConnected(false)
+        appModel.setOperatorConnected(true)
+        #expect(appModel.watchMessageRetryAttempts[messageID] == nil)
     }
 
     @Test @MainActor func `watch message outbox prioritizes replies over queued chat`() throws {
@@ -5771,10 +6131,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             transport: "transferUserInfo",
             kind: .quickReply)
 
-        _ = outbox.ingest(chat, isAvailable: false, gatewayStableID: "gateway-a")
-        _ = outbox.ingest(reply, isAvailable: false, gatewayStableID: "gateway-a")
+        _ = outbox.ingest(chat, gatewayStableID: "gateway-a")
+        _ = outbox.ingest(reply, gatewayStableID: "gateway-a")
 
         #expect(outbox.nextQueuedMessage(isAvailable: true, gatewayStableID: "gateway-a") == reply)
+        #expect(outbox.nextQueuedMessage(
+            isAvailable: true,
+            gatewayStableID: "gateway-a",
+            excludingMessageIDs: [reply.commandId]) == chat)
+        #expect(outbox.nextQueuedMessage(
+            isAvailable: true,
+            gatewayStableID: "gateway-a",
+            excludingMessageIDs: [reply.commandId, chat.commandId]) == nil)
     }
 
     @Test func `watch messages only override thinking for quick replies`() {
@@ -5838,9 +6206,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 .sendChat,
                 text: "Message \(index)",
                 sentAt: Int64(index))
-            if case .forward = coordinator.ingest(
+            if case .queue = coordinator.ingest(
                 event,
-                isAvailable: true,
                 gatewayStableID: "gateway-a")
             {
                 coordinator.removeQueuedMessage(
@@ -5856,9 +6223,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             .sendChat,
             text: "Message 0 again",
             sentAt: 999)
-        if case .forward = coordinator.ingest(
+        if case .queue = coordinator.ingest(
             oldestEvent,
-            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -5872,7 +6238,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             sentAt: 1000)
         if case .deduped = coordinator.ingest(
             recentEvent,
-            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -5898,7 +6263,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "transferUserInfo")
             if case .queue = coordinator.ingest(
                 event,
-                isAvailable: false,
                 gatewayStableID: "gateway-a")
             {
             } else {
@@ -5918,7 +6282,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             transport: "transferUserInfo")
         if case .deduped = coordinator.ingest(
             duplicateDeliveredEvent,
-            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -5985,12 +6348,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel._test_recordPendingWatchExecApprovalRecoveryID(
             decomposedRecovery.approvalId,
             gatewayDeviceId: decomposedOwner)
-        var recoveryPushes = appModel._test_pendingWatchExecApprovalRecoveryPushes()
+        var recoveryPushes = appModel.pendingWatchExecApprovalRecoveryPushes
         #expect(recoveryPushes.count == 2)
         #expect(Set(recoveryPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
 
-        appModel._test_removePendingWatchExecApprovalRecoveryPush(composedRecovery)
-        recoveryPushes = appModel._test_pendingWatchExecApprovalRecoveryPushes()
+        appModel.removePendingWatchExecApprovalRecoveryPush(composedRecovery)
+        recoveryPushes = appModel.pendingWatchExecApprovalRecoveryPushes
         #expect(recoveryPushes.count == 1)
         #expect(GatewayStableIdentifier.key(recoveryPushes.first?.gatewayDeviceId) ==
             GatewayStableIdentifier.key(decomposedOwner))
@@ -6003,12 +6366,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             gatewayDeviceId: decomposedOwner)
         #expect(await appModel.handleExecApprovalResolvedRemotePush(composedResolved))
         #expect(await appModel.handleExecApprovalResolvedRemotePush(decomposedResolved))
-        var resolvedPushes = appModel._test_pendingExecApprovalResolvedPushes()
+        var resolvedPushes = appModel.pendingExecApprovalResolvedPushes
         #expect(resolvedPushes.count == 2)
         #expect(Set(resolvedPushes.compactMap { GatewayStableIdentifier.key($0.gatewayDeviceId) }).count == 2)
 
-        appModel._test_removePendingExecApprovalResolvedPush(composedResolved)
-        resolvedPushes = appModel._test_pendingExecApprovalResolvedPushes()
+        appModel.removePendingExecApprovalResolvedPush(composedResolved)
+        resolvedPushes = appModel.pendingExecApprovalResolvedPushes
         #expect(resolvedPushes.count == 1)
         #expect(GatewayStableIdentifier.key(resolvedPushes.first?.gatewayDeviceId) ==
             GatewayStableIdentifier.key(decomposedOwner))
@@ -6044,17 +6407,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         appModel._test_setUnifiedExecApprovalGetResponse(makePendingExecApprovalJSON(
             "approval-shipped-cache",
             commandText: "canonical command"))
-        appModel._test_setConnectedGatewayID("gateway-b")
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        appModel.connectedGatewayID = "gateway-b"
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         #expect(appModel._test_watchExecApprovalCacheIDs().isEmpty)
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
         #expect(appModel._test_pendingPersistedExecApprovalReadbacks().count == 1)
 
-        appModel._test_setConnectedGatewayID("gateway-a")
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        appModel.connectedGatewayID = "gateway-a"
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
         #expect(appModel._test_watchExecApprovalCacheIDs() == ["approval-shipped-cache"])
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-shipped-cache")
-        #expect(appModel._test_pendingExecApprovalPrompt()?.commandText == "canonical command")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-shipped-cache")
+        #expect(appModel.pendingExecApprovalPrompt?.commandText == "canonical command")
         readbacks = appModel._test_pendingPersistedExecApprovalReadbacks()
         #expect(readbacks.isEmpty)
     }
@@ -6085,7 +6448,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             message: "gateway error",
             details: ["reason": AnyCodable("APPROVAL_NOT_FOUND")])
 
-        #expect(NodeAppModel._test_isApprovalNotificationStaleError(staleError))
+        #expect(NodeAppModel.isApprovalNotificationStaleError(staleError))
     }
 
     @Test func `approval RPC family requires a complete route catalog family`() {
@@ -6126,23 +6489,23 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test func `background aware exec approval reconnect covers watch and push paths`() {
         #expect(
-            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+            NodeAppModel.shouldUseBackgroundAwareExecApprovalReconnect(
                 sourceReason: "watch_request",
                 isBackgrounded: true))
         #expect(
-            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+            NodeAppModel.shouldUseBackgroundAwareExecApprovalReconnect(
                 sourceReason: "push_request",
                 isBackgrounded: true))
         #expect(
-            NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+            NodeAppModel.shouldUseBackgroundAwareExecApprovalReconnect(
                 sourceReason: "watch_resolve",
                 isBackgrounded: true))
         #expect(
-            !NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+            !NodeAppModel.shouldUseBackgroundAwareExecApprovalReconnect(
                 sourceReason: "direct",
                 isBackgrounded: true))
         #expect(
-            !NodeAppModel._test_shouldUseBackgroundAwareExecApprovalReconnect(
+            !NodeAppModel.shouldUseBackgroundAwareExecApprovalReconnect(
                 sourceReason: "watch_request",
                 isBackgrounded: false))
     }
@@ -6150,17 +6513,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     @Test func `exec approval event ID decodes gateway payload`() {
         let controlPrefixedID = "\u{001C}approval-1"
         #expect(NodeAppModel
-            ._test_execApprovalEventID(from: AnyCodable(["id": controlPrefixedID])) == controlPrefixedID)
+            .execApprovalEventID(from: AnyCodable(["id": controlPrefixedID])) == controlPrefixedID)
         #expect(NodeAppModel
-            ._test_execApprovalEventID(from: AnyCodable(["id": " approval-1 "])) == " approval-1 ")
+            .execApprovalEventID(from: AnyCodable(["id": " approval-1 "])) == " approval-1 ")
         #expect(NodeAppModel
-            ._test_execApprovalEventID(from: AnyCodable(["id": "\tapproval-1"])) == "\tapproval-1")
+            .execApprovalEventID(from: AnyCodable(["id": "\tapproval-1"])) == "\tapproval-1")
         #expect(NodeAppModel
-            ._test_execApprovalEventID(from: AnyCodable(["id": "\u{FEFF}approval-1"])) == "\u{FEFF}approval-1")
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "."])) == nil)
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": ".."])) == nil)
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["id": "   "])) == "   ")
-        #expect(NodeAppModel._test_execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
+            .execApprovalEventID(from: AnyCodable(["id": "\u{FEFF}approval-1"])) == "\u{FEFF}approval-1")
+        #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["id": "."])) == nil)
+        #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["id": ".."])) == nil)
+        #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["id": "   "])) == "   ")
+        #expect(NodeAppModel.execApprovalEventID(from: AnyCodable(["other": "approval-1"])) == nil)
     }
 
     @Test @MainActor func `operator gateway resolved event waits for canonical readback`() async throws {
@@ -6188,19 +6551,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                     agentId: nil,
                     expiresAtMs: Int64(Date().timeIntervalSince1970 * 1000) + 60000)))
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
             event: ExecApprovalNotificationBridge.resolvedKind,
             payload: AnyCodable(["id": "approval-event-resolved"]),
             seq: nil,
             stateversion: nil))
 
-        #expect(appModel._test_pendingExecApprovalPrompt()?.id == "approval-event-resolved")
+        #expect(appModel.pendingExecApprovalPrompt?.id == "approval-event-resolved")
         #expect(appModel._test_pendingWatchExecApprovalRecoveryIDs() == ["approval-event-resolved"])
         let pendingResolvedPush = ExecApprovalNotificationPrompt(
             approvalId: "approval-event-resolved",
             gatewayDeviceId: nil)
-        #expect(appModel._test_pendingExecApprovalResolvedPushes() == [pendingResolvedPush])
+        #expect(appModel.pendingExecApprovalResolvedPushes == [pendingResolvedPush])
         #expect(!notificationCenter.deliveredRemovedIdentifiers.contains([
             "approval-event-notification",
         ]))
@@ -6210,7 +6573,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
         defer { NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState() }
         let appModel = NodeAppModel(notificationCenter: MockBootstrapNotificationCenter())
-        appModel._test_setConnectedGatewayID("gateway-a")
+        appModel.connectedGatewayID = "gateway-a"
         let gatewayA = ExecApprovalNotificationPrompt(
             approvalId: "shared-approval-id",
             gatewayDeviceId: "gateway-device-a")
@@ -6228,14 +6591,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             approvalId: gatewayA.approvalId,
             recoveryPushGatewayDeviceID: gatewayA.gatewayDeviceId)
 
-        #expect(appModel._test_pendingWatchExecApprovalRecoveryPushes() == [gatewayA, gatewayB])
+        #expect(appModel.pendingWatchExecApprovalRecoveryPushes == [gatewayA, gatewayB])
     }
 
     @Test func `watch exec approval hydrate preserves exact missing I ds`() {
         let controlPrefixedID = "\u{001C}pending"
         let composedID = "pending-\u{00E9}"
         let decomposedID = "pending-e\u{0301}"
-        let idsToFetch = NodeAppModel._test_watchExecApprovalIDsNeedingFetch(
+        let idsToFetch = NodeAppModel.watchExecApprovalIDsNeedingFetch(
             candidateIDs: [
                 "cached",
                 controlPrefixedID,
@@ -6264,7 +6627,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let composedID = "approval-\u{00E9}"
         let decomposedID = "approval-e\u{0301}"
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
 
         for approvalID in [composedID, decomposedID] {
             try appModel._test_presentExecApprovalPrompt(#require(
@@ -6292,25 +6655,25 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test func `operator loop waits for bootstrap handoff before using stored token`() {
         #expect(
-            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
                 token: nil,
                 bootstrapToken: "fresh-bootstrap-token",
                 password: nil,
                 hasStoredOperatorToken: true))
         #expect(
-            !NodeAppModel._test_shouldStartOperatorGatewayLoop(
+            !NodeAppModel.shouldStartOperatorGatewayLoop(
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
                 hasStoredOperatorToken: false))
         #expect(
-            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
                 token: nil,
                 bootstrapToken: nil,
                 password: nil,
                 hasStoredOperatorToken: true))
         #expect(
-            NodeAppModel._test_shouldStartOperatorGatewayLoop(
+            NodeAppModel.shouldStartOperatorGatewayLoop(
                 token: "shared-token",
                 bootstrapToken: "fresh-bootstrap-token",
                 password: nil,
@@ -6318,19 +6681,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 
     @Test func `credential handoff is required only for bootstrap authentication`() {
-        #expect(NodeAppModel._test_usesBootstrapCredential(
+        #expect(NodeAppModel.usesBootstrapCredential(
             token: nil,
             bootstrapToken: "fresh-bootstrap-token",
             password: nil))
-        #expect(!NodeAppModel._test_usesBootstrapCredential(
+        #expect(!NodeAppModel.usesBootstrapCredential(
             token: "shared-token",
             bootstrapToken: "fresh-bootstrap-token",
             password: nil))
-        #expect(!NodeAppModel._test_usesBootstrapCredential(
+        #expect(!NodeAppModel.usesBootstrapCredential(
             token: nil,
             bootstrapToken: "fresh-bootstrap-token",
             password: "shared-password"))
-        #expect(!NodeAppModel._test_usesBootstrapCredential(
+        #expect(!NodeAppModel.usesBootstrapCredential(
             token: nil,
             bootstrapToken: nil,
             password: nil))
@@ -6338,17 +6701,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `operator gateway requested event shows notification guidance when notifications off`() async throws {
         let (center, appModel) = makeNotificationModel(status: .notDetermined)
-        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
-        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+        appModel.resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel.resetExecApprovalNotificationGuidanceSuppression() }
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
             event: ExecApprovalNotificationBridge.requestedKind,
             payload: AnyCodable(["id": "approval-notifications-off"]),
             seq: nil,
             stateversion: nil))
 
-        let prompt = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
+        let prompt = try #require(appModel.pendingNotificationPermissionGuidancePrompt)
         #expect(prompt.approvalId == "approval-notifications-off")
     }
 
@@ -6360,10 +6723,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(
             notificationCenter: center,
             watchMessagingService: MockWatchMessagingService())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setExecApprovalPromptFetchFailure("route_changed")
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
             event: ExecApprovalNotificationBridge.requestedKind,
             payload: AnyCodable(["id": "approval-requested-retry"]),
@@ -6375,7 +6738,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         ])
         appModel._test_setUnifiedExecApprovalGetResponse(
             makePendingExecApprovalJSON("approval-requested-retry"))
-        await appModel._test_reconcileWatchExecApprovalCache(reason: "operator_reconnected")
+        await appModel.reconcileWatchExecApprovalCache(reason: "operator_reconnected")
 
         #expect(appModel._test_pendingPersistedExecApprovalReadbacks().isEmpty)
         #expect(appModel._test_pendingExecApprovalInboxItems().map(\.id) == [
@@ -6388,8 +6751,8 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let authorizationGate = NotificationAuthorizationGate()
         center.authorizationStatusHandler = { await authorizationGate.wait() }
         let appModel = NodeAppModel(notificationCenter: center)
-        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
-        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+        appModel.resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel.resetExecApprovalNotificationGuidanceSuppression() }
         var routeIsCurrent = true
         let event = EventFrame(
             type: "event",
@@ -6399,7 +6762,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             stateversion: nil)
 
         let handling = Task { @MainActor in
-            await appModel._test_handleOperatorGatewayServerEvent(
+            await appModel.handleOperatorGatewayServerEvent(
                 event,
                 shouldContinue: { routeIsCurrent })
         }
@@ -6411,39 +6774,39 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await authorizationGate.resume(returning: .denied)
         await handling.value
 
-        #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
-        #expect(appModel._test_pendingExecApprovalPrompt() == nil)
+        #expect(appModel.pendingNotificationPermissionGuidancePrompt == nil)
+        #expect(appModel.pendingExecApprovalPrompt == nil)
     }
 
     @Test @MainActor func `suppressed operator gateway requested event does not show notification guidance`() async {
         let (center, appModel) = makeNotificationModel(status: .denied)
-        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
-        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+        appModel.resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel.resetExecApprovalNotificationGuidanceSuppression() }
         appModel.dismissNotificationPermissionGuidancePrompt(suppressFuture: true)
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
             event: ExecApprovalNotificationBridge.requestedKind,
             payload: AnyCodable(["id": "approval-suppressed"]),
             seq: nil,
             stateversion: nil))
 
-        #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
+        #expect(appModel.pendingNotificationPermissionGuidancePrompt == nil)
     }
 
     @Test @MainActor func `canonical resolved readback clears notification guidance prompt`() async throws {
         let (center, appModel) = makeNotificationModel(status: .denied)
-        appModel._test_resetExecApprovalNotificationGuidanceSuppression()
-        defer { appModel._test_resetExecApprovalNotificationGuidanceSuppression() }
+        appModel.resetExecApprovalNotificationGuidanceSuppression()
+        defer { appModel.resetExecApprovalNotificationGuidanceSuppression() }
 
-        await appModel._test_handleOperatorGatewayServerEvent(EventFrame(
+        await appModel.handleOperatorGatewayServerEvent(EventFrame(
             type: "event",
             event: ExecApprovalNotificationBridge.requestedKind,
             payload: AnyCodable(["id": "approval-guidance-resolved"]),
             seq: nil,
             stateversion: nil))
-        _ = try #require(appModel._test_pendingNotificationPermissionGuidancePrompt())
-        appModel._test_setConnectedGatewayID("test-gateway")
+        _ = try #require(appModel.pendingNotificationPermissionGuidancePrompt)
+        appModel.connectedGatewayID = "test-gateway"
         appModel._test_setUnifiedExecApprovalGetResponse(makeDeniedExecApprovalJSON(
             "approval-guidance-resolved",
             commandText: "echo guarded"))
@@ -6452,19 +6815,19 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             approvalId: "approval-guidance-resolved",
             recoveryPushGatewayDeviceID: nil)
 
-        #expect(appModel._test_pendingNotificationPermissionGuidancePrompt() == nil)
+        #expect(appModel.pendingNotificationPermissionGuidancePrompt == nil)
     }
 
     @Test @MainActor func `handle invoke rejects background commands`() async {
         let appModel = NodeAppModel()
         appModel.setScenePhase(.background)
 
-        let req = BridgeInvokeRequest(id: "bg", command: OpenClawCanvasCommand.present.rawValue)
-        let res = await appModel._test_handleInvoke(req)
+        let req = BridgeInvokeRequest(id: "bg", command: OpenClawScreenCommand.record.rawValue)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .backgroundUnavailable)
 
-        let talk = await appModel._test_handleInvoke(talkRequest(id: "bg-talk", command: .pttStart))
+        let talk = await appModel.handleInvoke(talkRequest(id: "bg-talk", command: .pttStart))
         #expect(talk.ok == false)
         #expect(talk.error?.message.contains("/talk") == true)
     }
@@ -6485,7 +6848,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             }
         }
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("CAMERA_DISABLED") == true)
@@ -6506,7 +6869,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(camera: CancellingCameraService())
         let request = BridgeInvokeRequest(id: "cancelled-camera", command: OpenClawCameraCommand.snap.rawValue)
 
-        let response = await appModel._test_handleInvoke(request)
+        let response = await appModel.handleInvoke(request)
 
         #expect(response.ok == false)
         #expect(response.error?.code == .unavailable)
@@ -6534,14 +6897,14 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             secondStarted: secondStarted.continuation)
         let appModel = NodeAppModel(camera: camera)
         let firstTask = Task {
-            await appModel._test_handleInvoke(
+            await appModel.handleInvoke(
                 BridgeInvokeRequest(id: "camera-first", command: OpenClawCameraCommand.snap.rawValue))
         }
         for await _ in firstStarted.stream {
             break
         }
         let secondTask = Task {
-            await appModel._test_handleInvoke(
+            await appModel.handleInvoke(
                 BridgeInvokeRequest(id: "camera-second", command: OpenClawCameraCommand.snap.rawValue))
         }
         for await _ in secondStarted.stream {
@@ -6566,7 +6929,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawSystemCommand.notify.rawValue,
             params: OpenClawSystemNotifyParams(title: "Approval", body: "Review request"))
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
 
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
@@ -6583,7 +6946,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawSystemCommand.notify.rawValue,
             params: OpenClawSystemNotifyParams(title: "Approval", body: "Review request"))
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
 
         #expect(res.ok)
         #expect(center.addCalls == 1)
@@ -6598,7 +6961,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawSystemCommand.notify.rawValue,
             params: OpenClawSystemNotifyParams(title: "Approval", body: "Review request"))
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
 
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
@@ -6613,18 +6976,18 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         PushEnrollmentConsent.reset()
         defer { PushEnrollmentConsent.reset() }
 
-        #expect(await appModel._test_canPublishAPNsRegistration() == false)
-        #expect(await appModel._test_canPublishAPNsRegistration(usesRelayTransport: false))
+        #expect(await appModel.canPublishAPNsRegistration() == false)
+        #expect(await appModel.canPublishAPNsRegistration(usesRelayTransport: false))
 
         PushEnrollmentConsent.markDisclosureAccepted()
         center.status = .notDetermined
-        #expect(await appModel._test_canPublishAPNsRegistration() == false)
+        #expect(await appModel.canPublishAPNsRegistration() == false)
 
         center.status = .authorized
-        #expect(await appModel._test_canPublishAPNsRegistration())
+        #expect(await appModel.canPublishAPNsRegistration())
 
         UserDefaults.standard.set(false, forKey: NotificationServingPreference.storageKey)
-        #expect(await appModel._test_canPublishAPNsRegistration() == false)
+        #expect(await appModel.canPublishAPNsRegistration() == false)
     }
 
     @Test @MainActor func `chat push without speech returns unavailable when notifications off`() async throws {
@@ -6634,7 +6997,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawChatCommand.push.rawValue,
             params: OpenClawChatPushParams(text: "Build finished", speak: false))
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
 
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
@@ -6651,10 +7014,36 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawChatCommand.push.rawValue,
             params: OpenClawChatPushParams(text: "Build finished", speak: false))
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
 
         #expect(res.ok)
         #expect(center.addCalls == 1)
+    }
+
+    @Test @MainActor func `cancelled chat push cannot continue as speech after authorization`() async throws {
+        let (center, appModel) = makeNotificationModel(status: .denied)
+        let authorizationGate = NotificationAuthorizationGate()
+        center.authorizationStatusHandler = { await authorizationGate.wait() }
+        let request = try makeInvokeRequest(
+            id: "cancelled-chat-push",
+            command: OpenClawChatCommand.push.rawValue,
+            params: OpenClawChatPushParams(text: "Cancelled notification test", speak: true))
+        let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(authorizationGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let authorizationStarted = await authorizationGate.hasStarted()
+        invocation.cancel()
+        await authorizationGate.resume(returning: .denied)
+        let response = await invocation.value
+        await Task.yield()
+        TalkSystemSpeechSynthesizer.shared.stop()
+
+        #expect(authorizationStarted)
+        #expect(!response.ok)
+        #expect(response.error?.message == "node invoke cancelled")
+        #expect(center.addCalls == 0)
     }
 
     @Test @MainActor func `handle invoke rejects invalid screen format`() async {
@@ -6668,103 +7057,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawScreenCommand.record.rawValue,
             paramsJSON: json)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.message.contains("screen format must be mp4") == true)
-    }
-
-    @Test @MainActor func `handle invoke canvas commands update screen`() async throws {
-        let appModel = NodeAppModel()
-        let coordinator = try mountScreen(appModel.screen)
-        defer { coordinator.teardown() }
-
-        appModel.screen.navigate(to: "http://example.com")
-
-        let present = BridgeInvokeRequest(id: "present", command: OpenClawCanvasCommand.present.rawValue)
-        let presentRes = await appModel._test_handleInvoke(present)
-        #expect(presentRes.ok == true)
-        #expect(appModel.screen.urlString.isEmpty)
-
-        // Loopback URLs are rejected (they are not meaningful for a remote gateway).
-        let navigate = try makeInvokeRequest(
-            id: "nav",
-            command: OpenClawCanvasCommand.navigate.rawValue,
-            params: OpenClawCanvasNavigateParams(url: "http://example.com/"))
-        let navRes = await appModel._test_handleInvoke(navigate)
-        #expect(navRes.ok == true)
-        #expect(appModel.screen.urlString == "http://example.com/")
-
-        let eval = try makeInvokeRequest(
-            id: "eval",
-            command: OpenClawCanvasCommand.evalJS.rawValue,
-            params: OpenClawCanvasEvalParams(javaScript: "1+1"))
-        var evalRes = await appModel._test_handleInvoke(eval)
-        let deadline = ContinuousClock().now.advanced(by: .seconds(3))
-        while evalRes.ok != true, ContinuousClock().now < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-            evalRes = await appModel._test_handleInvoke(eval)
-        }
-        #expect(evalRes.ok == true)
-        let payloadData = try #require(evalRes.payloadJSON?.data(using: .utf8))
-        let payload = try JSONSerialization.jsonObject(with: payloadData) as? [String: Any]
-        #expect(payload?["result"] as? String == "2")
-    }
-
-    @Test @MainActor func `pending foreground actions replay canvas navigate`() async throws {
-        let appModel = NodeAppModel()
-        let navJSON = try String(
-            decoding: JSONEncoder().encode(OpenClawCanvasNavigateParams(url: "http://example.com/")),
-            as: UTF8.self)
-
-        await appModel._test_applyPendingForegroundNodeActions([
-            (
-                id: "pending-nav-1",
-                command: OpenClawCanvasCommand.navigate.rawValue,
-                paramsJSON: navJSON),
-        ])
-
-        #expect(appModel.screen.urlString == "http://example.com/")
-    }
-
-    @Test @MainActor func `pending foreground actions do not apply while backgrounded`() async throws {
-        let appModel = NodeAppModel()
-        appModel.setScenePhase(.background)
-        let navJSON = try String(
-            decoding: JSONEncoder().encode(OpenClawCanvasNavigateParams(url: "http://example.com/")),
-            as: UTF8.self)
-
-        await appModel._test_applyPendingForegroundNodeActions([
-            (
-                id: "pending-nav-bg",
-                command: OpenClawCanvasCommand.navigate.rawValue,
-                paramsJSON: navJSON),
-        ])
-
-        #expect(appModel.screen.urlString.isEmpty)
-    }
-
-    @Test @MainActor func `handle invoke A 2 UI commands fail when local host unavailable`() async throws {
-        let appModel = NodeAppModel()
-
-        let reset = BridgeInvokeRequest(id: "reset", command: OpenClawCanvasA2UICommand.reset.rawValue)
-        let resetRes = await appModel._test_handleInvoke(reset)
-        #expect(resetRes.ok == false)
-        #expect(resetRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
-
-        let jsonl = "{\"beginRendering\":{}}"
-        let push = try makeInvokeRequest(
-            id: "push",
-            command: OpenClawCanvasA2UICommand.pushJSONL.rawValue,
-            params: OpenClawCanvasA2UIPushJSONLParams(jsonl: jsonl))
-        let pushRes = await appModel._test_handleInvoke(push)
-        #expect(pushRes.ok == false)
-        #expect(pushRes.error?.message.contains("A2UI_HOST_UNAVAILABLE") == true)
     }
 
     @Test @MainActor func `handle invoke unknown command returns invalid request`() async {
         let appModel = NodeAppModel()
         let req = BridgeInvokeRequest(id: "unknown", command: "nope")
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .invalidRequest)
     }
@@ -6780,7 +7081,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         let appModel = NodeAppModel(watchMessagingService: watchService)
         let req = BridgeInvokeRequest(id: "watch-status", command: OpenClawWatchCommand.status.rawValue)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == true)
 
         let payloadData = try #require(res.payloadJSON?.data(using: .utf8))
@@ -6828,7 +7129,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             queuedForDelivery: true,
             transport: "transferUserInfo")
         let appModel = NodeAppModel(watchMessagingService: watchService)
-        appModel._test_setConnectedGatewayID("gateway-watch-notify")
+        appModel.connectedGatewayID = "gateway-watch-notify"
         let params = OpenClawWatchNotifyParams(
             title: "OpenClaw",
             body: "Meeting with Peter is at 4pm",
@@ -6838,7 +7139,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req, gatewayStableID: "gateway-a")
+        let res = await appModel.handleInvoke(req, gatewayStableID: "gateway-a")
         #expect(res.ok == true)
         #expect(watchService.lastSent?.params.title == "OpenClaw")
         #expect(watchService.lastSent?.params.body == "Meeting with Peter is at 4pm")
@@ -6850,6 +7151,76 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(payload.deliveredImmediately == false)
         #expect(payload.queuedForDelivery == true)
         #expect(payload.transport == "transferUserInfo")
+    }
+
+    @Test @MainActor func `cancelled watch notification preserves cancellation after transport`() async throws {
+        let restorePreference = overrideNotificationServingPreference(false)
+        defer { restorePreference() }
+        let (watchService, appModel) = makeWatchModel()
+        let transportGate = WatchSnapshotSendGate()
+        watchService.sendNotificationHandler = {
+            await transportGate.wait()
+            return WatchNotificationSendResult(
+                deliveredImmediately: false,
+                queuedForDelivery: true,
+                transport: "transferUserInfo")
+        }
+        let request = try makeInvokeRequest(
+            id: "cancelled-watch-notify",
+            command: OpenClawWatchCommand.notify.rawValue,
+            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Cancelled mirror test"))
+        let invocation = Task { @MainActor in await appModel.handleInvoke(request) }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(transportGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let transportStarted = await transportGate.hasStarted()
+        invocation.cancel()
+        await transportGate.resume()
+        let response = await invocation.value
+
+        #expect(transportStarted)
+        #expect(!response.ok)
+        #expect(response.error?.message == "node invoke cancelled")
+    }
+
+    @Test @MainActor func `watch notification receipt accepts an independent phone mirror`() async throws {
+        let restorePreference = overrideNotificationServingPreference(true)
+        defer { restorePreference() }
+        let center = MockBootstrapNotificationCenter()
+        let (watchService, appModel) = makeWatchModel(notificationCenter: center)
+        let mirrorGate = WatchSnapshotSendGate()
+        center.authorizationStatusHandler = {
+            await mirrorGate.wait()
+            return .authorized
+        }
+        watchService.nextSendResult = WatchNotificationSendResult(
+            deliveredImmediately: false,
+            queuedForDelivery: true,
+            transport: "transferUserInfo")
+        let request = try makeInvokeRequest(
+            id: "accepted-watch-mirror",
+            command: OpenClawWatchCommand.notify.rawValue,
+            params: OpenClawWatchNotifyParams(title: "OpenClaw", body: "Accepted mirror test"))
+        var response: BridgeInvokeResponse?
+        let invocation = Task { @MainActor in
+            response = await appModel.handleInvoke(request)
+        }
+        let deadline = ContinuousClock().now.advanced(by: .seconds(2))
+        while await !(mirrorGate.hasStarted()), ContinuousClock().now < deadline {
+            await Task.yield()
+        }
+        let mirrorStarted = await mirrorGate.hasStarted()
+        await waitForMainActorWork { response != nil }
+        let responseBeforeMirror = response
+        invocation.cancel()
+        await mirrorGate.resume()
+        await invocation.value
+        await waitForMainActorWork { center.addCalls == 1 }
+
+        #expect(mirrorStarted)
+        #expect(responseBeforeMirror?.ok == true)
+        #expect(center.addCalls == 1)
     }
 
     @Test @MainActor func `watch reply codec preserves prompt gateway owner`() throws {
@@ -7150,7 +7521,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .invalidRequest)
         #expect(watchService.lastSent == nil)
@@ -7168,7 +7539,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == true)
         #expect(watchService.lastSent?.params.risk == .low)
         let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
@@ -7177,7 +7548,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `legacy watch reply binds to latest prompt owner`() async throws {
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("gateway-a")
+        appModel.connectedGatewayID = "gateway-a"
         let params = OpenClawWatchNotifyParams(
             title: "Task",
             body: "Action needed",
@@ -7186,7 +7557,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             id: "watch-notify-legacy-owner",
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
-        #expect(await appModel._test_handleInvoke(request, gatewayStableID: "gateway-a").ok)
+        #expect(await appModel.handleInvoke(request, gatewayStableID: "gateway-a").ok)
 
         watchService.emitReply(WatchQuickReplyEvent(
             replyId: "legacy-reply",
@@ -7200,7 +7571,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             transport: "transferUserInfo"))
         await Task.yield()
 
-        #expect(appModel._test_queuedWatchReplyCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 1)
     }
 
     @Test @MainActor func `handle invoke watch notify adds approval defaults`() async throws {
@@ -7215,7 +7586,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == true)
         let actionIDs = watchService.lastSent?.params.actions?.map(\.id)
         #expect(actionIDs == ["approve", "decline", "open_phone", "escalate"])
@@ -7240,7 +7611,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == true)
         #expect(watchService.lastSent?.params.priority == .timeSensitive)
         #expect(watchService.lastSent?.params.risk == .high)
@@ -7261,17 +7632,17 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             command: OpenClawWatchCommand.notify.rawValue,
             params: params)
 
-        let res = await appModel._test_handleInvoke(req)
+        let res = await appModel.handleInvoke(req)
         #expect(res.ok == false)
         #expect(res.error?.code == .unavailable)
         #expect(res.error?.message.contains("WATCH_UNAVAILABLE") == true)
     }
 
     @Test @MainActor func `watch reply queues when gateway offline`() async {
-        NodeAppModel._test_resetPersistedWatchReplyQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("gateway-watch-reply")
+        appModel.connectedGatewayID = "gateway-watch-reply"
         watchService.emitReply(
             WatchQuickReplyEvent(
                 replyId: "reply-offline-1",
@@ -7284,15 +7655,180 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 sentAtMs: 1234,
                 transport: "transferUserInfo"))
         await Task.yield()
-        #expect(appModel._test_queuedWatchReplyCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 1)
+    }
+
+    @Test(arguments: [
+        (WatchMessageKind.chat, "fresh", true),
+        (.chat, "pending", true),
+        (.chat, "delivered", false),
+        (.chat, "foreign", false),
+        (.chat, "disabled", false),
+        (.quickReply, "fresh", true),
+        (.quickReply, "pending", true),
+        (.quickReply, "delivered", false),
+        (.quickReply, "foreign", false),
+        (.quickReply, "disabled", false),
+    ]) @MainActor
+    func `queued watch messages renew background reconnect only for pending current owner work`(
+        kind: WatchMessageKind,
+        scenario: String,
+        reconnectExpected: Bool) async throws
+    {
+        WatchMessageOutbox.resetPersistedQueue()
+        let (watchService, appModel) = makeWatchModel()
+        defer {
+            appModel.disconnectGateway()
+            WatchMessageOutbox.resetPersistedQueue()
+        }
+        let gatewayURL = try #require(URL(string: "ws://127.0.0.1:1"))
+        let (config, _) = try makeGatewayPair(firstURL: gatewayURL, secondURL: gatewayURL)
+        appModel.activeGatewayConnectConfig = config
+        appModel.connectedGatewayID = config.effectiveStableID
+        appModel.isBackgrounded = true
+        appModel.backgroundReconnectSuppressed = true
+        appModel.gatewayAutoReconnectEnabled = scenario != "disabled"
+        // Keep a parked loop so this admission test never opens a socket.
+        appModel._test_setGatewayLoopTasks(node: nil, operator: Task {})
+        let eventGatewayID = scenario == "foreign" ? "gateway-other" : config.effectiveStableID
+        let event = makeWatchAppCommand(
+            "background-watch-message",
+            .sendChat,
+            gateway: eventGatewayID,
+            text: "A dictated Watch message",
+            sentAt: 1,
+            kind: kind)
+        if scenario == "pending" || scenario == "delivered" {
+            _ = appModel.watchMessageOutbox.ingest(
+                event,
+                gatewayStableID: eventGatewayID)
+            if scenario == "delivered" {
+                appModel.watchMessageOutbox.removeQueuedMessage(
+                    messageID: event.commandId,
+                    gatewayStableID: eventGatewayID)
+            }
+        }
+
+        switch kind {
+        case .chat:
+            watchService.emitAppCommand(event)
+        case .quickReply:
+            watchService.emitReply(WatchQuickReplyEvent(
+                replyId: "background-watch-message",
+                promptId: "background-watch-prompt",
+                actionId: "approve",
+                actionLabel: "Approve",
+                sessionKey: "main",
+                gatewayStableID: eventGatewayID,
+                note: nil,
+                sentAtMs: 1,
+                transport: "sendMessage"))
+        }
+
+        let reconnectGranted = await waitForMainActorWork {
+            !appModel.backgroundReconnectSuppressed
+        }
+
+        let expectedIDs = scenario == "delivered" || scenario == "foreign" ? [] : [event.commandId]
+        #expect(appModel.watchMessageOutbox.queuedMessageIDs(kind: kind) == expectedIDs)
+        #expect(reconnectGranted == reconnectExpected)
+    }
+
+    @Test @MainActor func `watch retry drain skips in flight messages without blocking fresh replies`() async throws {
+        WatchMessageOutbox.resetPersistedQueue()
+        NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        let (watchService, appModel) = makeWatchModel()
+        let gate = WatchMessageSendGate()
+        defer {
+            gate.release()
+            appModel.disconnectGateway()
+            WatchMessageOutbox.resetPersistedQueue()
+            NodeAppModel._test_resetPersistedWatchExecApprovalBridgeState()
+        }
+        let socket = GatewayTestWebSocketTask(sendHook: { socket, message, _ in
+            let data: Data
+            switch message {
+            case let .data(value): data = value
+            case let .string(value): data = Data(value.utf8)
+            @unknown default: return
+            }
+            let frame = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            guard frame["method"] as? String == "chat.send" else { return }
+            let requestID = try #require(frame["id"] as? String)
+            let params = try #require(frame["params"] as? [String: Any])
+            let commandID = try #require(params["idempotencyKey"] as? String)
+            let attempt = await gate.holdFirstSend(commandID: commandID)
+            let response: Data = if commandID == "second-watch-send", attempt == 1 {
+                try JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": requestID, "ok": false,
+                    "error": ["code": "UNAVAILABLE", "message": "Transient test failure"],
+                ])
+            } else {
+                try JSONSerialization.data(withJSONObject: [
+                    "type": "res", "id": requestID, "ok": true,
+                    "payload": ["runId": commandID, "status": "started"],
+                ])
+            }
+            socket.emitReceiveSuccessOnce(.data(response))
+        })
+        try await appModel.operatorSession.connect(
+            url: #require(URL(string: "ws://watch-send-test.invalid")),
+            credentials: .init(),
+            connectOptions: GatewayWebSocketTestSupport.identityFreeOperatorConnectOptions,
+            sessionBox: WebSocketSessionBox(session: GatewayTestWebSocketSession(taskFactory: { socket })),
+            onConnected: {},
+            onDisconnected: { _ in },
+            onInvoke: { BridgeInvokeResponse(id: $0.id, ok: true) })
+        appModel.connectedGatewayID = "gateway-watch-send"
+        appModel.setOperatorConnected(true)
+        let onlineSnapshot = await waitForMainActorWork { watchService.lastSentAppSnapshot != nil }
+        try #require(onlineSnapshot)
+        let first = WatchQuickReplyEvent(
+            replyId: "first-watch-send",
+            promptId: "watch-prompt",
+            actionId: "approve",
+            actionLabel: "Approve",
+            sessionKey: "main",
+            gatewayStableID: "gateway-watch-send",
+            note: nil,
+            sentAtMs: 1,
+            transport: "sendMessage")
+        var second = first
+        second.replyId = "second-watch-send"
+
+        watchService.emitReply(first)
+        let firstStarted = await waitForMainActorWork { gate.commandIDs == [first.replyId] }
+        try #require(firstStarted)
+        let freshReplyCompleted = XCTestExpectation(description: "fresh Watch reply forwarded while first send is held")
+        withObservationTracking {
+            _ = appModel.openChatRequestID
+        } onChange: {
+            freshReplyCompleted.fulfill()
+        }
+        watchService.emitReply(second)
+        watchService.emitReply(first)
+        let completion = await XCTWaiter.fulfillment(of: [freshReplyCompleted], timeout: 2)
+        #expect(completion == .completed)
+        #expect(gate.commandIDs.count { $0 == second.replyId } == 2 && appModel.openChatRequestID >= 1)
+        let duplicateForwarded = await waitForMainActorWork {
+            gate.commandIDs.count { $0 == first.replyId } > 1
+        }
+        #expect(!duplicateForwarded)
+        #expect(appModel.watchMessageOutbox.queuedMessageIDs() == [first.replyId])
+
+        gate.release()
+        let drained = await waitForMainActorWork { appModel.watchMessageOutbox.queuedCount() == 0 }
+        #expect(drained)
+        #expect(gate.commandIDs == [first.replyId, second.replyId, second.replyId])
+        #expect(appModel.openChatRequestID == 2)
     }
 
     @Test @MainActor func `watch chat and reply preserve boundary whitespace gateway owner`() async {
-        NodeAppModel._test_resetPersistedWatchChatQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchChatQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let gatewayID = " gateway-boundary "
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID(gatewayID)
+        appModel.connectedGatewayID = gatewayID
 
         watchService.emitAppCommand(makeWatchAppCommand(
             "watch-boundary-chat",
@@ -7310,10 +7846,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             note: nil,
             sentAtMs: 2,
             transport: "sendMessage"))
-        await waitForMainActorWork { appModel._test_queuedWatchReplyCount() == 1 }
+        await waitForMainActorWork { appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 1 }
 
-        #expect(appModel._test_queuedWatchChatCommandIds() == ["watch-boundary-chat"])
-        #expect(appModel._test_queuedWatchReplyCount() == 1)
+        #expect(appModel.watchMessageOutbox.queuedMessageIDs(kind: .chat) == ["watch-boundary-chat"])
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 1)
 
         watchService.emitAppCommand(makeWatchAppCommand(
             "watch-trimmed-owner-chat",
@@ -7322,7 +7858,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             text: "Wrong owner",
             sentAt: 3))
         await Task.yield()
-        #expect(appModel._test_queuedWatchChatCommandIds() == ["watch-boundary-chat"])
+        #expect(appModel.watchMessageOutbox.queuedMessageIDs(kind: .chat) == ["watch-boundary-chat"])
     }
 
     @Test @MainActor func `watch message outbox restores queued reply after restart`() throws {
@@ -7343,7 +7879,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             transport: "transferUserInfo",
             kind: .quickReply)
         let firstOutbox = WatchMessageOutbox(defaults: defaults)
-        if case .queue = firstOutbox.ingest(event, isAvailable: false, gatewayStableID: "gateway-a") {
+        if case .queue = firstOutbox.ingest(event, gatewayStableID: "gateway-a") {
         } else {
             Issue.record("expected watch reply to queue")
         }
@@ -7372,7 +7908,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             kind: .quickReply)
         let firstOutbox = WatchMessageOutbox(defaults: defaults)
         firstOutbox.recordPromptRoute(promptID: "prompt-a", gatewayStableID: "gateway-a")
-        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        _ = firstOutbox.ingest(event, gatewayStableID: "gateway-a")
         firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
         for index in 0..<140 {
             let pending = makeWatchAppCommand(
@@ -7382,14 +7918,13 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 text: "Pending \(index)",
                 sentAt: Int64(index + 2),
                 transport: "transferUserInfo")
-            _ = firstOutbox.ingest(pending, isAvailable: false, gatewayStableID: "gateway-a")
+            _ = firstOutbox.ingest(pending, gatewayStableID: "gateway-a")
         }
 
         let restoredOutbox = WatchMessageOutbox(defaults: defaults)
         #expect(restoredOutbox.gatewayStableID(forPromptID: "prompt-a") == "gateway-a")
         if case .deduped = restoredOutbox.ingest(
             event,
-            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -7410,7 +7945,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             sentAt: 1,
             kind: .quickReply)
         let firstOutbox = WatchMessageOutbox(defaults: defaults)
-        _ = firstOutbox.ingest(event, isAvailable: true, gatewayStableID: "gateway-a")
+        _ = firstOutbox.ingest(event, gatewayStableID: "gateway-a")
         let staleQueue = try #require(defaults.data(forKey: "watch.chat.command.queue.v1"))
         firstOutbox.removeQueuedMessage(messageID: event.commandId, gatewayStableID: "gateway-a")
 
@@ -7422,7 +7957,6 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         #expect(restoredOutbox.queuedCount() == 0)
         if case .deduped = restoredOutbox.ingest(
             event,
-            isAvailable: true,
             gatewayStableID: "gateway-a")
         {
         } else {
@@ -7431,10 +7965,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
     }
 
     @Test @MainActor func `watch reply drops stale gateway target`() async {
-        NodeAppModel._test_resetPersistedWatchReplyQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
-        appModel._test_setConnectedGatewayID("gateway-current")
+        appModel.connectedGatewayID = "gateway-current"
 
         watchService.emitReply(
             WatchQuickReplyEvent(
@@ -7449,16 +7983,16 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
                 transport: "transferUserInfo"))
         await Task.yield()
 
-        #expect(appModel._test_queuedWatchReplyCount() == 0)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 0)
         #expect(appModel.openChatRequestID == 0)
     }
 
     @Test @MainActor func `watch reply uses idempotent chat outbox`() async {
-        NodeAppModel._test_resetPersistedWatchReplyQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
         appModel.enterAppleReviewDemoMode()
-        appModel._test_recordWatchPromptRoute(
+        appModel.watchMessageOutbox.recordPromptRoute(
             promptID: "prompt-idempotent",
             gatewayStableID: AppleReviewDemoMode.gatewayID)
         let initialOpenChatRequestID = appModel.openChatRequestID
@@ -7476,15 +8010,15 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         watchService.emitReply(event)
         await waitForMainActorWork { appModel.openChatRequestID == initialOpenChatRequestID + 1 }
         watchService.emitReply(event)
-        await waitForMainActorWork { appModel._test_queuedWatchReplyCount() == 0 }
+        await waitForMainActorWork { appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 0 }
 
         #expect(appModel.openChatRequestID == initialOpenChatRequestID + 1)
-        #expect(appModel._test_queuedWatchReplyCount() == 0)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 0)
     }
 
     @Test @MainActor func `watch reply rejects legacy prompt without a gateway owner`() async {
-        NodeAppModel._test_resetPersistedWatchReplyQueueState()
-        defer { NodeAppModel._test_resetPersistedWatchReplyQueueState() }
+        WatchMessageOutbox.resetPersistedQueue()
+        defer { WatchMessageOutbox.resetPersistedQueue() }
         let (watchService, appModel) = makeWatchModel()
         appModel.enterAppleReviewDemoMode()
         let initialOpenChatRequestID = appModel.openChatRequestID
@@ -7505,28 +8039,40 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await Task.yield()
 
         #expect(appModel.openChatRequestID == initialOpenChatRequestID)
-        #expect(appModel._test_queuedWatchReplyCount() == 0)
+        #expect(appModel.watchMessageOutbox.queuedCount(kind: .quickReply) == 0)
     }
 
-    @Test @MainActor func `handle deep link sets error when not connected`() async throws {
+    @Test @MainActor func `handle deep link records failure when not connected`() async throws {
         let appModel = NodeAppModel()
         let url = try #require(URL(string: "openclaw://agent?message=hello"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.screen.errorText?.contains("Gateway not connected") == true)
+        #expect(appModel.lastShareEventText.contains("gateway not connected"))
     }
 
-    @Test @MainActor func `handle deep link rejects oversized message`() async throws {
+    @Test func `agent deep link logging excludes the original URL`() throws {
+        let source = try String(contentsOf: Self.nodeAppModelSourceURL(), encoding: .utf8)
+        let start = try #require(source.range(of: "private func handleAgentDeepLink("))
+        let end = try #require(
+            source.range(
+                of: "private func effectiveAgentDeepLinkForPrompt(",
+                range: start.upperBound..<source.endIndex))
+        let handler = String(source[start.lowerBound..<end.lowerBound])
+
+        #expect(!handler.contains("originalURL.absoluteString, privacy: .public"))
+    }
+
+    @Test @MainActor func `handle deep link records oversized message rejection`() async throws {
         let appModel = NodeAppModel()
         let msg = String(repeating: "a", count: 20001)
         let url = try #require(URL(string: "openclaw://agent?message=\(msg)"))
         await appModel.handleDeepLink(url: url)
-        #expect(appModel.screen.errorText?.contains("Deep link too large") == true)
+        #expect(appModel.lastShareEventText.contains("message too large"))
     }
 
     @Test @MainActor func `handle deep link requires confirmation when connected and unkeyed`() async {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
-        appModel._test_setAgentRequestHandler { _ in }
+        appModel.gatewayConnected = true
+        appModel.testAgentRequestHandler = { _ in }
         let url = makeAgentDeepLinkURL(message: "hello from deep link")
 
         await appModel.handleDeepLink(url: url)
@@ -7536,12 +8082,12 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         await appModel.approvePendingAgentDeepLinkPrompt()
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.screen.errorText == nil)
+        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
     }
 
     @Test @MainActor func `handle deep link coalesces prompt when rate limited`() async throws {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
 
         await appModel.handleDeepLink(url: makeAgentDeepLinkURL(message: "first prompt"))
         let firstPrompt = try #require(appModel.pendingAgentDeepLinkPrompt)
@@ -7555,7 +8101,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `handle deep link strips delivery fields when unkeyed`() async throws {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         let url = makeAgentDeepLinkURL(
             message: "route this",
             deliver: true,
@@ -7571,26 +8117,26 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
 
     @Test @MainActor func `handle deep link rejects long unkeyed message when connected`() async {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
+        appModel.gatewayConnected = true
         let message = String(repeating: "x", count: 241)
         let url = makeAgentDeepLinkURL(message: message)
 
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
-        #expect(appModel.screen.errorText?.contains("blocked") == true)
+        #expect(appModel.lastShareEventText.contains("Rejected"))
     }
 
     @Test @MainActor func `handle deep link bypasses prompt with valid key`() async {
         let appModel = NodeAppModel()
-        appModel._test_setGatewayConnected(true)
-        appModel._test_setAgentRequestHandler { _ in }
-        let key = NodeAppModel._test_currentDeepLinkKey()
+        appModel.gatewayConnected = true
+        appModel.testAgentRequestHandler = { _ in }
+        let key = NodeAppModel.expectedDeepLinkKey()
         let url = makeAgentDeepLinkURL(message: "trusted request", key: key)
 
         await appModel.handleDeepLink(url: url)
         #expect(appModel.pendingAgentDeepLinkPrompt == nil)
         #expect(appModel.openChatRequestID == 1)
-        #expect(appModel.screen.errorText == nil)
+        #expect(appModel.lastShareEventText.contains("Sent to gateway"))
     }
 
     @Test @MainActor func `operator scopes use the active gateway token`() throws {
@@ -7639,7 +8185,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             token: "operator-token",
             scopes: ["operator.read", "operator.admin", "operator.approvals"],
             gatewayID: authenticationOwnerID)
-        appModel._test_refreshOperatorAdminScopeFromStore()
+        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == true)
         #expect(appModel._test_shouldRequestStoredOperatorAdminScope(gatewayID: authenticationOwnerID))
         #expect(appModel._test_shouldRequestStoredOperatorApprovalScope(
@@ -7656,7 +8202,7 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
             deviceId: identity.deviceId,
             role: "operator",
             gatewayID: authenticationOwnerID)
-        appModel._test_refreshOperatorAdminScopeFromStore()
+        appModel.refreshOperatorAdminScopeFromStore()
         #expect(appModel.hasOperatorAdminScope == false)
     }
 
@@ -7667,18 +8213,10 @@ private func overrideNotificationServingPreference(_ enabled: Bool) -> () -> Voi
         }
     }
 
-    @Test @MainActor func `canvas A 2 UI action dispatches status`() async {
-        let appModel = NodeAppModel()
-        let body: [String: Any] = [
-            "userAction": [
-                "name": "tap",
-                "id": "action-1",
-                "surfaceId": "main",
-                "sourceComponentId": "button-1",
-                "context": ["value": "ok"],
-            ],
-        ]
-        await appModel._test_handleCanvasA2UIAction(body: body)
-        #expect(appModel.screen.urlString.isEmpty)
+    private static func nodeAppModelSourceURL() -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/Model/NodeAppModel.swift")
     }
 }

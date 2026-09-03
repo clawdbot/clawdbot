@@ -6,28 +6,29 @@ import {
   type SessionObserverHealth,
   type SessionObserverPlanProgress,
 } from "../../packages/gateway-protocol/src/schema/sessions.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "../agents/agent-run-terminal-reply.js";
+import type { runIsolatedCompletion } from "../agents/isolated-completion.js";
 import {
   terminalHealthFor,
   type SessionActivityNoteState,
 } from "../agents/session-activity-notes.js";
-import type {
-  completeWithPreparedSimpleCompletionModel,
-  prepareSimpleCompletionModelForAgent,
-} from "../agents/simple-completion-runtime.js";
+import type { prepareUtilityCompletionForAgent } from "../agents/utility-completion.js";
 import type { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import {
   loadSessionEntryReadOnly,
-  patchSessionEntry,
+  patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import type {
   SessionEventSubscriberRegistry,
   SessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 
 const HEADLINE_MAX_CHARS = 120;
 const ASSESSMENT_MAX_CHARS = 320;
@@ -39,10 +40,12 @@ const MAX_DISABLED_RUNS = 512;
 export const SESSION_OBSERVER_MODEL_MAX_TOKENS = 300;
 
 export function sessionObserverScopeKey(sessionKey: string, agentId: string): string {
-  return sessionKey === "global" ? `agent:${normalizeAgentId(agentId)}:global` : sessionKey;
+  return parseAgentSessionKey(sessionKey)
+    ? sessionKey
+    : `agent:${normalizeAgentId(agentId)}:${sessionKey}`;
 }
-type PrepareModel = typeof prepareSimpleCompletionModelForAgent;
-type CompleteModel = typeof completeWithPreparedSimpleCompletionModel;
+type PrepareModel = typeof prepareUtilityCompletionForAgent;
+type CompleteModel = typeof runIsolatedCompletion;
 type PreparedModel = Awaited<ReturnType<PrepareModel>>;
 
 export type SessionObserverState = SessionActivityNoteState & {
@@ -102,13 +105,7 @@ export function rememberSessionObserverRevisionFloor(
     floors.delete(sessionKey);
     floors.set(sessionKey, candidate);
   }
-  while (floors.size > MAX_REVISION_FLOORS) {
-    const oldest = floors.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    floors.delete(oldest);
-  }
+  pruneMapToMaxSize(floors, MAX_REVISION_FLOORS);
 }
 
 export function rememberSessionObserverDormantRun(
@@ -130,7 +127,7 @@ export function rememberSessionObserverDormantRun(
       // map so a later resume cannot restart below an already broadcast revision.
       rememberSessionObserverRevisionFloor(
         floors,
-        sessionObserverScopeKey(evicted.sessionKey, evicted.agentId),
+        resolveSessionSubscriptionKey(evicted.sessionKey, evicted.agentId),
         {
           revision: evicted.revision,
           previousDigest: evicted.previousDigest,
@@ -159,13 +156,7 @@ export function markSessionObserverRunSuperseded(
 ): void {
   runs.delete(runId);
   runs.set(runId, observedAt);
-  while (runs.size > MAX_SUPERSEDED_RUNS) {
-    const oldest = runs.keys().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    runs.delete(oldest);
-  }
+  pruneMapToMaxSize(runs, MAX_SUPERSEDED_RUNS);
 }
 
 export function createDormantSessionObserverRun(
@@ -218,21 +209,14 @@ export type SessionObserverDeps = {
   clearTimeoutFn?: typeof clearTimeout;
 };
 
-let completionRuntimePromise:
-  | Promise<typeof import("../agents/simple-completion-runtime.js")>
-  | undefined;
-
-function loadCompletionRuntime() {
-  completionRuntimePromise ??= import("../agents/simple-completion-runtime.js");
-  return completionRuntimePromise;
-}
-
 export async function defaultPrepareModel(params: Parameters<PrepareModel>[0]) {
-  return await (await loadCompletionRuntime()).prepareSimpleCompletionModelForAgent(params);
+  const { prepareUtilityCompletionForAgent } = await import("../agents/utility-completion.js");
+  return await prepareUtilityCompletionForAgent(params);
 }
 
 export async function defaultCompleteModel(params: Parameters<CompleteModel>[0]) {
-  return await (await loadCompletionRuntime()).completeWithPreparedSimpleCompletionModel(params);
+  const { runIsolatedCompletion } = await import("../agents/isolated-completion.js");
+  return await runIsolatedCompletion(params);
 }
 
 export const SESSION_OBSERVER_SYSTEM_PROMPT = [
@@ -241,7 +225,7 @@ export const SESSION_OBSERVER_SYSTEM_PROMPT = [
   "Do not transcribe the activity log. Summarize what it is doing and how it is going.",
   "Use American English and present tense. Do not use markdown in string values.",
   'Set health to exactly one of "on-track", "grinding", "stuck", "waiting-on-user", "wrapping-up", "done", or "failed".',
-  'Return strict JSON only, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
+  'Return one raw JSON object only, without Markdown fences or surrounding text, for example: {"headline":"Checking the fix","assessment":"Tests are passing.","health":"on-track","planProgress":{"completed":2,"total":3}}. Omit optional fields instead of setting them to null.',
 ].join(" ");
 
 const ModelDigestSchema = z
@@ -277,14 +261,13 @@ export async function defaultPersistDigest(params: {
   digest: SessionObserverDigest;
   stillCurrent?: () => boolean;
 }): Promise<boolean | null> {
-  let missingEntry = false;
-  const result = await patchSessionEntry(
+  // No fallbackEntry is supplied, so the accessor returns null only when the
+  // row is gone (→ null) and a truthy clone on rejection — track acceptance
+  // separately since the result alone can't distinguish the three states.
+  let applied = false;
+  const result = await patchSessionEntryCore(
     { sessionKey: params.sessionKey, agentId: params.agentId },
-    (entry, context) => {
-      if (!context.existingEntry) {
-        missingEntry = true;
-        return null;
-      }
+    (entry) => {
       if (params.stillCurrent?.() === false) {
         return null;
       }
@@ -294,20 +277,12 @@ export async function defaultPersistDigest(params: {
       if ((entry.observerDigest?.revision ?? 0) >= params.digest.revision) {
         return null;
       }
+      applied = true;
       return { observerDigest: params.digest };
     },
     { preserveActivity: true },
   );
-  if (result) {
-    return true;
-  }
-  return missingEntry ? null : false;
-}
-
-export function isTerminalLifecycleEvent(event: AgentEventPayload): boolean {
-  return (
-    event.stream === "lifecycle" && (event.data.phase === "end" || event.data.phase === "error")
-  );
+  return result === null ? null : applied;
 }
 
 export async function synthesizeSessionObserverTerminalDigest(params: {
@@ -347,6 +322,13 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
   }
   const sessionId =
     params.source.state?.sessionId ?? params.dormant?.sessionId ?? session?.sessionId;
+  const terminalReply = params.source.event
+    ? normalizeAgentRunTerminalReplySnapshot(params.source.event.data.terminalReply)
+    : params.source.state?.terminalReply;
+  const terminalHeadline =
+    terminalReply?.disposition === "visible"
+      ? sanitizeSessionObserverModelText(terminalReply.text, HEADLINE_MAX_CHARS)
+      : undefined;
   const persistBounded = async (candidate: SessionObserverDigest): Promise<boolean> => {
     let lastError: unknown;
     for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -384,6 +366,7 @@ export async function synthesizeSessionObserverTerminalDigest(params: {
     agentId,
     runId,
     health,
+    ...(terminalHeadline ? { headline: terminalHeadline } : {}),
     revision: previous.revision + 1,
     updatedAt: params.now(),
   };

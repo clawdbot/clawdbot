@@ -15,11 +15,14 @@ import {
   collectAllLiveTestFiles,
   parseLiveShardArgs,
   removeLiveShardReportFile,
+  resolveLiveShardBuildEntrypoint,
+  resolveLiveShardBuildProfile,
   resolveLiveShardPreparation,
   selectLiveShardFiles,
   validateLiveShardReportPayload,
-} from "../../scripts/test-live-shard.mjs";
+} from "../../scripts/test-live-shard.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
+import { waitForPidFile } from "../helpers/process-wait.js";
 
 describe("scripts/test-live-shard", () => {
   const allFiles = collectAllLiveTestFiles();
@@ -84,70 +87,65 @@ describe("scripts/test-live-shard", () => {
     );
   });
 
-  it("keeps slow gateway backend and media-capable extension files in their own shards", () => {
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+  it("routes fixture files across alphabet boundaries and dedicated slow shards", () => {
+    const expectedByShard = {
+      "native-live-src-agents": [
+        "src/agents/zai.live.test.ts",
+        "src/llm/providers/stream-wrappers/anthropic-family-tool-payload-compat.live.test.ts",
+        "src/skills/workshop/experience-review.live.test.ts",
+      ],
+      "native-live-src-agents-zai-coding": ["src/agents/zai.live.test.ts"],
+      "native-live-src-gateway-backends": [
+        "src/gateway/gateway-acp-bind.live.test.ts",
+        "src/gateway/gateway-cli-backend.live.test.ts",
+        "src/gateway/gateway-codex-bind.live.test.ts",
+        "src/gateway/gateway-codex-harness.live.test.ts",
+      ],
+      "native-live-src-gateway-profiles": [
+        "src/gateway/gateway-models.profiles.live.test.ts",
+        "src/gateway/gateway-openai-long-context.live.test.ts",
+      ],
+      "native-live-src-gateway-core": [
+        "src/gateway/fixture.live.test.ts",
+        "src/system-agent/fixture.live.test.ts",
+      ],
+      "native-live-src-infra": ["src/infra/fixture.live.test.ts"],
+      "native-live-test": ["test/fixture.live.test.ts"],
+      "native-live-extensions-a-k": [
+        "extensions/a-provider/model.live.test.ts",
+        "extensions/k-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-l-n": [
+        "extensions/l-provider/model.live.test.ts",
+        "extensions/n-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-moonshot": ["extensions/moonshot/moonshot.live.test.ts"],
+      "native-live-extensions-openai": ["extensions/openai/openai.live.test.ts"],
+      "native-live-extensions-o-z-other": [
+        "extensions/o-provider/model.live.test.ts",
+        "extensions/z-provider/model.live.test.ts",
+      ],
+      "native-live-extensions-xai": ["extensions/xai/xai.live.test.ts"],
+      "native-live-extensions-media": [
+        "extensions/minimax/minimax.live.test.ts",
+        "extensions/music-generation-providers.live.test.ts",
+        "extensions/openai/openai-tts.live.test.ts",
+        "extensions/tts-local-cli/speech-provider.live.test.ts",
+        "extensions/video-generation-providers.live.test.ts",
+        "extensions/volcengine/tts.live.test.ts",
+        "extensions/vydra/vydra.live.test.ts",
+      ],
+    };
+    const files = [...new Set(Object.values(expectedByShard).flat())].toSorted((a, b) =>
+      a.localeCompare(b),
     );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/skills/workshop/experience-review.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents", allFiles)).toContain(
-      "src/agents/zai.live.test.ts",
-    );
-    expect(selectLiveShardFiles("native-live-src-agents-zai-coding", allFiles)).toEqual([
-      "src/agents/zai.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-backends", allFiles)).toEqual([
-      "src/gateway/gateway-acp-bind.live.test.ts",
-      "src/gateway/gateway-cli-backend.live.test.ts",
-      "src/gateway/gateway-codex-bind.live.test.ts",
-      "src/gateway/gateway-codex-harness.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-gateway-core", allFiles)).toEqual([
-      "src/gateway/android-node.capabilities.live.test.ts",
-      "src/gateway/gateway-acp-spawn-defaults.live.test.ts",
-      "src/gateway/gateway-trajectory-export.live.test.ts",
-      "src/system-agent/rescue-channel.live.test.ts",
-      "src/system-agent/setup-app-recommendations.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-src-infra", allFiles)).toEqual([
-      "src/infra/push-apns-http2.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-test", allFiles)).toEqual([
-      "test/image-generation.infer-cli.live.test.ts",
-      "test/image-generation.runtime.live.test.ts",
-      "test/openai-onboarding.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-media", allFiles)).toEqual([
-      "extensions/minimax/minimax.live.test.ts",
-      "extensions/music-generation-providers.live.test.ts",
-      "extensions/openai/openai-tts.live.test.ts",
-      "extensions/video-generation-providers.live.test.ts",
-      "extensions/volcengine/tts.live.test.ts",
-      "extensions/vydra/vydra.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-openai", allFiles)).toEqual([
-      "extensions/openai/openai-provider.live.test.ts",
-      "extensions/openai/openai.live.test.ts",
-      "extensions/openai/realtime-quicksilver-gateway-bridge.live.test.ts",
-      "extensions/openai/realtime-quicksilver.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-l-n", allFiles)).toEqual([
-      "extensions/memory-lancedb/memory-lancedb.live.test.ts",
-      "extensions/meta/meta.live.test.ts",
-      "extensions/microsoft/microsoft.live.test.ts",
-      "extensions/mistral/mistral.live.test.ts",
-    ]);
-    expect(selectLiveShardFiles("native-live-extensions-moonshot", allFiles)).toEqual([
-      "extensions/moonshot/moonshot.live.test.ts",
-    ]);
-  });
 
-  it("keeps the Codex CLI backend live smoke on a minimal tool profile", () => {
-    const source = readFileSync("src/gateway/gateway-cli-backend.live.test.ts", "utf8");
-
-    expect(source).toContain('providerId === "codex-cli" && !schemaProbePluginPath');
-    expect(source).toContain('profile: "minimal" as const');
+    for (const [shard, expectedFiles] of Object.entries(expectedByShard)) {
+      expect(selectLiveShardFiles(shard, files), shard).toEqual(expectedFiles);
+    }
+    expect(selectLiveShardFiles("native-live-extensions-media-audio", allFiles)).toContain(
+      "extensions/tts-local-cli/speech-provider.live.test.ts",
+    );
   });
 
   it("rejects unknown shard names", () => {
@@ -235,6 +233,76 @@ describe("scripts/test-live-shard", () => {
       resolveLiveShardPreparation(selectLiveShardFiles("native-live-extensions-xai", allFiles)),
     ).toBeNull();
   });
+
+  it("prepares gateway profile shards with observable source-runtime diagnostics", () => {
+    const preparation = resolveLiveShardPreparation(
+      selectLiveShardFiles("native-live-src-gateway-profiles", allFiles),
+    );
+
+    expect(preparation).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+      runtimeEnv: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      },
+    });
+  });
+
+  it.each(["native-live-src-gateway-core", "native-live-src-gateway-backends"])(
+    "prepares the source gateway runtime before %s starts Vitest",
+    (shard) => {
+      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
+        env: {},
+        profile: "sourcePerformance",
+        requiredArtifact: "dist/.runtime-postbuildstamp",
+      });
+    },
+  );
+
+  it("prepares system-agent gateway tests without building unrelated source shards", () => {
+    expect(resolveLiveShardPreparation(["src/system-agent/rescue-channel.live.test.ts"])).toEqual({
+      env: {},
+      profile: "sourcePerformance",
+      requiredArtifact: "dist/.runtime-postbuildstamp",
+    });
+    expect(
+      resolveLiveShardPreparation(selectLiveShardFiles("native-live-src-infra", allFiles)),
+    ).toBeNull();
+  });
+
+  it("runs the frozen candidate's available build entrypoint and advertised profile", () => {
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mts")).toEqual([
+      "--import",
+      "tsx",
+      "scripts/build-all.mts",
+    ]);
+    expect(resolveLiveShardBuildEntrypoint((file) => file === "scripts/build-all.mjs")).toEqual([
+      "scripts/build-all.mjs",
+    ]);
+    expect(() => resolveLiveShardBuildEntrypoint(() => false)).toThrow(
+      "Live test shard cannot find scripts/build-all.{mts,mjs}",
+    );
+    expect(
+      resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n  sourcePerformance\n"),
+    ).toBe("sourcePerformance");
+    expect(resolveLiveShardBuildProfile("sourcePerformance", "Profiles:\n  full\n")).toBe("full");
+  });
+
+  it.each(["native-live-src-agents", "native-live-extensions-openai"])(
+    "prepares executable runtime artifacts before %s exercises live vision",
+    (shard) => {
+      expect(resolveLiveShardPreparation(selectLiveShardFiles(shard, allFiles))).toEqual({
+        env: {},
+        profile: "sourcePerformance",
+        requiredArtifact: "dist/.runtime-postbuildstamp",
+      });
+    },
+  );
 
   it("fails live shard reports with no passing tests", () => {
     expect(validateLiveShardReportPayload({ numPassedTests: 1, numTotalTests: 3 })).toEqual({
@@ -389,8 +457,47 @@ describe("scripts/test-live-shard", () => {
     });
   });
 
-  it("allows the experience review live file to be skipped until its env is enabled", () => {
-    const reviewFile = "src/skills/workshop/experience-review.live.test.ts";
+  it("allows the OpenAI long-context live file to be skipped until its env is enabled", () => {
+    const profilesFile = "src/gateway/gateway-models.profiles.live.test.ts";
+    const longContextFile = "src/gateway/gateway-openai-long-context.live.test.ts";
+    const payload = {
+      numPassedTests: 1,
+      numTotalTests: 2,
+      testResults: [
+        {
+          name: path.join(process.cwd(), profilesFile),
+          assertionResults: [{ status: "passed" }],
+        },
+        {
+          name: path.join(process.cwd(), longContextFile),
+          assertionResults: [{ status: "skipped" }],
+        },
+      ],
+    };
+    const expectedFiles = [profilesFile, longContextFile];
+
+    expect(validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {})).toEqual({
+      ok: true,
+    });
+    expect(
+      validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
+        OPENCLAW_LIVE_OPENAI_LONG_CONTEXT: "1",
+      }),
+    ).toEqual({
+      ok: false,
+      reason: `Vitest report selected live test files had no passing assertions: ${longContextFile}`,
+    });
+  });
+
+  it.each([
+    ["src/skills/workshop/experience-review.live.test.ts", "OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW"],
+    ["src/agents/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    ["src/agents/subagents/announce/subagent-announce.live.test.ts", "OPENCLAW_LIVE_SUBAGENT_E2E"],
+    [
+      "src/agents/sessions/agent-session.openai-compaction.live.test.ts",
+      "OPENCLAW_LIVE_OPENAI_COMPACTION",
+    ],
+  ])("respects explicit opt-in and pass evidence for %s", (reviewFile, optInEnv) => {
     const payload = {
       numPassedTests: 1,
       numTotalTests: 2,
@@ -412,12 +519,25 @@ describe("scripts/test-live-shard", () => {
     });
     expect(
       validateLiveShardReportPayload(payload, expectedFiles, process.cwd(), {
-        OPENCLAW_LIVE_SKILL_EXPERIENCE_REVIEW: "1",
+        [optInEnv]: "1",
       }),
     ).toEqual({
       ok: false,
       reason: `Vitest report selected live test files had no passing assertions: ${reviewFile}`,
     });
+    const passingPayload = {
+      ...payload,
+      numPassedTests: 2,
+      testResults: payload.testResults.map((result) => ({
+        ...result,
+        assertionResults: [{ status: "passed" }],
+      })),
+    };
+    expect(
+      validateLiveShardReportPayload(passingPayload, expectedFiles, process.cwd(), {
+        [optInEnv]: "1",
+      }),
+    ).toEqual({ ok: true });
   });
 
   it("allows GPT-Live files to be skipped until their shared opt-in is enabled", () => {
@@ -518,6 +638,26 @@ describe("scripts/test-live-shard", () => {
       env: { PATH: "/usr/bin" },
       stdio: "inherit",
     });
+    expect(
+      buildLiveShardSpawnParams({ OPENCLAW_LOG_LEVEL: "warn", PATH: "/usr/bin" }, "darwin", {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+      }),
+    ).toEqual({
+      detached: true,
+      env: {
+        OPENCLAW_DISABLE_BONJOUR: "1",
+        OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
+        OPENCLAW_LIVE_TEST_QUIET: "0",
+        OPENCLAW_LOG_LEVEL: "info",
+        OPENCLAW_PLUGIN_LIFECYCLE_TRACE: "1",
+        PATH: "/usr/bin",
+      },
+      stdio: "inherit",
+    });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -534,33 +674,28 @@ describe("scripts/test-live-shard", () => {
 
       try {
         writeFakePnpm(fakePnpmPath);
-        runner = spawn(
-          process.execPath,
-          ["scripts/test-live-shard.mjs", "native-live-src-agents"],
-          {
-            env: {
-              ...process.env,
-              OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
-              OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
-              OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
-              npm_execpath: fakePnpmPath,
-            },
-            stdio: "ignore",
+        runner = spawn(process.execPath, ["scripts/test-live-shard.mjs", "native-live-src-infra"], {
+          env: {
+            ...process.env,
+            OPENCLAW_FAKE_PNPM_DESCENDANT_PID_PATH: descendantPidPath,
+            OPENCLAW_FAKE_PNPM_PID_PATH: childPidPath,
+            OPENCLAW_FAKE_PNPM_SIGNALED_PATH: signaledPath,
+            npm_execpath: fakePnpmPath,
           },
-        );
+          stdio: "ignore",
+        });
 
-        await waitFor(() => existsSync(childPidPath), 5_000);
-        await waitFor(() => existsSync(descendantPidPath), 5_000);
-        childPid = Number(readFileSync(childPidPath, "utf8"));
-        descendantPid = Number(readFileSync(descendantPidPath, "utf8"));
-        expect(Number.isInteger(childPid)).toBe(true);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        childPid = await waitForPidFile(childPidPath, 5_000);
+        descendantPid = await waitForPidFile(descendantPidPath, 5_000);
 
         runner.kill("SIGTERM");
 
         await expect(waitForClose(runner)).resolves.toEqual({ code: null, signal: "SIGTERM" });
-        await waitFor(() => existsSync(signaledPath), 5_000);
-        expect(readFileSync(signaledPath, "utf8")).toBe("SIGTERM");
+        // Creation precedes the synchronous write; wait for the signal receipt itself.
+        await waitFor(
+          () => existsSync(signaledPath) && readFileSync(signaledPath, "utf8") === "SIGTERM",
+          5_000,
+        );
         await waitFor(() => !isProcessAlive(childPid), 5_000);
         await waitFor(() => !isProcessAlive(descendantPid), 5_000);
       } finally {

@@ -8,6 +8,7 @@ type TestApi = {
     store: Record<string, SessionEntry>;
     now?: number;
     blockedModelIdentities?: ReadonlySet<LegacyCodexModelIdentity>;
+    authProfileIdMap?: ReadonlyMap<string, string>;
   }): SessionRouteRepairResult;
 };
 

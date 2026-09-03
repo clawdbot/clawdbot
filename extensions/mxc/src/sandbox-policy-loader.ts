@@ -1,5 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { win32 } from "node:path";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { z } from "zod";
 import {
   DEFAULT_SANDBOX_BASELINE,
@@ -278,7 +279,7 @@ function assertConfiguredPathExists(pathValue: string, source: string): void {
         );
       }
       throw new Error(
-        `Sandbox policy path ${pathValue} configured by ${source} is not accessible on the host: ${formatError(err)}`,
+        `Sandbox policy path ${pathValue} configured by ${source} is not accessible on the host: ${formatErrorMessage(err)}`,
         { cause: err },
       );
     }
@@ -306,9 +307,12 @@ function policyFileError(policyPath: string, err: unknown): Error {
       { cause: err },
     );
   }
-  return new Error(`Failed to load sandbox policy file at ${policyPath}: ${formatError(err)}`, {
-    cause: err instanceof Error ? err : undefined,
-  });
+  return new Error(
+    `Failed to load sandbox policy file at ${policyPath}: ${formatErrorMessage(err)}`,
+    {
+      cause: err instanceof Error ? err : undefined,
+    },
+  );
 }
 
 function formatSandboxPolicyIssue(sourceLabel: string, issue: z.ZodIssue | undefined): string {
@@ -345,13 +349,6 @@ function formatIssuePath(pathSegments: readonly PropertyKey[]): string {
     label += `.${String(segment)}`;
   }
   return label;
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error && err.message) {
-    return err.message;
-  }
-  return String(err);
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {

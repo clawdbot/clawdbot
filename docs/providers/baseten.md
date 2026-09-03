@@ -40,7 +40,7 @@ openclaw onboard --auth-choice baseten-api-key
 ```
 
 ```bash Direct flag
-openclaw onboard --non-interactive \
+openclaw onboard --non-interactive --accept-risk --skip-health \
   --auth-choice baseten-api-key \
   --baseten-api-key "$BASETEN_API_KEY"
 ```
@@ -76,7 +76,7 @@ export BASETEN_API_KEY=...
 }
 ```
 
-Use `/model baseten/thinkingmachines/inkling` to switch an existing chat.
+Use `/model baseten/thinkingmachines/inkling -s` to switch the current session.
 
 ## Bundled fallback catalog
 
@@ -110,7 +110,7 @@ Most setups only need the API key. To pin the provider explicitly:
 
 ```json5
 {
-  env: { BASETEN_API_KEY: "..." },
+  env: { vars: { BASETEN_API_KEY: "..." } },
   agents: {
     defaults: {
       model: { primary: "baseten/thinkingmachines/inkling" },

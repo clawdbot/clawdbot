@@ -1,3 +1,4 @@
+import "../../styles/chat/workboard-card-chip.css";
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -12,6 +13,7 @@ import {
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 
 class WorkboardCardChip extends OpenClawLightDomElement {
+  @property({ type: Boolean }) active = true;
   @property({ attribute: false }) basePath = "";
   @property({ attribute: false }) client: GatewayBrowserClient | null = null;
   @property({ attribute: false }) sessionKey = "";
@@ -40,7 +42,7 @@ class WorkboardCardChip extends OpenClawLightDomElement {
   private synchronizeLookup(): void {
     const client = this.client;
     const sessionKey = this.sessionKey.trim();
-    if (!client || !sessionKey) {
+    if (!this.active || !client || !sessionKey) {
       this.releaseLookup();
       return;
     }
@@ -74,7 +76,7 @@ class WorkboardCardChip extends OpenClawLightDomElement {
 
   override render() {
     const match = this.match;
-    if (!match) {
+    if (!this.active || !match) {
       return nothing;
     }
     const status = t(`workboard.status.${match.status}`);

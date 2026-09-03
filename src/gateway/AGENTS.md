@@ -22,6 +22,20 @@ runtime when they only need plugin-owned static descriptors.
   unless the test is specifically proving automatic scheduling or lifecycle
   behavior.
 
+## Run Authority And Worker Upgrades
+
+- `src/infra/agent-run-registry.ts` owns run liveness. `src/gateway/worker-environments/placement-turn-claims.ts` owns worker-turn liveness. Validate both at use time; HMAC verification, TTL, and matching identifiers do not establish live authority.
+- For durable effects after awaited work, compose every applicable live-authority assertion into the owning synchronous pre-commit guard; rechecking only after the mutation returns is too late.
+- Sessionless runs retain prepared admission authority without inventing session projection. Canonical idempotency reservation owns deduplication; abort-map binding occurs only for registered projected runs.
+- Worker launch, recovery, reclaim, and RPC use require an exact live placement, environment, owner epoch, placement generation, and turn claim.
+- The current worker execution-context dialect is an upgrade boundary. Reject incompatible workers and reprovision them; do not emit legacy payloads, locally downgrade execution, or revive pre-restart claims.
+
+## Approval Identity Persistence
+
+- The approval store may lazily create its additive execution-identity companion table only when writing a valid bound identity.
+- Identity rows record provenance only. Authorization and decision consumption must use the parent approval and current live authority, never the companion row.
+- Preserve schema version and older-reader tolerance. Changes to this surface require enabled, disabled, integrity, downgrade, and candidate-reopen proof.
+
 ## Verification
 
 - Benchmark the affected Gateway test file before/after with

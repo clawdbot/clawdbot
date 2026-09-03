@@ -2,6 +2,8 @@
 import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
+  oversizedJsonResponse,
+  streamedJsonResponse,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
@@ -56,18 +58,6 @@ function pollFetchHeaders(callIndex: number): Headers | undefined {
   return (init as { headers?: Headers } | undefined)?.headers;
 }
 
-function streamedJsonResponse(payload: unknown): Response {
-  return new Response(
-    new ReadableStream({
-      start(controller) {
-        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
-        controller.close();
-      },
-    }),
-    { headers: { "content-type": "application/json" } },
-  );
-}
-
 function mockPixVerseVideoSubmit(videoId = 123) {
   postJsonRequestMock.mockResolvedValue({
     response: streamedJsonResponse({
@@ -105,37 +95,6 @@ function mockPixVerseVideoTask(
     }),
     headers: new Headers(),
   });
-}
-
-// Drives an unbounded JSON body (>16 MiB, no Content-Length) so the bounded
-// reader has to cancel the stream instead of buffering it all. A hard ceiling
-// guards the test from hanging if the reader ever fails to cancel.
-function oversizedJsonResponse(): {
-  response: Response;
-  state: { canceled: boolean; enqueuedBytes: number };
-} {
-  const state = { canceled: false, enqueuedBytes: 0 };
-  const chunk = 1024 * 1024;
-  const maxChunks = 64; // 64 MiB ceiling, 4x the 16 MiB cap.
-  let emitted = 0;
-  const response = new Response(
-    new ReadableStream({
-      pull(controller) {
-        if (emitted >= maxChunks) {
-          controller.close();
-          return;
-        }
-        emitted += 1;
-        state.enqueuedBytes += chunk;
-        controller.enqueue(new Uint8Array(chunk));
-      },
-      cancel() {
-        state.canceled = true;
-      },
-    }),
-    { headers: { "content-type": "application/json" } },
-  );
-  return { response, state };
 }
 
 describe("pixverse video generation provider", () => {

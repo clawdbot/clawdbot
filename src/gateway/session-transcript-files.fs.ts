@@ -12,12 +12,15 @@ import {
 } from "../config/sessions/artifacts.js";
 import { extractGeneratedTranscriptSessionId } from "../config/sessions/generated-transcript-session-id.js";
 import {
-  resolveSessionFilePath,
+  resolveSessionFilePathCore,
   resolveSessionTranscriptPath,
   resolveSessionTranscriptPathInDir,
 } from "../config/sessions/paths.js";
+import { resolveRealpathOrAbsolute as canonicalizePathForComparison } from "../infra/boundary-path.js";
+import { hasErrnoCode } from "../infra/errors.js";
 import { readFileWindowFully } from "../infra/file-read.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
 type ArchiveFileReason = SessionArchiveReason;
@@ -53,15 +56,6 @@ function classifySessionTranscriptCandidate(
   return transcriptSessionId === sessionId ? "current" : "stale";
 }
 
-function canonicalizePathForComparison(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  try {
-    return fs.realpathSync(resolved);
-  } catch {
-    return resolved;
-  }
-}
-
 export function resolveSessionTranscriptCandidates(
   sessionId: string,
   storePath: string | undefined,
@@ -82,19 +76,19 @@ export function resolveSessionTranscriptCandidates(
     const sessionsDir = path.dirname(storePath);
     if (sessionFile && sessionFileState !== "stale") {
       pushCandidate(() =>
-        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
     pushCandidate(() => resolveSessionTranscriptPathInDir(sessionId, sessionsDir));
     if (sessionFile && sessionFileState === "stale") {
       pushCandidate(() =>
-        resolveSessionFilePath(sessionId, { sessionFile }, { sessionsDir, agentId }),
+        resolveSessionFilePathCore(sessionId, { sessionFile }, { sessionsDir, agentId }),
       );
     }
   } else if (sessionFile) {
     if (agentId) {
       if (sessionFileState !== "stale") {
-        pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+        pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
       }
     } else {
       const trimmed = sessionFile.trim();
@@ -107,7 +101,7 @@ export function resolveSessionTranscriptCandidates(
   if (agentId) {
     pushCandidate(() => resolveSessionTranscriptPath(sessionId, agentId));
     if (sessionFile && sessionFileState === "stale") {
-      pushCandidate(() => resolveSessionFilePath(sessionId, { sessionFile }, { agentId }));
+      pushCandidate(() => resolveSessionFilePathCore(sessionId, { sessionFile }, { agentId }));
     }
   }
 
@@ -211,9 +205,7 @@ async function listResetArchiveCandidatesForTranscriptAsync(
     dirSize: dirStat.size,
     archives: boundedArchives,
   });
-  if (resetArchiveDiscoveryCache.size > MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES) {
-    resetArchiveDiscoveryCache.delete(resetArchiveDiscoveryCache.keys().next().value ?? "");
-  }
+  pruneMapToMaxSize(resetArchiveDiscoveryCache, MAX_RESET_ARCHIVE_DISCOVERY_CACHE_ENTRIES);
   return boundedArchives;
 }
 
@@ -443,9 +435,19 @@ type SessionArchiveCleanupRule = {
   olderThanMs: number;
 };
 
-// Store maintenance runs this on every session-store save. All retention rules
-// share one directory listing: a listing per reason would multiply READDIR
-// load on the per-save hot path, which is expensive on networked filesystems.
+async function ignoreMissingArchivePath<T>(operation: () => Promise<T>, fallback: T): Promise<T> {
+  try {
+    return await operation();
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return fallback;
+    }
+    throw error;
+  }
+}
+
+// Archive-retention sweeps share one directory listing across all rules. A
+// listing per reason would multiply READDIR load on networked filesystems.
 export async function cleanupArchivedSessionTranscripts(opts: {
   directories: string[];
   rules: SessionArchiveCleanupRule[];
@@ -463,7 +465,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   let scanned = 0;
 
   for (const dir of directories) {
-    const entries = await fs.promises.readdir(dir).catch(() => []);
+    const entries = await ignoreMissingArchivePath(() => fs.promises.readdir(dir), []);
     for (const entry of entries) {
       for (const rule of rules) {
         const timestamp = parseSessionArchiveTimestamp(entry, rule.reason);
@@ -473,10 +475,15 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
           const fullPath = path.join(dir, entry);
-          const stat = await fs.promises.stat(fullPath).catch(() => null);
+          const stat = await ignoreMissingArchivePath(() => fs.promises.stat(fullPath), null);
           if (stat?.isFile()) {
-            await fs.promises.rm(fullPath).catch(() => undefined);
-            removed += 1;
+            const removedFile = await ignoreMissingArchivePath(async () => {
+              await fs.promises.rm(fullPath);
+              return true;
+            }, false);
+            if (removedFile) {
+              removed += 1;
+            }
           }
         }
         // An archive name carries exactly one `.{reason}.{timestamp}` suffix,

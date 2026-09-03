@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchDiscordApplicationId,
   fetchDiscordApplicationSummary,
+  probeDiscordApplicationId,
   probeDiscord,
   resolveDiscordPrivilegedIntentsFromFlags,
 } from "./probe.js";
@@ -166,6 +167,45 @@ describe("resolveDiscordPrivilegedIntentsFromFlags", () => {
 
     await expect(lookup).resolves.toBe("app-1");
     expect(calls).toBe(2);
+  });
+
+  it.each([
+    { status: 401, kind: "rejected" },
+    { status: 403, kind: "rejected" },
+    { status: 503, kind: "unavailable" },
+  ] as const)("classifies application id HTTP $status as $kind", async ({ status, kind }) => {
+    vi.useFakeTimers();
+    try {
+      const fetcher = withFetchPreconnect(
+        async () =>
+          new Response(JSON.stringify({ message: "probe failed" }), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+      );
+      const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+      await vi.runAllTimersAsync();
+
+      await expect(probe).resolves.toMatchObject({ kind, status });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("preserves application id network failure as unavailable without an HTTP status", async () => {
+    vi.useFakeTimers();
+    try {
+      const error = new Error("fetch failed");
+      const fetcher = withFetchPreconnect(async () => {
+        throw error;
+      });
+      const probe = probeDiscordApplicationId("unparseable.token", 1_000, fetcher);
+      await vi.runAllTimersAsync();
+
+      await expect(probe).resolves.toEqual({ kind: "unavailable", status: null, error });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not retry Cloudflare HTML rate limits during application summary probes", async () => {

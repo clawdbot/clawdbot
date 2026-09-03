@@ -5,7 +5,7 @@ import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
 } from "../../infra/diagnostic-events.js";
-import { resetDiagnosticStateForTest } from "../../logging/diagnostic.js";
+import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
 
 vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => false),
@@ -229,6 +229,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
             provider: "test-provider",
             model: "test-model",
             usage: { input: 50, output: 100, cacheRead: 7, cacheWrite: 3, total: 55 },
+            diagnosticUsage: {
+              input: 150,
+              output: 200,
+              cacheRead: 17,
+              cacheWrite: 13,
+              total: 380,
+            },
             lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
           },
         },
@@ -237,8 +244,9 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       model: "fallback-model",
     });
 
+    let result: Awaited<ReturnType<typeof runCronIsolatedAgentTurn>> | undefined;
     try {
-      const result = await runCronIsolatedAgentTurn(makeParams());
+      result = await runCronIsolatedAgentTurn(makeParams());
       expect(result.status).toBe("ok");
     } finally {
       unsubscribe();
@@ -254,18 +262,25 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       provider: "test-provider",
       model: "test-model",
       usage: {
-        input: 50,
-        output: 100,
-        cacheRead: 7,
-        cacheWrite: 3,
-        promptTokens: 60,
-        total: 160,
+        input: 150,
+        output: 200,
+        cacheRead: 17,
+        cacheWrite: 13,
+        promptTokens: 180,
+        total: 380,
       },
       lastCallUsage: { input: 40, output: 5, cacheRead: 6, cacheWrite: 4 },
       context: { limit: 128000, used: 50 },
     });
     expect(usageEvents[0]?.durationMs).toEqual(expect.any(Number));
     expect(usageEvents[0]?.durationMs).toBeGreaterThanOrEqual(0);
+    expect(result?.usage).toEqual({
+      input_tokens: 50,
+      output_tokens: 100,
+      total_tokens: 160,
+      cache_read_tokens: 7,
+      cache_write_tokens: 3,
+    });
   });
 
   it("does not emit model.usage when diagnostics are disabled", async () => {
@@ -337,7 +352,20 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
     });
   });
 
-  it("preserves total-only model usage in cron diagnostics", async () => {
+  it.each([
+    { name: "total-only model usage", usage: { total: 42 }, expectedTotal: 42, cost: undefined },
+    {
+      name: "cost-only positive total",
+      usage: { cost: { total: 0.25 } },
+      expectedTotal: 0,
+      cost: 0.25,
+    },
+    { name: "cost-only zero total", usage: { cost: { total: 0 } }, expectedTotal: 0, cost: 0 },
+  ])("preserves $name in cron diagnostics", async ({ usage, expectedTotal, cost }) => {
+    const cronSession = makeCronSession({
+      sessionEntry: makeCronSessionEntry({ estimatedCostUsd: 1.25 }),
+    });
+    resolveCronSessionMock.mockReturnValue(cronSession);
     const usageEvents: Array<{
       type: string;
       usage?: { input?: number; output?: number; promptTokens?: number; total?: number };
@@ -354,7 +382,7 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
         payloads: [{ text: "test output" }],
         meta: {
           agentMeta: {
-            usage: { total: 42 },
+            usage,
           },
         },
       },
@@ -374,8 +402,21 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       input: 0,
       output: 0,
       promptTokens: 0,
-      total: 42,
+      total: expectedTotal,
     });
-    expect(usageEvents[0]?.costUsd).toBeUndefined();
+    expect(usageEvents[0]?.costUsd).toBe(cost);
+    if (cost !== undefined) {
+      expect(cronSession.sessionEntry.estimatedCostUsd).toBe(cost);
+      for (const key of [
+        "inputTokens",
+        "outputTokens",
+        "cacheRead",
+        "cacheWrite",
+        "totalTokens",
+      ] as const) {
+        expect(cronSession.sessionEntry[key]).toBeUndefined();
+      }
+      expect(cronSession.sessionEntry.totalTokensFresh).not.toBe(true);
+    }
   });
 });

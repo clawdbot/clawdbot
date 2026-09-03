@@ -1,0 +1,26 @@
+title: Agent sandboxed exec behavior
+
+scenario:
+  id: agent-sandboxed-exec-behavior
+  surface: runtime-tools
+  coverage:
+    primary:
+      - agent-runtime.sandboxed-exec-behavior
+  objective: Verify host:auto executes through the real Docker sandbox selected for an agent attempt.
+  successCriteria:
+    - The attempt-level resolver provisions a real session-scoped Docker sandbox.
+    - The public coding-tool surface routes exec host:auto into that sandbox.
+    - The command observes Docker and the /workspace mount and persists a workspace marker.
+    - A host executable outside the workspace remains inaccessible and is never executed.
+    - The sandbox runtime and isolated state are removed after the proof.
+  docsRefs:
+    - docs/gateway/sandboxing.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/attempt-setup.ts
+    - src/agents/agent-tools.ts
+    - src/agents/bash-tools.exec-run.ts
+    - test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts
+  execution:
+    kind: vitest
+    path: test/e2e/qa-lab/runtime/agent-sandboxed-exec-behavior.e2e.test.ts
+    summary: Provision Docker, construct agent tools, and execute a host:auto command across the sandbox boundary.

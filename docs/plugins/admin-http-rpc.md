@@ -102,7 +102,7 @@ Treat this plugin as a full Gateway operator surface.
 - Trusted identity-bearing HTTP auth (`trusted-proxy` mode) honors `x-openclaw-scopes` when present.
 - `gateway.auth.mode="none"` means this route is unauthenticated if the plugin is enabled. Use that only behind a private ingress you fully trust.
 - Requests dispatch through the same Gateway method handlers and scope checks as WebSocket RPC, after the plugin route auth passes.
-- The route remains reachable during a prepared suspension lease. Bounded request validation and the local `commands.list` discovery response remain available. Of the methods dispatched into the Gateway, only `gateway.suspend.prepare`, `gateway.suspend.status`, and `gateway.suspend.resume` may run while admission is closed; other allowlisted methods return the normal retryable Gateway `UNAVAILABLE` response.
+- The route remains reachable during a prepared suspension lease. Bounded request validation and the local `commands.list` discovery response remain available. Of the methods dispatched into the Gateway, `gateway.suspend.prepare`, `gateway.suspend.status`, `gateway.suspend.resume`, and an exact targeted non-safe `gateway.restart.request` may run while admission is closed; safe, untargeted, and other allowlisted methods return the normal retryable Gateway `UNAVAILABLE` response.
 - Keep this route on loopback, tailnet, or a private trusted ingress. Do not expose it directly to the public internet. Use separate gateways when callers cross trust boundaries.
 
 ## Request

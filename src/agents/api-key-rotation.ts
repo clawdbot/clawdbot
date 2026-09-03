@@ -3,6 +3,7 @@
  * Runs provider calls across configured keys on rate-limit failures and keeps
  * same-key transient retries separate from key rotation.
  */
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -18,7 +19,8 @@ import { collectProviderApiKeys, isApiKeyRateLimitError } from "./live-auth-keys
 type ApiKeyRetryParams = {
   apiKey: string;
   error: unknown;
-  attempt: number;
+  attempt: number; // One-based execution count for the current key.
+  apiKeyIndex: number; // Zero-based position of the current key.
 };
 
 type ExecuteWithApiKeyRotationOptions<T> = {
@@ -58,15 +60,16 @@ export async function executeWithApiKeyRotation<T>(
   const transientRetry = resolveTransientProviderRetryOptions(params.transientRetry);
   keyLoop: for (const [apiKeyIndex, apiKey] of keys.entries()) {
     const maxOperationAttempts = resolveTransientProviderAttempts(transientRetry);
-    for (let attemptNumber = 1; attemptNumber <= maxOperationAttempts; attemptNumber += 1) {
+    for (let attempt = 1; attempt <= maxOperationAttempts; attempt += 1) {
+      transientRetry?.signal?.throwIfAborted();
       try {
         return await params.execute(apiKey);
       } catch (error) {
+        transientRetry?.signal?.throwIfAborted();
         lastError = error;
         const message = formatErrorMessage(error);
-        const rotateKey = params.shouldRetry
-          ? params.shouldRetry({ apiKey, error, attempt: apiKeyIndex, message })
-          : isApiKeyRateLimitError(message);
+        const retry = { apiKey, error, attempt, apiKeyIndex, message };
+        const rotateKey = params.shouldRetry?.(retry) ?? isApiKeyRateLimitError(message);
 
         if (rotateKey) {
           // A rotation signal consumes the current key and moves to the next key
@@ -74,7 +77,7 @@ export async function executeWithApiKeyRotation<T>(
           if (apiKeyIndex + 1 >= keys.length) {
             break;
           }
-          params.onRetry?.({ apiKey, error, attempt: apiKeyIndex, message });
+          params.onRetry?.(retry);
           break;
         }
 
@@ -86,14 +89,14 @@ export async function executeWithApiKeyRotation<T>(
             message,
             provider: params.provider,
             apiKeyIndex,
-            attemptNumber,
+            attemptNumber: attempt,
             maxAttempts: maxOperationAttempts,
           })
         ) {
           break keyLoop;
         }
 
-        const delayMs = resolveTransientProviderDelayMs(transientRetry, attemptNumber);
+        const delayMs = resolveTransientProviderDelayMs(transientRetry, attempt);
         // Same-key transient retries are bounded by provider policy and keep the
         // current key stable so auth rotation only handles key-specific failures.
         const sleep = transientRetry.sleep ?? sleepWithAbort;
@@ -106,20 +109,4 @@ export async function executeWithApiKeyRotation<T>(
     throw new Error(`Failed to run API request for ${params.provider}.`);
   }
   throw toLintErrorObject(lastError, "Non-Error thrown");
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  // Preserve thrown object properties for callers/tests while still satisfying
-  // Error-only throw lint expectations.
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

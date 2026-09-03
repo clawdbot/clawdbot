@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
 import { SessionManager } from "../../agents/sessions/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -10,8 +11,8 @@ import {
 import {
   HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS,
   resolveSkillHistoryScanReviewOutcome,
-  resolveSkillHistoryScanRunFailure,
-} from "./history-scan-review-outcome.js";
+  assertSkillReviewRunSucceeded,
+} from "./review-outcome.js";
 import type { SkillWorkshopProposalReviewProgress } from "./types.js";
 
 export const HISTORY_SCAN_SESSION_SEGMENT = "skill-workshop-history-scan";
@@ -57,12 +58,19 @@ export async function runSkillHistoryScanReview(params: {
       }
     : undefined;
   const runId = params.runId ?? `${HISTORY_SCAN_SESSION_SEGMENT}:${randomUUID()}`;
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    params.config,
+    runId,
+    params.agentId,
+    "skill-workshop.history-scan",
+  );
   let runError: unknown;
   try {
     const sessionId = randomUUID();
     const sessionKey = `agent:${params.agentId}:${HISTORY_SCAN_SESSION_SEGMENT}:incognito-${sessionId}`;
     const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
     const result = await runEmbeddedAgent({
+      preparedRunAdmission,
       sessionId,
       sessionKey,
       sandboxSessionKey: sessionKey,
@@ -81,11 +89,11 @@ export async function runSkillHistoryScanReview(params: {
       provider: modelRef.provider,
       model: modelRef.model,
       // A smaller configured fallback must not receive a prompt sized for the primary model.
+      modelSelectionLocked: true,
       modelFallbacksOverride: [],
       timeoutMs: HISTORY_SCAN_TIMEOUT_MS,
       runId,
       toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
       disableTrajectory: true,
       skillWorkshopProposalOnly: true,
       skillWorkshopProposalEnv: params.env,
@@ -99,9 +107,11 @@ export async function runSkillHistoryScanReview(params: {
       reasoningLevel: "off",
       suppressToolErrorWarnings: true,
     });
-    runError = resolveSkillHistoryScanRunFailure(result);
+    assertSkillReviewRunSucceeded(result);
   } catch (error) {
     runError = error;
+  } finally {
+    preparedRunAdmission.close();
   }
   if (proposalReviewCompletion?.completed) {
     return proposalMutationBudget.completed;

@@ -8,7 +8,7 @@ import { pathToFileURL } from "node:url";
 import { collectClawHubPublishablePluginPackages } from "./lib/plugin-clawhub-release.ts";
 import { collectPublishablePluginPackages } from "./lib/plugin-npm-release.ts";
 
-const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.23.1";
+const DEFAULT_CLAWHUB_CLI_PACKAGE = "clawhub@0.23.3";
 
 type PluginReleasePretagPackTarget = {
   packageDir: string;
@@ -78,7 +78,9 @@ export function runPluginReleasePretagPackCheck(rootDir = resolve(".")) {
     runCommand(
       process.execPath,
       [
-        "scripts/check-plugin-npm-runtime-builds.mjs",
+        "--import",
+        "tsx",
+        "scripts/check-plugin-npm-runtime-builds.mts",
         ...targets.flatMap((target) => ["--package", target.packageDir]),
       ],
       {

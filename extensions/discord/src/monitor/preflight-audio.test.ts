@@ -3,9 +3,20 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const transcribeFirstAudioMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./preflight-audio.runtime.js", () => ({
-  transcribeFirstAudio: transcribeFirstAudioMock,
-}));
+vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>();
+  return {
+    ...actual,
+    createChannelPreflightAudio: (
+      params: Parameters<typeof actual.createChannelPreflightAudio>[0],
+    ) =>
+      actual.createChannelPreflightAudio({
+        ...params,
+        transcribeFirstAudio: transcribeFirstAudioMock,
+      }),
+  };
+});
 
 import { resolveDiscordPreflightAudioMentionContext } from "./preflight-audio.js";
 

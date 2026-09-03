@@ -1,5 +1,9 @@
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { Value } from "typebox/value";
+import {
+  SessionObserverDigestSchema,
+  type SessionObserverDigest,
+} from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -59,6 +63,10 @@ export type SidebarNarrationSyncInput = {
   agentId: string;
 };
 
+// TRANSITIONAL(marker-retirement): live narration strips inline markers because
+// streamed drafts still carry them mid-run; persisted data is already clean.
+// Drop the stripInlineDirectiveTagsForDisplay call when the visibleReplies
+// default flips to "message_tool".
 function normalizeSidebarNarrationText(text: string): string | null {
   const displayText = stripSuppressedControlReplyToken(
     stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
@@ -153,17 +161,21 @@ export class SidebarSessionNarrationController {
       return;
     }
 
-    const candidates = input.rows
-      .map((row, index) => ({ row, index }))
-      .filter(
-        ({ row }) =>
-          row.hasActiveRun && !areUiSessionKeysEquivalent(row.key, input.openSessionKey.trim()),
-      )
-      .toSorted(
-        (left, right) => rowRecency(right.row) - rowRecency(left.row) || left.index - right.index,
-      )
-      .slice(0, SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT);
-    const nextDesired = new Set(candidates.map(({ row }) => row.key));
+    const openSessionKey = input.openSessionKey.trim();
+    const nextDesired = new Set<string>();
+    let backgroundSubscriptions = 0;
+    for (const row of input.rows
+      .filter((candidate) => candidate.hasActiveRun)
+      .toSorted((left, right) => rowRecency(right) - rowRecency(left))) {
+      const open = areUiSessionKeysEquivalent(row.key, openSessionKey);
+      if (!open && backgroundSubscriptions >= SIDEBAR_NARRATION_SUBSCRIPTION_LIMIT) {
+        continue;
+      }
+      nextDesired.add(row.key);
+      if (!open) {
+        backgroundSubscriptions += 1;
+      }
+    }
 
     for (const key of this.desiredKeys) {
       if (nextDesired.has(key)) {
@@ -536,8 +548,11 @@ export class SidebarSessionNarrationController {
     ) {
       return;
     }
+    const digest = { ...record, runId };
+    if (!Value.Check(SessionObserverDigestSchema, digest)) {
+      return;
+    }
     this.observeRun(key, runId);
-    const digest = { ...record, runId } as unknown as SessionObserverDigest;
     const previous = this.observerDigests.get(key);
     if (previous && pickFreshestObserverDigest(previous, digest) === previous) {
       return;

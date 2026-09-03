@@ -1,15 +1,13 @@
 // Runtime bridge for plugin-provided migration hooks.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
-import {
-  withBundledPluginEnablementCompat,
-  withBundledPluginVitestCompat,
-} from "./bundled-compat.js";
+import { withBundledPluginEnablementCompat } from "./bundled-compat.js";
 import { listBundledPluginMetadata } from "./bundled-plugin-metadata.js";
+import { loadPluginRegistryHandle } from "./loader.js";
 import { resolveManifestContractRuntimePluginResolution } from "./manifest-contract-runtime.js";
+import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
-import { loadRuntimePluginRegistryHandle } from "./runtime/standalone-runtime-registry-loader.js";
 import type { MigrationProviderPlugin } from "./types.js";
 
 type MigrationProviderPluginResolution = {
@@ -58,21 +56,6 @@ function bindMigrationProviderToRegistry(
   };
 }
 
-function resolveMigrationProviderConfig(params: {
-  cfg?: OpenClawConfig;
-  bundledCompatPluginIds: readonly string[];
-}): OpenClawConfig | undefined {
-  const enablementCompat = withBundledPluginEnablementCompat({
-    config: params.cfg,
-    pluginIds: [...params.bundledCompatPluginIds],
-  });
-  return withBundledPluginVitestCompat({
-    config: enablementCompat,
-    pluginIds: [...params.bundledCompatPluginIds],
-    env: process.env,
-  });
-}
-
 function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; pluginIds: string[] }) {
   const active = getLoadedRuntimePluginRegistry({ requiredPluginIds: params.pluginIds });
   if (active) {
@@ -80,6 +63,7 @@ function resolveMigrationProviderRegistry(params: { cfg?: OpenClawConfig; plugin
   }
   const standalone = standaloneMigrationRegistrySlot;
   return standalone &&
+    !isPluginRegistryRetired(standalone.registry) &&
     standalone.config === params.cfg &&
     standalone.pluginIdsKey === migrationPluginIdsKey(params.pluginIds)
     ? standalone.registry
@@ -143,17 +127,14 @@ export function ensureStandaloneMigrationProviderRegistryLoaded(
   if (resolution.pluginIds.length === 0) {
     return;
   }
-  const compatConfig = resolveMigrationProviderConfig({
-    cfg: params.cfg,
-    bundledCompatPluginIds: resolution.bundledCompatPluginIds,
+  const compatConfig = withBundledPluginEnablementCompat({
+    config: params.cfg,
+    pluginIds: resolution.bundledCompatPluginIds,
   });
-  const registry = loadRuntimePluginRegistryHandle({
-    surface: "active",
-    requiredPluginIds: resolution.pluginIds,
-    loadOptions: {
-      ...(compatConfig === undefined ? {} : { config: compatConfig }),
-      onlyPluginIds: resolution.pluginIds,
-    },
+  const registry = loadPluginRegistryHandle({
+    ...(compatConfig === undefined ? {} : { config: compatConfig }),
+    onlyPluginIds: resolution.pluginIds,
+    activate: false,
   });
   standaloneMigrationRegistrySlot = registry
     ? {

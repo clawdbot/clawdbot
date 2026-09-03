@@ -18,8 +18,8 @@ export function resolveCliExecutionStartupContext(params: {
   argv: string[];
   commandPath?: string[];
   jsonOutputMode: boolean;
+  machineOutputMode?: boolean;
   env?: NodeJS.ProcessEnv;
-  routeMode?: boolean;
 }) {
   const invocation = resolveCliArgvInvocation(params.argv);
   // Commander owns the action path after parsing option values. Route-first
@@ -32,8 +32,8 @@ export function resolveCliExecutionStartupContext(params: {
       argv: params.argv,
       commandPath,
       jsonOutputMode: params.jsonOutputMode,
+      machineOutputMode: params.machineOutputMode,
       env: params.env,
-      routeMode: params.routeMode,
     }),
   };
 }
@@ -71,6 +71,7 @@ export async function ensureCliExecutionBootstrap(params: {
   beforeStateMigrations?: (snapshot?: ConfigFileSnapshot) => Promise<boolean>;
   loadPlugins?: boolean;
   skipConfigGuard?: boolean;
+  validateConfigOnly?: boolean;
   skipPristineCoreStateMigrations?: boolean;
   skipPristineStartupStateMigrations?: boolean;
 }) {
@@ -85,6 +86,9 @@ export async function ensureCliExecutionBootstrap(params: {
     loadPlugins: params.loadPlugins ?? params.startupPolicy.loadPlugins,
     pluginRegistry: params.startupPolicy.pluginRegistry,
     skipConfigGuard: params.skipConfigGuard ?? params.startupPolicy.skipConfigGuard,
+    ...((params.validateConfigOnly ?? params.startupPolicy.validateConfigOnly)
+      ? { validateConfigOnly: true }
+      : {}),
     ...(params.skipPristineStartupStateMigrations
       ? { skipPristineStartupStateMigrations: true }
       : {}),

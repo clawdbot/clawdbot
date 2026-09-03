@@ -3,6 +3,7 @@ import { getCommandPathWithRootOptions, isSimpleCommandHelpInvocation } from "./
 import type { RootHelpRenderOptions } from "./program/root-help.js";
 
 type PrecomputedSubcommandHelpName =
+  | "config"
   | "doctor"
   | "gateway"
   | "models"
@@ -27,6 +28,7 @@ export type PrecomputedCommandHelpDeps = {
 };
 
 const PRECOMPUTED_SUBCOMMAND_HELP_COMMANDS = new Set<PrecomputedSubcommandHelpName>([
+  "config",
   "doctor",
   "gateway",
   "models",

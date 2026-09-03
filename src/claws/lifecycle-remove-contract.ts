@@ -13,6 +13,7 @@ export type ClawRemovePlanAction = {
     | "sessionTranscripts"
     | "scheduledJob"
     | "workspaceFile"
+    | "bootstrap"
     | "packageRef"
     | "mcpServer"
     | "cronJob"

@@ -109,8 +109,9 @@ can consume embeddings without depending on the memory engine. Memory search
 also consumes generic `embeddingProviders`.
 
 The older memory-specific registration API and `memoryEmbeddingProviders`
-contract are deprecated. Use `registerEmbeddingProvider` and
-`embeddingProviders` for all new embedding providers.
+contract were removed after their August 2026 migration window. Use
+`registerEmbeddingProvider` and `embeddingProviders` for every embedding
+provider.
 
 ## Review checklist
 

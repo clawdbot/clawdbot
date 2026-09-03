@@ -31,13 +31,13 @@ It does **not** own branching or business logic. Put that in Lobster, acpx, or t
 
 Canonical plugin/runtime entrypoint:
 
-- `api.runtime.tasks.flow`
-- `api.runtime.taskFlow` still exists as an alias, but `api.runtime.tasks.flow` is the canonical shape
+- `api.runtime.tasks.managedFlows` is mutation-capable: create, advance, and cancel Task Flows.
+- `api.runtime.tasks.flows` is the read-only DTO view for listing and status lookups (`get`, `list`, `findLatest`, `resolve`, `getTaskSummary`).
 
 Binding:
 
-- `api.runtime.tasks.flow.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
-- `api.runtime.tasks.flow.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
+- `api.runtime.tasks.managedFlows.fromToolContext(ctx)` when you already have trusted tool context with `sessionKey`
+- `api.runtime.tasks.managedFlows.bindSession({ sessionKey, requesterOrigin })` when your binding layer already resolved the session and delivery context
 
 Managed-flow lifecycle:
 
@@ -59,7 +59,7 @@ Managed-flow lifecycle:
 ## Example shape
 
 ```ts
-const taskFlow = api.runtime.tasks.flow.fromToolContext(ctx);
+const taskFlow = api.runtime.tasks.managedFlows.fromToolContext(ctx);
 
 const created = taskFlow.createManaged({
   controllerId: "my-plugin/inbox-triage",
@@ -138,7 +138,7 @@ Use the flow runtime for state and task linkage. Keep decisions in the authoring
 
 - Store only the minimum state needed to resume.
 - Put human-readable wait reasons in `blockedSummary` or structured wait metadata in `waitJson`.
-- Use `getTaskSummary(flowId)` when the orchestrator needs a compact health view of child work.
+- Use `getTaskSummary(flowId)` on `api.runtime.tasks.flows` when the orchestrator needs a compact health view of child work.
 - Use `requestCancel(...)` when a caller wants the flow to stop scheduling immediately.
 - Use `cancel(...)` when you also want active linked child tasks cancelled.
 

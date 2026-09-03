@@ -12,7 +12,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 
 type AuditIdentityDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "audit_events" | "audit_identity_keys"
+  "audit_events" | "audit_identity_keys" | "execution_identity_contexts"
 >;
 type AuditIdentityKeyRow = Pick<
   Selectable<AuditIdentityDatabase["audit_identity_keys"]>,
@@ -24,8 +24,8 @@ const AUDIT_IDENTITY_KEY_BYTES = 32;
 const AUDIT_IDENTITY_KEY_ID_BYTES = 16;
 const AUDIT_IDENTITY_KEY_ID_RE = /^[a-f0-9]{32}$/u;
 const AUDIT_IDENTITY_DOMAIN = "openclaw.audit.identity.v1";
-// Only a top-level (depth-0) recordAuditEvent may create the key: the caller's
-// catch clears this cache on rollback, but a rolled-back outer transaction
+// Only a top-level (depth-0) audit/evidence write may create the key: each
+// caller clears this cache on rollback, because a rolled-back outer transaction
 // around a nested creation would leave a cached key that was never persisted.
 const identityByDatabase = new WeakMap<DatabaseSync, AuditIdentityKey>();
 
@@ -35,6 +35,14 @@ type AuditIdentityKey = {
 };
 
 type AuditIdentityKind = "account" | "actor" | "conversation" | "message" | "target";
+type ExecutionIdentityRefKind =
+  | "credential"
+  | "domain"
+  | "evidence"
+  | "grant"
+  | "principal"
+  | "runtime"
+  | "target";
 
 function registerAuditIdentityKeyForRedaction(key: Uint8Array): void {
   const bytes = Buffer.from(key);
@@ -81,7 +89,18 @@ export function loadOrCreateAuditIdentityKey(db: DatabaseSync): AuditIdentityKey
     db,
     kysely.selectFrom("audit_events").select("sequence").where("kind", "=", "message").limit(1),
   );
-  if (retainedMessage) {
+  const hasExecutionContextTable = Boolean(
+    db /* sqlite-allow-raw -- Missing-key integrity must tolerate pre-ensure current-schema DBs. */
+      .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?")
+      .get("execution_identity_contexts"),
+  );
+  const retainedExecutionContext = hasExecutionContextTable
+    ? executeSqliteQueryTakeFirstSync(
+        db,
+        kysely.selectFrom("execution_identity_contexts").select("context_id").limit(1),
+      )
+    : undefined;
+  if (retainedMessage || retainedExecutionContext) {
     // A missing key with retained refs would split correlation on restart.
     // Fail closed instead of silently rotating away from the persisted key id.
     throw new Error("audit identity key is missing");
@@ -146,4 +165,29 @@ export function pseudonymizeAuditIdentity(params: {
     )
     .digest("hex");
   return `hmac-sha256:v1:${params.identity.keyId}:${digest}`;
+}
+
+/** Project one execution-identity ref without retaining its raw owner value. */
+export function pseudonymizeExecutionIdentityRef(params: {
+  db: DatabaseSync;
+  kind: ExecutionIdentityRefKind;
+  scope: string;
+  value: string;
+}): string {
+  if (!params.scope || !params.value) {
+    throw new Error("execution identity HMAC scope and value must be non-empty");
+  }
+  const identity = loadOrCreateAuditIdentityKey(params.db);
+  const digest = createHmac("sha256", identity.key)
+    .update(
+      JSON.stringify([
+        "openclaw.audit.execution-identity.v1",
+        params.kind,
+        params.scope,
+        params.value,
+      ]),
+      "utf8",
+    )
+    .digest("hex");
+  return `hmac-sha256:v1:${identity.keyId}:${digest}`;
 }

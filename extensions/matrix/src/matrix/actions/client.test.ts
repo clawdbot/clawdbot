@@ -6,16 +6,15 @@ import {
   expectOneOffSharedMatrixClient,
   matrixClientResolverMocks,
   primeMatrixClientResolverMocks,
+  setAcquiredMatrixClient,
 } from "../client-resolver.test-helpers.js";
 
 const resolveMatrixRoomIdMock = vi.fn();
 
 const {
-  loadConfigMock,
   getMatrixRuntimeMock,
-  getActiveMatrixClientMock,
   acquireSharedMatrixClientMock,
-  releaseSharedClientInstanceMock,
+  sharedLeaseReleaseMock,
   isBunRuntimeMock,
   resolveMatrixAuthContextMock,
 } = matrixClientResolverMocks;
@@ -26,18 +25,10 @@ vi.mock("../../runtime.js", () => ({
   getMatrixRuntime: () => getMatrixRuntimeMock(),
 }));
 
-vi.mock("../active-client.js", () => ({
-  getActiveMatrixClient: getActiveMatrixClientMock,
-}));
-
 vi.mock("../client.js", () => ({
   acquireSharedMatrixClient: acquireSharedMatrixClientMock,
   isBunRuntime: () => isBunRuntimeMock(),
   resolveMatrixAuthContext: resolveMatrixAuthContextMock,
-}));
-
-vi.mock("../client/shared.js", () => ({
-  releaseSharedClientInstance: (...args: unknown[]) => releaseSharedClientInstanceMock(...args),
 }));
 
 vi.mock("../send.js", () => ({
@@ -58,16 +49,14 @@ describe("action client helpers", () => {
     primeMatrixClientResolverMocks();
     resolveMatrixRoomIdMock
       .mockReset()
-      .mockImplementation(async (clientForTest, roomId: string) => roomId);
+      .mockImplementation(async (_client, roomId: string) => roomId);
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
   });
 
-  it("stops one-off shared clients when no active monitor client is registered", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18799");
-
+  it("borrows and releases one-off action clients", async () => {
     const result = await withResolvedActionClient(
       { cfg: TEST_CFG, accountId: "default" },
       async () => "ok",
@@ -77,90 +66,51 @@ describe("action client helpers", () => {
     expect(result).toBe("ok");
   });
 
-  it("skips one-off room preparation when readiness is disabled", async () => {
+  it("forwards the transient retirement signal to action work", async () => {
+    const sharedClient = createMockMatrixClient();
+    const lease = setAcquiredMatrixClient(sharedClient);
+
+    await withResolvedActionClient(
+      { cfg: TEST_CFG, accountId: "default" },
+      async (_client, abortSignal) => {
+        expect(abortSignal).toBe(lease.abortSignal);
+      },
+    );
+  });
+
+  it("skips preparation when readiness is disabled", async () => {
     await withResolvedActionClient(
       { cfg: TEST_CFG, accountId: "default", readiness: "none" },
       async () => {},
     );
 
-    const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
-    expect(sharedClient.prepareForOneOff).not.toHaveBeenCalled();
-    expect(sharedClient.start).not.toHaveBeenCalled();
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    const lease = await acquireSharedMatrixClientMock.mock.results[0]?.value;
+    expect(lease.client.prepareForOneOff).not.toHaveBeenCalled();
+    expect(lease.client.start).not.toHaveBeenCalled();
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
   });
 
-  it("starts one-off clients when started readiness is required", async () => {
+  it("starts through the lease and persists started action clients", async () => {
     await withStartedActionClient({ cfg: TEST_CFG, accountId: "default" }, async () => {});
 
-    const sharedClient = await acquireSharedMatrixClientMock.mock.results[0]?.value;
-    expect(sharedClient.start).toHaveBeenCalledTimes(1);
-    expect(sharedClient.prepareForOneOff).not.toHaveBeenCalled();
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "persist");
-  });
-
-  it("reuses active monitor client when available", async () => {
-    const activeClient = createMockMatrixClient();
-    getActiveMatrixClientMock.mockReturnValue(activeClient);
-
-    const result = await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (client) => {
-        expect(client).toBe(activeClient);
-        return "ok";
-      },
-    );
-
-    expect(result).toBe("ok");
-    expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
-    expect(activeClient["stop"]).not.toHaveBeenCalled();
-  });
-
-  it("starts active clients when started readiness is required", async () => {
-    const activeClient = createMockMatrixClient();
-    getActiveMatrixClientMock.mockReturnValue(activeClient);
-
-    await withStartedActionClient({ cfg: TEST_CFG, accountId: "default" }, async (client) => {
-      expect(client).toBe(activeClient);
+    await expectOneOffSharedMatrixClient({
+      prepareForOneOffCalls: 0,
+      startCalls: 1,
+      releaseMode: "persist",
     });
-
-    expect(activeClient["start"]).toHaveBeenCalledTimes(1);
-    expect(activeClient["prepareForOneOff"]).not.toHaveBeenCalled();
-    expect(activeClient["stop"]).not.toHaveBeenCalled();
-    expect(activeClient["stopAndPersist"]).not.toHaveBeenCalled();
   });
 
-  it("uses the implicit resolved account id for active client lookup and storage", async () => {
-    loadConfigMock.mockReturnValue({
-      channels: {
-        matrix: {
-          accounts: {
-            ops: {
-              homeserver: "https://ops.example.org",
-              userId: "@ops:example.org",
-              accessToken: "ops-token",
-            },
-          },
-        },
-      },
-    });
+  it("uses the implicit resolved account id for shared acquisition", async () => {
     resolveMatrixAuthContextMock.mockReturnValue({
-      cfg: loadConfigMock(),
+      cfg: TEST_CFG,
       env: process.env,
       accountId: "ops",
-      resolved: {
-        homeserver: "https://ops.example.org",
-        userId: "@ops:example.org",
-        accessToken: "ops-token",
-        deviceId: "OPSDEVICE",
-        encryption: true,
-      },
+      resolved: {},
     });
-    await withResolvedActionClient({ cfg: loadConfigMock() as never }, async () => {});
 
-    await expectOneOffSharedMatrixClient({
-      cfg: loadConfigMock(),
-      accountId: "ops",
-    });
+    await withResolvedActionClient({ cfg: TEST_CFG }, async () => {});
+
+    await expectOneOffSharedMatrixClient({ accountId: "ops" });
   });
 
   it("uses explicit cfg instead of loading runtime config", async () => {
@@ -180,42 +130,24 @@ describe("action client helpers", () => {
     });
   });
 
-  it("stops shared action clients after wrapped calls succeed", async () => {
+  it("releases shared action clients with the requested discard mode", async () => {
     const sharedClient = createMockMatrixClient();
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+    setAcquiredMatrixClient(sharedClient);
 
-    const result = await withResolvedActionClient(
+    await withResolvedActionClient(
       { cfg: TEST_CFG, accountId: "default" },
       async (client) => {
         expect(client).toBe(sharedClient);
-        return "ok";
-      },
-    );
-
-    expect(result).toBe("ok");
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
-  });
-
-  it("can discard read-only shared action clients without persisting crypto state", async () => {
-    const sharedClient = createMockMatrixClient();
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
-
-    const result = await withResolvedActionClient(
-      { cfg: TEST_CFG, accountId: "default" },
-      async (client) => {
-        expect(client).toBe(sharedClient);
-        return "ok";
       },
       "discard",
     );
 
-    expect(result).toBe("ok");
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "discard");
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "discard" });
   });
 
-  it("stops shared action clients when the wrapped call throws", async () => {
+  it("releases shared action clients when the wrapped call throws", async () => {
     const sharedClient = createMockMatrixClient();
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+    setAcquiredMatrixClient(sharedClient);
 
     await expect(
       withResolvedActionClient({ cfg: TEST_CFG, accountId: "default" }, async () => {
@@ -223,25 +155,37 @@ describe("action client helpers", () => {
       }),
     ).rejects.toThrow("boom");
 
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
+  });
+
+  it("does not borrow an explicitly injected action client", async () => {
+    const injected = createMockMatrixClient();
+
+    await withResolvedActionClient({ client: injected }, async (client) => {
+      expect(client).toBe(injected);
+    });
+
+    expect(acquireSharedMatrixClientMock).not.toHaveBeenCalled();
+    expect(sharedLeaseReleaseMock).not.toHaveBeenCalled();
   });
 
   it("resolves room ids before running wrapped room actions", async () => {
     const sharedClient = createMockMatrixClient();
-    acquireSharedMatrixClientMock.mockResolvedValue(sharedClient);
+    const lease = setAcquiredMatrixClient(sharedClient);
     resolveMatrixRoomIdMock.mockResolvedValue("!room:example.org");
 
     const result = await withResolvedRoomAction(
       "room:#ops:example.org",
       { cfg: TEST_CFG, accountId: "default" },
-      async (client, resolvedRoom) => {
+      async (client, resolvedRoom, abortSignal) => {
         expect(client).toBe(sharedClient);
+        expect(abortSignal).toBe(lease.abortSignal);
         return resolvedRoom;
       },
     );
 
     expect(resolveMatrixRoomIdMock).toHaveBeenCalledWith(sharedClient, "room:#ops:example.org");
     expect(result).toBe("!room:example.org");
-    expect(releaseSharedClientInstanceMock).toHaveBeenCalledWith(sharedClient, "stop");
+    expect(sharedLeaseReleaseMock).toHaveBeenCalledWith({ mode: "stop" });
   });
 });

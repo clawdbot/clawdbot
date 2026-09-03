@@ -22,7 +22,7 @@ function readProxyUrlFromOptions(options: object | undefined): string | undefine
     return undefined;
   }
   if ("uri" in options) {
-    const uri: unknown = Reflect.get(options, "uri");
+    const uri = options.uri;
     return uri instanceof URL ? uri.href : typeof uri === "string" ? uri : undefined;
   }
   if ("httpsProxy" in options || "httpProxy" in options) {

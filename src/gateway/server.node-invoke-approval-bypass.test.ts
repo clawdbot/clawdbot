@@ -287,8 +287,9 @@ describe("node.invoke approval bypass", () => {
   });
 
   const approveAllPendingPairings = async () => {
-    const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
-    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+    const { listDevicePairing } = await import("../infra/device-pairing.js");
+    const { approveNodePairing, listNodePairing } = await import("../infra/device-pairing-node.js");
     const deviceList = await listDevicePairing();
     for (const pending of deviceList.pending) {
       await approveDevicePairing(pending.requestId, {
@@ -304,7 +305,7 @@ describe("node.invoke approval bypass", () => {
   };
 
   const approvePendingNodePairings = async (nodeId: string) => {
-    const { approveNodePairing, listNodePairing } = await import("../infra/node-pairing.js");
+    const { approveNodePairing, listNodePairing } = await import("../infra/device-pairing-node.js");
     const list = await listNodePairing();
     let approved = false;
     for (const pending of list.pending) {

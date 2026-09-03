@@ -1,6 +1,7 @@
 // Empty-state renderers for the Workshop board: filtered-queue detail pane
 // and the whole-page no-proposals panel with the self-learning pitch.
-import { html, nothing } from "lit";
+import { html } from "lit";
+import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import type { SkillWorkshopStatusFilter } from "../../lib/skill-workshop/index.ts";
 import { renderSelfLearningPitch, type SkillWorkshopSelfLearning } from "./self-learning.ts";
@@ -83,53 +84,17 @@ function resolveBoardEmptyState(
   };
 }
 
+const emptyStateIcons: Record<SkillWorkshopEmptyIcon, (typeof icons)[keyof typeof icons]> = {
+  search: icons.search,
+  clock: icons.clock,
+  check: icons.check,
+  x: icons.x,
+  shield: icons.shieldCheck,
+  refresh: icons.refresh,
+};
+
 function renderEmptyStateIcon(icon: SkillWorkshopEmptyIcon) {
-  switch (icon) {
-    case "clock":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <circle cx="12" cy="12" r="8"></circle>
-          <path d="M12 7v5l3 2"></path>
-        </svg>
-      `;
-    case "check":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M5 12.5l4 4L19 7"></path>
-        </svg>
-      `;
-    case "x":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M7 7l10 10"></path>
-          <path d="M17 7L7 17"></path>
-        </svg>
-      `;
-    case "shield":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M12 3l7 3v5c0 4.2-2.8 7.8-7 10-4.2-2.2-7-5.8-7-10V6l7-3z"></path>
-          <path d="M9 12l2 2 4-5"></path>
-        </svg>
-      `;
-    case "refresh":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <path d="M17 2v5h-5"></path>
-          <path d="M7 22v-5h5"></path>
-          <path d="M19 10a7 7 0 0 0-12-4l-2 2"></path>
-          <path d="M5 14a7 7 0 0 0 12 4l2-2"></path>
-        </svg>
-      `;
-    case "search":
-      return html`
-        <svg viewBox="0 0 24 24">
-          <circle cx="11" cy="11" r="6"></circle>
-          <path d="M16 16l4 4"></path>
-        </svg>
-      `;
-  }
-  return nothing;
+  return emptyStateIcons[icon];
 }
 
 export function renderWorkshopEmptyState(params: {

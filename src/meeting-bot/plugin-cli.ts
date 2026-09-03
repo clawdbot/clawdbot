@@ -31,8 +31,8 @@ type MeetingCliOptions = {
 };
 
 type JoinOptions = {
-  transport?: MeetingCliTransport;
-  mode?: MeetingCliMode;
+  transport?: string;
+  mode?: string;
   message?: string;
   timeoutMs?: string;
 };
@@ -48,11 +48,31 @@ function parseTimeout(value: string | undefined): number | undefined {
   return parsed;
 }
 
+function parseMeetingCliMode(value: string | undefined): MeetingCliMode | undefined {
+  if (value === undefined || value === "agent" || value === "bidi" || value === "transcribe") {
+    return value;
+  }
+  throw new Error(`mode must be agent, bidi, or transcribe; received ${value}`);
+}
+
+function parseMeetingCliTransport(value: string | undefined): MeetingCliTransport | undefined {
+  if (value === undefined || value === "chrome" || value === "chrome-node") {
+    return value;
+  }
+  throw new Error(`transport must be chrome or chrome-node; received ${value}`);
+}
+
+function markMeetingSetupFailure(result: unknown): void {
+  if (result && typeof result === "object" && "ok" in result && result.ok === false) {
+    process.exitCode = 1;
+  }
+}
+
 function joinPayload(url: string, options: JoinOptions): Record<string, unknown> {
   return {
     url,
-    ...(options.transport ? { transport: options.transport } : {}),
-    ...(options.mode ? { mode: options.mode } : {}),
+    ...(options.transport ? { transport: parseMeetingCliTransport(options.transport) } : {}),
+    ...(options.mode ? { mode: parseMeetingCliMode(options.mode) } : {}),
     ...(options.message ? { message: options.message } : {}),
     ...(options.timeoutMs ? { timeoutMs: parseTimeout(options.timeoutMs) } : {}),
   };
@@ -81,6 +101,7 @@ export function registerMeetingPluginCli(options: MeetingCliOptions): void {
       { progress: false, scopes: ["operator.admin"] },
     );
     process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+    return result;
   };
   const method = (action: string) => `${options.methodPrefix}.${action}`;
   const root = options.program.command(options.commandName).description(options.descriptions.root);
@@ -121,8 +142,12 @@ export function registerMeetingPluginCli(options: MeetingCliOptions): void {
   command("setup", options.descriptions.setup)
     .option("--transport <transport>", "chrome or chrome-node")
     .option("--mode <mode>", "agent, bidi, or transcribe")
-    .action(async (setupOptions: { transport?: MeetingCliTransport; mode?: MeetingCliMode }) => {
-      await call(method("setup"), setupOptions);
+    .action(async (setupOptions: { transport?: string; mode?: string }) => {
+      const result = await call(method("setup"), {
+        transport: parseMeetingCliTransport(setupOptions.transport),
+        mode: parseMeetingCliMode(setupOptions.mode),
+      });
+      markMeetingSetupFailure(result);
     });
 
   for (const [name, action, description] of [

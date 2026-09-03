@@ -4,14 +4,11 @@ import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  finalizeTaskRunByRunId,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunIdCore as finalizeTaskRunByRunId,
 } from "./task-executor.js";
-import {
-  listTaskFlowAuditFindings,
-  type TaskFlowAuditCode,
-  type TaskFlowAuditFinding,
-} from "./task-flow-registry.audit.js";
+import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import type { TaskFlowAuditCode, TaskFlowAuditFinding } from "./task-flow-registry.audit.types.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,
@@ -71,14 +68,14 @@ async function withTaskFlowAuditStateDir(run: (root: string) => Promise<void>): 
     },
     async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
       try {
         await run(state.stateDir);
       } finally {
         resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests();
-        resetTaskFlowRegistryForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
       }
     },
   );
@@ -88,8 +85,8 @@ describe("task-flow-registry audit", () => {
   afterEach(() => {
     ORIGINAL_ENV.restore();
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("surfaces restore failures as task-flow audit findings", () => {

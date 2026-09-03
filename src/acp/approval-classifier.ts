@@ -8,6 +8,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { isMutatingToolCall } from "../agents/tool-mutation.js";
+import { trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { readTrimmedStringAlias } from "../utils/string-readers.js";
 
@@ -63,7 +64,7 @@ function readFirstStringValue(
   return readTrimmedStringAlias(source, keys);
 }
 
-function normalizeToolName(value: string): string | undefined {
+function normalizeToolPolicyName(value: string): string | undefined {
   const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized || normalized.length > 128) {
     return undefined;
@@ -76,7 +77,7 @@ function parseToolNameFromTitle(title: string | undefined | null): string | unde
     return undefined;
   }
   const head = normalizeOptionalString(title.split(":", 1)[0]);
-  return head ? normalizeToolName(head) : undefined;
+  return head ? normalizeToolPolicyName(head) : undefined;
 }
 
 function resolveToolNameForPermission(params: {
@@ -93,8 +94,8 @@ function resolveToolNameForPermission(params: {
   const fromMeta = readFirstStringValue(toolMeta, ["toolName", "tool_name", "name"]);
   const fromRawInput = readFirstStringValue(rawInput, ["tool", "toolName", "tool_name", "name"]);
   const fromTitle = parseToolNameFromTitle(toolCall?.title);
-  const metaName = fromMeta ? normalizeToolName(fromMeta) : undefined;
-  const rawInputName = fromRawInput ? normalizeToolName(fromRawInput) : undefined;
+  const metaName = fromMeta ? normalizeToolPolicyName(fromMeta) : undefined;
+  const rawInputName = fromRawInput ? normalizeToolPolicyName(fromRawInput) : undefined;
   const titleName = fromTitle;
   if ((fromMeta && !metaName) || (fromRawInput && !rawInputName)) {
     return undefined;
@@ -169,11 +170,10 @@ function resolveAbsoluteScopedPath(value: string, cwd: string): string | undefin
   if (!candidate) {
     return undefined;
   }
-  if (candidate.startsWith("file://")) {
-    try {
-      const parsed = new URL(candidate);
-      candidate = decodeURIComponent(parsed.pathname || "");
-    } catch {
+  // Parse every file-scheme spelling first; alternate URL forms otherwise look cwd-relative.
+  if (/^file:/i.test(candidate)) {
+    candidate = trySafeFileURLToPath(candidate) ?? "";
+    if (!candidate) {
       return undefined;
     }
   }

@@ -1,3 +1,5 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import { decodeMeetingAudioBase64 } from "./audio-base64.js";
@@ -8,16 +10,6 @@ import type { MeetingRealtimeAudioTransport } from "./realtime-audio-transport.j
 const NODE_OUTPUT_GENERATION_CAPABILITY = Symbol.for(
   "openclaw.internal.meeting-node-output-generation.v1",
 );
-
-function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : {};
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value : undefined;
-}
 
 export function createNodeMeetingRealtimeAudioTransport(params: {
   runtime: PluginRuntime;
@@ -85,8 +77,9 @@ export function createNodeMeetingRealtimeAudioTransport(params: {
               params: { action: "pullAudio", bridgeId: params.bridgeId, timeoutMs: 250 },
               timeoutMs: 2_000,
             });
-            const result = asRecord(asRecord(raw).payload ?? raw);
-            const base64 = readString(result.base64);
+            const rawRecord = asOptionalRecord(raw);
+            const result = asOptionalRecord(rawRecord?.payload ?? raw) ?? {};
+            const base64 = readNonBlankString(result.base64);
             if (base64) {
               const audio = decodeMeetingAudioBase64(base64, "pullAudio");
               outputLoopbackVerifier.recordInput(audio);

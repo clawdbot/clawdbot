@@ -6,7 +6,7 @@ import {
   type OnboardingPluginInstallEntry,
 } from "../commands/onboarding-plugin-install.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { fetchClawHubSkillVerification } from "../infra/clawhub.js";
+import { fetchClawHubSkillVerification } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { scanInstalledApps } from "../infra/installed-apps.js";
 import {
@@ -323,13 +323,6 @@ export async function setupAppRecommendations(params: {
             workspaceDir: params.workspaceDir,
             slug: match.candidate.id,
             config: next,
-            onClawHubRisk: async () =>
-              await params.prompter.confirm({
-                message: t("wizard.appRecommendations.skillTrust", {
-                  name: match.candidate.displayName,
-                }),
-                initialValue: false,
-              }),
             logger: { warn: (message) => params.runtime.error(message) },
           });
           if (!result.ok) {

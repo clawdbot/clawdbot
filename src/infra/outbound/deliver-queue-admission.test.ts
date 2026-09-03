@@ -4,7 +4,7 @@ import type { StableDeliveryPreparation } from "./delivery-queue-preparation.js"
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 const mocks = vi.hoisted(() => ({
-  cancelDeliveryQueueMediaStage: vi.fn(),
+  cancelDeliveryQueueMediaRetention: vi.fn(),
   enqueueDelivery: vi.fn(),
   enqueueDeliveryOnce: vi.fn(),
   enqueuePreparedDeliveryOnce: vi.fn(),
@@ -18,15 +18,13 @@ vi.mock("./delivery-queue-media-spool.js", () => ({
   stageQueuePayloadMedia: mocks.stageQueuePayloadMedia,
 }));
 vi.mock("./delivery-queue-media-staging.js", () => ({
-  cancelDeliveryQueueMediaStage: mocks.cancelDeliveryQueueMediaStage,
+  cancelDeliveryQueueMediaRetention: mocks.cancelDeliveryQueueMediaRetention,
 }));
 vi.mock("./delivery-queue-storage.js", () => ({
-  loadPendingDelivery: mocks.loadPendingDelivery,
-}));
-vi.mock("./delivery-queue.js", () => ({
   enqueueDelivery: mocks.enqueueDelivery,
   enqueueDeliveryOnce: mocks.enqueueDeliveryOnce,
   enqueuePreparedDeliveryOnce: mocks.enqueuePreparedDeliveryOnce,
+  loadPendingDelivery: mocks.loadPendingDelivery,
 }));
 
 function preparation(id: string, preparationLeaseExpiresAt: number): StableDeliveryPreparation {

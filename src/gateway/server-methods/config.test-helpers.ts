@@ -67,6 +67,10 @@ export function createConfigHandlerHarness(args?: {
     isWebchatConnect: () => false,
     respond,
     context: {
+      configRevisionProjector: {
+        projectRawHash: (hash: string) => hash,
+        projectResolvedHash: (hash: string) => hash,
+      },
       logGateway,
       disconnectClientsUsingSharedGatewayAuth,
       ...args?.contextOverrides,

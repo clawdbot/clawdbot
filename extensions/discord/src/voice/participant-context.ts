@@ -142,7 +142,7 @@ export function countDiscordVoiceHumanParticipants(params: {
       continue;
     }
     knownUserIds.add(userId);
-    if (state.member?.user?.bot !== true) {
+    if (state.member?.user && state.member.user.bot !== true) {
       count += 1;
     }
   }

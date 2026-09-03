@@ -4,7 +4,7 @@ import {
   resolveLocalVitestEnv,
   resolveLocalFullSuiteProfile,
   resolveLocalVitestScheduling,
-} from "../../scripts/lib/vitest-local-scheduling.mjs";
+} from "../../scripts/lib/vitest-local-scheduling.mts";
 
 describe("vitest local full-suite profile", () => {
   it("forces local Vitest runs back onto local-check policy", () => {

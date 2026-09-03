@@ -1,10 +1,10 @@
 // Core Canvas document HTTP response coverage.
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCanvasDocument } from "./documents.js";
+import { createCanvasDocument, resolveCanvasDocumentsDir } from "./documents.js";
 import { handleCanvasDocumentHttpRequest } from "./serve.runtime.js";
 
 const tempDirs: string[] = [];
@@ -79,6 +79,59 @@ describe("core canvas document host", () => {
     const response = await capture(document.entryUrl);
     expect(response.statusCode).toBe(200);
     expect(response.headers["content-security-policy"]).toBeUndefined();
+  });
+
+  it("serves Content-Length on HEAD responses", async () => {
+    const stateDir = await createStateDir();
+    const html = "<html><body>widget</body></html>";
+    const document = await createCanvasDocument(
+      {
+        id: "widget-1",
+        kind: "html_bundle",
+        entrypoint: { type: "html", value: html },
+        cspSandbox: "scripts",
+      },
+      { stateDir },
+    );
+    const css = "body { color: red; }";
+    await writeFile(
+      path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "style.css"),
+      css,
+      "utf8",
+    );
+    const cssUrl = document.entryUrl.replace(/index\.html$/, "style.css");
+
+    const getHtml = await capture(document.entryUrl);
+    const headHtml = await capture(document.entryUrl, "HEAD");
+    expect(headHtml.statusCode).toBe(200);
+    expect(headHtml.headers["content-length"]).toBe(String(getHtml.body.byteLength));
+    expect(headHtml.body.byteLength).toBe(0);
+    expect(headHtml.headers["content-type"]).toBe("text/html; charset=utf-8");
+    expect(headHtml.headers["content-security-policy"]).toBe("sandbox allow-scripts");
+
+    const getCss = await capture(cssUrl);
+    const headCss = await capture(cssUrl, "HEAD");
+    expect(getCss.statusCode).toBe(200);
+    expect(headCss.statusCode).toBe(200);
+    expect(headCss.headers["content-length"]).toBe(String(getCss.body.byteLength));
+    expect(headCss.body.byteLength).toBe(0);
+
+    // Invalid UTF-8 in a copied HTML file expands to U+FFFD when served, so the
+    // header must be measured from the decoded representation, not raw bytes.
+    const brokenBytes = Buffer.from([
+      0x3c, 0x68, 0x31, 0x3e, 0xff, 0xfe, 0x3c, 0x2f, 0x68, 0x31, 0x3e,
+    ]);
+    await writeFile(
+      path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", "broken.html"),
+      brokenBytes,
+    );
+    const brokenUrl = document.entryUrl.replace(/index\.html$/, "broken.html");
+    const getBroken = await capture(brokenUrl);
+    const headBroken = await capture(brokenUrl, "HEAD");
+    expect(getBroken.statusCode).toBe(200);
+    expect(getBroken.body.byteLength).toBeGreaterThan(brokenBytes.byteLength);
+    expect(headBroken.headers["content-length"]).toBe(String(getBroken.body.byteLength));
+    expect(headBroken.body.byteLength).toBe(0);
   });
 
   it("rejects unsupported methods and traversal paths", async () => {

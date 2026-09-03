@@ -3,17 +3,21 @@ import type { FallbackAttempt } from "../agents/model-fallback.types.js";
 import { resolveAgentModelTimeoutMsValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { parseMusicGenerationModelRef } from "../media-generation/model-ref.js";
+import {
+  getMusicGenerationProvider,
+  listMusicGenerationProviders,
+} from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
   buildNoCapabilityModelConfiguredMessage,
   recordCapabilityCandidateFailure,
   resolveCapabilityModelCandidates,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "../media-generation/runtime-shared.js";
 import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
-import { parseMusicGenerationModelRef } from "./model-ref.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
-import { getMusicGenerationProvider, listMusicGenerationProviders } from "./provider-registry.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
 
@@ -91,6 +95,23 @@ export async function generateMusic(
       continue;
     }
 
+    const referenceImageError = resolveReferenceImageCapabilityError({
+      candidateRef: `${candidate.provider}/${candidate.model}`,
+      inputImageCount: params.inputImages?.length ?? 0,
+      edit: provider.capabilities.edit,
+    });
+    if (referenceImageError) {
+      recordCapabilityCandidateFailure({
+        attempts,
+        provider: candidate.provider,
+        model: candidate.model,
+        error: referenceImageError,
+      });
+      lastError = new Error(referenceImageError);
+      logger.debug(`music-generation candidate skipped: ${referenceImageError}`);
+      continue;
+    }
+
     try {
       const sanitized = resolveMusicGenerationOverrides({
         provider,
@@ -117,6 +138,12 @@ export async function generateMusic(
       });
       if (!Array.isArray(result.tracks) || result.tracks.length === 0) {
         throw new Error("Music generation provider returned no tracks.");
+      }
+      const emptyTrackIndex = result.tracks.findIndex((track) => track.buffer.byteLength === 0);
+      if (emptyTrackIndex >= 0) {
+        throw new Error(
+          `Music generation provider returned an empty track buffer at index ${emptyTrackIndex}.`,
+        );
       }
       return {
         tracks: result.tracks,

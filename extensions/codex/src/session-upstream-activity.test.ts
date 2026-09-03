@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import { CodexAppServerRpcError } from "./app-server/client.js";
 import type { CodexTurn } from "./app-server/protocol.js";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
-import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
+import type {
+  CodexSessionCatalogControl,
+  CodexSessionCatalogControlFactory,
+} from "./session-catalog-types.js";
 import { createChecker } from "./session-upstream-activity.js";
 
 function probe(overrides: Partial<SessionUpstreamProbe> = {}): SessionUpstreamProbe {
@@ -74,7 +77,11 @@ function createActivityChecker(params: {
   return createChecker({
     api,
     bindingStore,
-    control: params.control,
+    control: {
+      forRequest: () => params.control,
+      homesForAgent: () => [],
+      forUpstream: () => params.control,
+    } satisfies CodexSessionCatalogControlFactory,
     getRuntimeConfig: () => undefined,
   });
 }

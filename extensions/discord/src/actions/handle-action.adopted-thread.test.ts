@@ -9,9 +9,9 @@ const { handleDiscordMessageAction } = await import("./handle-action.js");
 const { beginDiscordActiveTurnThreadRoute, notifyDiscordActiveTurnThreadCreated } =
   await import("../active-turn-thread-route.js");
 
-function discordConfig(): OpenClawConfig {
+function discordConfig(actions?: Record<string, boolean>): OpenClawConfig {
   return {
-    channels: { discord: { token: "tok" } },
+    channels: { discord: { token: "tok", ...(actions ? { actions } : {}) } },
   } as OpenClawConfig;
 }
 
@@ -166,5 +166,54 @@ describe("handleDiscordMessageAction adopted thread delivery", () => {
     });
 
     expect(result.details).toEqual({ ok: true });
+  });
+
+  it("preserves trusted workspace authority for thread replies and rejects forged action capabilities", async () => {
+    const mediaReadFile = vi.fn(async () => Buffer.from("trusted report"));
+    const mediaAccess = {
+      localRoots: ["/tmp/agent-workspace"],
+      readFile: mediaReadFile,
+      workspaceDir: "/tmp/agent-workspace",
+    };
+    const forgedMediaAccess = {
+      localRoots: ["/tmp/forged-root"],
+      readFile: vi.fn(async () => Buffer.from("forged report")),
+      workspaceDir: "/tmp/forged-root",
+    };
+    const cfg = discordConfig({ threads: true });
+
+    await handleDiscordMessageAction({
+      action: "thread-reply",
+      params: {
+        threadId: "thread-123",
+        message: "thread update",
+        filePath: "./report.md",
+        mediaAccess: forgedMediaAccess,
+      },
+      cfg,
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
+      mediaReadFile,
+    });
+
+    expect(handleDiscordActionMock).toHaveBeenCalledTimes(1);
+    expect(handleDiscordActionMock).toHaveBeenCalledWith(
+      {
+        action: "threadReply",
+        accountId: undefined,
+        channelId: "thread-123",
+        content: "thread update",
+        mediaUrl: "./report.md",
+        replyTo: undefined,
+      },
+      cfg,
+      { mediaAccess, mediaLocalRoots: mediaAccess.localRoots, mediaReadFile },
+    );
+    expect(handleDiscordActionMock.mock.calls[0]?.[1]).toBe(cfg);
+    const actionOptions = handleDiscordActionMock.mock.calls[0]?.[2];
+    expect(actionOptions?.mediaAccess).toBe(mediaAccess);
+    expect(actionOptions?.mediaLocalRoots).toBe(mediaAccess.localRoots);
+    expect(actionOptions?.mediaReadFile).toBe(mediaReadFile);
+    expect(forgedMediaAccess.readFile).not.toHaveBeenCalled();
   });
 });

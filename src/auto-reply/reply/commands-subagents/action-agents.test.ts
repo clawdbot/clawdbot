@@ -166,6 +166,12 @@ describe("handleSubagentsAgentsAction", () => {
     const result = handleSubagentsAgentsAction(
       agentsActionInput(THREAD_CHANNEL, [
         subagentRun({
+          runId: "run-stale-unended",
+          childSessionKey: "agent:main:subagent:stale-unended",
+          task: "stale unended worker",
+          startedAgoMs: 3 * 60 * 60_000,
+        }),
+        subagentRun({
           runId: "run-hidden-recent",
           childSessionKey: hiddenSessionKey,
           task: "hidden recent worker",
@@ -184,6 +190,7 @@ describe("handleSubagentsAgentsAction", () => {
     expect(result.reply?.text).toContain("2. visible bound worker");
     expect(result.reply?.text).not.toContain("1. visible bound worker");
     expect(result.reply?.text).not.toContain("hidden recent worker");
+    expect(result.reply?.text).not.toContain("stale unended worker");
   });
 
   it("shows room-channel runs as unbound when the plugin supports conversation bindings", () => {

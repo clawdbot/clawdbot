@@ -27,6 +27,8 @@ type MockWsClient = {
   close: ReturnType<typeof vi.fn>;
 };
 
+type MockRuntime = ReturnType<typeof createRuntime>;
+
 function createAccount(accountId: string): ResolvedFeishuAccount {
   return {
     accountId,
@@ -47,6 +49,34 @@ function createWsClient(): MockWsClient {
     start: vi.fn(),
     close: vi.fn(),
   };
+}
+
+function createRuntime() {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+  };
+}
+
+function startWebSocketMonitor(accountId: string, runtime: MockRuntime = createRuntime()) {
+  const abortController = new AbortController();
+  return {
+    abortController,
+    runtime,
+    monitorPromise: monitorWebSocket({
+      account: createAccount(accountId),
+      accountId,
+      runtime,
+      abortSignal: abortController.signal,
+      eventDispatcher: {} as never,
+    }),
+  };
+}
+
+function seedBotIdentity(accountId: string, botOpenId: string, botName: string): void {
+  botOpenIds.set(accountId, botOpenId);
+  botNames.set(accountId, botName);
 }
 
 function createHttpServerMock(): {
@@ -105,23 +135,9 @@ describe("feishu websocket cleanup", () => {
     const wsClient = createWsClient();
     createFeishuWSClientMock.mockReturnValue(wsClient);
 
-    const abortController = new AbortController();
     const accountId = "alpha";
-
-    botOpenIds.set(accountId, "ou_alpha");
-    botNames.set(accountId, "Alpha");
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount(accountId),
-      accountId,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    seedBotIdentity(accountId, "ou_alpha", "Alpha");
+    const { abortController, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
       expect(wsClient.start).toHaveBeenCalledTimes(1);
@@ -148,21 +164,8 @@ describe("feishu websocket cleanup", () => {
       .mockResolvedValueOnce(failedClient)
       .mockResolvedValueOnce(recoveredClient);
 
-    const abortController = new AbortController();
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
     const accountId = "retry";
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount(accountId),
-      accountId,
-      runtime,
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    const { abortController, runtime, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
       expect(failedClient.start).toHaveBeenCalledTimes(1);
@@ -200,23 +203,9 @@ describe("feishu websocket cleanup", () => {
       .mockResolvedValueOnce(exhaustedClient)
       .mockResolvedValueOnce(recoveredClient);
 
-    const abortController = new AbortController();
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
     const accountId = "exhausted";
-    botOpenIds.set(accountId, "ou_exhausted");
-    botNames.set(accountId, "Exhausted");
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount(accountId),
-      accountId,
-      runtime,
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    seedBotIdentity(accountId, "ou_exhausted", "Exhausted");
+    const { abortController, runtime, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
       expect(exhaustedClient.start).toHaveBeenCalledTimes(1);
@@ -260,21 +249,8 @@ describe("feishu websocket cleanup", () => {
     const wsClient = createWsClient();
     createFeishuWSClientMock.mockResolvedValueOnce(wsClient);
 
-    const abortController = new AbortController();
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
     const accountId = "recoverable-callback";
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount(accountId),
-      accountId,
-      runtime,
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    const { abortController, runtime, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
       expect(wsClient.start).toHaveBeenCalledTimes(1);
@@ -306,22 +282,9 @@ describe("feishu websocket cleanup", () => {
     const exhaustedClient = createWsClient();
     createFeishuWSClientMock.mockResolvedValueOnce(exhaustedClient);
 
-    const abortController = new AbortController();
     const accountId = "abort-backoff";
-    botOpenIds.set(accountId, "ou_abort");
-    botNames.set(accountId, "Abort");
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount(accountId),
-      accountId,
-      runtime: {
-        log: vi.fn(),
-        error: vi.fn(),
-        exit: vi.fn(),
-      },
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    seedBotIdentity(accountId, "ou_abort", "Abort");
+    const { abortController, monitorPromise } = startWebSocketMonitor(accountId);
 
     await vi.waitFor(() => {
       expect(exhaustedClient.start).toHaveBeenCalledTimes(1);
@@ -349,20 +312,7 @@ describe("feishu websocket cleanup", () => {
     });
     createFeishuWSClientMock.mockReturnValue(wsClient);
 
-    const abortController = new AbortController();
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-
-    const monitorPromise = monitorWebSocket({
-      account: createAccount("close-error"),
-      accountId: "close-error",
-      runtime,
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    const { abortController, runtime, monitorPromise } = startWebSocketMonitor("close-error");
 
     await vi.waitFor(() => {
       expect(wsClient.start).toHaveBeenCalledTimes(1);
@@ -385,19 +335,7 @@ describe("feishu websocket cleanup", () => {
     });
     createFeishuWSClientMock.mockReturnValue(wsClient);
 
-    const abortController = new AbortController();
-    const runtime = {
-      log: vi.fn(),
-      error: vi.fn(),
-      exit: vi.fn(),
-    };
-    const monitorPromise = monitorWebSocket({
-      account: createAccount("close-error-utf16"),
-      accountId: "close-error-utf16",
-      runtime,
-      abortSignal: abortController.signal,
-      eventDispatcher: {} as never,
-    });
+    const { abortController, runtime, monitorPromise } = startWebSocketMonitor("close-error-utf16");
 
     await vi.waitFor(() => {
       expect(wsClient.start).toHaveBeenCalledTimes(1);

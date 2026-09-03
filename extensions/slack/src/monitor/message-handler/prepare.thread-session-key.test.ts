@@ -70,9 +70,6 @@ function buildChannelMessage(overrides?: Partial<SlackMessageEvent>): SlackMessa
 
 function buildEventScope(teamId: string): SlackEventScope {
   return {
-    apiAppId: "A1",
-    enterpriseId: "E1",
-    isEnterpriseInstall: true,
     teamId,
     client: {} as SlackEventScope["client"],
   };
@@ -153,6 +150,7 @@ describe("thread-level session keys", () => {
         sessionKey: "agent:main:slack:channel:c123",
         mainSessionKey: "agent:main:main",
         dmScope: "main",
+        groupScope: "per-group",
         lastRoutePolicy: "session",
         matchedBy: "default",
       },

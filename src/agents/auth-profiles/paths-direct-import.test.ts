@@ -1,29 +1,26 @@
 /**
  * Direct-import tests for auth profile path helpers.
- * Calls path-resolve exports directly so coverage attribution stays honest
- * despite the public paths.ts re-export barrel.
+ * Calls the owning modules directly so coverage attribution stays honest.
  */
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   resolveLegacyAuthProfilesPath as resolveAuthStorePath,
   resolveLegacyAuthStatePath as resolveAuthStatePath,
   resolveLegacyFlatAuthPath as resolveLegacyAuthStorePath,
 } from "../../commands/doctor-auth-legacy-paths.js";
 import { withEnv } from "../../test-utils/env.js";
-import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./path-resolve.js";
+import { resolveSharedAuthStorePath } from "./path-resolve.js";
+import { resolveAuthStorePathForDisplay } from "./paths.js";
 
-describe("path-resolve helpers (direct-import coverage attribution)", () => {
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("auth profile path helpers (direct-import coverage attribution)", () => {
   let stateDir = "";
 
-  beforeEach(async () => {
-    stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-path-direct-"));
-  });
-
-  afterEach(async () => {
-    await fs.rm(stateDir, { recursive: true, force: true });
+  beforeEach(() => {
+    stateDir = tempDirs.make("openclaw-path-direct-");
   });
 
   it("resolveAuthStorePath joins agentDir with the auth-profiles filename", () => {
@@ -80,22 +77,13 @@ describe("path-resolve helpers (direct-import coverage attribution)", () => {
     });
   });
 
-  it("resolveAuthStorePathForDisplay returns the resolved path for a non-tilde input", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStorePathForDisplay(agentDir);
-    expect(resolved.startsWith(stateDir)).toBe(true);
-    expect(path.basename(resolved)).toBe("openclaw-agent.sqlite");
-  });
-
-  it("resolveAuthStorePathForDisplay expands a tilde-rooted agent dir to the sqlite store", () => {
-    const tildeAgentDir = "~fake-openclaw-no-expand";
-    const resolved = resolveAuthStorePathForDisplay(tildeAgentDir);
-    expect(resolved).toBe(path.resolve(tildeAgentDir, "openclaw-agent.sqlite"));
-  });
-
-  it("resolveAuthStatePathForDisplay returns the sqlite auth state store", () => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const resolved = resolveAuthStatePathForDisplay(agentDir);
-    expect(resolved).toBe(path.join(agentDir, "openclaw-agent.sqlite"));
+  it("falls back to the shared owner for an agent dir that has no local store", () => {
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      // A tilde-rooted dir resolveUserPath cannot expand still must not be reported as the owner:
+      // without a local store the loader reads the shared database, so display must name that.
+      const resolved = resolveAuthStorePathForDisplay("~fake-openclaw-no-expand");
+      expect(resolved).toBe(resolveSharedAuthStorePath());
+      expect(resolved.startsWith("~")).toBe(false);
+    });
   });
 });

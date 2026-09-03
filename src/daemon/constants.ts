@@ -8,12 +8,30 @@ const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
 export const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
+export const GATEWAY_SERVICE_SELECTOR_ENV_KEYS = [
+  "OPENCLAW_STATE_DIR",
+  "OPENCLAW_CONFIG_PATH",
+  "OPENCLAW_PROFILE",
+  "OPENCLAW_GATEWAY_PORT",
+  "OPENCLAW_LAUNCHD_LABEL",
+  "OPENCLAW_SYSTEMD_UNIT",
+  "OPENCLAW_WINDOWS_TASK_NAME",
+] as const;
+
+export function isGatewayServiceEnv(env: Record<string, string | undefined>): boolean {
+  if (env.OPENCLAW_SERVICE_MARKER?.trim() !== GATEWAY_SERVICE_MARKER) {
+    return false;
+  }
+  const serviceKind = env.OPENCLAW_SERVICE_KIND?.trim();
+  return !serviceKind || serviceKind === GATEWAY_SERVICE_KIND;
+}
+
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
-export const NODE_SERVICE_MARKER = "openclaw";
+const NODE_SERVICE_MARKER = "openclaw";
 export const NODE_SERVICE_KIND = "node";
-export const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
+const NODE_WINDOWS_TASK_SCRIPT_NAME = "node.cmd";
 export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway"];
 
 function normalizeGatewayProfile(profile?: string): string | null {
@@ -95,34 +113,19 @@ export function resolveGatewayNativeServiceIdentityConflict(
   return null;
 }
 
-function formatGatewayServiceDescription(params?: { profile?: string; version?: string }): string {
-  const profile = normalizeGatewayProfile(params?.profile);
-  const version = params?.version?.trim();
-  const parts: string[] = [];
-  if (profile) {
-    parts.push(`profile: ${profile}`);
-  }
-  if (version) {
-    parts.push(`v${version}`);
-  }
-  if (parts.length === 0) {
+function formatGatewayServiceDescription(profile?: string): string {
+  const normalized = normalizeGatewayProfile(profile);
+  if (!normalized) {
     return "OpenClaw Gateway";
   }
-  return `OpenClaw Gateway (${parts.join(", ")})`;
+  return `OpenClaw Gateway (profile: ${normalized})`;
 }
 
 export function resolveGatewayServiceDescription(params: {
   env: Record<string, string | undefined>;
-  environment?: Record<string, string | undefined>;
   description?: string;
 }): string {
-  return (
-    params.description ??
-    formatGatewayServiceDescription({
-      profile: params.env.OPENCLAW_PROFILE,
-      version: params.environment?.OPENCLAW_SERVICE_VERSION ?? params.env.OPENCLAW_SERVICE_VERSION,
-    })
-  );
+  return params.description ?? formatGatewayServiceDescription(params.env.OPENCLAW_PROFILE);
 }
 
 export function resolveNodeLaunchAgentLabel(): string {
@@ -137,10 +140,15 @@ export function resolveNodeWindowsTaskName(): string {
   return NODE_WINDOWS_TASK_NAME;
 }
 
-export function formatNodeServiceDescription(params?: { version?: string }): string {
-  const version = params?.version?.trim();
-  if (!version) {
-    return "OpenClaw Node Host";
-  }
-  return `OpenClaw Node Host (v${version})`;
+export function resolveNodeServiceIdentityEnvironment(): Record<string, string> {
+  return {
+    OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
+    OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
+    OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
+    OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
+    OPENCLAW_LOG_PREFIX: "node",
+    OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,
+    OPENCLAW_SERVICE_KIND: NODE_SERVICE_KIND,
+  };
 }

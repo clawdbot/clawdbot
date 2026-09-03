@@ -1,9 +1,14 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
+import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createSessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import {
   createContext,
   createGateway,
@@ -11,12 +16,66 @@ import {
   createSessions,
 } from "./sessions-page.test-support.ts";
 
+vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
+
 afterEach(() => {
   document.body.replaceChildren();
+  vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
 
 describe("sessions page archived deletion", () => {
+  it("removes a confirmed selection while the delete RPC is pending and restores it on rejection", async () => {
+    const target = {
+      key: "agent:main:cloud",
+      kind: "direct" as const,
+      sessionId: "cloud-id",
+      label: "Cloud thread",
+      archived: true,
+      updatedAt: 1,
+    };
+    const response = createDeferred<{ deleted: boolean }>();
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.delete") {
+        return response.promise;
+      }
+      if (method === "sessions.list") {
+        return sessionsResult([target], 1);
+      }
+      if (method === "sessions.subscribe") {
+        return { subscribed: true };
+      }
+      return {};
+    });
+    const { gateway } = createGateway({ request } as unknown as GatewayBrowserClient);
+    const sessions = createSessionCapability(gateway);
+    const page = await createRenderedPage(
+      createContext(gateway, sessions),
+      sessionsResult([target], 1),
+      "archived",
+    );
+    try {
+      await sessions.refreshList({ agentId: "main", archivedFilter: "archived" });
+      vi.mocked(showConfirmDialog).mockResolvedValue(true);
+      const operation = page.deleteSessionFromMenu(target);
+      await vi.waitFor(() =>
+        expect(request).toHaveBeenCalledWith(
+          "sessions.delete",
+          expect.objectContaining({ key: target.key }),
+          { timeoutMs: 10 * 60_000 },
+        ),
+      );
+      expect(page.result?.sessions).toEqual([]);
+      response.reject(new Error("cloud cleanup failed"));
+      await operation;
+      expect(page.result?.sessions.map(({ key }) => key)).toContain(target.key);
+      expect(page.error).toContain("cloud cleanup failed");
+    } finally {
+      page.remove();
+      sessions.dispose();
+    }
+  });
+
   it("re-enumerates all archived sessions before bulk deletion", async () => {
     // The rendered result holds one archived row; enumeration must find both.
     const archivedKeys = ["agent:main:old-1", "agent:main:old-2"];
@@ -31,9 +90,15 @@ describe("sessions page archived deletion", () => {
         preservedWorktrees: [],
       })),
     });
-    const { gateway } = createGateway({} as GatewayBrowserClient);
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        features: { methods: ["sessions.delete"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
     const page = await createRenderedPage(
-      createContext(gateway, sessions),
+      createContext(mutableGateway.gateway, sessions),
       {
         count: 2,
         sessions: [
@@ -43,7 +108,7 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
@@ -51,7 +116,12 @@ describe("sessions page archived deletion", () => {
     expect(sessions.list).toHaveBeenCalledWith(
       expect.objectContaining({ archivedFilter: "archived", limit: 1000 }),
     );
-    expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message:
+        "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith([
       {
         key: archivedKeys[0],
@@ -66,6 +136,28 @@ describe("sessions page archived deletion", () => {
         archivedOnly: true,
       },
     ]);
+  });
+
+  it("does not let write-scoped operators delete an active session", async () => {
+    const key = "agent:main:active";
+    const sessions = createSessions();
+    const mutableGateway = createGateway({} as GatewayBrowserClient);
+    mutableGateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read", "operator.write"] },
+        features: { methods: ["sessions.delete"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    const page = await createRenderedPage(createContext(mutableGateway.gateway, sessions), {
+      count: 1,
+      sessions: [{ key, archived: false }],
+    } as SessionsListResult);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
+
+    await page.deleteSessionFromMenu({ key, archived: false } as SessionsListResult["sessions"][0]);
+
+    expect(sessions.deleteMany).not.toHaveBeenCalled();
+    expect(page.error).toBe("This action requires operator.admin access.");
   });
 
   it("aborts delete-all when an enumeration page fails", async () => {
@@ -83,12 +175,12 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.list).toHaveBeenCalledOnce());
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
   });
 
@@ -126,14 +218,19 @@ describe("sessions page archived deletion", () => {
       } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
 
     expect(list).toHaveBeenCalledTimes(2);
     expect(list).toHaveBeenNthCalledWith(2, expect.objectContaining({ offset: 2 }));
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message:
+        "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       [...pageOne, ...pageTwo].map((key) => ({
         key,
@@ -188,13 +285,18 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived(keys[0])] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     page.querySelector<HTMLButtonElement>(".settings-section__actions .danger")?.click();
     await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
 
     expect(list).toHaveBeenCalledTimes(3);
-    expect(confirm).toHaveBeenCalledWith("Delete 3 archived threads and their transcripts?");
+    expect(showConfirmDialog).toHaveBeenCalledWith({
+      message:
+        "Delete 3 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
     expect(sessions.deleteMany).toHaveBeenCalledWith(
       keys.map((key) => ({
         key,
@@ -225,11 +327,11 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteAllArchived();
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
     expect(page.error).toContain("archived session enumeration");
   });
@@ -254,11 +356,11 @@ describe("sessions page archived deletion", () => {
       { count: 1, sessions: [archived] } as SessionsListResult,
       "archived",
     );
-    const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+    vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
     await page.deleteAllArchived();
 
-    expect(confirm).not.toHaveBeenCalled();
+    expect(showConfirmDialog).not.toHaveBeenCalled();
     expect(sessions.deleteMany).not.toHaveBeenCalled();
     expect(page.error).toContain("archived session enumeration was incomplete");
   });
@@ -293,7 +395,7 @@ describe("sessions page archived deletion", () => {
         "archived",
         linked.key,
       );
-      const confirm = vi.spyOn(window, "confirm").mockReturnValue(true);
+      vi.mocked(showConfirmDialog).mockResolvedValue(true);
 
       await page.deleteAllArchived();
 
@@ -304,7 +406,12 @@ describe("sessions page archived deletion", () => {
       } else {
         expect(options).not.toHaveProperty("agentId");
       }
-      expect(confirm).toHaveBeenCalledWith("Delete 2 archived threads and their transcripts?");
+      expect(showConfirmDialog).toHaveBeenCalledWith({
+        message:
+          "Delete 2 archived sessions and their transcripts? Any attached workers will be stopped safely first.",
+        confirmLabel: "Delete",
+        danger: true,
+      });
       expect(sessions.deleteMany).toHaveBeenCalledWith(
         [linked.key, other.key].map((key) => ({
           key,

@@ -12,11 +12,20 @@ type RequestRecord = {
   init?: RequestInit;
 };
 
-function createMockClient(): {
+type DraftStreamOptions = Omit<
+  Parameters<typeof createMattermostDraftStream>[0],
+  "client" | "channelId"
+> & {
+  request?: MattermostClient["request"];
+};
+
+function createDraftStreamFixture(options: DraftStreamOptions = {}): {
   client: MattermostClient;
   calls: RequestRecord[];
   requestMock: ReturnType<typeof vi.fn<MattermostClient["request"]>>;
+  stream: ReturnType<typeof createMattermostDraftStream>;
 } {
+  const { request, ...streamOptions } = options;
   const calls: RequestRecord[] = [];
   let nextId = 1;
   const requestImpl: MattermostClient["request"] = async <T>(
@@ -32,7 +41,7 @@ function createMockClient(): {
     }
     return {} as T;
   };
-  const requestMock = vi.fn(requestImpl);
+  const requestMock = vi.fn(request ?? requestImpl);
   const client: MattermostClient = {
     baseUrl: "https://chat.example.com",
     apiBaseUrl: "https://chat.example.com/api/v4",
@@ -40,7 +49,13 @@ function createMockClient(): {
     request: requestMock as MattermostClient["request"],
     fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
   };
-  return { client, calls, requestMock };
+  const stream = createMattermostDraftStream({
+    client,
+    channelId: "channel-1",
+    throttleMs: 0,
+    ...streamOptions,
+  });
+  return { client, calls, requestMock, stream };
 }
 
 function parseRequestJson(init: RequestInit | undefined): Record<string, unknown> {
@@ -56,13 +71,7 @@ function parseRequestJson(init: RequestInit | undefined): Record<string, unknown
 
 describe("createMattermostDraftStream", () => {
   it("creates a preview post and updates it on later changes", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Running `read`…");
     await stream.flush();
@@ -81,12 +90,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("does not resend identical updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture();
 
     stream.update("Working...");
     await stream.flush();
@@ -97,13 +101,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("clears the preview post when no final reply is delivered", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -116,13 +114,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("discardPending keeps the preview post but ignores later updates", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -136,13 +128,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("seal keeps the preview post and cancels pending final overwrites", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Working...");
     await stream.flush();
@@ -156,13 +142,7 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("stop flushes the last pending update and ignores later ones", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 1000,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1", throttleMs: 1000 });
 
     stream.update("Working...");
     await stream.flush();
@@ -185,20 +165,7 @@ describe("createMattermostDraftStream", () => {
     const requestImpl: MattermostClient["request"] = async () => {
       throw new Error("boom");
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      warn,
-    });
+    const { requestMock, stream } = createDraftStreamFixture({ request: requestImpl, warn });
 
     stream.update("Working...");
     await stream.flush();
@@ -212,14 +179,8 @@ describe("createMattermostDraftStream", () => {
 
   it("retains an accepted preview failure after its background flush has settled", async () => {
     const warn = vi.fn();
-    const { client, requestMock } = createMockClient();
+    const { requestMock, stream } = createDraftStreamFixture({ warn });
     requestMock.mockResolvedValueOnce({ message: "already visible" });
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      warn,
-    });
 
     stream.update("Already delivered");
     await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce());
@@ -250,16 +211,10 @@ describe("createMattermostDraftStream", () => {
   });
 
   it("truncates on a code-point boundary so a straddling emoji is dropped whole", async () => {
-    const { client, calls } = createMockClient();
     // maxChars=12 => cut point is maxChars-3=9. The emoji 😀 occupies UTF-16
     // indices 8-9, so a raw slice(0,9) would keep the lone high surrogate at
     // index 8 and drop its low surrogate at index 9, leaking a dangling half.
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-      maxChars: 12,
-    });
+    const { calls, stream } = createDraftStreamFixture({ maxChars: 12 });
 
     const input = `${"a".repeat(8)}\u{1F600}${"b".repeat(5)}`;
     stream.update(input);
@@ -296,20 +251,7 @@ describe("createMattermostDraftStream", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 1000,
-      warn,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl, throttleMs: 1000, warn });
 
     stream.update("Working...");
     await stream.flush();
@@ -326,11 +268,7 @@ describe("createMattermostDraftStream", () => {
 
 describe("createMattermostDraftStream forceNewMessage", () => {
   it("propagates a provider-accepted boundary post without an identity", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { requestMock, stream } = createDraftStreamFixture({
       maxChars: 10,
       chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
     });
@@ -347,17 +285,13 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("retains accepted boundary failures before synchronous warning callbacks re-enter", async () => {
-    const { client, requestMock } = createMockClient();
     let reenteredBoundary: Promise<void> | undefined;
     const warn = vi.fn(() => {
       stream.update("must not publish twice");
       reenteredBoundary = stream.forceNewMessage();
       void reenteredBoundary.catch(() => {});
     });
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { requestMock, stream } = createDraftStreamFixture({
       maxChars: 10,
       chunkText: () => ["aaaaaaaaaa", "bbbbbbbbbb"],
       warn,
@@ -376,7 +310,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("propagates an accepted background failure that settles during boundary rotation", async () => {
-    const { client, requestMock } = createMockClient();
+    const { requestMock, stream } = createDraftStreamFixture();
     let releaseCreate: (() => void) | undefined;
     const createReady = new Promise<void>((resolve) => {
       releaseCreate = resolve;
@@ -384,11 +318,6 @@ describe("createMattermostDraftStream forceNewMessage", () => {
     requestMock.mockImplementationOnce(async () => {
       await createReady;
       return { message: "already visible" };
-    });
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
     });
 
     stream.update("Accepted background preview");
@@ -402,13 +331,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("creates a new post on the next update after forceNewMessage", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      rootId: "root-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture({ rootId: "root-1" });
 
     stream.update("Running `read`…");
     await stream.flush();
@@ -436,14 +359,10 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("restores and chunks an already-flushed over-limit block before rotating", async () => {
-    const { client, calls } = createMockClient();
     const firstChunk = "a".repeat(10);
     const secondChunk = "b".repeat(10);
     const chunkText = vi.fn(() => [firstChunk, secondChunk]);
-    const configuredStream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { calls, stream: configuredStream } = createDraftStreamFixture({
       maxChars: 10,
       chunkText,
     });
@@ -507,19 +426,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl });
 
     stream.update("tool start");
     stream.update("tool complete");
@@ -573,19 +480,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
       }
       return {} as T;
     };
-    const requestMock = vi.fn(requestImpl);
-    const client: MattermostClient = {
-      baseUrl: "https://chat.example.com",
-      apiBaseUrl: "https://chat.example.com/api/v4",
-      token: "token",
-      request: requestMock as MattermostClient["request"],
-      fetchImpl: vi.fn() as MattermostClient["fetchImpl"],
-    };
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture({ request: requestImpl });
 
     stream.update("Looking into the logs");
     stream.update("Looking into the logs now");
@@ -600,12 +495,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("opens a fresh post for a partial that arrives before a fire-and-forget boundary settles", async () => {
-    const { client, calls } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { calls, stream } = createDraftStreamFixture();
 
     stream.update("block A");
     await stream.flush();
@@ -624,12 +514,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("resolves a cumulative terminal reply to the current confirmed generation", async () => {
-    const { client } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -655,12 +540,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("strips confirmed assistant blocks but not transient progress generations", async () => {
-    const { client } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -692,12 +572,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("uses provider-finalized content from a boundary edit", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { requestMock, stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("Draft block");
     await stream.flush();
@@ -712,12 +587,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("keeps the canonical final when an assistant boundary fails to publish", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
-    });
+    const { requestMock, stream } = createDraftStreamFixture();
 
     stream.updateAssistantText("First block");
     await stream.flush();
@@ -734,11 +604,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("retains posts published before a later boundary chunk fails", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { requestMock, stream } = createDraftStreamFixture({
       chunkText: () => ["First half", "Second half"],
     });
 
@@ -758,11 +624,7 @@ describe("createMattermostDraftStream forceNewMessage", () => {
   });
 
   it("does not strip a requested prefix rewritten by the provider", async () => {
-    const { client, requestMock } = createMockClient();
-    const stream = createMattermostDraftStream({
-      client,
-      channelId: "channel-1",
-      throttleMs: 0,
+    const { requestMock, stream } = createDraftStreamFixture({
       chunkText: () => ["First half", "Second half"],
     });
 

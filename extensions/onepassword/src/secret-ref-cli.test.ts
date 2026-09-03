@@ -1,12 +1,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { inspectPathPermissions } from "@openclaw/fs-safe/permissions";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeOnePasswordSecretId } from "../onepassword-secret-id.js";
 import { registerOnePasswordSecretRefCommands, testing } from "./secret-ref-cli.js";
+
+type OnePasswordPlan = {
+  providerUpserts: Record<string, unknown>;
+  targets: Array<Record<string, unknown>>;
+};
 
 function captureStdout() {
   let output = "";
@@ -17,7 +21,7 @@ function captureStdout() {
   return () => output;
 }
 
-function createProgram(config: OpenClawConfig): Command {
+function createProgram(config: OpenClawConfig = {}): Command {
   const program = new Command().exitOverride();
   const onepassword = program.command("onepassword");
   registerOnePasswordSecretRefCommands({
@@ -36,19 +40,29 @@ async function runStatus(
   const output = captureStdout();
   await createProgram(config).parseAsync(
     ["onepassword", "secretref", "status", "--json", ...args],
-    {
-      from: "user",
-    },
+    { from: "user" },
   );
   return JSON.parse(output()) as Record<string, unknown>;
 }
 
-function createOpenAiPlan() {
-  return testing.buildPlan({
-    providerAlias: "onepassword",
-    providerConfig: testing.buildProviderConfig(),
-    providerSecrets: [{ providerId: "openai", secretId: "op://openclaw/OpenAI/credential" }],
-  });
+async function runSetup(planPath: string, args: string[]): Promise<string> {
+  const output = captureStdout();
+  await createProgram().parseAsync(
+    ["onepassword", "secretref", "setup", "--plan-out", planPath, ...args],
+    { from: "user" },
+  );
+  return output();
+}
+
+async function createSetupPlan(args: string[]): Promise<OnePasswordPlan> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onepassword-cli-"));
+  const planPath = path.join(dir, "plan.json");
+  try {
+    await runSetup(planPath, args);
+    return JSON.parse(await fs.readFile(planPath, "utf8")) as OnePasswordPlan;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
 }
 
 afterEach(() => {
@@ -56,215 +70,180 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-describe("1Password CLI helpers", () => {
-  it("builds a secrets apply plan for model provider API keys", () => {
-    const plan = testing.buildPlan({
-      providerAlias: "onepassword",
-      providerConfig: testing.buildProviderConfig(),
-      providerSecrets: [
-        {
-          providerId: "anthropic",
-          secretId: "op://openclaw/Anthropic/credential",
-        },
-        {
-          providerId: "openrouter",
-          secretId: "openclaw/OpenRouter/credential",
-        },
-      ],
-    });
+describe("1Password SecretRef setup", () => {
+  it("builds provider config and model API-key targets", async () => {
+    const plan = await createSetupPlan([
+      "--anthropic-id",
+      "op://openclaw/Anthropic/credential",
+      "--openrouter-id",
+      "openclaw/OpenRouter/credential",
+      "--provider-key",
+      "xai=op://openclaw/xAI/credential",
+    ]);
 
     expect(plan.providerUpserts.onepassword).toEqual({
       source: "exec",
-      pluginIntegration: {
-        pluginId: "onepassword",
-        integrationId: "onepassword",
-      },
+      pluginIntegration: { pluginId: "onepassword", integrationId: "onepassword" },
     });
     expect(plan.targets).toEqual([
-      {
+      expect.objectContaining({
         type: "models.providers.apiKey",
-        path: "models.providers.anthropic.apiKey",
-        pathSegments: ["models", "providers", "anthropic", "apiKey"],
         providerId: "anthropic",
-        ref: {
-          source: "exec",
-          provider: "onepassword",
-          id: "op://openclaw/Anthropic/credential",
-        },
-      },
-      {
-        type: "models.providers.apiKey",
-        path: "models.providers.openrouter.apiKey",
-        pathSegments: ["models", "providers", "openrouter", "apiKey"],
-        providerId: "openrouter",
-        ref: {
-          source: "exec",
-          provider: "onepassword",
-          id: "openclaw/OpenRouter/credential",
-        },
-      },
+        ref: { source: "exec", provider: "onepassword", id: "op://openclaw/Anthropic/credential" },
+      }),
+      expect.objectContaining({ providerId: "openrouter" }),
+      expect.objectContaining({ providerId: "xai" }),
     ]);
   });
 
-  it("builds a secrets apply plan for arbitrary known openclaw secret targets", () => {
-    const plan = testing.buildPlan({
-      providerAlias: "onepassword",
-      providerConfig: testing.buildProviderConfig(),
-      providerSecrets: [],
-      configTargetSecrets: testing.parseConfigTargetMappings([
-        "channels.telegram.botToken=op://openclaw/Telegram/botToken",
-        "models.providers.openai.headers.x-api-key=op://openclaw/OpenAI/proxyKey",
-        "auth-profiles:main:profiles.openai.key=op://openclaw/OpenAI/credential",
-      ]),
-    });
+  it("builds arbitrary known OpenClaw and auth-profile targets", async () => {
+    const plan = await createSetupPlan([
+      "--target",
+      "channels.telegram.botToken=op://openclaw/Telegram/botToken",
+      "--target",
+      "models.providers.openai.headers.x-api-key=op://openclaw/OpenAI/proxyKey",
+      "--target",
+      "auth-profiles:main:profiles.openai.key=op://openclaw/OpenAI/credential",
+    ]);
 
     expect(plan.targets).toEqual([
-      {
+      expect.objectContaining({
         type: "channels.telegram.botToken",
         path: "channels.telegram.botToken",
-        pathSegments: ["channels", "telegram", "botToken"],
-        ref: {
-          source: "exec",
-          provider: "onepassword",
-          id: "op://openclaw/Telegram/botToken",
-        },
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "models.providers.headers",
-        path: "models.providers.openai.headers.x-api-key",
-        pathSegments: ["models", "providers", "openai", "headers", "x-api-key"],
         providerId: "openai",
-        ref: {
-          source: "exec",
-          provider: "onepassword",
-          id: "op://openclaw/OpenAI/proxyKey",
-        },
-      },
-      {
+      }),
+      expect.objectContaining({
         type: "auth-profiles.api_key.key",
         path: "profiles.openai.key",
-        pathSegments: ["profiles", "openai", "key"],
         agentId: "main",
-        ref: {
-          source: "exec",
-          provider: "onepassword",
-          id: "op://openclaw/OpenAI/credential",
-        },
-      },
+      }),
     ]);
   });
 
-  it("parses custom provider mappings", () => {
-    expect(testing.parseProviderKeyMappings(["xai=op://openclaw/xAI/credential"])).toEqual([
-      {
-        providerId: "xai",
-        secretId: "op://openclaw/xAI/credential",
-      },
-    ]);
-  });
-
-  it("accepts native 1Password refs with spaces and encoded selectors", () => {
+  it("encodes native 1Password refs with spaces and selectors", async () => {
     const nativeRef = "op://Personal/OpenClaw QA API Key/password?attribute=value%20one";
-    expect(testing.parseProviderKeyMappings([`openai=${nativeRef}`])).toEqual([
-      {
-        providerId: "openai",
-        secretId: encodeOnePasswordSecretId(nativeRef),
-      },
-    ]);
+    const plan = await createSetupPlan(["--provider-key", `openai=${nativeRef}`]);
+    expect(plan.targets[0]).toMatchObject({
+      providerId: "openai",
+      ref: { id: encodeOnePasswordSecretId(nativeRef) },
+    });
   });
 
   it.each([
-    ["posix", "/tmp/plan.json", "/tmp/plan.json"],
-    ["posix", "/tmp/plan with spaces.json", "'/tmp/plan with spaces.json'"],
-    ["posix", "/tmp/plan'$(touch pwn).json", "'/tmp/plan'\\''$(touch pwn).json'"],
-    ["powershell", String.raw`C:\$env:TEMP\plan';.json`, String.raw`'C:\$env:TEMP\plan'';.json'`],
-    ["cmd", String.raw`C:\Users\Jane Doe\plan.json`, String.raw`"C:\Users\Jane Doe\plan.json"`],
-  ] satisfies Array<["cmd" | "posix" | "powershell", string, string]>)(
-    "shell-quotes %s command arguments for %j",
-    (shell, value, expected) => {
-      expect(testing.quoteCliArg(value, shell)).toBe(expected);
+    [
+      "duplicate providers",
+      [
+        "--openai-id",
+        "op://openclaw/OpenAI/credential",
+        "--provider-key",
+        "OpenAI=op://openclaw/OpenAI/other",
+      ],
+      "Duplicate model provider id",
+    ],
+    [
+      "non-canonical auth-profile agent ids",
+      ["--target", "auth-profiles:../main:profiles.openai.key=op://openclaw/OpenAI/credential"],
+      "Invalid --target auth-profiles target for 1Password",
+    ],
+    [
+      "traversal secret ids",
+      ["--provider-key", "openai=op://openclaw/../credential"],
+      "Invalid --provider-key openai 1Password SecretRef id",
+    ],
+    [
+      "unsupported targets",
+      ["--target", "secrets.github_pat=op://openclaw/GitHub/pat"],
+      "Unknown or unsupported 1Password setup target path",
+    ],
+    [
+      "duplicate target paths",
+      [
+        "--openai-id",
+        "op://openclaw/OpenAI/credential",
+        "--target",
+        "models.providers.openai.apiKey=op://openclaw/OpenAI/other",
+      ],
+      "Duplicate secret target path",
+    ],
+    ["empty plans", [], "No SecretRef targets selected"],
+  ])("rejects %s", async (_label, args, message) => {
+    await expect(createSetupPlan(args)).rejects.toThrow(message);
+  });
+
+  it.each(["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"])(
+    "rejects invalid 1Password ref %s",
+    async (id) => {
+      await expect(createSetupPlan(["--provider-key", `openai=${id}`])).rejects.toThrow(
+        "Invalid --provider-key openai 1Password SecretRef id",
+      );
     },
   );
 
-  it("rejects line breaks in generated command arguments", () => {
-    expect(() => testing.quoteCliArg("plan.json\nopenclaw secrets reload", "posix")).toThrow(
-      /cannot contain CR or LF/,
-    );
-    expect(() => testing.quoteCliArg("plan.json\r& whoami", "cmd")).toThrow(
-      /cannot contain CR or LF/,
-    );
+  it("prints a quoted canonical plan path after the readiness command", async () => {
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-setup-test-"));
+    const planPath = path.join(tempDir, "plan with spaces.json");
+    const canonicalPlanPath = path.join(await fs.realpath(tempDir), "plan with spaces.json");
+    try {
+      const output = await runSetup(planPath, ["--openai-id", "op://openclaw/OpenAI/credential"]);
+      expect(output).toContain("openclaw onepassword secretref status");
+      expect(output).toContain(
+        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
+      );
+      expect(output).toContain(`openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
   });
 
-  it("renders native follow-up commands for both Windows shells", () => {
-    expect(testing.renderApplyCommands(String.raw`C:\Users\Jane Doe\plan;.json`, "win32")).toEqual([
-      "PowerShell:",
-      String.raw`  openclaw secrets apply --from 'C:\Users\Jane Doe\plan;.json' --dry-run --allow-exec`,
-      String.raw`  openclaw secrets apply --from 'C:\Users\Jane Doe\plan;.json' --allow-exec`,
-      "Command Prompt:",
-      String.raw`  openclaw secrets apply --from "C:\Users\Jane Doe\plan;.json" --dry-run --allow-exec`,
-      String.raw`  openclaw secrets apply --from "C:\Users\Jane Doe\plan;.json" --allow-exec`,
-    ]);
-  });
+  it.skipIf(process.platform === "win32")(
+    "rejects plan output in a directory writable by another account",
+    async () => {
+      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secret-plan-test-"));
+      const planPath = path.join(tempDir, "plan.json");
+      try {
+        await fs.chmod(tempDir, 0o777);
+        await expect(
+          runSetup(planPath, ["--openai-id", "op://openclaw/OpenAI/credential"]),
+        ).rejects.toThrow("path is writable by another user");
+        await expect(fs.stat(planPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        await fs.chmod(tempDir, 0o700);
+        await fs.rm(tempDir, { recursive: true, force: true });
+      }
+    },
+  );
 
-  it("omits unsafe interactive Command Prompt commands", () => {
-    const commands = testing.renderApplyCommands(String.raw`C:\%TEMP%\plan!.json`, "win32");
-    expect(commands).toContain(
-      "Command Prompt: unavailable for paths containing % or !; use PowerShell.",
-    );
-    expect(commands.filter((command) => command.includes("openclaw secrets apply"))).toHaveLength(
-      2,
-    );
-    expect(() => testing.quoteCliArg(String.raw`C:\%TEMP%\plan!.json`, "cmd")).toThrow(
-      /cannot safely quote/,
-    );
-  });
+  it.skipIf(process.platform === "win32")(
+    "writes through the canonical directory instead of a replaceable alias",
+    async () => {
+      const trustedDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secret-plan-trusted-"));
+      const aliasParent = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-secret-plan-alias-"));
+      const aliasDir = path.join(aliasParent, "output");
+      const canonicalPlanPath = path.join(await fs.realpath(trustedDir), "plan.json");
+      try {
+        await fs.symlink(trustedDir, aliasDir);
+        await fs.chmod(aliasParent, 0o777);
+        const output = await runSetup(path.join(aliasDir, "plan.json"), [
+          "--openai-id",
+          "op://openclaw/OpenAI/credential",
+        ]);
+        expect(output).toContain(`Plan written to ${canonicalPlanPath}`);
+        expect(JSON.parse(await fs.readFile(canonicalPlanPath, "utf8"))).toMatchObject({
+          version: 1,
+        });
+      } finally {
+        await fs.chmod(aliasParent, 0o700);
+        await fs.rm(aliasParent, { recursive: true, force: true });
+        await fs.rm(trustedDir, { recursive: true, force: true });
+      }
+    },
+  );
+});
 
-  it("parses config target mappings", () => {
-    expect(
-      testing.parseConfigTargetMappings([
-        "channels.telegram.botToken=op://openclaw/Telegram/botToken",
-        "auth-profiles:main:profiles.openai.key=op://openclaw/OpenAI/credential",
-      ]),
-    ).toEqual([
-      {
-        path: "channels.telegram.botToken",
-        secretId: "op://openclaw/Telegram/botToken",
-      },
-      {
-        path: "profiles.openai.key",
-        agentId: "main",
-        secretId: "op://openclaw/OpenAI/credential",
-      },
-    ]);
-  });
-
-  it("rejects non-canonical auth-profile agent ids", () => {
-    expect(() =>
-      testing.parseConfigTargetMappings([
-        "auth-profiles:../main:profiles.openai.key=op://openclaw/OpenAI/credential",
-      ]),
-    ).toThrow("Invalid --target auth-profiles target for 1Password");
-  });
-
-  it("rejects duplicate model providers", () => {
-    expect(() =>
-      testing.collectProviderSecrets({
-        openaiId: "op://openclaw/OpenAI/credential",
-        providerKey: ["openai=op://openclaw/OpenAI/other"],
-      }),
-    ).toThrow("Duplicate model provider id in 1Password setup: openai");
-  });
-
-  it("rejects setup plans without targets", () => {
-    expect(() =>
-      testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [],
-      }),
-    ).toThrow("No SecretRef targets selected");
-  });
-
+describe("1Password readiness", () => {
   it("reports trusted executable and token prerequisites without exposing the token", async () => {
     const resolveTrustedCli = vi.fn(async () => "/trusted/op");
     const readTokenFile = vi.fn(() => "not-a-real-service-account-token");
@@ -296,10 +275,7 @@ describe("1Password CLI helpers", () => {
   it("reports untrusted op and unsafe token prerequisites", async () => {
     await expect(
       testing.inspectSecretRefReadiness(
-        {
-          env: { CLAW_1PASSWORD_OP: "op", PATH: "/bin" },
-          tokenFile: "/missing-token",
-        },
+        { env: { CLAW_1PASSWORD_OP: "op", PATH: "/bin" }, tokenFile: "/missing-token" },
         {
           resolveTrustedCli: async () => {
             throw new Error("unsafe path detail");
@@ -318,208 +294,6 @@ describe("1Password CLI helpers", () => {
       prerequisitesReady: false,
     });
   });
-
-  it("rejects traversal segments in SecretRef ids", () => {
-    expect(() => testing.parseProviderKeyMappings(["openai=op://openclaw/../credential"])).toThrow(
-      "Invalid --provider-key openai 1Password SecretRef id",
-    );
-  });
-
-  it("rejects invalid 1Password references before encoding", () => {
-    for (const id of ["/absolute/path", "op://openclaw\\OpenAI\\credential", "op://vault/clé"]) {
-      expect(() => testing.parseProviderKeyMappings([`openai=${id}`])).toThrow(
-        "Invalid --provider-key openai 1Password SecretRef id",
-      );
-    }
-  });
-
-  it("rejects unsupported config target paths", () => {
-    expect(() =>
-      testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [],
-        configTargetSecrets: [
-          {
-            path: "secrets.github_pat",
-            secretId: "op://openclaw/GitHub/pat",
-          },
-        ],
-      }),
-    ).toThrow("Unknown or unsupported 1Password setup target path: secrets.github_pat");
-  });
-
-  it("rejects duplicate config target paths", () => {
-    expect(() =>
-      testing.buildPlan({
-        providerAlias: "onepassword",
-        providerConfig: testing.buildProviderConfig(),
-        providerSecrets: [
-          {
-            providerId: "openai",
-            secretId: "op://openclaw/OpenAI/credential",
-          },
-        ],
-        configTargetSecrets: [
-          {
-            path: "models.providers.openai.apiKey",
-            secretId: "op://openclaw/OpenAI/other",
-          },
-        ],
-      }),
-    ).toThrow("Duplicate secret target path in 1Password setup: models.providers.openai.apiKey");
-  });
-
-  it("creates plan files exclusively with owner-only permissions", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
-    const planPath = path.join(tempDir, "plan.json");
-    const plan = createOpenAiPlan();
-    try {
-      await testing.writePlanFile(plan, planPath);
-      if (process.platform !== "win32") {
-        expect((await fs.stat(planPath)).mode & 0o777).toBe(0o600);
-      } else {
-        const permissions = await inspectPathPermissions(planPath);
-        expect(permissions).toMatchObject({
-          ok: true,
-          source: "windows-acl",
-          ownerTrusted: true,
-          groupReadable: false,
-          groupWritable: false,
-          worldReadable: false,
-          worldWritable: false,
-        });
-      }
-      await expect(testing.writePlanFile(plan, planPath)).rejects.toThrow(
-        "Plan path already exists",
-      );
-
-      const symlinkPath = path.join(tempDir, "symlink.json");
-      await fs.symlink(planPath, symlinkPath);
-      await expect(testing.writePlanFile(plan, symlinkPath)).rejects.toThrow(
-        "Plan path already exists",
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "rejects plan output in a directory writable by another account",
-    async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
-      const planPath = path.join(tempDir, "plan.json");
-      const plan = createOpenAiPlan();
-      try {
-        await fs.chmod(tempDir, 0o777);
-        await expect(testing.writePlanFile(plan, planPath)).rejects.toThrow(
-          "path is writable by another user",
-        );
-        await expect(fs.stat(planPath)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        await fs.chmod(tempDir, 0o700);
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "writes through the canonical directory instead of a replaceable alias",
-    async () => {
-      const trustedDir = await fs.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-1password-plan-trusted-"),
-      );
-      const aliasParent = await fs.mkdtemp(
-        path.join(os.tmpdir(), "openclaw-1password-plan-alias-"),
-      );
-      const aliasDir = path.join(aliasParent, "output");
-      const canonicalPlanPath = path.join(await fs.realpath(trustedDir), "plan.json");
-      const plan = createOpenAiPlan();
-      try {
-        await fs.symlink(trustedDir, aliasDir);
-        await fs.chmod(aliasParent, 0o777);
-        await expect(testing.writePlanFile(plan, path.join(aliasDir, "plan.json"))).resolves.toBe(
-          canonicalPlanPath,
-        );
-        expect(JSON.parse(await fs.readFile(canonicalPlanPath, "utf8"))).toMatchObject({
-          version: 1,
-        });
-      } finally {
-        await fs.chmod(aliasParent, 0o700);
-        await fs.rm(aliasParent, { recursive: true, force: true });
-        await fs.rm(trustedDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "rejects unrenderable plan paths before creating a file",
-    async () => {
-      const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
-      const planPath = path.join(tempDir, "plan\n.json");
-      const plan = createOpenAiPlan();
-      try {
-        await expect(testing.writePlanFile(plan, planPath)).rejects.toThrow(
-          "Command argument cannot contain CR or LF",
-        );
-        await expect(fs.stat(planPath)).rejects.toMatchObject({ code: "ENOENT" });
-      } finally {
-        await fs.rm(tempDir, { recursive: true, force: true });
-      }
-    },
-  );
-
-  it("writes a Windows plan through the atomic private-file primitive", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-plan-test-"));
-    const planPath = path.join(tempDir, "plan.json");
-    const plan = createOpenAiPlan();
-    const createPrivateWindowsFile = vi.fn(async (filePath: string, content: string) => {
-      await fs.writeFile(filePath, content, { flag: "wx" });
-    });
-    const resolveTrustedPlanDirectory = vi.fn(async (directoryPath: string) => directoryPath);
-    try {
-      await testing.writePlanFile(plan, planPath, {
-        platform: "win32",
-        createPrivateWindowsFile,
-        resolveTrustedPlanDirectory,
-      });
-      expect(resolveTrustedPlanDirectory).toHaveBeenCalledWith(path.resolve(tempDir));
-      expect(createPrivateWindowsFile).toHaveBeenCalledWith(planPath, expect.any(String));
-      expect(JSON.parse(await fs.readFile(planPath, "utf8"))).toMatchObject({ version: 1 });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("prints the readiness check before plan application", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-1password-setup-test-"));
-    const planPath = path.join(tempDir, "plan with spaces.json");
-    const canonicalPlanPath = path.join(await fs.realpath(tempDir), "plan with spaces.json");
-    const output = captureStdout();
-    try {
-      await createProgram({}).parseAsync(
-        [
-          "onepassword",
-          "secretref",
-          "setup",
-          "--openai-id",
-          "op://openclaw/OpenAI/credential",
-          "--plan-out",
-          planPath,
-        ],
-        { from: "user" },
-      );
-      expect(output()).toContain("openclaw onepassword secretref status");
-      expect(output()).toContain(
-        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
-      );
-      expect(output()).toContain(
-        `openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`,
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
 });
 
 describe("1Password CLI status", () => {
@@ -534,8 +308,8 @@ describe("1Password CLI status", () => {
         },
       },
     });
-    expect(result.providerAlias).toBe("corp-onepassword");
     expect(result).toMatchObject({
+      providerAlias: "corp-onepassword",
       providerReady: true,
       opStatus: "not-found",
       tokenFileStatus: "missing-or-unsafe",
@@ -557,8 +331,7 @@ describe("1Password CLI status", () => {
         },
       },
     });
-    expect(result.providerAlias).toBe("corp-onepassword");
-    expect(result.providerReady).toBe(true);
+    expect(result).toMatchObject({ providerAlias: "corp-onepassword", providerReady: true });
   });
 
   it("requires an explicit alias when multiple providers are configured", async () => {

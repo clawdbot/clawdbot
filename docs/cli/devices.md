@@ -41,6 +41,8 @@ Paired device display names use this precedence: operator label (`operatorLabel`
 
 Approve a pending pairing request by exact `requestId`. Omitting `requestId`, or passing `--latest`, only previews the newest pending request and exits (code 1); rerun with the exact request ID to approve.
 
+The printed approval command keeps your active profile or container, explicit Gateway URL, nondefault timeout, and JSON output mode. Token and password option values are omitted; supply the same credentials again when the preview asks you to reuse those options.
+
 ```bash
 openclaw devices approve
 openclaw devices approve <requestId>
@@ -141,8 +143,10 @@ Use this when Control UI or other clients keep failing with `AUTH_TOKEN_MISMATCH
 1. Confirm current gateway token source:
 
    ```bash
-   openclaw config get gateway.auth.token
+   openclaw gateway auth-token --show
    ```
+
+   Run the command in an interactive terminal on the Gateway host and treat its output as a secret.
 
 2. List paired devices and identify the affected device id:
 

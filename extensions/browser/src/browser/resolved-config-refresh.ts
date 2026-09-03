@@ -92,12 +92,34 @@ function applyResolvedConfig(
   current: BrowserServerState,
   freshResolved: BrowserServerState["resolved"],
 ) {
+  const extensionRelayInternalTokens: Record<string, string> = {};
+  for (const [name, relay] of current.extensionRelays ?? []) {
+    const runtime = current.profiles.get(name);
+    const lifecycle = runtime && getProfileLifecycle(runtime);
+    const profile = resolveProfile(freshResolved, name);
+    if (
+      runtime?.profile.driver === "extension" &&
+      !lifecycle?.terminal &&
+      !lifecycle?.transitionReason &&
+      !lifecycle?.cleanupRelays.has(relay) &&
+      profile?.driver === "extension" &&
+      profile.cdpPort === relay.port &&
+      relay.ownership !== "borrowed"
+    ) {
+      extensionRelayInternalTokens[name] = relay.internalToken;
+    }
+  }
   current.resolved = {
     ...freshResolved,
     // Keep the runtime evaluate gate stable across request-time profile refreshes.
     // Security-sensitive behavior should only change via full runtime config reload,
     // not as a side effect of resolving profiles/tabs during a request.
     evaluateEnabled: current.resolved.evaluateEnabled,
+    // Only an exact live relay owns its process-local CDP credential; stale
+    // config snapshots must never resurrect closed or replaced credentials.
+    extensionRelayInternalTokens,
+    // Config refresh must not erase the lifecycle's key while a relay is starting.
+    extensionRelayToken: current.resolved.extensionRelayToken,
   };
   for (const [name, runtime] of current.profiles) {
     const actor = getProfileLifecycle(runtime);
@@ -108,7 +130,7 @@ function applyResolvedConfig(
     if (actor.terminal) {
       continue;
     }
-    const nextProfile = resolveProfile(freshResolved, name);
+    const nextProfile = resolveProfile(current.resolved, name);
     if (nextProfile) {
       if (actor.blockedReason && !actor.transitionReason) {
         void beginProfileTransition({

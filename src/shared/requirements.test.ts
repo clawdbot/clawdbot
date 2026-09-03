@@ -121,7 +121,7 @@ describe("requirements evaluation", () => {
     expect(result.eligible).toBe(false);
   });
 
-  it("clears missing requirements when always is true but preserves config checks", () => {
+  it("clears runtime requirements when always is true on a compatible OS", () => {
     const result = evaluate({
       always: true,
       metadata: {
@@ -131,13 +131,32 @@ describe("requirements evaluation", () => {
           env: ["OPENAI_API_KEY"],
           config: ["browser.enabled"],
         },
-        os: ["darwin"],
+        os: ["linux"],
       },
     });
 
     expect(result.missing).toEqual({ bins: [], anyBins: [], env: [], config: [], os: [] });
     expect(result.configChecks).toEqual([{ path: "browser.enabled", satisfied: false }]);
     expect(result.eligible).toBe(true);
+  });
+
+  it("preserves OS incompatibility when always is true", () => {
+    const result = evaluate({
+      always: true,
+      metadata: {
+        requires: { bins: ["node"], env: ["OPENAI_API_KEY"] },
+        os: ["darwin"],
+      },
+    });
+
+    expect(result.missing).toEqual({
+      bins: [],
+      anyBins: [],
+      env: [],
+      config: [],
+      os: ["darwin"],
+    });
+    expect(result.eligible).toBe(false);
   });
 
   it("defaults missing metadata to empty requirements", () => {

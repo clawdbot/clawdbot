@@ -1,6 +1,12 @@
-import type { ScopeTree } from "openclaw/plugin-sdk/channel-policy";
+import {
+  resolveChannelGroupPolicy,
+  resolveToolsBySender,
+  type GroupToolPolicyConfig,
+  type ScopeTree,
+} from "openclaw/plugin-sdk/channel-policy";
 // Telegram helper module supports group config helpers behavior.
 import type {
+  OpenClawConfig,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -42,6 +48,21 @@ export function resolveTelegramScopedGroupConfig(
   return { groupConfig, topicConfig };
 }
 
+export function resolveTelegramGroupIngestEnabled(params: {
+  cfg: OpenClawConfig;
+  chatId: string | number;
+  accountId?: string;
+  topicConfig?: TelegramTopicConfig;
+}): boolean {
+  const { groupConfig, defaultConfig } = resolveChannelGroupPolicy({
+    cfg: params.cfg,
+    channel: "telegram",
+    groupId: String(params.chatId),
+    accountId: params.accountId,
+  });
+  return (params.topicConfig?.ingest ?? groupConfig?.ingest ?? defaultConfig?.ingest) === true;
+}
+
 export function resolveTelegramGroupPromptSettings(params: {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
@@ -57,4 +78,21 @@ export function resolveTelegramGroupPromptSettings(params: {
   const groupSystemPrompt =
     systemPromptParts.length > 0 ? systemPromptParts.join("\n\n") : undefined;
   return { skillFilter, groupSystemPrompt };
+}
+
+export function resolveTelegramDirectToolPolicy(params: {
+  directConfig?: Pick<TelegramDirectConfig, "tools" | "toolsBySender">;
+  senderId?: string | null;
+  senderName?: string | null;
+  senderUsername?: string | null;
+}): GroupToolPolicyConfig | undefined {
+  return (
+    resolveToolsBySender({
+      toolsBySender: params.directConfig?.toolsBySender,
+      messageProvider: "telegram",
+      senderId: params.senderId,
+      senderName: params.senderName,
+      senderUsername: params.senderUsername,
+    }) ?? params.directConfig?.tools
+  );
 }

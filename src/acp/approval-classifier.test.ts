@@ -21,6 +21,17 @@ function classify(params: {
 }
 
 describe("classifyAcpToolApproval", () => {
+  it.each([
+    ["list_windows", "other"],
+    ["left_click", "mutating"],
+  ])("keeps computer %s behind approval", (action, approvalClass) => {
+    expect(classify({ title: "computer", rawInput: { name: "computer", action } })).toEqual({
+      toolName: "computer",
+      approvalClass,
+      autoApprove: false,
+    });
+  });
+
   it("auto-approves scoped readonly reads", () => {
     expect(
       classify({
@@ -44,6 +55,45 @@ describe("classifyAcpToolApproval", () => {
       toolName: "read",
       approvalClass: "other",
       autoApprove: false,
+    });
+  });
+
+  it.each([
+    "file:///outside/marker.txt",
+    "file://localhost/outside/marker.txt",
+    "FILE:///outside/marker.txt",
+    "File:///outside/marker.txt",
+    "file:/outside/marker.txt",
+    "FILE:/outside/marker.txt",
+    "FILE://localhost/outside/marker.txt",
+    "FILE://remote.example/outside/marker.txt",
+  ])("does not auto-approve out-of-cwd file URL %s", (fileUrl) => {
+    expect(
+      classify({
+        title: "read: ignored-by-raw-input",
+        rawInput: { path: fileUrl },
+      }),
+    ).toEqual({
+      toolName: "read",
+      approvalClass: "other",
+      autoApprove: false,
+    });
+  });
+
+  it.each([
+    "file:///workspace/src/index.ts",
+    "FILE:///workspace/src/index.ts",
+    "file:/workspace/src/index.ts",
+  ])("auto-approves in-cwd file URL %s", (fileUrl) => {
+    expect(
+      classify({
+        title: "read: ignored-by-raw-input",
+        rawInput: { path: fileUrl },
+      }),
+    ).toEqual({
+      toolName: "read",
+      approvalClass: "readonly_scoped",
+      autoApprove: true,
     });
   });
 

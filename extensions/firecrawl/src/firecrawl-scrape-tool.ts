@@ -55,10 +55,16 @@ export function createFirecrawlScrapeTool(api: OpenClawPluginApi) {
   return {
     name: "firecrawl_scrape",
     label: "Firecrawl Scrape",
+    resultContentSource: "network" as const,
     description:
-      "Scrape a page using Firecrawl v2/scrape. Useful for JS-heavy or bot-protected pages where plain web_fetch is weak.",
+      "Scrape a page using Firecrawl v2/scrape. Useful for JS-heavy or bot-protected pages where a plain URL fetch is weak.",
     parameters: FirecrawlScrapeToolSchema,
-    execute: async (_toolCallId: string, rawParams: Record<string, unknown>) => {
+    execute: async (
+      _toolCallId: string,
+      rawParams: Record<string, unknown>,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted();
       const url = readStringParam(rawParams, "url", { required: true });
       const extractMode =
         readStringParam(rawParams, "extractMode") === "text" ? "text" : "markdown";
@@ -86,6 +92,7 @@ export function createFirecrawlScrapeTool(api: OpenClawPluginApi) {
           proxy,
           storeInCache,
           timeoutSeconds,
+          ...(signal ? { signal } : {}),
         }),
       );
     },

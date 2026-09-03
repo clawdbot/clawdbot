@@ -1,11 +1,14 @@
+import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
 /**
  * Browser setup entry. It auto-enables the Browser plugin when config or tool
  * policies reference browser control.
  */
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { isRecord } from "./src/record-shared.js";
+import {
+  isRecord,
+  normalizeOptionalLowercaseString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 
 function listContainsBrowser(value: unknown): boolean {
   return (
@@ -24,10 +27,9 @@ function hasBrowserToolReference(config: OpenClawConfig): boolean {
   if (toolPolicyReferencesBrowser(config.tools)) {
     return true;
   }
-  const agentList = config.agents?.list;
-  return Array.isArray(agentList)
-    ? agentList.some((entry) => isRecord(entry) && toolPolicyReferencesBrowser(entry.tools))
-    : false;
+  return listAgentIds(config).some((agentId) =>
+    toolPolicyReferencesBrowser(resolveAgentConfig(config, agentId)?.tools),
+  );
 }
 
 /** Setup entry that detects existing Browser configuration references. */

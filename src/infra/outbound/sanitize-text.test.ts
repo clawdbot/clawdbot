@@ -57,8 +57,13 @@ describe("sanitizeForPlainText", () => {
 
   // --- block elements -----------------------------------------------------
 
-  it("converts <p> and <div> to newlines", () => {
-    expect(sanitizeForPlainText("<p>paragraph</p>")).toBe("\nparagraph\n");
+  it.each([
+    ["<p>paragraph</p>", "\nparagraph\n"],
+    ['before<p class="x">inside</p>after', "before\ninside\nafter"],
+    ['before<div id="y">inside</div>after', "before\ninside\nafter"],
+    ["before<DIV id='y' title='a>b'>inside</DIV>after", "before\ninside\nafter"],
+  ])("preserves block boundaries in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
   });
 
   it("converts headings to bold text with newlines", () => {
@@ -75,11 +80,62 @@ describe("sanitizeForPlainText", () => {
     );
   });
 
+  it.each([
+    ["<b></b>", { style: "markdown" as const }],
+    ["<strong></strong>", {}],
+    ["<i></i>", { style: "markdown" as const }],
+    ["<em></em>", { style: "markdown" as const }],
+    ["<s></s>", { style: "markdown" as const }],
+    ["<strike></strike>", { style: "markdown" as const }],
+    ["<del></del>", { style: "markdown" as const }],
+    ["<code></code>", {}],
+    ["<h2></h2>", { style: "markdown" as const }],
+    ["<li></li>", { style: "markdown" as const }],
+    ["<b>   </b>", { style: "markdown" as const }],
+    ["<strong title='empty'></strong>", { style: "markdown" as const }],
+    ["<b><span></span></b>", { style: "markdown" as const }],
+    ["<b><img src='empty'/></b>", { style: "markdown" as const }],
+    ["<li><img src='empty'/></li>", { style: "markdown" as const }],
+    ["<i><b></b></i>", { style: "markdown" as const }],
+    ["<b><i></i></b>", { style: "markdown" as const }],
+  ])("does not create visible structure from %s", (input, options) => {
+    expect(sanitizeForPlainText(input, options)).toBe("");
+  });
+
+  it("preserves visible content around an empty element", () => {
+    expect(
+      sanitizeForPlainText("before\n<b></b>\nafter", {
+        style: "markdown",
+      }),
+    ).toBe("before\n\nafter");
+  });
+
+  it.each([
+    ["<b><br></b>", "\n"],
+    ["<b>\n</b>", "\n"],
+    ["<b>\r\n</b>", "\r\n"],
+    ["<p></p>", "\n\n"],
+    ["<div></div>", "\n\n"],
+    ["<p><br></p>", "\n\n"],
+  ])("preserves structural breaks in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it("preserves a wrapped line break between visible text", () => {
+    expect(sanitizeForPlainText("before<b>\n</b>after")).toBe("before\nafter");
+  });
+
   // --- tag stripping ------------------------------------------------------
 
   it("strips unknown/remaining tags", () => {
     expect(sanitizeForPlainText('<span class="x">text</span>')).toBe("text");
     expect(sanitizeForPlainText('<a href="https://example.com">link</a>')).toBe("link");
+  });
+
+  it("strips colon- and dot-qualified tags", () => {
+    expect(
+      sanitizeForPlainText("<vendor:note>one</vendor:note><vendor.note>two</vendor.note>"),
+    ).toBe("onetwo");
   });
 
   it("keeps stripping tags exposed by malformed tag text", () => {
@@ -89,6 +145,91 @@ describe("sanitizeForPlainText", () => {
 
     expect(sanitized).toBe("before alert(1) after");
     expect(sanitized).not.toContain("<script");
+  });
+
+  it("preserves tag-shaped code inside fenced blocks while converting prose tags", () => {
+    const reply = [
+      "Here is the nginx snippet:",
+      "",
+      "```xml",
+      '<server port="8080">',
+      '  <route path="/api"/>',
+      "</server>",
+      "```",
+      "",
+      "Wrap it in <b>bold</b> when quoting.",
+    ].join("\n");
+
+    expect(sanitizeForPlainText(reply, { style: "markdown" })).toBe(
+      [
+        "Here is the nginx snippet:",
+        "",
+        "```xml",
+        '<server port="8080">',
+        '  <route path="/api"/>',
+        "</server>",
+        "```",
+        "",
+        "Wrap it in **bold** when quoting.",
+      ].join("\n"),
+    );
+  });
+
+  it("preserves large control-character runs around code", () => {
+    const reply = `${"\u0000".repeat(40_000)}e\u0000p\n\`\`\`text\nline one\n\n\n<Button>\n\`\`\``;
+
+    expect(sanitizeForPlainText(reply)).toBe(reply);
+  });
+
+  it("preserves generics and JSX inside inline code spans", () => {
+    expect(
+      sanitizeForPlainText("Use `Array<string>` for ids, and render `<Button onClick={save}>`."),
+    ).toBe("Use `Array<string>` for ids, and render `<Button onClick={save}>`.");
+  });
+
+  it("keeps paired HTML formatting that wraps an inline code span", () => {
+    expect(sanitizeForPlainText("<strong>Use `<Button>` now</strong>")).toBe(
+      "*Use `<Button>` now*",
+    );
+    expect(sanitizeForPlainText("<em>render `<Button>` twice</em>", { style: "markdown" })).toBe(
+      "_render `<Button>` twice_",
+    );
+    expect(sanitizeForPlainText("<li>call `Array<string>` first</li>")).toBe(
+      "• call `Array<string>` first\n",
+    );
+  });
+
+  it.each([
+    ['Link: <a href="`hidden`">click</a> end', "Link: click end"],
+    ['Link: <a href="`hidden`">click</a> then `visible` end', "Link: click then `visible` end"],
+    ['`first` <a href="`hidden`">click</a> then `last`', "`first` click then `last`"],
+    ['<a href="`one`">a</a><span title="`two`">b</span> `visible`', "ab `visible`"],
+    ['<b title="`hidden`">`visible`</b>', "*`visible`*"],
+  ])("restores only surviving code regions in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+    expect(sanitizeForPlainText(input, { style: "markdown" })).toBe(
+      input.startsWith("<b") ? "**`visible`**" : expected,
+    );
+  });
+
+  it("preserves marker-shaped input around and inside surviving code", () => {
+    const sentinels = "\u0000e\u0000p0;\u0000p1;\u0000p12;";
+    const visible = `\`${sentinels}<Button>\``;
+    expect(sanitizeForPlainText(`${sentinels}<a href="\`hidden\`">click</a> ${visible}`)).toBe(
+      `${sentinels}click ${visible}`,
+    );
+  });
+
+  it("preserves tag-shaped code inside indented code blocks", () => {
+    expect(sanitizeForPlainText('Example:\n\n    <div id="root"></div>\n\ndone')).toBe(
+      'Example:\n\n    <div id="root"></div>\n\ndone',
+    );
+  });
+
+  it("keeps stripping tags after an unterminated inline code delimiter", () => {
+    expect(sanitizeForPlainText("prefix ` unterminated <span>text</span>")).toBe(
+      "prefix ` unterminated text",
+    );
   });
 
   it("strips known internal runtime scaffolding tags including underscore names", () => {
@@ -104,6 +245,43 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("See <https://example.com/path?q=1> now")).toBe(
       "See https://example.com/path?q=1 now",
     );
+    expect(sanitizeForPlainText("<https://example.com/a.pdf|Manual>")).toBe(
+      "https://example.com/a.pdf|Manual",
+    );
+  });
+
+  it.each([
+    ["<https://example.com/a.pdf|User Manual>", "User Manual"],
+    ["See <http://example.com/a.pdf|User Manual> now", "See User Manual now"],
+    ["<mailto:support@example.com|Contact Support>", "Contact Support"],
+    ["<mailto:a/b@example.com|Contact Support>", "Contact Support"],
+  ])("keeps the visible label from spaced angle links in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    "<https://example.com/a.pdf title=hidden>",
+    "<https://example.com/a.pdf\nsecret>",
+    "<https://example.com/a.pdf|   >",
+    "<ftp://example.com/a.pdf|File Manual>",
+    "</https://example.com/a.pdf>",
+  ])("does not broaden URL-shaped angle handling for %s", (input) => {
+    expect(sanitizeForPlainText(input)).toBe("");
+  });
+
+  it("keeps labeled angle text literal inside code", () => {
+    const link = "<https://example.com/a.pdf|User Manual>";
+    expect(sanitizeForPlainText(`\`${link}\` ${link}`)).toBe(`\`${link}\` User Manual`);
+  });
+
+  it("preserves angle-addr email addresses", () => {
+    expect(sanitizeForPlainText("Contact us at Support <support@example.com> or reply here")).toBe(
+      "Contact us at Support <support@example.com> or reply here",
+    );
+  });
+
+  it("still strips tags whose name ends at a tag boundary", () => {
+    expect(sanitizeForPlainText("Ping <users/abc> for access")).toBe("Ping  for access");
   });
 
   // --- passthrough --------------------------------------------------------

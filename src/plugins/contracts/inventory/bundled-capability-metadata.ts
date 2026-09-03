@@ -14,7 +14,7 @@ import {
   type PluginManifest,
 } from "../../manifest.js";
 import { resolveLoaderPackageRoot } from "../../sdk-alias.js";
-import { uniqueStrings } from "../shared.js";
+import { normalizeContractStringValues } from "../shared.js";
 
 // Build/test inventory only.
 // Runtime code should prefer manifest/runtime registry queries instead of these snapshots.
@@ -111,7 +111,7 @@ function normalizeSetupProviderEnvVars(setup: PluginManifest["setup"]): Record<s
         (provider) =>
           [
             provider.id.trim(),
-            uniqueStrings(provider.envVars ?? [], (value) =>
+            normalizeContractStringValues(provider.envVars ?? [], (value) =>
               typeof value === "string" ? value.trim() : "",
             ),
           ] as const,
@@ -126,57 +126,68 @@ function buildBundledPluginContractSnapshot(
 ): BundledPluginContractSnapshot {
   return {
     pluginId: manifest.id,
-    cliBackendIds: uniqueStrings(manifest.cliBackends, (value) => value.trim()),
-    providerIds: uniqueStrings(manifest.providers, (value) => value.trim()),
+    cliBackendIds: normalizeContractStringValues(manifest.cliBackends, (value) => value.trim()),
+    providerIds: normalizeContractStringValues(manifest.providers, (value) => value.trim()),
     providerEnvVars: normalizeSetupProviderEnvVars(manifest.setup),
-    workerProviderIds: uniqueStrings(manifest.contracts?.workerProviders, (value) => value.trim()),
-    embeddingProviderIds: uniqueStrings(manifest.contracts?.embeddingProviders, (value) =>
+    workerProviderIds: normalizeContractStringValues(manifest.contracts?.workerProviders, (value) =>
       value.trim(),
     ),
-    speechProviderIds: uniqueStrings(manifest.contracts?.speechProviders, (value) => value.trim()),
-    realtimeTranscriptionProviderIds: uniqueStrings(
+    embeddingProviderIds: normalizeContractStringValues(
+      manifest.contracts?.embeddingProviders,
+      (value) => value.trim(),
+    ),
+    speechProviderIds: normalizeContractStringValues(manifest.contracts?.speechProviders, (value) =>
+      value.trim(),
+    ),
+    realtimeTranscriptionProviderIds: normalizeContractStringValues(
       manifest.contracts?.realtimeTranscriptionProviders,
       (value) => value.trim(),
     ),
-    realtimeVoiceProviderIds: uniqueStrings(manifest.contracts?.realtimeVoiceProviders, (value) =>
-      value.trim(),
+    realtimeVoiceProviderIds: normalizeContractStringValues(
+      manifest.contracts?.realtimeVoiceProviders,
+      (value) => value.trim(),
     ),
-    mediaUnderstandingProviderIds: uniqueStrings(
+    mediaUnderstandingProviderIds: normalizeContractStringValues(
       manifest.contracts?.mediaUnderstandingProviders,
       (value) => value.trim(),
     ),
-    transcriptSourceProviderIds: uniqueStrings(
+    transcriptSourceProviderIds: normalizeContractStringValues(
       manifest.contracts?.transcriptSourceProviders,
       (value) => value.trim(),
     ),
-    documentExtractorIds: uniqueStrings(manifest.contracts?.documentExtractors, (value) =>
-      value.trim(),
+    documentExtractorIds: normalizeContractStringValues(
+      manifest.contracts?.documentExtractors,
+      (value) => value.trim(),
     ),
-    imageGenerationProviderIds: uniqueStrings(
+    imageGenerationProviderIds: normalizeContractStringValues(
       manifest.contracts?.imageGenerationProviders,
       (value) => value.trim(),
     ),
-    videoGenerationProviderIds: uniqueStrings(
+    videoGenerationProviderIds: normalizeContractStringValues(
       manifest.contracts?.videoGenerationProviders,
       (value) => value.trim(),
     ),
-    musicGenerationProviderIds: uniqueStrings(
+    musicGenerationProviderIds: normalizeContractStringValues(
       manifest.contracts?.musicGenerationProviders,
       (value) => value.trim(),
     ),
-    webContentExtractorIds: uniqueStrings(manifest.contracts?.webContentExtractors, (value) =>
-      value.trim(),
+    webContentExtractorIds: normalizeContractStringValues(
+      manifest.contracts?.webContentExtractors,
+      (value) => value.trim(),
     ),
-    webFetchProviderIds: uniqueStrings(manifest.contracts?.webFetchProviders, (value) =>
-      value.trim(),
+    webFetchProviderIds: normalizeContractStringValues(
+      manifest.contracts?.webFetchProviders,
+      (value) => value.trim(),
     ),
-    webSearchProviderIds: uniqueStrings(manifest.contracts?.webSearchProviders, (value) =>
-      value.trim(),
+    webSearchProviderIds: normalizeContractStringValues(
+      manifest.contracts?.webSearchProviders,
+      (value) => value.trim(),
     ),
-    migrationProviderIds: uniqueStrings(manifest.contracts?.migrationProviders, (value) =>
-      value.trim(),
+    migrationProviderIds: normalizeContractStringValues(
+      manifest.contracts?.migrationProviders,
+      (value) => value.trim(),
     ),
-    toolNames: uniqueStrings(manifest.contracts?.tools, (value) => value.trim()),
+    toolNames: normalizeContractStringValues(manifest.contracts?.tools, (value) => value.trim()),
   };
 }
 

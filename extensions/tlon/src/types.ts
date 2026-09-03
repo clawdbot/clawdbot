@@ -1,4 +1,7 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+import {
+  createAccountListHelpers,
+  resolveChannelMediaMaxBytes,
+} from "openclaw/plugin-sdk/account-helpers";
 // Tlon type declarations define plugin contracts.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { ResolvedChannelImplicitMentions } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -9,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/ssrf-runtime";
 
 type TlonAccountConfig = {
+  /** Megabyte cap for media this channel accepts and delivers. */
+  mediaMaxMb?: number;
   name?: string;
   enabled?: boolean;
   ship?: string;
@@ -35,6 +40,7 @@ export type TlonResolvedAccount = {
   name: string | null;
   enabled: boolean;
   configured: boolean;
+  mediaMaxBytes?: number;
   ship: string | null;
   url: string | null;
   code: string | null;
@@ -136,6 +142,11 @@ export function resolveTlonAccount(
     name: merged.name ?? null,
     enabled: merged.enabled !== false,
     configured,
+    mediaMaxBytes: resolveChannelMediaMaxBytes({
+      cfg,
+      accountId: resolvedAccountId,
+      resolveChannelLimitMb: () => merged.mediaMaxMb,
+    }),
     ship,
     url,
     code,

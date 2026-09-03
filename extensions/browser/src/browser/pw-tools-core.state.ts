@@ -2,11 +2,132 @@
  * Browser context and emulation state helpers for Playwright-backed tools.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { playwrightCore } from "./playwright-core.runtime.js";
+import type { CDPSession, Page } from "playwright-core";
+import { getPlaywrightCore } from "./playwright-core.runtime.js";
+import type { PageState } from "./pw-session-contracts.js";
 import { ensurePageState, getPageForTargetId } from "./pw-session.js";
-import { withPageScopedCdpClient } from "./pw-session.page-cdp.js";
+import {
+  awaitActionWithAbort,
+  createAbortPromiseWithListener,
+} from "./pw-tools-core.interactions.navigation.js";
 
-const { devices: playwrightDevices } = playwrightCore;
+type DeviceSize = { width: number; height: number };
+type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
+
+type PlaywrightDeviceDescriptor = {
+  userAgent: string;
+  viewport: DeviceSize;
+  screen?: DeviceSize;
+  deviceScaleFactor: number;
+  isMobile: boolean;
+  hasTouch: boolean;
+};
+
+function resolvePageEmulationState(state: PageState): NonNullable<PageState["emulation"]> {
+  return (state.emulation ??= {});
+}
+
+function resolvePageEmulationSession(page: Page, state: PageState): Promise<CDPSession> {
+  const emulation = resolvePageEmulationState(state);
+  if (emulation.session) {
+    return emulation.session;
+  }
+  const pending = page.context().newCDPSession(page);
+  emulation.session = pending;
+  void pending.catch(() => {
+    if (emulation.session === pending) {
+      delete emulation.session;
+    }
+  });
+  return pending;
+}
+
+async function withPageEmulationCdpClient<T>(params: {
+  page: Page;
+  state: PageState;
+  run: (send: PageCdpSend, session: CDPSession) => Promise<T>;
+}): Promise<T> {
+  const session = await resolvePageEmulationSession(params.page, params.state);
+  return await params.run(
+    (method, values) =>
+      (
+        session.send as unknown as (
+          method: string,
+          values?: Record<string, unknown>,
+        ) => Promise<unknown>
+      )(method, values),
+    session,
+  );
+}
+
+export async function setViewportSizeOnPage(page: Page, state: PageState, viewport: DeviceSize) {
+  const emulation = state.emulation;
+  if (
+    emulation?.metricsOwner &&
+    (emulation.metricsOwner.viewport.width !== viewport.width ||
+      emulation.metricsOwner.viewport.height !== viewport.height)
+  ) {
+    // Chromium caches metrics per session. Release the device owner before
+    // Playwright writes, or reapplying the same device silently skips its DPR/screen.
+    await emulation.metricsOwner.session.send("Emulation.clearDeviceMetricsOverride");
+    delete emulation.metricsOwner;
+  }
+  await page.setViewportSize(viewport);
+}
+
+export async function runPageEmulationTransition<T>(params: {
+  state: PageState;
+  signal?: AbortSignal;
+  run: () => Promise<T>;
+}): Promise<T> {
+  params.signal?.throwIfAborted();
+  const emulation = resolvePageEmulationState(params.state);
+  const interrupted = (emulation.transitionAbort ??= new AbortController());
+  interrupted.signal.throwIfAborted();
+  const signal = params.signal
+    ? AbortSignal.any([params.signal, interrupted.signal])
+    : interrupted.signal;
+  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal);
+  const previous = emulation.transitionTail ?? Promise.resolve();
+  const transition = previous
+    .catch(() => {})
+    .then(async () => {
+      signal.throwIfAborted();
+      // Device changes and captures share one queue: neither may observe or
+      // restore only part of another operation's viewport, metrics, or touch state.
+      const interrupt = () =>
+        interrupted.abort(
+          new Error(
+            "A previous screenshot or emulation action was cancelled but is still running. Retry when it finishes; if it remains stuck, close and reopen this tab.",
+          ),
+        );
+      params.signal?.addEventListener("abort", interrupt, { once: true });
+      try {
+        return await params.run();
+      } finally {
+        params.signal?.removeEventListener("abort", interrupt);
+      }
+    });
+  // Cancellation cannot stop Chromium's pending capture/restoration. Reject
+  // waiting callers, but retain the mutation owner until its cleanup settles.
+  const tail = transition
+    .then(
+      () => {},
+      () => {},
+    )
+    .finally(() => {
+      if (emulation.transitionTail === tail) {
+        delete emulation.transitionTail;
+        delete emulation.transitionAbort;
+      }
+    });
+  emulation.transitionTail = tail;
+  try {
+    return await awaitActionWithAbort(transition, abortPromise);
+  } finally {
+    cleanup();
+  }
+}
 
 /** Toggles offline mode for the target page context. */
 export async function setOfflineViaPlaywright(opts: {
@@ -110,16 +231,15 @@ export async function setLocaleViaPlaywright(opts: {
   locale: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const locale = normalizeOptionalString(opts.locale) ?? "";
   if (!locale) {
     throw new Error("locale is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
+  await withPageEmulationCdpClient({
     page,
-    targetId: opts.targetId,
-    fn: async (send) => {
+    state: pageState,
+    run: async (send) => {
       try {
         await send("Emulation.setLocaleOverride", { locale });
       } catch (err) {
@@ -139,16 +259,15 @@ export async function setTimezoneViaPlaywright(opts: {
   timezoneId: string;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const timezoneId = normalizeOptionalString(opts.timezoneId) ?? "";
   if (!timezoneId) {
     throw new Error("timezoneId is required");
   }
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
+  await withPageEmulationCdpClient({
     page,
-    targetId: opts.targetId,
-    fn: async (send) => {
+    state: pageState,
+    run: async (send) => {
       try {
         await send("Emulation.setTimezoneOverride", { timezoneId });
       } catch (err) {
@@ -170,60 +289,59 @@ export async function setDeviceViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   name: string;
+  signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
-  ensurePageState(page);
+  const pageState = ensurePageState(page);
   const name = normalizeOptionalString(opts.name) ?? "";
   if (!name) {
     throw new Error("device name is required");
   }
-  const descriptor = (playwrightDevices as Record<string, unknown>)[name] as
-    | {
-        userAgent?: string;
-        viewport?: { width: number; height: number };
-        deviceScaleFactor?: number;
-        isMobile?: boolean;
-        hasTouch?: boolean;
-        locale?: string;
-      }
+  const descriptor = (getPlaywrightCore().devices as Record<string, unknown>)[name] as
+    | PlaywrightDeviceDescriptor
     | undefined;
   if (!descriptor) {
     throw new Error(`Unknown device "${name}".`);
   }
 
-  if (descriptor.viewport) {
-    await page.setViewportSize({
-      width: descriptor.viewport.width,
-      height: descriptor.viewport.height,
-    });
-  }
+  await runPageEmulationTransition({
+    state: pageState,
+    signal: opts.signal,
+    run: async () => {
+      const screen = descriptor.screen ?? descriptor.viewport;
+      const isLandscape = screen.width > screen.height;
 
-  await withPageScopedCdpClient({
-    cdpUrl: opts.cdpUrl,
-    page,
-    targetId: opts.targetId,
-    fn: async (send) => {
-      if (descriptor.userAgent || descriptor.locale) {
-        await send("Emulation.setUserAgentOverride", {
-          userAgent: descriptor.userAgent ?? "",
-          acceptLanguage: descriptor.locale ?? undefined,
-        });
-      }
-      if (descriptor.viewport) {
-        await send("Emulation.setDeviceMetricsOverride", {
-          mobile: Boolean(descriptor.isMobile),
-          width: descriptor.viewport.width,
-          height: descriptor.viewport.height,
-          deviceScaleFactor: descriptor.deviceScaleFactor ?? 1,
-          screenWidth: descriptor.viewport.width,
-          screenHeight: descriptor.viewport.height,
-        });
-      }
-      if (descriptor.hasTouch) {
-        await send("Emulation.setTouchEmulationEnabled", {
-          enabled: true,
-        });
-      }
+      // Keep Playwright's page model aligned before applying the descriptor fields
+      // that its public setViewportSize API cannot express on an attached context.
+      await setViewportSizeOnPage(page, pageState, { ...descriptor.viewport });
+
+      await withPageEmulationCdpClient({
+        page,
+        state: pageState,
+        run: async (send, session) => {
+          await send("Emulation.setUserAgentOverride", {
+            userAgent: descriptor.userAgent,
+          });
+          await send("Emulation.setDeviceMetricsOverride", {
+            mobile: descriptor.isMobile,
+            width: descriptor.viewport.width,
+            height: descriptor.viewport.height,
+            deviceScaleFactor: descriptor.deviceScaleFactor,
+            screenWidth: screen.width,
+            screenHeight: screen.height,
+            screenOrientation:
+              descriptor.isMobile && !isLandscape
+                ? { angle: 0, type: "portraitPrimary" }
+                : { angle: descriptor.isMobile ? 90 : 0, type: "landscapePrimary" },
+          });
+          const emulation = resolvePageEmulationState(pageState);
+          emulation.metricsOwner = { session, viewport: { ...descriptor.viewport } };
+          await send("Emulation.setTouchEmulationEnabled", {
+            enabled: descriptor.hasTouch,
+          });
+          emulation.touch = { session, enabled: descriptor.hasTouch };
+        },
+      });
     },
   });
 }

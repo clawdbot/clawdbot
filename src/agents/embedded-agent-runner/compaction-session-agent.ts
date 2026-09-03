@@ -9,7 +9,7 @@ import { applyExtraParamsToAgent } from "./extra-params.js";
 import {
   resolveEmbeddedAgentApiKey,
   resolveEmbeddedAgentBaseStreamFn,
-  resolveEmbeddedAgentStreamFn,
+  resolveEmbeddedAgentStream,
 } from "./stream-resolution.js";
 import { mapThinkingLevelForProvider } from "./utils.js";
 
@@ -42,7 +42,6 @@ export async function prepareCompactionSessionAgent(params: {
   senderName?: string | null;
   senderUsername?: string | null;
   senderE164?: string | null;
-  webSearchEnabled?: boolean;
 }) {
   const authStorage =
     params.authStorage &&
@@ -60,7 +59,7 @@ export async function prepareCompactionSessionAgent(params: {
         authStorage,
       })
     : params.resolvedApiKey;
-  params.session.agent.streamFn = resolveEmbeddedAgentStreamFn({
+  params.session.agent.streamFn = resolveEmbeddedAgentStream({
     llmRuntime: params.llmRuntime,
     currentStreamFn: resolveEmbeddedAgentBaseStreamFn({ session: params.session as never }),
     providerStreamFn: params.providerStreamFn as never,
@@ -71,7 +70,7 @@ export async function prepareCompactionSessionAgent(params: {
     transportAuthAvailable: Boolean(transportApiKey?.trim()),
     authProfileId: params.runtimePlan?.auth.forwardedAuthProfileId,
     authStorage: params.authStorage as never,
-  });
+  }).streamFn;
   const providerTextTransforms = resolveProviderTextTransforms({
     provider: params.provider,
     config: params.config,
@@ -92,7 +91,7 @@ export async function prepareCompactionSessionAgent(params: {
     workspaceDir: params.effectiveWorkspace,
     model: params.effectiveModel,
   });
-  return applyExtraParamsToAgent(
+  const extraParams = applyExtraParamsToAgent(
     params.session.agent as never,
     params.config,
     params.provider,
@@ -107,10 +106,11 @@ export async function prepareCompactionSessionAgent(params: {
     {
       ...(preparedRuntimeExtraParams ? { preparedExtraParams: preparedRuntimeExtraParams } : {}),
       nativeWebSearchPolicyContext: {
-        // Compaction rebuilds the stream wrapper, so preserve the session policy
-        // inputs that can suppress provider-native search.
+        // Summaries have no tool loop; provider-hosted tools must not inherit
+        // the originating conversation's broader web-search authority.
         sessionKey: params.sessionKey,
-        webSearchEnabled: params.webSearchEnabled,
+        webSearchEnabled: false,
+        runtimeToolAllowlist: [],
         sandboxToolPolicy: params.sandboxToolPolicy,
         messageProvider: params.messageProvider,
         agentAccountId: params.agentAccountId,
@@ -125,4 +125,5 @@ export async function prepareCompactionSessionAgent(params: {
       },
     },
   );
+  return { ...extraParams, transportApiKey };
 }

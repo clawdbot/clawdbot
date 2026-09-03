@@ -12,46 +12,36 @@ extension OpenClawChatViewModel {
             return
         }
         self.latestAppliedRunSnapshotRequestID = request.id
-        if let activeRunIDs = payload.sessionInfo?.activeRunIds {
-            self.updateActiveSessionRunIDs(activeRunIDs)
-        } else if payload.sessionInfo?.hasActiveRun == false {
-            self.updateActiveSessionRunIDs([])
+        if let sessionInfo = payload.sessionInfo {
+            if let index = self.sessions.firstIndex(where: {
+                self.matchesCurrentSessionKey(incoming: $0.key, current: request.session.key)
+            }) {
+                var updated = self.sessions
+                updated[index].hasActiveRun = sessionInfo.hasActiveRun
+                updated[index].activeRunIds = sessionInfo.activeRunIds
+                self.sessions = updated
+            } else {
+                self.updateActiveSessionRunIDs(sessionInfo.activeRunIds ?? [])
+            }
         }
-        // Plan reconciliation shares run adoption: rejected history cannot clobber newer live state.
-        // A missing plan is version-skew unknown; replacement or explicit terminal evidence clears it.
         guard let snapshot = payload.inFlightRun,
               let runId = Self.normalizedRunID(snapshot.runId),
               self.liveRunStateByRunID[runId]?.terminal != true
         else {
-            guard let retainedRunId = self.planRunId else { return }
-            let activeRunIds = payload.sessionInfo?.activeRunIds
-            let confirmsAnotherRun = activeRunIds.map { !$0.contains(retainedRunId) } == true
-            if payload.sessionInfo?.hasActiveRun == false || confirmsAnotherRun {
-                self.clearPlan(for: retainedRunId)
-            }
             return
         }
 
         self.isApplyingRunSnapshot = true
         defer { self.isApplyingRunSnapshot = false }
         self.updateActiveSessionRunWithoutChatSnapshot(false)
-        self.adoptRunState(runId: runId, bufferedText: snapshot.text, preservePlan: true)
-        if self.planRunId != nil, self.planRunId != runId {
-            self.clearPlan()
-        }
-        if let planSnapshot = snapshot.plan {
-            self.applyPlanSnapshot(
-                runId: runId,
-                steps: planSnapshot.steps,
-                explanation: planSnapshot.explanation)
-        }
+        self.adoptRunState(runId: runId, bufferedText: snapshot.text)
     }
 
     func adoptRun(runId: String, bufferedText: String) {
-        self.adoptRunState(runId: runId, bufferedText: bufferedText, preservePlan: false)
+        self.adoptRunState(runId: runId, bufferedText: bufferedText)
     }
 
-    private func adoptRunState(runId: String, bufferedText: String, preservePlan: Bool) {
+    private func adoptRunState(runId: String, bufferedText: String) {
         // A terminal ID stays retired until an authoritative session snapshot
         // explicitly removes it; late deltas/history cannot resurrect the run.
         guard self.liveRunStateByRunID[runId]?.terminal != true else { return }
@@ -59,7 +49,7 @@ extension OpenClawChatViewModel {
         if replacedRun {
             // Gateway snapshots and live deltas are canonical for this session.
             // Replace stale local ownership so only that run consumes later events.
-            clearPendingRuns(reason: nil, preservePlan: preservePlan)
+            clearPendingRuns(reason: nil)
             self.pendingRuns.insert(runId)
             self.pendingToolCallsById = [:]
             self.updateStreamingAssistantText(nil)

@@ -1,61 +1,18 @@
 /** Describes package-authored plugin install source metadata and pinning warnings. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
-import { parseRegistryNpmSpec, type ParsedRegistryNpmSpec } from "../infra/npm-registry-spec.js";
-import type { PluginPackageInstall } from "./manifest.js";
+import { isExactSemverVersion, parseRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import type {
+  PluginInstallSourceInfo,
+  PluginInstallSourceWarning,
+  PluginInstallNpmPinState,
+  PluginInstallNpmSourceInfo,
+  PluginInstallClawHubSourceInfo,
+} from "./install-source-info.types.js";
+import type { PluginPackageInstall } from "./package-manifest.types.js";
+import { normalizePluginInstallDefaultChoice } from "./plugin-install-default-choice.js";
 
-/** Warning emitted while describing plugin package install source metadata. */
-type PluginInstallSourceWarning =
-  | "invalid-clawhub-spec"
-  | "invalid-npm-spec"
-  | "invalid-default-choice"
-  | "default-choice-missing-source"
-  | "clawhub-spec-floating"
-  | "npm-integrity-without-source"
-  | "npm-spec-floating"
-  | "npm-spec-missing-integrity"
-  | "npm-spec-package-name-mismatch";
-
-/** Pinning state for npm plugin install metadata. */
-type PluginInstallNpmPinState =
-  | "exact-with-integrity"
-  | "exact-without-integrity"
-  | "floating-with-integrity"
-  | "floating-without-integrity";
-
-/** Parsed npm install source metadata for a plugin package. */
-type PluginInstallNpmSourceInfo = {
-  spec: string;
-  packageName: string;
-  expectedPackageName?: string;
-  selector?: string;
-  selectorKind: ParsedRegistryNpmSpec["selectorKind"];
-  exactVersion: boolean;
-  expectedIntegrity?: string;
-  pinState: PluginInstallNpmPinState;
-};
-
-/** Parsed local install source metadata for a plugin package. */
-type PluginInstallLocalSourceInfo = {
-  path: string;
-};
-
-/** Parsed ClawHub install source metadata for a plugin package. */
-type PluginInstallClawHubSourceInfo = {
-  spec: string;
-  packageName: string;
-  version?: string;
-  exactVersion: boolean;
-};
-
-/** Parsed plugin install sources plus validation warnings. */
-export type PluginInstallSourceInfo = {
-  defaultChoice?: PluginPackageInstall["defaultChoice"];
-  clawhub?: PluginInstallClawHubSourceInfo;
-  npm?: PluginInstallNpmSourceInfo;
-  local?: PluginInstallLocalSourceInfo;
-  warnings: readonly PluginInstallSourceWarning[];
-};
+export type { PluginInstallSourceInfo } from "./install-source-info.types.js";
 
 /** Options for describing expected plugin install source metadata. */
 type DescribePluginInstallSourceOptions = {
@@ -70,10 +27,6 @@ function resolveNpmPinState(params: {
     return params.hasIntegrity ? "exact-with-integrity" : "exact-without-integrity";
   }
   return params.hasIntegrity ? "floating-with-integrity" : "floating-without-integrity";
-}
-
-function resolveDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
-  return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
 }
 
 function normalizeExpectedPackageName(value: string | null | undefined): string | undefined {
@@ -92,7 +45,7 @@ export function describePluginInstallSource(
   const clawhubSpec = normalizeOptionalString(install.clawhubSpec);
   const npmSpec = normalizeOptionalString(install.npmSpec);
   const localPath = normalizeOptionalString(install.localPath);
-  const defaultChoice = resolveDefaultChoice(install.defaultChoice);
+  const defaultChoice = normalizePluginInstallDefaultChoice(install.defaultChoice);
   const expectedIntegrity = normalizeOptionalString(install.expectedIntegrity);
   const expectedPackageName = normalizeExpectedPackageName(options?.expectedPackageName);
   const warnings: PluginInstallSourceWarning[] = [];
@@ -106,14 +59,15 @@ export function describePluginInstallSource(
   if (clawhubSpec) {
     const parsed = parseClawHubPluginSpec(clawhubSpec);
     if (parsed) {
-      if (!parsed.version) {
+      const exactVersion = parsed.version ? isExactSemverVersion(parsed.version) : false;
+      if (!exactVersion) {
         warnings.push("clawhub-spec-floating");
       }
       clawhub = {
         spec: clawhubSpec,
         packageName: parsed.name,
         ...(parsed.version ? { version: parsed.version } : {}),
-        exactVersion: Boolean(parsed.version),
+        exactVersion,
       };
     } else {
       warnings.push("invalid-clawhub-spec");

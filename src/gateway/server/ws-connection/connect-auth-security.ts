@@ -1,5 +1,5 @@
 // Gateway WebSocket authentication security events keep identifiers redacted.
-import { sha256HexPrefix } from "../../../infra/crypto-digest.js";
+import { sha256HexPrefixCore } from "../../../infra/crypto-digest.js";
 import {
   emitTrustedSecurityEvent,
   type DiagnosticSecurityEventInput,
@@ -10,7 +10,7 @@ function hashGatewaySecurityId(value: string | undefined): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return `sha256:${sha256HexPrefix(normalized, 12)}`;
+  return `sha256:${sha256HexPrefixCore(normalized, 12)}`;
 }
 
 export function emitGatewayAuthSecurityEvent(params: {

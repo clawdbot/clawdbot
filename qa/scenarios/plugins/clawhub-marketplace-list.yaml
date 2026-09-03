@@ -7,21 +7,22 @@ scenario:
   coverage:
     primary:
       - clawhub.marketplace-list
-    secondary:
       - clawhub.update-by-plugin-id
       - clawhub.uninstall-config-index-policy-file-cleanup
   objective: Verify package-installed marketplace listing, install, update, and uninstall behavior through the release plugin marketplace lane.
   successCriteria:
     - A fixture marketplace is written into the package-installed home.
     - The package-installed CLI lists the fixture marketplace as JSON and includes the expected plugin.
-    - The marketplace plugin installs by marketplace shortcut, exposes its CLI, updates by plugin id, and exposes the updated CLI output.
-    - Uninstall removes the plugin CLI and install metadata.
+    - The marketplace plugin installs into the managed directory with canonical marketplace metadata and a SQLite install/index record.
+    - A plugin-ID dry run reports 0.0.1 to 0.0.2 without mutating the record or CLI, then the real update persists 0.0.2 and exposes the v2 CLI output.
+    - Uninstall removes the config entry, SQLite install/index metadata, allow/deny policy entries, exact managed load path, managed directory, and plugin CLI while preserving unrelated policy and load-path sentinels.
   docsRefs:
     - docs/help/testing.md
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - scripts/e2e/release-plugin-marketplace-docker.sh
     - scripts/e2e/lib/release-plugin-marketplace/scenario.sh
+    - scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs
     - scripts/e2e/lib/release-scenarios/write-marketplace.mjs
   execution:
     kind: script

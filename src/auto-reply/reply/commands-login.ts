@@ -2,7 +2,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
@@ -18,7 +17,7 @@ const PRIVATE_CHAT_TYPES = new Set(["direct", "dm", "im", "private"]);
 const PUBLIC_CHAT_TYPES = new Set(["channel", "forum", "group", "public", "supergroup", "topic"]);
 const WEB_LOGIN_SURFACES = new Set(["control", "control-ui", "dashboard", "internal", "web"]);
 
-const activeCodexLoginFlows = new Map<string, { expiresAt: number }>();
+const activeCodexLoginFlows = codexChannelLoginRuntime.createFlowRegistry();
 
 type RunLoginFlow = (opts: ModelsAuthLoginFlowOptions) => Promise<unknown>;
 
@@ -117,22 +116,9 @@ function buildCodexLoginFlowKey(params: HandleCommandsParams, provider: string):
     keyPart(params.command.accountId ?? params.ctx.AccountId, "default"),
     keyPart(params.ctx.OriginatingTo ?? params.command.to ?? params.command.channelId, "unknown"),
     keyPart(threadId, "main"),
-    keyPart(
-      params.agentId ??
-        resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg }),
-      "main",
-    ),
+    params.agentId,
     provider,
   ].join(":");
-}
-
-function resolveLoginAgentId(params: HandleCommandsParams): string | undefined {
-  return (
-    normalizeOptionalString(params.agentId) ??
-    (params.sessionKey
-      ? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg })
-      : undefined)
-  );
 }
 
 async function emitLoginMessage(params: HandleCommandsParams, text: string): Promise<void> {
@@ -262,6 +248,7 @@ async function runChannelCodexLogin(params: {
       agentId: params.agentId,
       config: params.commandParams.cfg,
       runtime: params.runtime ?? defaultRuntime,
+      signal: reservation.record.signal,
       sendMessage: async (text) => await emitLoginMessage(params.commandParams, text),
       unsupportedPromptMessage: "Channel /login supports only fixed Codex device-code auth.",
       runLoginFlow: params.runLoginFlow,
@@ -317,15 +304,6 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
     };
   }
 
-  const agentId = resolveLoginAgentId(params);
-  if (!agentId) {
-    return {
-      shouldContinue: false,
-      reply: {
-        text: "Codex login is unavailable because the active agent could not be resolved.",
-      },
-    };
-  }
   if (!isPrivateLoginContext(params)) {
     return {
       shouldContinue: false,
@@ -338,7 +316,7 @@ export const handleLoginCommand: CommandHandler = async (params, allowTextComman
   const reply = await runChannelCodexLogin({
     commandParams: params,
     provider,
-    agentId,
+    agentId: params.agentId,
   });
   return { shouldContinue: false, reply };
 };

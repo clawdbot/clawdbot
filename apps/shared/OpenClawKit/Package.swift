@@ -1,4 +1,4 @@
-// swift-tools-version: 6.2
+// swift-tools-version: 6.3
 
 import PackageDescription
 
@@ -65,6 +65,9 @@ let package = Package(
                 .product(name: "SwiftMath", package: "SwiftMath"),
             ],
             path: "Sources/OpenClawChatUI",
+            resources: [
+                .copy("Resources/Mermaid"),
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency"),
             ]),

@@ -1,13 +1,17 @@
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { taskTimestampMs } from "../tasks/data.ts";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   isActiveWorkboardCard,
   normalizeString,
   workboardCardRunId,
   workboardCardSessionKey,
 } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
-import { normalizeTaskSummary, normalizeTasksPage } from "./normalization.ts";
+import { formatError } from "./normalization-utils.ts";
+import { normalizeTasksPage } from "./normalization.ts";
 import { getWorkboardRuntime, type WorkboardHost } from "./runtime.ts";
 import type { WorkboardCard, WorkboardTaskLinkState, WorkboardTaskSummary } from "./types.ts";
 
@@ -38,14 +42,7 @@ export async function listWorkboardTasks(
 }
 
 export function taskUpdatedAtValue(task: WorkboardTaskSummary): number {
-  if (typeof task.updatedAt === "number") {
-    return task.updatedAt;
-  }
-  if (typeof task.updatedAt === "string") {
-    const parsed = Date.parse(task.updatedAt);
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  return 0;
+  return taskTimestampMs(task.updatedAt);
 }
 
 export function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number | undefined {
@@ -54,9 +51,7 @@ export function taskLifecycleSourceUpdatedAt(task: WorkboardTaskSummary): number
 }
 
 export function sessionUpdatedAtValue(session: GatewaySessionRow): number | undefined {
-  return typeof session.updatedAt === "number" && Number.isFinite(session.updatedAt)
-    ? session.updatedAt
-    : undefined;
+  return asFiniteNumber(session.updatedAt);
 }
 
 export function taskSessionKeyMatchesCardSession(
@@ -238,6 +233,7 @@ export async function getWorkboardTaskPollBatch(
   tasks: WorkboardTaskSummary[];
   missingTaskIds: Set<string>;
   nextUnfilteredCursor?: string | null;
+  rejectedUnfilteredCursor?: string;
   error: string | null;
 }> {
   const results = await Promise.allSettled([
@@ -268,8 +264,9 @@ export async function getWorkboardTaskPollBatch(
   const tasks: WorkboardTaskSummary[] = [];
   const missingTaskIds = new Set<string>();
   let nextUnfilteredCursor: string | null | undefined;
+  let rejectedUnfilteredCursor: string | undefined;
   let error: string | null = null;
-  for (const result of results) {
+  for (const [index, result] of results.entries()) {
     if (result.status === "fulfilled") {
       tasks.push(...result.value.tasks);
       if ("missingTaskId" in result.value && result.value.missingTaskId) {
@@ -279,10 +276,28 @@ export async function getWorkboardTaskPollBatch(
         nextUnfilteredCursor = result.value.nextUnfilteredCursor;
       }
     } else {
+      // Promise.allSettled preserves input order, so discovery failures retain
+      // the exact query provenance needed to retire only a rejected stored cursor.
+      const discoveryQuery = discoveryQueries[index - taskIds.length];
+      if (
+        discoveryQuery?.cursor &&
+        !discoveryQuery.sessionKey &&
+        result.reason instanceof GatewayRequestError &&
+        result.reason.gatewayCode === "INVALID_REQUEST"
+      ) {
+        rejectedUnfilteredCursor = discoveryQuery.cursor;
+      }
       error ??= formatError(result.reason);
     }
   }
-  return { tasks, missingTaskIds, nextUnfilteredCursor, error };
+  return rejectedUnfilteredCursor
+    ? {
+        tasks: [],
+        missingTaskIds: new Set(),
+        rejectedUnfilteredCursor,
+        error,
+      }
+    : { tasks, missingTaskIds, nextUnfilteredCursor, error };
 }
 
 type WorkboardTaskIndex = {

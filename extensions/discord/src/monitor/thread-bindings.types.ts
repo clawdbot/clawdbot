@@ -14,7 +14,7 @@ export type ThreadBindingRecord = {
   boundBy: string;
   boundAt: number;
   lastActivityAt: number;
-  /** Inactivity timeout window in milliseconds (0 disables inactivity auto-unfocus). */
+  /** Inactivity timeout window in milliseconds (0 disables idle expiry). */
   idleTimeoutMs?: number;
   /** Hard max-age window in milliseconds from bind time (0 disables hard cap). */
   maxAgeMs?: number;

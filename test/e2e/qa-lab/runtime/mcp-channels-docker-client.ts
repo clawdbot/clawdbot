@@ -233,18 +233,54 @@ async function main() {
       (attachments.structuredContent?.attachments?.length ?? 0) === 1,
       "expected one seeded attachment",
     );
+    assert(
+      JSON.stringify(attachments.structuredContent?.attachments?.[0]) ===
+        JSON.stringify({
+          type: "openclaw_media",
+          media: {
+            url: "media://inbound/seeded-image.png",
+            contentType: "image/png",
+            kind: "image",
+            fileName: "seeded-image.png",
+            sizeBytes: 3,
+            transcribed: false,
+          },
+        }),
+      `expected canonical persisted media attachment: ${JSON.stringify(attachments.structuredContent)}`,
+    );
 
+    let waitCursor = 0;
+    let lastWaitEvent: Record<string, unknown> | undefined;
     const waitMessage = `wait event ${randomUUID()}`;
-    const [waited, waitRun] = await Promise.all([
-      callTool<{
-        structuredContent?: { event?: Record<string, unknown> };
-      }>({
-        name: "events_wait",
-        arguments: {
-          session_key: "agent:main:main",
-          after_cursor: 0,
-          timeout_ms: 120_000,
+    const [waitEvent, waitRun] = await Promise.all([
+      waitFor(
+        "correlated events_wait user event",
+        async () => {
+          const waited = await callTool<{
+            structuredContent?: { event?: Record<string, unknown> };
+          }>({
+            name: "events_wait",
+            arguments: {
+              session_key: "agent:main:main",
+              after_cursor: waitCursor,
+              timeout_ms: 15_000,
+            },
+          });
+          const event = waited.structuredContent?.event;
+          if (!event) {
+            return undefined;
+          }
+          assert(typeof event.cursor === "number", "expected events_wait cursor");
+          waitCursor = event.cursor;
+          lastWaitEvent = event;
+          return event.text === waitMessage ? event : undefined;
         },
+        120_000,
+      ).catch((error: unknown) => {
+        throw new Error(
+          `events_wait did not return the expected user event: ${JSON.stringify(lastWaitEvent)}`,
+          { cause: error },
+        );
       }),
       gateway.request<{ runId?: string; status?: string }>("chat.send", {
         sessionKey: "agent:main:main",
@@ -252,12 +288,9 @@ async function main() {
         idempotencyKey: randomUUID(),
       }),
     ]);
-    const waitEvent = waited.structuredContent?.event;
-    assert(waitEvent, "expected events_wait result");
     assert(waitEvent.type === "message", "expected message event");
     assert(waitEvent.role === "user", "expected user event role");
     assert(waitEvent.text === waitMessage, "expected wait event text");
-    const waitCursor = typeof waitEvent.cursor === "number" ? waitEvent.cursor : 0;
     assert(
       waitRun.status === "started" && typeof waitRun.runId === "string",
       `chat.send did not start: ${JSON.stringify(waitRun)}`,
@@ -480,6 +513,7 @@ async function main() {
           nonOwnerReplyForwarded: true,
           nonOwnerPermissionBlocked: true,
           ownerPermissionAllowed: permission.behavior === "allow",
+          canonicalMediaAttachmentFound: true,
           rawNotifications: connectedMcp.rawMessages.filter(
             (entry) =>
               ClaudeChannelNotificationSchema.safeParse(entry).success ||

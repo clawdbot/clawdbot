@@ -1,4 +1,5 @@
 // Normalizes provider auth choice metadata from plugin setup surfaces.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -11,7 +12,6 @@ import {
   toAgentEntriesRecord,
 } from "../agents/agent-scope-config.js";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   normalizeAgentModelMapForConfig,
   normalizeAgentModelRefForConfig,

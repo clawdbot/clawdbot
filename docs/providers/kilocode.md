@@ -66,7 +66,7 @@ Any model on the gateway is addressable as `kilocode/<upstream-id>` (for example
 
 ```json5
 {
-  env: { KILOCODE_API_KEY: "<your-kilocode-api-key>" }, // pragma: allowlist secret
+  env: { vars: { KILOCODE_API_KEY: "<your-kilocode-api-key>" } }, // pragma: allowlist secret
   agents: {
     defaults: {
       model: { primary: "kilocode/kilo-auto/balanced" },

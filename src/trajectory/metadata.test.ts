@@ -13,7 +13,8 @@ type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
 const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
 
-vi.mock("../infra/git-commit.js", () => ({
+vi.mock("../infra/git-commit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
@@ -44,9 +45,37 @@ import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+  loadPluginManifestRegistry.mockClear();
 });
 
 describe("trajectory metadata", () => {
+  it("uses prepared plugin metadata without rescanning manifests", () => {
+    const metadata = buildTrajectoryRunMetadata({
+      pluginMetadataSnapshot: {
+        plugins: [
+          {
+            id: "prepared-plugin",
+            name: "Prepared Plugin",
+            origin: "bundled",
+            channels: [],
+            providers: [],
+            cliBackends: [],
+            hooks: [],
+            skills: [],
+          },
+        ],
+      } as never,
+      workspaceDir: "/tmp/workspace",
+      timeoutMs: 30_000,
+    });
+
+    expect(metadata.plugins).toMatchObject({
+      source: "manifest-registry",
+      entries: [{ id: "prepared-plugin" }],
+    });
+    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+  });
+
   it("redacts harness argv and local paths with the support redaction rules", () => {
     const originalArgv = process.argv;
     process.argv = [
@@ -117,7 +146,6 @@ describe("trajectory metadata", () => {
       webFetchProviderIds: [],
       webSearchProviderIds: [],
       migrationProviderIds: [],
-      memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["openclaw"],
       cliCommands: [],
       services: [],

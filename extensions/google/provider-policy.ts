@@ -17,6 +17,7 @@ import { isGoogleGemini3ProModel, isGoogleGemini3ThinkingLevelModel } from "./th
 export {
   DEFAULT_GOOGLE_API_BASE_URL,
   isGoogleGenerativeAiApi,
+  isOfficialGoogleAiStudioBaseUrl,
   isGoogleVertexBaseUrl,
   isGoogleVertexHostname,
   normalizeGoogleApiBaseUrl,

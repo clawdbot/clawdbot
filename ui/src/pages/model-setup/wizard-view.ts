@@ -7,8 +7,9 @@ import type { ModelSetupWizardState } from "./state.ts";
 const WIZARD_TEXT_INPUT_ID = "model-setup-wizard-text-input";
 
 type WizardViewProps = {
-  mode: "auth" | "prepare";
+  mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
+  refreshWarning: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
   onAnswer: (value: unknown, includeValue?: boolean) => void;
@@ -29,7 +30,9 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
       label=${t(
         props.mode === "prepare"
           ? "modelSetup.wizard.prepareDialogLabel"
-          : "modelSetup.wizard.dialogLabel",
+          : props.mode === "activate"
+            ? "modelSetup.heading"
+            : "modelSetup.wizard.dialogLabel",
       )}
       @modal-cancel=${canCancel ? props.onCancel : props.onClose}
     >
@@ -41,17 +44,24 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
               : t(
                   props.mode === "prepare"
                     ? "modelSetup.wizard.prepareTitle"
-                    : "modelSetup.wizard.title",
+                    : props.mode === "activate"
+                      ? "modelSetup.heading"
+                      : "modelSetup.wizard.title",
                 )}
           </h2>
         </div>
         <div class="model-setup-wizard__body">
+          ${props.refreshWarning
+            ? html`<div class="callout warning" role="alert">${props.refreshWarning}</div>`
+            : nothing}
           ${props.state.phase === "starting"
             ? html`<div role="status">
                 ${t(
                   props.mode === "prepare"
                     ? "modelSetup.wizard.prepareStarting"
-                    : "modelSetup.wizard.starting",
+                    : props.mode === "activate"
+                      ? "modelSetup.wizard.checking"
+                      : "modelSetup.wizard.starting",
                 )}
               </div>`
             : props.state.phase === "done"
@@ -69,6 +79,17 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       value: props.value,
                       busy: props.state.busy,
                       inputId: WIZARD_TEXT_INPUT_ID,
+                      confirmAffirmativeLabel:
+                        props.mode === "prepare" && props.state.step.type === "confirm"
+                          ? t("modelSetup.wizard.continue")
+                          : undefined,
+                      leadingAction: html`<button
+                        type="button"
+                        class="btn"
+                        @click=${props.onCancel}
+                      >
+                        ${t("common.cancel")}
+                      </button>`,
                       onValueChange: props.onValueChange,
                       onAnswer: props.onAnswer,
                     })}
@@ -77,11 +98,19 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                       : nothing}
                   `}
         </div>
-        <div class="model-setup-wizard__footer">
-          <button type="button" class="btn" @click=${canCancel ? props.onCancel : props.onClose}>
-            ${canCancel ? t("common.cancel") : t("common.close")}
-          </button>
-        </div>
+        ${props.state.phase === "step"
+          ? nothing
+          : html`
+              <div class="model-setup-wizard__footer">
+                <button
+                  type="button"
+                  class="btn"
+                  @click=${canCancel ? props.onCancel : props.onClose}
+                >
+                  ${canCancel ? t("common.cancel") : t("common.close")}
+                </button>
+              </div>
+            `}
       </div>
     </openclaw-modal-dialog>
   `;

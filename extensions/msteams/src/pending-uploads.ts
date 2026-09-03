@@ -7,6 +7,7 @@
  */
 
 import crypto from "node:crypto";
+import { resolveGlobalSingleton } from "openclaw/plugin-sdk/global-singleton";
 
 interface PendingUpload {
   id: string;
@@ -19,9 +20,21 @@ interface PendingUpload {
   createdAt: number;
 }
 
-const pendingUploads = new Map<string, PendingUpload>();
-/** Timer handles keyed by upload ID, cleared on explicit removal to prevent ghost cleanup */
-const pendingUploadTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const { pendingUploads, pendingUploadTimers } = resolveGlobalSingleton(
+  Symbol.for("openclaw.msteams.pendingUploadState"),
+  () => ({
+    pendingUploads: new Map<string, PendingUpload>(),
+    /** Timer handles keyed by upload ID, cleared on explicit removal to prevent ghost cleanup. */
+    pendingUploadTimers: new Map<string, ReturnType<typeof setTimeout>>(),
+  }),
+  (state) => {
+    for (const timer of state.pendingUploadTimers.values()) {
+      clearTimeout(timer);
+    }
+    state.pendingUploadTimers.clear();
+    state.pendingUploads.clear();
+  },
+);
 
 /** TTL for pending uploads: 5 minutes */
 const PENDING_UPLOAD_TTL_MS = 5 * 60 * 1000;

@@ -1,16 +1,19 @@
-// Lobster tests cover lobster runner plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+// Lobster tests cover lobster runner plugin behavior.
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createEmbeddedLobsterRunner, resolveLobsterCwd } from "./lobster-runner.js";
+import {
+  createEmbeddedLobsterRunner,
+  resolveLobsterCwd,
+  type LobsterRunnerParams,
+} from "./lobster-runner.js";
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function requireFirstCallParam(calls: ReadonlyArray<readonly unknown[]>, label: string) {
   const call = calls[0];
@@ -84,6 +87,51 @@ describe("createEmbeddedLobsterRunner", () => {
       requiresApproval: null,
     });
   });
+
+  it.each(["inline", "workflow", "resume"])(
+    "bounds the model-visible result for an embedded %s request",
+    async (requestKind) => {
+      const runtimeResult = {
+        ok: true,
+        protocolVersion: 1,
+        status: "ok" as const,
+        output: Array.from({ length: 115 }, () => ({ a: 1 })),
+        requiresApproval: null,
+        requiresInput: null,
+      };
+      const runtime = {
+        runToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+        resumeToolRequest: vi.fn().mockResolvedValue(runtimeResult),
+      };
+      const runner = createEmbeddedLobsterRunner({
+        loadRuntime: vi.fn().mockResolvedValue(runtime),
+      });
+      const tempDir = tempDirs.make("openclaw-lobster-limit-");
+      const workflowPath = path.join(tempDir, "workflow.lobster");
+      await fs.writeFile(workflowPath, "steps: []\n", "utf8");
+      const params: LobsterRunnerParams =
+        requestKind === "resume"
+          ? {
+              action: "resume",
+              token: "resume-token",
+              approve: false,
+              cwd: tempDir,
+              timeoutMs: 2000,
+              maxStdoutBytes: 1024,
+            }
+          : {
+              action: "run",
+              pipeline: requestKind === "workflow" ? workflowPath : "exec --json=true echo bounded",
+              cwd: tempDir,
+              timeoutMs: 2000,
+              maxStdoutBytes: 1024,
+            };
+
+      await expect(runner.run(params)).rejects.toThrow(
+        "lobster runtime result exceeded maxStdoutBytes",
+      );
+    },
+  );
 
   it.each([
     "exec --json=true cat data.json",
@@ -498,7 +546,7 @@ describe("createEmbeddedLobsterRunner", () => {
         pipeline: "commands.list",
         cwd: process.cwd(),
         timeoutMs: 2000,
-        maxStdoutBytes: 4096,
+        maxStdoutBytes: 512_000,
       }),
     ).resolves.toMatchObject({ ok: true, status: "ok" });
   });
@@ -588,17 +636,3 @@ describe("createEmbeddedLobsterRunner", () => {
     ).rejects.toThrow(/timed out|aborted/);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

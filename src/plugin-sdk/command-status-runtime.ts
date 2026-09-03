@@ -13,5 +13,5 @@ const bindCommandStatusRuntime = createLazyRuntimeMethodBinder(loadCommandStatus
 export type { ResolveDirectStatusReplyForSessionParams } from "./command-status.runtime.js";
 
 /** Resolves the direct status reply text for a session without eagerly loading runtime code. */
-export const resolveDirectStatusReplyForSession: CommandStatusRuntime["resolveDirectStatusReplyForSession"] =
-  bindCommandStatusRuntime((runtime) => runtime.resolveDirectStatusReplyForSession);
+export const resolveDirectStatusReplyForSession: CommandStatusRuntime["resolveDirectStatusReplyForSessionCore"] =
+  bindCommandStatusRuntime((runtime) => runtime.resolveDirectStatusReplyForSessionCore);

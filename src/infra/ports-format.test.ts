@@ -43,6 +43,24 @@ describe("ports-format", () => {
     [{ commandLine: "/opt/fast-ssh/server --listen 127.0.0.1:18789" }, "non_gateway"],
     [{ commandLine: "ssh -N -L 9999:remote:22 host" }, "ssh"],
     [{ commandLine: "node /Users/me/Projects/openclaw/dist/entry.js gateway" }, "gateway"],
+    [{ command: "node", commandLine: "node /tmp/socat/openclaw/dist/index.js gateway" }, "gateway"],
+    [{ command: "socat" }, "non_gateway"],
+    [{ command: "socat1" }, "non_gateway"],
+    [{ command: "socat.exe" }, "non_gateway"],
+    [
+      {
+        command: "socat",
+        commandLine: "socat -lpopenclaw TCP-LISTEN:18789,fork TCP:127.0.0.1:18789",
+      },
+      "non_gateway",
+    ],
+    [
+      {
+        command: "node",
+        commandLine: "node /Users/me/Projects/openclaw/dist/index.js gateway --profile socat",
+      },
+      "gateway",
+    ],
     [{ commandLine: "python -m http.server 18789" }, "unknown"],
   ] as const)("classifies port listener %j", (listener, expected) => {
     expect(classifyPortListener(listener, 18789)).toBe(expected);
@@ -167,7 +185,7 @@ describe("ports-format", () => {
     ).toEqual([gatewayAlreadyRunningHint, multipleListenersHint]);
   });
 
-  it("formats free and busy port diagnostics", () => {
+  it("formats free, unknown, and busy port diagnostics", () => {
     expect(
       formatPortDiagnostics({
         port: 18789,
@@ -176,6 +194,15 @@ describe("ports-format", () => {
         hints: [],
       }),
     ).toEqual(["Port 18789 is free."]);
+
+    expect(
+      formatPortDiagnostics({
+        port: 18789,
+        status: "unknown",
+        listeners: [],
+        hints: [],
+      }),
+    ).toEqual(["Port 18789 availability could not be determined."]);
 
     const lines = formatPortDiagnostics({
       port: 18789,

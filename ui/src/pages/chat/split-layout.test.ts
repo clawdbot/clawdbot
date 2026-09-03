@@ -1,17 +1,17 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { normalizeChatSplitLayout } from "./split-layout-persistence.ts";
+import type { ChatSplitLayout } from "./split-layout-types.ts";
 import {
   applyUiCommandToSplitLayout,
   closePane,
   findPane,
   insertPane,
-  normalizeChatSplitLayout,
   panesOf,
   resizeColumns,
   resizePanes,
   setActivePane,
   setPaneSession,
-  type ChatSplitLayout,
 } from "./split-layout.ts";
 
 function createSinglePaneLayout(sessionKey: string): ChatSplitLayout {

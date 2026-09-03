@@ -1,35 +1,29 @@
 import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
-import { ref } from "lit/directives/ref.js";
-// Module import, not the protocol barrel — keeps TypeBox out of startup JS.
-import {
-  normalizeSessionIconInput,
-  parseSessionIcon,
-} from "../../../packages/gateway-protocol/src/session-icon.js";
 import { t } from "../i18n/index.ts";
-import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../lib/editor-links.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import { DropdownMenuController } from "./dropdown-menu-controller.ts";
 import { icons } from "./icons.ts";
 import { activateMenuShortcut, menuShortcutHint } from "./menu-shortcuts.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
-import { CURATED_SESSION_ICON_IDS, resolveSessionIcon } from "./session-icon-registry.ts";
-import { syncDropdownItemRadio } from "./web-awesome.ts";
-
-type SessionMenuData = {
-  label: string;
-  pinned: boolean;
-  unread: boolean;
-  archived: boolean;
-  category: string | null;
-  icon?: string;
-};
+import {
+  EMPTY_SESSION_MENU_DATA,
+  SessionMenuActions,
+  type SessionManagementAction,
+  type SessionMenuData,
+} from "./session-menu-actions.ts";
+import {
+  compactSessionMenuViewForValue,
+  type CompactSessionMenuView,
+} from "./session-menu-compact.ts";
+import type { SessionOwnerOption } from "./session-owner-chip.ts";
 
 /**
- * Worktree-session extras resolved lazily by the menu host after open; null
- * hides the block entirely (plain chat sessions), loading keeps the items
- * rendered-but-disabled so the menu layout never shifts under the pointer.
+ * Worktree-session extras resolved lazily by the menu host after open.
+ * Only resolved destinations are offered. A null `worktreePath` hides editor
+ * destinations — see
+ * `native-editor-locality.runtime.ts` for which checkouts ever get one.
  */
 export type SessionMenuWork = {
   loading: boolean;
@@ -38,32 +32,19 @@ export type SessionMenuWork = {
 };
 
 export type SessionMenuAction =
-  | { kind: "open-chat" }
+  | SessionManagementAction
   | { kind: "open-pr"; url: string }
-  | { kind: "open-in"; editor: EditorId; path: string }
-  | { kind: "toggle-pin" }
-  | { kind: "set-icon"; icon: string | null }
-  | { kind: "toggle-unread" }
-  | { kind: "rename" }
-  | { kind: "fork" }
   | { kind: "workboard" }
-  | { kind: "move-to-group"; category: string | null }
-  | { kind: "new-group" }
-  | { kind: "toggle-archived" }
-  | { kind: "stop-cloud-worker" }
-  | { kind: "delete" };
+  | { kind: "stop-cloud-worker" };
 
-const EMPTY_SESSION: SessionMenuData = {
-  label: "",
-  pinned: false,
-  unread: false,
-  archived: false,
-  category: null,
-  icon: undefined,
-};
+export type SessionMenuActionKind = SessionMenuAction["kind"];
 
 class SessionMenu extends OpenClawLightDomElement {
-  @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION;
+  @property({ attribute: false }) session: SessionMenuData = EMPTY_SESSION_MENU_DATA;
+  @property({ attribute: false }) compact = false;
+  @property({ attribute: false }) navigationAllowed = false;
+  @property({ attribute: false }) copyMarkdownAllowed = false;
+  @property({ attribute: false }) splitAllowed = false;
   // >1 renders the batch menu: only actions that apply to every selected
   // session (unread/group/archive/delete); `session` then carries aggregated
   // flags (unread = all unread, category = shared category or null).
@@ -72,22 +53,55 @@ class SessionMenu extends OpenClawLightDomElement {
   @property({ attribute: false }) anchor: { x: number; y: number } = { x: 0, y: 0 };
   @property({ attribute: false }) trigger: HTMLElement | null = null;
   @property({ attribute: false }) disabled = false;
+  @property({ attribute: false }) actionDisabledReasons: Partial<
+    Record<SessionMenuActionKind, string>
+  > = {};
   @property({ attribute: false }) forkDisabled = false;
-  // Guards both Archive and Delete: hosts pass canArchiveSessionRow() so agent
-  // main sessions and active runs stay protected from casual retirement.
+  @property({ attribute: false }) forkFromLastCompleted = false;
   @property({ attribute: false }) archiveAllowed = false;
+  @property({ attribute: false }) deleteAllowed = false;
   @property({ attribute: false }) cloudWorkerStopAllowed = false;
   @property({ attribute: false }) groups: readonly string[] = [];
-  @property({ attribute: false }) canOpenChat = false;
+  @property({ attribute: false }) ownerOptions: readonly SessionOwnerOption[] = [];
+  @property({ attribute: false }) selfOwner: SessionOwnerOption | null = null;
+  @property({ attribute: false }) currentOwnerId: string | null = null;
   @property({ attribute: false }) work: SessionMenuWork | null = null;
   @property({ attribute: false }) workboard: { captured: boolean; busy: boolean } | null = null;
   @property({ attribute: false }) onAction: (action: SessionMenuAction) => void = () => {};
   @property({ attribute: false }) onClose: () => void = () => {};
-  @state() private iconPickerOpen = false;
+  @state() private compactView: CompactSessionMenuView = "root";
+  private readonly managementActions = new SessionMenuActions(
+    this,
+    () => ({
+      session: this.session,
+      selectionCount: this.selectionCount,
+      compact: this.compact,
+      navigationAllowed: this.navigationAllowed,
+      copyMarkdownAllowed: this.copyMarkdownAllowed,
+      splitAllowed: this.splitAllowed,
+      disabled: this.disabled,
+      actionDisabledReasons: this.actionDisabledReasons,
+      forkDisabled: this.forkDisabled,
+      forkFromLastCompleted: this.forkFromLastCompleted,
+      archiveAllowed: this.archiveAllowed,
+      deleteAllowed: this.deleteAllowed,
+      groups: this.groups,
+      ownerOptions: this.ownerOptions,
+      selfOwner: this.selfOwner,
+      currentOwnerId: this.currentOwnerId,
+      worktreePath: this.work?.worktreePath ?? null,
+    }),
+    (action) => this.onAction(action),
+    () => this.onClose(),
+  );
   readonly menuLifecycle = new DropdownMenuController(this, {
     getTrigger: () => this.trigger,
     onClose: () => this.onClose(),
-    onKeydown: (event) => activateMenuShortcut(this, event),
+    onKeydown: (event) => {
+      if (!this.managementActions.handleKeydown(event)) {
+        activateMenuShortcut(this, event);
+      }
+    },
   });
 
   override connectedCallback() {
@@ -100,8 +114,19 @@ class SessionMenu extends OpenClawLightDomElement {
   }
 
   private runAction(action: SessionMenuAction) {
+    if (this.actionDisabledReasons[action.kind]) {
+      return;
+    }
     this.onClose();
     this.onAction(action);
+  }
+
+  private actionDisabled(kind: SessionMenuActionKind, extra = false): boolean {
+    return this.disabled || extra || Boolean(this.actionDisabledReasons[kind]);
+  }
+
+  private actionTitle(kind: SessionMenuActionKind): string | typeof nothing {
+    return this.actionDisabledReasons[kind] ?? nothing;
   }
 
   private readonly handleSelect = (event: CustomEvent<{ item: { value?: string } }>) => {
@@ -110,47 +135,22 @@ class SessionMenu extends OpenClawLightDomElement {
     if (!value) {
       return;
     }
-    const simpleActions: Partial<Record<string, SessionMenuAction>> = {
-      "open-chat": { kind: "open-chat" },
-      "toggle-pin": { kind: "toggle-pin" },
-      "toggle-unread": { kind: "toggle-unread" },
-      rename: { kind: "rename" },
-      fork: { kind: "fork" },
-      workboard: { kind: "workboard" },
-      "new-group": { kind: "new-group" },
-      "toggle-archived": { kind: "toggle-archived" },
-      "stop-cloud-worker": { kind: "stop-cloud-worker" },
-      delete: { kind: "delete" },
-    };
-    const simpleAction = simpleActions[value];
-    if (simpleAction) {
-      this.runAction(simpleAction);
+    const compactView = compactSessionMenuViewForValue(value);
+    if (compactView) {
+      this.compactView = compactView;
+      this.managementActions.prepareCompactView(compactView);
+      this.managementActions.focusCurrentView();
       return;
     }
-    if (value === "change-icon") {
-      this.iconPickerOpen = true;
-      void this.updateComplete.then(() => {
-        this.querySelector<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)")?.focus();
-      });
+    if (this.managementActions.handleSelect(value)) {
+      return;
+    }
+    if (value === "workboard" || value === "stop-cloud-worker") {
+      this.runAction({ kind: value });
       return;
     }
     if (value === "open-pr" && this.work?.pullRequestUrl) {
       this.runAction({ kind: "open-pr", url: this.work.pullRequestUrl });
-      return;
-    }
-    if (value.startsWith("open-in:") && this.work?.worktreePath) {
-      const editor = value.slice("open-in:".length) as EditorId;
-      if (EDITOR_IDS.includes(editor)) {
-        this.runAction({ kind: "open-in", editor, path: this.work.worktreePath });
-      }
-      return;
-    }
-    if (value.startsWith("move-to-group:")) {
-      const encodedCategory = value.slice("move-to-group:".length);
-      this.runAction({
-        kind: "move-to-group",
-        category: encodedCategory ? decodeURIComponent(encodedCategory) : null,
-      });
     }
   };
 
@@ -162,16 +162,15 @@ class SessionMenu extends OpenClawLightDomElement {
   };
 
   private renderWorkItems() {
-    const work = this.work;
-    if (!work) {
+    const pullRequestUrl = this.work?.pullRequestUrl;
+    if (!pullRequestUrl) {
       return nothing;
     }
-    const pullRequestUrl = work.pullRequestUrl;
-    const worktreePath = work.worktreePath;
     return html`
       <wa-dropdown-item
         class="session-menu__item"
         value="open-pr"
+        data-new-tab-action
         data-shortcut="g"
         aria-keyshortcuts="G"
         ?disabled=${this.disabled || !pullRequestUrl}
@@ -182,191 +181,6 @@ class SessionMenu extends OpenClawLightDomElement {
         <span class="session-menu__text">${t("sessionsView.openPullRequest")}</span>
         ${menuShortcutHint("g")}
       </wa-dropdown-item>
-      <wa-dropdown-item class="session-menu__item" ?disabled=${this.disabled || !worktreePath}>
-        <span slot="icon" class="session-menu__icon" aria-hidden="true">${icons.externalLink}</span>
-        <span class="session-menu__text">${t("sessionsView.openInEditorMenu")}</span>
-        ${worktreePath ? this.renderEditorSubmenu() : nothing}
-      </wa-dropdown-item>
-      <div class="session-menu__separator" role="separator"></div>
-    `;
-  }
-
-  private renderEditorSubmenu() {
-    return html`
-      ${EDITOR_IDS.map(
-        (editor) => html`
-          <wa-dropdown-item
-            slot="submenu"
-            class="session-menu__item"
-            value=${`open-in:${editor}`}
-            ?disabled=${this.disabled}
-          >
-            <span class="session-menu__text">${EDITOR_LABELS[editor]}</span>
-          </wa-dropdown-item>
-        `,
-      )}
-    `;
-  }
-
-  private renderGroupSubmenu() {
-    const session = this.session;
-    // Entries are numbered like the digits users see: existing groups first,
-    // then the ungroup entry, then New group…; entries past 9 stay unnumbered
-    // rather than reusing digits.
-    let nextDigit = 1;
-    const takeDigit = () => (nextDigit <= 9 ? String(nextDigit++) : null);
-    const entry = (label: string, checked: boolean, value: string, radio = true) => {
-      const digit = takeDigit();
-      return html`
-        <wa-dropdown-item
-          slot="submenu"
-          class="session-menu__item"
-          value=${value}
-          role=${radio ? "menuitemradio" : "menuitem"}
-          aria-checked=${radio ? String(checked) : nothing}
-          ${radio ? ref((element) => syncDropdownItemRadio(element, checked)) : nothing}
-          data-shortcut=${digit ?? nothing}
-          aria-keyshortcuts=${digit ?? nothing}
-          ?disabled=${this.disabled}
-        >
-          <span class="session-menu__text">${label}</span>
-          ${radio && checked
-            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-                >${icons.check}</span
-              >`
-            : nothing}
-          ${digit ? menuShortcutHint(digit) : nothing}
-        </wa-dropdown-item>
-      `;
-    };
-    return html`
-      ${this.groups.map((group) =>
-        entry(group, session.category === group, `move-to-group:${encodeURIComponent(group)}`),
-      )}
-      ${session.category
-        ? entry(t("sessionsView.removeFromGroup"), false, "move-to-group:", false)
-        : nothing}
-      ${entry(t("sessionsView.newGroup"), false, "new-group", false)}
-    `;
-  }
-
-  private readonly handleIconPickerKeydown = (event: KeyboardEvent) => {
-    if (event.key === "Escape") {
-      return;
-    }
-    event.stopPropagation();
-    const target = event.target;
-    if (!(target instanceof HTMLButtonElement) || !target.matches(".session-menu__icon-choice")) {
-      return;
-    }
-    const choices = Array.from(
-      this.querySelectorAll<HTMLButtonElement>(".session-menu__icon-choice:not(:disabled)"),
-    );
-    const index = choices.indexOf(target);
-    const columns = 6;
-    const nextIndex =
-      event.key === "ArrowLeft"
-        ? index - 1
-        : event.key === "ArrowRight"
-          ? index + 1
-          : event.key === "ArrowUp"
-            ? index - columns
-            : event.key === "ArrowDown"
-              ? index + columns
-              : index;
-    if (nextIndex >= 0 && nextIndex < choices.length && nextIndex !== index) {
-      event.preventDefault();
-      choices[nextIndex]?.focus();
-    }
-  };
-
-  private returnFromIconPicker() {
-    this.iconPickerOpen = false;
-    void this.updateComplete.then(() => {
-      this.querySelector<HTMLElement>('wa-dropdown-item[value="change-icon"]')?.focus({
-        preventScroll: true,
-      });
-    });
-  }
-
-  private renderIconPicker() {
-    const currentIcon = this.session.icon;
-    return html`
-      <div
-        class="session-menu__icon-picker"
-        role="dialog"
-        aria-label=${t("sessionsView.changeIcon")}
-        @keydown=${this.handleIconPickerKeydown}
-      >
-        <div class="session-menu__icon-picker-header">
-          <button
-            type="button"
-            class="session-menu__icon-picker-back"
-            aria-label=${t("common.back")}
-            @click=${() => this.returnFromIconPicker()}
-          >
-            ${icons.arrowLeft}
-          </button>
-          <span>${t("sessionsView.changeIcon")}</span>
-        </div>
-        <div
-          class="session-menu__icon-grid"
-          role="radiogroup"
-          aria-label=${t("sessionsView.changeIcon")}
-        >
-          ${CURATED_SESSION_ICON_IDS.map((id) => {
-            const value = `name:${id}`;
-            const selected = currentIcon === value;
-            return html`<button
-              type="button"
-              class="session-menu__icon-choice"
-              role="radio"
-              aria-label=${id}
-              aria-checked=${String(selected)}
-              title=${id}
-              ?disabled=${this.disabled}
-              @click=${() => this.runAction({ kind: "set-icon", icon: value })}
-            >
-              ${resolveSessionIcon(value)}
-            </button>`;
-          })}
-        </div>
-        <label class="session-menu__emoji-field">
-          <span>${t("sessionsView.customEmoji")}</span>
-          <input
-            type="text"
-            inputmode="text"
-            maxlength="16"
-            aria-label=${t("sessionsView.customEmoji")}
-            placeholder="🦞"
-            ?disabled=${this.disabled}
-            @keydown=${(event: KeyboardEvent) => {
-              if (event.key !== "Enter") {
-                return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              const input = event.currentTarget as HTMLInputElement;
-              const normalized = normalizeSessionIconInput(input.value);
-              if (!normalized.ok || parseSessionIcon(normalized.value)?.kind !== "emoji") {
-                input.setCustomValidity(t("sessionsView.invalidEmojiIcon"));
-                input.reportValidity();
-                return;
-              }
-              input.setCustomValidity("");
-              this.runAction({ kind: "set-icon", icon: normalized.value });
-            }}
-          />
-        </label>
-        <button
-          type="button"
-          class="session-menu__remove-icon"
-          ?disabled=${this.disabled || !currentIcon}
-          @click=${() => this.runAction({ kind: "set-icon", icon: null })}
-        >
-          ${t("sessionsView.removeIcon")}
-        </button>
-      </div>
     `;
   }
 
@@ -384,7 +198,7 @@ class SessionMenu extends OpenClawLightDomElement {
     return keyed(
       this.anchor,
       html`<wa-dropdown
-        class="session-menu"
+        class=${`session-menu${this.compact ? " session-menu--compact" : ""}`}
         .open=${true}
         placement="bottom-start"
         .distance=${0}
@@ -400,113 +214,17 @@ class SessionMenu extends OpenClawLightDomElement {
           aria-label=${menuLabel}
           style="position: fixed; left: ${clampedX}px; top: ${clampedY}px; width: 1px; height: 1px; opacity: 0; pointer-events: none;"
         ></button>
-        ${this.iconPickerOpen
-          ? this.renderIconPicker()
-          : html`${!batch && this.lastActive
+        ${this.compact && this.compactView !== "root"
+          ? this.managementActions.renderCompactView(this.compactView)
+          : html`
+              ${!batch && this.lastActive
                 ? html`<div class="session-menu__info">
                     ${t("sessionsView.lastActive", { time: this.lastActive })}
                   </div>`
                 : nothing}
-              ${!batch && this.canOpenChat
-                ? html`
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="open-chat"
-                      data-shortcut="o"
-                      aria-keyshortcuts="O"
-                      ?disabled=${this.disabled}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.messageSquare}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.openChat")}</span>
-                      ${menuShortcutHint("o")}
-                    </wa-dropdown-item>
-                  `
-                : nothing}
-              ${batch ? nothing : this.renderWorkItems()}
-              ${batch
-                ? nothing
-                : html`
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="toggle-pin"
-                      data-shortcut="p"
-                      aria-keyshortcuts="P"
-                      ?disabled=${this.disabled || session.archived}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${session.pinned ? icons.pinOff : icons.pin}</span
-                      >
-                      <span class="session-menu__text"
-                        >${session.pinned
-                          ? t("sessionsView.unpinSession")
-                          : t("sessionsView.pinSession")}</span
-                      >
-                      ${menuShortcutHint("p")}
-                    </wa-dropdown-item>
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="change-icon"
-                      ?disabled=${this.disabled}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.spark}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.changeIcon")}</span>
-                    </wa-dropdown-item>
-                  `}
-              <wa-dropdown-item
-                class="session-menu__item"
-                value="toggle-unread"
-                data-shortcut="u"
-                aria-keyshortcuts="U"
-                ?disabled=${this.disabled}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${session.unread ? icons.eye : icons.circle}</span
-                >
-                <span class="session-menu__text"
-                  >${batch
-                    ? session.unread
-                      ? t("sessionsView.markReadCount", { count })
-                      : t("sessionsView.markUnreadCount", { count })
-                    : session.unread
-                      ? t("sessionsView.markRead")
-                      : t("sessionsView.markUnread")}</span
-                >
-                ${menuShortcutHint("u")}
-              </wa-dropdown-item>
-              ${batch
-                ? nothing
-                : html`
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="rename"
-                      data-shortcut="r"
-                      aria-keyshortcuts="R"
-                      ?disabled=${this.disabled}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.edit}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.renameSessionMenu")}</span>
-                      ${menuShortcutHint("r")}
-                    </wa-dropdown-item>
-                    <wa-dropdown-item
-                      class="session-menu__item"
-                      value="fork"
-                      data-shortcut="f"
-                      aria-keyshortcuts="F"
-                      ?disabled=${this.disabled || this.forkDisabled}
-                    >
-                      <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                        >${icons.copy}</span
-                      >
-                      <span class="session-menu__text">${t("sessionsView.forkSession")}</span>
-                      ${menuShortcutHint("f")}
-                    </wa-dropdown-item>
-                  `}
+              ${this.managementActions.renderPrimaryActions()}
+              <div class="session-menu__separator" role="separator"></div>
+              ${this.managementActions.renderOrganizationActions()}
               ${!batch && this.workboard
                 ? html`
                     <wa-dropdown-item
@@ -528,17 +246,12 @@ class SessionMenu extends OpenClawLightDomElement {
                     </wa-dropdown-item>
                   `
                 : nothing}
-              <wa-dropdown-item class="session-menu__item" ?disabled=${this.disabled}>
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.folder}</span
-                >
-                <span class="session-menu__text"
-                  >${batch
-                    ? t("sessionsView.moveToGroupMenuCount", { count })
-                    : t("sessionsView.moveToGroupMenu")}</span
-                >
-                ${this.renderGroupSubmenu()}
-              </wa-dropdown-item>
+              ${batch
+                ? nothing
+                : html`
+                    <div class="session-menu__separator" role="separator"></div>
+                    ${this.managementActions.renderTransferActions()} ${this.renderWorkItems()}
+                  `}
               <div class="session-menu__separator" role="separator"></div>
               ${!batch && this.cloudWorkerStopAllowed
                 ? html`
@@ -546,7 +259,8 @@ class SessionMenu extends OpenClawLightDomElement {
                       class="session-menu__item session-menu__item--destructive"
                       value="stop-cloud-worker"
                       variant="danger"
-                      ?disabled=${this.disabled}
+                      ?disabled=${this.actionDisabled("stop-cloud-worker")}
+                      title=${this.actionTitle("stop-cloud-worker")}
                     >
                       <span slot="icon" class="session-menu__icon" aria-hidden="true"
                         >${icons.stop}</span
@@ -555,43 +269,8 @@ class SessionMenu extends OpenClawLightDomElement {
                     </wa-dropdown-item>
                   `
                 : nothing}
-              <wa-dropdown-item
-                class="session-menu__item"
-                value="toggle-archived"
-                data-shortcut="a"
-                aria-keyshortcuts="A"
-                ?disabled=${this.disabled || (!session.archived && !this.archiveAllowed)}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${session.archived ? icons.archiveRestore : icons.archive}</span
-                >
-                <span class="session-menu__text"
-                  >${batch
-                    ? t("sessionsView.archiveSessionCount", { count })
-                    : session.archived
-                      ? t("sessionsView.restoreSession")
-                      : t("sessionsView.archiveSession")}</span
-                >
-                ${menuShortcutHint("a")}
-              </wa-dropdown-item>
-              <wa-dropdown-item
-                class="session-menu__item session-menu__item--destructive"
-                value="delete"
-                variant="danger"
-                data-shortcut="d"
-                aria-keyshortcuts="D"
-                ?disabled=${this.disabled || !(session.archived || this.archiveAllowed)}
-              >
-                <span slot="icon" class="session-menu__icon" aria-hidden="true"
-                  >${icons.trash}</span
-                >
-                <span class="session-menu__text"
-                  >${batch
-                    ? t("sessionsView.deleteSessionCount", { count })
-                    : t("sessionsView.deleteSessionMenu")}</span
-                >
-                ${menuShortcutHint("d")}
-              </wa-dropdown-item>`}
+              ${this.managementActions.renderDeleteAction()}
+            `}
       </wa-dropdown>`,
     );
   }

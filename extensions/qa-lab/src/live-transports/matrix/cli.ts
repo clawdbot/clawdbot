@@ -52,6 +52,7 @@ async function runQaMatrix(opts: LiveTransportQaCommandOptions) {
           primaryModel: selection.primaryModel,
           providerMode: selection.providerMode,
           scenarioIds: selection.scenarioIds,
+          supportsModuleFlows: true,
         }),
     });
   };
@@ -76,8 +77,12 @@ export const matrixQaCliRegistration: LiveTransportQaCliRegistration =
     commandName: "matrix",
     adapterFactory: createLiveTransportQaAdapterFactory({
       id: "matrix",
+      supportsModuleFlows: true,
       // Every worker owns a uniquely named disposable homeserver, Gateway, and state tree.
       isolatesInstances: true,
+      async prepareSelectedScenarios(scenarioIds) {
+        await (await loadMatrixQaAdapterRuntime()).prepareMatrixQaSelectedScenarios(scenarioIds);
+      },
       async create(context) {
         return (await loadMatrixQaAdapterRuntime()).createMatrixQaTransportAdapter(context);
       },

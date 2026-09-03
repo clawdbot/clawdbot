@@ -1,6 +1,9 @@
 import os from "node:os";
 import type { SessionEntry } from "../config/sessions.js";
-import { resolveSessionFilePath, resolveSessionFilePathOptions } from "../config/sessions/paths.js";
+import {
+  resolveSessionFilePathCore,
+  resolveSessionFilePathOptions,
+} from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { formatMissingCostEntries } from "../infra/session-cost-usage-totals.js";
@@ -10,11 +13,11 @@ import {
 } from "../infra/session-cost-usage.js";
 import { formatTokenCount, formatUsd } from "../utils/usage-format.js";
 
-export function buildStatusUptimeLine(): string {
+export function buildStatusUptimeValue(): string {
   const format = (ms: number) => formatDurationCompact(ms, { spaced: true }) ?? "0s";
   const gatewayMs = Math.max(0, Math.round(process.uptime() * 1000));
   const systemMs = Math.max(0, Math.round(os.uptime() * 1000));
-  return `⏱️ Uptime: gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
+  return `gateway ${format(gatewayMs)} · system ${format(systemMs)}`;
 }
 
 async function resolveSessionCostLine(params: {
@@ -36,7 +39,7 @@ async function resolveSessionCostLine(params: {
     sessionFile = resolveExistingUsageSessionFile({
       sessionId,
       sessionEntry: params.sessionEntry,
-      sessionFile: resolveSessionFilePath(sessionId, params.sessionEntry, pathOpts),
+      sessionFile: resolveSessionFilePathCore(sessionId, params.sessionEntry, pathOpts),
       agentId: params.agentId,
     });
   } catch {

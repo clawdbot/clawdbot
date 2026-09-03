@@ -1,6 +1,7 @@
 // Diagnostic support bundle helpers collect logs and metadata for support exports.
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { isPathInside } from "../infra/path-guards.js";
 
 // File builders and writers for redacted diagnostic support bundles.
@@ -121,12 +122,12 @@ export async function writeSupportBundleDirectory(params: {
   return supportBundleContents(params.files);
 }
 
-/** Writes support-bundle files to a private zip archive and returns its byte size. */
+/** Writes support-bundle files to a private zip archive and returns the published path and byte size. */
 export async function writeSupportBundleZip(params: {
   outputPath: string;
   files: readonly DiagnosticSupportBundleFile[];
   compressionLevel?: number;
-}): Promise<number> {
+}): Promise<{ path: string; bytes: number }> {
   const { default: JSZip } = await import("jszip");
   const zip = new JSZip();
   for (const file of params.files) {
@@ -137,7 +138,18 @@ export async function writeSupportBundleZip(params: {
     compression: "DEFLATE",
     compressionOptions: { level: params.compressionLevel ?? 6 },
   });
-  await fsp.mkdir(path.dirname(params.outputPath), { recursive: true, mode: 0o700 });
-  await fsp.writeFile(params.outputPath, buffer, { mode: 0o600 });
-  return buffer.length;
+  const outputPath = path.resolve(params.outputPath);
+  await fsp.mkdir(path.dirname(outputPath), { recursive: true, mode: 0o700 });
+  // Publish through the staged sibling writer: a failed or interrupted write
+  // must never truncate a previously exported archive at the final path, and
+  // the atomic rename also replaces an overly permissive pre-existing mode.
+  const published = await writeExternalFileWithinRoot({
+    rootDir: path.dirname(outputPath),
+    path: path.basename(outputPath),
+    fallbackFileName: "openclaw-support.zip",
+    write: async (tempPath) => {
+      await fsp.writeFile(tempPath, buffer, { mode: 0o600 });
+    },
+  });
+  return { path: published.path, bytes: buffer.length };
 }

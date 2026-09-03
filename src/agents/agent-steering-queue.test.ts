@@ -6,7 +6,10 @@ import {
   prependAgentSteeringPrompt,
   releaseLeasedAgentSteeringItemsFromSubagentRuns,
 } from "./agent-steering-queue.js";
-import type { PendingFinalDeliveryPayload, SubagentRunRecord } from "./subagent-registry.types.js";
+import type {
+  PendingFinalDeliveryPayload,
+  SubagentRunRecord,
+} from "./subagents/registry/subagent-registry.types.js";
 
 const requesterSessionKey = "agent:main:main";
 
@@ -20,7 +23,6 @@ function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> 
     endedAt: 2_000,
     outcome: { status: "ok" },
     expectsCompletionMessage: true,
-    frozenResultText: `result for ${runId}`,
     ...overrides,
   } satisfies PendingFinalDeliveryPayload;
 }
@@ -65,6 +67,14 @@ function makeRun(overrides: RunOverrides = {}): SubagentRunRecord {
 
 function runMap(records: SubagentRunRecord[]) {
   return new Map(records.map((record) => [record.runId, record]));
+}
+
+function extractSubagentResult(prompt: string): string {
+  const result = prompt.match(/<prompt-data>\n([\s\S]*?)\n<\/prompt-data>/)?.[1];
+  if (result === undefined) {
+    throw new Error("Expected subagent result data block");
+  }
+  return result;
 }
 
 describe("agent steering queue", () => {
@@ -235,51 +245,77 @@ describe("agent steering queue", () => {
     expect(runs.get("retry")?.cleanupHandled).toBe(false);
   });
 
-  it("preserves suspended payloads across prompt submission failures", () => {
-    const runs = runMap([
-      makeRun({
-        runId: "run-1",
+  it.each(["expiry", "permanent_failure"] as const)(
+    "leaves a sibling blocked by %s untouched while steering the selected pending completion",
+    (suspendedReason) => {
+      const childSessionKey = "agent:main:subagent:shared";
+      const blocked = makeRun({
+        runId: "blocked",
+        childSessionKey,
         delivery: {
           status: "suspended",
           suspendedAt: 2_500,
-          suspendedReason: "retry-limit",
-          payload: payload("run-1", { frozenResultText: "kept result" }),
+          suspendedReason,
+          payload: payload("blocked", { childSessionKey }),
         },
+      });
+      const before = structuredClone(blocked);
+      const runs = runMap([blocked, makeRun({ runId: "selected", childSessionKey })]);
+      for (const settle of [
+        releaseLeasedAgentSteeringItemsFromSubagentRuns,
+        ackLeasedAgentSteeringItemsFromSubagentRuns,
+      ]) {
+        const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+          runs,
+          requesterSessionKey,
+          leaseId: "selected-lease",
+          now: 400_000,
+        });
+        expect(leased?.runIds).toEqual(["selected"]);
+        expect(leased?.prompt).toContain("result for selected");
+        expect(leased?.prompt).not.toContain("result for blocked");
+        expect(settle({ runs, runIds: leased?.runIds ?? [], leaseId: "selected-lease" })).toBe(1);
+        expect(blocked).toEqual(before);
+      }
+    },
+  );
+
+  it.each(["suspended", "discarded"] as const)(
+    "does not let a late lease callback overwrite %s delivery",
+    (status) => {
+      const run = makeRun();
+      const runs = runMap([run]);
+      leasePendingAgentSteeringItemsFromSubagentRuns({
+        runs,
+        requesterSessionKey,
+        leaseId: "retired-lease",
+      });
+      run.delivery = { ...run.delivery!, status, suspendedAt: 2_500 };
+      const before = structuredClone(run);
+      const lease = { runs, runIds: [run.runId], leaseId: "retired-lease" };
+      expect(ackLeasedAgentSteeringItemsFromSubagentRuns(lease)).toBe(0);
+      expect(releaseLeasedAgentSteeringItemsFromSubagentRuns(lease)).toBe(0);
+      expect(run).toEqual(before);
+    },
+  );
+
+  it("restores suspension when an already leased legacy prompt fails", () => {
+    const run = makeRun({
+      delivery: {
+        status: "in_progress",
+        suspendedAt: 2_500,
+        steeringLeaseId: "legacy-lease",
+        payload: payload("run-1"),
+      },
+    });
+    expect(
+      releaseLeasedAgentSteeringItemsFromSubagentRuns({
+        runs: runMap([run]),
+        runIds: [run.runId],
+        leaseId: "legacy-lease",
       }),
-    ]);
-
-    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
-      runs,
-      requesterSessionKey,
-      leaseId: "lease-1",
-      now: 3_000,
-    });
-    expect(leased?.prompt).toContain("kept result");
-
-    releaseLeasedAgentSteeringItemsFromSubagentRuns({
-      runs,
-      runIds: ["run-1"],
-      leaseId: "lease-1",
-    });
-    expect(runs.get("run-1")?.delivery?.status).toBe("suspended");
-
-    leasePendingAgentSteeringItemsFromSubagentRuns({
-      runs,
-      requesterSessionKey,
-      leaseId: "lease-2",
-      now: 4_000,
-    });
-    ackLeasedAgentSteeringItemsFromSubagentRuns({
-      runs,
-      runIds: ["run-1"],
-      leaseId: "lease-2",
-      now: 5_000,
-    });
-    expect(runs.get("run-1")?.delivery).toMatchObject({
-      status: "delivered",
-      suspendedAt: undefined,
-      suspendedReason: undefined,
-    });
+    ).toBe(1);
+    expect(run.delivery?.status).toBe("suspended");
   });
 
   it("uses captured fallback output when a resumed completion returns NO_REPLY", () => {
@@ -287,11 +323,13 @@ describe("agent steering queue", () => {
       makeRun({
         runId: "run-1",
         delivery: {
-          status: "suspended",
-          payload: payload("run-1", {
-            frozenResultText: "NO_REPLY",
-            fallbackFrozenResultText: "findings captured before the wake",
-          }),
+          status: "pending",
+          payload: payload("run-1"),
+        },
+        completion: {
+          required: true,
+          resultText: "NO_REPLY",
+          fallbackResultText: "findings captured before the wake",
         },
       }),
     ]);
@@ -317,9 +355,9 @@ describe("agent steering queue", () => {
             status: "pending",
             payload: payload(`run-${index + 1}`, {
               task: `task ${index + 1}`,
-              frozenResultText: "x".repeat(6_000),
             }),
           },
+          completion: { required: true, resultText: "x".repeat(6_000) },
         }),
       ),
     );
@@ -338,6 +376,28 @@ describe("agent steering queue", () => {
     for (const runId of omitted) {
       expect(runs.get(runId)?.delivery?.status).toBe("pending");
     }
+  });
+
+  it("bounds escaped result expansion with a visible marker", () => {
+    const fullResult = `${"<".repeat(6_000)}-unbounded-tail`;
+    const runs = runMap([
+      makeRun({
+        runId: "run-expanded",
+        completion: { required: true, resultText: fullResult },
+      }),
+    ]);
+
+    const leased = leasePendingAgentSteeringItemsFromSubagentRuns({
+      runs,
+      requesterSessionKey,
+      leaseId: "lease-expanded",
+    });
+    const projectedResult = extractSubagentResult(leased?.prompt ?? "");
+
+    expect(projectedResult.length).toBeLessThanOrEqual(6_000);
+    expect(projectedResult.endsWith("\n[child result truncated]")).toBe(true);
+    expect(projectedResult).not.toContain("unbounded-tail");
+    expect(runs.get("run-expanded")?.completion?.resultText).toBe(fullResult);
   });
 
   it("skips active cleanup, sanitizes metadata, and reclaims stale leases", () => {
@@ -402,7 +462,6 @@ describe("agent steering queue", () => {
         payload: payload("emoji-run", {
           label: emojiLabel,
           task: emojiLabel,
-          frozenResultText: "done",
         }),
       },
     });

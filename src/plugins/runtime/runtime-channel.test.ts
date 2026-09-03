@@ -3,6 +3,13 @@ import { getEventListeners } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeChannel } from "./runtime-channel.js";
 
+const dispatchRoutedChannelTurn = vi.hoisted(() => vi.fn(async () => ({ status: "handled" })));
+
+vi.mock("../../channels/turn/lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../channels/turn/lifecycle.js")>()),
+  dispatchRoutedChannelTurn,
+}));
+
 function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   const event = mock.mock.calls[index]?.[0] as { type?: string } | undefined;
   if (!event) {
@@ -10,6 +17,21 @@ function requireWatcherEvent(mock: ReturnType<typeof vi.fn>, index: number) {
   }
   return event;
 }
+
+describe("inbound dispatch", () => {
+  it("carries the owning runtime reply dispatcher into routed channel turns", async () => {
+    const boundReplyDispatch = vi.fn();
+    const channel = createRuntimeChannel({ dispatchReplyFromConfig: boundReplyDispatch });
+    const turn = { channel: "qa-channel" } as Parameters<typeof channel.inbound.dispatch>[0];
+
+    await channel.inbound.dispatch(turn);
+
+    expect(dispatchRoutedChannelTurn).toHaveBeenCalledWith({
+      ...turn,
+      dispatchReplyFromConfig: boundReplyDispatch,
+    });
+  });
+});
 
 describe("runtimeContexts", () => {
   it("registers, resolves, watches, and unregisters contexts", () => {

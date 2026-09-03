@@ -1,6 +1,4 @@
 // Line tests cover setup surface plugin behavior.
-import { readFileSync } from "node:fs";
-import path from "node:path";
 import {
   createStartAccountContext,
   installChannelDmPolicyContractSuite,
@@ -11,156 +9,21 @@ import {
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import ts from "typescript";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveRequestUrl } from "openclaw/plugin-sdk/request-url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime, ResolvedLineAccount } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineGatewayAdapter } from "./gateway.js";
-import { probeLineBot } from "./probe.js";
+import { stubLineApiFetch } from "./probe.test-support.js";
 import { setLineRuntime } from "./runtime.js";
 import { lineSetupWizard } from "./setup-surface.js";
 
-const { getBotInfoMock, MessagingApiClientMock } = vi.hoisted(() => {
-  const getBotInfoMockLocal = vi.fn();
-  const MessagingApiClientMockLocal = vi.fn(function () {
-    return { getBotInfo: getBotInfoMockLocal };
-  });
-  return {
-    getBotInfoMock: getBotInfoMockLocal,
-    MessagingApiClientMock: MessagingApiClientMockLocal,
-  };
-});
-
-vi.mock("@line/bot-sdk", () => ({
-  messagingApi: { MessagingApiClient: MessagingApiClientMock },
-}));
-
-afterAll(() => {
-  vi.doUnmock("@line/bot-sdk");
-  vi.resetModules();
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
 });
 
 const lineConfigure = createPluginSetupWizardConfigure(linePlugin);
-const LINE_SRC_PREFIX = `../../${bundledPluginRoot("line")}/src/`;
-
-function normalizeModuleSpecifier(specifier: string): string | null {
-  if (specifier.startsWith("./src/")) {
-    return specifier;
-  }
-  if (specifier.startsWith(LINE_SRC_PREFIX)) {
-    return `./src/${specifier.slice(LINE_SRC_PREFIX.length)}`;
-  }
-  return null;
-}
-
-function collectModuleExportNames(filePath: string): string[] {
-  const sourcePath = filePath.replace(/\.js$/, ".ts");
-  const sourceText = readFileSync(sourcePath, "utf8");
-  const sourceFile = ts.createSourceFile(sourcePath, sourceText, ts.ScriptTarget.Latest, true);
-  const names = new Set<string>();
-
-  for (const statement of sourceFile.statements) {
-    if (
-      ts.isExportDeclaration(statement) &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const element of statement.exportClause.elements) {
-        if (!element.isTypeOnly) {
-          names.add(element.name.text);
-        }
-      }
-      continue;
-    }
-
-    const modifiers = ts.canHaveModifiers(statement) ? ts.getModifiers(statement) : undefined;
-    const isExported = modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword);
-    if (!isExported) {
-      continue;
-    }
-
-    if (ts.isVariableStatement(statement)) {
-      for (const declaration of statement.declarationList.declarations) {
-        if (ts.isIdentifier(declaration.name)) {
-          names.add(declaration.name.text);
-        }
-      }
-      continue;
-    }
-
-    if (
-      ts.isFunctionDeclaration(statement) ||
-      ts.isClassDeclaration(statement) ||
-      ts.isEnumDeclaration(statement)
-    ) {
-      if (statement.name) {
-        names.add(statement.name.text);
-      }
-    }
-  }
-
-  return Array.from(names).toSorted();
-}
-
-function collectRuntimeApiPreExports(runtimeApiPath: string): string[] {
-  const runtimeApiSource = readFileSync(runtimeApiPath, "utf8");
-  const runtimeApiFile = ts.createSourceFile(
-    runtimeApiPath,
-    runtimeApiSource,
-    ts.ScriptTarget.Latest,
-    true,
-  );
-  const preExports = new Set<string>();
-  let pluginSdkLineRuntimeSeen = false;
-  const removedLineRuntimeSpecifier = ["openclaw", "plugin-sdk", "line-runtime"].join("/");
-
-  for (const statement of runtimeApiFile.statements) {
-    if (!ts.isExportDeclaration(statement)) {
-      continue;
-    }
-    const moduleSpecifier =
-      statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier)
-        ? statement.moduleSpecifier.text
-        : undefined;
-    if (!moduleSpecifier) {
-      continue;
-    }
-    if (moduleSpecifier === removedLineRuntimeSpecifier) {
-      pluginSdkLineRuntimeSeen = true;
-      break;
-    }
-    const normalized = normalizeModuleSpecifier(moduleSpecifier);
-    if (!normalized) {
-      continue;
-    }
-
-    if (!statement.exportClause) {
-      for (const name of collectModuleExportNames(
-        path.join(process.cwd(), "extensions", "line", normalized),
-      )) {
-        preExports.add(name);
-      }
-      continue;
-    }
-
-    if (!ts.isNamedExports(statement.exportClause)) {
-      continue;
-    }
-
-    for (const element of statement.exportClause.elements) {
-      if (!element.isTypeOnly) {
-        preExports.add(element.name.text);
-      }
-    }
-  }
-
-  if (!pluginSdkLineRuntimeSeen) {
-    return [];
-  }
-
-  return Array.from(preExports).toSorted();
-}
 
 describe("line setup wizard", () => {
   it("configures token and secret for the default account", async () => {
@@ -230,61 +93,17 @@ describe("line setup wizard", () => {
   });
 });
 
-describe("probeLineBot", () => {
-  beforeEach(() => {
-    getBotInfoMock.mockReset();
-    MessagingApiClientMock.mockReset();
-    MessagingApiClientMock.mockImplementation(function () {
-      return { getBotInfo: getBotInfoMock };
-    });
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    getBotInfoMock.mockClear();
-  });
-
-  it("returns timeout when bot info stalls", async () => {
-    vi.useFakeTimers();
-    getBotInfoMock.mockImplementation(() => new Promise(() => {}));
-
-    const probePromise = probeLineBot("token", 10);
-    await vi.advanceTimersByTimeAsync(20);
-    const result = await probePromise;
-
-    expect(result.ok).toBe(false);
-    expect(result.error).toBe("timeout");
-  });
-
-  it("returns bot info when available", async () => {
-    getBotInfoMock.mockResolvedValue({
-      displayName: "OpenClaw",
-      userId: "U123",
-      basicId: "@openclaw",
-      pictureUrl: "https://example.com/bot.png",
-    });
-
-    const result = await probeLineBot("token", 50);
-
-    expect(result.ok).toBe(true);
-    expect(result.bot?.userId).toBe("U123");
-  });
-});
-
 describe("linePlugin status.probeAccount", () => {
-  it("falls back to the direct probe helper when runtime is not initialized", async () => {
+  it("reports bot identity without initializing the message runtime", async () => {
     vi.resetModules();
     const { lineStatusAdapter } = await import("./status.js");
-    MessagingApiClientMock.mockReset();
-    MessagingApiClientMock.mockImplementation(function () {
-      return { getBotInfo: getBotInfoMock };
-    });
-    getBotInfoMock.mockResolvedValue({
+    const identity = {
       displayName: "OpenClaw",
       userId: "U123",
       basicId: "@openclaw",
       pictureUrl: "https://example.com/bot.png",
-    });
+    };
+    const fetchMock = stubLineApiFetch(Response.json(identity), Response.json({ type: "none" }));
 
     const params = {
       cfg: {} as OpenClawConfig,
@@ -298,19 +117,16 @@ describe("linePlugin status.probeAccount", () => {
       timeoutMs: 50,
     };
 
-    const directResult = await probeLineBot("token", 50);
     await expect(lineStatusAdapter.probeAccount!(params)).resolves.toEqual({
-      ...directResult,
+      ok: true,
+      bot: identity,
+      quota: { kind: "unlimited" },
       elapsedMs: expect.any(Number),
     });
-  });
-});
-
-describe("line runtime api", () => {
-  it("keeps the LINE runtime barrel self-contained", () => {
-    const runtimeApiPath = path.join(process.cwd(), "extensions", "line", "runtime-api.ts");
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
-    expect(collectRuntimeApiPreExports(runtimeApiPath)).toStrictEqual([]);
+    expect(fetchMock.mock.calls.map(([url]) => resolveRequestUrl(url))).toEqual([
+      "https://api.line.me/v2/bot/info",
+      "https://api.line.me/v2/bot/message/quota",
+    ]);
   });
 });
 
@@ -350,13 +166,16 @@ function createAccount(params: { token: string; secret: string }): ResolvedLineA
 
 function startLineAccount(params: { account: ResolvedLineAccount; abortSignal?: AbortSignal }) {
   const { runtime, monitorLineProvider } = createRuntime();
+  const statusEvents: unknown[] = [];
   setLineRuntime(runtime);
   return {
     monitorLineProvider,
+    statusEvents,
     task: lineGatewayAdapter.startAccount!(
       createStartAccountContext({
         account: params.account,
         abortSignal: params.abortSignal,
+        statusPatchSink: (patch) => statusEvents.push(patch),
       }),
     ),
   };
@@ -387,7 +206,7 @@ describe("linePlugin gateway.startAccount", () => {
 
   it("starts provider when token and secret are present", async () => {
     const abort = new AbortController();
-    const { monitorLineProvider, task } = startLineAccount({
+    const { monitorLineProvider, statusEvents, task } = startLineAccount({
       account: createAccount({ token: "token", secret: "secret" }),
       abortSignal: abort.signal,
     });
@@ -401,6 +220,10 @@ describe("linePlugin gateway.startAccount", () => {
     expect(startupParams?.channelAccessToken).toBe("token");
     expect(startupParams?.channelSecret).toBe("secret");
     expect(startupParams?.accountId).toBe("default");
+    expect(statusEvents).toContainEqual(
+      expect.objectContaining({ accountId: "default", lifecycle: "starting" }),
+    );
+    expect(startupParams).toEqual(expect.objectContaining({ statusSink: expect.any(Function) }));
 
     abort.abort();
     await task;

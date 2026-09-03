@@ -11,28 +11,6 @@ function jsonRoundTrip<T>(value: T): T {
 }
 
 describe("buildDiscordInboundJob", () => {
-  it("prefers route session key, then base session key, then channel id for queueing", async () => {
-    const routed = await createBaseDiscordMessageContext({
-      route: { sessionKey: "agent:main:discord:direct:routed" },
-      baseSessionKey: "agent:main:discord:direct:base",
-      messageChannelId: "channel-routed",
-    });
-    const baseOnly = await createBaseDiscordMessageContext({
-      route: { sessionKey: "" },
-      baseSessionKey: "agent:main:discord:direct:base-only",
-      messageChannelId: "channel-base",
-    });
-    const channelFallback = await createBaseDiscordMessageContext({
-      route: { sessionKey: "   " },
-      baseSessionKey: "   ",
-      messageChannelId: "channel-fallback",
-    });
-
-    expect(buildDiscordInboundJob(routed).queueKey).toBe("agent:main:discord:direct:routed");
-    expect(buildDiscordInboundJob(baseOnly).queueKey).toBe("agent:main:discord:direct:base-only");
-    expect(buildDiscordInboundJob(channelFallback).queueKey).toBe("channel-fallback");
-  });
-
   it("keeps live runtime references out of the payload", async () => {
     const ctx = await createBaseDiscordMessageContext({
       message: {
@@ -145,6 +123,7 @@ describe("buildDiscordInboundJob", () => {
     const ingressSettlement = {
       settle: vi.fn(async () => {}),
       abandon: vi.fn(async () => {}),
+      cancel: vi.fn(async () => {}),
     };
     const job = buildDiscordInboundJob(ctx, { ingressSettlement });
     const overrideAbortController = new AbortController();

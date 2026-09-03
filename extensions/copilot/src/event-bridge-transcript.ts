@@ -1,6 +1,11 @@
 import type { Attachment, SessionEvent } from "@github/copilot-sdk";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { sanitizeToolResult } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
+import {
+  asNonArrayRecord,
+  readNonEmptyStringPreservingWhitespace as readNonEmptyString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { buildCopilotAssistantUsage, type CopilotUsageSnapshot } from "./usage-bridge.js";
 
 export type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
@@ -52,7 +57,7 @@ export function buildAssistantMessage(params: {
   }
   for (const request of toolRequests) {
     content.push({
-      arguments: request.arguments ?? {},
+      arguments: asNonArrayRecord(request.arguments),
       id: request.toolCallId,
       name: request.name,
       type: "toolCall",
@@ -78,13 +83,12 @@ export function resolveAssistantUsage(
   latest: AssistantUsageSnapshot | undefined,
   byApiCallId: Map<string, AssistantUsageSnapshot>,
 ): AssistantUsageSnapshot | undefined {
-  const apiCallId = readString(event?.data.apiCallId);
+  const apiCallId = readNonEmptyString(event?.data.apiCallId);
   return apiCallId ? (byApiCallId.get(apiCallId) ?? latest) : latest;
 }
 
 export function resolveEventTimestamp(timestamp: string, now: () => number): number {
-  const parsed = Date.parse(timestamp);
-  return Number.isFinite(parsed) ? parsed : now();
+  return parseDateStringTimestampMs(timestamp) ?? now();
 }
 
 export function hasOwnKeys(value: unknown): value is Record<string, unknown> {
@@ -160,8 +164,4 @@ export function sanitizeToolDetailText(text: string): string {
   };
   const value = sanitized.content?.[0]?.text;
   return typeof value === "string" ? value : "";
-}
-
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }

@@ -81,7 +81,7 @@ export async function extractFilename(url: string): Promise<string> {
  * Check if a URL refers to a local file path.
  */
 export function isLocalPath(url: string): boolean {
-  if (url.startsWith("file://") || url.startsWith("/") || url.startsWith("~")) {
+  if (/^file:\/\//iu.test(url) || url.startsWith("/") || url.startsWith("~")) {
     return true;
   }
 

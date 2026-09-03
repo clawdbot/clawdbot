@@ -42,7 +42,13 @@ describe("Discord question finalization", () => {
           },
         },
       },
-      results: [{ channel: "discord", messageId: "55", channelId: "123" }],
+      results: [
+        {
+          channel: "discord",
+          messageId: "55",
+          target: { kind: "channel", id: "123" },
+        },
+      ],
     });
 
     await hoisted.registration?.finalize("Expired");

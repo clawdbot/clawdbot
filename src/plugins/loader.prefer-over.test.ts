@@ -9,7 +9,7 @@ import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 const tempDirs: string[] = [];
 
-function makeTempDir(): string {
+function makePluginLoaderTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-prefer-over-"));
   if (process.platform !== "win32") {
     fs.chmodSync(dir, 0o755);
@@ -97,14 +97,14 @@ afterEach(() => {
 
 describe("plugin loader preferOver activation", () => {
   it("loads the preferred external channel plugin without the replaced bundled plugin tools", () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     writeChannelToolPlugin({
       rootDir: bundledRoot,
       id: "qqbot",
       channelId: "qqbot",
       enabledByDefault: true,
     });
-    const externalRoot = makeTempDir();
+    const externalRoot = makePluginLoaderTempDir();
     const externalPluginDir = writeChannelToolPlugin({
       rootDir: externalRoot,
       id: "openclaw-qqbot",
@@ -112,7 +112,7 @@ describe("plugin loader preferOver activation", () => {
       preferOver: ["qqbot"],
     });
     const env = {
-      OPENCLAW_STATE_DIR: makeTempDir(),
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     };
     const rawConfig = {
@@ -142,21 +142,21 @@ describe("plugin loader preferOver activation", () => {
   });
 
   it("blocks tools from a plugin that loses a duplicate channel registration", () => {
-    const bundledRoot = makeTempDir();
+    const bundledRoot = makePluginLoaderTempDir();
     writeChannelToolPlugin({
       rootDir: bundledRoot,
       id: "qqbot",
       channelId: "qqbot",
       enabledByDefault: true,
     });
-    const externalRoot = makeTempDir();
+    const externalRoot = makePluginLoaderTempDir();
     const externalPluginDir = writeChannelToolPlugin({
       rootDir: externalRoot,
       id: "openclaw-qqbot",
       channelId: "qqbot",
     });
     const env = {
-      OPENCLAW_STATE_DIR: makeTempDir(),
+      OPENCLAW_STATE_DIR: makePluginLoaderTempDir(),
       OPENCLAW_BUNDLED_PLUGINS_DIR: bundledRoot,
     };
 

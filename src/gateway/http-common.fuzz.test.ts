@@ -1,7 +1,7 @@
 // Deterministic fuzz coverage for shared Gateway HTTP helpers and disconnect
 // handling without adding a property-test dependency.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import { createServer, type IncomingMessage } from "node:http";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayAuthResult } from "./auth.js";
 import {
@@ -11,11 +11,8 @@ import {
   sendJson,
   sendMethodNotAllowed,
   sendRateLimited,
-  sendUnauthorized,
   setDefaultSecurityHeaders,
-  setSseHeaders,
   watchClientDisconnect,
-  writeDone,
 } from "./http-common.js";
 import { makeMockHttpReqRes, makeMockHttpResponse } from "./test-http-response.js";
 
@@ -176,20 +173,6 @@ describe("fuzz: sendMethodNotAllowed", () => {
   });
 });
 
-describe("fuzz: sendUnauthorized", () => {
-  it("is deterministic: always 401 with the canonical error payload", () => {
-    const expected = JSON.stringify({
-      error: { message: "Unauthorized", type: "unauthorized" },
-    });
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, end } = makeMockHttpResponse();
-      sendUnauthorized(res);
-      expect(res.statusCode).toBe(401);
-      expect(end).toHaveBeenCalledWith(expected);
-    }
-  });
-});
-
 describe("fuzz: sendRateLimited", () => {
   it("sets Retry-After iff retryAfterMs is truthy and > 0, with ceil-seconds value", () => {
     const rng = makeRng(0x429);
@@ -265,91 +248,81 @@ describe("fuzz: sendInvalidRequest", () => {
 });
 
 describe("fuzz: readJsonBodyOrError", () => {
-  const makeRequest = () => ({}) as IncomingMessage;
-
   it("maps readJsonBody results to the documented status/body contract", async () => {
     const rng = makeRng(0xc0de);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, end } = makeMockHttpResponse();
-      const pick = randInt(rng, 0, 3);
-      let expectedStatus: number | undefined;
-      let expectedBody: string | undefined;
-      let expectedValue: unknown;
-
-      if (pick === 0) {
-        const value = randBody(rng);
-        expectedValue = value;
-        readJsonBodyMock.mockResolvedValueOnce({ ok: true, value });
-      } else if (pick === 1) {
-        expectedStatus = 413;
-        expectedBody = JSON.stringify({
-          error: { message: "Payload too large", type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
-      } else if (pick === 2) {
-        expectedStatus = 408;
-        expectedBody = JSON.stringify({
-          error: { message: "Request body timeout", type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
-      } else {
-        // Arbitrary error text must neither collide with the 413/408 sentinels
-        // nor accidentally reuse them; pick a prefix that can never match.
-        const text = `err-${randString(rng, 24)}`;
-        expectedStatus = 400;
-        expectedBody = JSON.stringify({
-          error: { message: text, type: "invalid_request_error" },
-        });
-        readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: text });
-      }
-
-      const maxBytes = randInt(rng, 1, 1 << 20);
-      const req = makeRequest();
-      const result = await readJsonBodyOrError(req, res, maxBytes);
-      if (pick === 0) {
-        expect(result).toEqual(expectedValue);
-      } else {
-        expect(result).toBeUndefined();
-        expect(res.statusCode).toBe(expectedStatus);
-        expect(end).toHaveBeenCalledWith(expectedBody);
-      }
-      expect(readJsonBodyMock).toHaveBeenLastCalledWith(req, maxBytes);
+    let maxBytes = 0;
+    let receivedRequest: IncomingMessage | undefined;
+    const tasks: Promise<void>[] = [];
+    const server = createServer((req, res) => {
+      receivedRequest = req;
+      tasks.push(
+        readJsonBodyOrError(req, res, maxBytes).then((value) => {
+          if (!res.headersSent) {
+            sendJson(res, 200, value);
+          }
+        }),
+      );
+    });
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    const address = server.address();
+    if (!address || typeof address === "string") {
+      throw new Error("missing listener");
     }
-  });
-});
+    try {
+      for (let i = 0; i < ITERATIONS; i += 1) {
+        const pick = randInt(rng, 0, 3);
+        let expectedStatus: number | undefined;
+        let expectedBody: string | undefined;
+        let expectedValue: unknown;
 
-describe("fuzz: writeDone", () => {
-  it("always writes the DONE sentinel exactly once per call", () => {
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res } = makeMockHttpResponse();
-      const write = vi.spyOn(res, "write");
-      writeDone(res);
-      expect(write).toHaveBeenCalledTimes(1);
-      expect(write).toHaveBeenCalledWith("data: [DONE]\n\n");
-    }
-  });
-});
+        if (pick === 0) {
+          const value = randBody(rng);
+          expectedValue = value;
+          readJsonBodyMock.mockResolvedValueOnce({ ok: true, value });
+        } else if (pick === 1) {
+          expectedStatus = 413;
+          expectedBody = JSON.stringify({
+            error: { message: "Payload too large", type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "payload too large" });
+        } else if (pick === 2) {
+          expectedStatus = 408;
+          expectedBody = JSON.stringify({
+            error: { message: "Request body timeout", type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: "request body timeout" });
+        } else {
+          // Arbitrary error text must neither collide with the 413/408 sentinels
+          // nor accidentally reuse them; pick a prefix that can never match.
+          const text = `err-${randString(rng, 24)}`;
+          expectedStatus = 400;
+          expectedBody = JSON.stringify({
+            error: { message: text, type: "invalid_request_error" },
+          });
+          readJsonBodyMock.mockResolvedValueOnce({ ok: false, error: text });
+        }
 
-describe("fuzz: setSseHeaders", () => {
-  it("sets SSE headers and invokes flushHeaders when present", () => {
-    const rng = makeRng(0x55e);
-    for (let i = 0; i < ITERATIONS; i += 1) {
-      const { res, setHeader } = makeMockHttpResponse();
-      const hasFlush = rng() < 0.5;
-      const flushHeaders = vi.fn();
-      if (hasFlush) {
-        (res as unknown as { flushHeaders: () => void }).flushHeaders = flushHeaders;
+        maxBytes = randInt(rng, 1, 1 << 20);
+        const response = await fetch(`http://127.0.0.1:${address.port}/`, {
+          headers: { Connection: "close" },
+        });
+        if (pick === 0) {
+          expect(response.status).toBe(200);
+          expect(await response.json()).toEqual(expectedValue);
+        } else {
+          expect(response.status).toBe(expectedStatus);
+          expect(await response.text()).toBe(expectedBody);
+        }
+        expect(readJsonBodyMock).toHaveBeenLastCalledWith(receivedRequest, maxBytes);
       }
-      setSseHeaders(res);
-      expect(res.statusCode).toBe(200);
-      expect(setHeader).toHaveBeenCalledWith("Content-Type", "text/event-stream; charset=utf-8");
-      expect(setHeader).toHaveBeenCalledWith("Cache-Control", "no-cache");
-      expect(setHeader).toHaveBeenCalledWith("Connection", "keep-alive");
-      if (hasFlush) {
-        expect(flushHeaders).toHaveBeenCalledTimes(1);
-      } else {
-        expect(flushHeaders).not.toHaveBeenCalled();
-      }
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+      await Promise.all(tasks);
     }
   });
 });

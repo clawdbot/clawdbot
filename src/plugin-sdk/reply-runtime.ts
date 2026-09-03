@@ -23,7 +23,7 @@ export {
 export {
   HEARTBEAT_PROMPT,
   DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-  resolveHeartbeatPrompt,
+  resolveHeartbeatPromptCore,
   stripHeartbeatToken,
 } from "../auto-reply/heartbeat.js";
 export { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
@@ -38,8 +38,8 @@ export {
   resolveInboundDebounceMs,
 } from "../auto-reply/inbound-debounce.js";
 export {
-  dispatchReplyWithBufferedBlockDispatcher,
-  dispatchReplyWithDispatcher,
+  dispatchReplyWithBufferedBlockDispatcherCore as dispatchReplyWithBufferedBlockDispatcher,
+  dispatchReplyWithDispatcherCore as dispatchReplyWithDispatcher,
 } from "../auto-reply/reply/provider-dispatcher.js";
 export {
   createReplyDispatcher,

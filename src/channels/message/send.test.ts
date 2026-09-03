@@ -13,9 +13,9 @@ vi.mock("../../infra/outbound/deliver.js", () => ({
 }));
 
 import {
-  sendDurableMessageBatch,
+  sendDurableMessageBatchCore as sendDurableMessageBatch,
   type DurableMessageBatchSendResult,
-  withDurableMessageSendContext,
+  withDurableMessageSendContextCore as withDurableMessageSendContext,
 } from "./send.js";
 import type { DurableMessageSendIntent } from "./types.js";
 
@@ -218,6 +218,28 @@ describe("withDurableMessageSendContext", () => {
     });
   });
 
+  it.each([
+    {
+      name: "title-only presentations",
+      payload: { presentation: { title: "Delivery failed: action required", blocks: [] } },
+      expected: { presentationCount: 1, items: [{ kinds: ["presentation"] }] },
+    },
+    {
+      name: "single attachments mirrored by the media alias",
+      payload: { mediaUrl: "/tmp/image.png", mediaUrls: ["/tmp/image.png"] },
+      expected: { mediaCount: 1, items: [{ mediaUrls: ["/tmp/image.png"] }] },
+    },
+  ])("keeps $name visible in durable live previews", async ({ payload, expected }) => {
+    await withDurableMessageSendContext(
+      { cfg, channel: "telegram", to: "chat-1", payloads: [payload] },
+      async (ctx) => {
+        const rendered = await ctx.render();
+        expect(rendered.plan).toMatchObject(expected);
+        expect((await ctx.previewUpdate(rendered)).lastRendered?.plan).toMatchObject(expected);
+      },
+    );
+  });
+
   it("forwards the durable send context signal to outbound delivery", async () => {
     const abortController = new AbortController();
     deliverOutboundPayloads.mockImplementationOnce(
@@ -278,6 +300,7 @@ describe("withDurableMessageSendContext", () => {
             { platformMessageId: "platform-1", kind: "text", index: 0 },
             { platformMessageId: "platform-2", kind: "media", index: 1 },
           ],
+          threadId: "canonical-thread",
           sentAt: 123,
         },
       },
@@ -288,17 +311,59 @@ describe("withDurableMessageSendContext", () => {
       channel: "telegram",
       to: "chat-1",
       payloads: [{ text: "hello" }],
+      threadId: "requested-thread",
     });
 
     expectBatchStatus(result, "sent");
     expect(result.receipt?.primaryPlatformMessageId).toBe("platform-1");
     expect(result.receipt?.platformMessageIds).toEqual(["platform-1", "platform-2"]);
+    expect(result.receipt?.threadId).toBe("canonical-thread");
+    expect(result.receipt?.parts.map((part) => part.threadId)).toEqual([
+      "canonical-thread",
+      "canonical-thread",
+    ]);
     expect(
       result.receipt?.parts.map(({ platformMessageId, kind }) => ({ platformMessageId, kind })),
     ).toEqual([
       { platformMessageId: "platform-1", kind: "text" },
       { platformMessageId: "platform-2", kind: "media" },
     ]);
+  });
+
+  it("keeps acknowledged multipart sends without platform ids authoritative", async () => {
+    deliverOutboundPayloads.mockResolvedValueOnce(
+      [123, 456].map((sentAt) => ({
+        channel: "synology-chat",
+        messageId: "",
+        chatId: "42",
+        receipt: {
+          platformMessageIds: [],
+          parts: [],
+          threadId: "42",
+          sentAt,
+        },
+      })),
+    );
+    const onCommitReceipt = vi.fn();
+
+    const result = await sendDurableMessageBatch({
+      cfg,
+      channel: "synology-chat",
+      to: "42",
+      payloads: [{ text: "first" }, { text: "second" }],
+      onCommitReceipt,
+    });
+
+    expectBatchStatus(result, "sent");
+    expect(result.results).toHaveLength(2);
+    expect(result.receipt).toMatchObject({
+      platformMessageIds: [],
+      parts: [],
+      threadId: "42",
+      sentAt: 123,
+    });
+    expect(result.receipt.primaryPlatformMessageId).toBeUndefined();
+    expect(onCommitReceipt).toHaveBeenCalledWith(result.receipt);
   });
 
   it("supports preview, edit, and delete send-context hooks", async () => {
@@ -557,7 +622,18 @@ describe("withDurableMessageSendContext", () => {
     const cause = new Error("network reset");
     const error = new OutboundDeliveryError("network reset", {
       cause,
-      results: [{ channel: "telegram", messageId: "msg-1" }],
+      results: [
+        {
+          channel: "telegram",
+          messageId: "msg-1",
+          receipt: {
+            platformMessageIds: ["msg-1"],
+            parts: [{ platformMessageId: "msg-1", kind: "text", index: 0 }],
+            threadId: "canonical-thread",
+            sentAt: 123,
+          },
+        },
+      ],
       payloadOutcomes: [
         {
           index: 0,
@@ -582,12 +658,15 @@ describe("withDurableMessageSendContext", () => {
       channel: "telegram",
       to: "chat-1",
       payloads: [{ text: "first" }, { text: "second" }],
+      threadId: "requested-thread",
       onSendFailure,
     });
 
     expectBatchStatus(result, "partial_failed");
-    expect(result.results).toEqual([{ channel: "telegram", messageId: "msg-1" }]);
+    expect(result.results).toEqual(error.results);
     expect(result.receipt?.platformMessageIds).toEqual(["msg-1"]);
+    expect(result.receipt?.threadId).toBe("canonical-thread");
+    expect(result.receipt?.parts[0]?.threadId).toBe("canonical-thread");
     expect(result.error).toBe(error);
     expect(result.sentBeforeError).toBe(true);
     expect(onSendFailure).toHaveBeenCalledWith(error);

@@ -32,10 +32,6 @@ struct NodePairingApprovalPrompterTests {
             localNodeId: "node-1"))
     }
 
-    @Test func `node pairing approval prompter exercises`() async {
-        await NodePairingApprovalPrompter.exerciseForTesting()
-    }
-
     @Test func `a newer device pairing request supersedes queued requests for the same device`() {
         func request(_ requestId: String, deviceId: String, ts: Double) -> DevicePairingApprovalPrompter
             .PendingRequest

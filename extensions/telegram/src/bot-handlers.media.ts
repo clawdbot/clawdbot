@@ -19,8 +19,8 @@ export class TelegramBotApiFileTooLargeError extends MediaFetchError {
 }
 
 export function isMediaSizeLimitError(err: unknown): boolean {
-  if (err instanceof TelegramBotApiFileTooLargeError) {
-    return true;
+  if (err instanceof MediaFetchError) {
+    return err.code === "max_bytes";
   }
   const errMsg = String(err);
   return errMsg.includes("exceeds") && errMsg.includes("MB limit");

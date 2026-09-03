@@ -1,4 +1,5 @@
 // Zalo type declarations define plugin contracts.
+import type { tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file-runtime";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 
 export type ZaloAccountConfig = {
@@ -49,5 +50,9 @@ export type ResolvedZaloAccount = {
   token: string;
   tokenSource: ZaloTokenSource;
   tokenStatus?: ZaloTokenStatus;
+  credentialDiagnostics?: Extract<
+    ReturnType<typeof tryReadSecretFileSync>,
+    { status: "configured_unavailable" }
+  >["diagnostic"][];
   config: ZaloAccountConfig;
 };

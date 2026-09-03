@@ -40,6 +40,7 @@ export type BrowserActionPathResult = {
   labels?: boolean;
   labelsCount?: number;
   labelsSkipped?: number;
+  truncated?: boolean;
   /**
    * Per-ref bounding boxes when labels=true. Coordinates are in the
    * captured image's space (viewport / fullpage / element-relative).

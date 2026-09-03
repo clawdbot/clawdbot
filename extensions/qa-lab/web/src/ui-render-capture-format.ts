@@ -1,9 +1,9 @@
 import {
   formatCaptureFieldValue,
   isSensitiveCaptureField,
-  redactCaptureInlineSecretPairs,
   redactCapturePayloadPreview,
   redactCaptureScalar,
+  redactSensitiveText,
   redactCaptureValue,
 } from "./ui-render-capture-redaction.js";
 import { esc, parseJsonObject } from "./ui-render-utils.js";
@@ -142,7 +142,7 @@ function renderCaptureSsePayload(
           const value = separatorIndex >= 0 ? line.slice(separatorIndex + 1).trim() : line;
           return {
             label,
-            value: redactCaptureScalar(redactCaptureInlineSecretPairs(value), label),
+            value: redactCaptureScalar(redactSensitiveText(value), label),
           };
         });
       const eventName = rows.find((row) => row.label === "event")?.value || "message";

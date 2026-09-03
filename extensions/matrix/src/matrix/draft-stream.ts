@@ -79,10 +79,14 @@ export function createMatrixDraftStream(params: {
 
   const sendOrEdit = async (text: string): Promise<boolean> => {
     const trimmed = text.trimEnd();
-    if (!trimmed) {
+    if (!trimmed.trim()) {
       return false;
     }
-    const preparedText = prepareMatrixSingleText(trimmed, { cfg, accountId });
+    const preparedText = prepareMatrixSingleText(trimmed, {
+      cfg,
+      accountId,
+      preserveWhitespace: true,
+    });
     if (!preparedText.fitsInSingleEvent) {
       finalizeInPlaceBlocked = true;
       if (!currentEventId) {
@@ -220,9 +224,10 @@ export function createMatrixDraftStream(params: {
     eventId: () => currentEventId,
     content: () => lastSentContent || undefined,
     matchesPreparedText: (text: string) =>
-      prepareMatrixSingleText(text, {
+      prepareMatrixSingleText(text.trimEnd(), {
         cfg,
         accountId,
+        preserveWhitespace: true,
       }).trimmedText === lastSentText,
     mustDeliverFinalNormally: () => sendFailed || finalizeInPlaceBlocked,
   };

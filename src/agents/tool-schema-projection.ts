@@ -21,7 +21,7 @@ export type RuntimeToolSchemaDiagnostic = {
 
 /** Runtime tool list split into compatible tools and schema diagnostics. */
 type RuntimeToolSchemaInspection<TTool extends Pick<AnyAgentTool, "name" | "parameters">> = {
-  readonly tools: readonly TTool[];
+  readonly tools: TTool[];
   readonly diagnostics: readonly RuntimeToolSchemaDiagnostic[];
 };
 

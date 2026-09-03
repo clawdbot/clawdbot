@@ -1,0 +1,46 @@
+{
+  "id": "geolocation",
+  "name": "Geolocation",
+  "description": "Resolves client IP addresses to a coarse city using a locally cached IP-geolocation database.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "uiHints": {
+    "databaseUrl": {
+      "label": "Database URL",
+      "help": "MMDB source. Defaults to the monthly DB-IP City Lite build. `{yyyy}` and `{mm}` expand to a release month; the previous month is tried when the current one is not published yet."
+    },
+    "attributionText": {
+      "label": "Attribution text",
+      "help": "Shown wherever results appear. The default database is CC BY 4.0 and requires this credit; change it only alongside databaseUrl."
+    },
+    "attributionUrl": {
+      "label": "Attribution link",
+      "help": "Link target for the attribution credit."
+    },
+    "refreshDays": {
+      "label": "Refresh interval (days)",
+      "help": "How old the cached database may get before it is downloaded again. Defaults to 30."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "databaseUrl": {
+        "type": "string"
+      },
+      "attributionText": {
+        "type": "string"
+      },
+      "attributionUrl": {
+        "type": "string"
+      },
+      "refreshDays": {
+        "type": "number",
+        "minimum": 1
+      }
+    }
+  }
+}

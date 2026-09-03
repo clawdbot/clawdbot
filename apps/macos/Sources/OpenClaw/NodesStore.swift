@@ -3,7 +3,7 @@ import Observation
 import OpenClawKit
 import OSLog
 
-struct NodeInfo: Identifiable, Codable {
+struct NodeInfo: Identifiable, Decodable {
     let nodeId: String
     let displayName: String?
     let platform: String?
@@ -32,7 +32,7 @@ struct NodeInfo: Identifiable, Codable {
     }
 }
 
-private struct NodeListResponse: Codable {
+private struct NodeListResponse: Decodable {
     let ts: Double?
     let nodes: [NodeInfo]
 }
@@ -51,6 +51,7 @@ final class NodesStore {
     var nodes: [NodeInfo] = []
     var lastError: String?
     var statusMessage: String?
+    let persistentServiceNotice: String?
     var isLoading = false
     private(set) var localNodeIdentityState: LocalNodeIdentityState = .loading
 
@@ -65,21 +66,37 @@ final class NodesStore {
     @ObservationIgnored private var localNodeIdentityPreparationTask: Task<Void, Never>?
 
     init(
+        appProfile: AppProfile = .current,
         localNodeIdentityProfile: GatewayDeviceIdentityProfile = MacNodeModeCoordinator.nodeIdentityProfile,
         localNodeIDLoader: @escaping @Sendable (GatewayDeviceIdentityProfile) -> String? = { profile in
             DeviceIdentityStore.loadOrCreatePersisted(profile: profile)?.deviceId
         })
     {
+        self.persistentServiceNotice = appProfile.isActive
+            ? "Persistent Mac node service unavailable under app profile; runtime node remains available."
+            : nil
         self.localNodeIdentityProfile = localNodeIdentityProfile
         self.localNodeIDLoader = localNodeIDLoader
     }
 
     func start() {
-        guard self.task == nil else { return }
+        guard self.task == nil || self.task?.isCancelled == true else { return }
+        let previousTask = self.task
+        let interval = self.interval
         self.scheduleLocalNodeIdentityPreparation()
-        SimpleTaskSupport.startDetachedLoop(task: &self.task, interval: self.interval) { [weak self] in
-            await self?.refresh()
+        self.task = Task { [weak self] in
+            await previousTask?.value
+            guard !Task.isCancelled else { return }
+            repeat {
+                guard let self else { return }
+                await self.refresh()
+            } while await SimpleTaskSupport.waitForNextOperation(interval: interval)
         }
+    }
+
+    func stop() {
+        // Reopening joins this task before refreshing so it cannot inherit stale isLoading.
+        self.task?.cancel()
     }
 
     private func scheduleLocalNodeIdentityPreparation() {
@@ -125,18 +142,20 @@ final class NodesStore {
     }
 
     func refresh() async {
+        guard !self.isLoading, !Task.isCancelled else { return }
         self.scheduleLocalNodeIdentityPreparation()
-        if self.isLoading { return }
         self.statusMessage = nil
         self.isLoading = true
         defer { self.isLoading = false }
         do {
             let data = try await GatewayConnection.shared.requestRaw(method: "node.list", params: nil, timeoutMs: 8000)
+            guard !Task.isCancelled else { return }
             let decoded = try JSONDecoder().decode(NodeListResponse.self, from: data)
             self.nodes = decoded.nodes
             self.lastError = nil
             self.statusMessage = nil
         } catch {
+            guard !Task.isCancelled else { return }
             if Self.isCancelled(error) {
                 self.logger.debug("node.list cancelled; keeping last nodes")
                 if self.nodes.isEmpty {

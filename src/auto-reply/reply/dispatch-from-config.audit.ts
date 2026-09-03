@@ -45,6 +45,8 @@ function resolveCompletedInboundAuditReason(
       return "acp_dispatch_completed";
     case "acp_empty_prompt":
       return "acp_dispatch_empty";
+    case "active_run_injected":
+      return "active_run_injected";
     default:
       return undefined;
   }
@@ -131,6 +133,74 @@ export type InboundMessageAuditTerminalRecorder = {
   finishError: () => void;
 };
 
+export function emitInboundMessageAuditTerminal(params: {
+  cfg: DispatchFromConfigParams["cfg"];
+  counts: Record<ReplyDispatchKind, number>;
+  ctx: DispatchFromConfigParams["ctx"];
+  observedRunId?: string;
+  startedAt: number;
+  terminal: { outcome: DispatchProcessedOutcome; options?: DispatchProcessedOptions };
+}): void {
+  const { ctx, cfg } = params;
+  const occurredAt = Date.now();
+  const sessionKey =
+    normalizeOptionalString(ctx.SessionKey) ?? normalizeOptionalString(ctx.CommandTargetSessionKey);
+  const actorId = normalizeOptionalString(ctx.SenderId);
+  const accountId = normalizeOptionalString(ctx.AccountId);
+  const conversationId =
+    normalizeOptionalString(ctx.NativeChannelId) ??
+    normalizeOptionalString(ctx.OriginatingTo) ??
+    normalizeOptionalString(ctx.To) ??
+    normalizeOptionalString(ctx.From);
+  const messageId =
+    normalizeOptionalString(ctx.MessageSidFull) ??
+    normalizeOptionalString(ctx.MessageSid) ??
+    normalizeOptionalString(ctx.MessageSidFirst) ??
+    normalizeOptionalString(ctx.MessageSidLast);
+  const terminalFields = resolveInboundMessageAuditTerminal(
+    params.terminal.outcome,
+    params.terminal.options?.reason,
+  );
+  let agentId = normalizeOptionalString(ctx.AgentId);
+  try {
+    agentId = resolveSessionAgentId({
+      sessionKey,
+      config: cfg,
+      agentId: ctx.AgentId,
+    });
+  } catch {
+    // Malformed setup must still produce a content-free terminal with available attribution.
+  }
+  try {
+    emitTrustedMessageAuditEvent({
+      occurredAt,
+      kind: "message",
+      action: "message.inbound.processed",
+      ...terminalFields,
+      actorType: actorId ? "channel_sender" : "system",
+      actorId: actorId ?? "gateway",
+      ...(agentId ? { agentId } : {}),
+      ...(normalizeOptionalString(params.observedRunId)
+        ? { runId: normalizeOptionalString(params.observedRunId) }
+        : {}),
+      direction: "inbound",
+      channel:
+        normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
+        normalizeLowercaseStringOrEmpty(ctx.Surface) ||
+        normalizeLowercaseStringOrEmpty(ctx.Provider) ||
+        "unknown",
+      conversationKind: normalizeChatType(ctx.ChatType) ?? "unknown",
+      durationMs: Math.max(0, occurredAt - params.startedAt),
+      resultCount: params.counts.tool + params.counts.block + params.counts.final,
+      ...(accountId ? { accountId } : {}),
+      ...(conversationId ? { conversationId } : {}),
+      ...(messageId ? { messageId } : {}),
+    });
+  } catch {
+    // Optional audit observers must never alter message dispatch semantics.
+  }
+}
+
 /**
  * Captures one terminal event for the reply-processing boundary. Channel admission and
  * pre-dispatch drops remain outside this boundary and need their own ingress projection.
@@ -157,66 +227,14 @@ export function createInboundMessageAuditTerminal(
       return;
     }
     finished = true;
-    const { ctx, cfg } = params;
-    const occurredAt = Date.now();
-    const sessionKey =
-      normalizeOptionalString(ctx.SessionKey) ??
-      normalizeOptionalString(ctx.CommandTargetSessionKey);
-    const actorId = normalizeOptionalString(ctx.SenderId);
-    const accountId = normalizeOptionalString(ctx.AccountId);
-    const conversationId =
-      normalizeOptionalString(ctx.NativeChannelId) ??
-      normalizeOptionalString(ctx.OriginatingTo) ??
-      normalizeOptionalString(ctx.To) ??
-      normalizeOptionalString(ctx.From);
-    const messageId =
-      normalizeOptionalString(ctx.MessageSidFull) ??
-      normalizeOptionalString(ctx.MessageSid) ??
-      normalizeOptionalString(ctx.MessageSidFirst) ??
-      normalizeOptionalString(ctx.MessageSidLast);
-    const terminalFields = resolveInboundMessageAuditTerminal(
-      terminal.outcome,
-      terminal.options?.reason,
-    );
-    let agentId = normalizeOptionalString(ctx.AgentId);
-    try {
-      agentId = resolveSessionAgentId({
-        sessionKey,
-        config: cfg,
-        agentId: ctx.AgentId,
-      });
-    } catch {
-      // Malformed setup must still produce a content-free terminal with available attribution.
-    }
-    try {
-      emitTrustedMessageAuditEvent({
-        occurredAt,
-        kind: "message",
-        action: "message.inbound.processed",
-        ...terminalFields,
-        actorType: actorId ? "channel_sender" : "system",
-        actorId: actorId ?? "gateway",
-        ...(agentId ? { agentId } : {}),
-        ...(observedRunId ? { runId: observedRunId } : {}),
-        direction: "inbound",
-        // OriginatingChannel is the canonical routing channel id and matches
-        // outbound rows' channel; Surface/Provider can be UI-surface variants
-        // and plugin channels may set only OriginatingChannel.
-        channel:
-          normalizeLowercaseStringOrEmpty(ctx.OriginatingChannel) ||
-          normalizeLowercaseStringOrEmpty(ctx.Surface) ||
-          normalizeLowercaseStringOrEmpty(ctx.Provider) ||
-          "unknown",
-        conversationKind: normalizeChatType(ctx.ChatType) ?? "unknown",
-        durationMs: Math.max(0, occurredAt - startedAt),
-        resultCount: counts.tool + counts.block + counts.final,
-        ...(accountId ? { accountId } : {}),
-        ...(conversationId ? { conversationId } : {}),
-        ...(messageId ? { messageId } : {}),
-      });
-    } catch {
-      // Optional audit observers must never alter message dispatch semantics.
-    }
+    emitInboundMessageAuditTerminal({
+      cfg: params.cfg,
+      counts,
+      ctx: params.ctx,
+      observedRunId,
+      startedAt,
+      terminal,
+    });
   };
 
   return {

@@ -39,10 +39,6 @@ struct CritterIconRendererTests {
         #expect(celebrating.tiffRepresentation != nil)
     }
 
-    @Test func `critter status label exercises helpers`() async {
-        await CritterStatusLabel.exerciseForTesting()
-    }
-
     @Test func `idle critter sleeps until its next animation`() {
         let now = Date(timeIntervalSinceReferenceDate: 100)
         let delay = CritterStatusLabel.nextAnimationTickDelay(

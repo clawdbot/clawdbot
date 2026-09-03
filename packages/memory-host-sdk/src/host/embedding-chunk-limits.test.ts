@@ -2,14 +2,14 @@
 import { describe, expect, it } from "vitest";
 import { enforceEmbeddingMaxInputTokens } from "./embedding-chunk-limits.js";
 import { estimateUtf8Bytes } from "./embedding-input-limits.js";
-import type { EmbeddingProvider } from "./embeddings.js";
+import type { EmbeddingProvider } from "./embeddings.types.js";
 
 function createProvider(maxInputTokens: number): EmbeddingProvider {
   return {
     id: "mock",
     model: "mock-embed",
     maxInputTokens,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }
@@ -21,7 +21,7 @@ function createProviderWithoutMaxInputTokens(params: {
   return {
     id: params.id,
     model: params.model,
-    embedQuery: async () => [0],
+    embed: async () => [0],
     embedBatch: async () => [[0]],
   };
 }

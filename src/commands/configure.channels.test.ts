@@ -84,8 +84,8 @@ function expectUnknownChannelRemovalPrompt(unsafeChannel: string, label: string)
     `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
   );
   expect(note).toHaveBeenCalledWith(
-    `${label} removed from config.\nNote: credentials/sessions on disk are unchanged.`,
-    "Channel removed",
+    `${label} selected for removal from config.\nNote: credentials/sessions on disk are unchanged.`,
+    "Channel removal",
   );
 }
 
@@ -143,8 +143,8 @@ describe("removeChannelConfigWizard", () => {
     );
     expect(next.channels).toEqual({ twitch: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
-      "Telegram removed from config.\nNote: credentials/sessions on disk are unchanged.",
-      "Channel removed",
+      "Telegram selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Channel removal",
     );
   });
 
@@ -164,8 +164,8 @@ describe("removeChannelConfigWizard", () => {
     expect(confirmArg().message).toBe("Delete done configuration from ~/.openclaw/openclaw.json?");
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
-      "done removed from config.\nNote: credentials/sessions on disk are unchanged.",
-      "Channel removed",
+      "done selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Channel removal",
     );
   });
 
@@ -231,8 +231,8 @@ describe("removeChannelConfigWizard", () => {
       "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
     );
     expect(note).toHaveBeenCalledWith(
-      "Telegram\\nBot removed from config.\nNote: credentials/sessions on disk are unchanged.",
-      "Channel removed",
+      "Telegram\\nBot selected for removal from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Channel removal",
     );
   });
 
