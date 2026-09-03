@@ -308,14 +308,16 @@ Gateway assigned rather than the label, so a reply whose choices the Gateway no 
 lists falls back to readable text instead of drawing a tap that answers the wrong
 option. The eligible shape is one single-select, non-secret question offering two to
 four distinct options — the same bound Telegram, Discord and Slack use; anything else
-stays readable text that a typed reply still answers. **Other…** is a control too:
-tapping it leaves the question open and asks for a typed answer, so the next thing
-typed becomes the answer.
+stays readable text that a typed reply still answers.
 
-A card holds at most four controls. A two- or three-option question therefore shows
-**Other…** alongside its options; a four-option one spends all four controls on the
-options, and **Other…** falls back into the card's text under `Actions:` — the typed
-route still works and the text still says so.
+**Other…** is a control too. Tapping it opens the composer — the postback carries LINE's
+`inputOption: "openKeyboard"` — and leaves the question open, so the next thing typed
+becomes the answer. The tap records nothing by itself, which is why it sends no
+acknowledgement: the keyboard is the acknowledgement, and LINE will not let a delivered
+card take its controls back afterwards. A card holds at most four controls, so a two- or
+three-option question shows **Other…** beside its options while a four-option one spends
+all four on the options and leaves **Other…** named in the card's text under `Actions:`,
+where the typed route still works and the text still says so.
 
 LINE cannot edit a message it already delivered, so the controls stay on screen after
 the question ends. A tap that arrives then is answered with `That question is no longer
