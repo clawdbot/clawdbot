@@ -69,10 +69,20 @@ function isMiniMaxCnHost(value: string | undefined): boolean {
   if (!trimmed) {
     return false;
   }
+  // Match the host only, on a dot boundary, so look-alike hosts such as
+  // "notminimaxi.com" are not mistaken for the CN endpoint.
+  const isCnHostname = (hostname: string) =>
+    hostname === "minimaxi.com" || hostname.endsWith(".minimaxi.com");
   try {
-    return new URL(trimmed).hostname.endsWith("minimaxi.com");
+    return isCnHostname(new URL(trimmed).hostname);
   } catch {
-    return trimmed.includes("minimaxi.com");
+    try {
+      // Scheme-less values (e.g. "api.minimaxi.com/anthropic"): prepend a
+      // scheme so only the host is inspected, never the path or query.
+      return isCnHostname(new URL(`https://${trimmed}`).hostname);
+    } catch {
+      return false;
+    }
   }
 }
 
