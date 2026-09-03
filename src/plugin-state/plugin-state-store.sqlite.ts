@@ -10,7 +10,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
-import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import {
   isSqliteCorruptionError,
   runSqliteImmediateTransactionSync,
@@ -53,10 +53,6 @@ export type PluginDoctorRawStateEntry = Omit<PluginStateEntry<unknown>, "value" 
   valueJson: string;
   value?: unknown;
   expiresAt: number | null;
-};
-
-type CountRow = {
-  count: number | bigint;
 };
 
 type PluginStateDatabase = {
@@ -341,7 +337,7 @@ function countLivePluginStateNamespaceEntries(
       .where("namespace", "=", params.namespace)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function allocatePluginStateNamespaceCreatedAt(
@@ -376,7 +372,7 @@ function countLivePluginStateEntries(
       .where("plugin_id", "=", params.pluginId)
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
-  return countRow(row);
+  return coerceRequiredSqliteNumber(row?.count ?? 0);
 }
 
 function deleteOldestPluginStateNamespaceEntries(
@@ -493,11 +489,6 @@ function withPluginStateDatabaseReadOnly<T>(
   }
 }
 
-function countRow(row: CountRow | undefined): number {
-  const raw = row?.count ?? 0;
-  return typeof raw === "bigint" ? Number(raw) : raw;
-}
-
 function envOptions(env?: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return env ? { env } : {};
 }
@@ -542,8 +533,8 @@ function readPluginStateRetention(
       .where((eb) => eb.or([eb("expires_at", "is", null), eb("expires_at", ">", params.now)])),
   );
   return {
-    namespaceCount: Number(row?.namespace_count ?? 0),
-    pluginCount: Number(row?.plugin_count ?? 0),
+    namespaceCount: coerceRequiredSqliteNumber(row?.namespace_count ?? 0),
+    pluginCount: coerceRequiredSqliteNumber(row?.plugin_count ?? 0),
     nextExpiry: normalizeSqliteNumber(row?.next_expiry ?? null) ?? Infinity,
     now: params.now,
     sweepPending: true,

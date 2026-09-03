@@ -12,6 +12,11 @@ import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
 import { SessionManager } from "../../sessions/index.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { testing as extraParamsTesting } from "../extra-params.test-support.js";
+import {
+  clearEmbeddedSessionPromptStates,
+  createToolResultPromptProjectionState,
+  getEmbeddedSessionPromptState,
+} from "../session-prompt-state.js";
 import { RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
 import {
   prepareEmbeddedAttemptTransport,
@@ -50,6 +55,7 @@ function createSettleFixture(overrides?: Partial<SettleInput>): SettleInput {
       messages: [],
     },
     sessionManager,
+    toolResultPromptProjectionState: createToolResultPromptProjectionState(),
     withOwnedTranscriptWrite: async (operation: () => unknown) => await operation(),
     subscription: {
       toolMetas: [],
@@ -122,6 +128,58 @@ describe("settleEmbeddedAttemptStream liveness", () => {
     expect(flushed).toHaveBeenCalledWith({ reason: "pre_compaction", attemptAccepted: false });
     expect(result.sessionIdUsed).toBe("sess-settle-1");
   });
+
+  it("persists the active projection after session-state eviction", async () => {
+    const sessionId = "cache-ttl-settle-evicted";
+    const otherSessionIds = Array.from({ length: 65 }, (_, index) => `cache-ttl-other-${index}`);
+    const state = getEmbeddedSessionPromptState(sessionId).toolResults;
+    const key = "tool:old-read:42";
+    state.replacements.set(key, {
+      message: {
+        role: "toolResult",
+        toolCallId: "old-read",
+        toolName: "read",
+        content: [{ type: "text", text: "kept prefix\n...\nkept suffix" }],
+        isError: false,
+        timestamp: 42,
+      },
+      cacheTtl: "soft",
+    });
+    state.sourceTextByKey.set(key, ["original full output"]);
+    state.frozen.add(key);
+    const input = {
+      ...createSettleFixture(),
+      toolResultPromptProjectionState: state,
+    };
+    input.attempt = {
+      ...input.attempt,
+      sessionId,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-6",
+      model: { ...input.attempt.model, api: "anthropic-messages" },
+      config: { agents: { defaults: { contextPruning: { mode: "cache-ttl" } } } },
+    };
+    try {
+      for (const otherSessionId of otherSessionIds) {
+        getEmbeddedSessionPromptState(otherSessionId);
+      }
+      expect(getEmbeddedSessionPromptState(sessionId).toolResults).not.toBe(state);
+
+      await settleEmbeddedAttemptStream(input);
+
+      expect(input.sessionManager.getEntries()).toContainEqual(
+        expect.objectContaining({
+          type: "custom",
+          customType: "openclaw.cache-ttl",
+          data: expect.objectContaining({
+            prunedToolResults: [{ key, mode: "soft" }],
+          }),
+        }),
+      );
+    } finally {
+      clearEmbeddedSessionPromptStates([sessionId, ...otherSessionIds]);
+    }
+  });
 });
 
 describe("prepareEmbeddedAttemptTransport", () => {
@@ -135,9 +193,42 @@ describe("prepareEmbeddedAttemptTransport", () => {
   });
 
   it.each([
-    { compaction: true, apiKey: "test-api-key", replayEnabled: true },
-    { compaction: true, apiKey: "test-sk-ant-oat-oauth", replayEnabled: false },
-    { compaction: false, apiKey: "test-api-key", replayEnabled: false },
+    {
+      compaction: true,
+      apiKey: "test-api-key",
+      replayEnabled: true,
+      pruning: false,
+      clearing: false,
+    },
+    {
+      compaction: true,
+      apiKey: "test-sk-ant-oat-oauth",
+      replayEnabled: false,
+      pruning: true,
+      clearing: false,
+    },
+    {
+      compaction: false,
+      apiKey: "test-api-key",
+      replayEnabled: false,
+      pruning: true,
+      clearing: true,
+    },
+    {
+      compaction: true,
+      apiKey: "test-api-key",
+      replayEnabled: true,
+      pruning: true,
+      clearing: true,
+    },
+    {
+      compaction: false,
+      apiKey: "test-api-key",
+      replayEnabled: false,
+      pruning: true,
+      clearing: false,
+      baseUrl: "https://proxy.example.test/anthropic",
+    },
   ])("prepares transport and replay from resolved auth/config: %j", async (testCase) => {
     const streamFn = vi.fn();
     bindStreamLlmRuntime(streamFn, {
@@ -152,12 +243,16 @@ describe("prepareEmbeddedAttemptTransport", () => {
     };
     const input = {
       attempt: {
-        config: {},
+        config: {
+          agents: {
+            defaults: { contextPruning: { mode: testCase.pruning ? "cache-ttl" : "off" } },
+          },
+        },
         model: {
           api: "anthropic-messages",
           provider: "anthropic",
           id: "claude-sonnet-4-6",
-          baseUrl: "https://api.anthropic.com",
+          baseUrl: testCase.baseUrl ?? "https://api.anthropic.com",
         },
         modelId: "claude-sonnet-4-6",
         provider: "anthropic",
@@ -204,6 +299,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.effectiveAgentTransport).toBe("sse");
     expect(session.agent.transport).toBe("sse");
     expect(result.compactionReplayEnabled).toBe(testCase.replayEnabled);
+    expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
   it("materializes native video from the prepared session agent workspace", async () => {

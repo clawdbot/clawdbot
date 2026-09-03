@@ -3631,62 +3631,173 @@ describe("Codex app-server thread lifecycle bindings", () => {
     ]);
   });
 
-  it("keeps the bound local provider when recoverable resume failure starts a fresh thread", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+  it.each(["thread/read", "thread/resume"])(
+    "keeps the bound local provider when %s fails before resume admission",
+    async (failureMethod) => {
+      const sessionFile = path.join(tempDir, "session.jsonl");
+      const workspaceDir = path.join(tempDir, "workspace");
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-existing",
+        cwd: workspaceDir,
+        model: "local-model",
+        modelProvider: "lmstudio",
+        approvalPolicy: "on-request",
+        sandbox: "workspace-write",
+      });
+      const params = createParams(sessionFile, workspaceDir);
+      params.provider = "codex";
+      params.modelId = "local-model-2";
+      const appServer = createThreadLifecycleAppServerOptions();
+      const fixture = await createLeasedLifecycleWireClient(
+        path.join(tempDir, "agent"),
+        ({ method }) => {
+          if (method === failureMethod) {
+            throw new CodexAppServerRpcError(
+              { code: -32_600, message: "thread not loaded: thread-existing" },
+              method,
+            );
+          }
+          if (method === "thread/read") {
+            return {
+              thread: {
+                ...threadStartResult("thread-existing").thread,
+                status: { type: "notLoaded" },
+              },
+            };
+          }
+          if (method === "thread/unsubscribe") {
+            return { status: "notLoaded" };
+          }
+          if (method === "thread/start") {
+            const response = threadStartResult("thread-new");
+            response.model = "local-model-2";
+            response.modelProvider = "lmstudio";
+            response.thread.modelProvider = "lmstudio";
+            return response;
+          }
+          throw new Error(`unexpected method: ${method}`);
+        },
+      );
+      const { client } = fixture;
+      const request = vi.spyOn(client, "request");
+      try {
+        const binding = await startOrResumeThread({
+          client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer,
+        });
+
+        const startParams = request.mock.calls.find(
+          ([method]) => method === "thread/start",
+        )?.[1] as Record<string, unknown> | undefined;
+        expect(request.mock.calls.map(([method]) => method)).toEqual(
+          failureMethod === "thread/read"
+            ? ["thread/read", "thread/start"]
+            : ["thread/read", "thread/resume", "thread/unsubscribe", "thread/start"],
+        );
+        expect(startParams?.model).toBe("local-model-2");
+        expect(startParams?.modelProvider).toBe("lmstudio");
+        expect(binding.threadId).toBe("thread-new");
+        expect(binding.modelProvider).toBe("lmstudio");
+        await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+          threadId: "thread-new",
+          modelProvider: "lmstudio",
+        });
+      } finally {
+        releaseLeasedSharedCodexAppServerClient(client);
+        await client.closeAndWait();
+      }
+    },
+  );
+
+  it.each([
+    "native-model",
+    "pending-adoption",
+    "overload",
+    "storage-failure",
+    "unrelated-invalid-request",
+    "wrong-thread",
+    "aborted",
+    "retired-client",
+    "closed-host",
+    "active-thread",
+    "parent-owned",
+  ] as const)("preserves the binding when cold preparation is %s", async (condition) => {
+    const sessionFile = path.join(tempDir, "preserved-cold.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
-    await writeCodexAppServerBinding(sessionFile, {
-      threadId: "thread-existing",
-      cwd: workspaceDir,
-      model: "local-model",
-      modelProvider: "lmstudio",
-      approvalPolicy: "on-request",
-      sandbox: "workspace-write",
-    });
-    const params = createParams(sessionFile, workspaceDir);
-    params.provider = "codex";
-    params.modelId = "local-model-2";
-    const appServer = createThreadLifecycleAppServerOptions();
-    const respond = vi.fn(async (method: string, _requestParams?: unknown) => {
-      if (method === "thread/resume") {
-        throw new CodexAppServerRpcError({ code: -32_000, message: "stale thread" }, method);
+    const agentDir = path.join(tempDir, "agent");
+    const params = { ...createParams(sessionFile, workspaceDir), agentDir };
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    const controller = new AbortController();
+    const wire = await createLeasedLifecycleWireClient(agentDir, ({ method }) => {
+      if (method !== "thread/read") {
+        throw new Error(`Unexpected cold preparation request: ${method}`);
       }
-      if (method === "thread/start") {
-        const response = threadStartResult("thread-new");
-        response.model = "local-model-2";
-        response.modelProvider = "lmstudio";
-        response.thread.modelProvider = "lmstudio";
-        return response;
+      if (condition === "aborted") {
+        controller.abort(new Error("preparation canceled"));
+      } else if (condition === "retired-client") {
+        retireSharedCodexAppServerClientIfCurrent(wire.client);
+      } else if (condition === "closed-host") {
+        closeHost();
+      } else if (condition === "active-thread" || condition === "parent-owned") {
+        return {
+          thread: {
+            ...threadStartResult("thread-preserved").thread,
+            status: { type: condition === "active-thread" ? "active" : "notLoaded" },
+            canAcceptDirectInput: condition !== "parent-owned",
+          },
+        };
       }
-      throw new Error(`unexpected method: ${method}`);
+      throw new CodexAppServerRpcError(
+        {
+          code:
+            condition === "overload"
+              ? -32_001
+              : condition === "storage-failure"
+                ? -32_603
+                : -32_600,
+          message:
+            condition === "storage-failure"
+              ? "failed to read thread: store unavailable"
+              : condition === "unrelated-invalid-request"
+                ? "invalid thread request"
+                : `thread not loaded: ${condition === "wrong-thread" ? "thread-other" : "thread-preserved"}`,
+        },
+        method,
+      );
     });
-    const fixture = await createLeasedCodexLifecycleHarness({
-      agentDir: path.join(tempDir, "agent"),
-      respond,
-      persistedThreads: ["thread-existing"],
-    });
-    const { client, request } = fixture;
-
-    const binding = await startOrResumeThread({
-      client,
-      params,
-      cwd: workspaceDir,
-      dynamicTools: [],
-      appServer,
-    });
-
-    const startParams = request.mock.calls.find(([method]) => method === "thread/start")?.[1] as
-      | Record<string, unknown>
-      | undefined;
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      "thread/read",
-      "thread/resume",
-      "thread/unsubscribe",
-      "thread/start",
-    ]);
-    expect(startParams?.model).toBe("local-model-2");
-    expect(startParams?.modelProvider).toBe("lmstudio");
-    expect(binding.threadId).toBe("thread-new");
-    expect(binding.modelProvider).toBe("lmstudio");
+    try {
+      await writeCodexAppServerBinding(sessionFile, {
+        threadId: "thread-preserved",
+        clientId: wire.client.getInstanceId(),
+        cwd: workspaceDir,
+        modelProvider: "openai",
+        ...(condition === "native-model" ? { preserveNativeModel: true } : {}),
+        ...(condition === "pending-adoption" ? { pendingResumeConfiguration: true } : {}),
+      });
+      const before = await readCodexAppServerBinding(sessionFile);
+      await expect(
+        startOrResumeThread({
+          client: wire.client,
+          params,
+          cwd: workspaceDir,
+          dynamicTools: [],
+          appServer: createThreadLifecycleAppServerOptions(),
+          userMcpServersEnabled: false,
+          signal: controller.signal,
+        }),
+      ).rejects.toThrow();
+      await expect(readCodexAppServerBinding(sessionFile)).resolves.toEqual(before);
+      expect(
+        new Set(wire.writes.map((message) => (JSON.parse(message) as RpcRequest).method)),
+      ).toEqual(new Set(["thread/read"]));
+    } finally {
+      closeHost();
+      releaseLeasedSharedCodexAppServerClient(wire.client);
+      await wire.client.closeAndWait();
+    }
   });
 
   it("fails closed when a structured resume failure cannot release its subscription", async () => {

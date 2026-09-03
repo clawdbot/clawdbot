@@ -275,6 +275,7 @@ export function bootstrapApplication(): ApplicationRuntime {
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   const overlays = createApplicationOverlays(gateway, {
     connectionBootstrap,
+    getActiveSessionKey: () => gateway.snapshot.sessionKey || undefined,
     drainConfigWrites: () => runtimeConfig.waitForPendingWrites(),
     onUpdateFailure: (failure, admission) =>
       void openUpdateFailureTriage(context, failure, admission),

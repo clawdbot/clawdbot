@@ -471,6 +471,7 @@ final class NodeAppModel {
     // Secondary "operator" connection: used for chat/talk/config/voicewake requests.
     private let operatorGateway = GatewayNodeSession()
     private var nodeGatewayTask: Task<Void, Never>?
+    @ObservationIgnored private var nodeHostStatsTask: Task<Void, Never>?
     private var operatorGatewayTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetTask: Task<Void, Never>?
     @ObservationIgnored private var gatewaySessionResetGeneration: UInt64 = 0
@@ -3587,6 +3588,7 @@ extension NodeAppModel {
         }
 
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         self.activeGatewayConnectConfig = nextConfig
         prepareForGatewayConnect(
             stableID: effectiveStableID,
@@ -3679,6 +3681,7 @@ extension NodeAppModel {
         self.talkMode.updateGatewayConnected(false)
         self.voiceWake.invalidatePendingCommand()
         self.gatewayRouteGeneration &+= 1
+        self.stopNodeHostStatsPublisher()
         nodeGatewayTask?.cancel()
         self.nodeGatewayTask = nil
         operatorGatewayTask?.cancel()
@@ -4416,6 +4419,8 @@ extension NodeAppModel {
         let shouldContinue = self.gatewayRouteCheck(
             generation: routeGeneration,
             stableID: stableID)
+        await self.startNodeHostStatsPublisher(shouldContinue: shouldContinue)
+        guard shouldContinue() else { return }
         await onNodeGatewayConnected(shouldContinue: shouldContinue)
         guard shouldContinue() else { return }
         SignificantLocationMonitor.startIfNeeded(
@@ -4604,7 +4609,50 @@ extension NodeAppModel {
 
     private func handleNodeGatewayRouteInvalidated(routeGeneration: UInt64, stableID: String) {
         guard self.isCurrentGatewayRoute(generation: routeGeneration, stableID: stableID) else { return }
+        self.stopNodeHostStatsPublisher()
         self.invalidateNodePushToTalkRoute()
+    }
+
+    private func stopNodeHostStatsPublisher() {
+        self.nodeHostStatsTask?.cancel()
+        self.nodeHostStatsTask = nil
+    }
+
+    private func startNodeHostStatsPublisher(
+        shouldContinue: @escaping @MainActor @Sendable () -> Bool) async
+    {
+        self.stopNodeHostStatsPublisher()
+        guard let route = await self.nodeGateway.currentRoute(), shouldContinue(), self.gatewayConnected else { return }
+        let gateway = self.nodeGateway
+        self.nodeHostStatsTask = Task {
+            var failureLogged = false
+            let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "NodeHostStats")
+            // App route generations survive socket reconnects; the captured route fences both.
+            while !Task.isCancelled, shouldContinue(), await gateway.currentRoute() == route {
+                guard !Task.isCancelled, shouldContinue() else { return }
+                let sent: Bool
+                do {
+                    let payload = try NodeHostStatsReporter.makePayload()
+                    let payloadJSON = try Self.encodePayload(payload)
+                    sent = await gateway.sendEvent(
+                        event: NodeHostStatsReporter.eventName,
+                        payloadJSON: payloadJSON,
+                        ifCurrentRoute: route)
+                } catch {
+                    sent = false
+                }
+                guard !Task.isCancelled, shouldContinue() else { return }
+                if !sent, !failureLogged {
+                    logger.debug("Node host stats publish failed")
+                    failureLogged = true
+                }
+                do {
+                    try await Task.sleep(for: .seconds(NodeHostStatsReporter.intervalSeconds))
+                } catch {
+                    return
+                }
+            }
+        }
     }
 
     func invalidateNodePushToTalkRoute() {

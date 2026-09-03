@@ -3,7 +3,7 @@ import { GatewayDrainingError } from "../process/gateway-work-admission.js";
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
   resolveModelFallbackError,
 } from "./failover-error.js";
@@ -86,6 +86,19 @@ const wrappers = [
 
 it.each(wrappers)("does not replay a terminal $name failure", async ({ wrap }) => {
   const error = wrap(maxTurns());
+  const run = vi.fn().mockRejectedValue(error);
+  const onError = vi.fn();
+  await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledTimes(1);
+  expect(onError).not.toHaveBeenCalled();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
+it("does not replay a CLI turn the backend already stopped", async () => {
+  const error = new FailoverError("recorded turn stop", {
+    reason: "unknown",
+    code: "cli_turn_stopped",
+  });
   const run = vi.fn().mockRejectedValue(error);
   const onError = vi.fn();
   await expect(runWithModelFallback({ ...fallbackOptions, run, onError })).rejects.toBe(error);
@@ -301,7 +314,7 @@ it("preserves coordination precedence and suspension discard for mixed failures"
 });
 
 describe.each([
-  { name: "max turns", find: findCliMaxTurnsError, make: maxTurns },
+  { name: "max turns", find: findCliTerminalStopError, make: maxTurns },
   {
     name: "CLI timeout",
     find: findCliTimeoutError,

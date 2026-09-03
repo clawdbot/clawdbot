@@ -11,6 +11,8 @@ import {
 } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
+import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import { FORCED_WORKER_ABANDONMENT_ERROR } from "./placement-record.js";
 import {
   createWorkerProjectPreparation,
   readWorkerProjectSnapshot,
@@ -434,14 +436,18 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const cancelRequested = (record: WorkerEnvironmentRecord) =>
     move(record, "failed", { lastError: "Provisioning canceled before provider allocation" });
 
-  const finishDestroy = async (record: WorkerEnvironmentRecord, provider?: WorkerProvider) => {
+  const finishDestroy = async (
+    record: WorkerEnvironmentRecord,
+    provider?: WorkerProvider,
+    reason?: "operator-abandon",
+  ) => {
     let r = record;
     if (r.state === "requested") {
       return cancelRequested(requireCurrentOwner(r));
     }
     // Fence local authority even when the provider is unavailable. stopOwner preserves
     // shared/unknown-host stop acknowledgements before releasing their attachments.
-    r = await stopOwner(r, "provider-destroying");
+    r = await stopOwner(r, reason ?? "provider-destroying");
     r = r.nodeDeviceId !== null && r.sharedHost === false ? r : beginDrain(r);
     const owningProvider = provider ?? providerFor(r.providerId);
     let leaseId = r.leaseId;
@@ -695,7 +701,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
 
   const destroy = async (
     environmentId: string,
-    destroyOptions: { requireUnattached?: boolean } = {},
+    destroyOptions: { requireUnattached?: boolean; reason?: "operator-abandon" } = {},
   ) => {
     const stopping = options.isStopping();
     if (stopping) {
@@ -715,8 +721,14 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           "Attached cloud workers must be stopped through sessions.reclaim",
         );
       }
-      record = store.requestDestroy({ environmentId, state: record.state });
-      return finishDestroy(record);
+      const reason =
+        record.providerId === DEVICE_WORKER_PROVIDER_ID ? destroyOptions.reason : undefined;
+      record = store.requestDestroy({
+        environmentId,
+        state: record.state,
+        ...(reason ? { terminalState: "failed", lastError: FORCED_WORKER_ABANDONMENT_ERROR } : {}),
+      });
+      return finishDestroy(record, undefined, reason);
     });
   };
 

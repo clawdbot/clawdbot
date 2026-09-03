@@ -61,6 +61,7 @@ export {
   getInProcessGatewayRequestContext,
 };
 export type { GatewayMethodDispatchResponse } from "./server-plugin-in-process-dispatch.js";
+export { runWithOperatorToolGatewayCleanupContext } from "./server-plugin-in-process-dispatch.js";
 export { hasInProcessGatewayContext } from "./server-plugins-node-runtime.js";
 export { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
 

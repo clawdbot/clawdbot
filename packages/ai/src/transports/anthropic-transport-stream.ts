@@ -100,6 +100,10 @@ import {
 } from "./anthropic-compaction-replay.js";
 import {
   applyAnthropicPayloadPolicyToParams,
+  applyAnthropicContextManagementToRequest,
+  isDirectAnthropicModel,
+  logAnthropicContextEdits,
+  resolveAnthropicContextManagementBetaHeader,
   resolveAnthropicPayloadPolicy,
 } from "./anthropic-payload-policy.js";
 import {
@@ -145,7 +149,6 @@ type AnthropicTransportModel = Model<"anthropic-messages"> & {
 
 type AnthropicTransportOptions = AnthropicOptions &
   Pick<SimpleStreamOptions, "reasoning" | "thinkingBudgets" | "stop"> & {
-    anthropicServerCompaction?: boolean;
     authProfileId?: string;
   };
 type AnthropicMessagesClient = {
@@ -229,14 +232,6 @@ function resolveAnthropicMessagesMaxTokens(params: {
           Math.floor(contextWindow / ANTHROPIC_MESSAGES_FALLBACK_CONTEXT_DIVISOR),
         ),
       );
-}
-
-function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" | "baseUrl">) {
-  if (normalizeLowercaseStringOrEmpty(model.provider) !== "anthropic") {
-    return false;
-  }
-  const endpointClass = resolveProviderEndpoint(model).endpointClass;
-  return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
 function isKimiAnthropicProvider(provider: string | undefined): boolean {
@@ -1106,7 +1101,9 @@ function resolveAnthropicTransportOptions(
     toolChoice: options?.toolChoice,
     thinkingBudgets: options?.thinkingBudgets,
     reasoning,
-    ...(options?.anthropicServerCompaction === true ? { anthropicServerCompaction: true } : {}),
+    anthropicServerCompaction: options?.anthropicServerCompaction,
+    anthropicCompactThreshold: options?.anthropicCompactThreshold,
+    cacheTtlPruning: options?.cacheTtlPruning,
     ...(options?.authProfileId ? { authProfileId: options.authProfileId } : {}),
   });
   if (reasoning === "off") {
@@ -1193,15 +1190,24 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         usedCompactionReplay = builtParams.usedCompactionReplay;
         let params = builtParams.params;
         const toolProjection = builtParams.toolProjection;
+        applyAnthropicContextManagementToRequest(
+          params,
+          model,
+          transportOptions,
+          directApiKeyBetaHeader,
+        );
         const nextParams = await transportOptions.onPayload?.(params, model);
         if (nextParams !== undefined) {
           params = nextParams as Record<string, unknown>;
         }
         applyClaudeRequestContract(params, model);
-        const bindingHeaders = applyAnthropicThinkingBindingControls(
+        const betaHeader = resolveAnthropicContextManagementBetaHeader(
           params,
           directApiKeyBetaHeader,
         );
+        const bindingHeaders =
+          applyAnthropicThinkingBindingControls(params, betaHeader) ??
+          (betaHeader !== undefined ? { "anthropic-beta": betaHeader } : undefined);
         const { response, stream: anthropicStream } = await client.messages.stream(
           { ...params, stream: true },
           { signal: transportOptions.signal, headers: bindingHeaders },
@@ -1718,6 +1724,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             continue;
           }
           if (event.type === "message_delta") {
+            logAnthropicContextEdits(event);
             const delta = event.delta as
               | { stop_reason?: string; stop_details?: unknown }
               | undefined;

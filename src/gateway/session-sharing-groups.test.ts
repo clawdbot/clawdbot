@@ -1,7 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionGroupHandlers } from "./server-methods/sessions-groups.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/types.js";
 import {
@@ -18,9 +19,70 @@ import {
   rolePolicyConfig,
 } from "./session-sharing.test-utils.js";
 
-afterEach(() => closeOpenClawAgentDatabasesForTest());
+afterEach(() => {
+  flushPendingSessionsChangedEvents();
+  closeOpenClawAgentDatabasesForTest();
+});
 
 describe("session sharing group mutations", () => {
+  it.each(["rename", "delete"])(
+    "refreshes groups after %s rejects changed member authority",
+    async (action) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        putSessionGroups({ cfg: {}, names: ["Old"] });
+        const sessionKey = "agent:main:changed-group-authority";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "changed-group-authority",
+            updatedAt: 1,
+            category: "Old",
+          },
+        );
+        const error = new SessionMutationAuthorizationChangedError({
+          code: "INVALID_REQUEST",
+          message: "member authority changed",
+          details: { reason: "changed" },
+        });
+        const broadcastToConnIds = vi.fn();
+        const respond = vi.fn();
+        const context = {
+          getRuntimeConfig: () => ({}),
+          getSessionEventSubscriberConnIds: () => new Set(["group-observer"]),
+          broadcastToConnIds,
+        } as unknown as GatewayRequestContext;
+        await expect(
+          sessionGroupHandlers[`sessions.groups.${action}`]?.({
+            params: { name: "Old", ...(action === "rename" ? { to: "New" } : {}) },
+            context,
+            respond,
+            sessionMutationAuthorization: {
+              assertCurrent: () => {},
+              assertTargetCurrent: () => {
+                throw error;
+              },
+            },
+          } as never),
+        ).rejects.toMatchObject({
+          name: "SessionMutationAuthorizationChangedError",
+          error: {
+            code: "INVALID_REQUEST",
+            details: { reason: "changed" },
+            message: expect.stringContaining("retry"),
+          },
+        });
+        expect(respond).not.toHaveBeenCalled();
+        expect(loadSessionEntry({ agentId: "main", sessionKey })?.category).toBe("Old");
+        expect(listSessionGroups()).toContainEqual({ name: "Old", position: 0 });
+        expect(broadcastToConnIds).toHaveBeenCalledWith(
+          "sessions.changed",
+          expect.objectContaining({ reason: "groups" }),
+          new Set(["group-observer"]),
+          expect.any(Object),
+        );
+      });
+    },
+  );
   it("refuses restricted group drops at put admission while allowing retained groups", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       putSessionGroups({ cfg: {}, names: ["Projects"] });

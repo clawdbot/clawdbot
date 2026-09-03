@@ -9,7 +9,6 @@ import type {
 import type {
   CliJsonlStreamingParserOptions,
   CliOutput,
-  CliStreamJsonOutputLimits,
   CliUsage,
 } from "./cli-output-contracts.js";
 import { normalizeClaudeCliStreamJsonRecord } from "./cli-output-echoed-binary.js";
@@ -46,57 +45,14 @@ import {
   readGeminiCliStreamJsonError,
   supportsCliJsonlToolEvents,
 } from "./cli-output-records.js";
-
-const CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS = 8 * 1024 * 1024;
-const CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES = 20_000;
+import {
+  CLI_STREAM_JSON_OUTPUT_LIMITS,
+  frameBoundedCliJsonlChunk,
+  streamJsonOutputLimitErrorText,
+} from "./cli-output-stream-limits.js";
 export const CLI_STREAM_JSON_MISSING_RESULT_ERROR =
   "CLI stream-json output ended without a result event.";
 const CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR = "Claude CLI returned a synthetic no-response result.";
-
-const CLI_STREAM_JSON_OUTPUT_LIMITS = Object.freeze({
-  maxTurnRawChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-  maxPendingLineChars: CLI_STREAM_JSON_DEFAULT_MAX_TURN_RAW_CHARS,
-  maxTurnLines: CLI_STREAM_JSON_DEFAULT_MAX_TURN_LINES,
-} satisfies CliStreamJsonOutputLimits);
-
-/** Frames arbitrary stdout chunks while bounding each individual raw JSONL line. */
-function frameBoundedCliJsonlChunk(
-  state: { pending: string },
-  chunk: string,
-  maxLineChars: number,
-  onLine: (line: string) => boolean | void,
-): boolean {
-  for (let offset = 0; offset < chunk.length;) {
-    const newlineIndex = chunk.indexOf("\n", offset);
-    const lineEnd = newlineIndex === -1 ? chunk.length : newlineIndex;
-    if (state.pending.length + (lineEnd - offset) > maxLineChars) {
-      state.pending = "";
-      return false;
-    }
-    state.pending += chunk.slice(offset, lineEnd);
-    if (newlineIndex === -1) {
-      return true;
-    }
-    const line = state.pending;
-    // Control-response writes can synchronously reenter stdout framing.
-    state.pending = "";
-    offset = newlineIndex + 1;
-    if (onLine(line) === false) {
-      return true;
-    }
-  }
-  return true;
-}
-
-function streamJsonOutputLimitErrorText(kind: "raw" | "line" | "lines", limit: number): string {
-  if (kind === "line") {
-    return `CLI JSONL line exceeded ${limit} characters; refusing to parse output.`;
-  }
-  if (kind === "lines") {
-    return `CLI JSONL output exceeded ${limit} lines; refusing to parse output.`;
-  }
-  return `CLI JSONL output exceeded ${limit} characters; refusing to parse output.`;
-}
 
 export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOptions) {
   const lineBuffer = { pending: "" };
@@ -410,7 +366,18 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
       usage,
     });
     if (result) {
-      if (result.errorText) {
+      // A stopped turn is only a failure when nothing was delivered; text
+      // streamed before the stop is still the reply, so this one defers until
+      // the resolved text below is known.
+      const stoppedTurn =
+        result.terminalFailure?.reason === "turn_stopped" ? result.terminalFailure : undefined;
+      const stoppedTurnErrorText = stoppedTurn ? (result.errorText ?? "") : "";
+      if (stoppedTurn) {
+        const delivered = { ...result };
+        delete delivered.errorText;
+        delete delivered.terminalFailure;
+        result = delivered;
+      } else if (result.errorText) {
         output = result;
         return;
       }
@@ -473,6 +440,13 @@ export function createCliJsonlStreamingParser(params: CliJsonlStreamingParserOpt
               errorText: CLAUDE_SYNTHETIC_NO_RESPONSE_ERROR,
               terminalFailure: { reason: "synthetic_no_response" as const },
             }
+          : {}),
+        // The CLI's own terminal reason outranks the synthetic marker: it names
+        // why the turn stopped and must not be retried like a format fault.
+        // Delivery is judged on this result's own segment; text an earlier
+        // interim result already committed is not this turn's reply.
+        ...(stoppedTurn && !nextText
+          ? { text: "", errorText: stoppedTurnErrorText, terminalFailure: stoppedTurn }
           : {}),
         ...(resumeCheckpointId ? { resumeCheckpointId } : {}),
         ...(diagnosticUsage ? { diagnosticUsage } : {}),

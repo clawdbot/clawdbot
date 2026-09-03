@@ -1322,7 +1322,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Opus: anthropic/claude-opus-4-5");
   });
 
-  it("keeps gateway guidance read-only", () => {
+  it("routes explicit updates through gateway without exposing config writes", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
       toolNames: ["gateway", "exec"],
@@ -1334,7 +1334,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("config.patch");
     expect(prompt).not.toContain("config.apply");
     expect(prompt).not.toContain("`config.schema.lookup|get|patch|apply`, `restart`");
-    expect(prompt).not.toContain("update.run");
+    expect(prompt).toContain(
+      "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic.",
+    );
+    expect(prompt).toContain(
+      "Never run openclaw update, npm install -g openclaw, or stop/restart the gateway service via exec.",
+    );
     expect(prompt).not.toContain("Use config.schema to");
     expect(prompt).not.toContain("config.schema, config.apply");
   });
@@ -1351,16 +1356,43 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("- openclaw: Gateway restart/system setup/config\n");
       expect(prompt).not.toContain("changes need human approval");
       expect(prompt).toContain(
-        "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`.",
+        "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
       );
       expect(prompt).toContain(
-        "Never restart the Gateway through shell commands or write your own config.",
+        "Never run npm install -g openclaw or stop the gateway service via exec.",
       );
+      expect(prompt).toContain(
+        "Updates need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI.",
+      );
+      expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).toContain(
         "`visible:true` for work the user follows or asked for; else hidden.",
       );
     },
   );
+
+  it.each([{ toolNames: ["exec"] }, { toolNames: [] }])(
+    "keeps updates out of exec without gateway ($toolNames)",
+    ({ toolNames }) => {
+      const prompt = buildAgentSystemPrompt({ workspaceDir: "/tmp/openclaw", toolNames });
+      expect(prompt).toContain(
+        "System controls unavailable. Updates and restarts need the OpenClaw owner: tell the user to run `openclaw update` in a terminal or use the Control UI. Never run npm install -g openclaw or stop the gateway service via exec.",
+      );
+      expect(prompt).not.toContain("update.run");
+    },
+  );
+
+  it("keeps update and delegated controls distinct when both tools are present", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["openclaw", "gateway"],
+    });
+    expect(prompt).toContain(
+      "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`.",
+    );
+    expect(prompt).toContain("Update OpenClaw: `gateway` action update.run");
+    expect(prompt).not.toContain("models/providers, updates: ask `openclaw`");
+  });
 
   it("omits openclaw delegation guidance without the tool", () => {
     const prompt = buildAgentSystemPrompt({

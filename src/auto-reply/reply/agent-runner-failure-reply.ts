@@ -13,7 +13,7 @@ import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-f
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import {
   describeFailoverError,
-  findCliMaxTurnsError,
+  findCliTerminalStopError,
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
@@ -295,10 +295,10 @@ export function buildExternalRunFailureReply(
       isGenericRunnerFailure: false,
     };
   }
-  const cliMaxTurnsError = findCliMaxTurnsError(error);
-  if (cliMaxTurnsError) {
+  const cliTerminalStopError = findCliTerminalStopError(error);
+  if (cliTerminalStopError) {
     return {
-      text: renderUserFacingText(cliMaxTurnsError.message, { errorContext: true }),
+      text: renderUserFacingText(cliTerminalStopError.message, { errorContext: true }),
       isGenericRunnerFailure: false,
     };
   }

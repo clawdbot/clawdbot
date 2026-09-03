@@ -74,7 +74,7 @@ command handling is enabled for the surface.
     mcp: false,
     plugins: false,
     debug: false,
-    restart: true,
+    restart: true, // enables /restart and /update
     ownerAllowFrom: ["discord:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
@@ -130,7 +130,7 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart` and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
@@ -307,6 +307,7 @@ plugins.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw and restart; receive a completion or failure notice in the same chat |
     | `/send on\|off\|inherit` | owner | Set send policy |
   </Accordion>
 
