@@ -195,14 +195,19 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
   }
 
   protected readonly handleDocumentKeydown = (event: KeyboardEvent) => {
-    if (document.querySelector(".shell-nav[aria-modal='true']")) {
+    const state = this.state;
+    // Retained panes keep their document listeners; only the current input owner
+    // may consume a key before the visible pane receives it.
+    if (
+      !state ||
+      !this.active ||
+      !this.presented ||
+      event.defaultPrevented ||
+      document.querySelector(".shell-nav[aria-modal='true']")
+    ) {
       return;
     }
     const togglePanelSlot = (slot: SidebarSlotId) => {
-      const state = this.state;
-      if (!state) {
-        return;
-      }
       const visible = isSidebarSlotVisible(state.sidebarLayout, slot);
       if (visible) {
         releaseAttachmentWorkspaceOwner(state, slot);
@@ -211,41 +216,21 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         visible ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
       );
     };
-    if (
-      this.active &&
-      this.presented &&
-      !event.defaultPrevented &&
-      this.state?.terminalAvailable &&
-      isTerminalPanelShortcut(event)
-    ) {
+    if (state.terminalAvailable && isTerminalPanelShortcut(event)) {
       event.preventDefault();
       togglePanelSlot("terminal");
       return;
     }
-    if (
-      this.active &&
-      this.presented &&
-      !event.defaultPrevented &&
-      matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)
-    ) {
-      const state = this.state;
-      if (!state) {
-        return;
-      }
+    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.workspaceFiles, event)) {
       event.preventDefault();
       togglePanelSlot("workspace");
       return;
     }
 
-    if (this.active && this.presented) {
-      focusChatComposerFromPrintableKeydown(this, event);
-    }
+    focusChatComposerFromPrintableKeydown(this, event);
 
     clearChatModelSearchOnEscape(event);
     if (event.defaultPrevented || event.key !== "Escape") {
-      return;
-    }
-    if (!this.state) {
       return;
     }
     const openDetails = this.querySelectorAll<HTMLDetailsElement>(CHAT_OPEN_DETAILS_SELECTOR);

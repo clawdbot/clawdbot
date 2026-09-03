@@ -572,7 +572,8 @@ describe("createBackupVolatileStatCache", () => {
         await state.writeText("settings.json", '{"keep":true}\n');
         const archivePath = state.path("volatile-stat-cache.tar.gz");
         const volatilePlan = { stateDirs: [state.stateDir] };
-        const statCache = createBackupVolatileStatCache(volatilePlan);
+        const isVolatile = (entryPath: string) => isVolatileBackupPath(entryPath, volatilePlan);
+        const statCache = createBackupVolatileStatCache(isVolatile);
         const getCachedStat = statCache.get.bind(statCache);
         let removedBeforeStat = false;
 
@@ -591,7 +592,7 @@ describe("createBackupVolatileStatCache", () => {
             portable: true,
             preservePaths: true,
             statCache,
-            filter: (entryPath) => !isVolatileBackupPath(entryPath, volatilePlan),
+            filter: (entryPath) => !isVolatile(entryPath),
           },
           [state.stateDir],
         );
@@ -606,6 +607,115 @@ describe("createBackupVolatileStatCache", () => {
 });
 
 describe("createBackupArchive", () => {
+  it.each<{
+    configRelativePath: string;
+    onlyConfig: boolean;
+    malformed: boolean;
+    volatileParent?: boolean;
+    absoluteNeighbor?: boolean;
+  }>([
+    { configRelativePath: "openclaw.json.tmp", onlyConfig: false, malformed: false },
+    { configRelativePath: "openclaw.json.tmp", onlyConfig: true, malformed: false },
+    {
+      configRelativePath: "sandbox/skills-workspaces/operator/openclaw.json",
+      onlyConfig: false,
+      malformed: false,
+      volatileParent: true,
+    },
+    {
+      configRelativePath: "sandbox/skills-workspaces/operator/openclaw.json",
+      onlyConfig: true,
+      malformed: false,
+      volatileParent: true,
+    },
+    { configRelativePath: "openclaw.json.tmp", onlyConfig: true, malformed: true },
+    {
+      configRelativePath: "cache.tmp/ordinary/openclaw.json",
+      onlyConfig: false,
+      malformed: false,
+      volatileParent: true,
+    },
+    {
+      configRelativePath: "cache.tmp/ordinary/openclaw.json",
+      onlyConfig: true,
+      malformed: false,
+      volatileParent: true,
+    },
+    {
+      configRelativePath: "cache.tmp/linked/openclaw.json",
+      onlyConfig: false,
+      malformed: false,
+      volatileParent: true,
+      absoluteNeighbor: true,
+    },
+    {
+      configRelativePath: "logs/history.log/openclaw.json",
+      onlyConfig: false,
+      malformed: false,
+      volatileParent: true,
+    },
+  ])(
+    "archives active config bytes at $configRelativePath (onlyConfig=$onlyConfig, malformed=$malformed)",
+    async ({ configRelativePath, onlyConfig, malformed, volatileParent, absoluteNeighbor }) => {
+      await withOpenClawTestState(
+        { layout: "state-only", prefix: "openclaw-backup-active-config-" },
+        async (state) => {
+          const configPath = state.statePath(...configRelativePath.split("/"));
+          const configRaw = malformed ? '{"gateway":' : '{"gateway":{"mode":"local"}}\n';
+          state.envVars.OPENCLAW_CONFIG_PATH = configPath;
+          state.applyEnv();
+          await fs.mkdir(path.dirname(configPath), { recursive: true });
+          await fs.writeFile(configPath, configRaw);
+          await state.writeText("logs/live.log", "live log\n");
+          await state.writeText("scratch.tmp", "temporary state\n");
+          await state.writeText(
+            "sandbox/skills-workspaces/other/generated.json",
+            "generated state\n",
+          );
+          await fs.writeFile(path.join(path.dirname(configPath), "neighbor.tmp"), "temporary\n");
+          await fs.writeFile(path.join(path.dirname(configPath), "neighbor.json"), "{}\n");
+          if (absoluteNeighbor && process.platform !== "win32") {
+            const target = state.path("unrelated.txt");
+            await fs.writeFile(target, "unrelated synthetic file\n");
+            await fs.symlink(target, path.join(path.dirname(configPath), "absolute-link"));
+          }
+
+          const archive = await createBackupArchive({
+            output: state.path("backup.tar.gz"),
+            includeWorkspace: false,
+            onlyConfig,
+          });
+          const entries = await listArchiveEntries(archive.archivePath);
+          const configEntries = entries.filter((entry) =>
+            entry.endsWith(`/state/${configRelativePath}`),
+          );
+          expect(configEntries).toHaveLength(1);
+          expect(entries.some((entry) => entry.endsWith("/live.log"))).toBe(false);
+          expect(
+            entries.some((entry) => entry.endsWith(".tmp") && !configEntries.includes(entry)),
+          ).toBe(false);
+          expect(entries.some((entry) => entry.includes("/skills-workspaces/other"))).toBe(false);
+          expect(entries.some((entry) => entry.endsWith("/neighbor.json"))).toBe(
+            !onlyConfig && !volatileParent,
+          );
+          expect(entries.some((entry) => entry.endsWith("/absolute-link"))).toBe(false);
+          if (onlyConfig) {
+            expect(entries).toHaveLength(2);
+          }
+
+          const extractDir = state.path("extract");
+          await fs.mkdir(extractDir);
+          await tar.x({ file: archive.archivePath, gzip: true, cwd: extractDir });
+          const configEntry = expectDefined(configEntries[0], "active config archive entry");
+          expect(await fs.readFile(path.join(extractDir, configEntry), "utf8")).toBe(configRaw);
+          await expect(verifyBackupArchive(archive.archivePath)).resolves.toMatchObject({
+            ok: true,
+          });
+        },
+      );
+    },
+  );
+
   it.runIf(process.platform !== "win32").each([
     {
       layout: "direct",
@@ -2936,16 +3046,24 @@ describe("createBackupArchive", () => {
     {
       label: "absolute",
       relative: false,
+      targetExists: true,
+      error: /Archive symbolic link target must be relative/iu,
+    },
+    {
+      label: "dangling absolute",
+      relative: false,
+      targetExists: false,
       error: /Archive symbolic link target must be relative/iu,
     },
     {
       label: "declared-asset-escaping relative",
       relative: true,
+      targetExists: true,
       error: /Archive symbolic link is outside the declared backup assets/iu,
     },
   ])(
     "rejects $label symlink targets before publishing the archive",
-    async ({ relative, error }) => {
+    async ({ relative, targetExists, error }) => {
       if (process.platform === "win32") {
         return;
       }
@@ -2959,7 +3077,9 @@ describe("createBackupArchive", () => {
         async (state) => {
           const outputPath = state.path("absolute-symlink.tar.gz");
           const outsideTarget = state.path("outside-target.txt");
-          await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          if (targetExists) {
+            await fs.writeFile(outsideTarget, "outside\n", "utf8");
+          }
           await fs.symlink(
             relative ? path.relative(state.stateDir, outsideTarget) : outsideTarget,
             state.statePath("ordinary-link"),
@@ -2979,11 +3099,13 @@ describe("createBackupArchive", () => {
   );
 
   it.runIf(process.platform !== "win32").each([
-    { label: "direct", hops: 1 },
-    { label: "chained", hops: 2 },
+    { label: "direct config", kind: "config" as const, hops: 1 },
+    { label: "chained config", kind: "config" as const, hops: 2 },
+    { label: "direct credentials", kind: "credentials" as const, hops: 1 },
+    { label: "chained credentials", kind: "credentials" as const, hops: 2 },
   ])(
-    "archives a $label absolute config symlink whose real target is a declared asset",
-    async ({ hops }) => {
+    "creates, verifies, and restores a $label symlink through its declared asset",
+    async ({ kind, hops }) => {
       await withOpenClawTestState(
         {
           layout: "state-only",
@@ -2991,18 +3113,33 @@ describe("createBackupArchive", () => {
           scenario: "minimal",
         },
         async (state) => {
-          const outputPath = state.path("declared-config-symlink.tar.gz");
-          const externalConfigPath = state.path("nix-store", "openclaw-default.json");
-          await fs.mkdir(path.dirname(externalConfigPath), { recursive: true });
-          await fs.rename(state.configPath, externalConfigPath);
-          let linkTarget = externalConfigPath;
+          const outputPath = state.path(`declared-${kind}-symlink.tar.gz`);
+          const restorePath = state.path(`restored-${kind}`);
+          const sourcePath = kind === "config" ? state.configPath : state.statePath("credentials");
+          const externalSourcePath = state.path(
+            "nix-store",
+            kind === "config" ? "openclaw-default.json" : "credentials",
+          );
+          if (kind === "config") {
+            await fs.mkdir(path.dirname(externalSourcePath), { recursive: true });
+            await fs.rename(sourcePath, externalSourcePath);
+          } else {
+            await fs.mkdir(externalSourcePath, { recursive: true });
+            await fs.writeFile(path.join(externalSourcePath, "credentials.json"), "managed\n");
+          }
+          let linkTarget = externalSourcePath;
           if (hops > 1) {
-            const intermediatePath = state.path("nix-store", "openclaw-link.json");
-            await fs.symlink(externalConfigPath, intermediatePath);
+            const intermediatePath = state.path("nix-store", `${kind}-link`);
+            await fs.symlink(externalSourcePath, intermediatePath);
             linkTarget = intermediatePath;
           }
-          await fs.symlink(linkTarget, state.configPath);
-          const canonicalExternalConfigPath = await fs.realpath(externalConfigPath);
+          await fs.symlink(linkTarget, sourcePath);
+          const canonicalExternalSourcePath = await fs.realpath(externalSourcePath);
+          const sourceContentsPath =
+            kind === "config"
+              ? externalSourcePath
+              : path.join(externalSourcePath, "credentials.json");
+          const expectedContents = await fs.readFile(sourceContentsPath, "utf8");
 
           const result = await createBackupArchive({
             output: outputPath,
@@ -3010,32 +3147,38 @@ describe("createBackupArchive", () => {
             nowMs: Date.UTC(2026, 8, 2, 13, 0, 0),
           });
           const entries = await listArchiveEntryDetails(result.archivePath);
-          const configLink = expectDefined(
-            entries.find((entry) => entry.path.endsWith("/state/openclaw.json")),
-            "archived config symlink",
+          const archivedLink = expectDefined(
+            entries.find((entry) =>
+              entry.path.endsWith(
+                kind === "config" ? "/state/openclaw.json" : "/state/credentials",
+              ),
+            ),
+            `archived ${kind} symlink`,
           );
-          const externalConfigEntry = expectDefined(
-            entries.find((entry) => entry.path.endsWith("/nix-store/openclaw-default.json")),
-            "archived external config target",
+          const managedAsset = expectDefined(
+            result.assets.find((asset) => asset.kind === kind),
+            `declared ${kind} asset`,
           );
 
-          expect(configLink.type).toBe("SymbolicLink");
-          expect(configLink.linkpath).toBe(
-            path.posix.relative(path.posix.dirname(configLink.path), externalConfigEntry.path),
+          expect(archivedLink.type).toBe("SymbolicLink");
+          expect(archivedLink.linkpath).toBe(
+            path.posix.relative(path.posix.dirname(archivedLink.path), managedAsset.archivePath),
           );
-          expect(result.assets).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({
-                kind: "config",
-                sourcePath: canonicalExternalConfigPath,
-              }),
-            ]),
-          );
+          expect(managedAsset.sourcePath).toBe(canonicalExternalSourcePath);
 
           const runtime: RuntimeEnv = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
           await expect(
             backupVerifyCommand(runtime, { archive: result.archivePath }),
           ).resolves.toMatchObject({ ok: true });
+          await backupRestoreCommand(runtime, { archive: result.archivePath, target: restorePath });
+
+          const restoredLinkPath = path.join(restorePath, archivedLink.path);
+          const restoredAssetPath = path.join(restorePath, managedAsset.archivePath);
+          expect(await fs.readlink(restoredLinkPath)).toBe(archivedLink.linkpath);
+          expect(await fs.realpath(restoredLinkPath)).toBe(await fs.realpath(restoredAssetPath));
+          const restoredContentsPath =
+            kind === "config" ? restoredLinkPath : path.join(restoredLinkPath, "credentials.json");
+          await expect(fs.readFile(restoredContentsPath, "utf8")).resolves.toBe(expectedContents);
         },
       );
     },

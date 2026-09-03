@@ -1,4 +1,5 @@
 import type {
+  RealtimeVoiceAudioSink,
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceResponseOutcome,
@@ -12,7 +13,7 @@ export type MockCallSource = {
 
 export type TestRealtimeBridgeParams = {
   agentId?: string;
-  audioSink: { sendAudio: (audio: Buffer) => void };
+  audioSink: RealtimeVoiceAudioSink;
   autoRespondToAudio?: boolean;
   cfg?: unknown;
   instructions?: string;

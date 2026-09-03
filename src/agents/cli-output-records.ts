@@ -59,6 +59,21 @@ export function isClaudeStreamJsonResult(params: {
   return supportsCliJsonlToolEvents(params) && params.parsed.type === "result";
 }
 
+export function isClaudeSyntheticNoResponse(parsed: Record<string, unknown>): boolean {
+  if (parsed.type !== "assistant" || !isRecord(parsed.message)) {
+    return false;
+  }
+  const message = parsed.message;
+  return (
+    message.model === "<synthetic>" &&
+    Array.isArray(message.content) &&
+    message.content.length === 1 &&
+    isRecord(message.content[0]) &&
+    message.content[0].type === "text" &&
+    message.content[0].text === "No response requested."
+  );
+}
+
 function extractJsonObjectCandidates(raw: string): string[] {
   return extractBalancedJsonFragments(raw, { openers: ["{"] }).map((fragment) => fragment.json);
 }

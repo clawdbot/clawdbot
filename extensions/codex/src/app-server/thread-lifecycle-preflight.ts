@@ -59,8 +59,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   if (params.nativeHookRelayRequired) {
     await assertCodexNativeHookRelayAllowed(params.client, params.signal);
   }
-  // Thread lifecycle spans are useful when profiling startup churn, but normal
-  // turns should not pay Date.now/span-array overhead while resuming threads.
+  // Slow resumes must be diagnosable without enabling a profiler beforehand.
   const lifecycleTiming = createCodexThreadLifecycleTimingTracker({
     ...params.timing,
     enabled: params.timing?.enabled ?? isCodexAppServerProfilerEnabled(params.params.config),

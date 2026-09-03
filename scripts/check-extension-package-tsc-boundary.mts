@@ -12,6 +12,7 @@ import {
   MAX_TIMER_TIMEOUT_MS,
   resolveTimerTimeoutMs,
 } from "../packages/normalization-core/src/number-coercion.ts";
+import { appendBoundedTail } from "./lib/bounded-output-tail.mjs";
 import {
   portableRelativePath,
   readArtifactRecord,
@@ -147,22 +148,6 @@ function formatFailureFooter(params: StepFailureParams = {}) {
 
 function createStepOutputCapture(): StepOutputCapture {
   return { text: "", truncatedChars: 0 };
-}
-
-/**
- * Appends child-process output while preserving only the diagnostic tail.
- */
-export function appendBoundedStepOutput(
-  buffer: StepOutputCapture,
-  chunk: unknown,
-  maxChars = STEP_OUTPUT_MAX_CHARS,
-) {
-  const nextText = buffer.text + String(chunk);
-  if (nextText.length <= maxChars) {
-    return { text: nextText, truncatedChars: buffer.truncatedChars };
-  }
-  const truncatedChars = buffer.truncatedChars + nextText.length - maxChars;
-  return { text: nextText.slice(-maxChars), truncatedChars };
 }
 
 function formatCapturedStepOutput(buffer: StepOutputCapture) {
@@ -352,10 +337,10 @@ export async function runNodeStepAsync(
         child.stdout!.setEncoding("utf8");
         child.stderr!.setEncoding("utf8");
         child.stdout!.on("data", (chunk) => {
-          stdout = appendBoundedStepOutput(stdout, chunk);
+          stdout = appendBoundedTail(stdout, chunk, STEP_OUTPUT_MAX_CHARS);
         });
         child.stderr!.on("data", (chunk) => {
-          stderr = appendBoundedStepOutput(stderr, chunk);
+          stderr = appendBoundedTail(stderr, chunk, STEP_OUTPUT_MAX_CHARS);
         });
       },
     });

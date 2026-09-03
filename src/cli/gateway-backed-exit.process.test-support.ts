@@ -16,6 +16,17 @@ afterEach(async () => {
   await closeActiveGatewayServers();
 });
 
+export async function prepareGatewayCliFixture(
+  root: string,
+  gateway: Record<string, unknown>,
+): Promise<{ stateDir: string; configPath: string }> {
+  const stateDir = path.join(root, "state");
+  const configPath = path.join(stateDir, "openclaw.json");
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(configPath, JSON.stringify({ gateway }));
+  return { stateDir, configPath };
+}
+
 export async function snapshotDirectoryContents(root: string): Promise<Record<string, string>> {
   const snapshot: Record<string, string> = {};
   const visit = async (directory: string): Promise<void> => {
@@ -58,19 +69,11 @@ export async function prepareUnreachableGatewayCliFixture(params: {
   seeded: boolean;
 }): Promise<{ root: string; stateDir: string; configPath: string }> {
   const root = tempDirs.make(`openclaw-${params.label}-${params.seeded ? "seeded" : "absent"}-`);
-  const stateDir = path.join(root, "state");
-  const configPath = path.join(stateDir, "openclaw.json");
-  await fs.mkdir(stateDir, { recursive: true });
-  await fs.writeFile(
-    configPath,
-    JSON.stringify({
-      gateway: {
-        mode: "remote",
-        auth: { mode: "none" },
-        remote: { url: UNREACHABLE_GATEWAY_URL },
-      },
-    }),
-  );
+  const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+    mode: "remote",
+    auth: { mode: "none" },
+    remote: { url: UNREACHABLE_GATEWAY_URL },
+  });
   if (params.seeded) {
     const stateEnv = {
       ...process.env,

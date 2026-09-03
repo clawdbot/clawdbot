@@ -75,6 +75,26 @@ export function activateCodexAttemptTurn(
   const { emitExecutionPhaseOnce, emitLifecycleStart, maybeAnnounceFastModeAutoOff } = lifecycle;
   const { enqueueNotification } = notifications;
   const activeTurnId = turn.turn.id;
+  const { thread } = resourceState;
+  const runtimeModelSelection =
+    thread.preserveNativeModel && thread.model && thread.modelProvider
+      ? { provider: thread.modelProvider, model: thread.model }
+      : undefined;
+  // Native preparation may replace the cached model. Attribute this turn to its
+  // ready thread, not the outer route or the pre-resume binding snapshot.
+  const projectionParams = runtimeModelSelection
+    ? {
+        ...dynamicToolParams,
+        provider: runtimeModelSelection.provider,
+        modelId: runtimeModelSelection.model,
+        model: {
+          ...dynamicToolParams.model,
+          id: runtimeModelSelection.model,
+          name: runtimeModelSelection.model,
+          provider: runtimeModelSelection.provider,
+        },
+      }
+    : dynamicToolParams;
   const progressCardTool = toolBridge.availableTools.find((tool) => tool.name === "progress_card");
   let nativePlanUpdateOrdinal = 0;
   const prepareNativeMcpAppResultDetails = createCodexNativeMcpAppResultDetailsPreparer({
@@ -98,7 +118,7 @@ export function activateCodexAttemptTurn(
   });
   projectorRef.current = new CodexAppServerEventProjector(
     {
-      ...dynamicToolParams,
+      ...projectionParams,
       onAgentEvent: (event) => {
         if (event.stream === "assistant" && typeof event.data.delta === "string") {
           streamState.eventEmitted = true;
@@ -121,7 +141,7 @@ export function activateCodexAttemptTurn(
           toolBridge.availableTools.some((tool) => tool.name === "message")),
       onAsyncDelivery: async (delivery) => {
         return await codexTranscriptMirrorRuntime.deliverAsyncMessageBestEffort({
-          params: dynamicToolParams,
+          params: projectionParams,
           cwd: effectiveCwd,
           threadId: resourceState.thread.threadId,
           turnId: activeTurnId,
@@ -506,6 +526,7 @@ export function activateCodexAttemptTurn(
   return {
     activeTurnId,
     activeProjector,
+    runtimeModelSelection,
     streamState,
     handle,
     freezeRunTerminalOutcome,

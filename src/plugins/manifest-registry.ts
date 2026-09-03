@@ -54,6 +54,7 @@ import { satisfiesPluginApiRange, resolvePackagePluginApiRange } from "./package
 import { isPathInside } from "./path-safety.js";
 import {
   pluginCacheExistsSync,
+  pluginCacheLstatSync,
   pluginCacheRealpathSync,
   pluginCacheStatSync,
   readPluginCacheFile,
@@ -166,8 +167,32 @@ function resolveManifestPluginSourcePath(params: {
 
 type SeenIdEntry = {
   candidate: PluginCandidate;
-  recordIndex: number;
+  record: PluginManifestRecord;
 };
+
+const PORTABLE_PLUGIN_ICON_PATH = path.join("assets", "icon.png");
+
+function resolvePortablePluginIconPath(params: {
+  rootDir: string;
+  rejectHardlinks: boolean;
+}): string | undefined {
+  const iconPath = path.resolve(params.rootDir, PORTABLE_PLUGIN_ICON_PATH);
+  const iconStat = pluginCacheLstatSync(iconPath);
+  if (!iconStat?.isFile() || (params.rejectHardlinks && iconStat.nlink > 1)) {
+    return undefined;
+  }
+  const rootPath = path.resolve(params.rootDir);
+  const rootRealPath = pluginCacheRealpathSync(rootPath) ?? rootPath;
+  return isPluginRootPath({
+    rootPath,
+    targetPath: iconPath,
+    rootRealPath,
+    rejectHardlinks: params.rejectHardlinks,
+    targetMustExist: true,
+  })
+    ? iconPath
+    : undefined;
+}
 
 // Canonicalize identical physical plugin roots with the most explicit source.
 // This only applies when multiple candidates resolve to the same on-disk plugin.
@@ -432,7 +457,10 @@ function buildRecord(params: {
     description:
       normalizeOptionalString(params.manifest.description) ?? params.candidate.packageDescription,
     catalog: mergeManifestCatalog(params.manifest.catalog, officialCatalogManifest?.catalog),
-    icon: normalizeOptionalString(params.manifest.icon),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version) ?? params.candidate.packageVersion,
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -540,11 +568,16 @@ function buildBundleRecord(params: {
   };
   candidate: PluginCandidate;
   manifestPath: string;
+  rejectHardlinks: boolean;
 }): PluginManifestRecord {
   return {
     id: params.manifest.id,
     name: normalizeOptionalString(params.manifest.name) ?? params.candidate.idHint,
     description: normalizeOptionalString(params.manifest.description),
+    iconPath: resolvePortablePluginIconPath({
+      rootDir: params.candidate.rootDir,
+      rejectHardlinks: params.rejectHardlinks,
+    }),
     version: normalizeOptionalString(params.manifest.version),
     packageName: params.candidate.packageName,
     packageVersion: params.candidate.packageVersion,
@@ -888,7 +921,6 @@ export function loadPluginManifestRegistryCore(
   const discovered = new Set(discovery.diagnostics);
   const diagnostics: PluginDiagnostic[] = [...discovered];
   const candidates: PluginCandidate[] = discovery.candidates;
-  const records: PluginManifestRecord[] = [];
   const seenIds = new Map<string, SeenIdEntry>();
   const currentHostVersion = resolveCompatibilityHostVersion(env);
   const explicitConfiguredFileSources = new Set(
@@ -1035,6 +1067,7 @@ export function loadPluginManifestRegistryCore(
           manifest: manifest as Parameters<typeof buildBundleRecord>[0]["manifest"],
           candidate,
           manifestPath: manifestRes.manifestPath,
+          rejectHardlinks,
         })
       : buildRecord({
           manifest: manifest as PluginManifest,
@@ -1054,6 +1087,9 @@ export function loadPluginManifestRegistryCore(
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),
         });
+    if (candidate.sourcePreferred || (candidate.origin === "bundled" && candidate.configSelected)) {
+      record.sourcePreferred = true;
+    }
     recordPluginManifestInstallOwner(
       record,
       resolvePluginCandidateInstallOwner(candidate),
@@ -1074,11 +1110,14 @@ export function loadPluginManifestRegistryCore(
         return Boolean(existingReal && candidateReal && existingReal === candidateReal);
       })();
       if (samePlugin) {
+        if (record.sourcePreferred || existing.record.sourcePreferred) {
+          record.sourcePreferred = true;
+          existing.record.sourcePreferred = true;
+        }
         // Prefer higher-precedence origins even if candidates are passed in
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
-          records[existing.recordIndex] = record;
-          seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
+          seenIds.set(effectivePluginId, { candidate, record });
           pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
@@ -1102,8 +1141,7 @@ export function loadPluginManifestRegistryCore(
       const winnerCandidate = candidateWins ? candidate : existing.candidate;
       const overriddenCandidate = candidateWins ? existing.candidate : candidate;
       if (candidateWins) {
-        records[existing.recordIndex] = record;
-        seenIds.set(effectivePluginId, { candidate, recordIndex: existing.recordIndex });
+        seenIds.set(effectivePluginId, { candidate, record });
         pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
@@ -1133,11 +1171,11 @@ export function loadPluginManifestRegistryCore(
       continue;
     }
 
-    seenIds.set(effectivePluginId, { candidate, recordIndex: records.length });
-    records.push(record);
+    seenIds.set(effectivePluginId, { candidate, record });
     pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
+  const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
   return registry;

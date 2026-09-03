@@ -23,6 +23,7 @@ type LoginFailureKind =
   | "trusted-proxy"
   | "auth-rate-limited"
   | "profile-unavailable"
+  | "verified-user-required"
   | "pairing-required"
   | "insecure-context"
   | "origin-not-allowed"
@@ -117,6 +118,20 @@ function resolveLoginFailureFeedback(
         "login.failure.profileUnavailable.stepAdmin",
       ],
       docsHref: "https://docs.openclaw.ai/concepts/user-model#gateway-profile-and-github-credit",
+    });
+  }
+
+  if (lastErrorCode === ConnectErrorDetailCodes.AUTH_VERIFIED_USER_REQUIRED) {
+    return buildFeedback({
+      kind: "verified-user-required",
+      rawError,
+      titleKey: "login.failure.verifiedUserRequired.title",
+      summaryKey: "login.failure.verifiedUserRequired.summary",
+      stepKeys: [
+        "login.failure.verifiedUserRequired.stepIdentity",
+        "login.failure.verifiedUserRequired.stepSharedSecret",
+      ],
+      docsHref: "https://docs.openclaw.ai/gateway/operator-scopes",
     });
   }
 

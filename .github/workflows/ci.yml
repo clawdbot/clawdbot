@@ -807,11 +807,13 @@ jobs:
               --base "$base_sha" --head HEAD --prefer-first-parent)"
           fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ] && [ "$RELEASE_GATE" != "true" ]; then
-            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1}')"
+            encoded_ref="$(jq -rn --arg value "refs/heads/${DEFAULT_BRANCH}" '$value | @uri')"
+            default_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
             if [[ ! "$default_sha" =~ ^[0-9a-f]{40}$ ]]; then
               echo "Could not resolve the default branch head for the manual target." >&2
               exit 1
             fi
+            echo "default_sha=$default_sha" >> "$GITHUB_OUTPUT"
             base_sha="$(
               gh api --method GET \
                 "repos/${GITHUB_REPOSITORY}/compare/${default_sha}...${head_sha}" \
@@ -844,6 +846,7 @@ jobs:
         if: inputs.historical_target_tag != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           HISTORICAL_TARGET_TAG: ${{ inputs.historical_target_tag }}
         run: |
           set -euo pipefail
@@ -851,12 +854,8 @@ jobs:
             echo "historical_target_tag must be a canonical OpenClaw release tag." >&2
             exit 1
           fi
-          tag_ref="refs/tags/${HISTORICAL_TARGET_TAG}"
-          remote="$(git remote get-url origin)"
-          tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "${tag_ref}^{}" | awk 'NR == 1 { print $1 }')"
-          if [[ -z "$tag_sha" ]]; then
-            tag_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --tags "$remote" "$tag_ref" | awk 'NR == 1 { print $1 }')"
-          fi
+          encoded_ref="$(jq -rn --arg value "refs/tags/${HISTORICAL_TARGET_TAG}" '$value | @uri')"
+          tag_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$tag_sha" != "$EXPECTED_SHA" ]]; then
             echo "Historical release tag ${HISTORICAL_TARGET_TAG} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -868,6 +867,7 @@ jobs:
         if: inputs.release_candidate_ref != ''
         env:
           EXPECTED_SHA: ${{ steps.checkout_ref.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
           RELEASE_CANDIDATE_REF: ${{ inputs.release_candidate_ref }}
         run: |
           set -euo pipefail
@@ -875,8 +875,8 @@ jobs:
             echo "release_candidate_ref must be a canonical OpenClaw release branch." >&2
             exit 1
           fi
-          remote="$(git remote get-url origin)"
-          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads "$remote" "refs/heads/${RELEASE_CANDIDATE_REF}" | awk 'NR == 1 { print $1 }')"
+          encoded_ref="$(jq -rn --arg value "refs/heads/${RELEASE_CANDIDATE_REF}" '$value | @uri')"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ "$branch_sha" != "$EXPECTED_SHA" ]]; then
             echo "Release candidate branch ${RELEASE_CANDIDATE_REF} does not resolve to ${EXPECTED_SHA}." >&2
             exit 1
@@ -900,7 +900,8 @@ jobs:
             echo "target_context_ref requires target_ref to be a full commit SHA." >&2
             exit 1
           fi
-          branch_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote --heads origin "refs/heads/${TARGET_CONTEXT_REF}" | awk 'NR == 1 { print $1 }')"
+          encoded_ref="$(jq -rn --arg value "refs/heads/${TARGET_CONTEXT_REF}" '$value | @uri')"
+          branch_sha="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}" --jq .sha)"
           if [[ ! "$branch_sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "target_context_ref branch ${TARGET_CONTEXT_REF} does not exist." >&2
             exit 1
@@ -914,11 +915,38 @@ jobs:
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
 
+      - name: Setup manifest TypeScript runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      - name: Resolve release correction base
+        id: release_correction_base
+        if: github.event_name == 'workflow_dispatch' && (inputs.release_scope == 'npm-beta' || inputs.release_scope == 'npm-stable')
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ steps.target_context_target.outputs.eligible == 'true' && inputs.target_context_ref || steps.historical_target.outputs.eligible == 'true' && inputs.historical_target_tag || '' }}
+        run: |
+          # Keep the token outside the manifest step, which imports candidate-owned code.
+          node --input-type=module <<'NODE'
+          import { execFileSync } from 'node:child_process';
+          import { appendFileSync, readFileSync } from 'node:fs';
+          import { resolveReleaseContextIdentity } from './.ci-harness/scripts/lib/release-context.mjs';
+          const version = JSON.parse(readFileSync('package.json', 'utf8')).version;
+          const identity = resolveReleaseContextIdentity(process.env.TARGET_CONTEXT_REF, version);
+          if (identity?.baseTag) {
+            const ref = encodeURIComponent(`refs/tags/${identity.baseTag}`);
+            const sha = execFileSync('gh', ['api', `repos/${process.env.GITHUB_REPOSITORY}/commits/${ref}`, '--jq', '.sha'], { encoding: 'utf8' }).trim();
+            if (!/^[0-9a-f]{40}$/u.test(sha)) throw new Error(`Could not resolve correction base ${identity.baseTag}.`);
+            appendFileSync(process.env.GITHUB_OUTPUT, `sha=${sha}\n`);
+          }
+          NODE
+
       - name: Classify candidate cache trust
         id: candidate_trust
         env:
           CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          DEFAULT_SHA: ${{ steps.diff_base.outputs.default_sha }}
           HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           RELEASE_CANDIDATE_TARGET: ${{ steps.release_candidate_target.outputs.eligible || 'false' }}
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
@@ -940,7 +968,6 @@ jobs:
             trust=pull-request
             cache_mode=restore
           elif [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            default_sha="$(python3 -I -S "$RUNNER_TEMP/ci-git-owner.py" --git 0 ls-remote origin "refs/heads/${DEFAULT_BRANCH}" | awk 'NR == 1 { print $1 }')"
             if [[ "$RELEASE_GATE" == "true" ]]; then
               trust=pull-request
               cache_mode=restore
@@ -952,7 +979,7 @@ jobs:
               trust=release
               cache_mode=restore
               cache_write_allowed=true
-            elif [[ -n "$default_sha" && "$CHECKOUT_REVISION" == "$default_sha" ]]; then
+            elif [[ -n "$DEFAULT_SHA" && "$CHECKOUT_REVISION" == "$DEFAULT_SHA" ]]; then
               trust=main
               cache_mode=restore
               cache_write_allowed=true
@@ -1003,11 +1030,6 @@ jobs:
             node scripts/ci-changed-scope.mjs --base "$BASE" --head "$HEAD_SHA"
           fi
 
-      - name: Setup manifest TypeScript runtime
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: ${{ env.NODE_VERSION }}
-
       # Current-revision preflight is dependency-free: the manifest planner
       # closure and protocol coverage import only node builtins and relative
       # files, and Node strips their types natively. Different-revision manual
@@ -1045,6 +1067,7 @@ jobs:
           OPENCLAW_CI_RUN_NATIVE_I18N: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_native_i18n || 'false' }}
           OPENCLAW_CI_CHANGED_PATHS_JSON: ${{ steps.changed_scope.outputs.changed_paths_json || 'null' }}
           OPENCLAW_CI_CHECKOUT_REVISION: ${{ steps.checkout_ref.outputs.sha }}
+          OPENCLAW_CI_CORRECTION_BASE_SHA: ${{ steps.release_correction_base.outputs.sha }}
           OPENCLAW_CI_HISTORICAL_TARGET: ${{ steps.historical_target.outputs.eligible || 'false' }}
           OPENCLAW_CI_RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           OPENCLAW_CI_RELEASE_SCOPE: ${{ inputs.release_scope || 'full' }}
@@ -1065,7 +1088,6 @@ jobs:
             manifest_node_args+=(--import tsx)
           fi
           node "${manifest_node_args[@]}" --input-type=module <<'EOF'
-          import { execFileSync } from "node:child_process";
           import { appendFileSync, existsSync, readFileSync } from "node:fs";
           import { matchesGlob } from "node:path";
           import { resolveTestGitCommits } from "./.ci-harness/.github/actions/git-owner/test-prerequisites.mjs";
@@ -1107,20 +1129,6 @@ jobs:
             throw new Error("CI target does not export a supported Node test shard planner");
           }
 
-          let changedNodeTestPlan = {};
-          const changedNodeTestPlanPath = existsSync(
-            "./scripts/lib/ci-changed-node-test-plan.mts",
-          )
-            ? "./scripts/lib/ci-changed-node-test-plan.mts"
-            : "./scripts/lib/ci-changed-node-test-plan.mjs";
-          if (existsSync(changedNodeTestPlanPath)) {
-            try {
-              changedNodeTestPlan = await import(changedNodeTestPlanPath);
-            } catch (error) {
-              console.warn(`Changed Node test planner import failed; using compact full suite: ${error}`);
-            }
-          }
-
           const importTargetPlan = async (path) => {
             if (existsSync(path)) {
               return import(path);
@@ -1130,6 +1138,11 @@ jobs:
             }
             return {};
           };
+          const changedNodeTestPlan = await importTargetPlan(
+            existsSync("./scripts/lib/ci-changed-node-test-plan.mts")
+              ? "./scripts/lib/ci-changed-node-test-plan.mts"
+              : "./scripts/lib/ci-changed-node-test-plan.mjs",
+          );
           const channelContractPlan = await importTargetPlan(
             existsSync("./scripts/lib/channel-contract-test-plan.mts")
               ? "./scripts/lib/channel-contract-test-plan.mts"
@@ -1216,16 +1229,7 @@ jobs:
             }
             if (identity.baseTag) {
               // Base-package corrections reuse the base tag's exact source; ancestry alone is insufficient.
-              const baseRef = `refs/tags/${identity.baseTag}`;
-              const remoteRefs = execFileSync("python3", [
-                "-I", "-S", `${process.env.RUNNER_TEMP}/ci-git-owner.py`, "--git", "120",
-                "ls-remote", "--tags", "https://github.com/openclaw/openclaw.git", baseRef, `${baseRef}^{}`,
-              ], { encoding: "utf8" });
-              const refs = new Map(remoteRefs.trim().split("\n").filter(Boolean).map((line) => {
-                const [sha, ref] = line.split(/\s+/u);
-                return [ref, sha];
-              }));
-              if (!refs.has(baseRef) || (refs.get(`${baseRef}^{}`) ?? refs.get(baseRef)) !== checkoutRevision) {
+              if (process.env.OPENCLAW_CI_CORRECTION_BASE_SHA !== checkoutRevision) {
                 throw new Error(`release_scope ${releaseScope} correction base ${identity.baseTag} does not resolve to ${checkoutRevision}`);
               }
             }
@@ -1277,10 +1281,14 @@ jobs:
             existsSync("test/vitest/vitest.ui-e2e.config.ts") &&
             readFileSync("test/vitest/vitest.ui-e2e.config.ts", "utf8")
               .includes("ui-e2e-projects-contract-v1");
-          // The registration envelope already charges 14 UI rows on every backend.
-          // Private source servers and resource-sensitive files retain their
-          // single-worker phase inside each weighted Control UI shard.
-          const uiE2eJobCount = supportsUiE2eProjects || usesHostedRunnerProfile ? 14 : 4;
+          // Six shards share setup on larger Blacksmith first attempts. Failed-job
+          // reruns retain this matrix while live routing still selects hosted runners;
+          // frozen targets and fresh hosted plans retain their established widths.
+          const compactUiE2e = !frozenTarget && runnerProfile === "blacksmith" &&
+            process.env.GITHUB_RUN_ATTEMPT === "1";
+          const uiE2eJobCount = supportsUiE2eProjects
+            ? (compactUiE2e ? 7 : 13)
+            : usesHostedRunnerProfile ? 14 : 4;
           const qaSmokeCiPartCount = usesHostedRunnerProfile ? 6 : 4;
           const supportsNativeI18n =
             hasPackageScript("native:i18n:check") &&
@@ -1370,27 +1378,20 @@ jobs:
                 : undefined;
           let changedNodeTestShards = null;
           let changedExtensionFallbackShards = [];
-          if (
-            compactPullRequest &&
-            changedPaths &&
-            typeof changedNodeTestPlan.createChangedNodeTestShards === "function"
-          ) {
-            try {
-              changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
-            } catch (error) {
-              console.warn(`Changed Node test planning failed; using compact full suite: ${error}`);
+          if (compactPullRequest && runNodeFull) {
+            // Compact core excludes plugins; a failed planner is not a complete fallback.
+            if (changedPaths === null) {
+              throw new Error("Current PR CI requires complete changed paths for Node test planning");
             }
-            if (
-              changedNodeTestShards === null &&
-              typeof changedNodeTestPlan.createChangedExtensionFallbackShards === "function"
-            ) {
-              try {
-                changedExtensionFallbackShards =
-                  changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
-              } catch (error) {
-                console.warn(`Changed extension fallback planning failed; using compact full suite: ${error}`);
-                changedExtensionFallbackShards = [];
+            for (const name of ["createChangedNodeTestShards", "createChangedExtensionFallbackShards"]) {
+              if (typeof changedNodeTestPlan[name] !== "function") {
+                throw new Error(`Current PR CI target does not export ${name}`);
               }
+            }
+            changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths);
+            if (changedNodeTestShards === null) {
+              changedExtensionFallbackShards =
+                changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -1500,6 +1501,13 @@ jobs:
                   ),
               }));
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
+          // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
+          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 120 : 64;
+          if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
+            throw new Error(
+              `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
+            );
+          }
           const nodeTestDistShards = nodeTestShards.filter((shard) => shard.requires_dist);
           // Targeted jobs cannot discover repository-scanning boundary tests
           // through imports. Keep the full boundary gate inside build-artifacts
@@ -1733,7 +1741,7 @@ jobs:
         with:
           ref: ${{ github.workflow_sha }}
           path: .ci-harness
-          sparse-checkout: .github/actions
+          sparse-checkout: ".github/actions\n.github/zizmor.yml\nscripts/detect-private-keys.mts"
           persist-credentials: false
 
       - name: Resolve security diff base
@@ -1779,44 +1787,66 @@ jobs:
           version: "3.97.0@sha256:ff4c95e9df7d645daf2140e3ca1039031c63106268d5fbb25feb43ceca1bcc33"
           extra_args: --results=verified,unknown --fail-on-scan-errors
 
-      - name: Prepare trusted pre-commit config
-        if: github.event_name == 'pull_request'
+      - name: Prepare trusted scanner config
         env:
           BASE_SHA: ${{ steps.diff_base.outputs.sha }}
-          BASE_REF: ${{ github.event.pull_request.base.ref }}
         run: |
           set -euo pipefail
-          trusted_config="$RUNNER_TEMP/pre-commit-base.yaml"
-          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null &&
-            git cat-file -e "${BASE_SHA}:.pre-commit-config.yaml" 2>/dev/null; then
-            git show "${BASE_SHA}:.pre-commit-config.yaml" > "$trusted_config"
-          elif git show "refs/remotes/origin/${BASE_REF}:.pre-commit-config.yaml" \
-            > "$trusted_config" 2>/dev/null; then
-            echo "Base SHA ${BASE_SHA} does not expose .pre-commit-config.yaml; using origin/${BASE_REF} instead."
+          trusted_policy="$RUNNER_TEMP/zizmor.yml"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:.github/zizmor.yml" > "$trusted_policy" 2>/dev/null; then
+              echo "::error title=trusted zizmor policy unavailable::Could not read .github/zizmor.yml from exact base ${BASE_SHA}."
+              exit 1
+            fi
           else
-            echo "::warning title=trusted pre-commit config unavailable::Could not read .pre-commit-config.yaml from ${BASE_SHA} or origin/${BASE_REF}; falling back to the checked-out config."
-            rm -f "$trusted_config"
-            exit 0
+            cp .ci-harness/.github/zizmor.yml "$trusted_policy"
           fi
-          echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
+          # The key scanner is repo code, so pull requests run the exact-base
+          # copy: a candidate must not be able to neuter the guard that scans it.
+          trusted_scanner="$RUNNER_TEMP/detect-private-keys.mts"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            if ! git show "${BASE_SHA}:scripts/detect-private-keys.mts" > "$trusted_scanner" 2>/dev/null; then
+              rm -f "$trusted_scanner"
+              echo "::error title=trusted private-key scanner unavailable::Could not read scripts/detect-private-keys.mts from exact base ${BASE_SHA}; land the scanner on the base branch first."
+              exit 1
+            fi
+          else
+            cp .ci-harness/scripts/detect-private-keys.mts "$trusted_scanner"
+          fi
+          echo "PRIVATE_KEY_SCANNER_PATH=$trusted_scanner" >> "$GITHUB_ENV"
+          cat > "$RUNNER_TEMP/security-fast-pre-commit.yaml" <<EOF
+          repos:
+            - repo: local
+              hooks:
+                - id: zizmor
+                  name: zizmor
+                  entry: zizmor
+                  language: system
+                  types: [yaml]
+                  files: '(\.github/(workflows/.*|dependabot.ya?ml))|(action\.ya?ml)$'
+                  require_serial: true
+                  args: [--config, "$trusted_policy", --persona=regular, --min-severity=medium, --min-confidence=medium]
+                  exclude: '^(vendor/|apps/swabble/)'
+          EOF
+          echo "PRE_COMMIT_CONFIG_PATH=$RUNNER_TEMP/security-fast-pre-commit.yaml" >> "$GITHUB_ENV"
 
-      - name: Resolve Python runtime
-        id: setup-python
+      - name: Setup Node.js
+        env:
+          REQUESTED_NODE_VERSION: "24.x"
         run: |
           set -euo pipefail
-          python3 --version
-          version="$(python3 - <<'PY'
-          import platform
-          print(platform.python_version())
-          PY
-          )"
-          echo "python-version=${version}" >> "$GITHUB_OUTPUT"
+          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
+          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
 
-      - name: Install pre-commit
-        run: python3 -m pip install --disable-pip-version-check pre-commit==4.6.2
-
+      # First-party scan before any package install: the scan itself uses no
+      # network and no third-party hook code, so a PyPI outage cannot stop it.
+      # Node 24 comes from the runner tool cache; the shared helper downloads
+      # only on images that lack it.
       - name: Detect committed private keys
-        run: pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" --all-files detect-private-key
+        run: node "$PRIVATE_KEY_SCANNER_PATH"
+
+      - name: Install security scanners
+        run: python3 --version && python3 -m pip install --disable-pip-version-check pre-commit==4.6.2 zizmor==1.29.0
 
       - name: Audit changed GitHub workflows with zizmor
         env:
@@ -1843,15 +1873,8 @@ jobs:
           fi
 
           printf 'Auditing workflow files:\n%s\n' "${workflow_files[@]}"
-          pre-commit run --config "${PRE_COMMIT_CONFIG_PATH:-.pre-commit-config.yaml}" zizmor --files "${workflow_files[@]}"
-
-      - name: Setup Node.js
-        env:
-          REQUESTED_NODE_VERSION: "24.x"
-        run: |
-          set -euo pipefail
-          source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
-          openclaw_ensure_node "$REQUESTED_NODE_VERSION"
+          GIT_ALLOW_PROTOCOL=file GIT_CONFIG_COUNT=0 \
+            pre-commit run --config "$PRE_COMMIT_CONFIG_PATH" zizmor --files "${workflow_files[@]}"
 
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
@@ -2281,6 +2304,38 @@ jobs:
           path: .local/gateway-watch-regression/
           retention-days: 7
 
+  control-ui-performance:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: needs.preflight.outputs.run_build_artifacts == 'true' || needs.preflight.outputs.run_ui_tests == 'true'
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    timeout-minutes: 15
+    env:
+      CHECKOUT_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
+      COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
+    steps:
+      - *linux_node_checkout_step
+      - name: Setup Node environment
+        uses: ./.ci-harness/.github/actions/setup-node-env
+        with:
+          cache-mode: ${{ needs.preflight.outputs.cache_mode }}
+          install-bun: "false"
+          dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
+
+      - name: Check Control UI performance against base
+        shell: bash
+        run: |
+          set -euo pipefail
+          if node -e 'process.exit(require("./package.json").scripts?.["ui:check-performance:base"] ? 0 : 1)'; then
+            pnpm ui:check-performance:base "$CHECKOUT_BASE_SHA"
+          elif [[ "$COMPATIBILITY_TARGET" == "true" ]]; then
+            echo "Skipping separate Control UI performance check: unavailable on the selected compatibility target; its artifact build retains its historical policy." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "ui:check-performance:base is required for non-compatibility targets." >&2
+            exit 1
+          fi
+
   native-i18n:
     permissions:
       contents: read
@@ -2403,9 +2458,10 @@ jobs:
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
     if: needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true'
-    # Hybrid attempt 1 uses Blacksmith; github mode, hybrid retries, manual
-    # dispatches, forks, and same-repo PR retries use GitHub-hosted capacity.
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Backend and contributor routing stays shared with real-Gateway tests.
+    # UI's two workers received two CPUs on the 8-vCPU label; request the measured
+    # eight-CPU class only for Control UI, retaining browser-extension placement.
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.task == 'control-ui' && 'blacksmith-32vcpu-ubuntu-2404' || 'blacksmith-8vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     # Source-server and runtime-budget owners retain serial Chromium execution.
     timeout-minutes: 25
     env:
@@ -2480,8 +2536,10 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Build Control UI bundle for real-Gateway tests
-        run: pnpm ui:build
+      - name: Build runtime and Control UI artifacts for real-Gateway tests
+        env:
+          OPENCLAW_BUILD_PRIVATE_QA: "1"
+        run: pnpm build:ci-artifacts
 
       - name: Test Control UI suites with a real Gateway
         env:
@@ -2496,8 +2554,11 @@ jobs:
           ui/src/e2e/usage-sessions-owner-attribution.e2e.test.ts
           ui/src/e2e/logs-lifecycle.e2e.test.ts
           ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts
+          ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts
           ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts
           extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/session-host-command-state.real-gateway.e2e.test.ts
+          extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
 
       - name: Upload sanitized Control UI real-Gateway proof
         if: always() && github.event_name == 'workflow_dispatch' && inputs.capture_ui_proof
@@ -3015,9 +3076,9 @@ jobs:
     timeout-minutes: ${{ matrix.timeout_minutes || 60 }}
     strategy:
       fail-fast: false
-      # Canonical main admits only one complete run at a time, so widen this
-      # matrix within the current runner-registration budget.
-      max-parallel: ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 96 || 28 }}
+      # Compact and PR manifest caps bound registrations; parallelism bounds
+      # active jobs. Canonical main retains two non-canceling parity slots.
+      max-parallel: 96
       matrix: ${{ fromJson(needs.preflight.outputs.checks_node_core_nondist_matrix) }}
     steps:
       - *linux_node_checkout_step
@@ -3167,6 +3228,16 @@ jobs:
           fi
           node --import tsx "$runner"
 
+      - &runner_memory_peak_step
+        name: Record runner memory peak
+        if: always()
+        shell: bash
+        run: |
+          # This includes setup and every child process, not just the test step.
+          if peak_memory="$(cat /sys/fs/cgroup/memory.peak 2>/dev/null)"; then
+            echo "runner cgroup peak memory bytes=$peak_memory"
+          fi
+
       - name: Save docs i18n Go cache
         if: always() && matrix.requires_go == true && needs.preflight.outputs.cache_write_allowed == 'true' && steps.docs-i18n-go-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -3184,6 +3255,7 @@ jobs:
     runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.repository == 'openclaw/openclaw' && github.event_name == 'workflow_dispatch' && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && (github.event_name == 'workflow_dispatch' || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04') }}
     timeout-minutes: 20
     env:
+      # Prepare comparison history before checkout's credential scope ends.
       CHECKOUT_BASE_SHA: ${{ ((matrix.task == 'guards' && github.event_name == 'pull_request') || (matrix.task == 'npm-lock' && github.event_name != 'workflow_dispatch')) && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
       fail-fast: false
@@ -3305,8 +3377,6 @@ jobs:
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
           OPENCLAW_LOCAL_CHECK: "0"
           TASK: ${{ matrix.task }}
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && needs.preflight.outputs.diff_base_revision || '' }}
-          DIFF_BASE_SHA: ${{ needs.preflight.outputs.diff_base_revision }}
         shell: bash
         run: |
           set -euo pipefail
@@ -3350,9 +3420,9 @@ jobs:
                 echo "Current CI targets must provide the check:coercion-helpers package script." >&2
                 exit 1
               fi
-              if [ -n "$PR_BASE_SHA" ]; then
-                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$PR_BASE_SHA"
-                node scripts/report-test-temp-creations.mjs --base refs/remotes/origin/ci-ratchet-base --head HEAD --no-merge-base
+              if [ -n "$CHECKOUT_BASE_SHA" ]; then
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+                node scripts/report-test-temp-creations.mjs --base "$CHECKOUT_BASE_SHA" --head HEAD --no-merge-base
               fi
               pnpm deps:patches:check
               pnpm lint:webhook:no-low-level-body-read
@@ -3366,14 +3436,10 @@ jobs:
               # dependency-surface changes resolve nothing); dispatches and
               # release validation keep the full sweep, which also covers
               # registry-side drift on unchanged lockfiles.
-              npm_lock_base=""
-              if [[ "${GITHUB_EVENT_NAME:-}" != "workflow_dispatch" && -n "$DIFF_BASE_SHA" ]] &&
+              if [[ -n "$CHECKOUT_BASE_SHA" ]] &&
                 has_package_script "deps:npm-lock:check:changed"; then
-                npm_lock_base="refs/remotes/origin/ci-ratchet-base"
-                test "$(git rev-parse "${npm_lock_base}^{commit}")" = "$DIFF_BASE_SHA"
-              fi
-              if [[ -n "$npm_lock_base" ]]; then
-                pnpm deps:npm-lock:check:changed --base "$npm_lock_base" --head HEAD
+                test "$(git rev-parse refs/remotes/origin/ci-ratchet-base^{commit})" = "$CHECKOUT_BASE_SHA"
+                pnpm deps:npm-lock:check:changed --base "$CHECKOUT_BASE_SHA" --head HEAD
               elif has_package_script "deps:npm-lock:check"; then
                 pnpm deps:npm-lock:check
               elif [[ "$HISTORICAL_TARGET" != "true" ]]; then
@@ -3408,14 +3474,14 @@ jobs:
                   hosted_extension_stripe="6/6"
                   lint_args=(--only=scripts --threads=1)
                 fi
-                export GOMAXPROCS=2
-                # Match local Go GC policy; thread limits alone leave the
-                # extension semantic graph too large for a 16GB runner.
-                export GOGC=30 GOMEMLIMIT=3GiB
               elif [ "$(nproc)" -lt 8 ]; then
-                # Fork PRs build each semantic Program once. Bound both oxlint
-                # and its Go helper within the 4-core/16GB hosted runner.
+                # Fork PRs build each semantic Program once on small runners.
                 lint_args=(--threads=1)
+              fi
+              if [ "$FROZEN_TARGET" = "true" ] &&
+                { [ "$HOSTED_RUNNER_STRIPES" = "true" ] || [ "$(nproc)" -lt 8 ]; }; then
+                # Frozen wrappers can predate native resource policy. Current
+                # wrappers limit lint without throttling declaration preparation.
                 export GOMAXPROCS=2
                 export GOGC=30 GOMEMLIMIT=3GiB
               fi
@@ -3607,12 +3673,16 @@ jobs:
 
       - name: Run hosted core lint stripe
         env:
-          GOMAXPROCS: "2"
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_LOCAL_CHECK: "0"
           RELEASE_GATE: ${{ inputs.release_gate && 'true' || 'false' }}
           RUNNER_PROFILE: ${{ needs.preflight.outputs.runner_profile }}
         run: |
           set -euo pipefail
+          if [ "$FROZEN_TARGET" = "true" ]; then
+            # Older wrappers lack the current constrained-host Go policy.
+            export GOMAXPROCS=2
+          fi
           # Older candidates run their complete lint set in check-lint; their
           # runner predates core-stripe, so these five new-only jobs are redundant.
           if [[ ! -f scripts/run-oxlint-shards.mts ]]; then
@@ -3679,13 +3749,8 @@ jobs:
       max-parallel: 12
       matrix:
         include:
-          - check_name: check-additional-boundaries-a
+          - check_name: check-additional-boundaries
             group: boundaries
-            boundary_shard: 1/4
-            runner: blacksmith-8vcpu-ubuntu-2404
-          - check_name: check-additional-boundaries-bcd
-            group: boundaries
-            boundary_shard: 2/4,3/4,4/4
             runner: blacksmith-8vcpu-ubuntu-2404
           # Prompt snapshot regeneration evaluates the full agent tool/prompt
           # import graph and used to own the boundaries-a wall clock; keep it
@@ -3698,9 +3763,6 @@ jobs:
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-session-accessor-boundary
             group: session-accessor-boundary
-            runner: blacksmith-4vcpu-ubuntu-2404
-          - check_name: check-session-transcript-reader-boundary
-            group: session-transcript-reader-boundary
             runner: blacksmith-4vcpu-ubuntu-2404
           - check_name: check-sqlite-session-schema-baseline
             group: sqlite-session-schema-baseline
@@ -3827,7 +3889,7 @@ jobs:
           ADDITIONAL_CHECK_GROUP: ${{ matrix.group }}
           COMPATIBILITY_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
           RUN_PROMPT_SNAPSHOTS: ${{ needs.preflight.outputs.run_prompt_snapshots }}
-          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ${{ matrix.boundary_shard || '' }}
+          OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: ""
           OPENCLAW_ADDITIONAL_BOUNDARY_CONCURRENCY: 4
           # Keep the existing CI worker budget; the requested runner label is not a CPU count.
           # The script's resource-based default caps at 6 outside this explicit override.
@@ -3892,8 +3954,6 @@ jobs:
               else
                 run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary
               fi
-              ;;
-            session-transcript-reader-boundary)
               if ! node -e 'const pkg = require("./package.json"); process.exit(pkg.scripts?.["lint:tmp:session-transcript-reader-boundary"] ? 0 : 1);'; then
                 echo "[skip] session transcript reader boundary script is not present in package.json"
               else
@@ -3978,7 +4038,10 @@ jobs:
       contents: read
     needs: [preflight]
     if: needs.preflight.outputs.run_check_docs == 'true'
-    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid') && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    # Always hosted: check-docs clones the ClawHub mirror without lending the
+    # repository token (git-owner boundary), and unauthenticated GitHub fetches
+    # from Blacksmith egress are refused often enough to fail the job.
+    runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
       - *linux_node_checkout_step
@@ -4137,12 +4200,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Jobs requesting the Blacksmith Windows class admit at most two project
-          # processes with one Vitest worker each; hosted fallbacks remain serial.
+          # Native allocation can be smaller than the runner label. Keep projects
+          # serial within each machine; the two matrix jobs still run concurrently.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
-          if [[ "${RUNNER_ENVIRONMENT:-}" == "self-hosted" ]]; then
-            export OPENCLAW_TEST_PROJECTS_PARALLEL=2
-          fi
           case "$TASK" in
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.
@@ -5197,7 +5257,7 @@ jobs:
     name: docker-seed-e2e
     needs: [preflight]
     if: needs.preflight.outputs.run_docker_seed_e2e == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'ubuntu-24.04' || github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || (github.event_name == 'pull_request' && (github.run_attempt > 1 || github.event.pull_request.head.repo.full_name != github.repository)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-32vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 60
     steps:
       - *linux_node_checkout_step
@@ -5210,6 +5270,10 @@ jobs:
           install-bun: "false"
           dependency-cache: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || runner.environment != 'self-hosted' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
 
+      - name: Report runner resources
+        run: |
+          node --input-type=module -e 'import os from "node:os"; console.log(JSON.stringify({ logicalCpuCount: os.availableParallelism(), totalMemoryBytes: os.totalmem() }));'
+
       - name: Run changed Docker seed owner lanes
         env:
           OPENCLAW_DOCKER_ALL_LANES: ${{ needs.preflight.outputs.docker_seed_lanes }}
@@ -5218,6 +5282,8 @@ jobs:
           OPENCLAW_DOCKER_ALL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
           OPENCLAW_DOCKER_ALL_TAIL_PARALLELISM: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && github.event_name == 'pull_request' && github.run_attempt == 1 && github.event.pull_request.head.repo.full_name == github.repository && contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association) && 3 || 1 }}
         run: pnpm test:docker:all
+
+      - *runner_memory_peak_step
 
   ci-gate:
     permissions:
@@ -5228,6 +5294,7 @@ jobs:
       - security-fast
       - pnpm-store-warmup
       - build-artifacts
+      - control-ui-performance
       - native-i18n
       - checks-ui
       - checks-ui-e2e
@@ -5256,7 +5323,9 @@ jobs:
     # Report failed prerequisites, but let superseded runs release their slot
     # without waiting for an aggregate runner after workflow cancellation.
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt == 1 && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    # Follow preflight so canonical Blacksmith runs never wait on a second hosted
+    # assignment; security-fast intentionally stays hosted outside hybrid.
+    runs-on: ${{ (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04') }}
     timeout-minutes: 5
     steps:
       - name: Verify selected CI lanes
@@ -5267,6 +5336,7 @@ jobs:
             security-fast=${{ needs.security-fast.result }}|true
             pnpm-store-warmup=${{ needs.pnpm-store-warmup.result }}|${{ (needs.preflight.outputs.run_node == 'true' || needs.preflight.outputs.run_check_docs == 'true') && (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid' || (!(github.repository == 'openclaw/openclaw' && github.event_name == 'push' && github.ref == 'refs/heads/main') && !(github.repository == 'openclaw/openclaw' && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && needs.preflight.outputs.run_node == 'true'))) }}
             build-artifacts=${{ needs.build-artifacts.result }}|${{ needs.preflight.outputs.run_build_artifacts }}
+            control-ui-performance=${{ needs.control-ui-performance.result }}|${{ needs.preflight.outputs.run_build_artifacts == 'true' || needs.preflight.outputs.run_ui_tests == 'true' }}
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_tests == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}

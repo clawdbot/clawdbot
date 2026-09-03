@@ -2,13 +2,18 @@
 // previews, session pull request chips): pinned origin, manual redirects,
 // bounded bodies, and normalized upstream error statuses.
 import { createHash } from "node:crypto";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  parseStrictNonNegativeInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readResponseWithLimit } from "../infra/http-body.js";
+import { parseRetryAfterHeaderSeconds } from "../infra/retry-after.js";
 import {
   assertSecretOwnerAvailable,
+  isTrustedSecretSurfaceUnavailableError,
   SecretSurfaceUnavailableError,
 } from "../secrets/runtime-degraded-state.js";
 export { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -22,13 +27,87 @@ const GITHUB_API_VERSION = "2022-11-28";
 const GITHUB_API_MAX_REDIRECTS = 3;
 
 export class ControlUiGitHubError extends Error {
-  readonly statusCode: number;
+  private readonly retryAtMs?: number;
+  readonly upstreamStatus: number;
 
-  constructor(statusCode: number, message: string) {
+  // Messages are authored here or by the metadata parser, never upstream bodies.
+  constructor(
+    readonly statusCode: number,
+    message: string,
+    options: { retryAtMs?: number; upstreamStatus?: number } = {},
+  ) {
     super(message);
     this.name = "ControlUiGitHubError";
-    this.statusCode = statusCode;
+    this.upstreamStatus = options.upstreamStatus ?? statusCode;
+    this.retryAtMs = options.retryAtMs;
   }
+
+  get retryAfterMs(): number | undefined {
+    // Cached failures must keep the original reset time when a hovercard reopens.
+    return this.retryAtMs === undefined ? undefined : Math.max(0, this.retryAtMs - Date.now());
+  }
+}
+
+// Keep no-response transport failures distinct from HTTP/protocol failures:
+// identity synchronization may reuse an exact verified cache only for the former.
+class ControlUiGitHubTransportError extends Error {}
+
+export function formatControlUiGitHubPreviewError(error: unknown): {
+  message: string;
+  retryable: boolean;
+  retryAfterMs?: number;
+} {
+  if (isTrustedSecretSurfaceUnavailableError(error)) {
+    return { message: CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE, retryable: false };
+  }
+  if (error instanceof ControlUiGitHubTransportError) {
+    return { message: `${error.message}. Retry or check GitHub availability.`, retryable: true };
+  }
+  if (error instanceof ControlUiGitHubError) {
+    const status = `HTTP ${error.upstreamStatus}`;
+    switch (error.statusCode) {
+      case 401:
+        return {
+          message: `GitHub authentication failed (${status}). Reconnect the GitHub identity in Settings.`,
+          retryable: false,
+        };
+      case 403:
+        return {
+          message: `GitHub access denied (${status}). Check the configured GitHub identity's repository access.`,
+          retryable: false,
+        };
+      case 404:
+        // The shared server credential must not reveal whether a private repository exists.
+        return {
+          message:
+            "GitHub item is unavailable or not public (HTTP 404). Open the link on GitHub to check access.",
+          retryable: false,
+        };
+      case 429: {
+        const retryAfterMs = error.retryAfterMs;
+        const wait =
+          retryAfterMs === undefined ? "Wait" : `Wait ${Math.ceil(retryAfterMs / 1_000)} seconds`;
+        return {
+          message: `GitHub API rate limit exceeded (${status}). ${wait} and retry.`,
+          retryable: true,
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        };
+      }
+      case 502:
+        return {
+          message: `${error.message.slice(0, 256)}. Retry or check GitHub availability.`,
+          retryable: true,
+        };
+    }
+  }
+  if (error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError")) {
+    return { message: "GitHub request timed out. Retry shortly.", retryable: true };
+  }
+  // Credential subprocess errors and arbitrary transport diagnostics can contain secrets.
+  return {
+    message: "GitHub preview could not be loaded. Retry or check the server logs.",
+    retryable: false,
+  };
 }
 
 export function requiredString(record: Record<string, unknown>, key: string): string {
@@ -129,6 +208,7 @@ export async function fetchGitHubApi(
   fetchImpl: typeof fetch,
   token?: string,
   beforeRedirect?: (url: URL) => Promise<void>,
+  identity?: { revalidate: () => Promise<void>; assertSelected: () => void },
 ): Promise<Response> {
   const initialUrl = safeGitHubApiUrl(rawUrl);
   if (!initialUrl) {
@@ -138,11 +218,23 @@ export async function fetchGitHubApi(
 
   const signal = AbortSignal.timeout(GITHUB_REQUEST_TIMEOUT_MS);
   for (let redirects = 0; ; redirects += 1) {
-    const response: Response = await fetchImpl(url.href, {
-      headers: githubApiHeaders(token),
-      redirect: "manual",
-      signal,
-    });
+    // Recheck every dispatch, including redirects and auxiliary metadata reads.
+    // Selection must still be current after the asynchronous credential read.
+    await identity?.revalidate();
+    identity?.assertSelected();
+    let response: Response;
+    try {
+      response = await fetchImpl(url.href, {
+        headers: githubApiHeaders(token),
+        redirect: "manual",
+        signal,
+      });
+    } catch (error) {
+      const timedOut = signal.aborted || (error instanceof Error && error.name === "TimeoutError");
+      throw new ControlUiGitHubTransportError(
+        timedOut ? "GitHub request timed out" : "Could not reach GitHub",
+      );
+    }
     if (!isGitHubApiRedirect(response.status)) {
       return response;
     }
@@ -167,7 +259,9 @@ export async function discardResponse(response: Response): Promise<void> {
 
 export async function readBoundedResponse(response: Response, maxBytes: number): Promise<Buffer> {
   try {
-    return await readResponseWithLimit(response, maxBytes);
+    return await readResponseWithLimit(response, maxBytes, {
+      onOverflow: () => new ControlUiGitHubError(502, "GitHub response exceeded the size limit"),
+    });
   } finally {
     await discardResponse(response);
   }
@@ -219,8 +313,21 @@ export async function readGitHubJsonResponse(
 ): Promise<unknown> {
   if (!response.ok) {
     const status = githubResponseErrorStatus(response);
+    let retryAtMs: number | undefined;
+    if (status === 429) {
+      const retrySeconds = parseRetryAfterHeaderSeconds(response.headers.get("retry-after"));
+      const reset = parseStrictNonNegativeInteger(response.headers.get("x-ratelimit-reset"));
+      if (retrySeconds !== undefined) {
+        retryAtMs = Date.now() + retrySeconds * 1_000;
+      } else if (reset !== undefined && reset <= Number.MAX_SAFE_INTEGER / 1_000) {
+        retryAtMs = reset * 1_000;
+      }
+    }
     await discardResponse(response);
-    throw new ControlUiGitHubError(status, `GitHub request failed (${response.status})`);
+    throw new ControlUiGitHubError(status, `GitHub request failed (HTTP ${response.status})`, {
+      upstreamStatus: response.status,
+      retryAtMs,
+    });
   }
   const body = await readBoundedResponse(response, maxBytes);
   try {

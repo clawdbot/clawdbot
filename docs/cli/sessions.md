@@ -50,6 +50,10 @@ SQLite target, verifies the target exists and is usable, and reports the physica
 path it actually read. Combine it with `--agent <id>` when you must select the
 configured agent that owns the store.
 
+`--agent` and `--store` require non-blank values. Selection errors exit non-zero
+and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
+is set.
+
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
 loop. The CLI returns the newest 100 sessions by default; pass `--limit <n>`
@@ -115,6 +119,12 @@ without proof that its environment is gone, the session remains unarchived;
 wait for the placement to settle, then retry. Agent main sessions remain
 protected. Already archived sessions are successful no-ops. Use `--dry-run` to
 validate every key and preview the result without changing session state.
+
+Archive reasons are assigned automatically and displayed as human-readable text
+in the Control UI. Explicit archive commands record `manual`; maintenance-owned
+archives record their owning trigger. Missing reasons remain protected as legacy
+state. Under disk pressure, only sessions explicitly archived by `maxEntries`
+are eligible for automatic deletion after cheaper cleanup tiers are exhausted.
 
 ## Delete sessions
 
@@ -191,6 +201,10 @@ print before follow mode; default `80`, and `0` starts at the current end.
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
+A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
+and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
+is rejected instead of selecting an inferred agent.
+
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
@@ -244,12 +258,14 @@ openclaw sessions cleanup --json
   pressure-gated: it only removes stale probe rows when session-entry
   maintenance/cap pressure is reached. When it runs, model-run cleanup
   happens before global stale cleanup and capping.
-- `maxEntries` caps the total live session row count. Protected rows are
-  reported as `keep` and count toward the cap, but they are never automatic
-  eviction targets. If protected rows prevent cleanup from reaching the cap,
-  the store remains above it. `--enforce` does not remove that protection;
-  unarchive, unpin, wait for active work to finish, or explicitly delete
-  sessions you no longer want to retain.
+- `maxEntries` caps the unarchived session row count; archived rows do not
+  consume it. Eligible ordinary overflow is reported as `archive-cap` and
+  archived, while synthetic runtime overflow remains disposable. Protected
+  unarchived rows are reported as `keep` and still consume the cap. If those
+  protected rows prevent cleanup from reaching the cap, the unarchived store
+  remains above it. `--enforce` does not remove that protection; unpin, wait
+  for active work to finish, or explicitly delete sessions you no longer want
+  to retain.
 
 Flags:
 

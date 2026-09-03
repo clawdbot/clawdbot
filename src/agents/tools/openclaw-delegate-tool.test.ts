@@ -2,6 +2,7 @@ import { Value } from "typebox/value";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun } from "./openclaw-delegate-tool.js";
 
@@ -28,6 +29,7 @@ describe("openclaw delegation tool", () => {
       sessionAgentId: "main",
       runSessionKey: "agent:main:dm:one",
       agentChannel: "webchat",
+      execSession: { permissionMode: "guarded" },
     })[0];
     if (!tool) {
       throw new Error("expected OpenClaw delegation tool");
@@ -57,6 +59,60 @@ describe("openclaw delegation tool", () => {
       "{ reply: string; action?: string; needsApproval?: true; proposalId?: string }",
     );
     expect(tool.catalogMode).toBeUndefined();
+  });
+
+  it.each([
+    { name: "default full", options: {}, full: true },
+    {
+      name: "explicit full overrides configured prompting",
+      options: {
+        execSession: { permissionMode: "full" },
+        config: { tools: { exec: { mode: "ask" } } },
+      },
+      full: true,
+    },
+    { name: "guarded", options: { execSession: { permissionMode: "guarded" } }, full: false },
+    { name: "workspace", options: { execSession: { permissionMode: "workspace" } }, full: false },
+    {
+      name: "restricted default",
+      options: { config: { tools: { exec: { mode: "ask" } } } },
+      full: false,
+    },
+    {
+      name: "agent-restricted default",
+      options: { config: { agents: { list: [{ id: "main", tools: { exec: { mode: "ask" } } }] } } },
+      full: false,
+    },
+    {
+      name: "turn-tightened full",
+      options: { execSession: { permissionMode: "full" }, execOverrides: { ask: "always" } },
+      full: false,
+    },
+    { name: "filesystem-restricted", options: { fsPolicy: { workspaceOnly: true } }, full: false },
+  ] satisfies Array<{
+    name: string;
+    options: Omit<Parameters<typeof createOpenClawDelegateToolsForRun>[0], "sessionAgentId">;
+    full: boolean;
+  }>)("carries $name authority privately, not in RPC data", async ({ options, full }) => {
+    callGateway.mockImplementation(async () => {
+      expect(getGatewayToolCallerIdentity()?.fullPermission).toBe(full);
+      return { sessionId: "delegate", reply: "Done." };
+    });
+    const [tool] = createOpenClawDelegateToolsForRun({
+      sessionAgentId: "main",
+      runSessionKey: "agent:main:main",
+      ...options,
+    });
+    if (!tool) {
+      throw new Error("expected OpenClaw delegation tool");
+    }
+
+    await tool.execute("call-policy", { message: "Change logging.", fullPermission: !full });
+
+    expect(tool.description).toContain(full ? "without asking for approval" : "human approval");
+    expect(callGateway.mock.calls[0]?.[1]).not.toHaveProperty("fullPermission");
+    expect(callGateway.mock.calls[0]?.[1].delegation).not.toHaveProperty("fullPermission");
+    expect(getGatewayToolCallerIdentity()).toBeUndefined();
   });
 
   it("reuses one session and accepts explicit continuation", async () => {

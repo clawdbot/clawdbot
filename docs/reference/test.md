@@ -209,6 +209,11 @@ existing temporary directories, Node or Vitest caches, or other global caches. S
 validators; it does not require `TSX_DISABLE_CACHE` in the invoking shell. Raw
 external `tsx` and `node --import tsx` invocations outside these launchers are unchanged.
 
+Control UI builds report size budgets without enforcing them. Run
+`pnpm ui:check-performance` after a build to enforce absolute budgets, or
+`pnpm ui:check-performance:base <base-commit-sha>` to build and compare both
+revisions with the same toolchain. See [Control UI size budgets](/ci#control-ui-size-budgets).
+
 ### Source tests and subprocess builds
 
 Non-watch runs through `pnpm test` or `scripts/run-vitest.mjs` keep Vitest tests
@@ -293,6 +298,13 @@ trailer.
 | `pnpm test:coverage:changed`                      | Unit coverage only for files changed since `origin/main`.                                                                                                                                                                                                                                                                                             |
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Runs the local changed formatting/typecheck/lint/guard plan, including targeted Vitest owner tests for selected paths. Use `pnpm test:changed` or `pnpm test <target>` for additional test proof matching the touched contract.                                                                                                                       |
+
+`pnpm check:changed` also runs the mobile protocol-event coverage guard when
+changes affect the gateway event catalog or constants, scanned mobile sources,
+coverage declarations, or the guard, its execution helpers, and its routing.
+All-lane checks include it too. Every gateway event must have a handler or an
+explicitly approved non-consumption declaration for each mobile client. To run
+only this guard, use `pnpm check:protocol-coverage`.
 
 For native app changes, `pnpm check:changed` uses platform scope to select lint:
 Android selects `pnpm android:lint` (the Gradle ktlint checks), while Apple app
@@ -421,7 +433,15 @@ and intentionally real-home live execution remain outside its protection.
 
 ## Control UI, TUI, and extension lanes
 
-- **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript real-Gateway suite. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI E2E:** `pnpm test:ui:e2e` runs the Vitest + Playwright lane, usually against a mocked Gateway WebSocket. Four resource groups retain two execution phases: `ui-e2e-bundled` and `ui-e2e-standalone` run first with at most two workers total; `ui-e2e-serial` and `ui-e2e-serial-standalone` then share one worker. The two bundle consumers lazily share one temporary UI bundle/preview until the invocation closes. Standalone projects own their fixture, source, or custom-build servers; selecting only standalone suites avoids the shared bundle build. Every selected project receives Chromium metadata, and new E2E files default to parallel bundled ownership. The root config retains the full discovery inventory: `ui/src/**/*.e2e.test.ts` plus the QA Lab media-transcript and OpenClaw-delegation real-Gateway suites. Shared mocks/controls live in `ui/src/test-helpers/control-ui-e2e.ts`. Some suites start isolated real Gateways; `OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY=1` excludes them. `pnpm test:e2e` includes this lane, with no additional CI jobs for resource groups. Use Testbox/Crabbox only when clean Linux/browser parity is part of the proof. In a linked worktree, `node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts --configLoader runner ui/src/e2e/chat-flow.messaging.e2e.test.ts` avoids pnpm dependency reconciliation for a targeted local run.
+- **Control UI real-Gateway approval proof:** Check default and explicit Full Access delegation against an isolated Gateway with a mock provider. Build the runtime before running the targeted proof:
+
+  ```bash
+  pnpm build qaRuntime
+  node scripts/run-vitest.mjs run --config test/vitest/vitest.ui-e2e.config.ts \
+    --configLoader runner extensions/qa-lab/src/control-ui-openclaw-delegation.real-gateway.e2e.test.ts
+  ```
+
 - **TUI PTY tests:** `node scripts/run-vitest.mjs run --config test/vitest/vitest.tui-pty.config.ts` runs the fast fake-backend PTY lane. `OPENCLAW_TUI_PTY_INCLUDE_LOCAL=1` or `pnpm tui:pty:test:watch --mode local` runs the slower `tui --local` smoke, which mocks only the external model endpoint. CI also sets `OPENCLAW_TUI_PTY_USE_BUILT_CLI=1` after building `dist/`; use that flag only when exact-head built artifacts already exist. Assert stable visible text or fixture calls, not raw ANSI snapshots.
 - `pnpm test:extensions` and `pnpm test extensions` run all extension/plugin shards. Heavy channel plugins, the browser plugin, and OpenAI run as dedicated shards; other plugin groups stay batched. `pnpm test extensions/<id>` runs one bundled plugin lane.
 - **Browser native host:** `node scripts/run-vitest.mjs extensions/browser/src/browser/extension-install.native-host.e2e.test.ts` runs the real native messaging launcher on macOS or Linux against built dist with synthetic installation state; it does not launch Chrome or a Gateway. Windows skips this POSIX process proof because [native bootstrap uses manual pairing there](/tools/chrome-extension#requirements). The E2E owner prepares artifacts before workers. With an already-built candidate, prefix the command with `OPENCLAW_E2E_USE_PREBUILT_DIST=1` to reuse it; missing artifacts fail the test. This case belongs to `pnpm test:e2e`, not the browser source shard or untargeted `pnpm test` unit suite. Linux CI runs it explicitly in `build-artifacts` and validates a JSON report proving the exact named test passed. The workflow skips only frozen historical checkouts missing this test file; that skip is unavailable proof, not a pass or coverage.
@@ -658,6 +678,8 @@ Saved output: `pnpm test:startup:bench:smoke` writes `.artifacts/cli-startup-ben
 </Accordion>
 
 <Accordion title="Gateway startup (scripts/bench-gateway-startup.ts)">
+
+Gateway startup, restart, and agent concurrency benchmark fixtures use temporary home and state directories, loopback binding, and `discovery.mdns.mode: "off"` so synthetic Gateways do not advertise on the LAN, including on macOS.
 
 Defaults to the built CLI entry at `dist/entry.js`; run `pnpm build` first. Pass `--entry scripts/run-node.mjs` to measure the source runner instead, and keep those results separate from built-entry baselines.
 

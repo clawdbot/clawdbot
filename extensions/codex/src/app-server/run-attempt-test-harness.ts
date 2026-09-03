@@ -1,6 +1,7 @@
 // Codex plugin module implements run attempt test harness behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import {
   abortAndDrainAgentHarnessRun,
@@ -35,6 +36,7 @@ import {
 import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
 import type { CodexServerNotification } from "./protocol.js";
@@ -694,6 +696,8 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
 
 export function setupRunAttemptTestHooks(): void {
   beforeEach(async () => {
+    // Direct runtime tests supply the plugin root normally owned by loader registration.
+    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
     // Machine-managed sandbox requirements must not leak into policy fixtures.
     vi.spyOn(codexRequirements, "readCodexRequirementsToml").mockReturnValue(undefined);
     // An uninitialized real host approvals store intentionally fails closed.
@@ -724,6 +728,7 @@ export function setupRunAttemptTestHooks(): void {
     }
     await sandboxExecServerRegistry.closeAll();
     resetCodexAppServerClientFactoryForTest();
+    setManagedCodexPluginRoot(undefined);
     clearRuntimeAuthProfileStoreSnapshots();
     dynamicToolBuildState.openClawCodingToolsFactory = undefined;
     codexWorkspaceDirCache.clear();

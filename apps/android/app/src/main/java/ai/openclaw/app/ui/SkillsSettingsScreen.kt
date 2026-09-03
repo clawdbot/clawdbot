@@ -7,6 +7,7 @@ import ai.openclaw.app.GatewayClawHubSkillSummary
 import ai.openclaw.app.GatewaySkillSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.i18n.nativeString
+import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.isClawHubSkillInstalled
 import ai.openclaw.app.isClawHubSkillOperationActive
 import ai.openclaw.app.ui.design.ClawDetailRow
@@ -81,16 +82,14 @@ internal fun SkillsSettingsScreen(
   viewModel: MainViewModel,
   onBack: () -> Unit,
 ) {
-  val skillsSummary by viewModel.skillsSummary.collectAsState()
-  val skillsRefreshing by viewModel.skillsRefreshing.collectAsState()
-  val skillsErrorText by viewModel.skillsErrorText.collectAsState()
+  val skillsState by viewModel.skillsState.collectAsState()
   val skillMutationKeys by viewModel.skillMutationKeys.collectAsState()
   val clawHubState by viewModel.clawHubSkillSearchState.collectAsState()
   val clawHubMethodsAvailable by viewModel.clawHubSkillMethodsAvailable.collectAsState()
   val isConnected by viewModel.isConnected.collectAsState()
   val operatorAdminScopeAvailable by viewModel.operatorAdminScopeAvailable.collectAsState()
   val canManageSkills = isConnected && operatorAdminScopeAvailable
-  val skills = skillsSummary.skills
+  val skills = skillsState.summary.skills
   val readyCount = skills.count { skillReady(it) }
   val needsSetupCount = skills.count { skillNeedsSetup(it) }
   val disabledCount = skills.count { it.disabled }
@@ -139,7 +138,7 @@ internal fun SkillsSettingsScreen(
       readyCount = readyCount,
       needsSetupCount = needsSetupCount,
       disabledCount = disabledCount,
-      refreshing = skillsRefreshing,
+      refreshing = skillsState.refreshing,
       canRefresh = isConnected,
       onRefresh = viewModel::refreshSkills,
     )
@@ -154,9 +153,9 @@ internal fun SkillsSettingsScreen(
       },
       modifier = Modifier.fillMaxWidth(),
     )
-    skillsErrorText?.let { errorText ->
+    skillsState.errorText?.let { errorText ->
       ClawPanel {
-        Text(text = errorText, style = ClawTheme.type.body, color = ClawTheme.colors.warning)
+        Text(text = errorText.resolveNativeTextResource(), style = ClawTheme.type.body, color = ClawTheme.colors.warning)
       }
     }
     if (isConnected && !operatorAdminScopeAvailable) {

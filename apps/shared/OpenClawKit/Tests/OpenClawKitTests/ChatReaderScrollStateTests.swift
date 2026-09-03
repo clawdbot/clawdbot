@@ -4,6 +4,16 @@ import Testing
 @testable import OpenClawChatUI
 
 struct ChatReaderScrollStateTests {
+    #if os(iOS)
+    @Test func `iOS initially restores to the live edge`() {
+        #expect(chatReaderInitialRestorePolicy() == .liveEdge)
+    }
+    #elseif os(macOS)
+    @Test func `macOS initially restores to the latest turn`() {
+        #expect(chatReaderInitialRestorePolicy() == .latestTurn)
+    }
+    #endif
+
     @Test func `optimistic turn removal keeps the older user as the baseline`() {
         let olderUserID = UUID()
         let optimisticUserID = UUID()

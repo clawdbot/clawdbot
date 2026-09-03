@@ -5,6 +5,7 @@ import {
   resolveCodexAppServerHomeDir,
   resolveCodexAppServerLocalHomeDir,
 } from "./auth-start-options.js";
+import { assertCodexSessionRuntimeOwnership } from "./binding-connection.js";
 import { isCodexAppServerLiveThreadClaimed } from "./client-runtime.js";
 import { resolveCodexAppServerClientInstanceId } from "./client.js";
 import { assertCodexThreadAcceptsDirectInput } from "./protocol-validators.js";
@@ -74,10 +75,11 @@ export async function withCodexThreadLifecycleBinding(
     agentId: params.agentId ?? params.params.agentId,
     config: params.params.config,
   });
-  const snapshot = await params.bindingStore.read(identity);
+  const snapshot = params.bindingStore.read(identity);
   const runWithLease = () =>
     params.bindingStore.withLease(identity, async () => {
-      const binding = await params.bindingStore.read(identity);
+      const binding = params.bindingStore.read(identity);
+      assertCodexSessionRuntimeOwnership(binding, params.params.expectedSessionRuntimeOwnership);
       // Never prepare a replacement under the queue selected for an obsolete snapshot.
       if (binding?.threadId !== snapshot?.threadId || binding?.clientId !== snapshot?.clientId) {
         throw new CodexThreadBindingConflictError(

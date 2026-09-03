@@ -46,7 +46,6 @@ export function renderNewSessionDraftView(options: {
   const preferences = context?.theme.settings;
   const voiceControl = dictation.render(draftOwnerKey, preferences?.realtimeTalkInputDeviceId);
   const dictationLocked = dictation.active;
-  const preparedTitle = titlePreparation.preparedTitle();
   return html`
     <div
       class="new-session-page__draft"
@@ -65,6 +64,12 @@ export function renderNewSessionDraftView(options: {
     >
       ${renderTargetBar()}
       ${worktreeNameInvalid ? renderDraftError(t("newSession.worktreeNameInvalid")) : nothing}
+      ${isCatalogTarget && capabilities.toolOverrides
+        ? renderDraftError(t("newSession.terminalCapabilityOverridesUnsupported"), {
+            label: t("common.reset"),
+            onClick: () => capabilities.setToolOverrides(null),
+          })
+        : nothing}
       ${submission.submissionOutcomeUnknown
         ? renderDraftError(
             t(
@@ -114,14 +119,9 @@ export function renderNewSessionDraftView(options: {
         textareaController: submission.composerTextarea,
         voiceControl,
         messageLocked: Boolean(submission.pendingPlacement.sessionKey),
-        terminalAction: submission.showStartInTerminal()
-          ? {
-              canStart:
-                !submission.submitting && !dictationLocked && submission.canSubmit("terminal"),
-              disabledReason: submission.submitBlock("terminal")?.reason,
-              onStart: () => void submission.startInTerminal(),
-            }
-          : undefined,
+        nativeTerminal: isCatalogTarget,
+        onUnsupportedAttachment: () =>
+          submission.setError(t("newSession.terminalAttachmentsUnsupported")),
         onInput: onMessage,
         onOpenImage,
         onVisibilityChange: (visibility) => {
@@ -131,21 +131,13 @@ export function renderNewSessionDraftView(options: {
         },
         onSubmit: () => void submission.submit(),
         onBackgroundSubmit:
-          submission.visibility === "draft"
+          submission.visibility === "draft" || isCatalogTarget
             ? undefined
             : () => void submission.submit(undefined, true),
       })}
-      ${titlePreparation.available()
-        ? html`<div class="new-session-page__title-notice">
-            <span>${t("newSession.titlePreparationDisclosure")}</span>
-            ${preparedTitle
-              ? html`<span class="new-session-page__prepared-title" role="status"
-                  >${t("newSession.preparedTitle", { title: preparedTitle })}</span
-                >`
-              : nothing}
-          </div>`
+      ${!isCatalogTarget
+        ? renderNewSessionIncognitoNotice(submission.visibility === "incognito")
         : nothing}
-      ${renderNewSessionIncognitoNotice(submission.visibility === "incognito")}
     </div>
   `;
 }

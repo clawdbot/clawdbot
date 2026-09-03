@@ -12,10 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
-import {
-  resetRemoteModelCatalogOverlayForTest,
-  setRemoteModelCatalogOverlaySourcesForTest,
-} from "../model-catalog/remote-overlay.test-support.js";
+import { setRemoteModelCatalogOverlaySourcesForTest } from "../model-catalog/remote-overlay.test-support.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import * as usageFormat from "../utils/usage-format.js";
@@ -36,7 +33,6 @@ import {
   loadSessionUsageTimeSeries as loadSessionUsageTimeSeriesForAgent,
   resolveExistingUsageSessionFile as resolveExistingUsageSessionFileForAgent,
 } from "./session-cost-usage.js";
-import { testing as sessionCostUsageTestApi } from "./session-cost-usage.test-support.js";
 
 type WithOptionalAgentId<T> = T extends (params: infer P) => unknown
   ? Omit<P, "agentId"> & { agentId?: string }
@@ -82,7 +78,7 @@ function waitForFast<T>(
 }
 
 async function refreshSessionCostUsageForTest(sessionFile: string): Promise<void> {
-  await sessionCostUsageTestApi.usageCostRefreshRuntime.refreshCostUsageCacheForAgent({
+  await refreshCostUsageCacheForAgent({
     agentId: "main",
     sessionFiles: [sessionFile],
   });
@@ -716,7 +712,6 @@ describe("session cost usage", () => {
         checked_at: 200,
       }),
     });
-    resetRemoteModelCatalogOverlayForTest();
     const config = {
       models: {
         providers: {
@@ -749,7 +744,6 @@ describe("session cost usage", () => {
       });
     } finally {
       setRemoteModelCatalogOverlaySourcesForTest();
-      resetRemoteModelCatalogOverlayForTest();
     }
   });
 

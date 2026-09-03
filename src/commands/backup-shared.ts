@@ -196,12 +196,12 @@ async function resolveBackupPlanFromPaths(params: {
   const configInsideState = params.configInsideState ?? false;
   const oauthInsideState = params.oauthInsideState ?? false;
   const canonicalStateDir = await canonicalizePathForContainment(stateDir);
-  const containmentConfigPath = await canonicalizePathForContainment(configPath);
-  const containmentOauthDir = await canonicalizePathForContainment(oauthDir);
+  const configSourcePath = await canonicalizePathForContainment(configPath);
+  const oauthSourcePath = await canonicalizePathForContainment(oauthDir);
   const inventory = await createBackupResourceInventory({
     stateDir: canonicalStateDir,
-    configPath: containmentConfigPath,
-    oauthDir: containmentOauthDir,
+    configPath: configSourcePath,
+    oauthDir: oauthSourcePath,
     workspaceDirs: await Promise.all(
       workspaceDirs.map((workspaceDir) => canonicalizePathForContainment(workspaceDir)),
     ),
@@ -265,14 +265,25 @@ async function resolveBackupPlanFromPaths(params: {
     };
   }
 
+  const isOwnedPathCoveredBy = (sourcePath: string, sourceRoot: string): boolean => {
+    let ancestor = sourcePath;
+    while (isPathWithin(ancestor, sourceRoot)) {
+      if (inventory.isVolatile(ancestor)) {
+        return false;
+      }
+      if (ancestor === sourceRoot) {
+        return true;
+      }
+      ancestor = path.dirname(ancestor);
+    }
+    return false;
+  };
   const rawCandidates: Array<Pick<BackupAssetCandidate, "kind" | "sourcePath">> = [
     { kind: "state", sourcePath: path.resolve(stateDir) },
-    // Lexically in-state config or credentials can still resolve outside state,
-    // such as a Nix store symlink. Canonical coverage retains those targets.
-    ...(configInsideState && isPathWithin(containmentConfigPath, canonicalStateDir)
+    ...(configInsideState && isOwnedPathCoveredBy(configSourcePath, canonicalStateDir)
       ? []
       : [{ kind: "config" as const, sourcePath: path.resolve(configPath) }]),
-    ...(oauthInsideState && isPathWithin(containmentOauthDir, canonicalStateDir)
+    ...(oauthInsideState && isOwnedPathCoveredBy(oauthSourcePath, canonicalStateDir)
       ? []
       : [{ kind: "credentials" as const, sourcePath: path.resolve(oauthDir) }]),
     ...workspaceDirs.map((workspaceDir) => ({
@@ -340,7 +351,9 @@ async function resolveBackupPlanFromPaths(params: {
     }
 
     const coveredBy = included.find((asset) =>
-      isPathWithin(candidate.canonicalPath, asset.sourcePath),
+      candidate.kind === "config" || candidate.kind === "credentials"
+        ? isOwnedPathCoveredBy(candidate.canonicalPath, asset.sourcePath)
+        : isPathWithin(candidate.canonicalPath, asset.sourcePath),
     );
     if (coveredBy) {
       skipped.push({

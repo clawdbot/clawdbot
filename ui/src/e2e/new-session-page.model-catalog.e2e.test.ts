@@ -384,7 +384,7 @@ suite.define(() => {
                   capabilities: {
                     continueSession: false,
                     archive: false,
-                    createSession: { model: "anthropic/claude-sonnet-4-6" },
+                    startTerminal: true,
                   },
                   hosts: [],
                 },

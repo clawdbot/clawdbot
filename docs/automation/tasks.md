@@ -343,6 +343,8 @@ The web Control UI has a **Tasks** page in the sidebar with live active and rece
 
 Chat panes also have a collapsible **Background tasks** rail scoped to the pane's agent, with running work, stop controls, and a finished section. Open it from the activity toggle in the pane header (or the floating activity button in single-pane chat).
 
+Running work stays in creation order so progress updates do not move rows while you monitor them. Finished work is selected and displayed by completion time, newest first. Transient list conflicts retry silently; if retries are exhausted, use **Refresh** in the Tasks panel header.
+
 Select a task to replace the list with a compact detail view inside the rail; use the back button to return to the list. The detail view shows the bounded input prompt, latest output or error summary, timing, and current tool activity. Subagent details stay in the rail rather than opening their child conversation in the main chat pane; linked-session actions remain available for task runtimes intended for direct inspection. On iOS, open **Chat actions → Background Tasks**; on Android, open the Chat overflow menu and select **Background tasks**. Both mobile views use the same Running and Finished grouping and open task details on selection.
 
 ## Status integration (task pressure)

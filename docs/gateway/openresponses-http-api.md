@@ -39,6 +39,21 @@ If the request includes an OpenResponses `user` string, the Gateway derives a st
 
 `previous_response_id` reuses the earlier response's session when the request stays within the same agent/user/requested-session scope (matched by auth subject, agent id, and `x-openclaw-session-key`).
 
+### Explicit incognito session continuation
+
+Explicitly selecting or continuing an incognito conversation with `x-openclaw-session-key` (the `sessionKey` override) requires effective `operator.admin` authority. This rule follows authority, not ingress: it denies both trusted-proxy callers without owner/admin authority and private `gateway.auth.mode="none"` callers that explicitly narrow `x-openclaw-scopes` below admin (for example, to `operator.write`). Either receives HTTP `403` with a `forbidden` error. A profile-less private no-auth caller on this path gets `missing scope: operator.admin`; for a profile-backed caller, the response hides the private target with this error shape (where `<sessionKey>` is the requested override):
+
+```json
+{
+  "error": {
+    "message": "Incognito session \"<sessionKey>\" was not found.",
+    "type": "forbidden"
+  }
+}
+```
+
+Owner/admin callers keep explicit incognito session continuation. A private no-auth request without `x-openclaw-scopes` receives the default operator scopes, including `operator.admin`, and is therefore treated as owner/admin. Reserved internal namespace overrides (`subagent:`, `cron:`, `acp:`) remain a separate validation failure and still return HTTP `400` with `invalid_request_error`.
+
 ## Request shape
 
 | Field                                                            | Support                                                                                                                        |

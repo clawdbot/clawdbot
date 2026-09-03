@@ -1,6 +1,8 @@
 import { EventEmitter } from "node:events";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { validateNodeHostStatsPayload } from "../../packages/gateway-protocol/src/index.js";
+import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
 
 const fixture = vi.hoisted(() => ({
   prepare: vi.fn(),
@@ -167,6 +169,43 @@ it("publishes hosting through the app route and retires it on disconnect", async
     expect(stderr).not.toHaveBeenCalled();
   } finally {
     await stop();
+  }
+});
+
+it("publishes host stats through the native bridge only while connected", async () => {
+  const { input, messages, stop } = startWorkerFixture(false);
+  const publications = () => messages.filter((message) => message.type === "node-event");
+  try {
+    await vi.waitFor(() => expect(messages.some((message) => message.type === "ready")).toBe(true));
+    expect(publications()).toEqual([]);
+    vi.useFakeTimers();
+    input.emit(
+      "line",
+      JSON.stringify({
+        type: "gateway-connection",
+        generation: 1,
+        connection: { url: "wss://gateway.example.test", protocol: 4, capabilities: [] },
+      }),
+    );
+    expect(publications()).toHaveLength(1);
+    expect(publications()[0]).toMatchObject({
+      type: "node-event",
+      generation: 1,
+      event: { event: NODE_HOST_STATS_EVENT },
+    });
+    const params = publications()[0]?.event as { payloadJSON: string };
+    expect(validateNodeHostStatsPayload(JSON.parse(params.payloadJSON))).toBe(true);
+    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
+    expect(publications()).toHaveLength(2);
+    input.emit(
+      "line",
+      JSON.stringify({ type: "gateway-connection", generation: 2, connection: null }),
+    );
+    await vi.advanceTimersByTimeAsync(NODE_HOST_STATS_INTERVAL_MS);
+    expect(publications()).toHaveLength(2);
+  } finally {
+    await stop();
+    vi.useRealTimers();
   }
 });
 

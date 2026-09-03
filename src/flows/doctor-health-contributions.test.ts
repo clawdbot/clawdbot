@@ -11,10 +11,10 @@ import { migrateLegacySecretRefEnvMarkers } from "../secrets/legacy-secretref-en
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
+import { createDoctorHealthContribution } from "./doctor-health-contribution.js";
 import { resolveDoctorContributionHealthChecks } from "./doctor-health-contributions.js";
 import {
   createDoctorConfigFixture,
-  createDoctorHealthContribution,
   createDoctorHealthFlowContext,
   createDoctorLintContext,
   resolveDoctorHealthContributions,

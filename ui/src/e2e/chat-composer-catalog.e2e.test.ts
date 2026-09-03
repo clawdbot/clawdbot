@@ -254,7 +254,7 @@ suite.define(() => {
     });
   });
 
-  it("loads agent-scoped startup models when the route switches sessions", async () => {
+  it("keeps the selected model visible while loading the next session's scoped catalog", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const workModel = {
         id: "work-model",
@@ -352,7 +352,28 @@ suite.define(() => {
         .toBe(1);
       expect(await gateway.getRequests("models.list")).toHaveLength(0);
 
+      await gateway.deferNext("chat.startup", { sessionKey: "agent:other:main" });
       await navigateToControlUiSession(page, "agent:other:main");
+      await gateway.waitForRequest("chat.startup", { after: 1 });
+      const targetModelTrigger = activeComposer().locator('[data-chat-model-select="true"]');
+      await expect.poll(() => targetModelTrigger.textContent()).toContain("other-model");
+      expect(await targetModelTrigger.getAttribute("aria-busy")).toBe("false");
+      expect(
+        await targetModelTrigger.locator(".chat-controls__model-trigger-skeleton").count(),
+      ).toBe(0);
+      expect(await activeComposer().locator("[data-chat-model-option]").count()).toBe(0);
+      expect(
+        await activeComposer()
+          .locator('.chat-controls__effort-picker:not([aria-hidden="true"])')
+          .count(),
+      ).toBe(0);
+      if (process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim()) {
+        await activeComposer().screenshot({
+          animations: "disabled",
+          path: `${suite.artifactDir}/selected-model-during-session-startup.png`,
+        });
+      }
+      await gateway.resolveDeferred("chat.startup");
       const startupRequests = await gateway.getRequests("chat.startup");
       expect(
         startupRequests.filter(

@@ -31,6 +31,8 @@ const rubyVersionPath = path.join(process.cwd(), "apps", "ios", ".ruby-version")
 const gemfilePath = path.join(process.cwd(), "apps", "ios", "Gemfile");
 const gemfileLockPath = path.join(process.cwd(), "apps", "ios", "Gemfile.lock");
 const iosReadmePath = path.join(process.cwd(), "apps", "ios", "README.md");
+const iosAgentsPath = path.join(process.cwd(), "apps", "ios", "AGENTS.md");
+const iosVersioningPath = path.join(process.cwd(), "apps", "ios", "VERSIONING.md");
 const fastlaneSetupPath = path.join(process.cwd(), "apps", "ios", "fastlane", "SETUP.md");
 const metadataReadmePath = path.join(
   process.cwd(),
@@ -176,6 +178,23 @@ describe("iOS Fastlane release upload gates", () => {
     for (const command of documentedCommands) {
       expect(command).toContain('BUNDLE_GEMFILE="$PWD/Gemfile" bundle _2.6.9_ exec fastlane');
     }
+  });
+
+  it("documents the shared mobile cutter as the sole release-note writer", () => {
+    const operatorSurfaces = [
+      iosAgentsPath,
+      iosReadmePath,
+      iosVersioningPath,
+      fastlaneSetupPath,
+      metadataReadmePath,
+    ];
+
+    for (const documentationPath of operatorSurfaces) {
+      const documentation = readFileSync(documentationPath, "utf8");
+      expect(documentation).not.toContain("pnpm ios:release:cut");
+      expect(documentation).toContain("scripts/mobile-release-version.ts");
+    }
+    expect(readFastfile()).not.toContain("pnpm ios:release:cut");
   });
 
   it("documents a direct Fastlane command that rejects an inherited Gemfile", () => {
@@ -345,6 +364,28 @@ describe("iOS Fastlane release upload gates", () => {
     );
   });
 
+  it("gates iOS uploads on committed shared mobile release state", () => {
+    const fastfile = readFastfile();
+    const checker = functionBody(fastfile, "check_mobile_release_versioning!");
+    const prepareContext = laneBody(fastfile, "prepare_app_store_context");
+    const plan = prepareContext.indexOf("resolve_ios_release_plan!");
+    const gate = prepareContext.indexOf("check_mobile_release_versioning!");
+    const sync = prepareContext.indexOf("sync_ios_versioning!");
+
+    expect(checker).toContain('"android-sync-versioning.ts"');
+    expect(checker).toContain('"--check"');
+    expect(checker).toContain('"--require-mobile-release"');
+    expect(checker).toContain('"--revision"');
+    expect(checker).toContain("app_store_revision");
+    expect(checker).toContain('"--root"');
+    expect(prepareContext).toContain(
+      "check_mobile_release_versioning!(app_store_revision: app_store_revision)",
+    );
+    expect(plan).toBeGreaterThanOrEqual(0);
+    expect(gate).toBeGreaterThan(plan);
+    expect(sync).toBeGreaterThan(gate);
+  });
+
   it("preflights the exact App Store version before screenshots and archive work", () => {
     const fastfile = readFastfile();
     const releaseUpload = laneBody(fastfile, "release_upload");
@@ -391,7 +432,7 @@ describe("iOS Fastlane release upload gates", () => {
     expect(planner).toContain("app_store_build_upload_state(upload)");
     expect(uploadState).toContain('detail["state"]');
     expect(uploadState).toContain("expected a StateDetail object");
-    expect(planner).toContain("does not match canonical root version");
+    expect(planner).toContain("does not match canonical mobile version");
     expect(planner).toContain('File.join(repo_root, "scripts", "ios-release-plan.ts")');
     expect(planLane).toContain("resolve_ios_release_plan!");
     expect(planLane).toContain("JSON.pretty_generate(plan)");

@@ -16,6 +16,8 @@ export function writeAndroidFixture(params: {
   version: string;
   versionCode: number;
   changelog?: string;
+  iosChangelog?: string;
+  mobileVersion?: string;
   releaseNotes?: string;
   packageVersion?: string;
   versionProperties?: string;
@@ -23,12 +25,19 @@ export function writeAndroidFixture(params: {
 }): string {
   const rootDir = makeTempDir(tempDirs, params.prefix ?? "openclaw-android-version-");
   fs.mkdirSync(path.join(rootDir, "apps", "android", "Config"), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, "apps", "ios"), { recursive: true });
+  fs.mkdirSync(path.join(rootDir, "apps", "mobile"), { recursive: true });
   fs.mkdirSync(path.join(rootDir, "apps", "android", "fastlane", "metadata", "android", "en-US"), {
     recursive: true,
   });
   fs.writeFileSync(
     path.join(rootDir, "package.json"),
     `${JSON.stringify({ version: params.packageVersion ?? "2026.6.2" }, null, 2)}\n`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "apps", "mobile", "version.json"),
+    `${JSON.stringify({ version: params.mobileVersion ?? params.version }, null, 2)}\n`,
     "utf8",
   );
   fs.writeFileSync(
@@ -41,6 +50,11 @@ export function writeAndroidFixture(params: {
   fs.writeFileSync(
     path.join(rootDir, "apps", "android", "CHANGELOG.md"),
     params.changelog ?? `# OpenClaw Android Changelog\n\n## Unreleased\n\n${releaseNotes}`,
+    "utf8",
+  );
+  fs.writeFileSync(
+    path.join(rootDir, "apps", "ios", "CHANGELOG.md"),
+    params.iosChangelog ?? `# OpenClaw iOS Changelog\n\n## Unreleased\n\n${releaseNotes}`,
     "utf8",
   );
   fs.writeFileSync(

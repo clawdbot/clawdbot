@@ -15,7 +15,7 @@ import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import type { CapabilityMenuProps } from "../chat/components/chat-composer-types.ts";
 import { renderAssistantAttachments } from "../chat/components/chat-message-attachments.ts";
 import { renderMessageImages } from "../chat/components/chat-message-images.ts";
-import { extractImages, extractMessageAttachments } from "../chat/components/chat-message-media.ts";
+import { projectMessageMedia } from "../chat/components/chat-message-media.ts";
 import {
   detectJson,
   renderMessageJson,
@@ -68,8 +68,7 @@ function renderNewSessionSubmission(
   const key = "new-session-submission";
   const normalized = normalizeMessage(message);
   const senderHue = normalized.sender ? resolveIdentityHue(normalized.sender) : null;
-  const images = extractImages(message);
-  const attachments = extractMessageAttachments(message, normalized.content);
+  const { images, attachments } = projectMessageMedia(message, normalized.content);
   const markdown = resolveMessageDisplayMarkdown(message, normalized);
   const json = detectJson(markdown);
   const imageOptions = { onOpenImage };
@@ -137,11 +136,8 @@ export function renderNewSessionDraftComposer(options: {
   dictationActive?: boolean;
   dictationPreview?: string;
   dictationStatus?: TemplateResult | typeof nothing;
-  terminalAction?: {
-    canStart: boolean;
-    disabledReason?: string;
-    onStart: () => void;
-  };
+  nativeTerminal?: boolean;
+  onUnsupportedAttachment?: () => void;
   submitting: boolean;
   messageLocked?: boolean;
   onInput: (message: string) => void;
@@ -151,7 +147,9 @@ export function renderNewSessionDraftComposer(options: {
   onBackgroundSubmit?: () => void;
 }) {
   const readSignal = options.attachmentDraft.readSignal;
-  const commandClient = options.context?.gateway.snapshot.client ?? null;
+  const commandClient = options.nativeTerminal
+    ? null
+    : (options.context?.gateway.snapshot.client ?? null);
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,
@@ -198,7 +196,8 @@ export function renderNewSessionDraftComposer(options: {
     dictationActive: options.dictationActive,
     dictationPreview: options.dictationPreview,
     dictationStatus: options.dictationStatus,
-    terminalAction: options.terminalAction,
+    nativeTerminal: options.nativeTerminal,
+    onUnsupportedAttachment: options.onUnsupportedAttachment,
     submitting: options.submitting,
     textareaController: options.textareaController,
     voiceControl: options.voiceControl,

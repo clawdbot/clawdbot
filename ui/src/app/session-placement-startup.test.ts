@@ -896,11 +896,10 @@ describe("application session placement startup", () => {
           },
         });
       }
-      if (
-        method === "sessions.reclaim" ||
-        method === "sessions.patch" ||
-        method === "sessions.delete"
-      ) {
+      if (method === "sessions.delete") {
+        return Promise.resolve({ ok: true, deleted: true });
+      }
+      if (method === "sessions.reclaim" || method === "sessions.patch") {
         return Promise.resolve({ ok: true });
       }
       throw new Error(`unexpected method ${method}`);
@@ -942,7 +941,13 @@ describe("application session placement startup", () => {
         expectedSessionId: "session-cloud-startup",
         archivedOnly: true,
       });
+      expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
     });
+    expect(startup.get(input.recovery.sessionKey)).toBeNull();
+    expect(request).not.toHaveBeenCalledWith(
+      "sessions.patch",
+      expect.objectContaining({ archived: false }),
+    );
     expect(request).not.toHaveBeenCalledWith("sessions.abort", expect.anything());
     expect(request).not.toHaveBeenCalledWith("environments.destroy", expect.anything());
     expect(sessionStorage.length).toBe(0);

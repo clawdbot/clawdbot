@@ -285,6 +285,25 @@ class ChatComposerLayoutTest {
   }
 
   @Test
+  fun multilineDraftGrowsThroughSixLinesAndStopsGrowingAtTheSeventh() {
+    showChat(viewportWidth = 360.dp, viewportHeight = 640.dp)
+    val editor = composeRule.onNode(hasSetTextAction())
+    val heights =
+      (1..7).map { lineCount ->
+        val draft = (1..lineCount).joinToString("\n") { line -> "Line $line" }
+        editor.performTextReplacement(draft)
+        editor.assertTextEquals(draft)
+        editor.getUnclippedBoundsInRoot().let { bounds -> bounds.bottom - bounds.top }
+      }
+
+    heights.take(6).zipWithNext().forEachIndexed { index, (current, next) ->
+      assertTrue("The editor must grow from ${index + 1} to ${index + 2} visible lines", next > current)
+    }
+    assertEquals("The seventh line must scroll inside the six-line editor", heights[5], heights[6])
+    assertComposerControlsVisible()
+  }
+
+  @Test
   fun compactPickersExposeFullSettingsWithoutExpandingTheComposer() {
     showChat(viewportWidth = 320.dp, fontScale = { 1.5f }, talkActive = true)
     composeRule.runOnIdle {

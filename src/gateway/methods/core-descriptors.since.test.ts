@@ -87,6 +87,7 @@ const CURRENT_TRAIN_METHODS = [
   "openclaw.setup.activate.start",
   "exec.approval.grants.list",
   "exec.approval.grants.revoke",
+  "models.authOrderSet",
   "sessions.patchMany",
   "sessions.goal.update",
   "sessions.goal.clear",
@@ -146,6 +147,8 @@ const CURRENT_TRAIN_METHODS = [
   "skills.library.import",
   "skills.library.upload",
   "sessions.title.prepare",
+  "transcripts.list",
+  "transcripts.get",
 ] as const;
 
 describe("core gateway method release trains", () => {

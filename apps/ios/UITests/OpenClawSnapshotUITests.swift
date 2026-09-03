@@ -787,6 +787,25 @@ final class OpenClawSnapshotUITests: XCTestCase {
         XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
     }
 
+    func testExistingSessionRestoresLatestOutput() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone reader positioning proof only")
+        self.launchApp(
+            for: ScreenshotTarget(
+                initialTab: "chat",
+                initialDestination: "chat",
+                name: "existing-session-latest-output"),
+            additionalArguments: ["--openclaw-long-chat-fixture"])
+        let app = try XCTUnwrap(self.app)
+
+        let latest = app.staticTexts["OPENCLAW_LONG_CHAT_LATEST"]
+        XCTAssertTrue(latest.waitForExistence(timeout: 8))
+        let composer = app.otherElements["chat-composer-surface"]
+        XCTAssertTrue(composer.waitForExistence(timeout: 3))
+        XCTAssertLessThanOrEqual(latest.frame.maxY, composer.frame.minY + 1)
+        XCTAssertFalse(app.buttons["Jump to latest reply"].exists)
+        self.attachScreenshot(named: "existing-session-latest-output")
+    }
+
     func testChatPresentationInLightAppearance() throws {
         try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone chat proof only")
         self.launchApp(
@@ -814,6 +833,30 @@ final class OpenClawSnapshotUITests: XCTestCase {
 
         self.sendFixtureChatMessage("Check the release status and prepare the next steps.")
         self.attachScreenshot(named: "chat-dark-soft-bottom-edge")
+    }
+
+    func testAssistantLongPressKeepsTranscriptVisibleAndActionsReachable() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom != .phone, "Phone message interaction proof only")
+        self.launchApp(for: ScreenshotTarget(
+            initialTab: "chat",
+            initialDestination: "chat",
+            name: "assistant-message-actions"))
+        let app = try XCTUnwrap(self.app)
+
+        let assistant = app.staticTexts[
+            "Ready when you are. I can check a project, coordinate an agent, or prepare the next step."
+        ]
+        XCTAssertTrue(assistant.waitForExistence(timeout: 8))
+        assistant.press(forDuration: 0.8)
+        XCTAssertTrue(assistant.exists)
+        XCTAssertTrue(app.otherElements["chat-composer-surface"].exists)
+        self.attachScreenshot(named: "assistant-message-selection")
+
+        let actions = app.buttons["chat-message-actions"]
+        XCTAssertTrue(actions.waitForExistence(timeout: 3))
+        actions.tap()
+        XCTAssertTrue(app.buttons["Copy Message"].waitForExistence(timeout: 3))
+        self.attachScreenshot(named: "assistant-message-actions")
     }
 
     func testEmptyChatStarterPromptSendsMessage() throws {
