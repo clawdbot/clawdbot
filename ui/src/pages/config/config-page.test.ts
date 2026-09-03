@@ -700,12 +700,14 @@ describe("ConfigPage session observer models", () => {
     });
   });
 
-  it("keeps a same-client agent switch from restoring stale observer models", async () => {
-    const main = deferred<ModelCatalogResult>();
+  it("keeps same-client agent switches from restoring stale observer models", async () => {
+    const firstMain = deferred<ModelCatalogResult>();
     const writer = deferred<ModelCatalogResult>();
-    vi.spyOn(modelCatalogStore, "loadModelCatalog").mockImplementation((_client, options) =>
-      options.agentId === "writer" ? writer.promise : main.promise,
-    );
+    const secondMain = deferred<ModelCatalogResult>();
+    vi.spyOn(modelCatalogStore, "loadModelCatalog")
+      .mockReturnValueOnce(firstMain.promise)
+      .mockReturnValueOnce(writer.promise)
+      .mockReturnValueOnce(secondMain.promise);
     const client = {} as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
@@ -735,10 +737,19 @@ describe("ConfigPage session observer models", () => {
     const writerModels = [{ id: "writer-model", name: "Writer Model", provider: "openai" }];
     writer.resolve({ models: writerModels });
     await writerLoad;
-    main.resolve({ models: [{ id: "main-model", name: "Main Model", provider: "openai" }] });
+    expect(state.sessionObserverModels).toEqual(writerModels);
+
+    selectionState.selectedId = "main";
+    const secondMainLoad = state.ensureSessionObserverModels(client, "main");
+    const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
+    secondMain.resolve({ models: currentMainModels });
+    await secondMainLoad;
+    firstMain.resolve({
+      models: [{ id: "stale-main", name: "Stale Main", provider: "openai" }],
+    });
     await mainLoad;
 
-    expect(state.sessionObserverModels).toEqual(writerModels);
+    expect(state.sessionObserverModels).toEqual(currentMainModels);
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
       agentId: "main",
       preparedOnly: true,
@@ -749,60 +760,16 @@ describe("ConfigPage session observer models", () => {
       preparedOnly: true,
       rejectOnFailure: true,
     });
+    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(3, client, {
+      agentId: "main",
+      preparedOnly: true,
+      rejectOnFailure: true,
+    });
 
     selectionState.selectedId = null;
     await state.ensureSessionObserverModels(client, null);
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(2);
-  });
-
-  it("keeps an earlier request stale after switching away and back to the same agent", async () => {
-    const firstMain = deferred<ModelCatalogResult>();
-    const writer = deferred<ModelCatalogResult>();
-    const secondMain = deferred<ModelCatalogResult>();
-    vi.spyOn(modelCatalogStore, "loadModelCatalog")
-      .mockReturnValueOnce(firstMain.promise)
-      .mockReturnValueOnce(writer.promise)
-      .mockReturnValueOnce(secondMain.promise);
-    const client = {} as GatewayBrowserClient;
-    const gateway = {
-      snapshot: { client, phase: "connected" },
-    } as unknown as ApplicationGateway;
-    const selectionState = { selectedId: "main" as string | null };
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: ApplicationContext;
-      systemInfoGatewaySource: ApplicationGateway;
-      sessionObserverModels: ModelCatalogEntry[];
-      ensureSessionObserverModels: (
-        client: GatewayBrowserClient,
-        agentId: string | null,
-      ) => Promise<void>;
-    };
-    Object.defineProperty(page, "isConnected", { configurable: true, value: true });
-    state.context = {
-      gateway,
-      agentSelection: { state: selectionState },
-    } as ApplicationContext;
-    state.systemInfoGatewaySource = gateway;
-
-    const firstMainLoad = state.ensureSessionObserverModels(client, "main");
-    selectionState.selectedId = "writer";
-    const writerLoad = state.ensureSessionObserverModels(client, "writer");
-    selectionState.selectedId = "main";
-    const secondMainLoad = state.ensureSessionObserverModels(client, "main");
-
-    const currentModels = [{ id: "current", name: "Current", provider: "openai" }];
-    secondMain.resolve({ models: currentModels });
-    await secondMainLoad;
-    expect(state.sessionObserverModels).toEqual(currentModels);
-
-    firstMain.resolve({ models: [{ id: "stale", name: "Stale", provider: "openai" }] });
-    writer.resolve({ models: [{ id: "writer", name: "Writer", provider: "openai" }] });
-    await Promise.all([firstMainLoad, writerLoad]);
-
-    expect(state.sessionObserverModels).toEqual(currentModels);
     expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(3);
   });
 });
