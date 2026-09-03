@@ -8,7 +8,9 @@ export function partitionSystemMonitors(
   const duplicates: Array<{ agentId: string; job: CronJob }> = [];
   for (const job of jobs) {
     const agentId = resolveAgentId(job);
-    if (!agentId) continue;
+    if (!agentId) {
+      continue;
+    }
     const current = retained.get(agentId);
     if (!current) {
       retained.set(agentId, job);
