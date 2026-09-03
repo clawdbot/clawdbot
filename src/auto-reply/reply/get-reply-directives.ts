@@ -307,7 +307,7 @@ export async function resolveReplyDirectives(params: {
   const commandRegistry =
     command.isAuthorizedSender &&
     isExplicitCommandTurn(commandTurn) &&
-    (commandTurn.kind === "native" || canInterpretTextDirectives)
+    (commandTurn.kind === "native" ? Boolean(commandTurn.commandName) : canInterpretTextDirectives)
       ? await loadCommandsRegistry()
       : undefined;
   const explicitDirectiveCommand = resolveReplyDirectiveCommand(
