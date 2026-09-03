@@ -248,15 +248,15 @@ function resolveReplayModelBoundIdentity(ref: ReplayModelRef): string | undefine
 }
 
 /**
- * Fable 5.1 and Mythos 5.1 read thinking from every earlier Claude generation
- * (verified live: Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the
- * API silently drops anything they cannot read. Moving onto them therefore keeps
- * prior reasoning; every other cross-identity move is still dropped here.
+ * Fable 5.1 reads thinking from every earlier Claude generation (verified live:
+ * Opus 5, Sonnet 5, Opus 4.8 replay with no drops), while the API silently
+ * drops anything it cannot read. Moving onto it therefore keeps prior reasoning;
+ * every other cross-identity move, including unregistered Mythos targets, is
+ * still dropped here until its replay contract is proven separately.
  */
 function readsPriorClaudeThinking(targetIdentity: string | undefined): boolean {
   return (
-    targetIdentity !== undefined &&
-    /^(?:fable:claude-fable-5-1|mythos:claude-mythos-5-1)(?=$|[^a-z0-9])/.test(targetIdentity)
+    targetIdentity !== undefined && /^fable:claude-fable-5-1(?=$|[^a-z0-9])/.test(targetIdentity)
   );
 }
 
