@@ -302,11 +302,11 @@ async function fetchPreview(
   // redirect into a repository the token can read but the viewer may not see.
   const beforeRedirect = token
     ? async (url: URL) => {
-        const repositoryUrl = redirectedRepositoryApiUrl(target, url);
-        if (!repositoryUrl) {
+        const redirectedRepositoryUrl = redirectedRepositoryApiUrl(target, url);
+        if (!redirectedRepositoryUrl) {
           throw new ControlUiGitHubError(502, "GitHub item returned an unsafe redirect");
         }
-        await assertPublicRepository(repositoryUrl);
+        await assertPublicRepository(redirectedRepositoryUrl);
       }
     : undefined;
   const readItem = async (url: string, maxBytes?: number) =>
