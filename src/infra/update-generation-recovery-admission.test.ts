@@ -181,7 +181,21 @@ describe("update generation recovery admission", () => {
       { bindingConverged: true, serviceState: { running: true, enabled: "true" } },
       { bindingConverged: true, serviceState: { running: true, enabled: undefined } },
       { bindingConverged: true, serviceState: input.runtime.serviceState, extra: true },
+      { bindingConverged: true, serviceState: { running: true, enabled: true, extra: true } },
       Object.assign(Object.create({ bindingConverged: true }), { serviceState: null }),
+      Object.assign(Object.create(null), {
+        bindingConverged: true,
+        serviceState: input.runtime.serviceState,
+      }),
+      {
+        bindingConverged: true,
+        serviceState: Object.assign(Object.create(null), { running: true, enabled: true }),
+      },
+      new Proxy({ bindingConverged: true, serviceState: input.runtime.serviceState }, {}),
+      {
+        bindingConverged: true,
+        serviceState: new Proxy({ running: true, enabled: true }, {}),
+      },
     ];
 
     for (const runtime of malformedRuntimeObservations) {

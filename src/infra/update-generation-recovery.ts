@@ -48,7 +48,7 @@ function decodeRuntimeDataObject(params: {
     throw new TypeError(`${label} must be an ordinary data object`);
   }
   const prototype = Object.getPrototypeOf(value);
-  if (prototype !== Object.prototype && prototype !== null) {
+  if (prototype !== Object.prototype) {
     throw new TypeError(`${label} has an unsupported prototype`);
   }
   const allowedKeys = new Set([...requiredKeys, ...optionalKeys]);

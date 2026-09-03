@@ -508,6 +508,10 @@ describe("update generation ledger hook", () => {
       { ...nextIntent, previousPackageVersion: "9.9.9" },
       {
         ...nextIntent,
+        serviceBefore: { ...nextIntent.serviceBefore, managed: false },
+      },
+      {
+        ...nextIntent,
         serviceBefore: { ...nextIntent.serviceBefore, running: false },
       },
       {
@@ -674,4 +678,102 @@ describe("update generation ledger hook", () => {
       }),
     ).rejects.toThrow("snapshot changed");
   });
+
+  for (const serviceBefore of [
+    { managed: true, running: true, enabled: true },
+    { managed: true, running: false, enabled: true },
+    { managed: true, running: true, enabled: false },
+    { managed: true, running: false, enabled: false },
+    { managed: false, running: true, enabled: true },
+    { managed: false, running: false, enabled: true },
+    { managed: false, running: true, enabled: false },
+    { managed: false, running: false, enabled: false },
+  ]) {
+    it(`preserves managed=${serviceBefore.managed} running=${serviceBefore.running} enabled=${serviceBefore.enabled} across namespace rollover`, async () => {
+      const previous = selection("a");
+      const candidate = selection("b");
+      let priorRecord = append(
+        null,
+        receipt("intent", 0, {
+          namespaceKey: NAMESPACE_KEY,
+          serviceBefore,
+          previousSelection: previous,
+          previousPackageVersion: "1.0.0",
+          stableBindingAlreadyVerified: true,
+          brokerId: "test-broker",
+          brokerRevision: null,
+        }),
+      );
+      priorRecord = append(
+        priorRecord,
+        receipt("generation-materialization-intent", 1, {
+          role: "candidate",
+          sourceArtifactId: "stage:candidate",
+          generationId: candidate.generationId,
+          manifest: manifest("b"),
+          packageVersion: "2.0.0",
+          entrypointRelativePath: candidate.entrypointRelativePath,
+        }),
+      );
+      priorRecord = append(
+        priorRecord,
+        receipt("generation-materialized", 2, {
+          role: "candidate",
+          generation: { ...candidate, packageVersion: "2.0.0" },
+        }),
+      );
+      priorRecord = append(
+        priorRecord,
+        receipt("candidate-selection-intent", 3, { from: previous, to: candidate }),
+      );
+      priorRecord = append(priorRecord, receipt("candidate-selected", 4, { selection: candidate }));
+      priorRecord = append(
+        priorRecord,
+        receipt("completion", 5, {
+          packageVersion: "2.0.0",
+          launcherVersion: "2.0.0",
+          serviceRunning: serviceBefore.running,
+          serviceEnabled: serviceBefore.enabled,
+        }),
+      );
+      priorRecord = append(
+        priorRecord,
+        receipt("cleanup-intent", 6, {
+          generationIds: [],
+          protectedGenerationIds: [previous.generationId, candidate.generationId],
+        }),
+      );
+      priorRecord = append(
+        priorRecord,
+        receipt("cleanup-completed", 7, { removedGenerationIds: [], deferred: [] }),
+      );
+      const priorSnapshot = { revision: "8", record: priorRecord };
+      const nextTransactionId = `rollover-${serviceBefore.managed}-${serviceBefore.running}-${serviceBefore.enabled}`;
+      const nextIntent = {
+        ...receipt("intent", 0, {
+          namespaceKey: NAMESPACE_KEY,
+          serviceBefore,
+          previousSelection: candidate,
+          previousPackageVersion: "2.0.0",
+          stableBindingAlreadyVerified: true,
+          brokerId: "test-broker",
+          brokerRevision: projectUpdateGenerationTransaction(priorRecord).brokerRevision,
+        }),
+        transactionId: nextTransactionId,
+        receiptId: buildUpdateGenerationReceiptId({
+          transactionId: nextTransactionId,
+          sequence: 0,
+          kind: "intent",
+        }),
+      };
+
+      const next = await persistUpdateGenerationReceipt({
+        filesystem: AUTHENTICATION_FILESYSTEM,
+        ledger: new MemoryLedger(priorSnapshot),
+        snapshot: priorSnapshot,
+        receipt: nextIntent,
+      });
+      expect(next.record.receipts).toEqual([nextIntent]);
+    });
+  }
 });

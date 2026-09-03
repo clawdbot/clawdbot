@@ -183,6 +183,7 @@ export async function persistUpdateGenerationReceipt(params: {
       !isDeepStrictEqual(receipt.previousSelection, terminal.selection) ||
       receipt.previousPackageVersion !== terminal.packageVersion ||
       !terminalServiceState ||
+      receipt.serviceBefore.managed !== priorProjection.intent.serviceBefore.managed ||
       receipt.serviceBefore.running !== terminalServiceState.running ||
       receipt.serviceBefore.enabled !== terminalServiceState.enabled
     ) {
