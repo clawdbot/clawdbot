@@ -82,6 +82,8 @@ function renderSessionSection(params: {
   const presenceLabel = presence
     ? t(presence === "idle" ? "presence.idle" : "presence.rosterTitle")
     : undefined;
+  const presenceId =
+    presence && personIdentity ? `sidebar-person-presence-${personIdentity.id}` : undefined;
   // Pinned rows render in the nav zone; renderHeader records whether this list
   // section owns collapse UI or sits directly below the global toolbar.
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
@@ -161,6 +163,7 @@ function renderSessionSection(params: {
         ></openclaw-viewer-avatar>
         ${presence
           ? html`<span
+              id=${presenceId ?? nothing}
               class="sidebar-session-group-presence ${presence === "idle"
                 ? "sidebar-session-group-presence--idle"
                 : ""}"
@@ -229,6 +232,8 @@ function renderSessionSection(params: {
                     >
                       ${chevron}
                     </button>
+                    <!-- The explicit label hides descendant text, so expose live presence
+                         as the button's accessible description. -->
                     <button
                       type="button"
                       class="sidebar-session-group-person"
@@ -237,6 +242,7 @@ function renderSessionSection(params: {
                       aria-haspopup="dialog"
                       aria-expanded="false"
                       aria-label=${t("presence.card.details", { name: label })}
+                      aria-describedby=${presenceId ?? nothing}
                     >
                       ${ownerAvatar}${labelText}
                     </button>

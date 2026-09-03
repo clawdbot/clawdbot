@@ -53,8 +53,11 @@ describe("AppSidebar viewer presence", () => {
     gateway.publishEvent("presence", { presence: [self, ada] });
     await sidebar.updateComplete;
     const dot = () => section("ada").querySelector(".sidebar-session-group-presence");
+    const personButton = section("ada").querySelector<HTMLButtonElement>("[data-person-card]")!;
     expect(dot()?.getAttribute("aria-label")).toBe("Online");
     expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(false);
+    expect(dot()!.id).toBeTruthy();
+    expect(personButton.getAttribute("aria-describedby")).toBe(dot()!.id);
     expect(section("bob").querySelector(".sidebar-session-group-presence")).toBeNull();
     expect(section("self").querySelector(".sidebar-session-group-presence")).toBeNull();
     expect(section("self").querySelector("[data-person-card]")).toBeNull();
@@ -64,7 +67,6 @@ describe("AppSidebar viewer presence", () => {
       )?.textContent,
     ).toBe("self");
 
-    const personButton = section("ada").querySelector<HTMLButtonElement>("[data-person-card]")!;
     const toggle = section("ada").querySelector<HTMLButtonElement>(
       ".sidebar-session-group-toggle",
     )!;
@@ -115,7 +117,7 @@ describe("AppSidebar viewer presence", () => {
     expect(recent.querySelector("h3")?.textContent).toBe("Recent sessions");
     expect(recent.querySelector("a")?.getAttribute("href")).toBe("/chat/main/profile-bob");
     expect(offlineCard.querySelector("footer a")?.getAttribute("href")).toBe(
-      "/activity?person=profile-bob",
+      "/activity/profile-bob",
     );
     bobButton.click();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
@@ -131,10 +133,12 @@ describe("AppSidebar viewer presence", () => {
     await sidebar.updateComplete;
     expect(dot()?.classList.contains("sidebar-session-group-presence--idle")).toBe(true);
     expect(dot()?.getAttribute("aria-label")).toBe("Idle");
+    expect(personButton.getAttribute("aria-describedby")).toBe(dot()!.id);
 
     gateway.publishEvent("presence", { presence: [self, { ...ada, reason: "disconnect" }] });
     await sidebar.updateComplete;
     expect(dot()).toBeNull();
+    expect(personButton.hasAttribute("aria-describedby")).toBe(false);
     expect(
       section("ada").querySelector(".sidebar-session-group-toggle__person")?.hasAttribute("title"),
     ).toBe(false);
