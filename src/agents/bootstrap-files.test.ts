@@ -8,6 +8,7 @@ import {
   upsertSessionEntryCore,
   type SessionTranscriptRuntimeTarget,
 } from "../config/sessions/session-accessor.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   clearInternalHooks,
   registerInternalHook,
@@ -25,6 +26,7 @@ import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
   makeBootstrapWarn,
+  resolveBootstrapContextForDiagnostics,
   resolveBootstrapContextForRun,
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
@@ -647,6 +649,60 @@ describe("resolveBootstrapFilesForRun", () => {
       expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
     },
   );
+});
+
+describe("resolveBootstrapContextForDiagnostics", () => {
+  beforeEach(() => clearInternalHooks());
+  afterEach(() => clearInternalHooks());
+
+  function createExtraFilesConfig(hooksEnabled?: boolean): OpenClawConfig {
+    return {
+      hooks: {
+        internal: {
+          enabled: hooksEnabled,
+          entries: {
+            "bootstrap-extra-files": { enabled: true, paths: ["packages/*/AGENTS.md"] },
+          },
+        },
+      },
+    };
+  }
+
+  async function makeWorkspaceWithExtraAgentsFile(): Promise<{
+    workspaceDir: string;
+    extraPath: string;
+  }> {
+    const workspaceDir = await fs.realpath(await makeTempWorkspace("openclaw-bootstrap-diag-"));
+    const extraPath = path.join(workspaceDir, "packages", "core", "AGENTS.md");
+    await fs.mkdir(path.dirname(extraPath), { recursive: true });
+    await fs.writeFile(extraPath, "extra agents", "utf8");
+    return { workspaceDir, extraPath };
+  }
+
+  it("projects bootstrap-extra-files additions without a registered handler", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(),
+    });
+
+    expect(result.bootstrapFiles.map((file) => file.path)).toContain(extraPath);
+    expect(result.contextFiles.find((file) => file.path === extraPath)?.content).toBe(
+      "extra agents",
+    );
+  });
+
+  it("projects nothing while the hook system is disabled", async () => {
+    const { workspaceDir, extraPath } = await makeWorkspaceWithExtraAgentsFile();
+
+    const result = await resolveBootstrapContextForDiagnostics({
+      workspaceDir,
+      config: createExtraFilesConfig(false),
+    });
+
+    expect(result.bootstrapFiles.map((file) => file.path)).not.toContain(extraPath);
+  });
 });
 
 describe("resolveBootstrapContextForRun", () => {
