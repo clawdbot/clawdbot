@@ -191,7 +191,10 @@ const {
     accountId: "default",
   })),
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
-  resolveLineQuestionPostbackMock: vi.fn(async () => ({ status: "answered" as const })),
+  // Typed from the real resolver so a test can drive every outcome it declares.
+  resolveLineQuestionPostbackMock: vi.fn<
+    typeof import("./question-postback.js").resolveLineQuestionPostback
+  >(async () => ({ status: "answered" as const })),
 }));
 
 vi.mock("./question-postback.js", async (importOriginal) => ({
