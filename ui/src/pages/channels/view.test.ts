@@ -2,6 +2,7 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import type { WhatsAppStatus } from "../../api/types.ts";
+import type { PluginCatalogItem } from "../../lib/plugins/index.ts";
 import { renderChannelDetail } from "./view.detail.ts";
 import {
   channelEnabled,
@@ -17,6 +18,8 @@ function createProps(snapshot: ChannelsProps["snapshot"]): ChannelsProps {
     connected: true,
     loading: false,
     snapshot,
+    pluginCatalog: null,
+    pluginIconUrls: {},
     lastError: null,
     lastSuccessAt: null,
     pairingLoading: false,
@@ -126,6 +129,61 @@ describe("channel hub refresh actions", () => {
     refreshButtons[1]!.click();
     expect(onPairingRefresh).toHaveBeenCalledOnce();
     expect(onRefresh).toHaveBeenCalledWith(true);
+  });
+});
+
+function createChannelPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
+  return {
+    id: "slack",
+    name: "Slack",
+    description: "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+    origin: "bundled",
+    installed: true,
+    enabled: false,
+    state: "disabled",
+    hasIcon: true,
+    ...overrides,
+  };
+}
+
+describe("channels plugin presentation metadata", () => {
+  it("uses matching plugins.list metadata for the gallery and setup modal", () => {
+    const props = createProps({
+      ts: Date.now(),
+      channelOrder: ["slack"],
+      channelLabels: { slack: "slack" },
+      channelDetailLabels: { slack: "Legacy channel subtitle" },
+      channels: { slack: { configured: false } },
+      channelAccounts: {},
+      channelDefaultAccountId: {},
+    });
+    props.pluginCatalog = {
+      plugins: [createChannelPlugin()],
+      diagnostics: [],
+      mutationAllowed: true,
+    };
+    props.pluginIconUrls = { slack: "blob:slack-plugin-icon" };
+    props.selectedChannel = "slack";
+    props.wizard = { phase: "error", channel: "slack", message: "Setup failed" };
+    const container = document.createElement("div");
+
+    render(renderChannels(props), container);
+
+    const row = container.querySelector(".channels-item");
+    expect(row?.querySelector(".settings-row__title")?.textContent).toBe("Slack");
+    expect(row?.querySelector(".settings-row__desc")?.textContent).toBe(
+      "OpenClaw Slack channel plugin for channels, DMs, commands, and app events.",
+    );
+    expect(row?.querySelector("img")?.getAttribute("src")).toBe("blob:slack-plugin-icon");
+    const detailIcon = container.querySelector(
+      ".channels-detail__header .channels-cover--icon img",
+    );
+    expect(detailIcon?.getAttribute("src")).toBe("blob:slack-plugin-icon");
+    expect(container.querySelector(".channels-wizard h2")?.textContent).toBe("Set up Slack");
+    expect(container.querySelector(".channels-wizard img")?.getAttribute("src")).toBe(
+      "blob:slack-plugin-icon",
+    );
+    expect(container.textContent).not.toContain("Legacy channel subtitle");
   });
 });
 

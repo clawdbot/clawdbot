@@ -174,18 +174,21 @@ Session tools are scoped to limit what the agent can see:
 | `self`  | Only the current session                                          |
 | `tree`  | Current + spawned; when called from main, all same-agent sessions |
 | `agent` | All sessions for this agent                                       |
-| `all`   | All sessions (cross-agent if configured)                          |
+| `all`   | All sessions (cross-agent access is on by default)                |
 
-Default is `agent`: unsandboxed sessions, including retained cron sessions, can
-list, read, search, message, and manage other sessions of the same agent. This
-can include other users sharing that agent. Set `tree` explicitly for current
-plus spawned scope; its canonical main-session exception still covers all
-same-agent sessions. Set `self` for strict current-session access, including main.
+Default is `all`: unsandboxed sessions, including retained cron sessions, can
+list, read, search, message, and inspect status across agents on the Gateway.
+This can include other users' transcripts. Cross-agent access is on by default
+and governed by `tools.agentToAgent`; set `enabled: false` to block ordinary
+cross-agent access or use `allow` to restrict permitted agent pairs; requester-owned native subagent and ACP child sessions stay reachable under `tree` or `all` either way. Set `agent` for same-agent-only
+access, or `tree` for current plus spawned scope; its canonical main-session
+exception still covers all same-agent sessions. Set `self` for strict
+current-session access, including main.
 
-The existing `agent` scope does not include children owned by another agent.
+The `agent` scope does not include children owned by another agent.
 Keep explicit `tree` when relying on its owned native/ACP child exception, or
-use `all` with the appropriate `tools.agentToAgent` policy. Ordinary cross-agent
-access remains gated. A sandboxed caller under the default spawned-only session
+use the default `all` with the appropriate `tools.agentToAgent` policy. A sandboxed
+caller under the default spawned-only session
 tool clamp stays limited to its spawn subtree. Incognito sessions remain hidden
 from every cross-session tool. Ambient group watches still add activity notices
 and prompt hints; they do not grant access.

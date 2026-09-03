@@ -1401,8 +1401,9 @@ contain tokens; see the [CLI reference](/cli/webhooks).
 A successful push or hook response is transport/admission evidence, not proof of
 completed email processing or delivery. Verify the restricted reader through
 [logs and its run output](/automation/cron-jobs#verify-the-reader-boundary). For a
-reader-to-agent handoff, expose only the required tool and constrain
-[`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent); see also
+reader-to-agent handoff, expose only the required tool and constrain the
+default-on [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent)
+policy with `allow`, or set `enabled: false` when no handoff is needed; see also
 [Prompt injection](/gateway/security#prompt-injection) and
 [per-agent sandbox and tools](/tools/multi-agent-sandbox-tools).
 

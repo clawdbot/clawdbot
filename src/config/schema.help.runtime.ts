@@ -110,11 +110,11 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.exec.node":
     "Node binding configuration for exec tooling when command execution is delegated through connected nodes. Use explicit node binding only when multi-node routing is required.",
   "tools.agentToAgent":
-    "Policy for allowing agent-to-agent tool calls and constraining which target agents can be reached. Keep disabled or tightly scoped unless cross-agent orchestration is intentionally enabled.",
+    "Policy for cross-agent session tool calls: sends, list, history, search, and status reads (default: enabled). Use allow to restrict agent pairs; enabled=false blocks ordinary cross-agent access. Requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.enabled":
-    "Enables the agent_to_agent tool surface so one agent can invoke another agent at runtime. Keep off in simple deployments and enable only when orchestration value outweighs complexity.",
+    "Enables cross-agent session tool access (default: true); omitted or empty allow permits every agent pair. Set false to block ordinary cross-agent access; requester-owned native subagent and ACP child sessions stay reachable under tree or all visibility. For strict separation, set tools.sessions.visibility to agent or self (tree still admits requester-owned native/ACP children), or use separate gateways.",
   "tools.agentToAgent.allow":
-    "Allowlist of target agent IDs permitted for agent_to_agent calls when orchestration is enabled. Use explicit allowlists to avoid uncontrolled cross-agent call graphs.",
+    "Agent ids or * patterns that may take part in cross-agent calls; the requesting and target agent must both match. Cross-agent access is on by default, and omitted or empty allow permits every pair. Set an explicit list to restrict access; blank entries deny.",
   "tools.updatePlan":
     "Unified `progress_card` status tool for durable plans and narrative notes. Enabled by default; set false to opt out.",
   "tools.toolSearch":
@@ -543,7 +543,7 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
   "tools.fs.workspaceOnly":
     "Restrict filesystem tools (read/write/edit/apply_patch) to the workspace directory (default: false).",
   "tools.sessions.visibility":
-    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send. ("agent" default = any session in the current agent id, including other users; "self" = only current; "tree" = current session + spawned subagent sessions; "all" = any session; cross-agent still requires tools.agentToAgent).',
+    'Controls which sessions can be targeted by sessions_list/sessions_history/sessions_search/sessions_send/session_status. ("all" default = any session on the Gateway, including other agents and users; "agent" = any session in the current agent id; "self" = only current; "tree" = current session + spawned subagent sessions). Cross-agent access is on by default and scoped by tools.agentToAgent; use narrower visibility to restrict access.',
   "tools.message.crossContext.allowWithinProvider":
     "Allow sends to other channels within the same provider (default: true).",
   "tools.message.crossContext.allowAcrossProviders":

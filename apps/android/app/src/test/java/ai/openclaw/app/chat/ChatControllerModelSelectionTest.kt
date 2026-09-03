@@ -19,8 +19,11 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
 
 @OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ChatControllerModelSelectionTest {
   private val json = chatControllerTestJson
 
@@ -78,7 +81,7 @@ class ChatControllerModelSelectionTest {
         val controller =
           createChatController(
             captureRequestLease = {
-              GatewaySession.RequestLease(endpointStableId = "") { _, paramsJson, _, withEnqueue ->
+              GatewaySession.RequestLease(endpointStableId = "") { method, paramsJson, _, withEnqueue ->
                 val patch = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
                 if ("model" in patch && !lockFromResponse) {
                   modelTransportStarted.complete(Unit)
@@ -91,10 +94,10 @@ class ChatControllerModelSelectionTest {
                   if (lockFromResponse) {
                     """{"key":"main","entry":{"sessionId":"native-model-session","agentHarnessId":"codex","modelSelectionLocked":true},"resolved":{"thinkingLevel":"high","agentRuntime":{"id":"codex","source":"session"}}}"""
                   } else {
-                    "{}"
+                    emptyChatGatewayResponse(method)
                   }
                 } else {
-                  "{}"
+                  emptyChatGatewayResponse(method)
                 }
               }
             },
@@ -102,7 +105,7 @@ class ChatControllerModelSelectionTest {
             if (method == "sessions.list") {
               """{"sessions":[{"key":"main","agentId":"main","thinkingLevel":"off","modelSelectionLocked":false}]}"""
             } else {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         controller.refreshSessions()
@@ -505,6 +508,7 @@ class ChatControllerModelSelectionTest {
           attachments = emptyList(),
         ),
       )
+      runCurrent()
       assertEquals(listOf("ultra"), sentThinkingLevels)
     }
 
@@ -564,7 +568,7 @@ class ChatControllerModelSelectionTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -586,6 +590,7 @@ class ChatControllerModelSelectionTest {
 
       releasePatch.complete(Unit)
       assertTrue(send.await())
+      runCurrent()
       assertEquals(
         listOf("sessions.patch", "chat.send"),
         requests.filter { it == "sessions.patch" || it == "chat.send" },
@@ -684,6 +689,7 @@ class ChatControllerModelSelectionTest {
 
       assertTrue(patch.await())
       assertTrue(send.await())
+      runCurrent()
       val sentParams =
         json.parseToJsonElement(
           requests
@@ -702,7 +708,7 @@ class ChatControllerModelSelectionTest {
         requests
           .filter { it.first == "chat.history" }
           .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
-      assertEquals(listOf(null, JsonPrimitive(1), null), historyLimits)
+      assertEquals(listOf(JsonPrimitive(1)), historyLimits.filterNotNull())
     }
 
   @Test
@@ -976,13 +982,14 @@ class ChatControllerModelSelectionTest {
 
       assertNull(controller.errorText.value)
       assertTrue(controller.sendMessageAwaitAcceptance("keep this draft", "high", emptyList()))
+      runCurrent()
       val sentParams = json.parseToJsonElement(requests.single { it.first == "chat.send" }.second.orEmpty()) as JsonObject
       assertEquals("off", (sentParams["thinking"] as JsonPrimitive).content)
       val historyLimits =
         requests
           .filter { it.first == "chat.history" }
           .map { (json.parseToJsonElement(it.second.orEmpty()) as JsonObject)["limit"] }
-      assertEquals(listOf(null, JsonPrimitive(1), JsonPrimitive(1), null), historyLimits)
+      assertEquals(listOf(JsonPrimitive(1), JsonPrimitive(1)), historyLimits.filterNotNull())
     }
 
   @Test
@@ -1025,6 +1032,7 @@ class ChatControllerModelSelectionTest {
       )
       releaseModelPatch.complete(Unit)
       assertTrue(send.await())
+      runCurrent()
       assertEquals("ultra", controller.thinkingLevel.value)
       assertEquals(
         listOf("sessions.patch", "sessions.patch", "chat.send"),
@@ -1095,7 +1103,7 @@ class ChatControllerModelSelectionTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -1349,7 +1357,7 @@ class ChatControllerModelSelectionTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -1597,6 +1605,7 @@ class ChatControllerModelSelectionTest {
         }
       releaseSecondPatch.complete(Unit)
       assertTrue(send.await())
+      runCurrent()
       val sendParams = requests.first { it.first == "chat.send" }.second.orEmpty()
       assertEquals(
         "ultra",
@@ -1668,7 +1677,7 @@ class ChatControllerModelSelectionTest {
             }
 
             else -> {
-              "{}"
+              emptyChatGatewayResponse(method)
             }
           }
         }
@@ -2031,6 +2040,7 @@ class ChatControllerModelSelectionTest {
       advanceUntilIdle()
 
       assertTrue(controller.sendMessageAwaitAcceptance("allowed", "off", emptyList()))
+      runCurrent()
       assertEquals(1, sends)
     }
 
@@ -2198,14 +2208,17 @@ class ChatControllerModelSelectionTest {
   fun unsupportedReasoningSendsOffWithoutChangingStoredLevelAndRestoresAfterFlip() =
     runTest {
       val sentThinkingLevels = mutableListOf<String>()
+      val persistedMessages = mutableListOf<ReplayHistoryMessage>()
       val controller =
         createScriptedChatController {
           respond("chat.send") { paramsJson ->
             val params = json.parseToJsonElement(paramsJson.orEmpty()) as JsonObject
             sentThinkingLevels += (params["thinking"] as JsonPrimitive).content
+            val id = (params["idempotencyKey"] as JsonPrimitive).content
+            persistedMessages += ReplayHistoryMessage("user", (params["message"] as JsonPrimitive).content, sentThinkingLevels.size.toLong(), idempotencyKey = "$id:user")
             """{"runId":"run-${sentThinkingLevels.size}","status":"ok"}"""
           }
-          respond("chat.history", """{"messages":[],"sessionInfo":{"key":"main"}}""")
+          respond("chat.history") { historyResponse("model-session", persistedMessages) }
           // Gating reads the controller-owned agent-scoped catalog hydrated from chat.metadata.
           respond("sessions.list", """{"sessions":[]}""")
           respond("chat.metadata") { paramsJson ->
@@ -2244,6 +2257,7 @@ class ChatControllerModelSelectionTest {
           attachments = emptyList(),
         ),
       )
+      runCurrent()
       assertEquals(listOf("off", "high"), sentThinkingLevels)
       assertEquals("high", controller.thinkingLevel.value)
     }

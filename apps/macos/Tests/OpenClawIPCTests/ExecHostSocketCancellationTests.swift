@@ -1,6 +1,5 @@
 import CryptoKit
 import Darwin
-import Dispatch
 import Foundation
 import OpenClawKit
 import Testing
@@ -13,15 +12,17 @@ struct ExecHostSocketCancellationTests {
         case serverStop
     }
 
+    private enum ResponseReadError: Error {
+        case eofBeforeNewline
+    }
+
     @Test
     func `normal request half-close still receives native execution result`() async throws {
         try await self.withServer { server, root, fixture in
             let client = fixture.client
             try self.send(command: ["/usr/bin/printf", "half-close-ok"], root: root, client: client)
             #expect(shutdown(client, SHUT_WR) == 0)
-            let response = try await Task.detached {
-                try self.readResponse(client)
-            }.value
+            let response = try await self.readResponse(client)
             #expect(response.ok)
             #expect(response.payload?.stdout == "half-close-ok")
             #expect(response.payload?.success == true)
@@ -168,7 +169,7 @@ struct ExecHostSocketCancellationTests {
 
     private func connect(_ root: URL) throws -> Int32 {
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-        guard fd >= 0 else { throw POSIXError(.EIO) }
+        guard fd >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
         var address = sockaddr_un()
         address.sun_family = sa_family_t(AF_UNIX)
         let socketPath = root.appendingPathComponent("exec.sock").path
@@ -185,11 +186,16 @@ struct ExecHostSocketCancellationTests {
             }
         }
         guard result == 0 else {
+            let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
             close(fd)
-            throw POSIXError(.ECONNREFUSED)
+            throw error
         }
         var timeout = timeval(tv_sec: CancellationFixture.socketTimeoutSeconds, tv_usec: 0)
-        _ = setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size))
+        guard setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, socklen_t(MemoryLayout<timeval>.size)) == 0 else {
+            let error = NSError(domain: NSPOSIXErrorDomain, code: Int(errno))
+            close(fd)
+            throw error
+        }
         return fd
     }
 
@@ -211,15 +217,18 @@ struct ExecHostSocketCancellationTests {
         try FileHandle(fileDescriptor: client, closeOnDealloc: false).write(contentsOf: bytes)
     }
 
-    private func readResponse(_ fd: Int32) throws -> ExecHostResponse {
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while !data.contains(0x0A) {
-            let count = recv(fd, &buffer, buffer.count, 0)
-            guard count > 0 else { throw POSIXError(.EIO) }
-            data.append(contentsOf: buffer.prefix(count))
+    private func readResponse(_ fd: Int32) async throws -> ExecHostResponse {
+        try await ExecApprovalsSocketTestSupport.withBlockingSocketIO {
+            var data = Data()
+            var buffer = [UInt8](repeating: 0, count: 4096)
+            while !data.contains(0x0A) {
+                let count = recv(fd, &buffer, buffer.count, 0)
+                guard count >= 0 else { throw NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+                guard count > 0 else { throw ResponseReadError.eofBeforeNewline }
+                data.append(contentsOf: buffer.prefix(count))
+            }
+            return try JSONDecoder().decode(ExecHostResponse.self, from: data)
         }
-        return try JSONDecoder().decode(ExecHostResponse.self, from: data)
     }
 
     private func waitUntil(_ condition: () -> Bool) async -> Bool {

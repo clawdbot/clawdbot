@@ -184,9 +184,21 @@ See [Plugins](/tools/plugin) for the full plugin system guide, and [Capability m
 | `name`                               | No       | `string`                     | Human-readable plugin name.                                                                                                                                                                                                                                                                                                                                                                      |
 | `description`                        | No       | `string`                     | Short summary shown in plugin surfaces.                                                                                                                                                                                                                                                                                                                                                          |
 | `catalog`                            | No       | `object`                     | Optional presentation hints for plugin catalog surfaces. This metadata does not install, enable, or grant trust to a plugin.                                                                                                                                                                                                                                                                     |
-| `icon`                               | No       | `string`                     | HTTPS image URL for marketplace/catalog cards. ClawHub accepts any valid `https://` URL and falls back to the default plugin icon when this is omitted or invalid.                                                                                                                                                                                                                               |
 | `version`                            | No       | `string`                     | Informational plugin version.                                                                                                                                                                                                                                                                                                                                                                    |
 | `uiHints`                            | No       | `Record<string, object>`     | UI labels, placeholders, and sensitivity hints for config fields.                                                                                                                                                                                                                                                                                                                                |
+
+## Plugin icon
+
+Place the portable plugin icon at `assets/icon.png`, relative to the plugin root. No manifest
+field is required. Use a square PNG that remains recognizable at 16 px; 512×512 is recommended.
+Missing, unreadable, or invalid icons are ignored and do not invalidate the plugin.
+
+OpenClaw adopts this fixed package path as its icon convention, matching the path proposed in
+[Agent Plugins 1.1](https://github.com/agentplugins/agent-plugins-spec/pull/66). Other Agent Plugins
+consumers may not discover it unless that proposal is adopted. The fixed path keeps packages
+portable and inspectable, avoids manifest path indirection and precedence rules, and lets OpenClaw
+render the icon without a runtime network request. Top-level plugin-branding icon URLs are not
+loaded; provider-auth artwork remains server-owned catalog metadata.
 
 Prefer top-level `sessionRouteStateOwners` for static doctor ownership. The
 older `doctorContract.sessionRouteStateOwners: true` declaration plus a
