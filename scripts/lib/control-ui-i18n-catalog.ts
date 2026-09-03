@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { registerActivityEnglish } from "../../ui/src/i18n/locales/en-activity.ts";
 import { registerMeetingsEnglish } from "../../ui/src/i18n/locales/en-meetings.ts";
+import { registerMemoryImportEnglish } from "../../ui/src/i18n/locales/en-memory-import.ts";
 import { registerPluginConsentEnglish } from "../../ui/src/i18n/locales/en-plugin-consent.ts";
 import { registerSessionPlacementEnglish } from "../../ui/src/i18n/locales/en-session-placement.ts";
 import { registerSettingsEnglish } from "../../ui/src/i18n/locales/en-settings.ts";
@@ -24,6 +25,7 @@ const sourceFiles = [
   "en-agents.ts",
   "en-activity.ts",
   "en-meetings.ts",
+  "en-memory-import.ts",
   "en-session-placement.ts",
   "en-plugin-consent.ts",
   "en-settings.ts",
@@ -39,6 +41,7 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     en,
     registerActivityEnglish.catalog,
     registerMeetingsEnglish.catalog,
+    registerMemoryImportEnglish.catalog,
     registerSessionPlacementEnglish.catalog,
     registerPluginConsentEnglish.catalog,
     registerSettingsEnglish.catalog,
