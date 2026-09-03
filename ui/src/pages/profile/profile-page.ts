@@ -420,7 +420,7 @@ export class ProfilePage extends OpenClawLightDomElement {
     if (!user) {
       return null;
     }
-    const name = this.ownProfile?.displayName?.trim() || user.name?.trim() || user.email || user.id;
+    const name = user.name?.trim() || this.ownProfile?.displayName?.trim() || user.email || user.id;
     return {
       name,
       email: user.email,
@@ -479,7 +479,7 @@ export class ProfilePage extends OpenClawLightDomElement {
           </div>
           <div class="profile-hero__name">${user.name}</div>
           <div class="profile-hero__handle">
-            ${user.email ? html`<span>${user.email}</span>` : nothing}
+            ${user.email ? html`<span class="profile-hero__email">${user.email}</span>` : nothing}
             <span class="profile-hero__badge">OpenClaw</span>
           </div>
         </section>

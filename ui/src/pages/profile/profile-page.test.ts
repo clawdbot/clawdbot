@@ -279,6 +279,11 @@ it("shows the authenticated user in the profile hero when the default agent diff
 
   expect(page.querySelector(".profile-hero__handle")?.textContent).toContain("ada@example.test");
   expect(page.querySelector(".profile-hero")?.textContent).not.toContain("Clipper");
+
+  harness.context.gateway.updateSelfUser?.({ name: "Ada Lovelace" });
+  await waitForFast(() =>
+    expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
+  );
 });
 
 it("loads and updates co-author consent separately from verified GitHub identity", async () => {

@@ -115,6 +115,26 @@ suite.define(() => {
     });
   });
 
+  it("wraps a long authenticated email beside the Profile badge on narrow screens", async () => {
+    const longEmail = "very-long-primary-user-address-for-profile-proof@example.com";
+    await suite.withPage({ viewport: { width: 360, height: 800 } }, async ({ page }) => {
+      await openProfilePage(
+        page,
+        { "users.self": { profile: { ...testProfile, emails: [longEmail] } } },
+        [{ ...testPresenceUsers[0], email: longEmail }],
+      );
+
+      const handle = page.locator(".profile-hero__handle");
+      await expect(handle).toContainText(longEmail);
+      expect(await handle.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
+        true,
+      );
+      expect(
+        await page.locator("body").evaluate((element) => element.scrollWidth),
+      ).toBeLessThanOrEqual(360);
+    });
+  });
+
   it("shows sign-in verification separately from explicit Git co-author credit", async () => {
     await suite.withPage(
       {
