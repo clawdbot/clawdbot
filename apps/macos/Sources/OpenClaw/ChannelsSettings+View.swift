@@ -57,6 +57,9 @@ extension ChannelsSettings {
 
     private var detail: some View {
         VStack(alignment: .leading, spacing: 0) {
+            if self.store.isAcquiringSource {
+                ProgressView().controlSize(.small)
+            }
             if let error = self.store.lastError {
                 Text(error)
                     .font(.callout)

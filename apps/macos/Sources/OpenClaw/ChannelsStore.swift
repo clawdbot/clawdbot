@@ -278,7 +278,7 @@ final class ChannelsStore {
         }
     }
 
-    // Acquisition can fail before a lease exists; the selected revision still owns that error.
+    // Keep cold errors on their selected revision through retries, until a Source is acquired.
     private var failure: (revision: UInt64?, source: Source?, message: String)?
     var lastError: String? {
         get {
@@ -368,6 +368,22 @@ final class ChannelsStore {
         self.source === source && source.isCurrent
     }
 
+    @MainActor
+    private final class SourceAcquisition {
+        let revision: UInt64?
+        var task: Task<Source?, Never>?
+
+        init(revision: UInt64?) {
+            self.revision = revision
+        }
+    }
+
+    private var sourceAcquisition: SourceAcquisition?
+    var isAcquiringSource: Bool {
+        guard self.source.map(self.owns) != true, let acquisition = self.sourceAcquisition else { return false }
+        return acquisition.revision == self.gateway.selectedEndpointRevision
+    }
+
     func resolveSource(_ expected: Source? = nil) async -> Source? {
         if let expected {
             guard self.owns(expected) else {
@@ -377,33 +393,55 @@ final class ChannelsStore {
             return expected
         }
         if let source = self.source, self.owns(source) { return source }
+        if let acquisition = self.sourceAcquisition, self.isAcquiringSource {
+            return await acquisition.task?.value
+        }
         self.clearSource()
-        let revision = self.gateway.selectedEndpointRevision
+        let acquisition = SourceAcquisition(revision: self.gateway.selectedEndpointRevision)
+        self.sourceAcquisition = acquisition
+        // The selection owns the shared attempt; cancelling one pane must not
+        // discard another caller's acquisition or its pending state.
+        acquisition.task = Task { await self.acquireSource(acquisition) }
+        return await acquisition.task?.value
+    }
+
+    private func acquireSource(_ acquisition: SourceAcquisition) async -> Source? {
+        defer { if self.sourceAcquisition === acquisition { self.sourceAcquisition = nil } }
         do {
             let lease = try await self.gateway.acquireServerLease()
-            guard revision == self.gateway.selectedEndpointRevision else {
+            guard self.sourceAcquisition === acquisition,
+                  acquisition.revision == self.gateway.selectedEndpointRevision
+            else {
                 self.logger.info("channel work discarded while the Primary Gateway changed")
                 return nil
             }
-            if let source = self.source, self.owns(source) { return source }
-            let source = Source(lease: lease, gateway: self.gateway)
-            guard source.isCurrent else { return nil }
-            self.source = source
-            return source
+            return self.adoptSource(lease)
         } catch {
+            guard self.sourceAcquisition === acquisition,
+                  acquisition.revision == self.gateway.selectedEndpointRevision,
+                  self.source == nil else { return nil }
             self.logger.error("channel Gateway unavailable: \(error.localizedDescription, privacy: .public)")
-            if revision == self.gateway.selectedEndpointRevision {
-                self.failure = (revision, nil, error.localizedDescription)
-            }
+            self.failure = (acquisition.revision, nil, error.localizedDescription)
             return nil
         }
     }
 
+    @discardableResult
+    func adoptSource(_ lease: GatewayConnection.ServerLease) -> Source? {
+        if let source = self.source, self.owns(source) { return source }
+        let source = Source(lease: lease, gateway: self.gateway)
+        guard source.isCurrent else { return nil }
+        self.source = source
+        self.failure = nil
+        return source
+    }
+
     func clearSource() {
         if self.source != nil { self.logger.info("channel state retired after the Primary Gateway changed") }
+        self.sourceAcquisition?.task?.cancel()
+        self.sourceAcquisition = nil
         self.source = nil
         self.snapshot = nil
-        self.lastError = nil
         self.lastSuccess = nil
         self.isRefreshing = false
         self.whatsappLoginMessage = nil

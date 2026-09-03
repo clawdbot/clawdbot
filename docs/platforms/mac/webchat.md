@@ -94,6 +94,8 @@ the previous Gateway's channel status, login QR, and unsaved config draft, then
 loads the new Gateway's settings. A temporary reconnect to the same Primary
 keeps its WhatsApp login session and config draft. If the connection fails, these
 panes show the Gateway error and keep **Refresh** or **Reload** available.
+Connection attempts show progress, and retries retain the last failure until
+the Gateway connects or Primary changes.
 Opening or revisiting these panes while settings load waits for the current
 Gateway's shared read. Background refreshes preserve unsaved edits; **Reload**
 replaces them with the Gateway's current values.

@@ -57,7 +57,7 @@ extension ChannelsStore {
                 guard let self else { return }
                 if let source = self.source, !self.owns(source) { self.clearSource() }
                 guard let push = delivery.push else { return }
-                if self.source == nil { self.source = Source(lease: delivery.serverLease, gateway: self.gateway) }
+                if self.source == nil { self.adoptSource(delivery.serverLease) }
                 self.handleGatewayPush(push)
             }
         self.pollTask = Task.detached { [weak self] in

@@ -13,6 +13,12 @@ struct ConfigSettings: View {
     private struct LoadIdentity: Equatable {
         let active: Bool
         let source: ChannelsStore.Source?
+        let revision: UInt64?
+    }
+
+    private struct LookupIdentity: Equatable {
+        let load: LoadIdentity
+        let path: String?
     }
 
     init(store: ChannelsStore = .shared, isActive: Bool = true) {
@@ -21,25 +27,31 @@ struct ConfigSettings: View {
     }
 
     var body: some View {
+        let load = LoadIdentity(
+            active: self.isActive,
+            source: self.store.source,
+            revision: self.store.gateway.selectedEndpointRevision)
+        let lookup = LookupIdentity(load: load, path: self.activePath)
         HStack(spacing: 16) {
             self.sidebar
             self.detail
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .settingsDetailContent()
-        .task(id: LoadIdentity(active: self.isActive, source: self.store.source)) {
-            guard self.isActive, !self.isPreview else { return }
+        .task(id: load) {
+            guard load.active, !self.isPreview, !Task.isCancelled else { return }
             self.hasLoaded = true
-            async let configLoad: Void = self.store.loadConfig(force: false)
-            _ = await self.store.loadConfigSchemaLookup(path: ".")
+            async let configLoad: Void = self.store.loadConfig(force: false, source: load.source)
+            _ = await self.store.loadConfigSchemaLookup(path: ".", source: load.source)
             await configLoad
             guard !Task.isCancelled else { return }
             self.ensureSelection()
-            if let activePath = self.activePath { _ = await self.store.loadConfigSchemaLookup(path: activePath) }
         }
-        .task(id: self.activePath) {
-            guard let activePath = self.activePath else { return }
-            _ = await self.store.loadConfigSchemaLookup(path: activePath)
+        .task(id: lookup) {
+            // Root completion must not retry this path after its own read has failed.
+            guard lookup.load.active, !self.isPreview, !Task.isCancelled,
+                  let activePath = lookup.path, let source = lookup.load.source else { return }
+            _ = await self.store.loadConfigSchemaLookup(path: activePath, source: source)
         }
         .onAppear {
             self.updateActiveWork(self.isActive)
@@ -115,7 +127,8 @@ extension ConfigSettings {
     private var detail: some View {
         VStack(alignment: .leading, spacing: 16) {
             if self.store.configLookupRoot == nil,
-               !self.hasLoaded || self.store.configLookupLoadingPaths.contains(".")
+               !self.hasLoaded || self.store.configLookupLoadingPaths.contains(".") ||
+               (self.store.isAcquiringSource && self.store.lastError == nil)
             {
                 ProgressView().controlSize(.small)
             } else if let section = self.activeSection {
@@ -144,6 +157,7 @@ extension ConfigSettings {
     private var schemaUnavailableDetail: some View {
         VStack(alignment: .leading, spacing: 8) {
             self.header
+            if self.store.isAcquiringSource { ProgressView().controlSize(.small) }
             Text(self.store.lastError ?? self.store.configLookupErrors["."] ?? self.store.configStatus ??
                 "Schema unavailable.")
                 .font(.callout)
