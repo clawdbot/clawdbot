@@ -155,7 +155,7 @@ When `USER.md` approaches the cap:
 3. Move detailed observations and running project context into daily `memory/YYYY-MM-DD.md` files.
 4. Use [standing intents](/concepts/standing-intents) for event-conditioned future actions, so the trigger stays injected without the full detail.
 
-The agent reads `MEMORY.md` and daily memory on demand, so detail moved there stays reachable without spending the always-injected `USER.md` budget. When truncation does happen, the runtime warning and `openclaw doctor` both name the fixed cap and recommend compacting the file rather than raising `bootstrapMaxChars`.
+`MEMORY.md` is injected with the workspace bootstrap under the normal per-file budget, while daily memory files are retrieved on demand, so detail moved to daily memory stays reachable without spending the always-injected `USER.md` budget. When truncation does happen, the runtime warning and `openclaw doctor` both name the fixed cap and recommend compacting the file rather than raising `bootstrapMaxChars`.
 
 ## Related
 
