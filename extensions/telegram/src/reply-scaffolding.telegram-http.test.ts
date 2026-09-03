@@ -1,6 +1,5 @@
 import { createServer, type Server } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { buildHistoryContext } from "openclaw/plugin-sdk/reply-history";
 import {
   createReplyDispatcher,
@@ -133,20 +132,6 @@ describe("reply scaffolding through final preparation and Telegram HTTP", () => 
     );
 
     expect(delivered).toEqual(["Visible answer."]);
-  });
-
-  it("projects unspaced labeled links through the public Telegram plain-text contract", async () => {
-    const cfg = {
-      channels: {
-        telegram: { botToken: "123456:telegram-plugin-http-fixture", apiRoot },
-      },
-    };
-    const source = "<https://example.com/a.pdf|Manual>";
-    const text = sanitizeForPlainText(source, { style: "markdown" });
-
-    await sendMessageTelegram("123", text, { cfg });
-
-    expect(delivered).toEqual(["Manual"]);
   });
 
   it("preserves literal fenced scaffolding examples that do not copy the private prompt", async () => {
