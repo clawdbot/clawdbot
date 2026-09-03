@@ -1,10 +1,4 @@
-import {
-  execFile,
-  spawnSync,
-  type ChildProcess,
-  type ExecFileException,
-  type ExecFileOptionsWithStringEncoding,
-} from "node:child_process";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -22,15 +16,6 @@ import {
   prepareSqliteReadOnlyLocationSync,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
-
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
-  return {
-    ...actual,
-    execFile: vi.fn(actual.execFile),
-    spawnSync: vi.fn(actual.spawnSync),
-  };
-});
 
 const writers: Array<ReturnType<typeof startSqliteConcurrentWriter>> = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -53,7 +38,7 @@ function expectContentionGuidance(error: unknown, sourcePath: string): void {
   expect(error).toBeInstanceOf(Error);
   expect((error as Error).message).toContain(sourcePath);
   expect((error as Error).message).toMatch(
-    /being written concurrently.*running Gateway.*openclaw backup sqlite create --global.*stop the Gateway/iu,
+    /no net page progress.*(stop the Gateway|otherwise quiesce writes).*back up only configuration.*only-config/iu,
   );
 }
 
@@ -539,52 +524,37 @@ describe("prepareSqliteReadOnlyLocation", () => {
     );
   });
 
-  it.each(["SIGKILL", null])(
-    "maps an async worker timeout with signal $signal to the backup contention guidance",
-    async (signal) => {
-      const sourcePath = createTempDatabasePath();
-      const timeoutError = Object.assign(new Error("worker timed out"), {
-        code: null,
-        killed: true,
-        signal,
-      });
-      vi.mocked(execFile).mockImplementationOnce(((
-        _file: string,
-        _args: string[],
-        _options: ExecFileOptionsWithStringEncoding,
-        callback: (error: ExecFileException | null, stdout: string, stderr: string) => void,
-      ) => {
-        callback(timeoutError as unknown as ExecFileException, "", "");
-        return {} as ChildProcess;
-      }) as unknown as typeof execFile);
+  it("stops a WAL backup that repeatedly makes no net page progress", async () => {
+    const sqlite = requireNodeSqlite();
+    const databasePath = createTempDatabasePath();
+    const writer = new sqlite.DatabaseSync(databasePath);
+    try {
+      writer.exec(`
+        PRAGMA journal_mode = WAL;
+        PRAGMA wal_autocheckpoint = 0;
+        CREATE TABLE writes (id INTEGER PRIMARY KEY, payload BLOB NOT NULL);
+        INSERT INTO writes (payload) VALUES (zeroblob(8192));
+      `);
+      expect(fs.existsSync(`${databasePath}-wal`)).toBe(true);
+      expect(fs.existsSync(`${databasePath}-shm`)).toBe(true);
 
-      const error = await prepareSqliteReadOnlyLocation(sourcePath).then(
+      vi.spyOn(sqlite, "backup").mockImplementation(async (_source, _destination, options) => {
+        if (!options?.progress) {
+          throw new Error("missing progress callback");
+        }
+        while (true) {
+          options.progress({ remainingPages: 50, totalPages: 50 });
+        }
+      });
+
+      const error = await prepareSqliteReadOnlyLocationInProcess(databasePath).then(
         () => undefined,
         (cause: unknown) => cause,
       );
-      expectContentionGuidance(error, sourcePath);
-    },
-  );
-
-  it("maps a synchronous worker timeout to the backup contention guidance", () => {
-    const sourcePath = createTempDatabasePath();
-    vi.mocked(spawnSync).mockReturnValueOnce({
-      error: Object.assign(new Error("spawnSync ETIMEDOUT"), { code: "ETIMEDOUT" }),
-      output: [null, "", ""],
-      pid: 123,
-      signal: "SIGKILL",
-      status: null,
-      stderr: "",
-      stdout: "",
-    } as unknown as ReturnType<typeof spawnSync>);
-
-    let error: unknown;
-    try {
-      prepareSqliteReadOnlyLocationSync(sourcePath);
-    } catch (cause) {
-      error = cause;
+      expectContentionGuidance(error, fs.realpathSync.native(databasePath));
+    } finally {
+      writer.close();
     }
-    expectContentionGuidance(error, sourcePath);
   });
 
   it.runIf(process.platform === "linux")(

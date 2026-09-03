@@ -6,7 +6,8 @@ import {
   resolveSqliteFilesystemPath,
 } from "./node-sqlite.js";
 
-const MAX_CONSECUTIVE_NON_PROGRESS_STEPS = 10_000;
+const MAX_RESTARTS_WITHOUT_NEW_MINIMUM = 1_000;
+const MAX_STEPS_WITHOUT_COPY_ADVANCE = 10_000;
 
 type SqliteOnlineBackupOptions = {
   allowExtension?: boolean;
@@ -15,10 +16,10 @@ type SqliteOnlineBackupOptions = {
   sourcePath: string;
 };
 
-export function createSqliteBackupContentionError(sourcePath: string): Error {
+function createSqliteBackupContentionError(sourcePath: string): Error {
   return new Error(
-    `SQLite backup could not finish because the source database is being written concurrently, typically by a running Gateway: ${sourcePath}. ` +
-      "Retry with `openclaw backup sqlite create --global`, or stop the Gateway and retry.",
+    `SQLite backup stopped after repeated steps made no net page progress: ${sourcePath}. ` +
+      "Stop the Gateway or otherwise quiesce writes, then retry. To back up only configuration, run `openclaw backup create --only-config`.",
   );
 }
 
@@ -32,19 +33,36 @@ export async function backupSqliteOnline(options: SqliteOnlineBackupOptions): Pr
     source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
     try {
       await options.beforeBackup?.(source);
-      // Node restarts a stepped backup when another connection writes. Only a new
-      // minimum proves net progress; repeated restarts must eventually terminate.
+      // Restart jumps count wasted passes; the generous step budget catches a copy
+      // that stopped moving. Any decrease resets it, so database size is irrelevant.
       let minimumRemainingPages = Number.POSITIVE_INFINITY;
-      let consecutiveNonProgressSteps = 0;
+      let previousRemainingPages = Number.POSITIVE_INFINITY;
+      let restartsSinceNewMinimum = 0;
+      let stepsSinceCopyAdvanced = 0;
       await sqlite.backup(source, resolveSqliteFilesystemPath(options.destinationPath), {
         progress: ({ remainingPages }) => {
-          if (remainingPages < minimumRemainingPages) {
+          const reachedNewMinimum = remainingPages < minimumRemainingPages;
+          const copyAdvanced = remainingPages < previousRemainingPages;
+          const restarted = remainingPages > previousRemainingPages;
+          previousRemainingPages = remainingPages;
+          if (copyAdvanced) {
+            stepsSinceCopyAdvanced = 0;
+          } else {
+            stepsSinceCopyAdvanced += 1;
+            if (stepsSinceCopyAdvanced > MAX_STEPS_WITHOUT_COPY_ADVANCE) {
+              throw createSqliteBackupContentionError(options.sourcePath);
+            }
+          }
+          if (reachedNewMinimum) {
             minimumRemainingPages = remainingPages;
-            consecutiveNonProgressSteps = 0;
+            restartsSinceNewMinimum = 0;
             return;
           }
-          consecutiveNonProgressSteps += 1;
-          if (consecutiveNonProgressSteps >= MAX_CONSECUTIVE_NON_PROGRESS_STEPS) {
+          if (!restarted) {
+            return;
+          }
+          restartsSinceNewMinimum += 1;
+          if (restartsSinceNewMinimum > MAX_RESTARTS_WITHOUT_NEW_MINIMUM) {
             throw createSqliteBackupContentionError(options.sourcePath);
           }
         },

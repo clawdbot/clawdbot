@@ -6,7 +6,7 @@ import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
-import { backupSqliteOnline, createSqliteBackupContentionError } from "./sqlite-online-backup.js";
+import { backupSqliteOnline } from "./sqlite-online-backup.js";
 import {
   createPrivateSqliteTempDirectory,
   createPrivateSqliteTempDirectorySync,
@@ -14,7 +14,6 @@ import {
 } from "./sqlite-private-directory.js";
 
 const MAX_SNAPSHOT_ATTEMPTS = 10;
-const SQLITE_READONLY_WORKER_TIMEOUT_MS = 30 * 60 * 1_000;
 const COPY_BUFFER_BYTES = 1024 * 1024;
 const SQLITE_HEADER_BYTES = 20;
 const SQLITE_READONLY_RESULT_CODE = 8;
@@ -657,15 +656,9 @@ export async function prepareSqliteReadOnlyLocation(
       [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "async", sourcePath],
       {
         encoding: "utf8",
-        killSignal: "SIGKILL",
-        timeout: SQLITE_READONLY_WORKER_TIMEOUT_MS,
       },
       (error, stdout, stderr) => {
         try {
-          const workerSignal: unknown = error?.signal;
-          if (error?.killed === true && (workerSignal === "SIGKILL" || workerSignal === null)) {
-            throw createSqliteBackupContentionError(sourcePath);
-          }
           const failure = error ? `exited unsuccessfully: ${error.message}` : undefined;
           resolve(adoptSqliteReadOnlyWorkerResult({ failure, stderr, stdout }));
         } catch (workerError) {
@@ -686,13 +679,8 @@ export function prepareSqliteReadOnlyLocationSync(
     [...resolveRuntimeWorkerArgv(workerUrl), SQLITE_READONLY_CHILD_ARG, "sync", sourcePath],
     {
       encoding: "utf8",
-      killSignal: "SIGKILL",
-      timeout: SQLITE_READONLY_WORKER_TIMEOUT_MS,
     },
   );
-  if (result.error && "code" in result.error && result.error.code === "ETIMEDOUT") {
-    throw createSqliteBackupContentionError(sourcePath);
-  }
   const failure = result.error
     ? `failed to start: ${result.error.message}`
     : result.status === 0
