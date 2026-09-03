@@ -193,7 +193,6 @@ struct WatchInboxStoreOperationTests {
 
             #expect(store.appCommandStatus?.code == .sending)
             #expect(store.isAwaitingVoiceReply)
-            #expect(store.isCurrentAppCommandAttempt(attempt, gatewayStableID: "watch-test-gateway"))
             #expect(store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
             #expect(store.appCommandStatus?.code == .sent)
         }
@@ -212,7 +211,6 @@ struct WatchInboxStoreOperationTests {
 
             #expect(store.appCommandStatus == nil)
             #expect(!store.isAwaitingVoiceReply)
-            #expect(!store.isCurrentAppCommandAttempt(attempt, gatewayStableID: originalGateway))
             #expect(!store.markAppCommandResult(Self.result(.delivered), command: .sendChat, attemptID: attempt))
             store.consume(chatCompletion: WatchChatCompletionMessage(
                 commandId: "original-voice-command",
@@ -388,23 +386,6 @@ struct WatchInboxStoreOperationTests {
                 #expect(store.markAppCommandResult(outcome.0, command: .startTalk, attemptID: attempt))
                 #expect(store.appCommandStatus?.code == outcome.1)
             }
-        }
-    }
-
-    @Test func `newer command retires an older delayed refresh owner`() throws {
-        try Self.withStore { store, _ in
-            store.consume(appSnapshot: Self.snapshot(id: "owner-snapshot"))
-            let originalAttempt = store.markAppCommandSending(.sendChat)
-            #expect(store.markAppCommandResult(
-                Self.result(.delivered),
-                command: .sendChat,
-                attemptID: originalAttempt))
-            #expect(store.isCurrentAppCommandAttempt(originalAttempt, gatewayStableID: "watch-test-gateway"))
-
-            let replacementAttempt = store.markAppCommandSending(.startTalk)
-            #expect(!store.isCurrentAppCommandAttempt(originalAttempt, gatewayStableID: "watch-test-gateway"))
-            #expect(store.isCurrentAppCommandAttempt(replacementAttempt, gatewayStableID: "watch-test-gateway"))
-            #expect(!store.isCurrentAppCommandAttempt(replacementAttempt, gatewayStableID: "different-gateway"))
         }
     }
 
@@ -805,7 +786,6 @@ struct WatchInboxStoreOperationTests {
                 } else {
                     #expect(store.appCommandStatus == chatBefore)
                     // Blocking a different kind must not silently retire this command's completion owner.
-                    #expect(store.isCurrentAppCommandAttempt(chatAttempt, gatewayStableID: context.gatewayStableID))
                     #expect(store.markAppCommandResult(
                         Self.result(.delivered),
                         command: .sendChat,

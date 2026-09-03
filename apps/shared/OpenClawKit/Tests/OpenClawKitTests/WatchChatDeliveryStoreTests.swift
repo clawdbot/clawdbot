@@ -7,7 +7,7 @@ struct WatchChatDeliveryStoreTests {
         let command = Self.command(body: .quickReply(
             promptId: "prompt", actionId: "yes", actionLabel: "Yes", note: "A note"))
         let payload = try OpenClawWatchChatDeliveryCodec.encode(command)
-        #expect(try OpenClawWatchChatDeliveryCodec.decodeCommand(payload, nowMs: 1000) == command)
+        #expect(try OpenClawWatchChatDeliveryCodec.decodeCommandStructure(payload) == command)
         #expect(command
             .text == "Watch reply: Yes\npromptId=prompt\nactionId=yes\nreplyId=command\nsentAtMs=1000\nnote=A note")
         let receipt = Self.terminal(command)
@@ -28,14 +28,14 @@ struct WatchChatDeliveryStoreTests {
         var extraField = payload
         extraField["transport"] = "sendMessage"
         #expect(throws: OpenClawWatchChatDeliveryError.self) {
-            try OpenClawWatchChatDeliveryCodec.decodeCommand(extraField, nowMs: 1000)
+            try OpenClawWatchChatDeliveryCodec.decodeCommandStructure(extraField)
         }
         var mixedBody = payload
         var body = try #require(payload["body"] as? [String: Any])
         body["chat"] = ["text": "another command"]
         mixedBody["body"] = body
         #expect(throws: OpenClawWatchChatDeliveryError.self) {
-            try OpenClawWatchChatDeliveryCodec.decodeCommand(mixedBody, nowMs: 1000)
+            try OpenClawWatchChatDeliveryCodec.decodeCommandStructure(mixedBody)
         }
     }
 

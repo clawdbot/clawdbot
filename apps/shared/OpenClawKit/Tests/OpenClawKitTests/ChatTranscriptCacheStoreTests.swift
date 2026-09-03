@@ -1638,16 +1638,16 @@ final class WatchMessageJournalStoreTests: ClientDatabaseTestSuite, @unchecked S
     }
 
     @Test func `Watch admission waits for a prepared legacy import`() async throws {
-        #expect(try await self.journal.hasImportedLegacyMessages() == false)
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.route(gatewayStableID: "gw-a")
+        }
         await #expect(throws: OpenClawWatchChatDeliveryError.self) {
             try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: Int64.max)
         }
         await #expect(throws: OpenClawWatchChatDeliveryError.self) {
             _ = try await journal.route(gatewayStableID: "gw-a")
         }
-        #expect(try await self.journal.hasImportedLegacyMessages() == false)
         try await self.journal.importLegacy(.init(messages: [], recentMessageIDs: []), nowMs: self.now)
-        #expect(try await self.journal.hasImportedLegacyMessages())
         #expect(try await self.journal.route(gatewayStableID: "gw-a") == nil)
     }
 
@@ -2144,7 +2144,13 @@ final class WatchMessageJournalStoreTests: ClientDatabaseTestSuite, @unchecked S
                 .init(messages: [fresh, original, changed], recentMessageIDs: []), nowMs: self.now)
         }
         #expect(try await self.journal.entries() == before)
-        #expect(try await self.journal.hasImportedLegacyMessages() == hasModernCommand)
+        if hasModernCommand {
+            #expect(try await self.journal.route(gatewayStableID: "gw-a") != nil)
+        } else {
+            await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+                _ = try await self.journal.route(gatewayStableID: "gw-a")
+            }
+        }
         try await self.journal.importLegacy(.init(messages: [fresh], recentMessageIDs: []), nowMs: self.now)
         let after = try await self.journal.entries()
         #expect(after.first { $0.commandId == fresh.id }?.displayText == fresh.text)
@@ -2201,7 +2207,9 @@ final class WatchMessageJournalStoreTests: ClientDatabaseTestSuite, @unchecked S
             """)
         }
         await #expect(throws: DatabaseError.self) { try await self.journal.importLegacy(snapshot, nowMs: self.now) }
-        #expect(try await self.journal.hasImportedLegacyMessages() == false)
+        await #expect(throws: OpenClawWatchChatDeliveryError.self) {
+            _ = try await self.journal.route(gatewayStableID: "gw-a")
+        }
         #expect(try await self.journal.entries().isEmpty)
         try await databases.stateQueue.write { db in try db.execute(sql: "DROP TRIGGER reject_watch_import") }
         try await self.journal.importLegacy(snapshot, nowMs: self.now)

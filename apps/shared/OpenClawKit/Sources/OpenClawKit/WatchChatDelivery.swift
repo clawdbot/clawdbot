@@ -300,15 +300,6 @@ public enum OpenClawWatchChatDeliveryCodec {
         return context
     }
 
-    public static func decodeCommand(
-        _ payload: [String: Any],
-        nowMs: Int64) throws -> OpenClawWatchChatDeliveryCommand
-    {
-        let command = try self.decodeCommandStructure(payload)
-        try self.validateCommand(command, nowMs: nowMs)
-        return command
-    }
-
     public static func decodeCommandStructure(_ payload: [String: Any]) throws -> OpenClawWatchChatDeliveryCommand {
         let command: OpenClawWatchChatDeliveryCommand = try self.decode(payload)
         try self.validateCommandStructure(command)

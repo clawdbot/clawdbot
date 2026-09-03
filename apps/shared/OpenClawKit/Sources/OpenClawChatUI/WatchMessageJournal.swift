@@ -314,10 +314,6 @@ public actor OpenClawWatchMessageJournal {
             .values(in: self.queue, bufferingPolicy: .bufferingNewest(1))
     }
 
-    public func queued(owner: OpenClawWatchMessageOwner) async throws -> [OpenClawWatchMessageEntry] {
-        try await self.entries(in: .queued, owner: owner)
-    }
-
     public func accepted(owner: OpenClawWatchMessageOwner) async throws -> [OpenClawWatchMessageEntry] {
         try await self.entries(in: .accepted, owner: owner)
     }

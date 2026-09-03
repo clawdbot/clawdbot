@@ -189,10 +189,6 @@ extension OpenClawWatchMessageJournal {
                 localized: "Watch messages need recovery. Contact support; Reset Onboarding erases all local data."))
     }
 
-    public func hasImportedLegacyMessages() throws -> Bool {
-        try self.queue.read(Self.hasImportedLegacyMessages)
-    }
-
     static func hasImportedLegacyMessages(_ db: Database) throws -> Bool {
         try Bool.fetchOne(
             db,

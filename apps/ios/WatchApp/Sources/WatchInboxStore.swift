@@ -727,11 +727,6 @@ import WatchKit
         self.persistState()
         return true
     }
-
-    func isCurrentAppCommandAttempt(_ attemptID: UUID, gatewayStableID: String?) -> Bool {
-        self.activeAppCommandAttemptID == attemptID
-            && WatchGatewayID.key(self.appSnapshot?.gatewayStableID) == WatchGatewayID.key(gatewayStableID)
-    }
 }
 
 // MARK: - Exec approvals
