@@ -79,18 +79,10 @@ export function assertWorkspaceSkillSupportPathSetIsFileOnly(paths: readonly str
     if (!filePath.includes("/")) {
       throw new Error("Support file paths must include a file below an allowed support directory.");
     }
-  }
-  // A parent path is not always the sorted neighbor of its descendants:
-  // "scripts/a-b" sorts between "scripts/a" and "scripts/a/b". Compare every
-  // path against the whole declared set instead of adjacent pairs.
-  const declared = new Set(sorted);
-  for (const filePath of sorted) {
-    const segments = filePath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      const ancestor = segments.slice(0, index).join("/");
-      if (declared.has(ancestor)) {
-        throw new Error(`Support file paths cannot overlap: ${ancestor} and ${filePath}`);
-      }
+    // A parent may not neighbor its descendant when another name sorts between them.
+    const ancestor = sorted.find((candidate) => filePath.startsWith(`${candidate}/`));
+    if (ancestor) {
+      throw new Error(`Support file paths cannot overlap: ${ancestor} and ${filePath}`);
     }
   }
 }
