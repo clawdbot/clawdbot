@@ -518,26 +518,9 @@ export class AcpTranslatorPromptStream {
       return;
     }
     if (state === "aborted") {
-      // Claim before the first await so a stalled or rejected interruption
-      // delivery cannot strand the prompt (same shape as settleRecoveredPrompt).
-      if (!this.claimPendingPrompt(pending)) {
-        return;
-      }
-      const errorMessage =
-        typeof payload.errorMessage === "string" ? payload.errorMessage.trim() : undefined;
-      if (errorMessage) {
-        // The Gateway attaches the abort cause (e.g. tool validation failure)
-        // to the event; surface it or the IDE shows a bare "cancelled" for a
-        // run that actually died from an error. Nonblocking: the notice is
-        // best-effort and must not hold terminal settlement hostage.
-        await this.emitPromptChunk(
-          pending,
-          "agent_message_chunk",
-          `[OpenClaw interruption] ${errorMessage}`,
-          false,
-        );
-      }
-      await this.finishPrompt(pending.sessionId, pending, "cancelled", { claimed: true });
+      const interruption =
+        typeof payload.errorMessage === "string" ? payload.errorMessage : undefined;
+      await this.finishPrompt(pending.sessionId, pending, "cancelled", { interruption });
       return;
     }
     if (state === "error") {
@@ -592,10 +575,19 @@ export class AcpTranslatorPromptStream {
     sessionId: string,
     pending: AcpPendingPrompt,
     stopReason: StopReason,
-    options: { claimed?: boolean } = {},
+    options: { claimed?: boolean; interruption?: string } = {},
   ): Promise<void> {
     if (!options.claimed && !this.claimPendingPrompt(pending)) {
       return;
+    }
+    if (options.interruption) {
+      // Persist the visible reason before settlement without waiting for client delivery.
+      await this.emitPromptChunk(
+        pending,
+        "agent_message_chunk",
+        `[OpenClaw interruption] ${options.interruption}`,
+        false,
+      );
     }
     const promptKey = this.pendingPromptKey(sessionId, pending.idempotencyKey);
     this.settlingPromptKeys.add(promptKey);

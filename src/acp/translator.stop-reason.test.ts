@@ -144,40 +144,7 @@ describe("acp translator stop reason mapping", () => {
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
 
-  async function createAbortedPromptHarness(
-    sessionUpdateImpl: (params: unknown) => Promise<void>,
-  ): Promise<{
-    agent: AcpGatewayAgent;
-    promptPromise: Promise<unknown>;
-    sessionUpdate: ReturnType<typeof vi.fn>;
-    getRunId: () => string | undefined;
-  }> {
-    let runId: string | undefined;
-    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method === "chat.send") {
-        runId = params?.idempotencyKey as string | undefined;
-        return new Promise<never>(() => {});
-      }
-      return {};
-    }) as GatewayClient["request"];
-    const connection = createAcpConnection();
-    const sessionUpdate = vi.fn(sessionUpdateImpl);
-    connection.sessionUpdate = sessionUpdate as typeof connection.sessionUpdate;
-    const sessionStore = createInMemorySessionStore();
-    sessionStore.createSession({
-      sessionId: "session-1",
-      sessionKey: "agent:main:main",
-      cwd: "/tmp",
-    });
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), { sessionStore });
-    const promptPromise = promptAgent(agent, "session-1");
-    await vi.waitFor(() => {
-      expect(runId).toBeDefined();
-    });
-    return { agent, promptPromise, sessionUpdate, getRunId: () => runId };
-  }
-
-  function sendAbortWithCause(agent: AcpGatewayAgent, runId: string | undefined): Promise<void> {
+  function sendAbortWithCause(agent: AcpGatewayAgent, runId: string): Promise<void> {
     return agent.handleGatewayEvent(
       createChatEvent({
         runId,
@@ -190,35 +157,32 @@ describe("acp translator stop reason mapping", () => {
   }
 
   it("aborted state with errorMessage surfaces the cause before resolving as cancelled", async () => {
-    const { agent, promptPromise, sessionUpdate, getRunId } = await createAbortedPromptHarness(
-      async () => {},
-    );
+    const { agent, promptPromise, runId, sessionUpdate } = await createPendingPromptHarness();
+    const settlement = observeSettlement(promptPromise);
 
-    await sendAbortWithCause(agent, getRunId());
+    await sendAbortWithCause(agent, runId);
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
-    const chunkTexts = sessionUpdate.mock.calls
-      .map(
-        ([params]) =>
-          (
-            params as {
-              update?: { sessionUpdate?: string; content?: { text?: string } };
-            }
-          ).update,
-      )
-      .filter((update) => update?.sessionUpdate === "agent_message_chunk")
-      .map((update) => update?.content?.text);
-    expect(chunkTexts).toContain(
-      "[OpenClaw interruption] Tool validation failed: command contains unsupported flag",
+    expect(sessionUpdate).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        content: {
+          type: "text",
+          text: "[OpenClaw interruption] Tool validation failed: command contains unsupported flag",
+        },
+      },
+    });
+    expect(sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
+      settlement.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
     );
   });
 
   it("resolves as cancelled when the interruption notice delivery rejects", async () => {
-    const { agent, promptPromise, getRunId } = await createAbortedPromptHarness(async () => {
-      throw new Error("client gone");
-    });
+    const { agent, promptPromise, runId, sessionUpdate } = await createPendingPromptHarness();
+    sessionUpdate.mockRejectedValueOnce(new Error("client gone"));
 
-    await sendAbortWithCause(agent, getRunId());
+    await sendAbortWithCause(agent, runId);
 
     await expect(promptPromise).resolves.toEqual({ stopReason: "cancelled" });
   });
