@@ -4,6 +4,8 @@ import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 import { SessionClassificationSchema, SessionPeerKindSchema } from "./session-classification.js";
 import {
+  SESSION_EXPANDED_PARTICIPANT_LIMIT,
+  SESSION_PARTICIPANT_LIMIT,
   SessionParticipantSchema,
   SessionParticipantIdentitySchema,
 } from "./session-participant.js";
@@ -148,7 +150,12 @@ export const SessionRowSchema = Type.Object(
     ),
     createdActor: Type.Optional(SessionCreatedActorSchema),
     owner: Type.Optional(SessionOwnerSchema),
-    participants: Type.Optional(Type.Array(SessionParticipantSchema, { maxItems: 4 })),
+    participants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_PARTICIPANT_LIMIT }),
+    ),
+    expandedParticipants: Type.Optional(
+      Type.Array(SessionParticipantSchema, { maxItems: SESSION_EXPANDED_PARTICIPANT_LIMIT }),
+    ),
     participantCount: Type.Optional(Type.Integer({ minimum: 0 })),
     visibility: Type.Optional(SessionVisibilitySchema),
     sharingRole: Type.Optional(SessionSharingRoleSchema),

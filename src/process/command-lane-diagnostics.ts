@@ -21,7 +21,11 @@ export function getCommandLaneDiagnostics(): {
   lanes: CommandLaneSnapshot[];
   dynamic: DynamicCommandLaneSummary | null;
 } {
-  const lanes = [...STATIC_COMMAND_LANES].toSorted().map((lane) => getCommandLaneSnapshot(lane));
+  const lanes = [...STATIC_COMMAND_LANES]
+    .toSorted()
+    .map((lane) => getCommandLaneSnapshot(lane))
+    // Disabled lanes disappear only once their outstanding work has cleared.
+    .filter((lane) => lane.maxConcurrent > 0 || lane.activeCount > 0 || lane.queuedCount > 0);
   const dynamic: DynamicCommandLaneSummary = {
     laneCount: 0,
     activeCount: 0,

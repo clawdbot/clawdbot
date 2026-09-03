@@ -14,6 +14,7 @@ import {
 import { abortChatRunById } from "./chat-abort.js";
 import { handleTrustedInternalChatSend } from "./server-methods/chat-send-handler.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/shared-types.js";
+import { prepareTalkAgentConsultTranscript } from "./talk-agent-consult-transcript.js";
 import { resolveTalkAgentConsultAuthority } from "./talk-client-gateway-control.js";
 import { registerTalkRealtimeRelayAgentRun } from "./talk-realtime-relay.js";
 import type { PreparedTalkSessionTarget } from "./talk-session-target.types.js";
@@ -153,6 +154,7 @@ export async function startTalkRealtimeAgentConsult(
     const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
       toolsAllow: authority.toolsAllow,
       transcript: { display: false, excludeFromContext: true },
+      prepareAssistantTranscriptMessage: prepareTalkAgentConsultTranscript,
     });
     void Promise.resolve(chatSendResult).then(
       () => {

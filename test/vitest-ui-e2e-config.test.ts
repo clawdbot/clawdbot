@@ -394,6 +394,7 @@ describe("Control UI E2E resource ownership", () => {
     const realGateway = [
       "agent-file-lifecycle.real-gateway",
       "control-ui-auth-transports",
+      "cron-duration-save.real-gateway",
       "logs-lifecycle",
       "mcp-app-conformance",
       "session-progress-hovercard.real-gateway",
@@ -408,9 +409,11 @@ describe("Control UI E2E resource ownership", () => {
     ).toEqual(
       realGateway.toSorted().map((file) => ({
         file,
-        project: file.endsWith("/mcp-app-conformance.e2e.test.ts")
-          ? "ui-e2e-serial-standalone"
-          : "ui-e2e-serial",
+        project:
+          file.endsWith("/mcp-app-conformance.e2e.test.ts") ||
+          file.endsWith("/cron-duration-save.real-gateway.e2e.test.ts")
+            ? "ui-e2e-serial-standalone"
+            : "ui-e2e-serial",
       })),
     );
     const skipped = probeOwnership({ skipRealGateway: true });

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, expect, test } from "vitest";
+import { afterEach, expect, test, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -15,7 +15,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-test("bounds transcript boundary inspection independently of preview message count", async () => {
+test.each([false, true])("bounds transcript boundary work (compacted: %s)", async (compacted) => {
   const env = captureEnv(["OPENCLAW_STATE_DIR"]);
   const tempDir = tempDirs.make("openclaw-title-probe-work-");
   setTestEnvValue("OPENCLAW_STATE_DIR", tempDir);
@@ -41,7 +41,21 @@ test("bounds transcript boundary inspection independently of preview message cou
   const nativeJson = new DatabaseSync(":memory:");
   const extractJson = nativeJson.prepare("SELECT json_extract(?, ?) AS value");
   try {
-    await replaceTranscriptEvents(scope, [...messages, ...metadata]);
+    await replaceTranscriptEvents(scope, [
+      ...messages,
+      ...metadata,
+      ...(compacted
+        ? [
+            {
+              type: "compaction",
+              id: "compaction",
+              parentId: "metadata-19",
+              firstKeptEntryId: "message-0",
+              summary: "Synthetic compaction summary ".repeat(4096),
+            },
+          ]
+        : []),
+    ]);
     const database = openOpenClawAgentDatabase({
       agentId: scope.agentId,
       path: path.join(tempDir, "openclaw-agent.sqlite"),
@@ -54,7 +68,12 @@ test("bounds transcript boundary inspection independently of preview message cou
       return extractJson.get(value, jsonPath)?.value ?? null;
     });
 
+    const parse = vi.spyOn(JSON, "parse");
     const [probe] = readSessionTranscriptTitleProbeBatch([scope]);
+    const boundaryParses = parse.mock.calls.filter(([value]) =>
+      value.includes("Synthetic compaction summary"),
+    ).length;
+    parse.mockRestore();
     expect(probe?.totalMessages).toBe(messages.length);
     expect(probe?.head).toHaveLength(20);
     expect(probe?.tail).toHaveLength(20);
@@ -62,7 +81,9 @@ test("bounds transcript boundary inspection independently of preview message cou
     expect(probe?.tail.at(-1)?.event).toMatchObject({ id: "message-59" });
     expect(boundaryInspections).toBeGreaterThan(0);
     expect(boundaryInspections).toBeLessThanOrEqual(metadata.length * 2);
+    expect(boundaryParses).toBe(compacted ? 1 : 0);
   } finally {
+    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     nativeJson.close();
