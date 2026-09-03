@@ -8,7 +8,10 @@ import {
   normalizeSingleOrTrimmedStringList,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { walkMemoryWikiDirectory } from "./bounded-walk.js";
+import {
+  isMemoryWikiRepositoryOrDependencyDirectory,
+  walkMemoryWikiDirectory,
+} from "./bounded-walk.js";
 import { compileMemoryWikiVault } from "./compile.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
@@ -133,10 +136,7 @@ async function collectOkfMarkdownFiles(
 ): Promise<string[]> {
   const entries = await walkMemoryWikiDirectory(rootDir, "", {
     entryFilter: (entry) =>
-      entry.kind === "directory" &&
-      [".git", "node_modules"].includes(path.basename(entry.relativePath))
-        ? "skip-subtree"
-        : "include",
+      isMemoryWikiRepositoryOrDependencyDirectory(entry) ? "skip-subtree" : "include",
     onDirectoryError: "skip-and-report",
   });
   const files: string[] = [];
