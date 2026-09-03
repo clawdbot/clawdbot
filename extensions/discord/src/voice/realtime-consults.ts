@@ -259,6 +259,13 @@ export class DiscordRealtimeConsults {
     }
     if (usesRealtimeAgentHandoff) {
       if (pendingForcedConsult) {
+        if (this.params.consultTakeover() && this.params.consultPolicy() === "always") {
+          // consultPolicy=always makes the consult certain, so begin the
+          // takeover BEFORE the debounced consult is scheduled: the provider
+          // never gets a speaking window (v1 began at consult start, after
+          // the debounce — ~2s of the provider's own reply leaked out).
+          this.params.playback.beginConsultTakeover();
+        }
         this.schedulePreparedForcedAgentProxyConsult(pendingForcedConsult);
       }
       return;
