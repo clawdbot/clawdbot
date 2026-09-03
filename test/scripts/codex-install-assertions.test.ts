@@ -864,15 +864,20 @@ describe("Codex install helpers", () => {
 
   it.each([undefined, "^0.152.1", "latest"])("rejects a non-exact candidate pin %s", (pin) => {
     const root = makeTempDir(tempDirs, "openclaw-codex-candidate-invalid-pin-");
-    createCodexInstallFixture(root);
+    const fixture = createCodexInstallFixture(root);
     writeJson("/tmp/openclaw-candidate-codex-package.json", {
       dependencies: { "@openai/codex": pin },
     });
+    const pluginPackage = JSON.parse(readFileSync(fixture.pluginPackageJson, "utf8"));
+    pluginPackage.dependencies["@openai/codex"] = pin;
+    writeJson(fixture.pluginPackageJson, pluginPackage);
 
     const result = runCodexOnDemandAssertions(root);
 
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("@openclaw/codex must depend on @openai/codex");
+    expect(result.stderr).toContain(
+      `@openclaw/codex must depend on @openai/codex ${String(pin)}; found ${String(pin)}`,
+    );
   });
 
   it("rejects an installed @openai/codex package outside the exact release version", () => {
