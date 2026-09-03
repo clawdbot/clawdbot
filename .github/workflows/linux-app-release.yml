@@ -271,6 +271,7 @@ jobs:
             /usr/bin/python3 apps/linux/tests/packaged_runtime_smoke.py \
             "dist/linux-app/release/OpenClaw-${version}-amd64.AppImage" \
             --output "${RUNNER_TEMP}/linux-packaged-runtime" \
+            --require-fuse \
             --shell-container \
               "archlinux@sha256:82b1b08faae9d61e3e7e13d562f4d09114d939105b0d59ff34140f3bd418593a"
 
