@@ -31,7 +31,7 @@ The rest of this page is the deep end: the trust model, what the audit checks, a
 - Not supported: one shared gateway/agent used by mutually untrusted or adversarial users.
 - Adversarial-user isolation needs separate gateways (and ideally separate OS users/hosts).
 - Everyone who can message a tool-enabled agent shares that agent's delegated tool authority. That is fine for teammates who already trust each other; it is why adversarial users cannot share an agent.
-- Session tools reach across the whole Gateway by default: `tools.sessions.visibility` defaults to `all` and `tools.agentToAgent.enabled` defaults to `true`, so any tool-enabled agent can list, read, search, and message every agent's sessions, including other users' transcripts. That matches one trust boundary per Gateway. For personas with different trust levels on one Gateway, set `tools.sessions.visibility` to `agent`, `tree`, or `self`, restrict pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false`. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
+- Session tools reach across the whole Gateway by default: `tools.sessions.visibility` defaults to `all` and `tools.agentToAgent.enabled` defaults to `true`, so any tool-enabled agent running unsandboxed can list, read, search, and message every agent's sessions, including other users' transcripts. Sandboxed sessions stay clamped to their own spawn tree by default, which limits them as callers but does not hide their transcripts from unsandboxed agents. That matches one trust boundary per Gateway. For personas with different trust levels on one Gateway, set `tools.sessions.visibility` to `agent`, `tree`, or `self`, restrict pairs with `tools.agentToAgent.allow`, or set `tools.agentToAgent.enabled: false`. See [`tools.sessions`](/gateway/config-tools#tools-sessions) and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
@@ -412,7 +412,7 @@ Each agent can have its own sandbox + tool policy: full access, read-only, or no
 
 Common patterns: personal agent (full access, no sandbox), family/work agent (sandboxed + read-only tools), public agent (sandboxed + no filesystem/shell tools).
 
-Tool and sandbox profiles do not narrow session-tool reach. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
+Tool profiles do not narrow session-tool reach, and sandboxing only clamps the sandboxed caller to its spawn tree; an unsandboxed agent can still read a sandboxed agent's sessions. Session visibility is Gateway-wide and agent-to-agent messaging is on by default, so pair persona profiles with `tools.sessions.visibility` and `tools.agentToAgent` when agents on one Gateway should not see or message each other (see the last example below).
 
 ### Full access (no sandbox)
 

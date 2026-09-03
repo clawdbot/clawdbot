@@ -14,6 +14,7 @@ import type { AgentToolsConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import {
   createAgentToAgentPolicy,
+  resolveSandboxSessionToolsVisibility,
   resolveSessionToolsVisibility,
 } from "../plugin-sdk/session-visibility.js";
 import { normalizePluginsConfigWithResolverCore } from "../plugins/config-normalization-shared.js";
@@ -180,11 +181,20 @@ export function collectCrossAgentSessionAccessFindings(
     return [];
   }
 
+  // Sandboxed sessions clamp to their spawn tree unless the clamp is disabled, so
+  // only agents with an unsandboxed session can reach other agents' sessions.
+  const sandboxClamp = resolveSandboxSessionToolsVisibility(cfg);
+  const reachers: string[] = [];
+  const sandboxed: string[] = [];
   const signals: string[] = [];
   for (const agentId of agentIds) {
     const sandboxMode = resolveSandboxConfigForAgent(cfg, agentId).mode;
     if (sandboxMode !== "off") {
+      sandboxed.push(agentId);
       signals.push(`${agentId}: sandbox.mode="${sandboxMode}"`);
+    }
+    if (sandboxMode !== "all" || sandboxClamp === "all") {
+      reachers.push(agentId);
     }
     const tools = resolveAgentConfig(cfg, agentId)?.tools;
     const restrictions = (["profile", "allow", "deny"] as const).filter(
@@ -196,7 +206,20 @@ export function collectCrossAgentSessionAccessFindings(
       );
     }
   }
+  if (reachers.length === 0) {
+    return [];
+  }
   signals.push(...listPotentialMultiUserSignals(cfg));
+  const reachLine =
+    reachers.length === agentIds.length
+      ? "every listed agent"
+      : `the agents with unsandboxed sessions (${reachers.join(", ")})`;
+  const clampLine =
+    sandboxed.length === 0
+      ? 'Sandboxed sessions stay clamped to their spawn tree unless agents.defaults.sandbox.sessionToolsVisibility is "all"; incognito sessions remain hidden.'
+      : sandboxClamp === "all"
+        ? `Sandboxed sessions (${sandboxed.join(", ")}) are not clamped because agents.defaults.sandbox.sessionToolsVisibility is "all"; incognito sessions remain hidden.`
+        : `Sandboxed sessions (${sandboxed.join(", ")}) stay clamped to their spawn tree, so they cannot reach other agents, but their transcripts remain readable by the unsandboxed callers; incognito sessions remain hidden.`;
   const trustDetail =
     signals.length > 0
       ? "\nTrust-boundary signals:\n" +
@@ -211,8 +234,8 @@ export function collectCrossAgentSessionAccessFindings(
       title: "Agents share Gateway-wide session access (default)",
       detail:
         `Agents: ${agentIds.join(", ")}\n` +
-        "tools.sessions.visibility resolves to \"all\" and tools.agentToAgent is enabled with no allow list, so every listed agent can list, read, search, and message every other agent's sessions, including other users' transcripts.\n" +
-        "Sandboxed sessions stay clamped to their spawn tree by default; incognito sessions remain protected." +
+        `tools.sessions.visibility resolves to "all" and tools.agentToAgent is enabled with no allow list, so ${reachLine} can list, read, search, and message every other agent's sessions from unsandboxed sessions, including other users' transcripts.\n` +
+        clampLine +
         trustDetail,
       remediation:
         'Set tools.sessions.visibility to "agent", "tree", or "self"; restrict tools.agentToAgent.allow to the intended requester and target ids; or set tools.agentToAgent.enabled: false. See https://docs.openclaw.ai/gateway/config-tools#tools-agenttoagent and https://docs.openclaw.ai/gateway/security#scope-one-trust-boundary-per-gateway.',

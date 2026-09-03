@@ -22,6 +22,10 @@ describe("security audit cross-agent session access", () => {
       name: `configured allow list ${JSON.stringify(allow)}`,
       cfg: { agents, tools: { agentToAgent: { allow } } },
     })),
+    {
+      name: "agents that are all fully sandboxed under the default clamp",
+      cfg: { agents: { ...agents, defaults: { sandbox: { mode: "all" } } } },
+    },
   ] satisfies Array<{ name: string; cfg: OpenClawConfig }>)("does not flag $name", ({ cfg }) => {
     expect(collectCrossAgentSessionAccessFindings(cfg)).toEqual([]);
   });
@@ -124,6 +128,46 @@ describe("security audit cross-agent session access", () => {
       expect(findings[0]!.detail).toContain("different trust levels");
       for (const signal of signals) {
         expect(findings[0]!.detail).toContain(signal);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "a sandboxed agent under the default clamp",
+      cfg: { agents: { entries: { home: {}, work: { sandbox: { mode: "all" } } } } },
+      detail: [
+        "the agents with unsandboxed sessions (home)",
+        "Sandboxed sessions (work) stay clamped to their spawn tree",
+        "remain readable by the unsandboxed callers",
+      ],
+    },
+    {
+      name: "non-main sandboxing that keeps main sessions unsandboxed",
+      cfg: { agents: { ...agents, defaults: { sandbox: { mode: "non-main" } } } },
+      detail: ["every listed agent", "Sandboxed sessions (home, work) stay clamped"],
+    },
+    {
+      name: "fully sandboxed agents with the clamp disabled",
+      cfg: {
+        agents: {
+          ...agents,
+          defaults: { sandbox: { mode: "all", sessionToolsVisibility: "all" } },
+        },
+      },
+      detail: [
+        "every listed agent",
+        'Sandboxed sessions (home, work) are not clamped because agents.defaults.sandbox.sessionToolsVisibility is "all"',
+      ],
+    },
+  ] satisfies Array<{ name: string; cfg: OpenClawConfig; detail: string[] }>)(
+    "renders sandbox reach for $name",
+    ({ cfg, detail }) => {
+      const findings = collectCrossAgentSessionAccessFindings(cfg);
+      expect(findings).toHaveLength(1);
+      expect(findings[0]).toMatchObject({ checkId, severity: "warn" });
+      for (const fragment of detail) {
+        expect(findings[0]!.detail).toContain(fragment);
       }
     },
   );

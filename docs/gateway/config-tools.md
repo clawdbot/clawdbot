@@ -418,7 +418,7 @@ Configures inbound media understanding (image/audio/video):
 }
 ```
 
-Cross-agent access is on by default. `enabled` (default `true`) gates cross-agent session tool calls: `sessions_send` to another agent, and cross-agent `sessions_list`, `sessions_history`, `sessions_search`, and status reads under the default `tools.sessions.visibility: "all"`. Set `enabled: false` to turn cross-agent access off. Same-agent access never consults this policy.
+Cross-agent access is on by default. `enabled` (default `true`) gates cross-agent session tool calls: `sessions_send` to another agent, and cross-agent `sessions_list`, `sessions_history`, `sessions_search`, and status reads under the default `tools.sessions.visibility: "all"`. Set `enabled: false` to turn cross-agent access off. Same-agent access never consults this policy. Requester-owned native subagent and ACP child sessions are the one exception: under `tree` or `all` visibility they stay reachable across agent boundaries before this policy is consulted, including with `enabled: false`.
 
 `allow` lists the agent ids or `*` patterns that may take part in a cross-agent call. Both the requesting agent and the target agent must match an entry. Exact ids are case-sensitive; wildcard patterns are case-insensitive.
 
