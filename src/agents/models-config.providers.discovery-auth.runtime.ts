@@ -16,17 +16,13 @@ export async function prepareProviderDiscoveryAuth(
   {
     agentDir,
     authStore,
-    providerIds,
     resolveProviderApiKey,
     resolveProviderAuth,
-    resolveProviderAuthProviderId,
   }: {
     agentDir: string;
     authStore: AuthProfileStore;
-    providerIds: readonly string[];
     resolveProviderApiKey: ProviderApiKeyResolver;
     resolveProviderAuth: ProviderAuthResolver;
-    resolveProviderAuthProviderId: (provider: string) => string;
   },
   config?: OpenClawConfig,
 ) {
@@ -73,59 +69,68 @@ export async function prepareProviderDiscoveryAuth(
       });
     }
   }
-  const failedOAuthProfiles = new Map<string, readonly string[]>();
-  for (const provider of new Set(providerIds.map(resolveProviderAuthProviderId))) {
-    const failed: string[] = [];
-    while (true) {
-      let auth: ReturnType<ProviderAuthResolver>;
-      try {
-        auth = resolveProviderAuth(provider, { excludeProfileIds: failed });
-      } catch {
-        break;
-      }
-      if (!auth.profileId || auth.mode !== "oauth") {
-        break;
-      }
-      const credential = authStore.profiles[auth.profileId];
-      if (credential?.type !== "oauth" || credential.oauthRef) {
-        break;
-      }
-      if (hasUsableOAuthCredential(credential)) {
-        break;
-      }
-      try {
-        const resolved = await resolveApiKeyForProfile({
-          cfg: config,
-          store: authStore,
-          profileId: auth.profileId,
-          agentDir,
-          allowProfileFallback: false,
-        });
-        if (!resolved?.apiKey) {
-          throw new Error("OAuth profile did not resolve a usable catalog credential");
-        }
-        profiles.set(auth.profileId, () => resolved.apiKey);
-        break;
-      } catch {
-        failed.push(auth.profileId);
-      }
-    }
-    if (failed.length > 0) {
-      failedOAuthProfiles.set(provider, failed);
-    }
-  }
   const enrich = <T extends { profileId?: string }>(auth: T): T => {
     const resolve = auth.profileId ? profiles.get(auth.profileId) : undefined;
     return resolve ? { ...auth, discoveryApiKey: resolve() } : auth;
   };
   return {
     resolveProviderApiKey: (provider: string) => enrich(resolveProviderApiKey(provider)),
-    resolveProviderAuth: (provider: string, options?: { oauthMarker?: string }) =>
-      enrich(
-        resolveProviderAuth(provider, {
-          ...options,
-          excludeProfileIds: failedOAuthProfiles.get(resolveProviderAuthProviderId(provider)),
-        }),
-      ),
+    resolveProviderAuth: (provider: string, options?: Parameters<ProviderAuthResolver>[1]) =>
+      enrich(resolveProviderAuth(provider, options)),
   };
+}
+
+/** Excludes only failed expiring OAuth candidates for one live catalog hook. */
+export async function prepareProviderCatalogOAuthAuth(
+  {
+    agentDir,
+    authStore,
+    provider,
+    resolveProviderAuth,
+  }: {
+    agentDir: string;
+    authStore: AuthProfileStore;
+    provider: string;
+    resolveProviderAuth: ProviderAuthResolver;
+  },
+  config?: OpenClawConfig,
+) {
+  const failedProfileIds: string[] = [];
+  while (true) {
+    let auth: ReturnType<ProviderAuthResolver>;
+    try {
+      auth = resolveProviderAuth(provider, { excludeProfileIds: failedProfileIds });
+    } catch {
+      break;
+    }
+    if (!auth.profileId || auth.mode !== "oauth") {
+      break;
+    }
+    const credential = authStore.profiles[auth.profileId];
+    if (
+      credential?.type !== "oauth" ||
+      credential.oauthRef ||
+      hasUsableOAuthCredential(credential)
+    ) {
+      break;
+    }
+    try {
+      const resolved = await resolveApiKeyForProfile({
+        cfg: config,
+        store: authStore,
+        profileId: auth.profileId,
+        agentDir,
+        allowProfileFallback: false,
+      });
+      if (resolved?.apiKey) {
+        break;
+      }
+    } catch {
+      failedProfileIds.push(auth.profileId);
+      continue;
+    }
+    failedProfileIds.push(auth.profileId);
+  }
+  return (requestedProvider: string, options?: { oauthMarker?: string }) =>
+    resolveProviderAuth(requestedProvider, { ...options, excludeProfileIds: failedProfileIds });
 }

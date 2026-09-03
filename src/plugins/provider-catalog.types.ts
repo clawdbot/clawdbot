@@ -51,6 +51,7 @@ export type ProviderCatalogResult =
 
 export type ProviderPluginCatalog = {
   order?: ProviderCatalogOrder;
+  prepareAuthProfiles?: "oauth";
   run: (ctx: ProviderCatalogContext) => Promise<ProviderCatalogResult>;
 };
 

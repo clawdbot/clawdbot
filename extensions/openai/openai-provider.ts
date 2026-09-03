@@ -933,6 +933,7 @@ export function buildOpenAIProvider(): ProviderPlugin {
     ...providerDefinition,
     catalog: {
       order: "simple",
+      prepareAuthProfiles: "oauth",
       run: async (ctx) => {
         if (ctx.providerIds && !ctx.providerIds.includes(PROVIDER_ID)) {
           return null;

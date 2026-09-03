@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { runProviderCatalog } from "../plugins/provider-discovery.js";
+import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
@@ -45,4 +48,37 @@ export function createProviderCatalogAuthIdResolver(
       env: ctx.env,
       ...(metadataSnapshot ? { metadataSnapshot } : {}),
     });
+}
+
+export async function prepareProviderCatalogRun(
+  params: Parameters<typeof runProviderCatalog>[0] & {
+    agentDir: string;
+    authStore: AuthProfileStore;
+    timeoutMs?: number | null;
+  },
+): Promise<Parameters<typeof runProviderCatalog>[0] & { timeoutMs?: number | null }> {
+  const { authStore, ...catalogParams } = params;
+  if (
+    params.provider.catalog?.prepareAuthProfiles !== "oauth" ||
+    (params.providerIds !== undefined &&
+      !params.providerIds.some((providerId) =>
+        matchesProviderPluginRef(params.provider, providerId),
+      ))
+  ) {
+    return catalogParams;
+  }
+  const { prepareProviderCatalogOAuthAuth } =
+    await import("./models-config.providers.discovery-auth.runtime.js");
+  return {
+    ...catalogParams,
+    resolveProviderAuth: await prepareProviderCatalogOAuthAuth(
+      {
+        agentDir: params.agentDir,
+        authStore,
+        provider: params.provider.id,
+        resolveProviderAuth: params.resolveProviderAuth,
+      },
+      params.config,
+    ),
+  };
 }

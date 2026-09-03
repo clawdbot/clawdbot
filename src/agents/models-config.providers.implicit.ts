@@ -41,6 +41,7 @@ import {
 import {
   buildPluginCatalogConfig,
   createProviderCatalogAuthIdResolver,
+  prepareProviderCatalogRun,
 } from "./models-config.providers.catalog-context.js";
 import type {
   ProviderApiKeyResolver,
@@ -297,6 +298,7 @@ async function resolvePluginImplicitProviders(
     } else {
       result = await runProviderCatalogWithTimeout({
         provider,
+        authStore: ctx.authStore,
         ...(providerIds !== undefined ? { providerIds } : {}),
         config: catalogConfig,
         agentDir: ctx.agentDir,
@@ -358,6 +360,8 @@ async function resolvePluginImplicitProviders(
 
 async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
+    agentDir: string;
+    authStore: AuthProfileStore;
     timeoutMs: number | null;
   },
 ): Promise<Awaited<ReturnType<typeof runProviderCatalog>> | undefined> {
@@ -375,11 +379,12 @@ async function runProviderCatalogWithTimeout(
       }
     },
   };
+  const runCatalog = async () => runProviderCatalog(await prepareProviderCatalogRun(catalogParams));
   try {
     if (!timeoutMs) {
-      return await runProviderCatalog(catalogParams);
+      return await runCatalog();
     }
-    const catalogRun = runProviderCatalog(catalogParams);
+    const catalogRun = runCatalog();
     // Live discovery should not hang startup; a timeout skips this provider while
     // preserving the rest of the prepared catalog.
     return await Promise.race([
@@ -598,11 +603,7 @@ export async function resolveImplicitProviders(
   if (params.providerDiscoveryEntriesOnly !== true && hasLiveCatalog) {
     const { prepareProviderDiscoveryAuth } =
       await import("./models-config.providers.discovery-auth.runtime.js");
-    const preparedAuth = await prepareProviderDiscoveryAuth(
-      { ...context, providerIds: discoveryProviders.map((provider) => provider.id) },
-      discoveryAuthConfig,
-    );
-    Object.assign(context, preparedAuth);
+    Object.assign(context, await prepareProviderDiscoveryAuth(context, discoveryAuthConfig));
   }
   const preparedStaticResultsByProvider = new Map(
     preparedStaticEntries?.map(({ provider, result }) => [
