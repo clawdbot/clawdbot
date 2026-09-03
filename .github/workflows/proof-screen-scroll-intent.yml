@@ -113,7 +113,7 @@ jobs:
         run: |
           set -euo pipefail
           swift test --package-path "$PROOF_PACKAGE" --build-system native \
-            --skip-build --no-parallel --filter 'ScreenScrollServiceProofTests/legacy global request dispatches ticks' \
+            --skip-build --no-parallel --filter 'legacy' \
             2>&1 | tee "$PROOF_EVIDENCE/service-red.log"
 
       - name: Capture actual caller source-contract red
@@ -130,7 +130,7 @@ jobs:
           set -euo pipefail
           swift test --package-path "$PROOF_PACKAGE" --build-system native \
             --skip-build --no-parallel \
-            --filter 'ScreenScrollServiceProofTests/(foreground global request dispatches ticks|background requires snapshot and target even with synth only policy)' \
+            --filter ScreenScrollServiceProofTests --skip 'legacy' \
             2>&1 | tee "$PROOF_EVIDENCE/contracts-green.log"
           grep -F 'SCREEN_SCROLL_FOREGROUND_CHECKED:' "$PROOF_EVIDENCE/contracts-green.log"
           grep -F 'SCREEN_SCROLL_BACKGROUND_CHECKED:' "$PROOF_EVIDENCE/contracts-green.log"
