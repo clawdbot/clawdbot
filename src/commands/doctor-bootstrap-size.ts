@@ -14,6 +14,7 @@ import {
   resolveBootstrapMaxChars,
   resolveBootstrapTotalMaxChars,
 } from "../agents/embedded-agent-helpers.js";
+import { USER_BOOTSTRAP_MAX_CHARS } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 // Every warning uses the same locale; silent checks never need a formatter.
@@ -110,9 +111,26 @@ export async function noteBootstrapFileSize(cfg: OpenClawConfig) {
       `Total bootstrap raw chars (before truncation): ${formatInt(analysis.totals.rawChars)}.`,
     );
 
+    // USER.md is capped by Math.min(bootstrapMaxChars, USER_BOOTSTRAP_MAX_CHARS), so
+    // raising bootstrapMaxChars cannot lift its limit. Name the fixed cap and mirror
+    // the suppression the sibling prompt-warning renderer already applies
+    // (src/agents/bootstrap-budget-warning.ts) instead of offering a knob that
+    // has no effect here.
+    const isFixedUserCapFile = (file: { name?: string; effectiveFileLimit: number }) =>
+      file.name?.toLowerCase() === "user.md" &&
+      file.effectiveFileLimit === USER_BOOTSTRAP_MAX_CHARS;
+    const fixedUserCapApplied = analysis.truncatedFiles.some(
+      (file) => isFixedUserCapFile(file) && file.causes.includes("per-file-limit"),
+    );
+    if (fixedUserCapApplied) {
+      lines.push(
+        `- USER.md has a fixed ${formatInt(USER_BOOTSTRAP_MAX_CHARS)}-character bootstrap cap; keep it compact.`,
+      );
+    }
     const needsPerFileTip =
-      analysis.truncatedFiles.some((file) => file.causes.includes("per-file-limit")) ||
-      analysis.nearLimitFiles.length > 0;
+      analysis.truncatedFiles.some(
+        (file) => file.causes.includes("per-file-limit") && !isFixedUserCapFile(file),
+      ) || analysis.nearLimitFiles.some((file) => !file.truncated && !isFixedUserCapFile(file));
     const needsTotalTip =
       analysis.truncatedFiles.some((file) => file.causes.includes("total-limit")) ||
       analysis.totalNearLimit;

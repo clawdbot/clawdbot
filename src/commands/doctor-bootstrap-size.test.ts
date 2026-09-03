@@ -131,3 +131,37 @@ describe("noteBootstrapFileSize", () => {
     expect(resolveBootstrapContextForRun).toHaveBeenCalledTimes(2);
   });
 });
+
+it("names the fixed USER.md cap and omits the bootstrapMaxChars tip when only USER.md is truncated", async () => {
+  vi.resetAllMocks();
+  listAgentIds.mockReturnValue(["main"]);
+  resolveDefaultAgentId.mockReturnValue("main");
+  resolveAgentWorkspaceDir.mockReturnValue("/tmp/workspace");
+  resolveBootstrapMaxChars.mockReturnValue(20_000);
+  resolveBootstrapTotalMaxChars.mockReturnValue(150_000);
+  resolveBootstrapContextForRun.mockResolvedValue({
+    bootstrapFiles: [
+      {
+        name: "USER.md",
+        path: "/tmp/workspace/USER.md",
+        content: "a".repeat(10_983),
+        missing: false,
+      },
+    ],
+    contextFiles: [{ path: "/tmp/workspace/USER.md", content: "a".repeat(4_000) }],
+  });
+  await noteBootstrapFileSize({} as OpenClawConfig);
+  expect(note).toHaveBeenCalledTimes(1);
+  const [message, title] = note.mock.calls[0] ?? [];
+  expect(title).toBe("Bootstrap file size");
+  expect(message).toBe(
+    [
+      "Workspace bootstrap files exceed limits and will be truncated:",
+      "- USER.md: 10,983 raw / 4,000 injected (64% truncated; max/file)",
+      "Total bootstrap injected chars: 4,000 (3% of max/total 150,000).",
+      "Total bootstrap raw chars (before truncation): 10,983.",
+      "- USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
+    ].join("\n"),
+  );
+  expect(message).not.toContain("bootstrapMaxChars");
+});
