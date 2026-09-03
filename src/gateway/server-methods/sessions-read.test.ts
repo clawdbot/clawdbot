@@ -11,9 +11,11 @@ import {
 } from "../../config/sessions.js";
 import {
   loadSessionEntry,
+  recordSessionParticipant,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { addSessionMember } from "../../config/sessions/session-sharing-store.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { recordAgentProvenance } from "../../state/agent-provenance.js";
@@ -33,6 +35,7 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "../test/server-sessions.test-helpers.js";
 import { agentsHandlers } from "./agents.js";
+<<<<<<< HEAD
 import {
   identifiedClient,
   listSessions,
@@ -435,6 +438,99 @@ test("a hidden-foreign role cannot discover sessions through search, batch previ
     ok: false,
     error: { message: `No session found: ${foreignKey}` },
   });
+});
+
+test("sessions.describe hides foreign drafts at operator role boundaries", async () => {
+  const sessionKey = "agent:main:foreign-draft-describe";
+  const profileId = (name: string) => ensureProfileForEmail(`${name}@example.com`).id;
+  const ownerId = profileId("draft-owner");
+  const memberId = profileId("draft-member");
+  const storePath = resolveStorePath(undefined, { agentId: "main" });
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey, storePath },
+    {
+      sessionId: "session-foreign-draft-describe",
+      updatedAt: 42,
+      createdActor: { type: "human", source: "profile", id: ownerId },
+      visibility: "draft",
+    },
+  );
+  expect(
+    addSessionMember(
+      { agentId: "main", sessionKey, storePath },
+      { identityId: memberId, addedBy: ownerId, addedAt: 1 },
+    ).inserted,
+  ).toBe(true);
+  for (let index = 0; index < 5; index += 1) {
+    expect(
+      recordSessionParticipant(
+        { agentId: "main", sessionKey, storePath },
+        { identity: { type: "profile", id: `participant-${index}` }, promptedAt: index + 1 },
+      ),
+    ).toBe("inserted");
+  }
+  const roleConfig = (others: "view" | "suggest" | "write"): OpenClawConfig => ({
+    gateway: {
+      roles: {
+        default: "limited",
+        definitions: {
+          limited: {
+            sessions: { others },
+            agents: "*",
+            scopes: ["operator.read", "operator.write"],
+          },
+        },
+      },
+    },
+  });
+  const admin = identifiedClient(profileId("draft-admin"));
+  admin.connect!.scopes = ["operator.admin"];
+  const cases = [
+    {
+      name: "view",
+      client: identifiedClient(profileId("draft-viewer")),
+      cfg: roleConfig("view"),
+      hidden: true,
+    },
+    {
+      name: "suggest",
+      client: identifiedClient(profileId("draft-suggester")),
+      cfg: roleConfig("suggest"),
+      hidden: true,
+    },
+    {
+      name: "write",
+      client: identifiedClient(profileId("draft-writer")),
+      cfg: roleConfig("write"),
+      hidden: true,
+    },
+    { name: "member", client: identifiedClient(memberId), cfg: roleConfig("write"), hidden: true },
+    { name: "owner", client: identifiedClient(ownerId), cfg: roleConfig("view"), hidden: false },
+    { name: "admin", client: admin, cfg: roleConfig("view"), hidden: false },
+    {
+      name: "no roles",
+      client: identifiedClient(profileId("draft-outsider")),
+      cfg: {},
+      hidden: false,
+    },
+  ] as const;
+
+  for (const { name, client, cfg, hidden } of cases) {
+    const described = await directSessionReq<{
+      session: { participants?: unknown[]; expandedParticipants?: unknown[] } | null;
+    }>(
+      "sessions.describe",
+      { key: sessionKey },
+      { client, context: { getRuntimeConfig: () => cfg } },
+    );
+    expect(described.ok, name).toBe(true);
+    if (hidden) {
+      expect(described.payload?.session, name).toBeNull();
+    } else {
+      expect(described.payload?.session?.participants, name).toHaveLength(4);
+      expect(described.payload?.session?.expandedParticipants, name).toHaveLength(5);
+    }
+  }
 });
 
 test("bare ownerless reads fail closed without blocking scoped preview siblings", async () => {
