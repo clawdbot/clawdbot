@@ -331,7 +331,7 @@ describe("channels controller WhatsApp provider selection", () => {
 
     expect(channels.state.whatsappLoginSessionKey).toBe("opaque-session");
     await channels.waitWhatsApp();
-    expect(request.mock.calls.filter(([method]) => method === "web.login.wait").at(-1)).toEqual([
+    expect(request.mock.calls.findLast(([method]) => method === "web.login.wait")).toEqual([
       "web.login.wait",
       expect.objectContaining({ sessionKey: "opaque-session" }),
     ]);
