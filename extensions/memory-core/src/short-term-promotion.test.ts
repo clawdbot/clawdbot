@@ -857,6 +857,27 @@ describe("short-term promotion", () => {
     expect(ranked[0]?.key).not.toMatch(/^memory:claim:/u);
   });
 
+  it("reinforces an existing daily claim when the recall arrives second", async (workspaceDir) => {
+    const claim = "Deploy scripts live in infra/deploy and need the staging profile.";
+    await recordMemoryRecalls(
+      workspaceDir,
+      "__dreaming_daily__:2026-04-01",
+      [memoryRecallResult("memory/2026-04-01.md", 3, 3, 0.62, claim)],
+      { signalType: "daily", dayBucket: "2026-04-01" },
+    );
+    await recordMemoryRecalls(workspaceDir, "deploy scripts", [
+      memoryRecallResult("memory/2026-04-02.md", 7, 9, 0.9, claim),
+    ]);
+
+    const ranked = await rankAllCandidates(workspaceDir);
+    expect(ranked).toHaveLength(1);
+    expect(ranked[0]).toMatchObject({ recallCount: 1, dailyCount: 1, signalCount: 2 });
+    expect(ranked[0]?.key).toMatch(/^memory:claim:/u);
+    // The claim keeps its first citation rather than the recalled file's.
+    expect(ranked[0]?.path).toBe("memory/2026-04-01.md");
+    expect(ranked[0]?.startLine).toBe(3);
+  });
+
   it("reads only light-staged keys that have not already gone through REM", async (workspaceDir) => {
     const nowMs = Date.parse("2026-04-05T10:00:00.000Z");
     await recordMemoryRecalls(

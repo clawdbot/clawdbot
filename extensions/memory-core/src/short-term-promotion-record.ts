@@ -254,8 +254,15 @@ export async function recordShortTermRecalls(params: {
               source: "memory",
               claimHash,
             });
+      // The reverse arrival order needs the same treatment: a daily claim
+      // recorded before its first interactive recall must be reinforced by that
+      // recall, or the recall opens the rival entry this pairing avoids and
+      // neither side alone reaches the promotion thresholds.
+      const dailyClaimEntry =
+        signalType === "recall" ? store.entries[buildDailyClaimEntryKey(claimHash)] : undefined;
       const key =
         nonDailyEntry?.key ??
+        dailyClaimEntry?.key ??
         (signalType !== "recall" || store.entries[claimKey] ? claimKey : buildEntryKey(result));
       const existing = store.entries[key];
       const score = clampScore(result.score);
@@ -311,8 +318,11 @@ export async function recordShortTermRecalls(params: {
         ? (existing?.lastRecalledAt ?? nowIso)
         : nowIso;
       // Daily claim keys omit the file path; retain the first source citation
-      // while observations from distinct days accumulate on the same claim.
-      const preserveFirstDailySource = signalType === "daily" && existing !== undefined;
+      // while observations from distinct days accumulate on the same claim. A
+      // recall reinforcing such a claim cites it the same way, so the claim
+      // never adopts the path of whichever file the search happened to hit.
+      const preserveFirstDailySource =
+        existing !== undefined && (signalType === "daily" || dailyClaimEntry !== undefined);
       store.entries[key] = {
         key,
         path: preserveFirstDailySource ? existing.path : normalizedPath,
