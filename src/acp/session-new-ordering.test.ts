@@ -340,6 +340,60 @@ describe("AcpSessionNewOrdering", () => {
     expect(output).toEqual([created, other, afterEviction]);
   });
 
+  it("retires a loaded session the agent rejected", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const rejected = {
+      jsonrpc: "2.0",
+      id: 4,
+      error: { code: -32602, message: "no" },
+    } as AnyMessage;
+    const late = sessionUpdate("client-chosen");
+    const other = newSessionResponse(5, "other-session");
+
+    const output = await runSteps(ordering, [
+      {
+        inbound: {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "session/load",
+          params: { sessionId: "client-chosen", cwd: "/tmp", mcpServers: [{}] },
+        } as AnyMessage,
+      },
+      { outbound: rejected },
+      { inbound: newSessionRequest(5) },
+      { outbound: late },
+      { outbound: other },
+    ]);
+
+    // The ID was client-chosen and the agent refused it. Had it stayed established,
+    // `late` would have passed straight through; instead it waits behind the
+    // in-flight creation like any unrecognized session — and, uncapped, the set
+    // would otherwise grow by one for every rejected load a peer cares to send.
+    expect(output).toEqual([rejected, other, late]);
+  });
+
+  it("keeps a loaded session the agent accepted", async () => {
+    const ordering = new AcpSessionNewOrdering();
+    const accepted = { jsonrpc: "2.0", id: 4, result: {} } as AnyMessage;
+    const update = sessionUpdate("client-chosen");
+
+    const output = await runSteps(ordering, [
+      {
+        inbound: {
+          jsonrpc: "2.0",
+          id: 4,
+          method: "session/load",
+          params: { sessionId: "client-chosen", cwd: "/tmp" },
+        } as AnyMessage,
+      },
+      { outbound: accepted },
+      { inbound: newSessionRequest(5) },
+      { outbound: update },
+    ]);
+
+    expect(output).toEqual([accepted, update]);
+  });
+
   it("does not settle a correlation on an agent-initiated request that reuses the id", async () => {
     const ordering = new AcpSessionNewOrdering();
     const update = sessionUpdate("s");

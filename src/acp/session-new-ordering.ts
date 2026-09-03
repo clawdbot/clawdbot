@@ -56,6 +56,16 @@ export class AcpSessionNewOrdering {
   /** Per-session queue depth, used only to enforce the bounds — never for ordering. */
   private readonly queuedPerSession = new Map<string, number>();
   /**
+   * In-flight `session/load` / `session/resume` requests, keyed by JSON-RPC ID, with
+   * the session each one named. Those IDs are established provisionally on arrival
+   * so their updates are never delayed, but the agent can still reject the request
+   * — a load carrying per-session MCP servers, for one — and a rejected ID must not
+   * stay recognized: it is client-chosen, so leaving it would let a peer grow the
+   * established set without bound. The error response retires it. Bounded by
+   * in-flight loads, each of which is real work, and cleared by its own response.
+   */
+  private readonly provisionalSessions = new Map<string, string>();
+  /**
    * JSON-RPC IDs of in-flight `session/new` requests, used to correlate the
    * establishing response.
    *
@@ -94,6 +104,10 @@ export class AcpSessionNewOrdering {
     // peer grow this set for the lifetime of the process.
     if (SESSION_ESTABLISHING_METHODS.has(method)) {
       this.establish(sessionId);
+      const requestId = readRequestId(messageObject?.id);
+      if (requestId !== undefined) {
+        this.provisionalSessions.set(requestId, sessionId);
+      }
       return;
     }
 
@@ -127,6 +141,17 @@ export class AcpSessionNewOrdering {
     const responseId = isJsonRpcResponse(messageObject)
       ? readRequestId(messageObject?.id)
       : undefined;
+    if (responseId !== undefined) {
+      const provisional = this.provisionalSessions.get(responseId);
+      if (provisional !== undefined) {
+        this.provisionalSessions.delete(responseId);
+        if (messageObject?.error !== undefined) {
+          // The agent rejected the load or resume, so the session it named was never
+          // accepted and must not outlive the request that proposed it.
+          this.forget(provisional);
+        }
+      }
+    }
     if (responseId !== undefined && this.pendingNewSessionRequestIds.delete(responseId)) {
       // The response to `session/new` always goes out first; it is what introduces
       // the session ID to the client. A failed creation carries no ID to establish.
