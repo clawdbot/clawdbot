@@ -41,7 +41,7 @@ export function createRuntimeProviderAuthLookup(params: {
     workspaceDir: params.workspaceDir,
     env,
   };
-  const syntheticAuthProviderRefs =
+  const syntheticAuthProviderRefState =
     params.includePluginSyntheticAuth === false
       ? undefined
       : resolveRuntimeSyntheticAuthProviderRefState(lookupParams);
@@ -54,10 +54,8 @@ export function createRuntimeProviderAuthLookup(params: {
       skipSetupProviderFallback: true,
     },
     setupProviderFallbackRefs: authLookupMaps.setupProviderFallbackRefs,
-    syntheticAuthProviderRefs: syntheticAuthProviderRefs?.complete
-      ? syntheticAuthProviderRefs.refs
-      : undefined,
-    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefs?.complete,
+    syntheticAuthProviderRefs: syntheticAuthProviderRefState?.refs,
+    syntheticAuthProviderRefsComplete: syntheticAuthProviderRefState?.complete,
   };
 }
 
@@ -119,9 +117,18 @@ function shouldResolvePluginSyntheticAuth(params: {
   modelApi?: string;
   runtimeLookup?: RuntimeProviderAuthLookup;
 }): boolean {
-  const syntheticAuthProviderRefs = params.runtimeLookup?.syntheticAuthProviderRefs;
-  if (!syntheticAuthProviderRefs) {
+  if (!params.runtimeLookup) {
     return true;
+  }
+  // A prepared lookup that omitted refs used to mean "unrestricted", so an
+  // incomplete registry fell through to dynamic plugin discovery. Keep that
+  // unrestricted path only when no lookup was supplied.
+  if (params.runtimeLookup.syntheticAuthProviderRefsComplete === false) {
+    return false;
+  }
+  const syntheticAuthProviderRefs = params.runtimeLookup.syntheticAuthProviderRefs;
+  if (!syntheticAuthProviderRefs) {
+    return false;
   }
   const eligibleRefs = new Set(
     normalizeUniqueStringEntries(syntheticAuthProviderRefs.map((ref) => normalizeProviderId(ref))),

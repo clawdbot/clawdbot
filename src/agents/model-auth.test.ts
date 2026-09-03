@@ -1701,6 +1701,46 @@ describe("resolveApiKeyForProviderCore", () => {
     ).rejects.toThrow('No API key found for provider "native-cli"');
   });
 
+  it("fails closed when a prepared plugin lookup is incomplete", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "native-cli/demo-model",
+          },
+        },
+      },
+    };
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: {
+          envApiKey: { skipSetupProviderFallback: true },
+          syntheticAuthProviderRefsComplete: false,
+        },
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+
+    await expect(
+      resolveApiKeyForProviderCore({
+        provider: "native-cli",
+        cfg,
+        store: { version: 1, profiles: {} },
+        allowAuthProfileFallback: false,
+        allowPluginSyntheticAuth: true,
+        runtimeLookup: createRuntimeProviderAuthLookup({
+          includePluginSyntheticAuth: false,
+          env: {},
+        }),
+      }),
+    ).rejects.toThrow('No API key found for provider "native-cli"');
+  });
+
   it("reuses the loaded auth profile store after deferring an explicit synthetic profile", async () => {
     const auth = await resolveApiKeyForProviderCore({
       provider: "custom-auth",
