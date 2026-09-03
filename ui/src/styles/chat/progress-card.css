@@ -128,7 +128,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--text);
 }
 
-.session-hovercard__participant-unresolved,
 .session-hovercard__no-pr,
 .session-hovercard__more {
   color: var(--muted);
