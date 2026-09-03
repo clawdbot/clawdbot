@@ -985,7 +985,7 @@ apply_baseline_config_recipe() {
 }
 
 configure_watchos_tls_fixture() {
-  [ "$SCENARIO" = "watchos-direct-node" ] || return 0
+  [ "${SCENARIO:-}" = "watchos-direct-node" ] || return 0
   command -v openssl >/dev/null || {
     echo "watchOS direct-node survivor requires openssl" >&2
     return 1
@@ -1364,7 +1364,7 @@ probe_gateway_endpoint() {
   local start_epoch
   local end_epoch
   local gateway_http_url="http://127.0.0.1:18789"
-  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     gateway_http_url="$WATCH_GATEWAY_HTTP_URL"
   fi
   local args=(
@@ -1396,7 +1396,7 @@ start_gateway() {
   env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw gateway --port "$port" --bind loopback --allow-unconfigured >"$GATEWAY_LOG" 2>&1 &
   gateway_pid="$!"
   local readiness_mode="strict"
-  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     readiness_mode="legacy-ready-log-ok"
   fi
   openclaw_e2e_wait_gateway_ready "$gateway_pid" "$GATEWAY_LOG" 360 "$port" "$readiness_mode" || return "$?"
@@ -1424,7 +1424,7 @@ check_gateway_probes() {
 check_gateway_status() {
   local port=18789
   local gateway_ws_url="ws://127.0.0.1:$port"
-  if [ "$SCENARIO" = "watchos-direct-node" ]; then
+  if [ "${SCENARIO:-}" = "watchos-direct-node" ]; then
     gateway_ws_url="$WATCH_GATEWAY_WS_URL"
   fi
   local budget
