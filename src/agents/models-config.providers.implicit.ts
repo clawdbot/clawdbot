@@ -38,6 +38,10 @@ import {
   resolveImplicitProviderDiscoveryScope,
   type ProviderDiscoveryScope,
 } from "./models-config.providers.discovery-scope.js";
+import {
+  buildPluginCatalogConfig,
+  createProviderCatalogAuthIdResolver,
+} from "./models-config.providers.catalog-context.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -48,7 +52,6 @@ import {
   createProviderAuthResolver,
   resolveMissingProviderApiKey,
 } from "./models-config.providers.secrets.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 const log = createSubsystemLogger("agents/model-providers");
 
@@ -353,22 +356,6 @@ async function resolvePluginImplicitProviders(
   return Object.keys(discovered).length > 0 ? discovered : undefined;
 }
 
-function buildPluginCatalogConfig(ctx: ImplicitProviderContext): OpenClawConfig {
-  if (!ctx.explicitProviders || Object.keys(ctx.explicitProviders).length === 0) {
-    return ctx.config ?? {};
-  }
-  return {
-    ...ctx.config,
-    models: {
-      ...ctx.config?.models,
-      providers: {
-        ...ctx.config?.models?.providers,
-        ...ctx.explicitProviders,
-      },
-    },
-  };
-}
-
 async function runProviderCatalogWithTimeout(
   params: Parameters<typeof runProviderCatalog>[0] & {
     timeoutMs: number | null;
@@ -509,21 +496,6 @@ export async function resolveImplicitProviders(
     params.workspaceDir,
     discoveryAuthEnv,
   ] as const;
-  const authAliasLookupParams = {
-    config: discoveryAuthConfig,
-    workspaceDir: params.workspaceDir,
-    env,
-    ...(params.pluginMetadataSnapshot
-      ? {
-          metadataSnapshot: {
-            plugins: params.pluginMetadataSnapshot.manifestRegistry.plugins,
-            owners: {
-              providerAuthAliases: params.pluginMetadataSnapshot.owners.providerAuthAliases,
-            },
-          },
-        }
-      : {}),
-  };
   const context: ImplicitProviderContext = {
     ...params,
     get authStore() {
@@ -533,8 +505,12 @@ export async function resolveImplicitProviders(
     ...(discoveryScope ? { providerDiscoveryScope: discoveryScope } : {}),
     resolveProviderApiKey: createProviderApiKeyResolver(...authInputs),
     resolveProviderAuth: createProviderAuthResolver(...authInputs),
-    resolveProviderAuthProviderId: (provider) =>
-      resolveProviderIdForAuth(provider, authAliasLookupParams),
+    resolveProviderAuthProviderId: createProviderCatalogAuthIdResolver({
+      config: discoveryAuthConfig,
+      workspaceDir: params.workspaceDir,
+      env,
+      pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+    }),
   };
   const preparedStaticEntries = params.preparedStaticProviderCatalog
     ? params.preparedStaticProviderCatalog.entries.filter(
