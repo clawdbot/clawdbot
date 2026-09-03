@@ -22,7 +22,7 @@ import { withEnvAsync } from "../../src/test-utils/env.js";
 import { createBoundedChildOutput } from "./bounded-child-output.js";
 import { createFixtureLifetime } from "./fixture-lifetime.js";
 import { createOpenClawTestInstance, testing } from "./openclaw-test-instance.js";
-import { isProcessAlive, waitForDead } from "./process-wait.js";
+import { isProcessAlive, waitForDead, waitForFile } from "./process-wait.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
@@ -199,7 +199,7 @@ recordFixtureProcess(process.pid);
       path.join(distDir, "index.mjs"),
       `
 import { execFileSync, spawn } from "node:child_process";
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 ${processReceipt}
 const tracePath = process.env.OPENCLAW_FAKE_GATEWAY_TRACE;
@@ -223,14 +223,20 @@ const kind = (process.env.OPENCLAW_FAKE_GATEWAY_SEQUENCE || "ready").split(",")[
 if (kind === "cli-json") {
   if (argv[1] === "overflow-close") {
     const splitCodePoint = Buffer.from([0xf0, 0x9f, 0xa6, 0x8a]);
+    const releasePath = tracePath + ".overflow-release";
     const first = Buffer.concat([
       Buffer.alloc(Number(argv[0]) - 2, 0x61),
       splitCodePoint.subarray(0, 2),
     ]);
     await new Promise((resolve) => process.stdout.write(first, resolve));
-    await (await fetch(controlUrl + "/wait")).text();
+    writeFileSync(tracePath + ".overflow-ready", "");
+    const releaseDeadline = Date.now() + 5_000;
+    while (!existsSync(releasePath)) {
+      if (Date.now() >= releaseDeadline) throw new Error("overflow release timed out");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await new Promise((resolve) =>
-      process.stdout.write(
+      process.stdout.end(
         Buffer.concat([
           splitCodePoint.subarray(2),
           Buffer.from("\\ntrailing overflow output\\n"),
@@ -238,7 +244,8 @@ if (kind === "cli-json") {
         resolve,
       ),
     );
-    process.exit(0);
+    setInterval(() => {}, 1_000);
+    await new Promise(() => {});
   }
   const json = JSON.stringify({ first: "complete", payload: "é".repeat(Number(argv[0])), providerCredentialPresent: Object.hasOwn(process.env, "OPENAI_API_KEY"), last: "complete" });
   await Promise.all([
@@ -374,12 +381,10 @@ describe("openclaw test instance", () => {
     "owns complete CLI JSON and diagnostic tails (%s)",
     async (mode) => {
       await withEnvAsync({ OPENAI_API_KEY: "ambient-provider-fixture" }, async () => {
-        const control = mode === "overflow-close" ? await createGatewayControl() : undefined;
-        const { instance, readAttempts } = await createFakeGateway(
+        const { instance, tracePath, readAttempts } = await createFakeGateway(
           "cli-json",
           1_000,
           1_500,
-          control ? { url: control.url } : undefined,
         );
         // The command must not merge a removed credential back from its parent.
         delete instance.env.OPENAI_API_KEY;
@@ -398,9 +403,9 @@ describe("openclaw test instance", () => {
             }),
             (error: unknown) => error,
           );
-          if (control) {
-            await withTestTimeout(control.reached, 5_000, "overflow close control gate");
-            await control.release();
+          if (mode === "overflow-close") {
+            await waitForFile(`${tracePath}.overflow-ready`, 5_000);
+            await fs.writeFile(`${tracePath}.overflow-release`, "");
           }
           const outcome = await outcomePromise;
           if (!(outcome instanceof Error)) {
