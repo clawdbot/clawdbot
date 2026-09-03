@@ -38,6 +38,7 @@ import {
   type StoredCodexAppServerBinding,
 } from "./session-binding-record.js";
 export {
+  CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY,
   CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
   bindingStoreKey,

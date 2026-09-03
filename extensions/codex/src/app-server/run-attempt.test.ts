@@ -113,6 +113,7 @@ import {
 } from "./sandbox-exec-server.js";
 import { createSandboxContext } from "./sandbox-exec-server.test-helpers.js";
 import {
+  CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY,
   CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
 } from "./session-binding.js";
@@ -259,6 +260,7 @@ async function writeExistingBinding(
     modelProvider: "openai",
     historyCoveredThrough: new Date().toISOString(),
     webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+    agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
     ...(supervisionFingerprint ? { appServerRuntimeFingerprint: supervisionFingerprint } : {}),
     ...overrides,
   });
@@ -4925,11 +4927,10 @@ describe("runCodexAppServerAttempt", () => {
       | {
           config?: { project_doc_max_bytes?: number };
           developerInstructions?: string;
-          environments?: Array<{ environmentId?: string; cwd?: string }>;
         }
       | undefined;
     expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
-    expect(resumeRequest?.environments).toEqual([{ environmentId: "local", cwd: workspaceDir }]);
+    expect(resumeRequest).not.toHaveProperty("environments");
     expect(resumeRequest?.developerInstructions).toContain("Frozen Codex Project Instructions");
     expect(resumeRequest?.developerInstructions).not.toContain(lateGuidance);
   });
@@ -5072,6 +5073,39 @@ describe("runCodexAppServerAttempt", () => {
     );
     sandboxHarness.close(new Error("sandbox app-server process exited"));
 
+    const coldSandboxHarness = createResumeHarness({
+      threadId: "thread-sandbox-empty",
+      instructionSources: ["/workspace/AGENTS.md"],
+    });
+    const coldSandboxParams = createParams(sessionFile, workspaceDir);
+    coldSandboxParams.disableTools = false;
+    coldSandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    coldSandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(coldSandboxParams, true);
+    setAgentWorkspaceForTest(coldSandboxParams, workspaceDir);
+    const coldSandboxRun = runCodexAppServerAttempt(coldSandboxParams, { pluginConfig });
+    await coldSandboxHarness.waitForMethod("turn/start");
+    await coldSandboxHarness.completeTurn({
+      threadId: "thread-sandbox-empty",
+      turnId: "turn-1",
+    });
+    await coldSandboxRun;
+
+    const coldSandboxResume = coldSandboxHarness.requests.find(
+      (request) => request.method === "thread/resume",
+    );
+    const coldSandboxResumeRequest = coldSandboxResume?.params as
+      | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
+      | undefined;
+    expect(coldSandboxResumeRequest?.config?.project_doc_max_bytes).toBe(0);
+    expect(coldSandboxResumeRequest?.developerInstructions).toContain(
+      "Frozen Codex Project Instructions",
+    );
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+    });
+    coldSandboxHarness.close(new Error("cold sandbox app-server process exited"));
+
     const hostHarness = createResumeHarness({
       threadId: "thread-sandbox-empty",
       instructionSources: [],
@@ -5092,6 +5126,82 @@ describe("runCodexAppServerAttempt", () => {
       | undefined;
     expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
     expect(resumeRequest?.developerInstructions).toContain("Frozen Codex Project Instructions");
+  });
+
+  it("replays a captured host instruction snapshot on a cold sandbox resume", async () => {
+    testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("exec"),
+      createRuntimeDynamicTool("process"),
+      createRuntimeDynamicTool("message"),
+    ]);
+    const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    const capturedGuidance = "Keep this host-captured guidance inside the sandbox continuation.";
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(agentsPath, capturedGuidance);
+    const pluginConfig = {
+      appServer: {
+        mode: "yolo" as const,
+        experimental: { sandboxExecServer: true },
+      },
+    };
+    const firstHarness = createStartedThreadHarness(async (method) =>
+      method === "thread/start"
+        ? threadStartResult("thread-host-snapshot", {
+            cwd: workspaceDir,
+            instructionSources: [agentsPath],
+          })
+        : undefined,
+    );
+    const firstParams = createParams(sessionFile, workspaceDir);
+    firstParams.disableTools = false;
+    firstParams.runtimePlan = createCodexRuntimePlanFixture();
+    setCodexTestModelSupportsTools(firstParams, true);
+    setAgentWorkspaceForTest(firstParams, workspaceDir);
+    const firstRun = runCodexAppServerAttempt(firstParams, { pluginConfig });
+    await firstHarness.waitForMethod("turn/start");
+    await firstHarness.completeTurn({ threadId: "thread-host-snapshot", turnId: "turn-1" });
+    await firstRun;
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+    });
+    firstHarness.close(new Error("host app-server process exited"));
+
+    const sandbox = {
+      ...createSandboxContext({}),
+      sessionKey: "agent:main:sandbox-portable-authority",
+      workspaceDir,
+      agentWorkspaceDir: workspaceDir,
+      runtimeId: `sandbox-portable-authority-${path.basename(tempDir)}`,
+      runtimeLabel: "Sandbox portable instruction authority",
+      containerName: "sandbox-portable-instruction-authority",
+    };
+    const sandboxHarness = createResumeHarness({
+      threadId: "thread-host-snapshot",
+      instructionSources: ["/workspace/AGENTS.md"],
+    });
+    const sandboxParams = createParams(sessionFile, workspaceDir);
+    sandboxParams.disableTools = false;
+    sandboxParams.runtimePlan = createCodexRuntimePlanFixture();
+    sandboxParams.sandbox = sandbox as never;
+    setCodexTestModelSupportsTools(sandboxParams, true);
+    setAgentWorkspaceForTest(sandboxParams, workspaceDir);
+    const sandboxRun = runCodexAppServerAttempt(sandboxParams, { pluginConfig });
+    await sandboxHarness.waitForMethod("turn/start");
+    await sandboxHarness.completeTurn({ threadId: "thread-host-snapshot", turnId: "turn-1" });
+    await sandboxRun;
+
+    const threadResume = sandboxHarness.requests.find(
+      (request) => request.method === "thread/resume",
+    );
+    const resumeRequest = threadResume?.params as
+      | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
+      | undefined;
+    expect(resumeRequest?.config?.project_doc_max_bytes).toBe(0);
+    expect(resumeRequest?.developerInstructions).toContain(capturedGuidance);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+    });
   });
 
   it("keeps a nonempty same-workspace snapshot frozen after AGENTS.md changes", async () => {
@@ -5162,25 +5272,37 @@ describe("runCodexAppServerAttempt", () => {
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toBeUndefined();
   });
 
-  it("captures native project instructions while upgrading a legacy cold resume", async () => {
+  it("rotates a legacy cold owner through an explicitly local start before capture", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
     const agentsPath = path.join(workspaceDir, "AGENTS.md");
     const capturedGuidance = "Freeze these instructions while upgrading the legacy binding.";
     await fs.mkdir(workspaceDir, { recursive: true });
     await fs.writeFile(agentsPath, capturedGuidance);
-    await writeExistingBinding(sessionFile, workspaceDir);
-    const resumeHarness = createResumeHarness({
-      threadId: "thread-existing",
-      instructionSources: [agentsPath],
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      agentWorkspaceDeveloperInstructions: undefined,
     });
+    const resumeHarness = createStartedThreadHarness(
+      async (method) =>
+        method === "thread/start"
+          ? threadStartResult("thread-upgraded", {
+              cwd: workspaceDir,
+              instructionSources: [agentsPath],
+            })
+          : undefined,
+      { persistedThreads: ["thread-existing"] },
+    );
 
     const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
     await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await resumeHarness.completeTurn({ threadId: "thread-upgraded", turnId: "turn-1" });
     await resumedRun;
 
+    expect(resumeHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
+    const startRequest = resumeHarness.requests.find((request) => request.method === "thread/start")
+      ?.params as { environments?: Array<{ environmentId?: string; cwd?: string }> } | undefined;
+    expect(startRequest?.environments).toEqual([{ environmentId: "local", cwd: workspaceDir }]);
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
+      threadId: "thread-upgraded",
       agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
     });
   });
@@ -5193,7 +5315,9 @@ describe("runCodexAppServerAttempt", () => {
     ]);
     const { sessionFile, workspaceDir } = createRunPaths();
     await fs.mkdir(workspaceDir, { recursive: true });
-    await writeExistingBinding(sessionFile, workspaceDir);
+    await writeExistingBinding(sessionFile, workspaceDir, {
+      agentWorkspaceDeveloperInstructions: undefined,
+    });
     const sandbox = {
       ...createSandboxContext({}),
       sessionKey: "agent:main:legacy-sandbox-authority",
@@ -5215,17 +5339,24 @@ describe("runCodexAppServerAttempt", () => {
     sandboxParams.sandbox = sandbox as never;
     setCodexTestModelSupportsTools(sandboxParams, true);
     setAgentWorkspaceForTest(sandboxParams, workspaceDir);
-    const sandboxHarness = createResumeHarness({
-      threadId: "thread-existing",
-      instructionSources: ["/workspace/AGENTS.md"],
-    });
+    const sandboxHarness = createStartedThreadHarness(
+      async (method) =>
+        method === "thread/start"
+          ? threadStartResult("thread-sandbox-upgraded", {
+              cwd: "/workspace",
+              instructionSources: ["/workspace/AGENTS.md"],
+            })
+          : undefined,
+      { persistedThreads: ["thread-existing"] },
+    );
 
     const sandboxRun = runCodexAppServerAttempt(sandboxParams, { pluginConfig });
     await sandboxHarness.waitForMethod("turn/start");
-    await sandboxHarness.completeTurn({ threadId: "thread-existing", turnId: "turn-1" });
+    await sandboxHarness.completeTurn({ threadId: "thread-sandbox-upgraded", turnId: "turn-1" });
     await sandboxRun;
+    expect(sandboxHarness.requests.map((request) => request.method)).not.toContain("thread/resume");
     await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
-      threadId: "thread-existing",
+      threadId: "thread-sandbox-upgraded",
       agentWorkspaceDeveloperInstructions: CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
       projectInstructionsUnavailableToGateway: true,
       environmentSelectionFingerprint: expect.stringMatching(/^sha256:[a-f0-9]{64}$/u),
@@ -5322,6 +5453,9 @@ describe("runCodexAppServerAttempt", () => {
     await firstHarness.waitForMethod("turn/start");
     await firstHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await firstRun;
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      agentWorkspaceDeveloperInstructions: CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY,
+    });
 
     await fs.writeFile(path.join(agentWorkspaceDir, "AGENTS.md"), lateGuidance);
     const resumeHarness = createResumeHarness("thread-1");
@@ -5337,6 +5471,12 @@ describe("runCodexAppServerAttempt", () => {
       | { config?: { project_doc_max_bytes?: number }; developerInstructions?: string }
       | undefined;
     expect(resumeRequest?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(resumeRequest?.developerInstructions).toContain(
+      "configured OpenClaw agent workspace contained no project-instruction files",
+    );
+    expect(resumeRequest?.developerInstructions).not.toContain(
+      "root-to-working-directory Codex project-document hierarchy was empty",
+    );
     expect(resumeRequest?.developerInstructions).not.toContain(lateGuidance);
   });
 
@@ -5821,10 +5961,11 @@ describe("runCodexAppServerAttempt", () => {
   });
   it("keeps lightweight cron Codex turns out of OpenClaw bootstrap context", async () => {
     const { sessionFile, workspaceDir } = createRunPaths();
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
     const exactCommand =
       "cd /Users/phaedrus/Projects/openclaw && /Users/phaedrus/clawd/scripts/clawsweeper-related-scan.py";
     await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Follow AGENTS guidance.");
+    await fs.writeFile(agentsPath, "Follow AGENTS guidance.");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Soul voice goes here.");
     const harness = createStartedThreadHarness();
     const params = createParams(sessionFile, workspaceDir);
@@ -5859,25 +6000,37 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnStartParams.input?.[0]?.text).toBe(exactCommand);
     expect(result.systemPromptReport?.skills).toMatchObject({ promptChars: 0, entries: [] });
     expect(result.systemPromptReport?.skills.hash).toMatch(/^[a-f0-9]{64}$/u);
-    const resumeHarness = createResumeHarness({
-      threadId: "thread-1",
-      instructionSources: [path.join(workspaceDir, "AGENTS.md")],
-    });
-    const resumedRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
-    await resumeHarness.waitForMethod("turn/start");
-    await resumeHarness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await resumedRun;
-    const threadResume = resumeHarness.requests.find(
-      (request) => request.method === "thread/resume",
+    const ordinaryHarness = createStartedThreadHarness(
+      async (method) =>
+        method === "thread/start"
+          ? threadStartResult("thread-after-cron", {
+              cwd: workspaceDir,
+              instructionSources: [agentsPath],
+            })
+          : undefined,
+      { persistedThreads: ["thread-1"] },
     );
-    expect(
-      (threadResume?.params as { developerInstructions?: string } | undefined)
-        ?.developerInstructions,
-    ).not.toContain("native project-doc discovery");
-    expect(
-      (threadResume?.params as { developerInstructions?: string } | undefined)
-        ?.developerInstructions,
-    ).not.toContain("Follow AGENTS guidance.");
+    const ordinaryRun = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await ordinaryHarness.waitForMethod("turn/start");
+    await ordinaryHarness.completeTurn({ threadId: "thread-after-cron", turnId: "turn-1" });
+    await ordinaryRun;
+    expect(ordinaryHarness.requests.map((request) => request.method)).not.toContain(
+      "thread/resume",
+    );
+    const ordinaryStart = ordinaryHarness.requests.find(
+      (request) => request.method === "thread/start",
+    )?.params as
+      | {
+          config?: { project_doc_max_bytes?: number };
+          environments?: Array<{ environmentId?: string; cwd?: string }>;
+        }
+      | undefined;
+    expect(ordinaryStart?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(ordinaryStart?.environments).toEqual([{ environmentId: "local", cwd: workspaceDir }]);
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-after-cron",
+      agentWorkspaceDeveloperInstructions: expect.stringContaining("Follow AGENTS guidance."),
+    });
   });
 
   it("keeps lightweight cron delivery hints byte-for-byte without OpenClaw prompt context", async () => {

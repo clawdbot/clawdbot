@@ -14,7 +14,7 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { buildNativeHookRelayCommandPlan } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import type { CodexSessionCatalogControl } from "../session-catalog-types.js";
-import { prepareCodexWorkspaceDeveloperInstructions } from "./attempt-context.js";
+import { resolveCanonicalCodexForkProjectInstructionPolicy } from "./canonical-fork-project-instructions.js";
 import { resolveOpenClawExecPolicyForCodexAppServer } from "./config-exec-policy.js";
 import { assertCodexModelBackedReviewerEffectiveConfig } from "./config-reviewer.js";
 import { readCodexPluginConfig, resolveCodexSupervisionAppServerRuntimeOptions } from "./config.js";
@@ -60,6 +60,7 @@ export async function prepareCanonicalCodexFork(params: {
   modelProvider: string;
   sandbox: AgentHarnessSessionForkParams["sandbox"];
   dynamicTools: CodexDynamicToolSpec[];
+  agentWorkspaceDeveloperInstructions: string;
 }) {
   const { created, initialization, config, context } = params;
   const assertCurrent = initialization.assertCurrent;
@@ -224,15 +225,11 @@ export async function prepareCanonicalCodexFork(params: {
     cwd,
   });
   assertCurrent();
-  const workspaceInstructions = await prepareCodexWorkspaceDeveloperInstructions({
-    config,
-    agentId: created.agentId,
-    sessionKey: created.key,
-    sessionId: created.sessionId,
+  const projectInstructions = resolveCanonicalCodexForkProjectInstructionPolicy({
     workspaceDir,
     cwd,
+    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
   });
-  assertCurrent();
   const promptContext = {
     config,
     agentId: created.agentId,
@@ -241,7 +238,7 @@ export async function prepareCanonicalCodexFork(params: {
   };
   const developerInstructions = [
     buildDeveloperInstructions(promptContext, { dynamicTools }),
-    workspaceInstructions,
+    projectInstructions.developerInstructions,
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -256,6 +253,7 @@ export async function prepareCanonicalCodexFork(params: {
       apps?.configPatch,
       appServer.networkProxy?.configPatch,
       buildCodexNativeHookRelayConfig({ relay, events, clearOmittedEvents: true }),
+      projectInstructions.configPatch,
     ),
     nativeSkillIsolation,
   );
@@ -276,7 +274,7 @@ export async function prepareCanonicalCodexFork(params: {
     provisionalAppIds: apps?.provisionalAppIds ?? [],
     bindingPolicy: {
       nativeHookRelayGeneration: generation,
-      agentWorkspaceDeveloperInstructions: workspaceInstructions,
+      agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
       networkProxyProfileName: appServer.networkProxy?.profileName,
       networkProxyConfigFingerprint: appServer.networkProxy?.configFingerprint,
       nativeSkillIsolationFingerprint: nativeSkillIsolation

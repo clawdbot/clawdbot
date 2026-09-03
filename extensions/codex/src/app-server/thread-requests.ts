@@ -301,7 +301,10 @@ export function buildThreadResumeParams(
         }
       : {}),
     ...buildCodexThreadConfiguration(params, options),
-    ...resolveCodexThreadEnvironmentSelection(options),
+    // Codex 0.153 does not accept `environments` on thread/resume. Callers that
+    // need to establish project-instruction ownership must rotate through a
+    // fresh, explicitly selected thread/start instead of relying on an ignored
+    // JSON field here.
     personality: CODEX_NATIVE_PERSONALITY_NONE,
   };
 }

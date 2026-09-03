@@ -189,6 +189,12 @@ export async function tryReuseCodexLiveThread(
   } = options;
   const incognito = isIncognitoSessionKey(params.params.sessionKey);
 
+  assertCodexProjectInstructionEnvironmentAvailable(
+    binding,
+    environmentSelectionFingerprint,
+    "reuse",
+  );
+
   // These native-owned ephemeral lifetimes do not enter ordinary
   // configuration ownership. Keep their existing live-only continuation path.
   if (incognito && (binding.preserveNativeModel || binding.connectionScope === "supervision")) {
@@ -204,12 +210,6 @@ export async function tryReuseCodexLiveThread(
     }
     return { kind: "rotate" };
   }
-
-  assertCodexProjectInstructionEnvironmentAvailable(
-    binding,
-    environmentSelectionFingerprint,
-    "reuse",
-  );
 
   if (
     !binding.clientId ||
@@ -270,13 +270,16 @@ export async function tryReuseCodexLiveThread(
         ? buildCodexPluginAppsConfigPatchFromPolicyContext(binding.pluginAppPolicyContext)
         : undefined);
     const resumeAuthProfileId = params.params.authProfileId ?? binding.authProfileId;
-    const resumeConfig = mergeCodexThreadConfigs(
+    const warmConfig = mergeCodexThreadConfigs(
       params.config,
       userMcpServersConfigPatch,
       pluginAppsConfigPatch,
       prebuiltFinalConfigPatch.configPatch,
     );
-    const resumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
+    const buildExpectedResumeParams = (
+      developerInstructions: string | undefined,
+      config: typeof warmConfig,
+    ) =>
       buildThreadResumeParams(params.params, {
         threadId: binding.threadId,
         cwd: params.cwd,
@@ -286,8 +289,8 @@ export async function tryReuseCodexLiveThread(
         preserveNativeModel: false,
         appServer: params.appServer,
         dynamicTools: params.dynamicTools,
-        developerInstructions: params.developerInstructions,
-        config: applyCodexNativeSkillIsolation(resumeConfig, nativeSkillIsolation),
+        developerInstructions,
+        config: applyCodexNativeSkillIsolation(config, nativeSkillIsolation),
         nativeCodeModeEnabled: params.nativeCodeModeEnabled,
         nativeProviderWebSearchSupport: params.nativeProviderWebSearchSupport,
         nativeCodeModeOnlyEnabled: params.nativeCodeModeOnlyEnabled,
@@ -296,28 +299,53 @@ export async function tryReuseCodexLiveThread(
         restrictedToolSurfaceInheritedMcpServerNames,
         shellEnvironment: params.shellEnvironment,
         disableLoginShell: params.disableLoginShell,
-      }),
+      });
+    const warmResumeParams = lifecycleTiming.measureSync("warm-thread-resume-params", () =>
+      buildExpectedResumeParams(params.developerInstructions, warmConfig),
     );
+    // A fresh thread keeps native project discovery loaded in memory. A
+    // physically cold resume instead replays the frozen snapshot and disables
+    // native rediscovery. Both are valid warm owners of the same durable
+    // authority, but their wire-level configuration fingerprints differ.
+    const coldResumeParams = params.nativeProjectDocsDisabledOnResume
+      ? buildExpectedResumeParams(
+          params.coldDeveloperInstructions ?? params.developerInstructions,
+          mergeCodexThreadConfigs(warmConfig, { project_doc_max_bytes: 0 }),
+        )
+      : warmResumeParams;
+    const fingerprintResumeParams = (resumeParams: typeof warmResumeParams) =>
+      fingerprintCodexThreadConfig(
+        {
+          ...resumeParams,
+          // Keep the actual loaded provider separate from caller-selected
+          // overrides so account or provider changes always invalidate reuse.
+          model: binding.model ?? resumeParams.model ?? null,
+          requestedModel: resumeParams.model ?? null,
+          modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
+          requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
+        },
+        resumeAuthProfileId,
+        dynamicToolsFingerprint,
+      );
+    const warmThreadConfigFingerprint = fingerprintResumeParams(warmResumeParams);
+    const coldThreadConfigFingerprint = fingerprintResumeParams(coldResumeParams);
+    const loadedResumeParams = incognito
+      ? warmResumeParams
+      : retainedThread.configFingerprint === warmThreadConfigFingerprint
+        ? warmResumeParams
+        : retainedThread.configFingerprint === coldThreadConfigFingerprint
+          ? coldResumeParams
+          : undefined;
     const liveThreadConfigFingerprint = incognito
       ? retainedThread.configFingerprint
-      : fingerprintCodexThreadConfig(
-          {
-            ...resumeParams,
-            // Keep the actual loaded provider separate from caller-selected
-            // overrides so account or provider changes always invalidate reuse.
-            model: binding.model ?? resumeParams.model ?? null,
-            requestedModel: resumeParams.model ?? null,
-            modelProvider: binding.modelProvider ?? resumeParams.modelProvider ?? null,
-            requestedModelProvider: resumeParams.modelProvider ?? binding.modelProvider ?? null,
-          },
-          resumeAuthProfileId,
-          dynamicToolsFingerprint,
-        );
-    if (incognito && retainedThread.ephemeralPolicy !== resumeParams.developerInstructions) {
+      : loadedResumeParams
+        ? retainedThread.configFingerprint
+        : coldThreadConfigFingerprint;
+    if (incognito && retainedThread.ephemeralPolicy !== warmResumeParams.developerInstructions) {
       preserveSubscription = true;
       throw new CodexIncognitoPolicyChangeError();
     }
-    if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
+    if (!incognito && !loadedResumeParams) {
       // Return the same owner first: cold-resume preparation must observe native teardown
       // before releasing it, otherwise a loaded resume can silently ignore new policy.
       preserveSubscription = true;
@@ -328,7 +356,7 @@ export async function tryReuseCodexLiveThread(
       threadId: binding.threadId,
       appIds: pluginThreadConfig?.provisionalAppIds ?? [],
       signal: params.signal,
-      threadConfig: resumeParams.config,
+      threadConfig: loadedResumeParams?.config ?? warmResumeParams.config,
       restrictedToolSurface,
       lifecycleTiming,
       assertCurrent: assertWarmOwner,
@@ -383,7 +411,9 @@ export async function tryReuseCodexLiveThread(
         liveThreadConfigFingerprint,
         liveThreadEphemeralPolicy: retainedThread.ephemeralPolicy,
         liveThreadOwnership: retainedThread,
-        ...(!incognito && retainedThread.serviceTier && resumeParams.serviceTier === undefined
+        ...(!incognito &&
+        retainedThread.serviceTier &&
+        (loadedResumeParams?.serviceTier ?? warmResumeParams.serviceTier) === undefined
           ? { clearInheritedServiceTier: true }
           : {}),
         lifecycle: { action: "resumed" },

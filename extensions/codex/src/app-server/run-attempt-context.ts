@@ -27,7 +27,10 @@ import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profi
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
-import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
+import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
+} from "./session-binding.js";
 import {
   buildDeveloperInstructions,
   type CodexContextEngineThreadBootstrapProjection,
@@ -184,11 +187,17 @@ export async function prepareCodexAttemptContext(
     workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed &&
     !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
     workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed;
-  const storedAgentWorkspaceDeveloperInstructions =
-    workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier ||
-    nativeProjectInstructionSnapshotAllowed
-      ? startupBinding?.agentWorkspaceDeveloperInstructions
+  const storedBindingInstructions = startupBinding?.agentWorkspaceDeveloperInstructions;
+  const storedReplayableNativeProjectInstructions =
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    storedBindingInstructions !== undefined &&
+    storedBindingInstructions !== CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY
+      ? storedBindingInstructions
       : undefined;
+  const storedAgentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier
+      ? storedBindingInstructions
+      : storedReplayableNativeProjectInstructions;
   const captureNativeProjectInstructions =
     nativeProjectInstructionSnapshotAllowed &&
     storedAgentWorkspaceDeveloperInstructions === undefined;
@@ -197,9 +206,10 @@ export async function prepareCodexAttemptContext(
   const projectInstructionsUnavailableToGateway =
     workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed &&
     !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
-    !workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed;
+    !workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed &&
+    storedReplayableNativeProjectInstructions === undefined;
   const nativeProjectDocsDisabledOnResume =
-    nativeProjectInstructionSnapshotAllowed &&
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
     storedAgentWorkspaceDeveloperInstructions !== undefined;
   const agentWorkspaceDeveloperInstructions =
     workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed

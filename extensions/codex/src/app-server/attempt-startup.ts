@@ -165,9 +165,9 @@ export async function startCodexAttemptThread(params: {
   webSearchAllowed: boolean;
   developerInstructions: string | undefined;
   /** Developer instructions used only when a physical start or cold resume needs frozen replay. */
-  coldDeveloperInstructions: string | undefined;
+  coldDeveloperInstructions?: string;
   agentWorkspaceDeveloperInstructions?: string;
-  agentWorkspaceDeveloperInstructionsAllowed: boolean;
+  agentWorkspaceDeveloperInstructionsAllowed?: boolean;
   captureNativeProjectInstructions?: boolean;
   projectInstructionsUnavailableToGateway?: boolean;
   nativeProjectDocsDisabledOnResume?: boolean;

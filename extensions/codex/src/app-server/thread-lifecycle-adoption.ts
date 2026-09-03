@@ -137,6 +137,16 @@ export async function resumePendingCodexThread(
   context: PendingResumeContext,
 ): Promise<CodexAppServerThreadLifecycleBinding> {
   const { binding, contextEngineBinding, lifecycleTiming, restrictedToolSurface } = context;
+  if (
+    binding.agentWorkspaceDeveloperInstructions === undefined &&
+    (params.captureNativeProjectInstructions === true ||
+      params.projectInstructionsUnavailableToGateway === true)
+  ) {
+    throw new Error(
+      `Cannot configure resumed Codex thread ${binding.threadId}: its project-instruction authority was not established when it was attached. ` +
+        "The thread is preserved; continue it in native Codex or use /new for the current OpenClaw tools.",
+    );
+  }
   assertCodexProjectInstructionColdResumeAllowed(binding);
   if (
     isIncognitoSessionKey(params.params.sessionKey) ||

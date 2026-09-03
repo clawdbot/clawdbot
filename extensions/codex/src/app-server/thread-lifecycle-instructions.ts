@@ -1,4 +1,5 @@
 import {
+  CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY,
   CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
   CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY,
 } from "./session-binding.js";
@@ -11,6 +12,7 @@ export function captureAgentInstructions(
     | "params"
     | "agentWorkspaceDeveloperInstructions"
     | "agentWorkspaceDeveloperInstructionsAllowed"
+    | "captureNativeProjectInstructions"
     | "projectInstructionsUnavailableToGateway"
   >,
   fallbackInstructions?: string | null,
@@ -33,10 +35,14 @@ export function captureAgentInstructions(
       projectInstructionsUnavailableToGateway: true as const,
     };
   }
+  const establishedInstructions =
+    params.agentWorkspaceDeveloperInstructions ?? fallbackInstructions;
   return {
     agentWorkspaceDeveloperInstructions:
-      params.agentWorkspaceDeveloperInstructions !== undefined
-        ? params.agentWorkspaceDeveloperInstructions
-        : (fallbackInstructions ?? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY),
+      establishedInstructions ??
+      (params.captureNativeProjectInstructions === true ||
+      params.projectInstructionsUnavailableToGateway === true
+        ? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY
+        : CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY),
   };
 }

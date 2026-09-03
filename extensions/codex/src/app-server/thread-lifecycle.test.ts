@@ -4157,6 +4157,264 @@ describe("Codex app-server supervised branch lifecycle", () => {
     },
   );
 
+  it("materializes a model-locked canonical branch with captured agent instructions", async () => {
+    const sourceThreadId = "thread-source";
+    const probeThreadId = "thread-probe";
+    const finalThreadId = "thread-final";
+    const lastTurnId = "turn-terminal";
+    const capturedGuidance = "Follow the captured supervised AGENTS guidance.";
+    const turnDeveloperInstructions = "Apply the current supervised turn policy.";
+    const workspaceDir = path.join(tempDir, "workspace");
+    const agentsPath = path.join(workspaceDir, "AGENTS.md");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(agentsPath, capturedGuidance);
+    const attempt = createThreadLifecycleParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    attempt.agentDir = path.join(tempDir, "agent");
+    const rolloutPath = path.join(
+      resolveCodexAppServerHomeDir(attempt.agentDir),
+      "sessions",
+      `rollout-${finalThreadId}.jsonl`,
+    );
+    attempt.modelId = "outer-global-default";
+    attempt.expectedSessionRuntimeOwnership = { model: "native", auth: "native" };
+    const identity = await seedPendingSupervisionBinding({
+      attempt,
+      cwd: workspaceDir,
+      pending: { sourceThreadId, lastTurnId },
+    });
+    const terminalSource = sourceThread({
+      threadId: sourceThreadId,
+      turns: [
+        {
+          id: lastTurnId,
+          status: "completed",
+          items: [
+            {
+              id: "user-1",
+              type: "userMessage",
+              content: [{ type: "text", text: "Visible question" }],
+            },
+            { id: "reasoning-1", type: "reasoning", text: "Private reasoning" },
+            {
+              id: "assistant-1",
+              type: "agentMessage",
+              text: "Visible answer",
+              phase: "final_answer",
+            },
+            { id: "tool-1", type: "commandExecution", command: "secret-tool" },
+          ],
+        },
+      ],
+    });
+    const request = vi.fn(async (method: string, requestParams: unknown) => {
+      if (method === "thread/read") {
+        const threadId = (requestParams as { threadId?: string }).threadId;
+        return {
+          thread:
+            threadId === sourceThreadId
+              ? terminalSource
+              : {
+                  ...sourceThread({ threadId: finalThreadId, status: "notLoaded" }),
+                  path: rolloutPath,
+                },
+        };
+      }
+      if (method === "thread/fork") {
+        return nativeThreadResult(probeThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/start") {
+        return {
+          ...nativeThreadResult(finalThreadId, "native-effective", "native-provider"),
+          instructionSources: [agentsPath],
+        };
+      }
+      if (method === "thread/resume") {
+        return nativeThreadResult(finalThreadId, "native-effective", "native-provider");
+      }
+      if (method === "thread/inject_items" || method === "thread/unsubscribe") {
+        return {};
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    const dynamicTools = [
+      {
+        type: "function" as const,
+        name: "message",
+        description: "Send a message",
+        inputSchema: { type: "object", properties: {} },
+      },
+    ];
+    const commonParams = {
+      client: { request } as never,
+      params: attempt,
+      cwd: workspaceDir,
+      dynamicTools,
+      developerInstructions: turnDeveloperInstructions,
+      agentWorkspaceDeveloperInstructionsAllowed: true,
+      captureNativeProjectInstructions: true,
+      environmentSelection: [{ environmentId: "local", cwd: workspaceDir }],
+      shellEnvironment: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+      disableLoginShell: true,
+      appServer: createThreadLifecycleAppServerOptions(),
+      appServerRuntimeFingerprint: "codex-runtime-v1",
+    };
+
+    const materialized = await startOrResumeThread(commonParams);
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/fork",
+      "thread/unsubscribe",
+      "thread/start",
+      "thread/inject_items",
+    ]);
+    expect(request.mock.calls[0]?.[1]).toEqual({
+      threadId: sourceThreadId,
+      includeTurns: true,
+    });
+    const forkParams = request.mock.calls[1]?.[1] as Record<string, unknown>;
+    expect(forkParams).toMatchObject({
+      threadId: sourceThreadId,
+      lastTurnId,
+      excludeTurns: true,
+      developerInstructions: turnDeveloperInstructions,
+      config: {
+        allow_login_shell: false,
+        shell_environment_policy: {
+          experimental_use_profile: false,
+          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        },
+      },
+    });
+    expect(forkParams).not.toHaveProperty("model");
+    expect(forkParams).not.toHaveProperty("modelProvider");
+    expect(forkParams).not.toHaveProperty("dynamicTools");
+    expect(forkParams).not.toHaveProperty("environments");
+    const startParams = request.mock.calls.find(
+      ([method]) => method === "thread/start",
+    )?.[1] as Record<string, unknown>;
+    expect(startParams).toMatchObject({
+      model: "native-effective",
+      modelProvider: "native-provider",
+      developerInstructions: turnDeveloperInstructions,
+      dynamicTools,
+      environments: [{ environmentId: "local", cwd: workspaceDir }],
+      config: {
+        allow_login_shell: false,
+        shell_environment_policy: {
+          experimental_use_profile: false,
+          set: { GH_TOKEN: "", GITHUB_TOKEN: "" },
+        },
+      },
+    });
+    expect(startParams.model).not.toBe(attempt.modelId);
+    expect(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]).toEqual({
+      threadId: finalThreadId,
+      items: [
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "Visible question" }],
+        },
+        {
+          type: "message",
+          role: "assistant",
+          content: [{ type: "output_text", text: "Visible answer" }],
+          phase: "final_answer",
+        },
+      ],
+    });
+    expect(
+      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
+    ).not.toContain("Private reasoning");
+    expect(
+      JSON.stringify(request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1]),
+    ).not.toContain("secret-tool");
+    expect(request.mock.calls[2]?.[1]).toEqual({ threadId: probeThreadId });
+    expect(materialized).toMatchObject({
+      threadId: finalThreadId,
+      model: "native-effective",
+      modelProvider: "native-provider",
+      preserveNativeModel: true,
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+      conversationSourceTransferComplete: true,
+      lifecycle: { action: "forked" },
+    });
+    expect(materialized.pendingSupervisionBranch).toBeUndefined();
+    expect(materialized.historyCoveredThrough).not.toBe(new Date(0).toISOString());
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      threadId: finalThreadId,
+      model: "native-effective",
+      modelProvider: "native-provider",
+      preserveNativeModel: true,
+      agentWorkspaceDeveloperInstructions: expect.stringContaining(capturedGuidance),
+      conversationSourceTransferComplete: true,
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
+    });
+
+    await writeNativeCatalogFixture(rolloutPath, finalThreadId, startParams.dynamicTools);
+    request.mockClear();
+    const frozenInstructions = materialized.agentWorkspaceDeveloperInstructions;
+    expect(frozenInstructions).toContain(capturedGuidance);
+    const resumed = await withLeasedCodexTestClient({
+      agentDir: path.join(tempDir, "agent"),
+      request,
+      run: (client) =>
+        startOrResumeThread({
+          ...commonParams,
+          client,
+          signal: AbortSignal.timeout(10_000),
+          coldDeveloperInstructions: `${turnDeveloperInstructions}\n\n${frozenInstructions}`,
+          nativeProjectDocsDisabledOnResume: true,
+          appServerRuntimeFingerprint: "codex-runtime-v2",
+        }),
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual([
+      "thread/read",
+      "thread/read",
+      "thread/resume",
+      "thread/inject_items",
+    ]);
+    expect(request.mock.calls[0]?.[1]).toEqual({ threadId: finalThreadId, includeTurns: false });
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("model");
+    expect(request.mock.calls[2]?.[1]).not.toHaveProperty("modelProvider");
+    expect(request.mock.calls[2]?.[1]).toMatchObject({
+      developerInstructions: expect.stringContaining(capturedGuidance),
+      config: { project_doc_max_bytes: 0 },
+    });
+    expect(request.mock.calls[3]?.[1]).toMatchObject({
+      threadId: finalThreadId,
+      items: [
+        {
+          type: "message",
+          role: "developer",
+          content: [
+            {
+              type: "input_text",
+              text: expect.stringContaining(capturedGuidance),
+            },
+          ],
+        },
+      ],
+    });
+    expect(resumed).toMatchObject({
+      threadId: finalThreadId,
+      preserveNativeModel: true,
+      conversationSourceTransferComplete: true,
+      lifecycle: { action: "resumed" },
+    });
+    expect(testCodexAppServerBindingStore.read(identity)).toMatchObject({
+      appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
+        commonParams.appServer,
+        attempt.agentDir,
+      ),
+    });
+  });
+
   it("materializes a model-locked canonical branch with frozen agent instructions", async () => {
     const sourceThreadId = "thread-source";
     const probeThreadId = "thread-probe";
@@ -6108,7 +6366,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     });
   });
 
-  it.each(["", "thread-source", undefined])(
+  it.each(["", "thread-source", " thread-source ", undefined])(
     "abandons an unsafe probe id %s without touching the source",
     async (returnedId) => {
       const sourceThreadId = "thread-source";
@@ -6149,7 +6407,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
           appServer: createThreadLifecycleAppServerOptions(),
         }),
       ).rejects.toThrow(
-        returnedId === "thread-source"
+        returnedId?.trim() === "thread-source"
           ? "model probe reused an existing thread"
           : "model probe may have materialized without a safe thread id",
       );
@@ -6163,7 +6421,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
     },
   );
 
-  it.each(["", "thread-source", "thread-probe"])(
+  it.each(["", "thread-source", "thread-probe", " thread-source ", " thread-probe "])(
     "releases the probe before abandoning unsafe canonical id %s",
     async (returnedId) => {
       const sourceThreadId = "thread-source";

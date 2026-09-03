@@ -35,7 +35,6 @@ import {
 } from "./codex-app-server.test-fixtures.js";
 import * as codexRequirements from "./config-requirements.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { setManagedCodexPluginRoot } from "./managed-binary.js";
 import { nativeHookRelayUnregisterQueue } from "./native-hook-relay-state.js";
 import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
@@ -62,6 +61,7 @@ export {
   extractGenerationFromThreadRequest,
   extractRelayIdFromThreadRequest,
 } from "./run-attempt-hook-test-support.js";
+export { createRuntimeDynamicTool } from "./run-attempt-dynamic-tool.test-support.js";
 
 const execApprovalsRuntimeMocks = vi.hoisted(() => ({
   loadExecApprovals: vi.fn<() => ExecApprovalsFile>(() => ({ version: 1, agents: {} })),
@@ -675,27 +675,6 @@ export function createResumeHarness(
     },
     { persistedThreads: [threadId] },
   );
-}
-
-type RuntimeDynamicToolForTest = Parameters<
-  typeof createCodexDynamicToolBridge
->[0]["tools"][number];
-
-export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTest {
-  return {
-    name,
-    label: name,
-    description: name + " test tool",
-    parameters: {
-      type: "object",
-      properties: {},
-      additionalProperties: false,
-    },
-    execute: vi.fn(async () => ({
-      content: [{ type: "text" as const, text: name + " done" }],
-      details: {},
-    })),
-  };
 }
 
 export function setupRunAttemptTestHooks(): void {

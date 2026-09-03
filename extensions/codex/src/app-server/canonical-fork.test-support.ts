@@ -26,6 +26,7 @@ import { createCodexDynamicToolBuildStageTracker } from "./dynamic-tool-build.js
 import { acquireCodexNativeConfigFence } from "./native-config-fence.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
+import { joinPresentSections } from "./run-attempt-state.js";
 import { prepareCodexAttemptTools } from "./run-attempt-tool-setup.js";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -285,8 +286,17 @@ export async function createCanonicalForkFixture(params: {
             webSearchAllowed: preparedTools.toolState.webSearchAllowed,
             persistentWebSearchAllowed: preparedTools.toolState.persistentWebSearchAllowed,
             developerInstructions: options.developerInstructions,
-            coldDeveloperInstructions: options.developerInstructions,
+            coldDeveloperInstructions: joinPresentSections(
+              options.developerInstructions,
+              startupBinding?.agentWorkspaceDeveloperInstructions,
+            ),
+            agentWorkspaceDeveloperInstructions:
+              startupBinding?.agentWorkspaceDeveloperInstructions,
             agentWorkspaceDeveloperInstructionsAllowed: true,
+            captureNativeProjectInstructions:
+              startupBinding?.agentWorkspaceDeveloperInstructions === undefined,
+            nativeProjectDocsDisabledOnResume:
+              startupBinding?.agentWorkspaceDeveloperInstructions !== undefined,
             bundleMcpThreadConfig,
             sandboxExecServerEnabled: false,
             sandbox: null,

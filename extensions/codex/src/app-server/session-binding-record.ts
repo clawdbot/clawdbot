@@ -15,6 +15,12 @@ export const CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY = [
   "The original root-to-working-directory Codex project-document hierarchy was empty when this thread started. Project-instruction files created later do not apply to this existing thread.",
 ].join("\n");
 
+export const CODEX_FROZEN_EMPTY_AGENT_WORKSPACE_AUTHORITY = [
+  "## Frozen OpenClaw Agent Workspace Instructions",
+  "",
+  "The configured OpenClaw agent workspace contained no project-instruction files when this thread started. Files created there later do not apply to this existing thread.",
+].join("\n");
+
 export const CODEX_UNAVAILABLE_PROJECT_DOCS_AUTHORITY = [
   "## Unavailable Codex Project Instructions",
   "",

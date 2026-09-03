@@ -180,6 +180,11 @@ export async function startOrResumeThread(
         shellEnvironment: params.shellEnvironment,
         disableLoginShell: params.disableLoginShell,
         environmentSelection: params.environmentSelection,
+        agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+        agentWorkspaceDeveloperInstructionsAllowed:
+          params.agentWorkspaceDeveloperInstructionsAllowed,
+        captureNativeProjectInstructions: params.captureNativeProjectInstructions,
+        projectInstructionsUnavailableToGateway: params.projectInstructionsUnavailableToGateway,
         provisionalAppIds: pluginThreadConfig?.provisionalAppIds,
         signal: params.signal,
         throwIfAborted: () => {
@@ -194,7 +199,6 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
-          ...captureAgentInstructions(params, pendingBinding.agentWorkspaceDeveloperInstructions),
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,
@@ -650,6 +654,22 @@ export async function startOrResumeThread(
               ? "rotating an unavailable ephemeral thread binding"
               : "rotating a stale plugin app binding",
           );
+        } else if (
+          binding.agentWorkspaceDeveloperInstructions === undefined &&
+          (params.captureNativeProjectInstructions === true ||
+            params.projectInstructionsUnavailableToGateway === true)
+        ) {
+          // Codex 0.153 cannot select an environment on thread/resume. A legacy
+          // binding therefore cannot safely discover project instructions while
+          // it is physically cold: configured remote defaults may return the
+          // same absolute paths as this host. Preserve a genuinely warm thread,
+          // but rotate every cold legacy owner through thread/start, where the
+          // explicit local/sandbox environment selection is supported.
+          embeddedAgentLog.debug(
+            "codex app-server legacy project-instruction owner is cold; starting a new thread",
+            { threadId: binding.threadId },
+          );
+          await clearCurrentBinding("rotating a cold legacy project-instruction owner");
         } else {
           const resumeBinding = binding;
           const resumed = await resumeExistingCodexThread(params, {

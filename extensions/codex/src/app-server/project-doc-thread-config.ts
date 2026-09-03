@@ -2,7 +2,7 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
-import { type CodexTurnEnvironmentParams, type JsonObject } from "./protocol.js";
+import type { CodexTurnEnvironmentParams, JsonObject } from "./protocol.js";
 
 const CODEX_NATIVE_PROJECT_DOC_MAX_BYTES = 128 * 1024;
 const CODEX_NATIVE_PROJECT_DOC_FILENAMES = ["AGENTS.override.md", "AGENTS.md"] as const;
@@ -203,7 +203,7 @@ async function resolveCodexProjectDocSearchDirectories(
       }),
     ).then((results) => results.some(Boolean));
     if (containsRootMarker) {
-      return ancestors.reverse();
+      return ancestors.toReversed();
     }
     const parent = path.dirname(directory);
     if (parent === directory) {
