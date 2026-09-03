@@ -32,8 +32,10 @@ import {
 import {
   ensureUserProfileRoleSchema,
   ensureUserProfilesSchema,
+  GATEWAY_OWNER_PROFILE_ID,
   hasEnsuredUserProfileRoleSchema,
   UserProfileNotFoundError,
+  UserProfileOwnerError,
 } from "./user-profiles-schema.js";
 import {
   fetchTailscaleAvatar,
@@ -79,7 +81,7 @@ type UserProfileAvatarError =
   | { code: "avatar_too_large"; maxBytes: number }
   | { code: "unsupported_avatar_mime"; mime: string };
 
-export { UserProfileNotFoundError };
+export { GATEWAY_OWNER_PROFILE_ID, UserProfileNotFoundError };
 
 type UserProfileListRow = Pick<
   UserProfileRow,
@@ -90,7 +92,6 @@ type UserProfileListRow = Pick<
 };
 
 const MAX_USER_PROFILE_DISPLAY_NAME_LENGTH = 256;
-export const GATEWAY_OWNER_PROFILE_ID = "gateway-owner";
 // A dot keeps the local owner outside Tailscale's provider-suffix namespace.
 const GATEWAY_OWNER_PROFILE_PROVIDER = "gateway.local";
 const GATEWAY_OWNER_PROFILE_SUBJECT = "owner";
@@ -236,6 +237,9 @@ export function setUserProfileRole(
   return runOpenClawStateWriteTransaction(
     ({ db }) => {
       const profile = requireResolvedUserProfileById(db, profileId);
+      if (profile.id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("role");
+      }
       executeSqliteQuerySync(
         db,
         userProfilesDb(db)
@@ -562,6 +566,9 @@ export function linkEmail(
     ({ db }) => {
       const kysely = userProfilesDb(db);
       const target = requireResolvedUserProfileById(db, targetProfileId);
+      if (target.id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("merge");
+      }
       const existingAlias = executeSqliteQueryTakeFirstSync(
         db,
         kysely
@@ -569,6 +576,9 @@ export function linkEmail(
           .select("profile_id")
           .where("email", "=", normalizedEmail),
       );
+      if (existingAlias?.profile_id === GATEWAY_OWNER_PROFILE_ID) {
+        throw new UserProfileOwnerError("merge");
+      }
       if (!existingAlias) {
         executeSqliteQuerySync(
           db,

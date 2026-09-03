@@ -17,7 +17,7 @@ OpenClaw loads `USER.md` beside `MEMORY.md` at session start. It has a separate 
 
 Your authenticated Gateway profile is separate from `USER.md`. Open **Settings → Profile → Identity** to set the display name and avatar shown to other people on the Gateway. A custom OpenClaw avatar remains authoritative when a GitHub account is verified.
 
-A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name; a saved name is never overwritten. If no full name is available, the sidebar shows **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes.
+A single-user Gateway gives unidentified operator connections one durable local owner profile, shared across devices and tabs, including device-token reconnects. The Gateway host account's full name fills an unset display name; a saved name is never overwritten. If no full name is available, the sidebar shows **Owner** until you set a name. Login names are not used. The owner profile has no email and does not change permissions or identity scopes. It cannot be merged with a personal profile or assigned an operator role; sign in with a personal identity for those operations.
 
 When `gateway.roles` is configured, unidentified operators receive the owner profile only with token or password authentication. Other connections need a profile-backed sign-in for personal identity. Node, ephemeral, and synthetic connections do not receive an owner profile.
 

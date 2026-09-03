@@ -12,7 +12,11 @@ import {
 } from "./openclaw-state-db.js";
 import { mutateUserPreference, selectUserPreferenceValues } from "./user-preferences.js";
 import { selectResolvedUserProfileById, userProfilesDb } from "./user-profiles-internal.js";
-import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
+import {
+  ensureUserProfilesSchema,
+  GATEWAY_OWNER_PROFILE_ID,
+  UserProfileOwnerError,
+} from "./user-profiles-schema.js";
 
 const GITHUB_PROVIDER = "github";
 const GITHUB_LOGIN_SUBJECT_PREFIX = "login:";
@@ -255,6 +259,13 @@ export function applyVerifiedGitHubIdentity(params: {
   const targetProfileId = existing
     ? (selectResolvedUserProfileById(db, existing.profile_id)?.id ?? currentProfileId)
     : currentProfileId;
+  // An email linked by older code must not turn shared owner attribution into a person.
+  if (
+    currentProfileId === GATEWAY_OWNER_PROFILE_ID ||
+    targetProfileId === GATEWAY_OWNER_PROFILE_ID
+  ) {
+    throw new UserProfileOwnerError("merge");
+  }
   const currentIdentity = selectStoredGitHubIdentities(db, [currentProfileId]).get(
     currentProfileId,
   );

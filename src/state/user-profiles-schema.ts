@@ -6,6 +6,8 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 
+export const GATEWAY_OWNER_PROFILE_ID = "gateway-owner";
+
 // Canonical additive schema for durable user profiles. Kept feature-local so
 // ordinary shared-state opens do not create identity tables until they are used.
 const USER_PROFILES_SCHEMA_SQL = `
@@ -69,6 +71,17 @@ export class UserProfileNotFoundError extends Error {
   constructor(profileId: string) {
     super(`user profile not found: ${profileId}`);
     this.name = "UserProfileNotFoundError";
+  }
+}
+
+export class UserProfileOwnerError extends Error {
+  constructor(operation: "merge" | "role") {
+    super(
+      operation === "merge"
+        ? "the shared owner profile cannot be merged; sign in with a personal identity instead"
+        : "the shared owner profile is not governed by operator roles",
+    );
+    this.name = "UserProfileOwnerError";
   }
 }
 

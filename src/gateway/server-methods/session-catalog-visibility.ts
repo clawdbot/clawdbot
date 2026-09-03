@@ -10,6 +10,7 @@ import type {
 } from "../../plugins/session-catalog.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
 import { readUserProfileAliases } from "../../state/user-profile-list.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../state/user-profiles-schema.js";
 import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.js";
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
@@ -36,7 +37,8 @@ export function resolveSessionCatalogVisibility(
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
   const multipleIdentities = hasMultipleSessionSharingIdentities();
-  const profileId = client?.authenticatedUserProfile?.profileId;
+  const attachedProfileId = client?.authenticatedUserProfile?.profileId;
+  const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
   const profileAliases = profileId ? readUserProfileAliases(profileId) : undefined;
   const cacheKey = JSON.stringify({

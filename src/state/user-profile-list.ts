@@ -21,6 +21,7 @@ import {
 } from "./user-profiles-internal.js";
 import {
   ensureUserProfilesSchema,
+  GATEWAY_OWNER_PROFILE_ID,
   UserProfileNotFoundError,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
@@ -96,6 +97,7 @@ export function hasMultipleSessionSharingIdentities(
       .selectFrom("user_profiles")
       .select("id")
       .where("merged_into", "is", null)
+      .where("id", "!=", GATEWAY_OWNER_PROFILE_ID)
       .limit(2),
   ).rows;
   return profiles.length >= 2;
