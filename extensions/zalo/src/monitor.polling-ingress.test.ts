@@ -446,4 +446,92 @@ describe("Zalo polling durable ingress", () => {
     abort.abort();
     await run;
   });
+
+  type ProbeDispatchArgs = {
+    ctx?: { MessageSid?: string };
+    replyOptions?: { turnAdoptionLifecycle?: { onAdopted: () => Promise<void> } };
+  };
+  const probeSetup = () =>
+    createLifecycleMonitorSetup({ accountId: "default", dmPolicy: "open", webhookUrl: "" });
+  const makeProbeUpdate = (id: string, n: number) =>
+    createTextUpdate({
+      messageId: id,
+      userId: `user-${n}`,
+      userName: `User ${n}`,
+      chatId: `dm-chat-${n}`,
+    });
+
+  it("keeps poll order when two polled admissions land in the same millisecond", async () => {
+    // Pin Date.now only for the ingress monitor's admission clock (and the
+    // Zalo monitor itself) so the drain/lease/retry clocks keep advancing.
+    const realNow = Date.now;
+    let pinnedAt: number | undefined;
+    const isPinnedCaller = (stack: string) => {
+      const frames = stack.split("\n").slice(1);
+      const first = frames.find(
+        (f) => /channels[/]message[/]/.test(f) || /extensions[/]zalo[/]src[/]monitor\.ts/.test(f),
+      );
+      return (
+        first !== undefined && /ingress-monitor|extensions[/]zalo[/]src[/]monitor\.ts/.test(first)
+      );
+    };
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => {
+      if (pinnedAt !== undefined && isPinnedCaller(new Error().stack ?? "")) {
+        return pinnedAt;
+      }
+      return realNow();
+    });
+    try {
+      const held = makeProbeUpdate("poll-tie-0", 0);
+      const polledSecond = makeProbeUpdate("poll-tie-b", 1);
+      const polledThird = makeProbeUpdate("poll-tie-a", 2);
+      getUpdatesMock
+        .mockResolvedValueOnce({ ok: true, result: held as ZaloUpdate })
+        .mockResolvedValueOnce({ ok: true, result: polledSecond as ZaloUpdate })
+        .mockResolvedValueOnce({ ok: true, result: polledThird as ZaloUpdate })
+        .mockImplementation(() => new Promise(() => {}));
+      const order: string[] = [];
+      const firstGate = createDeferred();
+      dispatchMock.mockImplementation(async ({ ctx, replyOptions }: ProbeDispatchArgs) => {
+        order.push(ctx?.MessageSid ?? "?");
+        if (order.length === 1) {
+          await firstGate.promise;
+        }
+        await replyOptions?.turnAdoptionLifecycle?.onAdopted();
+      });
+
+      pinnedAt = realNow();
+      const { abort, run } = await startPollingMonitor(probeSetup());
+
+      await vi.waitFor(
+        async () => {
+          const pending = await queue.listPending();
+          expect(pending.map((r) => r.id).toSorted()).toEqual(["poll-tie-a", "poll-tie-b"]);
+        },
+        { timeout: 5_000 },
+      );
+      pinnedAt = undefined;
+      const pending = await queue.listPending();
+      console.log(
+        "PROBE-A pending (queue order):",
+        pending.map((r) => `${r.id}@${r.receivedAt}`).join(" "),
+        "| getUpdates calls:",
+        getUpdatesMock.mock.calls.length,
+      );
+
+      firstGate.resolve();
+      await vi.waitFor(() => {
+        expect(order).toHaveLength(3);
+      });
+      console.log("PROBE-A dispatch order:", order.join(" -> "));
+      for (const id of ["poll-tie-0", "poll-tie-b", "poll-tie-a"]) {
+        await waitForZaloWebhookVerdict(queue, id, "completed");
+      }
+      abort.abort();
+      await run;
+      expect(order).toEqual(["poll-tie-0", "poll-tie-b", "poll-tie-a"]);
+    } finally {
+      nowSpy.mockRestore();
+    }
+  });
 });
