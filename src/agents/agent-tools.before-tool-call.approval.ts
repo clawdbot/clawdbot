@@ -547,6 +547,7 @@ export async function resolveSkillWorkshopApprovalForFinalParams(params: {
     toolName: params.toolName,
     toolParams: isPlainObject(params.params) ? params.params : {},
     config: params.ctx?.config ?? getRuntimeConfig(),
+    ...(params.ctx?.agentId ? { agentId: params.ctx.agentId } : {}),
     ...(params.ctx?.workspaceDir ? { workspaceDir: params.ctx.workspaceDir } : {}),
   });
   return await resolveBeforeToolCallApprovalOutcome({
