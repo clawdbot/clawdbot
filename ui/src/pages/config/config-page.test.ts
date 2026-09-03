@@ -704,11 +704,16 @@ describe("ConfigPage session observer models", () => {
     const firstMain = deferred<ModelCatalogResult>();
     const writer = deferred<ModelCatalogResult>();
     const secondMain = deferred<ModelCatalogResult>();
-    vi.spyOn(modelCatalogStore, "loadModelCatalog")
-      .mockReturnValueOnce(firstMain.promise)
-      .mockReturnValueOnce(writer.promise)
-      .mockReturnValueOnce(secondMain.promise);
-    const client = {} as GatewayBrowserClient;
+    let mainRequests = 0;
+    const request = vi.fn((_method: string, params: unknown) => {
+      const agentId = (params as { agentId?: string }).agentId;
+      if (agentId === "writer") {
+        return writer.promise;
+      }
+      mainRequests += 1;
+      return mainRequests === 1 ? firstMain.promise : secondMain.promise;
+    });
+    const client = { request } as unknown as GatewayBrowserClient;
     const gateway = {
       snapshot: { client, phase: "connected" },
     } as unknown as ApplicationGateway;
@@ -739,6 +744,7 @@ describe("ConfigPage session observer models", () => {
     await writerLoad;
     expect(state.sessionObserverModels).toEqual(writerModels);
 
+    modelCatalogStore.invalidateModelCatalogCache(client);
     selectionState.selectedId = "main";
     const secondMainLoad = state.ensureSessionObserverModels(client, "main");
     const currentMainModels = [{ id: "current-main", name: "Current Main", provider: "openai" }];
@@ -750,27 +756,27 @@ describe("ConfigPage session observer models", () => {
     await mainLoad;
 
     expect(state.sessionObserverModels).toEqual(currentMainModels);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(1, client, {
+    expect(request).toHaveBeenNthCalledWith(1, "models.list", {
       agentId: "main",
       preparedOnly: true,
-      rejectOnFailure: true,
+      view: "configured",
     });
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(2, client, {
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       agentId: "writer",
       preparedOnly: true,
-      rejectOnFailure: true,
+      view: "configured",
     });
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenNthCalledWith(3, client, {
+    expect(request).toHaveBeenNthCalledWith(3, "models.list", {
       agentId: "main",
       preparedOnly: true,
-      rejectOnFailure: true,
+      view: "configured",
     });
 
     selectionState.selectedId = null;
     await state.ensureSessionObserverModels(client, null);
     expect(state.sessionObserverModels).toEqual([]);
     expect(state.sessionObserverModelsUnavailable).toBe(true);
-    expect(modelCatalogStore.loadModelCatalog).toHaveBeenCalledTimes(3);
+    expect(request).toHaveBeenCalledTimes(3);
   });
 });
 
