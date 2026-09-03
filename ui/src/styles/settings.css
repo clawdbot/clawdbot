@@ -538,10 +538,9 @@ wa-switch.settings-toggle {
    grid instead of ragged right-aligned fields. A percentage guard cannot work
    here (the shrink-to-fit control resolves 100% circularly); the fixed width
    shrinks via flex because .settings-input/.settings-secret set min-width: 0. */
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-secret,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-phone-presentation,
-.settings-row:not(.settings-row--stacked) .settings-row__control > .settings-input-with-hint {
+.settings-row:not(.settings-row--stacked)
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > :is(.settings-input, .settings-secret, .settings-phone-presentation, .settings-input-with-hint) {
   width: 340px;
 }
 
@@ -566,7 +565,9 @@ wa-switch.settings-toggle {
   overflow-wrap: anywhere;
 }
 
-.settings-row--stacked .settings-row__control > .settings-phone-presentation {
+.settings-row--stacked
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > .settings-phone-presentation {
   flex: 1 1 auto;
   width: 100%;
 }
@@ -574,10 +575,17 @@ wa-switch.settings-toggle {
 /* Number inputs hold short values (ports, counts, limits); the shared 340px
    text width turns −/+ stepper rows into a stretched bar. */
 .settings-row:not(.settings-row--stacked)
-  .settings-row__control
-  > input[type="number"].settings-input {
+  :is(.settings-row__control, .cfg-scalar-input__control)
+  > :is(
+    input[type="number"].settings-input,
+    .settings-secret:has(> input[type="number"].settings-input)
+  ) {
   width: 110px;
   text-align: center;
+
+  > input {
+    text-align: inherit;
+  }
 }
 
 /* Time inputs hold HH:MM; the shared 340px text width would stretch the paired
@@ -588,73 +596,35 @@ wa-switch.settings-toggle {
   width: auto;
 }
 
-/* ── Scalar input wrapper (shared by Config + Channel detail forms) ──
- * Lives here rather than config.css because every schema-driven surface
- * (config pages and the channel detail forms) renders the same wrapper. */
-
 /* Inline validation/unsupported-node message inside a settings-row. */
 .cfg-field__error {
   font-size: 12px;
   color: var(--danger);
 }
 
-/*
- * Scalar input wrapper: keeps the control cluster (buttons + input) on one
- * line while the inline validation error wraps below. Mirrors the JSON
- * editor's error placement without forcing a column layout on the control.
- */
+/* Keep the control cluster intact while its error wraps below. Letting the
+   input wrap with its adjusters splits full-width array values into three rows. */
 .cfg-scalar-input {
   display: flex;
   flex: 1 1 auto;
-  align-items: center;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: var(--space-2);
   min-width: 0;
 }
 
-.cfg-scalar-input > .settings-input {
-  flex: 1 1 auto;
-}
-
-.cfg-scalar-input > .cfg-field__error {
-  flex: 1 0 100%;
-}
-
-/*
- * Carry desktop scalar-control sizing through the wrapper so it matches the
- * direct-child rules above.  Without this the 340px text/secret/phone
- * and 110px numeric widths are lost because the wrapper inserts an extra level
- * between .settings-row__control and the input.
- */
-.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-input,
-.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-secret,
-.settings-row:not(.settings-row--stacked) .cfg-scalar-input > .settings-phone-presentation {
-  width: 340px;
-  flex: 0 1 auto;
-}
-
-.settings-row:not(.settings-row--stacked) .cfg-scalar-input > input[type="number"].settings-input {
-  width: 110px;
-  text-align: center;
-}
-
-/*
- * Carry stacked-row full-width rules through the wrapper.  Stacked rows
- * (config form arrays/maps) give sensitive and phone controls full width
- * via direct-child selectors above; the wrapper inserts an extra level
- * so those rules must be mirrored here.
- */
-.settings-row--stacked .cfg-scalar-input > .settings-secret,
-.settings-row--stacked .cfg-scalar-input > .settings-phone-presentation {
-  flex: 1 1 auto;
-  width: 100%;
+.cfg-scalar-input__control {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  min-width: 0;
 }
 
 /* ── Secret input (inset reveal toggle; no trailing button) ── */
 
 /* Stacked rows (config form arrays/maps) give the control full width; the
    wrapper must grow or the inner 100% resolves against fit-content. */
-.settings-row--stacked .settings-row__control > .settings-secret {
+.settings-row--stacked :is(.settings-row__control, .cfg-scalar-input__control) > .settings-secret {
   flex: 1 1 auto;
 }
 

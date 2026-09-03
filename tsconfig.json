@@ -183,6 +183,9 @@
       "@openclaw/normalization-core/json-schema": [
         "./packages/normalization-core/src/json-schema.ts"
       ],
+      "@openclaw/normalization-core/json-value": [
+        "./packages/normalization-core/src/json-value.ts"
+      ],
       "@openclaw/normalization-core/markdown-plain-text": [
         "./packages/normalization-core/src/markdown-plain-text.ts"
       ],

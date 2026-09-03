@@ -343,7 +343,7 @@ export function adoptConfigSetAck(
   state.configIssues = [];
   setConfigRawOriginal(state, submittedRaw);
   if (parsed) {
-    state.configFormOriginal = cloneConfigObject(parsed);
+    state.configFormOriginal = cloneConfigObject(parsed, state.configForm);
   }
   state.configDraftBaseHash = ackHash;
   if (!state.configFormDirty) {
@@ -351,7 +351,7 @@ export function adoptConfigSetAck(
     // non-preserving snapshot application would do.
     state.configRaw = submittedRaw;
     if (parsed) {
-      state.configForm = cloneConfigObject(parsed);
+      state.configForm = cloneConfigObject(state.configFormOriginal);
     }
   }
 }
@@ -574,7 +574,7 @@ export function rebaseConfigDraft(state: RuntimeConfigState) {
   const editableConfig = resolveEditableSnapshotConfig(state.configSnapshot);
   // A retained draft can predate a reconnect snapshot. Adopt its document and
   // revision together; pairing old originals with the new hash bypasses CAS.
-  state.configFormOriginal = cloneConfigObject(editableConfig ?? {});
+  state.configFormOriginal = cloneConfigObject(editableConfig ?? {}, state.configForm);
   const raw =
     state.configSnapshot?.raw ??
     (editableConfig ? serializeConfigForm(editableConfig) : state.configRawOriginal);

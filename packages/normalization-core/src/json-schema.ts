@@ -1,6 +1,6 @@
 // Browser-safe JSON Schema normalization and value checks shared by core and Control UI.
-import { Guard } from "typebox/guard";
 import { Check } from "typebox/schema";
+import { isJsonValue } from "./json-value.js";
 import { isRecord } from "./record-coerce.js";
 
 type JsonSchemaObject = Record<string, unknown>;
@@ -185,94 +185,9 @@ function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((entry) => typeof entry === "string");
 }
 
-function isJsonValue(
-  value: unknown,
-  active = new WeakSet<object>(),
-  complete = new WeakSet<object>(),
-): boolean {
-  if (value === null || typeof value === "string" || typeof value === "boolean") {
-    return true;
-  }
-  if (typeof value === "number") {
-    return Number.isFinite(value);
-  }
-  if (typeof value !== "object") {
-    return false;
-  }
-  let entries: unknown[];
-  try {
-    if (Array.isArray(value)) {
-      const ownKeys = Reflect.ownKeys(value);
-      if (
-        ownKeys.length !== value.length + 1 ||
-        ownKeys.some((key) => {
-          if (key === "length") {
-            return false;
-          }
-          if (typeof key !== "string") {
-            return true;
-          }
-          const index = Number(key);
-          return (
-            !Number.isSafeInteger(index) ||
-            index < 0 ||
-            index >= value.length ||
-            String(index) !== key
-          );
-        })
-      ) {
-        return false;
-      }
-      entries = value;
-    } else {
-      const prototype = Object.getPrototypeOf(value);
-      if (prototype !== Object.prototype && prototype !== null) {
-        return false;
-      }
-      const ownKeys = Reflect.ownKeys(value);
-      if (
-        ownKeys.some(
-          (key) =>
-            typeof key !== "string" || !Object.prototype.propertyIsEnumerable.call(value, key),
-        )
-      ) {
-        return false;
-      }
-      entries = Object.values(value);
-    }
-  } catch {
-    return false;
-  }
-  if (complete.has(value)) {
-    return true;
-  }
-  if (active.has(value)) {
-    return false;
-  }
-  active.add(value);
-  const valid = entries.every((entry) => isJsonValue(entry, active, complete));
-  active.delete(value);
-  if (valid) {
-    complete.add(value);
-  }
-  return valid;
-}
-
 /** Normalize JSON Schema constructs into the TypeBox runtime subset used by validators. */
 export function normalizeJsonSchemaForTypeBox(schema: JsonSchemaValue): JsonSchemaValue {
   return normalizeJsonSchemaNode(schema) as JsonSchemaValue;
-}
-
-/** Compare acyclic JSON values using the same equality semantics as TypeBox. */
-export function jsonSchemaValuesEqual(left: unknown, right: unknown): boolean {
-  if (!isJsonValue(left) || !isJsonValue(right)) {
-    return false;
-  }
-  try {
-    return Guard.IsDeepEqual(left, right);
-  } catch {
-    return false;
-  }
 }
 
 /** Validate an acyclic JSON value against the canonical normalized schema. */

@@ -266,10 +266,12 @@ select.settings-select:focus-visible {
   min-width: 0;
 }
 
-.settings-secret > input,
-.settings-secret > textarea {
+.settings-secret > :is(input, textarea) {
   width: 100%;
   min-width: 0;
+}
+
+.settings-secret:has(.settings-secret__toggle) > :is(input, textarea) {
   padding-right: 36px;
 }
 
