@@ -1,4 +1,6 @@
 // Gateway connect pairing tests protect session exemptions and durable device grant bounds.
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
@@ -18,6 +20,8 @@ import { issueDeviceBootstrapToken } from "../../../infra/device-bootstrap.js";
 import * as pairingApprovals from "../../../infra/device-pairing-approval.js";
 import { ensureDeviceToken } from "../../../infra/device-pairing-tokens.js";
 import { getPairedDevice, listDevicePairing } from "../../../infra/device-pairing.js";
+import { setLoggerOverride } from "../../../logging.js";
+import { testApi as loggerTest } from "../../../logging/logger.test-support.js";
 import {
   CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES,
   CONTROL_UI_OWNER_BOOTSTRAP_PROFILE,
@@ -45,6 +49,7 @@ import {
   pairDeviceIdentity,
 } from "../../device-authz.test-helpers.js";
 import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
+import { usersHandlers } from "../../server-methods/users.js";
 import {
   ConnectErrorDetailCodes,
   CONTROL_UI_CLIENT,
@@ -79,7 +84,7 @@ const TUI_CLIENT = {
 } as const;
 
 describe("gateway connect pairing exemptions", () => {
-  test("restores a merged owner on shared-token reconnect without exposing the person's policy or GitHub", async () => {
+  test("keeps a merged owner unidentified until Doctor repairs it before reconnect", async () => {
     const origin = "https://localhost";
     const auth = { mode: "token", token: "merged-owner-secret" } as const;
     const config: OpenClawConfig = {
@@ -103,6 +108,7 @@ describe("gateway connect pairing exemptions", () => {
       wsHeaders: { origin },
     });
     let reconnect: Awaited<ReturnType<typeof openTrackedWs>> | undefined;
+    const selfHandler = vi.spyOn(usersHandlers, "users.self");
     const connectOptions = {
       token: auth.token,
       scopes: ["operator.admin"],
@@ -130,7 +136,8 @@ describe("gateway connect pairing exemptions", () => {
         }),
         () => {},
       );
-      const db = openOpenClawStateDatabase().db;
+      const stateDb = openOpenClawStateDatabase();
+      const db = stateDb.db;
       // The old merge writer moved identities to the person and left the owner tombstone.
       db.prepare(
         "UPDATE user_profiles SET merged_into = ?, updated_at = 1 WHERE id = 'gateway-owner'",
@@ -151,11 +158,55 @@ describe("gateway connect pairing exemptions", () => {
         },
       });
       started.ws.close();
+      const logPath = path.join(path.dirname(stateDb.path), "owner-repair.log");
+      setLoggerOverride({ level: "warn", consoleLevel: "silent", file: logPath });
       reconnect = await openTrackedWs(started.port, { origin });
-      const connected = await connectReq(reconnect, connectOptions);
+      const connected = await connectReq(reconnect, {
+        ...connectOptions,
+        client: { ...CONTROL_UI_CLIENT, instanceId: "before-owner-repair" },
+      });
       expect(connected.ok).toBe(true);
+      const hello = connected.payload as HelloOk;
+      expect(await rpcReq(reconnect, "users.self", {})).toMatchObject({
+        ok: false,
+        error: { code: "FORBIDDEN", message: "users.self requires an authenticated user" },
+      });
+      expect(selfHandler.mock.lastCall?.[0].client).not.toHaveProperty("authenticatedUserProfile");
+      const presence = hello.snapshot.presence.find(
+        (entry) => entry.instanceId === "before-owner-repair",
+      );
+      expect(presence).toBeDefined();
+      expect(presence).not.toHaveProperty("user");
+      await loggerTest.flushFileLogQueueForTests();
+      const log = await fs.readFile(logPath, "utf8");
+      expect(log).toContain("user profile resolution failed");
+      expect(log).toContain("openclaw doctor --fix");
+      expect(
+        db
+          .prepare("SELECT merged_into, updated_at FROM user_profiles WHERE id = 'gateway-owner'")
+          .get(),
+      ).toMatchObject({ merged_into: person.id, updated_at: 1 });
+
+      const { repairMergedGatewayOwnerProfile } =
+        await import("../../../state/user-profiles-owner-migration.js");
+      expect(repairMergedGatewayOwnerProfile({ shouldRepair: true }).repaired).toBe(true);
+      reconnect.close();
+      reconnect = await openTrackedWs(started.port, { origin });
+      const repaired = await connectReq(reconnect, {
+        ...connectOptions,
+        client: { ...CONTROL_UI_CLIENT, instanceId: "after-owner-repair" },
+      });
+      expect(repaired.ok).toBe(true);
       const self = await rpcReq<UsersSelfResult>(reconnect, "users.self", {});
       const profileId = self.payload?.profile.id;
+      expect(selfHandler.mock.lastCall?.[0].client?.authenticatedUserProfile).toMatchObject({
+        profileId: "gateway-owner",
+      });
+      const repairedHello = repaired.payload as HelloOk;
+      expect(
+        repairedHello.snapshot.presence.find((entry) => entry.instanceId === "after-owner-repair")
+          ?.user,
+      ).toMatchObject({ id: "gateway-owner" });
       expect.soft(profileId).toBe("gateway-owner");
       expect.soft(resolveOperatorRolePolicyForProfile(profileId, config)).toBeUndefined();
       expect.soft(hasMultipleSessionSharingIdentities()).toBe(false);
@@ -168,6 +219,8 @@ describe("gateway connect pairing exemptions", () => {
         .toMatchObject({ emails: ["person@example.test"], role: "guest" });
       expect(readUserGitHubConnection(person.id)).toEqual(personalConnection);
     } finally {
+      selfHandler.mockRestore();
+      setLoggerOverride({ level: "silent", consoleLevel: "silent" });
       reconnect?.close();
       started.ws.close();
       await started.server.close();

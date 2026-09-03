@@ -2,22 +2,17 @@ import type { DatabaseSync } from "node:sqlite";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync, executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { emitUserProfilesChanged } from "./user-profile-events.js";
 import { type UserProfileRow, userProfilesDb } from "./user-profiles-internal.js";
+import { UserProfileOwnerError } from "./user-profiles-schema.js";
 
-const log = createSubsystemLogger("state/user-profiles");
 // A dot keeps the local owner outside Tailscale's provider-suffix namespace.
 const OWNER_PROVIDER = "gateway.local";
 const OWNER_SUBJECT = "owner";
 
-/** Queue roster invalidation only for actual changes, after the owning transaction commits. */
-export function ensureGatewayOwnerProfileRow(
-  db: DatabaseSync,
-  displayName: string | null,
-): UserProfileRow {
+/** Read raw rows: the shared owner must never inherit a person through a merge. */
+export function readGatewayOwnerProfileRows(db: DatabaseSync) {
   const kysely = userProfilesDb(db);
-  const now = Date.now();
   const owner = executeSqliteQueryTakeFirstSync(
     db,
     kysely.selectFrom("user_profiles").selectAll().where("id", "=", GATEWAY_OWNER_PROFILE_ID),
@@ -35,16 +30,28 @@ export function ensureGatewayOwnerProfileRow(
       .where("provider", "=", OWNER_PROVIDER)
       .where("subject", "=", OWNER_SUBJECT),
   );
-  // Old merges moved the owner identity to the person. The raw canonical row wins;
-  // only an unmerged legacy UUID owner may be reused when no canonical row exists.
-  const existing = owner ?? (identified?.merged_into ? undefined : identified);
-  const repaired = Boolean(
-    owner?.merged_into || identified?.merged_into || (owner && identified?.id !== owner.id),
-  );
+  return { owner, identified };
+}
+
+/** Queue roster invalidation only for actual changes, after the owning transaction commits. */
+export function ensureGatewayOwnerProfileRow(
+  db: DatabaseSync,
+  displayName: string | null,
+): UserProfileRow {
+  const { owner, identified } = readGatewayOwnerProfileRows(db);
+  if (
+    owner?.merged_into ||
+    identified?.merged_into ||
+    (owner && identified && owner.id !== identified.id)
+  ) {
+    throw new UserProfileOwnerError("repair-required");
+  }
+  const kysely = userProfilesDb(db);
+  const now = Date.now();
+  const existing = owner ?? identified;
   const row: UserProfileRow = existing
     ? {
         ...existing,
-        merged_into: null,
         display_name:
           existing.display_name?.trim() || !displayName ? existing.display_name : displayName,
       }
@@ -60,13 +67,13 @@ export function ensureGatewayOwnerProfileRow(
       };
   if (!existing) {
     executeSqliteQuerySync(db, kysely.insertInto("user_profiles").values(row));
-  } else if (existing.merged_into || row.display_name !== existing.display_name) {
+  } else if (row.display_name !== existing.display_name) {
     row.updated_at = now;
     executeSqliteQuerySync(
       db,
       kysely
         .updateTable("user_profiles")
-        .set({ merged_into: null, display_name: row.display_name, updated_at: now })
+        .set({ display_name: row.display_name, updated_at: now })
         .where("id", "=", row.id),
     );
   }
@@ -81,24 +88,10 @@ export function ensureGatewayOwnerProfileRow(
         canonical_login: null,
         created_at: now,
       })
-      .onConflict((conflict) =>
-        conflict.columns(["provider", "subject"]).doUpdateSet({ profile_id: row.id }),
-      ),
+      .onConflict((conflict) => conflict.columns(["provider", "subject"]).doNothing()),
   );
-  if (
-    !existing ||
-    existing.merged_into ||
-    row.display_name !== existing.display_name ||
-    identified?.id !== row.id
-  ) {
+  if (!existing || row.display_name !== existing.display_name || !identified) {
     deferSqlitePostCommitPublication(db, emitUserProfilesChanged);
-  }
-  if (repaired) {
-    deferSqlitePostCommitPublication(db, () =>
-      log.warn(
-        "Restored the shared gateway owner profile; personal emails, roles, and GitHub identities remain with the person.",
-      ),
-    );
   }
   return row;
 }
