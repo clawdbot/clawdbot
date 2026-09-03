@@ -2,6 +2,7 @@ import Foundation
 import OpenClawProtocol
 import Testing
 @testable import OpenClaw
+@testable import OpenClawKit
 
 @MainActor
 struct WorkActivityStoreTests {
@@ -167,4 +168,24 @@ struct WorkActivityStoreTests {
 @MainActor
 private final class WorkActivityAcknowledgement {
     var received = false
+}
+
+func makeActivityGatewayConnection(mainSessionKey: String) -> GatewayConnection {
+    let session = GatewayTestWebSocketSession(taskFactory: {
+        GatewayTestWebSocketTask(sendHook: { socket, message, sendIndex in
+            guard sendIndex > 0, let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+            socket.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+        }, receiveHook: { socket, receiveIndex in
+            if receiveIndex == 0 { return .data(GatewayWebSocketTestSupport.connectChallengeData()) }
+            return .data(GatewayWebSocketTestSupport.connectOkData(
+                id: socket.snapshotConnectRequestID() ?? "connect", mainSessionKey: mainSessionKey))
+        })
+    })
+    return GatewayConnection(
+        testEndpointProvider: {
+            GatewayConnection.EndpointSnapshot(
+                config: (URL(string: "ws://127.0.0.1:49229")!, nil, nil), routeAuthority: nil, revision: 1)
+        },
+        currentEndpointRevision: { 1 },
+        sessionBox: WebSocketSessionBox(session: session))
 }
