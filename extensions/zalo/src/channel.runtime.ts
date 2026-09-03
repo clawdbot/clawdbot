@@ -11,9 +11,13 @@ import { normalizeSecretInputString } from "./secret-input.js";
 import { sendMessageZalo } from "./send.js";
 import type { ResolvedZaloAccount } from "./types.js";
 
-export async function notifyZaloPairingApproval(params: { cfg: OpenClawConfig; id: string }) {
+export async function notifyZaloPairingApproval(params: {
+  cfg: OpenClawConfig;
+  id: string;
+  accountId?: string;
+}) {
   const { resolveZaloAccount } = await import("./accounts.js");
-  const account = resolveZaloAccount({ cfg: params.cfg });
+  const account = resolveZaloAccount({ cfg: params.cfg, accountId: params.accountId });
   if (!account.token) {
     throw new Error("Zalo token not configured");
   }

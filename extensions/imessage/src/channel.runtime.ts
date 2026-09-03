@@ -68,8 +68,12 @@ export async function sendIMessageOutbound(params: {
 export async function notifyIMessageApproval(params: {
   cfg: Parameters<typeof import("./accounts.js").resolveIMessageAccount>[0]["cfg"];
   id: string;
+  accountId?: string;
 }): Promise<void> {
-  await sendMessageIMessage(params.id, PAIRING_APPROVED_MESSAGE, { config: params.cfg });
+  await sendMessageIMessage(params.id, PAIRING_APPROVED_MESSAGE, {
+    config: params.cfg,
+    accountId: params.accountId,
+  });
 }
 
 export async function probeIMessageAccount(params?: {
