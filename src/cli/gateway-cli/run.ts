@@ -57,6 +57,7 @@ import {
 } from "../../infra/gateway-processes.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { isTailscaleRouteOwnershipConflictError } from "../../infra/tailscale-route-ownership-error.js";
+import type { GatewaySuccessorProbe } from "../../infra/windows-task-restart.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -522,6 +523,35 @@ function createConfiguredGatewayHealthProbe(cfg: OpenClawConfig) {
       timeoutMs: SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS,
     });
     return isGatewayHealthzResponse(result?.statusCode, result?.body ?? "");
+  };
+}
+
+/**
+ * Resolves the Windows handoff successor probe target with the configured
+ * local probe's transport semantics: a TLS gateway is probed over HTTPS with
+ * the exact certificate pin, a TLS gateway whose pin cannot be resolved is
+ * explicitly left unverified (never failed by a plaintext probe), and
+ * wildcard bind hosts (`gateway.bind: lan`) are normalized to loopback.
+ */
+function createSuccessorProbeTargetResolver(cfg: OpenClawConfig) {
+  const localProbe = createConfiguredGatewayLocalProbe(cfg);
+  return async (params: { host: string; port: number }): Promise<GatewaySuccessorProbe> => {
+    const tlsTarget = await localProbe.resolveWebSocketTarget(params.port);
+    if (cfg.gateway?.tls?.enabled === true) {
+      return tlsTarget?.tlsFingerprint
+        ? {
+            transport: "https",
+            host: normalizeGatewayHealthProbeHost(params.host),
+            port: params.port,
+            fingerprintSha256: tlsTarget.tlsFingerprint,
+          }
+        : { transport: "unverified", reason: "tls-certificate-pin-unavailable" };
+    }
+    return {
+      transport: "http",
+      host: normalizeGatewayHealthProbeHost(params.host),
+      port: params.port,
+    };
   };
 }
 
@@ -1117,6 +1147,7 @@ async function runGatewayCommandOnce(opts: GatewayRunOpts, hooks: GatewayRunRunt
       ownsProcessLifecycle: true,
       lockPort: port,
       healthHost,
+      resolveSuccessorProbeTarget: createSuccessorProbeTargetResolver(cfg),
       beginBoot,
       completeBoot,
       start: async ({ processStartedAt, startupStartedAt, requestHotReloadRecovery } = {}) => {
@@ -1228,6 +1259,7 @@ export async function runGatewayCommand(
 
 const testing = {
   createConfiguredGatewayHealthProbe,
+  createSuccessorProbeTargetResolver,
   isGatewayHealthzResponse,
   normalizeGatewayHealthProbeHost,
   probeGatewayHealthz,

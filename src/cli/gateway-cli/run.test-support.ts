@@ -11,6 +11,12 @@ type GatewayRunTestApi = {
   createConfiguredGatewayHealthProbe(
     cfg: OpenClawConfig,
   ): (params: { host: string; port: number }) => Promise<boolean>;
+  createSuccessorProbeTargetResolver(
+    cfg: OpenClawConfig,
+  ): (params: {
+    host: string;
+    port: number;
+  }) => Promise<import("../../infra/windows-task-restart.js").GatewaySuccessorProbe>;
   isGatewayHealthzResponse(statusCode: number | undefined, body: string): boolean;
   normalizeGatewayHealthProbeHost(host: string): string;
   probeGatewayHealthz(params: {
@@ -44,6 +50,9 @@ function getTestApi(): GatewayRunTestApi {
 export const testing: GatewayRunTestApi = {
   createConfiguredGatewayHealthProbe(cfg) {
     return getTestApi().createConfiguredGatewayHealthProbe(cfg);
+  },
+  createSuccessorProbeTargetResolver(cfg) {
+    return getTestApi().createSuccessorProbeTargetResolver(cfg);
   },
   isGatewayHealthzResponse(statusCode, body) {
     return getTestApi().isGatewayHealthzResponse(statusCode, body);

@@ -5,6 +5,7 @@ import net from "node:net";
 import { performance } from "node:perf_hooks";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import { normalizeGatewayHttpProbeHost } from "../../gateway/local-http-probe.js";
 import {
   captureGatewayRestartTraceHandoff,
   createGatewayRestartTraceHandoffEnv,
@@ -20,8 +21,10 @@ import {
   type GatewayBootLifecycleCompletion,
 } from "../../infra/gateway-boot-lifecycle.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
+import type { GatewayRespawnOptions } from "../../infra/process-respawn.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
 import type { GatewayRestartEmitter } from "../../infra/restart.js";
+import type { GatewaySuccessorProbe } from "../../infra/windows-task-restart.js";
 import { flushLogger } from "../../logging/logger.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { RuntimeEnv } from "../../runtime.js";
@@ -54,6 +57,22 @@ type GatewayRunSignalRequest = {
 };
 
 type GatewayLifecycleRuntimeModule = typeof import("./lifecycle.runtime.js");
+
+/**
+ * Default successor probe target for callers that do not resolve one from
+ * gateway configuration (tests, embedded loops): plain HTTP against the
+ * configured health host, with the canonical local probe's wildcard-to-
+ * loopback normalization so a `gateway.bind: lan` (0.0.0.0) successor is
+ * still probed on 127.0.0.1.
+ */
+const resolveDefaultSuccessorProbeTarget = async (params: {
+  host: string;
+  port: number;
+}): Promise<GatewaySuccessorProbe> => ({
+  transport: "http",
+  host: normalizeGatewayHttpProbeHost(params.host.toLowerCase()),
+  port: params.port,
+});
 
 function isUpdateProcessRestartReason(reason: string | undefined): boolean {
   return reason === "update.run" || reason === "update.auto";
@@ -107,6 +126,16 @@ export async function runGatewayLoop(params: {
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
+  /**
+   * Resolves the successor probe transport at restart time from gateway
+   * configuration (TLS gateways yield an HTTPS probe with the exact
+   * certificate pin, or an explicitly unverified outcome when the pin cannot
+   * be resolved). Optional; defaults to a plain HTTP loopback-normalized probe.
+   */
+  resolveSuccessorProbeTarget?: (params: {
+    host: string;
+    port: number;
+  }) => Promise<GatewaySuccessorProbe>;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
   beginBoot?: (startedAtMs: number) => void | Promise<void>;
   completeBoot?: (completion: GatewayBootLifecycleCompletion) => void;
@@ -385,8 +414,26 @@ export async function runGatewayLoop(params: {
       return exitProcessAfterLogFlush(0, expectedOwner);
     }
 
-    const respawnOptions = {
+    // Typed internal handoff context for the detached Windows scheduled-task
+    // helper: what it needs to wait out this predecessor and how to verify the
+    // successor. Carried through the restart call chain, never as
+    // process-visible OPENCLAW_* environment names (#137266, #137301).
+    const successorProbe =
+      typeof params.lockPort === "number"
+        ? await (params.resolveSuccessorProbeTarget ?? resolveDefaultSuccessorProbeTarget)({
+            host: params.healthHost ?? "127.0.0.1",
+            port: params.lockPort,
+          })
+        : ({
+            transport: "unverified",
+            reason: "gateway-port-unknown",
+          } satisfies GatewaySuccessorProbe);
+    const respawnOptions: GatewayRespawnOptions = {
       env: createGatewayRestartTraceHandoffEnv(captureGatewayRestartTraceHandoff()),
+      windowsTaskHandoff: {
+        predecessorPid: process.pid,
+        successorProbe,
+      },
     };
     const isStandaloneUpdate = isUpdateRestart && !supervisorMode;
     const respawn = isStandaloneUpdate

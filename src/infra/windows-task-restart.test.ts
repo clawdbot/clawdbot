@@ -189,6 +189,280 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(script).not.toContain("findstr");
   });
 
+  it("waits for the predecessor pid before treating the task as restarted (#137266)", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask({ OPENCLAW_PROFILE: "work" }, { predecessorPid: 4242 });
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(":waitpred");
+    expect(script).toContain(
+      `-Command "if (Get-Process -Id 4242 -ErrorAction SilentlyContinue) { exit 0 }; exit 1"`,
+    );
+    expect(script).toContain("if %predwaits% GEQ 60");
+    // The predecessor wait must run before the task state probe so a live
+    // predecessor can no longer be mistaken for an already-started successor.
+    expect(script.indexOf(":waitpred")).toBeLessThan(script.indexOf("Get-ScheduledTask"));
+    expect(script).toContain(":starttask");
+    // Pin the wait-loop control flow: the only ways out of :waitpred are a
+    // dead predecessor (errorlevel branch) or the budget expiring *inside*
+    // the GEQ block. A live predecessor must loop through sleep/increment and
+    // re-probe instead of falling through to :starttask. Regression guard for
+    // an unconditional `goto starttask` after the budget check that made the
+    // loop unreachable, letting the handoff treat a still-running predecessor
+    // as a successor (found by native-trace review of this PR).
+    const waitBlock = script.slice(script.indexOf(":waitpred"), script.indexOf(":starttask"));
+    const budgetCheck = waitBlock.indexOf("if %predwaits% GEQ 60 (");
+    const budgetBlockEnd = waitBlock.indexOf(")", budgetCheck);
+    expect(budgetCheck).toBeGreaterThan(-1);
+    expect(budgetBlockEnd).toBeGreaterThan(budgetCheck);
+    // When the budget expires the predecessor is still alive, so the handoff
+    // must record an explicit non-recovered outcome and stop. Falling into
+    // :starttask here would let the task-state and readiness probes observe
+    // the still-running predecessor and log a false result=recovered.
+    const budgetBlock = waitBlock.slice(budgetCheck, budgetBlockEnd);
+    expect(budgetBlock).toContain("goto cleanup");
+    expect(budgetBlock).toContain("result=failed-predecessor-still-alive");
+    expect(budgetBlock).not.toContain("goto starttask");
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=failed-predecessor-still-alive",
+    );
+    const outsideBudgetBlock = waitBlock.slice(0, budgetCheck) + waitBlock.slice(budgetBlockEnd);
+    const standaloneExits = outsideBudgetBlock
+      .split("\r\n")
+      .map((line) => line.trim())
+      .filter((line) => line === "goto starttask");
+    expect(standaloneExits).toStrictEqual([]);
+    expect(outsideBudgetBlock).toContain("if errorlevel 1 goto starttask");
+    expect(waitBlock.indexOf("timeout /t 1 /nobreak >nul")).toBeGreaterThan(budgetBlockEnd);
+    expect(waitBlock.indexOf("set /a predwaits+=1")).toBeGreaterThan(budgetBlockEnd);
+    expect(waitBlock.trimEnd().endsWith("goto waitpred")).toBe(true);
+    // Without a health endpoint the outcome stays explicit but unverified.
+    expect(script).toContain("result=started-unverified");
+    expect(script).not.toContain("Invoke-WebRequest");
+  });
+
+  it("probes successor readiness before declaring recovery (#137266)", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 4242,
+        successorProbe: { transport: "http", host: "127.0.0.1", port: 18789 },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain(":readiness");
+    expect(script).toContain(":probe");
+    // Readiness is the gateway /healthz contract, not raw TCP reachability:
+    // 200 plus the {"ok":true,"status":"live"} body, so an unrelated listener
+    // occupying the port cannot satisfy the probe.
+    expect(script).toContain("Invoke-WebRequest");
+    expect(script).toContain("-Uri 'http://127.0.0.1:18789/healthz'");
+    expect(script).toContain("-TimeoutSec 2");
+    expect(script).toContain("$j = $r.Content | ConvertFrom-Json");
+    expect(script).toContain(
+      "if ($r.StatusCode -eq 200 -and $j.ok -eq $true -and $j.status -eq 'live') { exit 0 }",
+    );
+    expect(script).not.toContain("Net.Sockets.TcpClient");
+    expect(script).toContain("if %probes% GEQ 90 goto fallback");
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=recovered",
+    );
+    expect(script).not.toContain("result=started-unverified");
+    // The direct-launch fallback gets its own bounded readiness pass and a
+    // durable failure outcome when the successor never comes up.
+    expect(script).toContain(":fallbackprobe");
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=failed-successor-not-ready",
+    );
+    // Readiness probing happens after the scheduled task has been started.
+    expect(script.indexOf('schtasks /Run /TN "OpenClaw Gateway (work)"')).toBeLessThan(
+      script.indexOf(":readiness"),
+    );
+  });
+
+  it("probes a TLS successor over HTTPS with the exact configured certificate pin", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 4242,
+        successorProbe: {
+          transport: "https",
+          host: "127.0.0.1",
+          port: 18789,
+          fingerprintSha256: "a".repeat(64),
+        },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    // TLS successors are probed over an SslStream with the canonical local
+    // probe's exact-pin trust model: only the configured SHA-256 fingerprint
+    // may proceed to the /healthz contract check, everything else keeps
+    // polling and never false-fails a healthy TLS successor.
+    expect(script).toContain("New-Object System.Net.Sockets.TcpClient('127.0.0.1',18789)");
+    expect(script).toContain("$pin = '" + "a".repeat(64) + "'");
+    expect(script).toContain(
+      "GetCertHash([System.Security.Cryptography.HashAlgorithmName]::SHA256)",
+    );
+    expect(script).toContain("if ($fp -ne $pin) { exit 1 }");
+    expect(script).toContain("AuthenticateAsClient('127.0.0.1')");
+    expect(script).toContain("'GET /healthz HTTP/1.1'");
+    expect(script).toContain("'Host: 127.0.0.1'");
+    expect(script).toContain("if ($resp -notmatch '^HTTP/1\\.[01] 200 ') { exit 1 }");
+    expect(script).toContain("if ($j.ok -eq $true -and $j.status -eq 'live') { exit 0 }");
+    expect(script).not.toContain("-Uri 'http://");
+    expect(script).not.toContain("-Uri 'https://");
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=recovered",
+    );
+    expect(script).toContain(":fallbackprobe");
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=failed-successor-not-ready",
+    );
+    expect(script).not.toContain("result=started-unverified");
+  });
+
+  it("normalizes wildcard bind hosts to loopback in the readiness probe", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 4242,
+        // gateway.bind: lan resolves to 0.0.0.0; the probe must target
+        // loopback, matching the configured local probe's normalization.
+        successorProbe: { transport: "http", host: "0.0.0.0", port: 18790 },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).toContain("-Uri 'http://127.0.0.1:18790/healthz'");
+    expect(script).not.toContain("0.0.0.0");
+  });
+
+  it("leaves verification explicitly unavailable when a TLS pin cannot be resolved", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 4242,
+        successorProbe: { transport: "unverified", reason: "tls-certificate-pin-unavailable" },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    // A TLS gateway whose pin is unresolvable must never be probed over
+    // plaintext: the outcome records started-unverified with the reason
+    // instead of falsely failing a healthy successor.
+    expect(script).toContain(
+      "openclaw restart outcome source=windows-task-handoff result=started-unverified note=tls-certificate-pin-unavailable",
+    );
+    expect(script).not.toContain("Invoke-WebRequest");
+    expect(script).not.toContain(":probe");
+    expect(script).not.toContain(":fallbackprobe");
+    expect(script).not.toContain("result=recovered");
+    expect(script).not.toContain("failed-successor-not-ready");
+  });
+
+  it("ignores malformed handoff context instead of embedding it in the script", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 0,
+        successorProbe: { transport: "http", host: '127.0.0.1" & calc', port: 18789 },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).not.toContain(":waitpred");
+    expect(script).not.toContain("Get-Process -Id");
+    expect(script).not.toContain("Invoke-WebRequest");
+    expect(script).not.toContain("Net.Sockets.TcpClient");
+    expect(script).not.toContain("calc");
+    expect(script).toContain("result=started-unverified");
+  });
+
+  it("drops a TLS probe whose fingerprint is not a normalized SHA-256 pin", () => {
+    spawnMock.mockImplementation((_file: string, args: string[]) => {
+      createdScriptPaths.add(decodeCmdPathArg(expectDefined(args[3], "args[3] test invariant")));
+      return { unref: vi.fn() };
+    });
+
+    relaunchGatewayScheduledTask(
+      { OPENCLAW_PROFILE: "work" },
+      {
+        predecessorPid: 4242,
+        successorProbe: {
+          transport: "https",
+          host: "127.0.0.1",
+          port: 18789,
+          fingerprintSha256: "zz" + "a".repeat(62) + " & calc",
+        },
+      },
+    );
+
+    const scriptPath = expectDefined(
+      [...createdScriptPaths][0],
+      "[...createdScriptPaths][0] test invariant",
+    );
+    const script = fs.readFileSync(scriptPath, "utf8");
+    expect(script).not.toContain("Invoke-WebRequest");
+    expect(script).not.toContain("TcpClient");
+    expect(script).not.toContain("calc");
+    expect(script).toContain("result=started-unverified");
+  });
+
   it("returns failed when the helper cannot be spawned", () => {
     spawnMock.mockImplementation(() => {
       throw new Error("spawn failed");

@@ -20,7 +20,10 @@ import { formatErrorMessage } from "./errors.js";
 import { type GatewayRestartIntent, normalizeRestartIntentReason } from "./restart-intent.js";
 import { cleanStaleGatewayProcessesSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
-import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
+import {
+  relaunchGatewayScheduledTask,
+  type GatewayWindowsTaskHandoff,
+} from "./windows-task-restart.js";
 
 const SPAWN_TIMEOUT_MS = 2000;
 const SIGUSR1_AUTH_GRACE_MS = 5000;
@@ -853,7 +856,9 @@ function normalizeSystemdUnit(raw?: string, profile?: string): string {
   return unit.endsWith(".service") ? unit : `${unit}.service`;
 }
 
-export function triggerOpenClawRestart(): RestartAttempt {
+export function triggerOpenClawRestart(
+  windowsTaskHandoff?: GatewayWindowsTaskHandoff,
+): RestartAttempt {
   if (process.env.VITEST || process.env.NODE_ENV === "test") {
     return { ok: true, method: "supervisor", detail: "test mode" };
   }
@@ -892,7 +897,10 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
 
   if (process.platform === "win32") {
-    return relaunchGatewayScheduledTask(process.env);
+    // The gateway restart handoff context (predecessor pid, successor probe
+    // spec) arrives as a typed internal carrier, not environment names, so it
+    // never widens the process-visible OPENCLAW_* surface (#137266, #137301).
+    return relaunchGatewayScheduledTask(process.env, windowsTaskHandoff);
   }
 
   if (process.platform !== "darwin") {

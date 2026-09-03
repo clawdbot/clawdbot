@@ -6,6 +6,7 @@ import { isTruthyEnvValue } from "./env.js";
 import { formatErrorMessage } from "./errors.js";
 import { triggerOpenClawRestart } from "./restart.js";
 import { detectGatewayRespawnSupervisor } from "./supervisor-markers.js";
+import type { GatewayWindowsTaskHandoff } from "./windows-task-restart.js";
 
 type GatewayRespawnResult = {
   mode: "supervised" | "disabled" | "failed";
@@ -19,8 +20,14 @@ type GatewayUpdateRespawnResult = {
   detail?: string;
   child?: ChildProcess;
 };
-type GatewayRespawnOptions = {
+export type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
+  /**
+   * Typed internal Windows scheduled-task handoff context (predecessor pid,
+   * successor probe spec). Threaded through the restart call chain without
+   * becoming process-visible environment names.
+   */
+  windowsTaskHandoff?: GatewayWindowsTaskHandoff;
 };
 
 const PNPM_VERSIONED_OPENCLAW_ENTRY_PATTERN =
@@ -43,7 +50,7 @@ function rewritePnpmVersionedOpenClawEntryPath(entryPath: string): string {
  *   custom supervisors keep tracking the same gateway PID
  */
 export function restartGatewayProcessWithFreshPid(
-  _opts: GatewayRespawnOptions = {},
+  opts: GatewayRespawnOptions = {},
 ): GatewayRespawnResult {
   if (isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)) {
     return { mode: "disabled" };
@@ -60,7 +67,7 @@ export function restartGatewayProcessWithFreshPid(
         : { mode: "failed", detail: handoff.error };
     }
     if (supervisor === "schtasks") {
-      const restart = triggerOpenClawRestart();
+      const restart = triggerOpenClawRestart(opts.windowsTaskHandoff);
       if (!restart.ok) {
         return {
           mode: "failed",

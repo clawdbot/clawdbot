@@ -134,14 +134,17 @@ const waitForActiveCronJobs = vi.fn(async (_timeoutMs?: number) => ({
 const reloadTaskRuntimeStateFromStore = vi.fn();
 const clearRuntimeConfigSnapshot = vi.fn();
 const restartGatewayProcessWithFreshPid = vi.fn<
-  (_opts?: { env?: NodeJS.ProcessEnv }) => {
+  (_opts?: {
+    env?: NodeJS.ProcessEnv;
+    windowsTaskHandoff?: import("../../infra/windows-task-restart.js").GatewayWindowsTaskHandoff;
+  }) => {
     mode: "supervised" | "disabled" | "failed";
     detail?: string;
     handoffSpawned?: Promise<boolean>;
   }
 >(() => ({ mode: "disabled" }));
 const respawnGatewayProcessForUpdate = vi.fn<
-  (_opts?: { env?: NodeJS.ProcessEnv }) => {
+  (_opts?: import("../../infra/process-respawn.js").GatewayRespawnOptions) => {
     mode: "spawned" | "disabled" | "failed";
     pid?: number;
     detail?: string;
@@ -218,10 +221,12 @@ vi.mock("../../infra/gateway-suspend-coordinator.js", () => ({
 }));
 
 vi.mock("../../infra/process-respawn.js", () => ({
-  respawnGatewayProcessForUpdate: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    respawnGatewayProcessForUpdate(opts),
-  restartGatewayProcessWithFreshPid: (opts?: { env?: NodeJS.ProcessEnv }) =>
-    restartGatewayProcessWithFreshPid(opts),
+  respawnGatewayProcessForUpdate: (
+    opts?: import("../../infra/process-respawn.js").GatewayRespawnOptions,
+  ) => respawnGatewayProcessForUpdate(opts),
+  restartGatewayProcessWithFreshPid: (
+    opts?: import("../../infra/process-respawn.js").GatewayRespawnOptions,
+  ) => restartGatewayProcessWithFreshPid(opts),
 }));
 
 vi.mock("../../infra/restart-sentinel.js", () => ({
@@ -425,6 +430,10 @@ async function runLoopWithStart(params: {
   ownsProcessLifecycle?: boolean;
   lockPort?: number;
   healthHost?: string;
+  resolveSuccessorProbeTarget?: (params: {
+    host: string;
+    port: number;
+  }) => Promise<import("../../infra/windows-task-restart.js").GatewaySuccessorProbe>;
   waitForHealthyChild?: (port: number, pid?: number, host?: string) => Promise<boolean>;
 }) {
   vi.resetModules();
@@ -435,6 +444,7 @@ async function runLoopWithStart(params: {
     ownsProcessLifecycle: params.ownsProcessLifecycle,
     lockPort: params.lockPort,
     healthHost: params.healthHost,
+    resolveSuccessorProbeTarget: params.resolveSuccessorProbeTarget,
     waitForHealthyChild: params.waitForHealthyChild,
   });
   return { loopPromise };
@@ -460,11 +470,25 @@ async function waitForLoopCondition(predicate: () => boolean, message: string) {
   throw new Error(message);
 }
 
-async function createSignaledLoopHarness(exitCallOrder?: string[]) {
+async function createSignaledLoopHarness(
+  exitCallOrder?: string[],
+  loopParams?: {
+    lockPort?: number;
+    healthHost?: string;
+    resolveSuccessorProbeTarget?: (params: {
+      host: string;
+      port: number;
+    }) => Promise<import("../../infra/windows-task-restart.js").GatewaySuccessorProbe>;
+  },
+) {
   const close = createCloseMock();
   const { start, started } = createSignaledStart(close);
   const { runtime, exited } = createRuntimeWithExitSignal(exitCallOrder);
-  const { loopPromise } = await runLoopWithStart({ start, runtime });
+  const { loopPromise } = await runLoopWithStart({
+    start,
+    runtime,
+    ...loopParams,
+  });
   await waitForStart(started);
   return { close, start, runtime, exited, loopPromise };
 }
@@ -2167,6 +2191,103 @@ describe("runGatewayLoop", () => {
       } else {
         process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalTraceEnv;
       }
+    }
+  });
+
+  it("hands the successor probe to the scheduled-task helper as typed context, not env names", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+    const originalTraceEnv = process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+    process.env.OPENCLAW_GATEWAY_RESTART_TRACE = "1";
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        acquireGatewayLock.mockResolvedValueOnce({
+          release: vi.fn(async () => {}),
+        });
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+        const resolveSuccessorProbeTarget = vi.fn(async () => ({
+          transport: "https" as const,
+          host: "127.0.0.1",
+          port: 18789,
+          fingerprintSha256: "a".repeat(64),
+        }));
+
+        const { exited } = await createSignaledLoopHarness(undefined, {
+          lockPort: 18789,
+          healthHost: "10.0.0.25",
+          resolveSuccessorProbeTarget,
+        });
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+
+        await expect(exited).resolves.toBe(0);
+        expect(resolveSuccessorProbeTarget).toHaveBeenCalledWith({
+          host: "10.0.0.25",
+          port: 18789,
+        });
+        const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
+        // The handoff context is a typed carrier: predecessor pid and probe
+        // spec never widen the process-visible OPENCLAW_* environment surface.
+        expect(respawnOpts?.windowsTaskHandoff).toEqual({
+          predecessorPid: process.pid,
+          successorProbe: {
+            transport: "https",
+            host: "127.0.0.1",
+            port: 18789,
+            fingerprintSha256: "a".repeat(64),
+          },
+        });
+        expect(Object.keys(respawnOpts?.env ?? {})).toEqual([
+          "OPENCLAW_GATEWAY_RESTART_TRACE_STARTED_AT_MS",
+          "OPENCLAW_GATEWAY_RESTART_TRACE_LAST_AT_MS",
+        ]);
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
+      if (originalTraceEnv === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_RESTART_TRACE;
+      } else {
+        process.env.OPENCLAW_GATEWAY_RESTART_TRACE = originalTraceEnv;
+      }
+    }
+  });
+
+  it("defaults the successor probe to loopback-normalized HTTP for wildcard bind hosts", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
+    process.env.OPENCLAW_SUPERVISOR_MODE = "external";
+
+    try {
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        acquireGatewayLock.mockResolvedValueOnce({
+          release: vi.fn(async () => {}),
+        });
+        restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
+
+        const { exited } = await createSignaledLoopHarness(undefined, {
+          lockPort: 18789,
+          healthHost: "0.0.0.0",
+        });
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+
+        await expect(exited).resolves.toBe(0);
+        const [respawnOpts] = restartGatewayProcessWithFreshPid.mock.calls[0] ?? [];
+        // gateway.bind: lan resolves to 0.0.0.0; without a configured resolver
+        // the default probe normalizes the wildcard host to loopback, matching
+        // the configured local probe's host semantics.
+        expect(respawnOpts?.windowsTaskHandoff?.successorProbe).toEqual({
+          transport: "http",
+          host: "127.0.0.1",
+          port: 18789,
+        });
+      });
+    } finally {
+      delete process.env.OPENCLAW_SUPERVISOR_MODE;
     }
   });
 

@@ -269,6 +269,28 @@ describe("restartGatewayProcessWithFreshPid", () => {
     expect(spawnMock).not.toHaveBeenCalled();
   });
 
+  it("forwards the typed Windows handoff context on the schtasks supervisor path", () => {
+    clearSupervisorHints();
+    setPlatform("win32");
+    process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+    process.env.OPENCLAW_SERVICE_KIND = "gateway";
+    triggerOpenClawRestartMock.mockReturnValue({ ok: true, method: "schtasks" });
+    const windowsTaskHandoff = {
+      predecessorPid: 4242,
+      successorProbe: {
+        transport: "https",
+        host: "127.0.0.1",
+        port: 18789,
+        fingerprintSha256: "a".repeat(64),
+      } as const,
+    };
+
+    const result = restartGatewayProcessWithFreshPid({ windowsTaskHandoff });
+
+    expect(result.mode).toBe("supervised");
+    expect(triggerOpenClawRestartMock).toHaveBeenCalledWith(windowsTaskHandoff);
+  });
+
   it("keeps generic service markers out of non-Windows supervisor detection", () => {
     clearSupervisorHints();
     setPlatform("linux");
