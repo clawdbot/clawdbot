@@ -122,7 +122,7 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 }));
 
 vi.mock("./agent-auth-discovery.js", () => ({
-  resolveAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
+  prepareAmbientAgentCredentialsForDiscovery: mocks.resolveAmbientCredentials,
 }));
 
 vi.mock("../plugins/provider-public-artifacts.js", () => ({
@@ -252,16 +252,20 @@ beforeEach(() => {
 
 describe("prepareScopedReadOnlyModelAuthModes", () => {
   function usePreparedSyntheticAuth() {
-    mocks.resolveAmbientCredentials.mockImplementationOnce((...args: unknown[]) => {
+    mocks.resolveAmbientCredentials.mockImplementationOnce(async (...args: unknown[]) => {
       const params = args[0] as {
         syntheticAuthProviderRefs: string[];
-        resolveSyntheticAuth: (provider: string) => { apiKey?: string } | undefined;
+        resolveSyntheticAuth: (provider: string) => Promise<{ apiKey?: string } | undefined>;
       };
       return Object.fromEntries(
-        params.syntheticAuthProviderRefs.flatMap((provider) => {
-          const key = params.resolveSyntheticAuth(provider)?.apiKey;
-          return key ? [[provider, { type: "api_key", key }]] : [];
-        }),
+        (
+          await Promise.all(
+            params.syntheticAuthProviderRefs.map(async (provider) => {
+              const key = (await params.resolveSyntheticAuth(provider))?.apiKey;
+              return key ? [[provider, { type: "api_key", key }]] : [];
+            }),
+          )
+        ).flat(),
       );
     });
   }
@@ -571,9 +575,9 @@ describe("prepared model runtime Gateway catalog mode", () => {
       }),
     );
     const ambientOptions = mocks.resolveAmbientCredentials.mock.calls[0]?.[0] as
-      | { resolveSyntheticAuth?: (provider: string) => { apiKey?: string } | undefined }
+      | { resolveSyntheticAuth?: (provider: string) => Promise<{ apiKey?: string } | undefined> }
       | undefined;
-    expect(ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
+    expect(await ambientOptions?.resolveSyntheticAuth?.("openai")).toMatchObject({
       apiKey: "synthetic-openai-key",
     });
     expect(mocks.resolveSyntheticAuth).toHaveBeenCalledWith({

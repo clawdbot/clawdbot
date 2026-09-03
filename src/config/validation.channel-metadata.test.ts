@@ -10,12 +10,10 @@ import {
 } from "./validation.js";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
-  vi.fn(
-    (): PluginManifestRegistry => ({
-      diagnostics: [],
-      plugins: [],
-    }),
-  ),
+  vi.fn((): PluginManifestRegistry => ({
+    diagnostics: [],
+    plugins: [],
+  })),
 );
 
 function createTelegramSchemaRegistry(): PluginManifestRegistry {

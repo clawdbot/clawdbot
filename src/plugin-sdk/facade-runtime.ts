@@ -15,6 +15,7 @@ import {
 import {
   createFacadeResolutionKey as createFacadeResolutionKeyShared,
   resolveBundledFacadeModuleLocation,
+  resolveBundledMetadataManifestRecord,
   resolveRegistryPluginModuleLocationFromRecords,
 } from "./facade-resolution-shared.js";
 export {
@@ -125,7 +126,6 @@ function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
     modulePath,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
-    aliasMap: {},
   });
 }
 
@@ -198,10 +198,11 @@ export function loadBundledPluginPublicSurfaceModuleSync<T extends object>(
   params: BundledPluginPublicSurfaceParams,
 ): T {
   const location = resolveFacadeModuleLocation(params);
+  const trackingParams = buildFacadeActivationCheckParams(params, location);
+  // Bundled identity is metadata; only registry fallback needs the activation runtime.
   const trackedPluginId = () =>
-    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(
-      buildFacadeActivationCheckParams(params, location),
-    );
+    resolveBundledMetadataManifestRecord(trackingParams)?.id ??
+    loadFacadeActivationCheckRuntime().resolveTrackedFacadePluginId(trackingParams);
   if (!location) {
     return loadBundledPluginPublicSurfaceModuleSyncLight<T>({
       ...params,

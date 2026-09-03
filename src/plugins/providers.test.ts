@@ -826,13 +826,11 @@ describe("resolvePluginProviders", () => {
     loadOpenClawPluginsMock.mockReturnValue(registry);
     loadPluginManifestRegistryMock.mockReset();
     applyPluginAutoEnableMock.mockReset();
-    applyPluginAutoEnableMock.mockImplementation(
-      (params): PluginAutoEnableResult => ({
-        config: params.config ?? ({} as OpenClawConfig),
-        changes: [],
-        autoEnabledReasons: {},
-      }),
-    );
+    applyPluginAutoEnableMock.mockImplementation((params): PluginAutoEnableResult => ({
+      config: params.config ?? ({} as OpenClawConfig),
+      changes: [],
+      autoEnabledReasons: {},
+    }));
     setManifestPlugins([
       createManifestProviderPlugin({
         id: "google",

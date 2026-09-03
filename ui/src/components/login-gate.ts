@@ -369,17 +369,19 @@ function renderLoginFailure(feedback: LoginFailureFeedback) {
     >
       <div class="login-gate__failure-title">${feedback.title}</div>
       <div class="login-gate__failure-summary">${feedback.summary}</div>
-      ${feedback.refreshAction
-        ? html`
-            <button
-              type="button"
-              class="btn primary login-gate__failure-refresh"
-              @click=${refreshLoginGatePage}
-            >
-              ${feedback.refreshAction.label}
-            </button>
-          `
-        : nothing}
+      ${
+        feedback.refreshAction
+          ? html`
+              <button
+                type="button"
+                class="btn primary login-gate__failure-refresh"
+                @click=${refreshLoginGatePage}
+              >
+                ${feedback.refreshAction.label}
+              </button>
+            `
+          : nothing
+      }
       <ol class="login-gate__failure-steps">
         ${feedback.steps.map((step) => html`<li>${renderLoginFailureStep(step)}</li>`)}
       </ol>
@@ -487,9 +489,9 @@ function renderLoginGate(props: LoginGateProps) {
                 }}
               />
               <openclaw-tooltip
-                .content=${props.showGatewayPassword
-                  ? t("login.hidePassword")
-                  : t("login.showPassword")}
+                .content=${
+                  props.showGatewayPassword ? t("login.hidePassword") : t("login.showPassword")
+                }
               >
                 <button
                   type="button"

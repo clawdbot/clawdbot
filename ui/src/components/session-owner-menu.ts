@@ -113,11 +113,13 @@ export class SessionOwnerMenu {
           <span class="session-menu__text"
             >${owner === self ? t("sessionsView.assignToMe") : (owner.label ?? owner.id)}</span
           >
-          ${checked
-            ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
-                >${icons.check}</span
-              >`
-            : nothing}
+          ${
+            checked
+              ? html`<span slot="details" class="session-menu__check" aria-hidden="true"
+                  >${icons.check}</span
+                >`
+              : nothing
+          }
         </wa-dropdown-item>`;
       })}
       ${this.profiles.render({

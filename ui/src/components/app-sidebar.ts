@@ -56,6 +56,7 @@ import {
   storeSidebarCatalogGrouping,
   type SidebarRecentSession,
 } from "./app-sidebar-session-types.ts";
+import { renderCommunityInviteCard } from "./community-invite-card.ts";
 import {
   COMMUNITY_INVITE_KEY,
   dismissCommunityInvite as persistCommunityInviteDismissal,
@@ -158,14 +159,7 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
   private readonly hiddenSessionCatalogsChanged = () => {
     this.hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
   };
-  @state() private communityInviteEligible = false;
-  @state() private communityInviteCardLoaded = false;
-  private readonly communityInviteCardImport = createIdleImport(
-    () => import("./community-invite-card.ts"),
-    () => {
-      this.communityInviteCardLoaded = true;
-    },
-  );
+  @state() private communityInvitePresentation: "unavailable" | "pending" | "shown" = "unavailable";
   private readonly communityInviteStorageChanged = (event: StorageEvent) => {
     if (event.key === COMMUNITY_INVITE_KEY || event.key === null) {
       this.syncCommunityInviteState();
@@ -204,13 +198,23 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     );
     this.narration?.disconnect();
     this.catalogRendererImport.dispose();
-    this.communityInviteCardImport.dispose();
     window.removeEventListener("storage", this.communityInviteStorageChanged);
     super.disconnectedCallback();
   }
 
   protected override willUpdate(changed: PropertyValues<this>) {
     super.willUpdate(changed);
+    // Admit new geometry only between interactions; once shown it stays put.
+    // Native drag can clear :hover, so retain the organizer's authoritative drag facts.
+    if (
+      this.communityInvitePresentation === "pending" &&
+      !this.matches(":hover, :focus-within") &&
+      this.sessionOrganizer.draggingSessionKey === null &&
+      this.sessionOrganizer.draggingSidebarSection === null &&
+      this.sessionOrganizer.draggingSidebarEntry === null
+    ) {
+      this.communityInvitePresentation = "shown";
+    }
     const currentResult = this.sessionData.sessionsResult;
     this.sessionProjection.observeRows([
       ...(currentResult ? [currentResult] : []),
@@ -327,13 +331,24 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     this.catalogRendererImport.schedule();
   }
 
+  private readonly handleSidebarInteractionEnd = (event: Event) => {
+    // Internal focus handoffs can briefly clear :focus-within before the new target focuses.
+    if (
+      this.communityInvitePresentation !== "pending" ||
+      (event instanceof FocusEvent &&
+        event.relatedTarget instanceof Node &&
+        this.contains(event.relatedTarget))
+    ) {
+      return;
+    }
+    this.requestUpdate();
+  };
+
   private syncCommunityInviteState() {
-    this.communityInviteEligible =
-      this.context?.config.current.communityInvite === true && isCommunityInviteEligible();
-    if (this.communityInviteEligible) {
-      this.communityInviteCardImport.schedule();
-    } else {
-      this.communityInviteCardImport.dispose();
+    if (this.context?.config.current.communityInvite !== true || !isCommunityInviteEligible()) {
+      this.communityInvitePresentation = "unavailable";
+    } else if (this.communityInvitePresentation !== "shown") {
+      this.communityInvitePresentation = "pending";
     }
   }
 
@@ -540,6 +555,8 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
     return html`
       <aside
         class="sidebar"
+        @pointerleave=${this.handleSidebarInteractionEnd}
+        @focusout=${this.handleSidebarInteractionEnd}
         @contextmenu=${(event: MouseEvent) => {
           // Editable controls keep the platform editing menu; all other sidebar chrome is owned here.
           if (!(event.target as Element).closest("input, textarea, [contenteditable]")) {
@@ -551,8 +568,9 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
           ${renderAppSidebarBrand(this)}
           <div class="sidebar-shell__content">
             <div
-              class="sidebar-shell__body sidebar-shell__body--scroll-${this.sessionData
-                .sessionsScrollState}"
+              class="sidebar-shell__body sidebar-shell__body--scroll-${
+                this.sessionData.sessionsScrollState
+              }"
               @scroll=${(event: Event) =>
                 this.sessionData.updateSessionsScrollState(event.currentTarget as HTMLElement)}
             >
@@ -585,20 +603,18 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
               </nav>
               ${renderAppSidebarOnline(this)} ${this.renderSessions()}
             </div>
-            ${this.sessionsStatusFilter === "archived"
-              ? nothing
-              : renderPanelRefreshStatus({
-                  status: this.sessionData.sessionCatalogRefreshStatus,
-                  onRetry: () => void this.sessionData.refreshSessionCatalogs(),
-                  className: "sidebar-session-error sidebar-session-catalog-error",
-                })}
+            ${
+              this.sessionsStatusFilter === "archived"
+                ? nothing
+                : renderPanelRefreshStatus({
+                    status: this.sessionData.sessionCatalogRefreshStatus,
+                    onRetry: () => void this.sessionData.refreshSessionCatalogs(),
+                    className: "sidebar-session-error sidebar-session-catalog-error",
+                  })
+            }
           </div>
           <div class="sidebar-shell__invite">
-            ${this.communityInviteEligible && this.communityInviteCardLoaded
-              ? html`<openclaw-community-invite-card
-                  .onDismiss=${this.dismissCommunityInvite}
-                ></openclaw-community-invite-card>`
-              : nothing}
+            ${this.communityInvitePresentation === "shown" ? renderCommunityInviteCard(this.dismissCommunityInvite) : nothing}
             <openclaw-lobster-pet
               .seed=${lobsterPetSeed(this.sessionKey)}
               .mode=${resolveLobsterPetMode(
@@ -613,16 +629,18 @@ class AppSidebar extends AppSidebarSessionNavigationElement implements SessionLi
             ></openclaw-lobster-pet>
           </div>
           <div class="sidebar-shell__footer">
-            ${this.devGitBranch
-              ? html`<openclaw-tooltip .content=${this.devGitBranch}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true"
-                      >${icons.gitBranch}</span
-                    >
-                    <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>`
-              : nothing}
+            ${
+              this.devGitBranch
+                ? html`<openclaw-tooltip .content=${this.devGitBranch}>
+                    <div class="sidebar-footer-branch">
+                      <span class="sidebar-footer-branch__icon" aria-hidden="true"
+                        >${icons.gitBranch}</span
+                      >
+                      <span class="sidebar-footer-branch__name">${this.devGitBranch}</span>
+                    </div>
+                  </openclaw-tooltip>`
+                : nothing
+            }
             ${renderAppSidebarFooterBar(this)}
           </div>
         </div>

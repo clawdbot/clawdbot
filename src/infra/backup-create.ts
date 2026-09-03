@@ -1,4 +1,5 @@
 // Creates backup archives while filtering volatile runtime state.
+import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -330,6 +331,32 @@ function remapArchiveEntryPath(params: {
   return buildBackupArchivePath(params.archiveRoot, normalizedEntry);
 }
 
+function remapDeclaredAbsoluteSymbolicLinkTarget(params: {
+  linkpath: string | undefined;
+  archiveEntryPath: string;
+  archiveRoot: string;
+  assets: readonly BackupAsset[];
+}): string | undefined {
+  if (!params.linkpath || !path.isAbsolute(params.linkpath) || params.linkpath.includes("\\")) {
+    return params.linkpath;
+  }
+  // Tar exposes the first link hop, while assets own the final canonical path.
+  // Resolve before containment so chains map to one portable archive target.
+  let targetSourcePath: string;
+  try {
+    targetSourcePath = realpathSync(params.linkpath);
+  } catch {
+    return params.linkpath;
+  }
+  if (!params.assets.some((asset) => isPathWithin(targetSourcePath, asset.sourcePath))) {
+    return params.linkpath;
+  }
+  return path.posix.relative(
+    path.posix.dirname(params.archiveEntryPath),
+    buildBackupArchivePath(params.archiveRoot, targetSourcePath),
+  );
+}
+
 function isBackupTarFilterFile(entry: import("node:fs").Stats | import("tar").ReadEntry): boolean {
   return "isFile" in entry ? entry.isFile() : entry.type === "File";
 }
@@ -618,6 +645,12 @@ export async function createBackupArchive(
                   });
                   if (entry.type === "SymbolicLink" && !archiveSymlinkViolation) {
                     try {
+                      entry.linkpath = remapDeclaredAbsoluteSymbolicLinkTarget({
+                        linkpath: entry.linkpath,
+                        archiveEntryPath,
+                        archiveRoot,
+                        assets: result.assets,
+                      });
                       assertArchiveSymbolicLinkTarget({
                         archiveRoot,
                         entryPath: archiveEntryPath,

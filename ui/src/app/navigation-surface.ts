@@ -155,28 +155,32 @@ export function renderFloatingUpdateCard(params: {
   if (!showAttention && !showUpdateCard) {
     return nothing;
   }
-  return html`${showAttention
-    ? html`<openclaw-sidebar-attention
-        class="sidebar-attention--floating"
-        .onNavigate=${params.onNavigate}
-        .onOpenApprovals=${params.onOpenApprovals}
-      ></openclaw-sidebar-attention>`
-    : nothing}${showUpdateCard
-    ? html`<openclaw-sidebar-update-card
-        class="sidebar-update-card--floating"
-        .updateAvailable=${params.updateAvailable}
-        .updateSchedule=${params.updateSchedule ?? null}
-        .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
-        .updateBusy=${params.updateBusy}
-        .statusBanner=${params.statusBanner ?? null}
-        .watchUpdateProgress=${params.watchUpdateProgress}
-        .canUpdate=${params.canUpdate ?? false}
-        .canHoldUpdate=${params.canHoldUpdate ?? false}
-        .onUpdate=${params.onUpdate}
-        .refreshRequired=${params.refreshRequired}
-        .onRefresh=${params.onRefresh}
-        .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
-        .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
-      ></openclaw-sidebar-update-card>`
-    : nothing}`;
+  return html`${
+    showAttention
+      ? html`<openclaw-sidebar-attention
+          class="sidebar-attention--floating"
+          .onNavigate=${params.onNavigate}
+          .onOpenApprovals=${params.onOpenApprovals}
+        ></openclaw-sidebar-attention>`
+      : nothing
+  }${
+    showUpdateCard
+      ? html`<openclaw-sidebar-update-card
+          class="sidebar-update-card--floating"
+          .updateAvailable=${params.updateAvailable}
+          .updateSchedule=${params.updateSchedule ?? null}
+          .heldUpdateCampaignId=${params.heldUpdateCampaignId ?? null}
+          .updateBusy=${params.updateBusy}
+          .statusBanner=${params.statusBanner ?? null}
+          .watchUpdateProgress=${params.watchUpdateProgress}
+          .canUpdate=${params.canUpdate ?? false}
+          .canHoldUpdate=${params.canHoldUpdate ?? false}
+          .onUpdate=${params.onUpdate}
+          .refreshRequired=${params.refreshRequired}
+          .onRefresh=${params.onRefresh}
+          .onHoldUpdate=${params.onHoldUpdate ?? (async () => false)}
+          .onReviewUpdate=${params.onReviewUpdate ?? (() => undefined)}
+        ></openclaw-sidebar-update-card>`
+      : nothing
+  }`;
 }

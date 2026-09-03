@@ -119,9 +119,11 @@ export function renderCardMoveControl(
 export function renderCardActionSlot(content: TemplateResult | typeof nothing) {
   return html`
     <span class="workboard-card__action-slot">
-      ${content === nothing
-        ? html`<span class="workboard-card__action-placeholder" aria-hidden="true"></span>`
-        : content}
+      ${
+        content === nothing
+          ? html`<span class="workboard-card__action-placeholder" aria-hidden="true"></span>`
+          : content
+      }
     </span>
   `;
 }
@@ -162,9 +164,11 @@ function renderCardActionButton(params: {
 }) {
   const button = html`
     <button
-      class=${params.iconOnly
-        ? `btn btn--icon workboard-card__icon ${params.className ?? ""}`
-        : `btn ${params.className ?? ""}`}
+      class=${
+        params.iconOnly
+          ? `btn btn--icon workboard-card__icon ${params.className ?? ""}`
+          : `btn ${params.className ?? ""}`
+      }
       type="button"
       aria-label=${params.label}
       aria-haspopup=${params.ariaHaspopup ?? nothing}
@@ -314,9 +318,9 @@ export function renderStartExecutionButton(
       : t("workboard.runDefaultAgent");
   const button = html`
     <button
-      class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${options.iconOnly
-        ? "workboard-card__start--icon"
-        : ""} ${engine ? "" : "workboard-card__start--default"}"
+      class="btn btn--xs workboard-card__start workboard-card__start--${mode} ${
+        options.iconOnly ? "workboard-card__start--icon" : ""
+      } ${engine ? "" : "workboard-card__start--default"}"
       type="button"
       aria-label=${title}
       ?disabled=${disabled}
@@ -334,15 +338,19 @@ export function renderStartExecutionButton(
         }
       }}
     >
-      ${engine
-        ? html`${renderEngineMark(engine)}${options.iconOnly
-            ? nothing
-            : html`<span
-                >${mode === "autonomous" ? t("workboard.run") : t("workboard.open")}</span
-              >`}`
-        : html`${mode === "autonomous" ? icons.play : icons.penLine}${options.iconOnly
-            ? nothing
-            : html`<span>${t("workboard.start")}</span>`}`}
+      ${
+        engine
+          ? html`${renderEngineMark(engine)}${
+              options.iconOnly
+                ? nothing
+                : html`<span
+                    >${mode === "autonomous" ? t("workboard.run") : t("workboard.open")}</span
+                  >`
+            }`
+          : html`${mode === "autonomous" ? icons.play : icons.penLine}${
+              options.iconOnly ? nothing : html`<span>${t("workboard.start")}</span>`
+            }`
+      }
     </button>
   `;
   return options.iconOnly
@@ -355,10 +363,12 @@ export function renderStartExecutionControls(props: WorkboardProps, card: Workbo
   return html`
     <div class="workboard-card__execution-controls">
       ${renderStartExecutionButton(props, card, null, "autonomous")}
-      ${canModelOverride
-        ? html`${renderStartExecutionButton(props, card, "codex", "autonomous")}
-          ${renderStartExecutionButton(props, card, "claude", "autonomous")}`
-        : nothing}
+      ${
+        canModelOverride
+          ? html`${renderStartExecutionButton(props, card, "codex", "autonomous")}
+            ${renderStartExecutionButton(props, card, "claude", "autonomous")}`
+          : nothing
+      }
       ${renderStartExecutionButton(props, card, "codex", "manual")}
       ${renderStartExecutionButton(props, card, "claude", "manual")}
     </div>

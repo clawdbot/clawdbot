@@ -715,12 +715,7 @@ export class TerminalSessionManager {
     }
   }
 
-  /**
-   * Tears down every session — detached ones included — on gateway
-   * shutdown/stop. Silent because the sockets are going away anyway (disabling
-   * the terminal is a `gateway` restart, so that path also runs through here,
-   * not a live notification).
-   */
+  /** Tears down all sessions silently on Gateway shutdown; their sockets are closing too. */
   disposeAll(): void {
     // Abort any opens still spawning so they don't register after shutdown.
     for (const pending of this.pendingOpens.keys()) {

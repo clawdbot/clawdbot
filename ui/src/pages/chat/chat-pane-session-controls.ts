@@ -197,7 +197,6 @@ export function renderChatPaneComposerControls(params: {
           modelOverrides: state.sessions.state.modelOverrides,
           thinkingSession,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
-          modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
           modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
           modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),

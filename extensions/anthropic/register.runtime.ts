@@ -52,7 +52,7 @@ import {
 import { acceptsAnthropicLiveModelContract } from "./live-model-contract-gate.js";
 import { anthropicMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { resolveClaudeCliSyntheticAuth } from "./provider-discovery.js";
+import { prepareClaudeCliSyntheticAuth } from "./provider-discovery.js";
 import {
   createClaudeSessionNodeInvokePolicies,
   registerClaudeSessionDiscovery,
@@ -872,10 +872,11 @@ export function buildAnthropicProvider(): ProviderPlugin {
       );
     },
     normalizeResolvedModel: (ctx) => normalizeAnthropicResolvedModel(ctx),
-    resolveSyntheticAuth: ({ config, provider }) =>
-      normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID
-        ? resolveClaudeCliSyntheticAuth(config)
-        : undefined,
+    prepareSyntheticAuth: ({ config, provider, env, signal }) =>
+      prepareClaudeCliSyntheticAuth(
+        normalizeLowercaseStringOrEmpty(provider) === CLAUDE_CLI_BACKEND_ID ? config : undefined,
+        { env, signal },
+      ),
     ...buildProviderReplayFamilyHooks({ family: "native-anthropic-by-model" }),
     isModernModelRef: ({ provider, modelId }) =>
       matchesAnthropicModernModel(modelId) &&

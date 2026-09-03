@@ -67,9 +67,13 @@ export function renderLazyViewError({
         <button class="btn lazy-view-error__action" @click=${onRetry}>
           ${actionLabel ?? (stale ? t("common.reload") : t("lazyView.retry"))}
         </button>
-        ${onClose
-          ? html`<button class="btn" type="button" @click=${onClose}>${t("common.close")}</button>`
-          : nothing}
+        ${
+          onClose
+            ? html`<button class="btn" type="button" @click=${onClose}>
+                ${t("common.close")}
+              </button>`
+            : nothing
+        }
       `,
       detail,
       inline: Boolean(render),

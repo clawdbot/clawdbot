@@ -3321,68 +3321,84 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("replaces reply-to-current with an explicit id on a runtime-owned media rewrite", async () => {
-    await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
-      const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
-      writeSavedPng(fixtureDir, "reply.png");
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "older-distinct-assistant",
-        text: "A distinct earlier reply.",
-        provider: "openai",
-        model: "codex",
-      });
-      await appendSourceReplyMirrorEntry({
-        idempotencyKey: "runtime-owned-assistant",
-        openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
-        text: `Dinner options\nMEDIA:${mediaUrl}`,
-        provider: "openai",
-        model: "codex",
-      });
-      setAgentRunReplies([
-        {
-          kind: "final",
-          payload: setReplyPayloadMetadata(
-            {
-              text: "Dinner options",
-              mediaUrl,
-              mediaUrls: [mediaUrl],
-              replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
-            },
-            {
-              assistantTranscriptOwned: true,
-              assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
-            },
-          ),
-        },
-      ]);
-      const { send } = createChatRequestFixture();
+  it.each([false, true])(
+    "replaces reply-to-current on a runtime-owned media rewrite (signed=%s)",
+    async (signed) => {
+      await withTranscriptFixtureState("openclaw-chat-send-owned-media-", async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        writeSavedPng(fixtureDir, "reply.png");
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "older-distinct-assistant",
+          text: "A distinct earlier reply.",
+          provider: "openai",
+          model: "codex",
+        });
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: "runtime-owned-assistant",
+          openclawDelivery: { audioAsVoice: true, replyToCurrent: true },
+          text: `Dinner options\nMEDIA:${mediaUrl}`,
+          ...(signed
+            ? {
+                content: [
+                  { type: "text", text: "Dinner options", textSignature: "msg_final" },
+                  { type: "text", text: `MEDIA:${mediaUrl}` },
+                ],
+              }
+            : {}),
+          provider: "openai",
+          model: "codex",
+        });
+        setAgentRunReplies([
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "Dinner options",
+                mediaUrl,
+                mediaUrls: [mediaUrl],
+                replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+              },
+              {
+                assistantTranscriptOwned: true,
+                assistantTranscriptIdempotencyKey: "runtime-owned-assistant",
+              },
+            ),
+          },
+        ]);
+        const { send } = createChatRequestFixture();
 
-      await send({
-        idempotencyKey: "idem-owned-media",
-        expectBroadcast: false,
-        waitFor: "dedupe",
-      });
+        await send({
+          idempotencyKey: "idem-owned-media",
+          expectBroadcast: false,
+          waitFor: "dedupe",
+        });
 
-      const messages = await readActiveAssistantTranscriptMessages();
-      expect(messages.map((message) => message.idempotencyKey)).toEqual([
-        "older-distinct-assistant",
-        "runtime-owned-assistant",
-      ]);
-      const rewritten = messages[1];
-      const content = Array.isArray(rewritten?.content)
-        ? (rewritten.content as Array<Record<string, unknown>>)
-        : [];
-      expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
-      expect(content.filter((block) => block.type === "image")).toHaveLength(1);
-      expect(rewritten?.openclawDelivery).toEqual({
-        audioAsVoice: true,
-        mediaUrls: [mediaUrl],
-        replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        const messages = await readActiveAssistantTranscriptMessages();
+        expect(messages.map((message) => message.idempotencyKey)).toEqual([
+          "older-distinct-assistant",
+          "runtime-owned-assistant",
+        ]);
+        const rewritten = messages[1];
+        const content = Array.isArray(rewritten?.content)
+          ? (rewritten.content as Array<Record<string, unknown>>)
+          : [];
+        expect(content[0]).toEqual({ type: "text", text: "Dinner options" });
+        expect(content.filter((block) => block.type === "image")).toHaveLength(1);
+        if (signed) {
+          expect((await readRawActiveAssistantTranscriptMessages())[1]?.content).toEqual([
+            { type: "text", text: "Dinner options", textSignature: "msg_final" },
+          ]);
+        }
+        expect(rewritten?.openclawDelivery).toEqual({
+          audioAsVoice: true,
+          mediaUrls: [mediaUrl],
+          replyToId: "3114cf3c-e628-4c33-9214-894a1d8b6c60",
+        });
+        expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
+        expect(JSON.stringify(messages)).not.toContain(":assistant-media");
       });
-      expect(JSON.stringify(rewritten)).not.toContain("[[reply_to:");
-      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
-    });
-  });
+    },
+  );
 
   it("persists agent media only after a disposed attempt transcript owner has unwound", async () => {
     await withTranscriptFixtureState(
@@ -3943,7 +3959,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const assistantEntries = await readActiveAssistantTranscriptMessages();
         expect(assistantEntries).toHaveLength(1);
         expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
-        expect(JSON.stringify(assistantEntries[0])).toContain(replyText);
+        for (const message of [
+          assistantEntries[0],
+          ...(await readRawActiveAssistantTranscriptMessages()),
+        ]) {
+          expect(getMessageContent({ message }).filter((block) => block.type === "text")).toEqual([
+            { type: "text", text: replyText },
+          ]);
+        }
         expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
         expect(JSON.stringify(assistantEntries[0]?.content)).not.toContain(mediaUrl);
       },

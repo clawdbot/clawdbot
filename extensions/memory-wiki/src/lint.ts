@@ -529,15 +529,13 @@ export async function lintMemoryWikiVault(
     Object.values(sourceSyncState.entries).map((entry) => entry.pagePath.split(path.sep).join("/")),
   );
   const issues = [
-    ...compileResult.frontmatterErrors.map(
-      (error): MemoryWikiLintIssue => ({
-        severity: "error",
-        category: "structure",
-        code: "invalid-frontmatter",
-        path: error.relativePath,
-        message: `Frontmatter failed to parse: ${error.message}`,
-      }),
-    ),
+    ...compileResult.frontmatterErrors.map((error): MemoryWikiLintIssue => ({
+      severity: "error",
+      category: "structure",
+      code: "invalid-frontmatter",
+      path: error.relativePath,
+      message: `Frontmatter failed to parse: ${error.message}`,
+    })),
     ...collectPageIssues(compileResult.pages, managedImportedSourcePagePaths),
   ].toSorted((left, right) => left.path.localeCompare(right.path));
   const issuesByCategory = buildIssuesByCategory(issues);
