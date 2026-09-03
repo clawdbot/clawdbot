@@ -15,6 +15,7 @@ import {
   finishCronRunReceiptInDatabase,
   inspectActiveCronRunReceipt,
   isCronRunReceiptOwnerStale,
+  listActiveCronRunReceiptJobIdsInDatabase,
   type CronRunReceiptRecoveryCandidate,
 } from "../store/run-receipt-store.js";
 import type { CronJob } from "../types.js";
@@ -327,17 +328,15 @@ export function recomputeUnownedCronSchedules(
       const notifications: DeferredCronNotifications = [];
       let changed = false;
       const jobs: CronJob[] = [];
-      for (const row of loadCronRows(db, storeKey)) {
-        if (
-          findActiveCronRunReceiptInDatabase({
-            database: db,
-            storePath: state.deps.storePath,
-            jobId: row.job_id,
-          })
-        ) {
+      const rows = loadCronRows(db, storeKey);
+      const decodedJobs = loadedCronStoreFromRows(rows).store.jobs;
+      const jobsById = new Map(decodedJobs.map((job) => [job.id, job]));
+      const activeJobIds = listActiveCronRunReceiptJobIdsInDatabase(db, state.deps.storePath);
+      for (const row of rows) {
+        if (activeJobIds.has(row.job_id)) {
           continue;
         }
-        const job = loadedCronStoreFromRows([row]).store.jobs[0];
+        const job = jobsById.get(row.job_id);
         if (!job) {
           continue;
         }

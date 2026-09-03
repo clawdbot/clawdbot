@@ -162,8 +162,16 @@ describe("collaboration event scope guards", () => {
   it("revalidates an authoritative session-generation creator replacement before socket I/O", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const sessionKey = "agent:main:draft-owner-filter";
-      const ownerActor = { type: "human" as const, id: "profile-owner" };
-      const successorActor = { type: "human" as const, id: "profile-successor" };
+      const ownerActor = {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile-owner",
+      };
+      const successorActor = {
+        type: "human" as const,
+        source: "profile" as const,
+        id: "profile-successor",
+      };
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
         {

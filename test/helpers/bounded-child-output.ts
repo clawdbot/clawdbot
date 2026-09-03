@@ -2,7 +2,7 @@ import { StringDecoder } from "node:string_decoder";
 
 export const DEFAULT_CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
 
-function decodeUtf8Tail(buffer: Buffer): string {
+export function decodeUtf8Tail(buffer: Buffer): string {
   let start = 0;
   while (start < buffer.length && (buffer[start]! & 0b1100_0000) === 0b1000_0000) {
     start += 1;
@@ -35,7 +35,7 @@ export function createBoundedChildOutput(maxBytes = DEFAULT_CHILD_OUTPUT_TAIL_BY
   };
 
   return {
-    append(chunk: unknown): void {
+    append(this: void, chunk: unknown): void {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
       if (buffer.byteLength >= limit) {
         chunks = [Buffer.from(buffer.subarray(buffer.byteLength - limit))];

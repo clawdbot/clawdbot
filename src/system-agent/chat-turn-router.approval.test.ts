@@ -185,48 +185,6 @@ describe("SystemAgentChatEngine approval", () => {
     expect(engine.getPendingOperatorProposal()).toBeNull();
   });
 
-  it("hatches into the agent after a fresh setup applies", async () => {
-    useTempStateDir();
-    const verifyInferenceConfig = vi.fn(async () => ({
-      ok: true as const,
-      modelRef: "openai/gpt-5.5",
-      latencyMs: 100,
-    }));
-    const applySetup = vi.fn(async () => ({
-      configPath: "/tmp/openclaw.json",
-      configHashBefore: "before",
-      configHashAfter: "after",
-      bootstrapPending: true,
-      workspaceReady: true,
-      gateway: { status: "ready" as const, action: "reused" as const },
-      lines: ["Workspace: /tmp/hatch-work"],
-    }));
-    const engine = new SystemAgentChatEngine({
-      runAgentTurn: async () => null,
-      planWithAssistant: async () => null,
-      classifyApproval: async ({ message }) => (message === "yes" ? "approve" : "other"),
-      deps: {
-        applySetup,
-        verifyInferenceConfig,
-        loadOverview: fakeOverviewLoader({ defaultModel: "openai/gpt-5.5" }),
-      },
-    });
-    engine.propose({ kind: "setup", workspace: "/tmp/hatch-work" });
-
-    const reply = await engine.handle("yes");
-
-    expect(applySetup).toHaveBeenCalledOnce();
-    expect(reply.action).toBe("open-tui");
-    expect(reply.agentDraft).toBe("hatch");
-    expect(reply.handoff).toMatchObject({
-      kind: "open-tui",
-      workspace: "/tmp/hatch-work",
-      agentDraft: "hatch",
-    });
-    expect(reply.text).toContain("Your agent is hatching");
-    expect(reply.text).toContain("Settings → Ask OpenClaw");
-  });
-
   it.each([
     {
       origin: "custodian",
@@ -1074,8 +1032,9 @@ describe("SystemAgentChatEngine approval", () => {
 
     expect(runAgentTurn).toHaveBeenCalledOnce();
     expect(planner).not.toHaveBeenCalled();
-    expect(reply.text).toContain("OpenClaw operator UI");
-    expect(reply.text).toContain("cannot be applied from this chat");
+    expect(reply.text).toContain("requesting session's permission policy");
+    expect(reply.text).toContain("returns the final outcome");
+    expect(reply.text).not.toContain("OpenClaw operator UI");
     expect(reply.text).not.toContain("ask the user to reply yes");
     expect(reply.action).toBe("none");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
@@ -1085,7 +1044,7 @@ describe("SystemAgentChatEngine approval", () => {
     });
   });
 
-  it("tells delegated messaging users an approval can't be applied from chat", async () => {
+  it("leaves delegated planner proposals for the host permission policy", async () => {
     const planner = vi.fn(async () => ({
       reply: "Let's point your agent at gpt-5.5.",
       command: "set default model openai/gpt-5.5",
@@ -1100,10 +1059,10 @@ describe("SystemAgentChatEngine approval", () => {
 
     const reply = await engine.handle("actually use an openai model");
 
-    expect(reply.text).toContain("cannot be applied from this chat");
-    expect(reply.text).toContain("OpenClaw operator UI");
-    expect(reply.text).toContain("Refused:");
-    expect(reply.text).toContain("was not applied from this chat");
+    expect(reply.text).toContain("requesting session's permission policy");
+    expect(reply.text).toContain("returns the final outcome");
+    expect(reply.text).toContain("Proposed:");
+    expect(reply.text).not.toContain("OpenClaw operator UI");
     expect(reply.text).not.toContain("Say yes to apply");
     expect(engine.getPendingOperatorProposal()?.operation).toEqual({
       kind: "set-default-model",

@@ -48,12 +48,18 @@ function secretSentinelScope(label: string): Buffer {
   return createHash("sha256").update(label).digest().subarray(0, SECRET_SENTINEL_SCOPE_BYTES);
 }
 
-/** Seals a secret into authenticated ciphertext that only this process can resolve. */
+/** Masks provider auth unless its compatibility switch explicitly requests plaintext. */
 export function mintSecretSentinel(value: string, meta: { label: string }): string {
-  registerSecretValueForRedaction(value);
   if (!secretSentinelsEnabled()) {
+    registerSecretValueForRedaction(value);
     return value;
   }
+  return sealSecretSentinel(value, meta);
+}
+
+/** Always seals protected egress values, independently of provider compatibility settings. */
+export function sealSecretSentinel(value: string, meta: { label: string }): string {
+  registerSecretValueForRedaction(value);
   const scope = secretSentinelScope(meta.label);
   // A keyed nonce preserves the old stable-by-value-and-label behavior without
   // retaining a reverse plaintext map. Different plaintexts collide only at

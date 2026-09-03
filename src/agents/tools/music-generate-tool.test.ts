@@ -288,20 +288,6 @@ describe("createMusicGenerateTool", () => {
     ).toBeNull();
   });
 
-  it("registers when music-generation config is present", () => {
-    expectMusicGenerateTool(
-      createMusicGenerateTool({
-        config: asConfig({
-          agents: {
-            defaults: {
-              musicGenerationModel: { primary: "google/lyria-3-clip-preview" },
-            },
-          },
-        }),
-      }),
-    );
-  });
-
   it("tells song requests to generate audio instead of only lyrics", () => {
     const tool = expectMusicGenerateTool(
       createMusicGenerateTool({

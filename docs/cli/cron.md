@@ -85,7 +85,7 @@ Agent-turn jobs default to the creating conversation when session context is ava
 
 ## Delivery
 
-`openclaw automations list` and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
+`openclaw automations add`, `openclaw automations list`, and `openclaw automations show <job-id>` preview the resolved delivery route. For `channel: "last"`, the preview shows whether the route resolved from the main or current session, or will fail closed.
 
 Provider-prefixed targets can disambiguate unresolved announce channels. For example, `to: "telegram:123"` selects Telegram when `delivery.channel` is omitted or `last`. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the prefix must match that channel; `channel: "whatsapp"` with `to: "telegram:123"` is rejected. Service prefixes such as `imessage:` and `sms:` remain channel-owned target syntax.
 
@@ -146,6 +146,8 @@ One-shot jobs delete only after `completionStatus: "succeeded"`. Required-delive
 
 ### Recurring jobs
 
+Configured intervals and stagger windows retain millisecond precision in human-readable output: `--every 90s` displays as `every 1m 30s`, and `--stagger 1001ms` as `stagger 1s 1ms`. Use `automations show <job-id>` for the full duration when the list column is truncated. Relative next-run and last-run labels remain rounded.
+
 Recurring jobs use exponential retry backoff after consecutive errors: 30s, 1m, 5m, 15m, 60m. The schedule returns to normal after the next successful run.
 
 Skipped runs are tracked separately from execution errors. They do not affect retry backoff, but `openclaw automations edit <job-id> --failure-alert-include-skipped` can opt failure alerts into repeated skipped-run notifications.
@@ -169,7 +171,7 @@ Add `--wait` when a script should block until that exact queued run records a te
 openclaw automations run <job-id> --wait --wait-timeout 10m --poll-interval 2s
 ```
 
-With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`; it does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`; `failed`, `unknown`, execution errors/skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero.
+With `--wait`, the CLI calls `cron.run` first, then polls the durable `cron.runs` row for the returned `runId`; it does not reread mutable job delivery settings. JSON reports payload execution as `status` and whole-run completion as `completionStatus`. The command exits `0` only for `completionStatus: "succeeded"`; `failed`, `unknown`, execution errors/skips, a missing `runId`, and timeout expiry exit non-zero (default `10m`, polled every `2s` by default). `--poll-interval` must be greater than zero. Completed JSON output, including the run summary, is flushed before the command exits, so it can be piped to a JSON reader.
 
 <Note>
 Use `--due` when you want the manual command to run only if the job is currently due. If `--due --wait` does not enqueue a run, the command returns the normal non-run response instead of polling.
@@ -219,6 +221,8 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 ### Silent token suppression
 
 If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses both direct outbound delivery and the fallback queued summary path, so nothing is posted back to chat.
+
+Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`; genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
 
 ### Structured denials
 

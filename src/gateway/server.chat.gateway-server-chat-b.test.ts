@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -18,7 +19,7 @@ import { createSessionsHistoryTool } from "../agents/tools/sessions-history-tool
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
-import { clearConfigCache, getRuntimeConfig } from "../config/config.js";
+import { getRuntimeConfig, resetConfigRuntimeState } from "../config/config.js";
 import { resolveSessionRoutingContract } from "../config/sessions/main-session.js";
 import {
   appendTranscriptEvent,
@@ -29,7 +30,6 @@ import {
   patchSessionEntryCore,
   replaceTranscriptEvents,
   replaceSessionEntry,
-  withTranscriptWriteLock,
 } from "../config/sessions/session-accessor.js";
 import {
   waitForSessionTranscriptIndexReconcile,
@@ -39,6 +39,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { rotateAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { onDiagnosticEvent, type DiagnosticPayloadLargeEvent } from "../infra/diagnostic-events.js";
+import { flushDiagnosticsTimeline } from "../infra/diagnostics-timeline.js";
 import { ExecApprovalsMigrationRequiredError } from "../infra/exec-approvals-migration-gate.js";
 import { getMediaDir } from "../media/store.js";
 import { installTemporaryCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -49,6 +50,7 @@ import {
   isSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
 } from "../sessions/session-lifecycle-admission.js";
+import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../sessions/user-turn-transcript.js";
 import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -83,6 +85,32 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
+async function readWarmChatStartup(ws: Parameters<typeof rpcReq>[0]) {
+  // rpcReq resets the runtime config before each request. Warm startup must reuse
+  // the exact config that prepared metadata, as an ordinary client does.
+  const config = getRuntimeConfig();
+  const id = randomUUID();
+  const response = onceMessage<{
+    type: string;
+    id: string;
+    ok: boolean;
+    payload?: {
+      metadata?: {
+        commands?: Array<{ name?: string; textAliases?: string[] }>;
+        models?: Array<{ id?: string; provider?: string }>;
+      };
+      messages?: unknown[];
+      sessionInfo?: { key?: string; sessionId?: string };
+    };
+  }>(ws, (message) => message.type === "res" && message.id === id);
+  ws.send(
+    JSON.stringify({ type: "req", id, method: "chat.startup", params: makeMainSessionParams() }),
+  );
+  const result = await response;
+  expect(getRuntimeConfig()).toBe(config);
+  return result;
+}
+
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
     typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
@@ -110,7 +138,8 @@ vi.mock(
   },
 );
 
-vi.mock("../plugins/provider-thinking.js", () => ({
+vi.mock("../plugins/provider-thinking.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-thinking.js")>()),
   resolveEffectiveThinkingProfile: (params: { context?: { reasoning?: boolean } }) => {
     const offOnly =
       params.context?.reasoning === false ||
@@ -161,21 +190,23 @@ let harness: GatewayHarness;
 
 function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMetadataSnapshot {
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash,
+    generatedAtMs: 0,
+    installRecords: {},
+    // Matches the real isolated bundled snapshot: no installed-index rows,
+    // with the selected bundled manifests supplied below.
+    plugins: [],
+    diagnostics: [],
+  };
   const emptySnapshot: PluginMetadataSnapshot = {
     policyHash,
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash,
-      generatedAtMs: 0,
-      installRecords: {},
-      // Matches the real isolated bundled snapshot: no installed-index rows,
-      // with the selected bundled manifests supplied below.
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [], diagnostics: [] },
     plugins: [],
@@ -191,6 +222,7 @@ function createGatewayPluginMetadataSnapshot(config: OpenClawConfig): PluginMeta
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,
@@ -240,22 +272,6 @@ afterAll(async () => {
   await harness.close();
 });
 
-const sendReq = (
-  ws: { send: (payload: string) => void },
-  id: string,
-  method: string,
-  params: unknown,
-) => {
-  ws.send(
-    JSON.stringify({
-      type: "req",
-      id,
-      method,
-      params,
-    }),
-  );
-};
-
 async function withGatewayChatHarness(
   run: (ctx: { ws: GatewaySocket; createSessionDir: () => Promise<string> }) => Promise<void>,
   options?: { headers?: Record<string, string> },
@@ -269,8 +285,8 @@ async function withGatewayChatHarness(
     if (process.env.OPENCLAW_CONFIG_PATH) {
       await fs.rm(process.env.OPENCLAW_CONFIG_PATH, { force: true });
     }
-    clearConfigCache();
     testState.sessionStorePath = undefined;
+    resetConfigRuntimeState();
     ws.close();
   }
 }
@@ -309,7 +325,7 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
   }
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeMainSessionTranscript(
@@ -372,7 +388,7 @@ function openDirectChatSession() {
 function resetDirectChatSession() {
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
-  clearConfigCache();
+  resetConfigRuntimeState();
 }
 
 async function writeStoredMainSession(entry: StoredSessionEntry = {}) {
@@ -393,8 +409,8 @@ async function callDirectChatHandler(
   method: DirectChatMethod,
   options: GatewayRequestHandlerOptions,
 ) {
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  await expectDefined(chatHandlers[method], `${method} test invariant`)(options);
+  const { coreGatewayHandlers } = await import("./server-methods.js");
+  await expectDefined(coreGatewayHandlers[method], `${method} test invariant`)(options);
 }
 
 type DirectChatCallOptions = Omit<
@@ -621,6 +637,7 @@ test("chat.send replays a cached result after the session is archived", async ()
 });
 
 async function readTimelineEvents(filePath: string): Promise<Array<Record<string, unknown>>> {
+  flushDiagnosticsTimeline();
   const raw = await fs.readFile(filePath, "utf-8");
   return raw
     .trim()
@@ -869,7 +886,6 @@ describe("gateway server chat", () => {
         ).toMatchObject({ state: "active", environmentId: "env-placement" });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -919,7 +935,6 @@ describe("gateway server chat", () => {
         });
       } finally {
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1104,7 +1119,6 @@ describe("gateway server chat", () => {
       } finally {
         clearActiveEmbeddedRun("sess-main", handle, "main");
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1164,7 +1178,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.sessionConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1370,7 +1383,6 @@ describe("gateway server chat", () => {
       } finally {
         handler.dispose();
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -1485,14 +1497,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await rpcReq<{
-        metadata?: {
-          commands?: Array<{ name?: string; textAliases?: string[] }>;
-          models?: Array<{ id?: string; provider?: string }>;
-        };
-        messages?: unknown[];
-        sessionInfo?: { key?: string; sessionId?: string };
-      }>(ws, "chat.startup", makeMainSessionParams());
+      const startup = await readWarmChatStartup(ws);
       const agents = await rpcReq<{
         agents?: Array<{
           id?: string;
@@ -1723,7 +1728,6 @@ describe("gateway server chat", () => {
       } finally {
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -2014,7 +2018,6 @@ describe("gateway server chat", () => {
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
-      clearConfigCache();
     }
   });
 
@@ -2059,7 +2062,6 @@ describe("gateway server chat", () => {
             talk: { agentId: "main" },
           };
           await state.writeConfig(config);
-          clearConfigCache();
           const pluginMetadataSnapshot = createGatewayPluginMetadataSnapshot(config);
           assertPluginMetadataSnapshotConsistency(pluginMetadataSnapshot);
           releasePluginMetadata = installTemporaryCurrentPluginMetadataSnapshot(
@@ -2487,7 +2489,6 @@ describe("gateway server chat", () => {
           testState.agentsConfig = previousAgentsConfig;
           testState.sessionStorePath = undefined;
           releasePluginMetadata();
-          clearConfigCache();
         }
       },
     );
@@ -2518,9 +2519,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await rpcReq<{
-        metadata?: { models?: Array<{ id?: string; provider?: string }> };
-      }>(ws, "chat.startup", makeMainSessionParams());
+      const startup = await readWarmChatStartup(ws);
 
       expect(startup.ok).toBe(true);
       expect(startup.payload?.metadata?.models).toEqual(
@@ -2810,7 +2809,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await connectOk(ws);
       const modelsListResult = await import("./server-methods/models-list-result.js");
-      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValue(
+      vi.spyOn(modelsListResult, "prepareModelsListResult").mockRejectedValue(
         new Error("configured model catalog unavailable"),
       );
 
@@ -3732,7 +3731,6 @@ describe("gateway server chat", () => {
         dispatchInboundMessageMock.mockReset();
         testState.agentConfig = undefined;
         testState.sessionStorePath = undefined;
-        clearConfigCache();
       }
     },
   );
@@ -4085,41 +4083,43 @@ describe("gateway server chat", () => {
   test.each([
     { caseName: "tombstones an explicit abort", retryable: false, stopReason: "rpc" },
     { caseName: "retains a restart interruption", retryable: true, stopReason: "restart" },
-  ])("chat.send $caseName during SQLite admission", async ({ retryable, stopReason }) => {
+  ])("chat.send $caseName after SQLite admission commits", async ({ retryable, stopReason }) => {
     const { storePath } = openDirectChatSession();
     const runId = `idem-restart-safe-abort-${stopReason}`;
-    const lockEntered = createDeferred();
-    const releaseLock = createDeferred();
-    let lockPromise: Promise<void> | undefined;
+    let stopListening: (() => void) | undefined;
     try {
       await writeStoredMainSession(makeDoneSessionEntry());
       const scope = makeMainSessionScope(storePath);
-      lockPromise = withTranscriptWriteLock(scope, async () => {
-        lockEntered.resolve(undefined);
-        await releaseLock.promise;
-      });
-      await lockEntered.promise;
       const context = createDirectChatContext();
+      const abortCommittedTurn = vi.fn(() => {
+        const activeRun = expectDefined(
+          context.chatAbortControllers.get(runId),
+          "expected admitted chat run",
+        );
+        activeRun.abortStopReason = stopReason;
+        activeRun.controller.abort();
+      });
+      // The transcript notification follows the atomic user-turn and recovery-claim commit.
+      stopListening = onSessionTranscriptUpdate((update) => {
+        if (
+          update.target.sessionKey === scope.sessionKey &&
+          update.target.sessionId === scope.sessionId &&
+          isRecord(update.message) &&
+          update.message.role === "user" &&
+          update.message.idempotencyKey === `${runId}:user`
+        ) {
+          abortCommittedTurn();
+        }
+      });
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
-      const sendPromise = sendControlUiChat({
+      await sendControlUiChat({
         context,
         idempotencyKey: runId,
         message: "persist, then stop",
         respond: captureChatResult(responses),
       });
-      await waitForFast(
-        () => expect(context.chatAbortControllers.get(runId)).toBeDefined(),
-        FAST_WAIT_OPTS,
-      );
-      const activeRun = context.chatAbortControllers.get(runId);
-      if (!activeRun) {
-        throw new Error("expected admitted chat run");
-      }
-      activeRun.abortStopReason = stopReason;
-      activeRun.controller.abort();
-      releaseLock.resolve(undefined);
-      await Promise.all([sendPromise, lockPromise]);
-
+      stopListening();
+      expect(abortCommittedTurn).toHaveBeenCalledOnce();
       expect(responses).toEqual([
         {
           ok: true,
@@ -4225,8 +4225,7 @@ describe("gateway server chat", () => {
         }),
       ).toHaveLength(1);
     } finally {
-      releaseLock.resolve(undefined);
-      await lockPromise?.catch(() => undefined);
+      stopListening?.();
       resetDirectChatSession();
     }
   });
@@ -4657,11 +4656,10 @@ describe("gateway server chat", () => {
           scope: initialRuntimeConfig.session?.scope === "global" ? "per-sender" : "global",
         },
       } as const;
-      context.getRuntimeConfig = vi
-        .fn()
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValueOnce(initialRuntimeConfig)
-        .mockReturnValue(changedRuntimeConfig);
+      context.getRuntimeConfig = () =>
+        loadSessionEntry(makeMainSessionScope(storePath))?.restartRecoveryDeliveryRunId === runId
+          ? changedRuntimeConfig
+          : initialRuntimeConfig;
       const responses: Array<{ ok: boolean; payload?: unknown }> = [];
 
       await sendControlUiChat({
@@ -6258,6 +6256,7 @@ describe("gateway server chat", () => {
         },
       );
     } finally {
+      flushDiagnosticsTimeline();
       if (previousDiagnostics === undefined) {
         delete process.env.OPENCLAW_DIAGNOSTICS;
       } else {
@@ -8041,18 +8040,16 @@ describe("gateway server chat", () => {
         return undefined;
       });
 
-      const sendResP = onceMessage(ws, (o) => o.type === "res" && o.id === "send-abort-1", 2_000);
-      sendReq(
+      const sendRes = await rpcReq(
         ws,
-        "send-abort-1",
         "chat.send",
         makeChatSendParams({
           idempotencyKey: "idem-abort-1",
           timeoutMs: 30_000,
         }),
+        2_000,
       );
 
-      const sendRes = await sendResP;
       expect(sendRes.ok).toBe(true);
       await waitForFast(() => {
         expect(spy.mock.calls.length).toBeGreaterThan(0);

@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import { manualTranscriptSourceProvider } from "../../transcripts/manual-source.js";
@@ -12,9 +13,12 @@ import type {
   TranscriptsStartResult,
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
-import type { TranscriptsStore } from "../../transcripts/store.js";
+import { transcriptSessionSelector } from "../../transcripts/store-artifacts.js";
+import { TranscriptsStore, TranscriptsSummaryChangedError } from "../../transcripts/store.js";
+import { summarizeTranscriptsWithModel } from "../../transcripts/summary-model.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
 import { truncateUtf16Safe } from "../../utils.js";
+import { resolveDefaultAgentId } from "../agent-scope-config.js";
 
 const ACCOUNT_ID_OUTPUT_MAX_CHARS = 64;
 
@@ -52,6 +56,13 @@ type ActiveTranscriptsSession = {
 
 // Process-local ownership shared by tool-driven and configured transcript captures.
 export const activeSessions = new Map<string, ActiveTranscriptsSession>();
+
+export function isTranscriptSessionActive(
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
+): boolean {
+  const entry = activeSessions.get(session.sessionId);
+  return entry?.session.startedAt === session.startedAt && entry.phase !== "terminal";
+}
 // Reserve ids across async provider startup so overlapping starts cannot
 // replace the only cleanup owner for an existing or still-starting capture.
 const startingSessionIds = new Set<string>();
@@ -60,16 +71,54 @@ export function isTranscriptSessionStarting(sessionId: string): boolean {
   return startingSessionIds.has(sessionId);
 }
 
-export async function persistTranscriptSummary(params: {
+export function createTranscriptsStore(ctx: TranscriptsRuntimeContext): TranscriptsStore {
+  return new TranscriptsStore(path.join(ctx.stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: ctx.stateDir },
+  });
+}
+
+export async function readTranscriptSummary(params: {
   config: ReturnType<typeof resolveTranscriptsConfig>;
+  cfg?: OpenClawConfig;
   store: TranscriptsStore;
   session: TranscriptSessionDescriptor;
 }) {
   const utterances = await params.store.readUtterancesForSession(params.session, {
     maxUtterances: params.config.maxUtterances,
   });
-  const summary = summarizeTranscripts({ session: params.session, utterances });
-  const intendedSummaryPath = await params.store.writeSummary(summary, params.session);
+  const agentId = params.session.metadata?.agentId;
+  try {
+    if (params.cfg) {
+      const modeled = await summarizeTranscriptsWithModel({
+        cfg: params.cfg,
+        agentId:
+          typeof agentId === "string" && agentId.trim()
+            ? agentId
+            : resolveDefaultAgentId(params.cfg),
+        session: params.session,
+        utterances,
+      });
+      if (modeled) {
+        return modeled;
+      }
+    }
+  } catch {
+    // Historical captures may have no resolvable agent; they still get notes.
+  }
+  // Heuristic notes are the deterministic base; model inference is an enhancement
+  // so an unavailable model never loses the captured meeting notes.
+  return summarizeTranscripts({ session: params.session, utterances });
+}
+
+export async function persistTranscriptSummary(
+  params: Parameters<typeof readTranscriptSummary>[0],
+) {
+  const revision = params.store.readSummaryInputRevision(params.session);
+  if (revision === undefined) {
+    throw new TranscriptsSummaryChangedError();
+  }
+  const summary = await readTranscriptSummary(params);
+  const intendedSummaryPath = await params.store.writeSummary(summary, params.session, revision);
   return { summary, intendedSummaryPath };
 }
 
@@ -90,6 +139,7 @@ export function finalizeTranscriptCapture(params: {
     await params.store.writeSession(entry.session);
     return await persistTranscriptSummary({
       config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+      cfg: params.ctx.config,
       store: params.store,
       session: entry.session,
     });
@@ -299,9 +349,14 @@ export function resolveTranscriptSourceOwnership(params: {
   return { source: providerSource };
 }
 
-export function toolText(text: string, details?: Record<string, unknown>) {
+export function toolText(text: string, details?: Record<string, unknown> & { selector?: string }) {
   return {
-    content: [{ type: "text" as const, text }],
+    content: [
+      {
+        type: "text" as const,
+        text: details?.selector ? `${text}\nSelector: ${details.selector}` : text,
+      },
+    ],
     details: details ?? {},
   };
 }
@@ -336,6 +391,8 @@ export async function startTranscripts(params: {
   startupWaitMs?: number;
   configuredLifecycle?: true;
   lifecycleToken?: symbol;
+  existingSession?: TranscriptSessionDescriptor;
+  onCaptureEnded?: () => void;
 }) {
   if (params.abortSignal?.aborted) {
     throw new Error("transcripts start aborted");
@@ -366,12 +423,18 @@ export async function startTranscripts(params: {
   }
   const session: TranscriptSessionDescriptor = {
     sessionId:
+      params.existingSession?.sessionId ??
       readTranscriptStringParam(params.rawParams, "sessionId", { trim: true }) ??
       createTranscriptSessionId(),
-    title: readTranscriptStringParam(params.rawParams, "title", { trim: true }),
+    title:
+      readTranscriptStringParam(params.rawParams, "title", { trim: true }) ??
+      params.existingSession?.title,
     source: sanitizeTranscriptSourceLocator(providerSource),
-    startedAt: new Date().toISOString(),
-    metadata: params.ctx.agentId ? { agentId: params.ctx.agentId } : {},
+    startedAt: params.existingSession?.startedAt ?? new Date().toISOString(),
+    metadata: {
+      ...params.existingSession?.metadata,
+      ...(params.ctx.agentId ? { agentId: params.ctx.agentId } : {}),
+    },
   };
   if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
     throw new Error(`transcripts session already active: ${session.sessionId}`);
@@ -383,9 +446,9 @@ export async function startTranscripts(params: {
     phase: "starting",
     lifecycleToken: params.lifecycleToken,
   };
+  const startupAbort = createStartupAbortScope(params.abortSignal);
   try {
     await params.store.writeSession(session);
-    const startupAbort = createStartupAbortScope(params.abortSignal);
     let result: TranscriptsStartResult;
     try {
       result = await provider.start({
@@ -419,15 +482,19 @@ export async function startTranscripts(params: {
           entry.session = { ...session, stoppedAt: new Date().toISOString() };
           // Awaiting start here would deadlock providers that notify inline.
           if (activeSessions.get(session.sessionId) === entry) {
-            await finalizeTranscriptCapture({ ...params, entry });
+            try {
+              await finalizeTranscriptCapture({ ...params, entry });
+            } finally {
+              if (!entry.stopping) {
+                params.onCaptureEnded?.();
+              }
+            }
           }
         },
       });
     } catch (error) {
       entry.phase = "failed";
       throw error;
-    } finally {
-      startupAbort.detach();
     }
     // Provider failures retain cleanup ownership; only a successful result can
     // transfer a live capture to this lifecycle for abort/stop retry handling.
@@ -436,6 +503,14 @@ export async function startTranscripts(params: {
       throw new Error(result.error);
     }
     activeSessions.set(session.sessionId, entry);
+    if (!session.title) {
+      const title = truncateUtf16Safe(result.session.title?.trim() ?? "", 120);
+      if (title) {
+        session.title = title;
+        entry.session = { ...entry.session, title };
+        await params.store.writeSession(entry.session);
+      }
+    }
     if (startupAbort.signal?.aborted) {
       entry.cleanupPending = true;
       const cleanupError =
@@ -457,6 +532,7 @@ export async function startTranscripts(params: {
       await finalizeTranscriptCapture({ ...params, entry });
       return toolText(`Transcripts ended during startup: ${session.sessionId}`, {
         sessionId: session.sessionId,
+        selector: transcriptSessionSelector(session),
         active: false,
         stoppedAt: entry.session.stoppedAt,
       });
@@ -468,11 +544,40 @@ export async function startTranscripts(params: {
       {
         sessionId: session.sessionId,
         startedAt: session.startedAt,
+        selector: transcriptSessionSelector(session),
         providerId: provider.id,
         ...(effectiveAccount ? { accountId: effectiveAccount } : {}),
       },
     );
+  } catch (error) {
+    if (
+      entry.phase === "starting" &&
+      !entry.cleanupPending &&
+      activeSessions.get(session.sessionId) === entry
+    ) {
+      entry.cleanupPending = true;
+      const cleanupError = await stopPendingTranscriptCapture({
+        ctx: params.ctx,
+        provider,
+        session,
+        reason: "startup-failed",
+      });
+      if (cleanupError) {
+        throw new Error(
+          `transcripts start failed session=${session.sessionId}; provider cleanup failed: ${cleanupError}`,
+          { cause: error },
+        );
+      }
+      await finalizeTranscriptCapture({ ...params, entry });
+    }
+    // Failed reopening must not erase the durable stop time: the next bounded
+    // attempt still needs to find this same meeting, not create an empty sibling.
+    if (entry.phase === "failed" && params.existingSession) {
+      await params.store.writeSession(params.existingSession);
+    }
+    throw error;
   } finally {
+    startupAbort.detach();
     startingSessionIds.delete(session.sessionId);
   }
 }

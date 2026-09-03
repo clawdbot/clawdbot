@@ -11,6 +11,7 @@ export type SessionToolOverrides = {
 export type SessionPatch = {
   label?: string | null;
   icon?: string | null;
+  color?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;
@@ -44,8 +45,10 @@ export type SessionPatchOptions = {
   deferListRefresh?: boolean;
 };
 
+export type SessionPatchResult = SessionsPatchResult & { listRefreshError?: string };
+
 export type SessionPatchRoute = (
   key: string,
   patch: SessionPatch,
   options?: SessionPatchOptions,
-) => Promise<SessionsPatchResult | null>;
+) => Promise<SessionPatchResult | null>;

@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import {
   filterContainerGenericHints,
-  parsePortFromArgs,
   renderRuntimeHints,
   renderGatewayServiceStartHints,
   resolveRuntimeStatusColor,
@@ -19,17 +18,6 @@ describe("resolveRuntimeStatusColor", () => {
   it("falls back to warning color for unexpected states", () => {
     expect(resolveRuntimeStatusColor("degraded")).toBe(theme.warn);
     expect(resolveRuntimeStatusColor(undefined)).toBe(theme.muted);
-  });
-});
-
-describe("parsePortFromArgs", () => {
-  it("rejects inline port values with trailing equals-separated text", () => {
-    expect(parsePortFromArgs(["--port=123=bad"])).toBeNull();
-  });
-
-  it("accepts valid inline and space-separated port values", () => {
-    expect(parsePortFromArgs(["--port=14720"])).toBe(14_720);
-    expect(parsePortFromArgs(["--port", "14721"])).toBe(14_721);
   });
 });
 

@@ -21,9 +21,9 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
-const invocationCwd = process.cwd();
 // The supervisor must not retain a cwd inside a worktree the operation may
-// delete; only the child keeps the caller's original cwd.
+// delete. Start the child in this same owner so early Git/gh reads use the
+// repository selected by the wrapper, before any PR worktree is entered.
 process.chdir(repoRoot);
 const lockScript = fileURLToPath(new URL("./operation-lock.sh", import.meta.url));
 const lockSnapshotDir = mkdtempSync(join(tmpdir(), "openclaw-pr-lock-release-"));
@@ -196,11 +196,23 @@ for (const signal of FORWARDED_SIGNALS) {
   process.on(signal, handler);
 }
 
+// Git maintenance must join before leader completion, not daemonize with fd 3.
+// Append to Git's inherited -c transport so nested tools share this lifetime
+// without changing repository config or discarding the caller's other settings.
+const gitConfigParameters = [
+  process.env.GIT_CONFIG_PARAMETERS,
+  "'maintenance.autoDetach=false'",
+  "'gc.autoDetach=false'",
+]
+  .filter(Boolean)
+  .join(" ");
+
 const child = spawn(script, args, {
-  cwd: invocationCwd,
+  cwd: repoRoot,
   detached: true,
   env: {
     ...process.env,
+    GIT_CONFIG_PARAMETERS: gitConfigParameters,
     OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
     OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),

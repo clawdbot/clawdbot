@@ -412,6 +412,8 @@ WebChat receives the committed `session.message` event immediately. The same ass
 
 If the bound conversation is an external channel, OpenClaw also performs its normal durable channel send. That send still happens at most once, and the required session commit does not create a second external message. A verified `message` tool send suppresses the automatic channel resend but does not suppress the session commit. The run is reported delivered only after both the external recipient handoff (when required) and the canonical session commit succeed.
 
+When the bound conversation has no external channel route — WebChat/Control UI conversations, or a gateway with no channel plugins configured — the session commit alone completes delivery and the run succeeds without attempting an external send. If the conversation does name an external route that cannot be resolved at run time, the committed result stays in the conversation and the run records the resolution failure as its delivery error: a delivery failure, not a turn failure.
+
 <Warning>
   Every outbound automation webhook uses the strict SSRF guard. Loopback,
   private/internal, link-local, and other special-use targets are refused by
@@ -466,6 +468,8 @@ Failure notification routes resolve in this order:
 - `delivery.failureDestination` is only supported on `sessionTarget="isolated"` jobs unless the primary delivery mode is `webhook`.
 - `failureAlert.includeSkipped: true` opts a job or global automation alert policy into repeated skipped-run alerts. Skipped runs keep a separate consecutive-skip counter, so they do not affect execution-error backoff.
 - `openclaw automations edit` exposes per-job alert tuning: `--failure-alert`/`--no-failure-alert`, `--failure-alert-after <n>`, `--failure-alert-channel`, `--failure-alert-to`, `--failure-alert-cooldown`, `--failure-alert-include-skipped`/`--failure-alert-exclude-skipped`, `--failure-alert-mode`, and `--failure-alert-account-id`.
+
+In the Control UI, custom failure alerts show stored threshold, cooldown, and mode overrides. An omitted channel displays the neutral `last` choice without storing it. Leave the threshold or cooldown blank, or choose **Inherit global setting** for alert mode, to use the Gateway's normal global and routing defaults. Cooldowns accept decimal seconds with millisecond precision, including `0` for no cooldown; for example, `1.001` seconds preserves `1001` milliseconds. Editing other job fields or cloning a job preserves its alert policy, including the skipped-run setting.
 
 A required completion-delivery failure is distinct from an execution failure: a run can record `status: "ok"` with `completionStatus: "failed"`. It does not increment the execution-failure streak or backoff. A delivery-failure alert can notify through a resolved alternate failure destination without waiting for `failureAlert.after`. All such alerts, including the first delivery failure after an execution alert, honor the shared job/global `failureAlert.cooldownMs` (default 1 hour); suppressed alerts still leave the delivery failure in run history. Skipped runs and quiet trigger checks do not clear the cooldown; successful completion does. The scheduler never retries the already-failed primary route for an alert.
 
@@ -599,7 +603,7 @@ Intentional silence (`NO_REPLY`), intentionally empty output, heartbeat acknowle
 
 Direct Gateway event sources can use `cron.run` with `mode: "if-enabled"` to run immediately without overriding an operator-disabled or auto-disabled job. Explicit operator run-now commands continue to use `force`.
 
-The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews.
+The agent `automations` tool returns compact job summaries (`id`, `name`, `enabled`, `nextRunAtMs`, `scheduleKind`, `lastRunStatus`) from `automations(action: "list")`; use `automations(action: "get", jobId: "...")` for one full job definition. Direct Gateway callers can pass `compact: true` to `cron.list`; omitting it preserves the full response with delivery previews. `cron.add` includes the same dry-run preview on the created job so create-time output names a resolved route or fail-closed outcome.
 
 `openclaw automations create` is an alias for `openclaw automations add`. New jobs can use a positional schedule (`"0 9 * * 1"`, `"every 1h"`, `"20m"`, or an ISO timestamp) followed by a positional agent prompt. Use `--webhook <url>` on `automations add|create` or `automations edit` to POST the finished run payload to an HTTP endpoint; webhook delivery cannot combine with chat delivery flags (`--announce`, `--channel`, `--to`, `--thread-id`, `--account`). On `automations edit`, `--clear-channel`, `--clear-to`, `--clear-thread-id`, and `--clear-account` unset those routing fields individually (each rejected alongside its matching set flag) — distinct from `--no-deliver`, which only disables runner fallback delivery.
 
@@ -733,7 +737,7 @@ limits, routing policy, and error responses.
       --data '{"text":"The sample import completed","mode":"now","agentId":"main"}'
     ```
 
-    HTTP `200` with `{ "ok": true, "mode": "now" }` means the event was enqueued and a wake was requested, not that a heartbeat completed. Use `mode: "next-heartbeat"` to enqueue without requesting an immediate wake.
+    HTTP `200` includes `eventOutcome: "queued"` when the queue accepts the wake or `eventOutcome: "coalesced"` when the same wake is already the queue's most recent pending event. With `mode: "now"`, a wake is requested in either case; the response does not mean a heartbeat completed. Use `mode: "next-heartbeat"` to avoid requesting an immediate wake.
 
     A supplied `agentId` must name a configured agent. Supply it explicitly when the fleet has no implicit or retained legacy owner. A caller-selected `sessionKey` requires `mode: "now"`, `hooks.allowRequestSessionKey: true`, and the configured prefix policy; deferred wakes use the main session.
 
@@ -755,7 +759,7 @@ limits, routing policy, and error responses.
 
     Persistent mapped hooks require a stable mapping `sessionKey` or `hooks.defaultSessionKey`. Template-derived keys require the same caller-key opt-in and prefix policy as request keys.
 
-    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery, and mapped wake actions are not deduplicated. The reference covers batch caps and response shapes.
+    `forEach: "<key>"` fans out over a top-level payload array. Each item sees a one-element array, so the Gmail preset's `messages[0]` means the current email. Agent fan-out admission answers after at most about 8 seconds of dispatch waiting; pending items continue in the background and a partial batch returns non-2xx. Retrying the same batch reuses pending or admitted agent items while the bounded in-memory replay cache retains them. It is not durable exactly-once delivery; mapped wake actions have no replay identity, and the queue may coalesce repeated wakes. The reference covers batch caps and response shapes.
 
   </Accordion>
 </AccordionGroup>
@@ -870,7 +874,7 @@ Why this shape is safer:
 - `allowedAgentIds` prevents this hook endpoint from selecting another agent. If the Gateway serves other hook workflows, include only their intended agent ids too.
 - `scope: "session"` gives each Gmail message its own sandbox; `workspaceAccess: "none"` keeps the host agent workspace out of that sandbox.
 - `allow: ["session_status"]` is an absolute per-agent clamp, so global `tools.alsoAllow` additions cannot leak into the reader. The minimal profile and explicit deny list make the intended boundary auditable.
-- `deliver: false` disables automatic successful announcements; completion is logged instead. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Keep agent-to-agent handoff disabled unless you deliberately expose the exact coordination tool and pair it with a narrow [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent) policy.
+- `deliver: false` disables automatic successful announcements; completion is logged instead. To announce a summary externally after validating the reader, set `deliver: true` and add an explicit `channel` and `to`. Agent-to-agent access is on by default: set [`tools.agentToAgent.enabled: false`](/gateway/config-tools#tools-agenttoagent) to disable cross-agent handoff, or deliberately expose the exact coordination tool and constrain permitted agent pairs with `tools.agentToAgent.allow`.
 
 Tool policies can only become more restrictive as global, provider, agent, and sandbox rules are combined. The per-agent allowlist cannot restore `session_status` if an earlier policy removed it. Ensure inherited policies retain `session_status`; an empty effective tool set aborts before the model sees the email.
 
@@ -901,7 +905,7 @@ The two tokens protect different hops: `hooks.gmail.pushToken` authenticates Pub
 <Warning>
 The built-in Gmail preset's per-message session separates conversation context; it does not restrict the target agent's tools or workspace. Without a custom mapping that sets `agentId`, Gmail hooks run as the default agent.
 
-For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. If it needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent`. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
+For untrusted inboxes, route the hook to a dedicated reader agent, give that agent read-only or no workspace access, and deny filesystem-write, shell, browser, and other unnecessary tools. Agent-to-agent access is on by default. If the reader needs to notify the main agent, expose only the required coordination tool and constrain its targets with `tools.agentToAgent.allow`; otherwise set `tools.agentToAgent.enabled: false` to disable cross-agent access. See [Prompt injection](/gateway/security#prompt-injection), [Multi-agent sandbox and tools](/tools/multi-agent-sandbox-tools), and [`tools.agentToAgent`](/gateway/config-tools#tools-agenttoagent).
 </Warning>
 
 ### Verify the reader boundary
@@ -999,6 +1003,8 @@ when omitted. Prefer narrow `allowedHostnames` entries over the broad
 `dangerouslyAllowPrivateNetwork` opt-in.
 
 Automation jobs, run history, and quarantined malformed jobs live in the shared SQLite state database. Use the CLI or Gateway API to change jobs; `cron.store` is retired.
+
+Set `cron.skipMissedJobs: true` to skip recurring (`cron` and `every`) slots missed while the Gateway was offline. At startup, those jobs advance to their next future occurrence instead of catching up, avoiding stale reminders and unnecessary model calls at the cost of dropping missed work. The default is `false` (catch up); one-shot (`at`) jobs retain their normal catch-up behavior either way.
 
 Disable automations: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
 

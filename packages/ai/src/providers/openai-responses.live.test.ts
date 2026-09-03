@@ -138,7 +138,7 @@ describeLive("OpenAI Responses live", () => {
             },
           ],
         },
-        { apiKey: OPENAI_KEY, maxTokens: 16, maxRetries: 0 },
+        { apiKey: OPENAI_KEY, maxTokens: 16 },
       ).result();
 
       expect(result.stopReason).toBe("error");

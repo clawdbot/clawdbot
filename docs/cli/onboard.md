@@ -198,6 +198,20 @@ state:
   onboarding or OpenClaw. On a configured install, reach OpenClaw with
   `/openclaw` inside the TUI or `openclaw setup`.
 
+Remote setup reuses device pairing for the selected Gateway, including a
+configured remote connection forwarded through loopback. Its readiness probes
+do not create new device pairings. Setup chat keeps a stable authenticated
+caller across replies, including on loopback connections.
+
+When interactive remote setup activates inference and the Gateway requires a
+restart, onboarding waits up to 45 seconds for a new Gateway boot and a successful
+inference check before opening setup chat. A healthy connection to the old
+Gateway does not count. If the restart wait expires or boot identity is missing,
+onboarding reports that the settings were saved and stops rather than trying
+another provider. Check the remote Gateway, then rerun bare `openclaw` in the
+connected terminal. If the error says the Gateway did not provide a boot identity,
+update and restart that Gateway first.
+
 Plaintext `ws://` is accepted for loopback, private IP literals, `.local`, and Tailnet `*.ts.net` gateway URLs. For other trusted private-DNS names, set `OPENCLAW_ALLOW_INSECURE_PRIVATE_WS=1` in the onboarding process environment.
 
 ## Reset

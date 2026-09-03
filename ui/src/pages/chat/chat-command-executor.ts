@@ -44,7 +44,7 @@ import { patchChatCommandSessionSettings, selectedGlobalScope } from "./chat-set
 
 type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
-  content: string;
+  content?: string;
   /** Side-effect action the caller should perform after displaying the result. */
   action?: "refresh" | "export" | "new-session" | "reset" | "stop" | "clear" | "navigate-usage";
   /** Model-dependent tools need refreshing after a confirmed selection. */
@@ -221,17 +221,7 @@ async function executeCompact(
       };
     }
     if (result?.compacted) {
-      const before = result.result?.tokensBefore;
-      const after = result.result?.tokensAfter;
-      const tokenSummary =
-        typeof before === "number" && typeof after === "number"
-          ? t("chat.commandResults.compaction.tokenSummary", {
-              before: before.toLocaleString(),
-              after: after.toLocaleString(),
-            })
-          : "";
       return {
-        content: `${t("chat.commandResults.compaction.succeeded")}${tokenSummary}.`,
         action: "refresh",
       };
     }

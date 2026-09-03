@@ -1,19 +1,20 @@
 import { createHash } from "node:crypto";
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { SESSION_PARTICIPANT_LIMIT } from "../../packages/gateway-protocol/src/schema/session-participant.js";
 import { resolveAuthoredModelContextTokens } from "../agents/context-resolution.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
-import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
   getSessionDisplaySubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
   isSubagentRunLive,
+  isSubagentRunQueued,
   resolveSubagentSessionStatus,
 } from "../agents/subagents/registry/subagent-registry-read.js";
 import { resolveQueueSettingsCore } from "../auto-reply/reply/queue/settings.js";
@@ -30,6 +31,10 @@ import {
 } from "../config/sessions.js";
 import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
+import {
+  MAX_SESSION_PARTICIPANTS,
+  sessionCreatorProfileId,
+} from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
@@ -42,11 +47,11 @@ import { normalizeControlUiBasePath } from "./control-ui-shared.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 import { sessionClassificationForRow } from "./session-classification.js";
 import {
-  hasSessionCreatorProfileProvenance,
   projectSessionActor,
   projectSessionOwner,
   projectSessionParticipants,
 } from "./session-identity-projection.js";
+import { isSessionPermissionChangePending } from "./session-permission-change.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -77,7 +82,6 @@ import { isGroupOrChannelDisplaySession, parseGroupKey } from "./session-utils-s
 import type { GatewaySessionRow, SessionListModelCatalog } from "./session-utils.types.js";
 import { projectWorkerPlacementAgentRuntime } from "./worker-environments/placement-session-runtime.js";
 
-/** Adds current actor display data without persisting rename-prone metadata. */
 /** Opaque cache-busting revision for the channel-avatar route; never leaks the reference. */
 function channelAvatarRevision(reference: string): string {
   return createHash("sha256").update(reference).digest("base64url").slice(0, 12);
@@ -115,9 +119,10 @@ export function buildGatewaySessionRow(params: {
     entry,
     params.rowContext?.userProfileIdentityById,
     cfg,
-  ).filter(
-    (participant) => JSON.stringify(participant.identity) !== JSON.stringify(owner?.actor.identity),
   );
+  if (owner?.actor.identity) {
+    participants.delete(JSON.stringify(owner.actor.identity));
+  }
   const observerDigest =
     entry?.observerDigest &&
     // Strictly newer: a run end and restart can share a millisecond, and the
@@ -182,7 +187,7 @@ export function buildGatewaySessionRow(params: {
   const subagentOwner =
     normalizeOptionalString(subagentRun?.controllerSessionKey) ||
     normalizeOptionalString(subagentRun?.requesterSessionKey);
-  const liveSubagentRunActive = isSubagentRunLive(subagentRun);
+  const liveSubagentRunActive = isSubagentRunLive(subagentRun) || isSubagentRunQueued(subagentRun);
   const hasActiveSubagentRun =
     liveSubagentRunActive ||
     (rowContext?.subagentRuns.countActiveDescendantRuns(key) ?? countActiveDescendantRuns(key)) > 0;
@@ -232,43 +237,27 @@ export function buildGatewaySessionRow(params: {
     : undefined;
   const selectedModel = resolveSessionSelectedModelRef({
     cfg,
+    sessionKey: key,
     entry,
     agentId: sessionAgentId,
     rowContext,
     allowPluginNormalization: !lightweight,
   });
-  const resolvedModel = resolveSessionModelIdentityRef(
-    cfg,
-    entry,
-    sessionAgentId,
-    subagentRun?.model,
-    { allowPluginNormalization: !lightweight },
-  );
   const freshSessionTotalTokens = asNonNegativeFiniteNumber(resolveFreshSessionTotalTokens(entry));
-  const needsTranscriptTotalTokens = freshSessionTotalTokens === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    !skipTranscriptUsage &&
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
-      entry,
-      rowContext,
-    }) === undefined;
-  const transcriptUsage =
-    !skipTranscriptUsage && (needsTranscriptTotalTokens || needsTranscriptEstimatedCostUsd)
-      ? resolveTranscriptUsageFallback({
-          cfg,
-          key,
-          entry,
-          storePath,
-          fallbackProvider: resolvedModel.provider,
-          fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
-          maxTranscriptBytes: params.transcriptUsageMaxBytes,
-          rowContext: params.rowContext,
-          agentId: sessionAgentId,
-        })
-      : null;
+  const transcriptUsage = !skipTranscriptUsage
+    ? resolveTranscriptUsageFallback({
+        cfg,
+        key,
+        entry,
+        storePath,
+        freshTotalTokens: freshSessionTotalTokens,
+        fallbackModelRef: subagentRun?.model,
+        allowPluginNormalization: !lightweight,
+        maxTranscriptBytes: params.transcriptUsageMaxBytes,
+        rowContext: params.rowContext,
+        agentId: sessionAgentId,
+      })
+    : null;
   const totalTokens =
     freshSessionTotalTokens ?? asNonNegativeFiniteNumber(transcriptUsage?.totalTokens);
   const totalTokensFresh =
@@ -350,12 +339,12 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  // A per-agent catalog map keeps unscoped listings owner-scoped: each row uses
-  // its own agent's completed catalog instead of a shared default-agent catalog.
+  // Entries and provider policy must stay bound to the same prepared agent owner;
+  // the Gateway startup registry can contain a different set of plugins.
+  const preparedCatalog =
+    params.modelCatalog instanceof Map ? params.modelCatalog.get(sessionAgentId) : undefined;
   const rowModelCatalog =
-    params.modelCatalog instanceof Map
-      ? params.modelCatalog.get(sessionAgentId)
-      : params.modelCatalog;
+    params.modelCatalog instanceof Map ? preparedCatalog?.entries : params.modelCatalog;
   // Event/list rows must not rediscover plugin-backed configured catalog metadata.
   // Lightweight projections may use an already-active provider policy, but must
   // not fall through to public artifacts that reload the manifest registry.
@@ -369,7 +358,7 @@ export function buildGatewaySessionRow(params: {
     entry,
     modelCatalog: thinkingModelCatalog,
     rowContext,
-    providerPolicySource: lightweight ? "active" : undefined,
+    providerPolicySource: preparedCatalog?.pluginRegistry ?? (lightweight ? "active" : undefined),
   });
   const catalogEntry =
     rowModelCatalog && rowModelProvider && rowModel
@@ -439,6 +428,7 @@ export function buildGatewaySessionRow(params: {
     spawnedWorkspaceDir: entry?.spawnedWorkspaceDir,
     spawnedCwd: entry?.spawnedCwd,
     permissionMode: entry?.permissionMode,
+    permissionModePending: isSessionPermissionChangePending(entry?.sessionId),
     ...(entry?.permissionMode !== undefined && entry.sessionRoot !== undefined
       ? { sessionRoot: entry.sessionRoot }
       : {}),
@@ -454,17 +444,24 @@ export function buildGatewaySessionRow(params: {
       entry?.createdActor,
       rowContext?.userProfileIdentityById,
       cfg,
-      hasSessionCreatorProfileProvenance(entry),
+      Boolean(sessionCreatorProfileId(entry?.createdActor)),
     ),
     owner,
-    participants: participants.length ? participants.slice(0, 4) : undefined,
-    participantCount: participants.length || undefined,
+    // Keep the released v4 summary stable; expanded identities are additive for newer clients.
+    participants: participants.size
+      ? [...participants.values()].slice(0, SESSION_PARTICIPANT_LIMIT)
+      : undefined,
+    expandedParticipants: participants.size
+      ? [...participants.values()].slice(0, MAX_SESSION_PARTICIPANTS)
+      : undefined,
+    participantCount: participants.size || undefined,
     createdAt: entry?.createdAt,
     forkSource: entry?.forkSource,
     previousSessionId: entry?.previousSessionId,
     kind: gatewayKind,
     label: entry?.label,
     icon: entry?.icon,
+    color: entry?.color,
     channelAvatarUrl,
     category: entry?.category,
     boardFace: entry?.boardFace,
@@ -482,6 +479,7 @@ export function buildGatewaySessionRow(params: {
     archived: entry?.archivedAt !== undefined,
     archivedAt: entry?.archivedAt,
     archivedBy: projectSessionActor(entry?.archivedBy, rowContext?.userProfileIdentityById, cfg),
+    archiveReason: entry?.archiveReason,
     pinned: entry?.pinnedAt !== undefined,
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),

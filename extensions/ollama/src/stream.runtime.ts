@@ -15,7 +15,7 @@ import type {
   Tool,
   Usage,
 } from "openclaw/plugin-sdk/llm";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, transformMessages } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
@@ -982,7 +982,7 @@ function createRawOllamaStreamFn(
           ? { availableToolNames }
           : {};
         const ollamaMessages = convertToOllamaMessages(
-          context.messages ?? [],
+          transformMessages(context.messages ?? [], model),
           context.systemPrompt,
           toolCallNameOptions,
         );

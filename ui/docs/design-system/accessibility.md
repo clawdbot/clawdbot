@@ -119,7 +119,7 @@ When building a tab interface:
 
 - [ ] No animation plays without being suppressible via `prefers-reduced-motion`
 - [ ] The global reset in `base.css` covers transitions — test with "Reduce motion" enabled in OS settings
-- [ ] Infinite loaders (`shimmer`, spinners) have explicit `animation: none` in reduced-motion context
+- [ ] Infinite loaders rely on the global reduced-motion gate; shadow-root copies must carry the same guard, and opt-in decorative motion is gated to `no-preference`
 
 ### 8. Semantic HTML
 

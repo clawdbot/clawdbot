@@ -16,6 +16,7 @@ type TestSessionEntry = {
   model?: string;
   modelProvider?: string;
   modelSelectionLocked?: boolean;
+  pluginOwnerId?: string;
   pluginExtensions?: Record<string, unknown>;
   contextTokens?: number;
   authProfileOverride?: string;
@@ -720,6 +721,7 @@ describe("generateVoiceResponse", () => {
       sessionId: "catalog-adopted-session",
       updatedAt: 100,
       agentHarnessId: "codex",
+      agentRuntimeOverride: "openclaw",
       modelSelectionLocked: true,
       pluginExtensions: {
         codex: {
@@ -753,6 +755,47 @@ describe("generateVoiceResponse", () => {
       agentHarnessRuntimeOverride: "codex",
       sessionKey,
     });
+  });
+
+  it.each([
+    {
+      name: "unlocked observation",
+      entry: { agentHarnessId: "codex" },
+    },
+    {
+      name: "plugin-owned locked observation",
+      entry: {
+        agentHarnessId: "codex",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+    {
+      name: "plugin-owned runtime request",
+      entry: {
+        agentHarnessId: "codex",
+        agentRuntimeOverride: "openclaw",
+        modelSelectionLocked: true,
+        pluginOwnerId: "voice-call",
+      },
+    },
+  ])("does not turn $name into a native voice pin", async ({ entry }) => {
+    const { runtime, runEmbeddedAgent, sessionStore } = createAgentRuntime([
+      { text: '{"spoken":"Voice continued."}' },
+    ]);
+    sessionStore["agent:main:voice:15550001111"] = {
+      sessionId: "existing-session",
+      updatedAt: 100,
+      ...entry,
+    };
+
+    const { result } = await runGenerateVoiceResponse([], { runtime });
+
+    expect(result.text).toBe("Voice continued.");
+    const args = requireEmbeddedAgentArgs(runEmbeddedAgent);
+    expect(args.agentHarnessId).toBeUndefined();
+    expect(args.agentHarnessRuntimeOverride).toBeUndefined();
+    expect(args.modelSelectionLocked).toBe(entry.modelSelectionLocked === true);
   });
 
   it("canonicalizes a restored legacy per-call key for classic responses", async () => {

@@ -116,8 +116,7 @@ function ensureCliLiveSessionCapacity(context: PreparedCliRunContext): void {
 /** Returns whether this prepared local plugin transport may retain its execution process. */
 export function acceptsCliLiveSession(context: PreparedCliRunContext): boolean {
   return (
-    context.params.sessionEntry?.execHost !== "node" &&
-    Boolean(context.preparedBackend.execute) &&
+    context.executionTarget.kind === "plugin" &&
     context.preparedBackend.backend.liveSession !== undefined &&
     context.preparedBackend.backend.output === "jsonl" &&
     context.preparedBackend.backend.input === "stdin"

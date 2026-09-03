@@ -34,23 +34,18 @@ function clearIdentityAvatarCache(): void {
 // the owning Gateway or credential context changes.
 registerAvatarGatewayReset(clearIdentityAvatarCache);
 
-function trimIdentityAvatarCache(protectedEntry?: CachedIdentityAvatar): void {
-  while (identityAvatarCache.size > IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
-    let evicted = false;
-    for (const [key, entry] of identityAvatarCache) {
-      // Pending consumers still need their eventual blob. Only completed LRU
-      // entries may be evicted; the request currently resolving stays valid.
-      if (!entry.blobUrl || !entry.loaded || entry === protectedEntry) {
-        continue;
-      }
-      identityAvatarCache.delete(key);
-      URL.revokeObjectURL(entry.blobUrl);
-      evicted = true;
+function trimIdentityAvatarCache(): void {
+  for (const [key, entry] of identityAvatarCache) {
+    if (identityAvatarCache.size <= IDENTITY_AVATAR_CACHE_MAX_ENTRIES) {
       break;
     }
-    if (!evicted) {
-      break;
+    // Pending consumers still need their eventual blob. Only settled images
+    // may be evicted, in the Map's LRU order.
+    if (!entry.blobUrl || !entry.loaded) {
+      continue;
     }
+    identityAvatarCache.delete(key);
+    URL.revokeObjectURL(entry.blobUrl);
   }
 }
 
@@ -96,7 +91,7 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
         return null;
       }
       entry.blobUrl = blobUrl;
-      trimIdentityAvatarCache(entry);
+      trimIdentityAvatarCache();
       return blobUrl;
     } catch {
       return null;
@@ -108,7 +103,7 @@ function loadIdentityAvatar(url: string): string | Promise<string | null> {
     }
   })();
   identityAvatarCache.set(url, entry);
-  trimIdentityAvatarCache(entry);
+  trimIdentityAvatarCache();
   return entry.promise;
 }
 
@@ -121,9 +116,7 @@ export function resolveAvatarImageUrl(value: string): string | Promise<string | 
   }
   // Connected same-origin routes need the loader too: it resolves a missing
   // avatar before Lit can reconcile an <img> error back over its initials.
-  const pageOrigin = globalThis.location?.origin;
-  const crossOrigin = pageOrigin ? new URL(trusted, pageOrigin).origin !== pageOrigin : false;
-  return origin || authHeader || crossOrigin ? loadIdentityAvatar(trusted) : trusted;
+  return origin || authHeader ? loadIdentityAvatar(trusted) : trusted;
 }
 
 /** A blob stays live until its image has finished loading or definitively failed. */

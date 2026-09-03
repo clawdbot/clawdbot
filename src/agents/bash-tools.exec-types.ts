@@ -153,13 +153,14 @@ export type ExecToolDetails = {
       startedAt: number;
       cwd?: string;
       tail?: string;
+      followUp?: string;
     }
   | {
       status: "completed" | "failed";
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
-      reason?: "not-dispatched" | "outcome-unknown";
+      reason?: "not-dispatched" | "outcome-unknown" | "policy-denied";
       nodeInvokeFailure?: {
         failureCode?: string;
         message: string;
@@ -172,6 +173,7 @@ export type ExecToolDetails = {
       timedOut?: boolean;
       noOutputTimedOut?: boolean;
       cwd?: string;
+      nodeId?: string;
     }
   | {
       status: "approval-pending";

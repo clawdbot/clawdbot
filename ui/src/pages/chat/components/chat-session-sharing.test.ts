@@ -71,6 +71,54 @@ describe("chat session sharing menu", () => {
     expect(onMemberChange).toHaveBeenCalledWith("alice", true);
   });
 
+  it("renders standard radio options with visibility icons and one selected checkmark", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "read-only",
+          sharingRole: "owner",
+        },
+        state: {
+          loading: false,
+          result: {
+            sessionKey: "agent:main:main",
+            members: [],
+            identities: [],
+            role: "owner",
+            allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
+          },
+        },
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const items = [...root.querySelectorAll<HTMLElement>(".chat-pane__sharing-visibility-item")];
+    expect(items).toHaveLength(4);
+    expect(items.every((item) => item.querySelector('[slot="icon"]') !== null)).toBe(true);
+    expect(items.map((item) => item.getAttribute("role"))).toEqual(
+      items.map(() => "menuitemradio"),
+    );
+    expect(items.map((item) => item.getAttribute("aria-checked"))).toEqual([
+      "false",
+      "true",
+      "false",
+      "false",
+    ]);
+    const selected = root.querySelector<HTMLElement>(
+      'wa-dropdown-item[value="visibility:read-only"]',
+    );
+    expect(selected?.hasAttribute("disabled")).toBe(false);
+    expect(selected?.querySelector(".session-menu__check svg")).not.toBeNull();
+    expect(
+      root.querySelectorAll(".chat-pane__sharing-visibility-item .session-menu__check"),
+    ).toHaveLength(1);
+  });
+
   it("renders member presentation from identity.type, not from ID spelling", () => {
     const root = mount(
       renderChatSessionSharing({
@@ -121,6 +169,32 @@ describe("chat session sharing menu", () => {
       expect(nonHuman?.querySelector("openclaw-session-owner-chip")).toBeNull();
       expect(nonHuman?.querySelector(".chat-pane__sharing-member-icon svg")).not.toBeNull();
     }
+  });
+
+  it("shows shape-matched member skeletons while identities load", () => {
+    const root = mount(
+      renderChatSessionSharing({
+        session: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 1,
+          visibility: "shared",
+          sharingRole: "owner",
+        },
+        state: { loading: true },
+        allowedVisibilities: ["shared", "read-only"],
+        onOpen: vi.fn(),
+        onVisibilityChange: vi.fn(),
+        onMemberChange: vi.fn(),
+      }),
+    );
+
+    const loading = root.querySelector(".chat-pane__sharing-members-loading");
+    expect(loading?.getAttribute("role")).toBe("status");
+    expect(loading?.getAttribute("aria-busy")).toBe("true");
+    expect(loading?.textContent?.trim()).toBe("");
+    expect(root.querySelectorAll(".chat-pane__sharing-member-skeleton")).toHaveLength(3);
+    expect(root.querySelectorAll(".chat-pane__sharing-member-skeleton .skeleton")).toHaveLength(6);
   });
 
   it("shows only the draft marker to a non-manager", () => {

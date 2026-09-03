@@ -2,7 +2,7 @@
  * Gateway health endpoint integration tests.
  */
 import { randomUUID } from "node:crypto";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { emitHeartbeatEvent } from "../infra/heartbeat-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -15,7 +15,6 @@ vi.mock("./server-restart-sentinel.js", () => ({
   recoverPendingRestartContinuationDeliveries: vi.fn(async () => undefined),
 }));
 
-installGatewayTestHooks({ scope: "suite" });
 const HEALTH_E2E_TIMEOUT_MS = 20_000;
 const PRESENCE_EVENT_TIMEOUT_MS = 6_000;
 const SHUTDOWN_EVENT_TIMEOUT_MS = 3_000;
@@ -25,12 +24,14 @@ const CLI_PRESENCE_TIMEOUT_MS = 3_000;
 let harness: GatewayServerHarness;
 let harnessClose: Promise<void> | undefined;
 
-beforeAll(async () => {
-  harness = await startGatewayServerHarness();
-});
-
-afterAll(async () => {
-  await (harnessClose ?? harness.close());
+installGatewayTestHooks({
+  scope: "suite",
+  setup: async () => {
+    harness = await startGatewayServerHarness();
+  },
+  cleanup: async () => {
+    await (harnessClose ?? harness?.close());
+  },
 });
 
 describe("gateway server health/presence", () => {

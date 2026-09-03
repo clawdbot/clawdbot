@@ -911,11 +911,16 @@ describe("createModelExecAutoReviewer", () => {
   });
 
   it("uses systemAgent.agentId when agentId is omitted in multi-agent explicit mode", async () => {
-    const prepare = vi.fn(async () => ({
-      selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
-      model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
-      auth: { apiKey: "redacted", mode: "env" as const },
-    }));
+    const prepare = vi.fn(async ({ agentId }: { agentId: string }) => {
+      if (agentId !== "agent-a") {
+        throw new Error(`unexpected reviewer owner: ${agentId}`);
+      }
+      return {
+        selection: { provider: "openrouter", modelId: "reviewer", agentDir: "/agent" },
+        model: { provider: "openrouter", id: "reviewer", api: "openai" as const },
+        auth: { apiKey: "redacted", mode: "env" as const },
+      };
+    });
     const complete = vi.fn(async () => ({
       stopReason: "stop" as const,
       content: [

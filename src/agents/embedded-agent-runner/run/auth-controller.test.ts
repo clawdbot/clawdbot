@@ -645,6 +645,36 @@ describe("createEmbeddedRunAuthController", () => {
     },
   );
 
+  it("preserves selected-profile identity through auth exhaustion bookkeeping", async () => {
+    const harness = createMutableAuthControllerHarness();
+    mocks.getApiKeyForModelCore.mockRejectedValue(
+      Object.assign(new Error("selected profile missing"), {
+        status: 401,
+        code: "selected_auth_profile_unavailable",
+      }),
+    );
+    const controller = createMutableEmbeddedRunAuthController({
+      harness,
+      setRuntimeApiKey: vi.fn(),
+      profileCandidates: ["first", "second"],
+      fallbackConfigured: true,
+    });
+
+    const error = await controller.initializeAuthProfile().catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(FailoverError);
+    expect(error).toMatchObject({
+      reason: "auth",
+      code: "selected_auth_profile_unavailable",
+      authProfileFailure: { allInCooldown: false },
+    });
+    expect(mocks.getApiKeyForModelCore.mock.calls.map(([params]) => params.profileId)).toEqual([
+      "first",
+      "second",
+    ]);
+    expect(harness.profileIndex).toBe(2);
+  });
+
   it("only enables transient cooldown probing when every automatic profile is transiently cooled", () => {
     const now = Date.now();
     const createStore = (

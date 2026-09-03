@@ -257,6 +257,8 @@ Once DMs work, you can turn your server into a full workspace where each channel
 
     If Discord shows typing and the logs show token usage but no posted message, check whether the turn was configured as an ambient room event or opted into message-tool visible replies.
 
+    Session-busy notices also respect this reply policy. For ambient events and message-tool replies, Discord records the failure and suppressed notice in Gateway logs without posting to the room.
+
     <Tabs>
       <Tab title="Ask your agent">
         > "Allow my agent to respond on this server without having to be @mentioned"
@@ -312,6 +314,7 @@ Now create channels and start chatting. The agent sees the channel name, and eac
 - Group DMs are ignored by default (`channels.discord.dm.groupEnabled=false`).
 - Native slash commands run in isolated command sessions (`agent:<agentId>:discord:slash:<userId>`), while still carrying `CommandTargetSessionKey` to the routed conversation session.
 - Text-only cron/heartbeat announce delivery to Discord collapses to the final assistant-visible answer, sent once. Media and structured component payloads remain multi-message when the agent emits multiple deliverable payloads.
+- A send response without a Discord message ID stays unconfirmed. Queued delivery records the missing identity for recovery instead of reporting success or immediately sending a duplicate; inspect delivery warnings with `openclaw health --verbose`.
 
 ## Forum channels
 
@@ -589,7 +592,7 @@ Example:
     When writing outbound Discord messages, use canonical mention syntax: `<@USER_ID>` for users, `<#CHANNEL_ID>` for channels, and `<@&ROLE_ID>` for roles. Do not use the legacy `<@!USER_ID>` nickname mention form.
 
     `requireMention` is configured per guild/channel (`channels.discord.guilds...`).
-    `ignoreOtherMentions` optionally drops messages that mention another user/role but not the bot (excluding @everyone/@here).
+    `ignoreOtherMentions` optionally drops messages addressed to another identity but not the bot. This covers explicit user/role mentions (excluding @everyone/@here) and replies to another non-webhook bot. An explicit mention of the current bot still wins.
 
     Group DMs:
 
@@ -735,14 +738,14 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `off` disables Discord preview edits.
     - `partial` edits a single preview message as tokens arrive.
     - `block` emits draft-sized chunks; tune size and breakpoints with `streaming.preview.chunk` (`minChars`, `maxChars`, `breakPreference`), clamped to `textChunkLimit`. An explicit non-`off` preview mode overrides inherited `agents.defaults.blockStreamingDefault: "on"`; explicit `streaming.block.enabled: true` overrides the preview. If a turn cannot use previews, inherited block delivery still applies.
-    - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration as a status headline, with the compact tool rows underneath and no generated label.
+    - `progress` keeps one editable status draft until final delivery. It shows the agent's latest preamble or narration and authored plan steps. Without a summary yet, it shows `Working`. Ordinary tool calls do not become rolling log rows, and OpenClaw adds no progress emoji.
     - Media, error, and explicit-reply finals cancel pending preview edits.
-    - `streaming.preview.toolProgress` and `streaming.progress.toolProgress` both default to `true` when preview streaming is active. Tool rows such as `🛠️ Bash: run tests` or `🔎 Web Search: for "query"` need no additional progress config; set either key to `false` to keep the status headline only.
+    - `streaming.preview.toolProgress` controls tool rows in `partial` and `block` modes. In `progress` mode, tool activity drives the quiet summary; approvals and failures remain visible without a per-tool log.
     - `streaming.progress.commentary` (default `false`) opts into raw assistant commentary in the temporary progress draft. The default preamble/narration status line is independent of this option. Commentary is cleaned before display, stays transient, and does not change final answer delivery.
     - `streaming.progress.maxLineChars` controls the per-line progress preview budget. Prose is shortened on word boundaries; command and path details keep useful suffixes.
-    - `streaming.preview.commandText` / `streaming.progress.commandText` controls command/exec detail in compact progress lines: `status` (default, tool label only) or `raw` (explicit command text).
+    - `streaming.preview.commandText` controls command/exec detail in tool previews: `status` (default, tool label only) or `raw` (explicit command text). Progress summaries omit ordinary command lines.
 
-    Hide raw command/exec text while keeping compact progress lines:
+    Use quiet progress summaries:
 
     ```json
     {
@@ -752,7 +755,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
             "mode": "progress",
             "progress": {
               "toolProgress": true,
-              "commandText": "status"
+              "commentary": false
             }
           }
         }
@@ -793,11 +796,10 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
 
     Commands:
 
-    - `/focus <target>` bind current/new thread to a subagent/session target
-    - `/unfocus` remove current thread binding
+    - `/session unbind` remove the current thread binding without closing its agent session
     - `/agents` show active runs and binding state
-    - `/session idle <duration|off>` inspect/update inactivity auto-unfocus for focused bindings
-    - `/session max-age <duration|off>` inspect/update hard max age for focused bindings
+    - `/session idle <duration|off>` inspect/update inactivity expiry for the current binding
+    - `/session max-age <duration|off>` inspect/update hard max age for the current binding
 
     Config:
 
@@ -821,7 +823,7 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
     - `spawnSessions` controls auto-create/bind threads for `sessions_spawn({ thread: true })` and ACP thread spawns. Default: `true`.
     - `defaultSpawnContext` controls native subagent context for thread-bound spawns. Default: `"fork"`.
     - Deprecated `spawnSubagentSessions`/`spawnAcpSessions` keys are migrated by `openclaw doctor --fix`.
-    - If thread bindings are disabled, `/focus` and related operations are unavailable.
+    - If thread bindings are disabled, thread-bound spawns are unavailable.
 
     See [Sub-agents](/tools/subagents), [ACP Agents](/tools/acp-agents), and [Configuration Reference](/gateway/configuration-reference).
 
@@ -928,6 +930,8 @@ See [Slash commands](/tools/slash-commands) for the command catalog and behavior
   </Accordion>
 
   <Accordion title="Ack reactions">
+    Status reactions keep the acknowledgement stable throughout work. They do not add per-tool emoji, inactivity warnings, or a success flash. Actual failures retain the error reaction lifecycle.
+
     `ackReaction` sends an acknowledgement emoji while OpenClaw processes an inbound message.
 
     Resolution order:
@@ -1266,6 +1270,7 @@ Auto-join example:
 
 Notes:
 
+- The OpenAI `agent-proxy` response and wake-name policies below require a GA realtime model, such as `gpt-realtime-2.1`. GPT-Live currently responds to audio autonomously and does not enforce those policies; do not rely on wake-name gating with GPT-Live in a shared voice channel.
 - Discord voice is opt-in for text-only configs; set `channels.discord.voice.enabled=true` (or keep an existing `channels.discord.voice` block) to enable `/vc` commands, the voice runtime, and the `GuildVoiceStates` gateway intent. `channels.discord.intents.voiceStates` can explicitly override the intent subscription; leave it unset to follow effective voice enablement.
 - `voice.mode` controls the conversation path. The default is `agent-proxy`: a realtime voice front end handles turn timing, interruption, and playback, delegates substantive work to the routed OpenClaw agent through `openclaw_agent_consult`, and treats the result like a typed Discord prompt from that speaker. `stt-tts` keeps the older batch STT plus TTS flow. `bidi` lets the realtime model converse directly while exposing `openclaw_agent_consult` for the OpenClaw brain.
 - `voice.agentSession` controls which OpenClaw conversation receives voice turns. Leave it unset for the voice channel's own session, or set `{ mode: "target", target: "channel:<text-channel-id>" }` to make the voice channel act as the microphone/speaker extension of an existing Discord text channel session such as `#maintainers`.
@@ -1278,7 +1283,7 @@ Notes:
 - `stt-tts` replies remain active until Discord finishes playing them; long responses are not cut off by a fixed one-minute playback deadline.
 - In realtime modes, `voice.realtime.provider`, `voice.realtime.model`, and `voice.realtime.speakerVoice` configure the realtime audio session. For OpenAI Realtime 2.1 plus the Codex brain, use `voice.realtime.model: "gpt-realtime-2.1"` and `voice.model: "openai/gpt-5.6-sol"`.
 - Realtime voice modes include small `IDENTITY.md`, `USER.md`, and `SOUL.md` profile files in the realtime provider instructions by default so fast direct turns keep the same identity, user grounding, and persona as the routed OpenClaw agent. Set `voice.realtime.bootstrapContextFiles` to a subset to customize this, or `[]` to disable it. Only those profile files are supported; `AGENTS.md` stays in the normal agent context. The injected profile context does not replace `openclaw_agent_consult` for workspace work, current facts, memory lookup, or tool-backed actions.
-- In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when a leading wake name is recognized from partial transcription before the final transcript arrives. The policy follows live joins and leaves without reconnecting voice.
+- In OpenAI `agent-proxy` realtime mode, wake-name gating adapts to the room by default: one human can talk naturally without a wake name, while two or more humans must start or end a turn with one. Other bots do not count as people. Set `voice.realtime.requireWakeName: true` to always require a wake name or `false` to never require one. Configured wake names must be one or two words. If `voice.realtime.wakeNames` is unset, OpenClaw uses the routed agent `name` plus `OpenClaw`, falling back to the agent id plus `OpenClaw`. An active wake-name gate disables realtime provider auto-response, routes accepted turns through the OpenClaw agent consult path, and gives a short spoken acknowledgement when an exact leading wake name is recognized from partial transcription before the final transcript arrives. Fuzzy name matching waits for the final transcript, so an unfinished ordinary word does not trigger an acknowledgement. The policy follows live joins and leaves without reconnecting voice.
 - The OpenAI realtime provider accepts current Realtime 2 event names and legacy Codex-compatible aliases for output audio and transcript events, so compatible provider snapshots can drift without dropping assistant audio.
 - `voice.realtime.bargeIn` controls whether Discord speaker-start events interrupt active realtime playback. If unset, it follows the realtime provider's input-audio interruption setting.
 - `voice.realtime.minBargeInAudioEndMs` controls the minimum assistant playback duration before an OpenAI realtime barge-in truncates audio. Default: `250`. Set `0` for immediate interruption in low-echo rooms, or raise it for echo-heavy speaker setups.
@@ -1303,6 +1308,66 @@ Notes:
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
 - In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like "and", plus obvious non-actionable closings like "be right back" or "bye". Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+### Meeting notes
+
+Use the `discord-voice` transcripts provider to keep a note-taking bot in a voice
+channel only while humans are present. Capture is listen-only: the bot never
+speaks in that channel and does not start a realtime conversation provider.
+Enable Discord voice, configure an authenticated [speech-to-text provider](/nodes/audio),
+and add an occupancy-driven transcript source:
+
+```json5
+{
+  channels: {
+    discord: {
+      voice: { enabled: true },
+    },
+  },
+  tools: {
+    media: {
+      models: [{ provider: "openai", model: "gpt-4o-transcribe", capabilities: ["audio"] }],
+      audio: { enabled: true },
+    },
+  },
+  transcripts: {
+    autoStart: [
+      {
+        providerId: "discord-voice",
+        guildId: "123456789012345678",
+        channelId: "234567890123456789",
+        whenOccupied: true,
+      },
+    ],
+  },
+}
+```
+
+The bot needs Connect permission in the target channel and the `GuildVoiceStates`
+intent, which `voice.enabled: true` enables by default. Do not explicitly disable
+`channels.discord.intents.voiceStates`. Keep the channel inside any configured
+`voice.allowedChannels` allowlist. Use `transcripts.autoStart`, not conversational
+`voice.autoJoin`, for this note-taking recipe. Tell participants that the bot
+captures and stores transcripts before enabling it.
+
+For multiple Discord accounts, add `accountId` to select the voice-enabled bot
+unless the configured default account resolves it unambiguously. Configure at
+most one occupancy-driven `discord-voice` entry per account and guild; the bot
+cannot capture multiple voice channels in the same guild. Later conflicting
+entries are skipped with a warning.
+
+The bot joins on human arrival, including when the channel is already occupied
+at startup. After the last human leaves, it waits 30 seconds before leaving and
+generating notes; a return during that grace keeps capture running. Episodes use
+generated session IDs, ignoring a configured `sessionId`. A session stopped less
+than 10 minutes ago can reopen for the same source after a Gateway restart or a
+short gap, preserving its ID, start time, and accumulated utterances.
+
+Notes include participants, an overview, decisions, action items, and risks.
+They use the agent's utility model, falling back to its primary model and then
+deterministic heuristic notes if model generation fails. Read stored notes with
+the `transcripts` tool, the [CLI](/cli/transcripts), or the Control UI Meetings
+page. The tool's `summarize` action regenerates notes from the stored transcript.
 
 ### Follow users in voice
 
@@ -1356,6 +1421,7 @@ STT plus TTS pipeline:
 
 - Discord PCM capture is converted to a WAV temp file.
 - `tools.media.audio` handles STT, for example `openai/gpt-4o-mini-transcribe`.
+- Batch capture respects the largest applicable [audio input limit](/nodes/audio), including configured model and CLI fallbacks. Oversized captures stop with a warning to speak a shorter segment; partial audio is not transcribed. This limit does not buffer or truncate direct realtime streams.
 - The transcript is sent through Discord ingress and routing while the response LLM runs with a voice-output policy that hides the agent `tts` tool and asks for returned text, because Discord voice owns final TTS playback.
 - `voice.model`, when set, overrides only the response LLM for this voice-channel turn.
 - `voice.tts` is merged over `tts`; streaming-capable providers feed the player directly, otherwise the resulting audio file is played in the joined channel.
@@ -1460,6 +1526,8 @@ Voice as an extension of an existing Discord channel session:
 In `agent-proxy` mode the bot joins the configured voice channel, but OpenClaw agent turns use the target channel's normal routed session and agent. The realtime voice session speaks the returned result back into the voice channel. The supervisor agent can still use normal message tools according to its tool policy, including sending a separate Discord message if that is the right action.
 
 While a delegated OpenClaw run is active, new Discord voice transcripts are treated as live run control before starting another agent turn. Phrases such as "status", "cancel that", "use the smaller fix", or "when you're done also check tests" are classified as status, cancel, steering, or follow-up input for the active session. Status, cancel, accepted steering, and follow-up outcomes are spoken back into the voice channel so the caller knows whether OpenClaw handled the request.
+
+When OpenClaw cancels a delegated consult, Discord records cancellation rather than a failure and does not play the generic error fallback. Matching late provider tool calls receive the same terminal cancellation instead of restarting the work. The voice session remains available for the next request; timeouts and genuine failures keep their normal error handling.
 
 Useful target forms:
 

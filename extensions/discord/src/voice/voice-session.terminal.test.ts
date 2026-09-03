@@ -62,7 +62,7 @@ defineDiscordVoiceTests(
             "voice capture stream",
           );
           getVoiceReceive(manager).scheduleCaptureFinalize(entry, "u-owner", "speaker end");
-          expect(entry.capture.captureFinalizeTimers.size).toBe(1);
+          expect(entry.capture.get("u-owner")?.finalizeTimer).toBeDefined();
           const turn = beginSpeakerTurn(entry);
           const provider = lastRealtimeBridgeParams();
           const player = getLastAudioPlayer();
@@ -72,12 +72,11 @@ defineDiscordVoiceTests(
           provider.onClose?.(reason);
 
           expect(manager.status()).toEqual([]);
-          expect(entry.realtime).toBeUndefined();
+          expect(entry.realtimeLifecycle.status).toBe("stopped");
           expect(entry.transcripts).toBeUndefined();
           expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
-          expect(entry.capture.activeCaptureStreams.size).toBe(0);
-          expect(entry.capture.captureFinalizeTimers.size).toBe(0);
+          expect(entry.capture.size).toBe(0);
           expect(oldConnection.destroy).toHaveBeenCalledOnce();
           expect(realtimeSessionMock.close).toHaveBeenCalledOnce();
           expect(loggerErrorMock).toHaveBeenCalledExactlyOnceWith(
@@ -104,8 +103,8 @@ defineDiscordVoiceTests(
             { transcripts: replacementTranscripts },
           );
           const inputCalls = realtimeSessionMock.sendAudio.mock.calls.length;
-          turn?.sendInputAudio(Buffer.alloc(3840));
-          turn?.close();
+          turn.sendInputAudio(Buffer.alloc(3840));
+          turn.close();
           provider.onClose?.(reason);
           provider.onReady?.();
           provider.onEvent?.({ direction: "client", type: "session.reconnect.ready" });

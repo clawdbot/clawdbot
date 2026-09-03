@@ -27,6 +27,7 @@ export type CliExecutableIdentity = Readonly<{
   resolvedPath: string;
   invocation: Readonly<{
     command: string;
+    argv0?: string;
     leadingArgv: readonly string[];
     resolution: "direct" | "node-entrypoint" | "exe-entrypoint";
   }>;
@@ -167,7 +168,15 @@ function resolveCommandPath(params: {
     // workspaces. A cwd-relative executable cannot name one durable owner.
     return undefined;
   }
-  return resolveExecutablePath(params.command, {
+  const command =
+    process.platform === "win32"
+      ? resolveWindowsExecutablePath(params.command, params.env)
+      : params.command;
+  if (process.platform === "win32" && !isDurableRootedCommand(command)) {
+    // The Windows resolver returns the raw command when PATH lookup misses.
+    return undefined;
+  }
+  return resolveExecutablePath(command, {
     ...(params.cwd ? { cwd: params.cwd } : {}),
     env: params.env,
   });
@@ -476,8 +485,10 @@ async function resolvePosixIdentity(params: {
     command: params.command,
     resolvedPath,
     invocation: {
-      // Spawn the exact file opened and hashed, not a mutable symlink alias.
+      // Execute the exact file opened and hashed, while preserving a symlink's
+      // invocation name for runtimes that dispatch from argv0.
       command: resolvedPath,
+      ...(params.resolvedPath !== resolvedPath ? { argv0: params.resolvedPath } : {}),
       leadingArgv: [],
       resolution: "direct",
     },

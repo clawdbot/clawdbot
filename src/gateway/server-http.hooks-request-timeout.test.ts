@@ -38,7 +38,7 @@ describe("createHooksRequestHandler timeout status mapping", () => {
 
   test("returns 408 for request body timeout", async () => {
     readJsonBodyMock.mockResolvedValue({ ok: false, error: "request body timeout" });
-    const dispatchWakeHook = vi.fn();
+    const dispatchWakeHook = vi.fn(() => ({ eventOutcome: "queued" as const }));
     const dispatchAgentHook = vi.fn(() => ({ ok: true as const, runId: "run-1" }));
     const handler = createHooksHandler({ dispatchWakeHook, dispatchAgentHook });
     const tasks: Promise<boolean>[] = [];

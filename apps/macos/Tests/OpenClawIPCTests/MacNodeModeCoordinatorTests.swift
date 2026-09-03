@@ -108,7 +108,7 @@ private actor CoordinatorNodeHostWorkerProbe: MacNodeHostWorking {
         self.routeClearReleaseGate.open()
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {
         self.stopCount += 1
         self.stopGate.open()
@@ -149,7 +149,7 @@ private actor CoordinatorFailingStartWorkerProbe: MacNodeHostWorking {
         true
     }
 
-    func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
+    func gatewayConnected(ifCurrentRoute _: GatewayNodeSessionRoute) async {}
     func stop() async {}
 
     func startCallCount() -> Int {
@@ -1364,47 +1364,45 @@ struct MacNodeModeCoordinatorTests {
         #expect(!route.permitsTrustedPinReplacement(url: url, failure: failure))
     }
 
-    @Test func `stale repair cannot replace a newer stored pin`() async throws {
-        try await withFakeGatewayTLSKeychain {
-            let url = try #require(URL(string: "wss://gateway.example.ts.net"))
-            let storeKey = "test-stale-repair"
-            GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
-            let route = try #require(GatewayTLSRoute.resolve(
-                url: url,
-                connectionMode: .remote,
-                configuredFingerprint: nil,
-                storedFingerprint: "old",
-                storeKey: storeKey))
-            let firstFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "new",
-                systemTrustOk: true,
-                port: 443)
-            let staleFailure = GatewayTLSValidationFailure(
-                kind: .pinMismatch,
-                host: "gateway.example.ts.net",
-                storeKey: storeKey,
-                expectedFingerprint: "old",
-                observedFingerprint: "stale",
-                systemTrustOk: true,
-                port: 443)
+    @Test(.gatewayTLSStoreIsolated) func `stale repair cannot replace a newer stored pin`() async throws {
+        let url = try #require(URL(string: "wss://gateway.example.ts.net"))
+        let storeKey = "test-stale-repair"
+        GatewayTLSStore.saveFingerprint("old", stableID: storeKey)
+        let route = try #require(GatewayTLSRoute.resolve(
+            url: url,
+            connectionMode: .remote,
+            configuredFingerprint: nil,
+            storedFingerprint: "old",
+            storeKey: storeKey))
+        let firstFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "new",
+            systemTrustOk: true,
+            port: 443)
+        let staleFailure = GatewayTLSValidationFailure(
+            kind: .pinMismatch,
+            host: "gateway.example.ts.net",
+            storeKey: storeKey,
+            expectedFingerprint: "old",
+            observedFingerprint: "stale",
+            systemTrustOk: true,
+            port: 443)
 
-            let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: firstFailure)
-            let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
-                route: route,
-                url: url,
-                failure: staleFailure)
+        let firstRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: firstFailure)
+        let staleRepaired = await GatewayTLSRepairCoordinator.shared.repair(
+            route: route,
+            url: url,
+            failure: staleFailure)
 
-            #expect(firstRepaired)
-            #expect(!staleRepaired)
-            #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
-        }
+        #expect(firstRepaired)
+        #expect(!staleRepaired)
+        #expect(GatewayTLSStore.loadFingerprint(stableID: storeKey) == "new")
     }
 
     @Test func `auto repairs trusted loopback pin mismatch`() throws {

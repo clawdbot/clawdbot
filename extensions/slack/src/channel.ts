@@ -67,6 +67,7 @@ import type { SlackProbe } from "./probe.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { getOptionalSlackRuntime } from "./runtime.js";
 import { slackSecurityAdapter } from "./security.js";
+import { setSlackSessionStatus } from "./session-status.js";
 import { createSlackSetupWizardProxy, slackSetupContract } from "./setup-core.js";
 import {
   createSlackPluginBase,
@@ -80,7 +81,11 @@ import {
   parseSlackTarget,
 } from "./target-parsing.js";
 import { slackContextTargetsMatch } from "./targets.js";
-import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
+import {
+  normalizeSlackThreadTsCandidate,
+  resolveSlackReplyThreadTs,
+  resolveSlackThreadTsValue,
+} from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -186,7 +191,7 @@ async function setSlackHeartbeatThreadStatus(params: {
   to: string;
   accountId?: string | null;
   threadId?: string | number | null;
-  status: string;
+  status: "processing" | "active";
 }) {
   const threadTs = resolveSlackThreadTsValue({ threadId: params.threadId });
   const target = parseSlackTarget(params.to, { defaultKind: "channel" });
@@ -213,10 +218,11 @@ async function setSlackHeartbeatThreadStatus(params: {
             accountId: account.accountId,
             token: botToken,
           });
-    await client.assistant.threads.setStatus({
+    await setSlackSessionStatus({
+      client,
       token: botToken,
-      channel_id: channelId,
-      thread_ts: threadTs,
+      channelId,
+      threadTs,
       status: params.status,
     });
   } catch (error) {
@@ -678,7 +684,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           to,
           accountId,
           threadId,
-          status: "is typing...",
+          status: "processing",
         });
       },
       clearTyping: async ({ cfg, to, accountId, threadId }) => {
@@ -687,7 +693,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           to,
           accountId,
           threadId,
-          status: "",
+          status: "active",
         });
       },
     },
@@ -876,14 +882,19 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
               toolContext,
             }),
           ),
-    resolveReplyTransport: ({ threadId, replyToId, replyToIsExplicit, replyDelivery }) => {
-      const allowedReplyToId = replyDelivery?.replyToMode === "off" ? undefined : replyToId;
-      // Slack's thread_ts identifies the root. Only known inherited replies may let
-      // that root replace a child timestamp; explicit and unknown callers stay reply-first.
-      const preferThreadId = replyToIsExplicit === false;
-      const resolvedReplyToId = resolveSlackThreadTsValue({
-        replyToId: preferThreadId ? threadId : allowedReplyToId,
-        threadId: preferThreadId ? allowedReplyToId : threadId,
+    resolveReplyTransport: ({
+      threadId,
+      replyToId,
+      replyToIsExplicit,
+      replyToCurrent,
+      replyDelivery,
+    }) => {
+      const resolvedReplyToId = resolveSlackReplyThreadTs({
+        replyToId: normalizeSlackThreadTsCandidate(replyToId),
+        threadId: normalizeSlackThreadTsCandidate(threadId),
+        replyToMode: replyDelivery?.replyToMode,
+        replyToIsExplicit,
+        replyToCurrent,
       });
       return {
         replyToId:

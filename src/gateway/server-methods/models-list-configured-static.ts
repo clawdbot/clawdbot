@@ -26,7 +26,7 @@ export function includeConfiguredStaticCatalogEntries(params: {
     defaultModel: params.defaultModel,
     agentId: params.agentId,
     ...RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
-    manifestPlugins: params.metadataSnapshot.plugins,
+    manifestPlugins: params.metadataSnapshot,
   });
   const configuredKeys = new Set(
     [...policy.configuredKeys].map((key) => {

@@ -57,8 +57,6 @@ function buildBridgeFromPersistedBundledRecord(
   return {
     bundledPluginId: record.pluginId,
     pluginId: externalPluginId || record.pluginId,
-    preferredSource:
-      officialInstall?.defaultChoice === "clawhub" && clawhubSpec ? "clawhub" : "npm",
     ...(npmSpec ? { npmSpec } : {}),
     ...(expectedIntegrity ? { expectedIntegrity } : {}),
     ...(clawhubSpec ? { clawhubSpec } : {}),

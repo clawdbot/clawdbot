@@ -9,6 +9,26 @@ export const SESSION_AGENT_ATTENTION_ICON_IDS = [
 
 export type SessionAgentAttentionIconId = (typeof SESSION_AGENT_ATTENTION_ICON_IDS)[number];
 
+// Palette matches Claude Code's /color names exactly so imported sessions keep
+// their color 1:1; clients render theme-tuned hues per name, never raw values.
+export const SESSION_COLOR_IDS = [
+  "red",
+  "blue",
+  "green",
+  "yellow",
+  "purple",
+  "orange",
+  "pink",
+  "cyan",
+] as const;
+
+export type SessionColorId = (typeof SESSION_COLOR_IDS)[number];
+
+export function normalizeSessionColorValue(value: string): SessionColorId | null {
+  const normalized = value.trim().toLowerCase();
+  return SESSION_COLOR_IDS.find((id) => id === normalized) ?? null;
+}
+
 export const SESSION_ICON_GLYPH_IDS = [
   "braces",
   "book",

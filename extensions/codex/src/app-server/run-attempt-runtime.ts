@@ -52,6 +52,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     contextSessionKey,
     sandboxSessionKey,
     sessionAgentId,
+    policyAgentId,
     sandbox,
     attemptClientFactory,
     runAbortController,
@@ -171,6 +172,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   );
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
+    agentId: sessionAgentId,
     cfg: params.config,
     toolsEnabled: usesSupervisionConnection || supportsModelTools(params.model),
     disableTools: params.disableTools,
@@ -182,7 +184,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     params.trigger === "cron" &&
     params.scheduledToolPolicy !== undefined &&
     Array.isArray(params.toolsAllow);
-  const ownsScheduledConfiguredMcpSurface =
+  const scheduledConfiguredMcpSurface =
     authenticatedScheduledMode &&
     (bundleMcpThreadConfig.staticServerNames.length > 0 ||
       mutable.startupBinding?.configuredMcpOwnershipVersion === 1);
@@ -220,8 +222,13 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
   const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
     runtimeParams,
     sandbox,
-    { agentId: sessionAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
+    { agentId: policyAgentId, runtimeSessionKey: sandboxSessionKey, sandboxExecServerEnabled },
   );
+  const configuredMcpSurface = scheduledConfiguredMcpSurface
+    ? "scheduled"
+    : !nativeToolSurfaceEnabled && bundleMcpThreadConfig.staticServerNames.length > 0
+      ? "transient"
+      : undefined;
   preDynamicStartupStages.mark("native-tool-surface");
   const nativeProviderWebSearchSupport =
     resolveCodexWebSearchPlan({
@@ -280,7 +287,7 @@ export async function prepareCodexAttemptRuntime(connection: CodexAttemptConnect
     bundleMcpThreadConfig,
     bundleManifestRegistry,
     authenticatedScheduledMode,
-    ownsScheduledConfiguredMcpSurface,
+    configuredMcpSurface,
     canResolveScheduledConfiguredMcpCreatorAuthority:
       mayResolveScheduledConfiguredMcpCreatorAuthority,
     codexMcpToolOverrides,

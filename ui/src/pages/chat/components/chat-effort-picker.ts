@@ -18,7 +18,6 @@ type ChatEffortPickerParams = {
   disabledReason?: string;
   fastMode: ChatFastModeSelectState;
   sessionKey: string;
-  showFastMode: boolean;
   thinkingDisabled: boolean;
   thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
@@ -34,7 +33,7 @@ function formatEffortLabel(label: string): string {
 export function renderChatEffortPicker(params: ChatEffortPickerParams) {
   const sliderStops = params.thinking.options;
   const showReasoning = sliderStops.length > 0;
-  if (!params.reserved && !showReasoning && (!params.showFastMode || !params.fastMode.supported)) {
+  if (!params.reserved && !showReasoning && !params.fastMode.supported) {
     return nothing;
   }
   const selection = params.thinking.selection;
@@ -298,44 +297,40 @@ export function renderChatEffortPicker(params: ChatEffortPickerParams) {
                 </div>
               `
             : nothing}
-          ${params.showFastMode
-            ? html`
-                <div class="chat-controls__fast-mode-row">
-                  <span class="chat-controls__fast-mode-icon" aria-hidden="true">${icons.zap}</span>
-                  <span class="chat-controls__fast-mode-copy">
-                    <span class="chat-controls__fast-mode-title">
-                      ${t("chat.modelControls.fastMode")}
-                    </span>
-                    <span class="chat-controls__fast-mode-description">
-                      ${t("chat.modelControls.fastHelp")}
-                    </span>
-                  </span>
-                  <button
-                    class="chat-controls__speed-toggle ${params.fastMode.active
-                      ? "chat-controls__speed-toggle--active"
-                      : ""}"
-                    data-chat-speed-toggle=${params.fastMode.nextValue}
-                    type="button"
-                    role="switch"
-                    aria-checked=${params.fastMode.active ? "true" : "false"}
-                    aria-label=${t("chat.modelControls.fastResponsesAria", {
-                      state: params.fastMode.label,
-                    })}
-                    ?disabled=${params.fastMode.disabled}
-                    @click=${(event: MouseEvent) => {
-                      event.stopPropagation();
-                      if (params.fastMode.disabled) {
-                        event.preventDefault();
-                        return;
-                      }
-                      commitFastMode(params.fastMode.nextValue);
-                    }}
-                  >
-                    <span class="chat-controls__speed-toggle-thumb"></span>
-                  </button>
-                </div>
-              `
-            : nothing}
+          <div class="chat-controls__fast-mode-row">
+            <span class="chat-controls__fast-mode-icon" aria-hidden="true">${icons.zap}</span>
+            <span class="chat-controls__fast-mode-copy">
+              <span class="chat-controls__fast-mode-title">
+                ${t("chat.modelControls.fastMode")}
+              </span>
+              <span class="chat-controls__fast-mode-description">
+                ${t("chat.modelControls.fastHelp")}
+              </span>
+            </span>
+            <button
+              class="chat-controls__speed-toggle ${params.fastMode.active
+                ? "chat-controls__speed-toggle--active"
+                : ""}"
+              data-chat-speed-toggle=${params.fastMode.nextValue}
+              type="button"
+              role="switch"
+              aria-checked=${params.fastMode.active ? "true" : "false"}
+              aria-label=${t("chat.modelControls.fastResponsesAria", {
+                state: params.fastMode.label,
+              })}
+              ?disabled=${params.fastMode.disabled}
+              @click=${(event: MouseEvent) => {
+                event.stopPropagation();
+                if (params.fastMode.disabled) {
+                  event.preventDefault();
+                  return;
+                }
+                commitFastMode(params.fastMode.nextValue);
+              }}
+            >
+              <span class="chat-controls__speed-toggle-thumb"></span>
+            </button>
+          </div>
         </div>
       </wa-popup>
     </details>

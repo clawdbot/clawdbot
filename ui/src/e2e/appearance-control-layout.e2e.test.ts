@@ -38,6 +38,16 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/appearance`);
         await waitForControlUiSettingsTakeover(page);
 
+        const appearanceHeadings = await page
+          .locator(
+            ".settings-page > .settings-section > .settings-section__header > .settings-section__heading",
+          )
+          .allTextContents();
+        const themeIndex = appearanceHeadings.findIndex((heading) => heading.trim() === "Theme");
+        expect(
+          appearanceHeadings.slice(themeIndex, themeIndex + 3).map((heading) => heading.trim()),
+        ).toEqual(["Theme", "Accent color", "Typography"]);
+
         const accent = page.locator("#settings-appearance-accent");
         const customPicker = accent.locator("[data-accent-custom]");
         const customSwatch = accent.locator(".settings-accent-swatch--custom");
@@ -71,7 +81,7 @@ suite.define(() => {
         const theme = page.locator("#settings-appearance-theme");
         const grid = theme.locator(".settings-theme-grid");
         for (const [width, expectedColumns] of [
-          [560, 2],
+          [560, 3],
           [320, 1],
         ] as const) {
           await page.setViewportSize({ height: 1000, width });

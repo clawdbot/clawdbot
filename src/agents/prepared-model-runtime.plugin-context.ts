@@ -1,12 +1,9 @@
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
-import { extractPluginInstallRecordsFromInstalledPluginIndex } from "../plugins/installed-plugin-index-install-records.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
-import {
-  resolvePluginRuntimeLoadContext,
-  setPluginRuntimeLoadContext,
-} from "../plugins/runtime/load-context.js";
+import { setPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
+import { resolvePluginRuntimeLoadContext } from "../plugins/runtime/load-context.resolve.js";
 import { createAgentRuntimeMetadataPluginIdScope } from "./harness/runtime-plugin-load-plan.js";
 import type { PreparedModelRuntimeInput } from "./prepared-model-runtime.types.js";
 
@@ -63,7 +60,6 @@ export function prepareOwnedPluginLoadContext(
       preferBuiltPluginArtifacts,
     }),
     metadataSnapshot,
-    installRecords: extractPluginInstallRecordsFromInstalledPluginIndex(metadataSnapshot.index),
   };
   // The prepared registry is the lifecycle-owned carrier; standalone callers keep the cold path.
   setPluginRuntimeLoadContext(registry, context);

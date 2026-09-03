@@ -1836,7 +1836,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
       {
         type: "text",
         text: "following text",
-        textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+        textSignature: expect.stringMatching(
+          /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+        ),
       },
     ]);
   });
@@ -1909,7 +1911,9 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(result.content[0]).toEqual({
       type: "text",
       text: "Use <",
-      textSignature: '{"v":1,"id":"commentary-0","phase":"commentary"}',
+      textSignature: expect.stringMatching(
+        /^\{"v":1,"id":"commentary-0-[0-9a-f]{24}","phase":"commentary"\}$/u,
+      ),
     });
     expect(result.content[1]).toMatchObject({ type: "toolCall", id: "call_1", name: "bash" });
   });

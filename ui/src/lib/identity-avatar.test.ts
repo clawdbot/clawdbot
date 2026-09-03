@@ -195,10 +195,9 @@ describe("resolveAvatar gateway origin trust", () => {
 });
 
 describe("resolveAvatar profile-id senders", () => {
-  it("preserves unqualified sender whitespace normalization", () => {
-    expect(resolveAvatar({ id: " c3e32452-0467-47e5-aafa-233cd5dae29f " })).toEqual({
-      kind: "profile",
-      url: "/api/users/c3e32452-0467-47e5-aafa-233cd5dae29f/avatar",
+  it("sender provenance keeps an unqualified UUID on initials", () => {
+    expect(resolveAvatar({ id: " c3e32452-0467-47e5-aafa-233cd5dae29f " })).toMatchObject({
+      kind: "initials",
     });
   });
 

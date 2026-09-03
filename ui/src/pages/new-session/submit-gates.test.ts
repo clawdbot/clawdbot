@@ -45,7 +45,9 @@ describe("DraftSubmissionFlow submit gates", () => {
       });
       place.modelControl.load(context, "main", true, { agent: place.selectedAgent() });
       await vi.waitFor(() =>
-        expect(peekChatMetadata(context.gateway.snapshot.client!, "main")?.models).toHaveLength(1),
+        expect(
+          peekChatMetadata(context.gateway.snapshot.client!, { agentId: "main" })?.models,
+        ).toHaveLength(1),
       );
       flow.setMessage("Start this session");
       expect(flow.submitBlock()).toEqual(

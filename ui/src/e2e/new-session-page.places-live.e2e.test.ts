@@ -35,7 +35,7 @@ suite.define(() => {
     }
   });
 
-  it("shows advertised cloud machines only to admins", async () => {
+  it("shows advertised cloud machines after selecting a profile", async () => {
     const context = await suite.browser.newContext({ locale: "en-US", serviceWorkers: "block" });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -63,9 +63,13 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.waitForRequest("environments.list");
-      await page.locator("#new-session-where-trigger").click();
+      const where = page.locator("#new-session-where-trigger");
+      await where.click();
       const picker = page.locator("wa-popover.new-session-page__where-popover");
-      await picker.locator('[data-value="cloud:aws"]').click();
+      const profile = picker.locator('[data-value="cloud:aws"]');
+      await profile.click();
+      await profile.waitFor({ state: "hidden" });
+      await where.click();
       await picker.locator('[data-value="machine:fast"]').waitFor();
     } finally {
       await context.close();
@@ -281,10 +285,11 @@ suite.define(() => {
       await expect.poll(() => runner.isDisabled()).toBe(true);
       await expect
         .poll(() => runner.locator(".new-session-page__menu-fact").allTextContents())
-        .toEqual([
-          "Worker slots 0/2",
-          "No worker slots are available. Wait for a slot or pick another device.",
-        ]);
+        .toEqual(["No worker slots are available. Wait for a slot or pick another device."]);
+      // A disabled row keeps a muted meter with no utilization claim.
+      await expect
+        .poll(() => runner.locator(".capacity-meter-pips").getAttribute("aria-label"))
+        .toBe("Slot utilization unavailable");
       expect(await gateway.getRequests("node.list")).toHaveLength(0);
     } finally {
       await context.close();

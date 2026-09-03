@@ -47,7 +47,7 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then answer exactly TELEGRAM-EMPTY-WRITE-RECOVERED-OK."
+            text: "@openclaw Empty response after write recovery QA check: write qa-empty-response-side-effect.txt with the text side effect completed once, then reply with exact marker: `TELEGRAM-EMPTY-WRITE-RECOVERED-OK`."
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

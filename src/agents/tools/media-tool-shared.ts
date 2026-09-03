@@ -1,7 +1,6 @@
 /** Shared media tool routing, auth, path, and reference helpers. */
 import { normalizeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -23,7 +22,6 @@ import {
   normalizeMediaReferenceSource,
 } from "../../media/media-reference.js";
 import type { WebMediaResult } from "../../media/web-media.js";
-import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { loadCapabilityManifestSnapshot } from "../../plugins/capability-provider-runtime.js";
 import { listAvailableManifestContractValues } from "../../plugins/manifest-contract-eligibility.js";
 import { resolveUserPath } from "../../utils.js";
@@ -464,16 +462,6 @@ export function resolveGenerateAction(
 }
 
 /**
- * Reads boolean tool parameters from either canonical or snake_case keys.
- */
-export function readBooleanToolParam(
-  params: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  return parseBoolean(readSnakeCaseParamRaw(params, key));
-}
-
-/**
  * Normalizes singular/plural media reference parameters into a deduped, bounded list.
  */
 export function normalizeMediaReferenceInputs(params: {
@@ -605,6 +593,22 @@ export async function resolveMediaToolReferenceAccess(params: {
 }
 
 type LoadedToolReferenceMedia = WebMediaResult | ReturnType<typeof decodeDataUrl>;
+
+export type MediaToolSandbox = Pick<
+  SandboxedBridgeMediaPathConfig,
+  "root" | "bridge" | "stagedMediaPaths"
+>;
+
+export function resolveMediaToolSandboxConfig(
+  sandbox: MediaToolSandbox | null | undefined,
+  workspaceOnly: boolean | undefined,
+): SandboxedBridgeMediaPathConfig | null {
+  if (!sandbox) {
+    return null;
+  }
+  const root = sandbox.root.trim();
+  return root ? { ...sandbox, root, workspaceOnly: workspaceOnly === true } : null;
+}
 
 /** Loads generation references while retaining each tool's distinct transport and sandbox policy. */
 export async function loadMediaToolReferences<T>(params: {
@@ -753,6 +757,8 @@ export function buildTextToolResult(
     details: {
       model: `${result.provider}/${result.model}`,
       ...extraDetails,
+      // Code Mode and Tool Search read details instead of rendered content.
+      text: result.text,
       attempts: result.attempts,
     },
   };

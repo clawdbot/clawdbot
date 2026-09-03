@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type {
@@ -77,6 +78,127 @@ function harness() {
 }
 
 describe("transcript capture ownership", () => {
+  it.each(["write failure", "shutdown"])(
+    "releases the provider when title adoption encounters %s",
+    async (fault) => {
+      const h = harness();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const controller = new AbortController();
+      h.provider.start = async (request) => ({
+        ok: true,
+        session: { ...request.session, title: "Room" },
+      });
+      const originalWrite = h.store.writeSession.bind(h.store);
+      let blocked = false;
+      vi.spyOn(TranscriptsStore.prototype, "writeSession").mockImplementation(async (session) => {
+        if (session.title === "Room" && !blocked) {
+          blocked = true;
+          entered.resolve();
+          await release.promise;
+          if (fault === "write failure") {
+            throw new Error("title write unavailable");
+          }
+        }
+        await originalWrite(session);
+      });
+      const start = h
+        .createTool()
+        .execute(
+          "title-start",
+          { action: "start", providerId: "capture", sessionId: "notes" },
+          controller.signal,
+        );
+      const rejected = expect(start).rejects.toThrow(
+        fault === "shutdown" ? "aborted" : "title write unavailable",
+      );
+      try {
+        await entered.promise;
+        if (fault === "shutdown") {
+          controller.abort();
+        }
+      } finally {
+        release.resolve();
+      }
+      await rejected;
+      expect(h.provider.stop).toHaveBeenCalledOnce();
+      expect((await h.session()).stoppedAt).toBeDefined();
+      expect(await h.store.readSummary(await h.session())).toMatchObject({
+        summary: { utteranceCount: 0 },
+      });
+      expect(activeSessions.has("notes")).toBe(false);
+    },
+  );
+
+  it.each([undefined, "Operator title"])(
+    "adopts only a bounded provider title when the caller title is %s",
+    async (title) => {
+      const h = harness();
+      h.provider.start = async (request) => ({
+        ok: true,
+        session: {
+          ...request.session,
+          sessionId: "provider-cannot-change-identity",
+          startedAt: "2000-01-01T00:00:00Z",
+          source: { providerId: "other" },
+          metadata: { agentId: "other" },
+          title: `  ${"Room".repeat(40)}  `,
+        },
+      });
+      await h.execute({ action: "start", providerId: "capture", sessionId: "notes", title });
+      const stored = await h.session();
+      expect(stored.title).toBe(title ?? "Room".repeat(30));
+      expect(stored).toMatchObject({
+        sessionId: "notes",
+        source: { providerId: "capture" },
+        metadata: { agentId: "research" },
+      });
+      expect(stored.startedAt).not.toBe("2000-01-01T00:00:00Z");
+      await h.execute({ action: "stop", sessionId: "notes" });
+    },
+  );
+
+  it.each(["stop", "summarize"] as const)(
+    "rejects %s when its caller closes during provider policy",
+    async (action) => {
+      const h = harness();
+      await h.start();
+      let callerActive = true;
+      const tool = h.createTool(() => {
+        if (!callerActive) {
+          throw new Error("caller ended");
+        }
+      });
+      const entered = createDeferred();
+      const release = createDeferred();
+      h.provider.accessControl = {
+        channelId: "capture-channel",
+        resolveAccountId: ({ source }) => ({ ok: true, value: source.accountId }),
+        authorize: async () => {
+          entered.resolve();
+          await release.promise;
+          return { ok: true, value: undefined };
+        },
+      };
+      const session = await h.session();
+      const pending = tool.execute("closed-caller", {
+        action,
+        selector: `${session.startedAt.slice(0, 10)}/notes`,
+      });
+      const rejected = expect(pending).rejects.toThrow();
+      try {
+        await Promise.race([entered.promise, pending]);
+        callerActive = false;
+      } finally {
+        release.resolve();
+      }
+      await rejected;
+      expect(h.provider.stop).not.toHaveBeenCalled();
+      expect((await h.session()).stoppedAt).toBeUndefined();
+      expect(await h.store.readSummary(session)).toEqual({});
+    },
+  );
+
   it.each(["terminal", "rejected", "thrown"] as const)(
     "fences a %s startup and its retained callbacks after same-millisecond id reuse",
     async (outcome) => {
@@ -109,7 +231,12 @@ describe("transcript capture ownership", () => {
       };
       if (outcome === "terminal") {
         await expect(h.start()).resolves.toMatchObject({
-          details: { sessionId: "notes", active: false, stoppedAt: expect.any(String) },
+          details: {
+            sessionId: "notes",
+            selector: `${new Date().toISOString().slice(0, 10)}/notes`,
+            active: false,
+            stoppedAt: expect.any(String),
+          },
         });
         expect(await h.store.readSummary(await h.session())).toMatchObject({
           summary: { utteranceCount: 1 },
@@ -207,7 +334,13 @@ describe("transcript capture ownership", () => {
       await expect(h.execute({ action: "status" })).resolves.toMatchObject({
         details: {
           active: [],
-          pendingFinalization: [{ sessionId: "notes", stoppedAt: expect.any(String) }],
+          pendingFinalization: [
+            {
+              sessionId: "notes",
+              selector: `${request.session.startedAt.slice(0, 10)}/notes`,
+              stoppedAt: expect.any(String),
+            },
+          ],
         },
       });
       expect(h.logger.warn).toHaveBeenCalledWith(
@@ -225,9 +358,111 @@ describe("transcript capture ownership", () => {
     },
   );
 
-  it.each(["stop", "status"] as const)(
-    "revalidates capture identity after awaited %s authorization without reusing startup authority",
-    async (action) => {
+  it.each(["inference", "commit"] as const)(
+    "does not overwrite a completed reopen with a historical summary snapshot (%s)",
+    async (phase) => {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      const h = harness();
+      await h.start();
+      await h.requests[0]!.onUtterance({ text: "Original meeting" });
+      await h.execute({ action: "stop", sessionId: "notes" });
+      const session = await h.session();
+      const entered = createDeferred();
+      const release = createDeferred();
+      const originalRead = h.store.readUtterancesForSession.bind(h.store);
+      if (phase === "inference") {
+        vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+          async (...args) => {
+            const utterances = await originalRead(...args);
+            entered.resolve();
+            await release.promise;
+            return utterances;
+          },
+        );
+      } else {
+        const originalWrite = h.store.writeSummary.bind(h.store);
+        vi.spyOn(TranscriptsStore.prototype, "writeSummary").mockImplementationOnce(
+          async (...args) => {
+            entered.resolve();
+            await release.promise;
+            return originalWrite(...args);
+          },
+        );
+      }
+      const historical = h.execute({ action: "summarize", sessionId: "notes" });
+      try {
+        await Promise.race([entered.promise, historical]);
+        await h.start();
+        expect((await h.session()).startedAt).toBe(session.startedAt);
+        await h.requests[1]!.onUtterance({ text: "Reopened meeting" });
+        await h.execute({ action: "stop", sessionId: "notes" });
+        release.resolve();
+        await expect.soft(historical).resolves.toMatchObject({ details: { skipped: true } });
+        expect(await h.store.readSummary(session)).toMatchObject({
+          summary: { transcript: ["Original meeting", "Reopened meeting"] },
+        });
+      } finally {
+        release.resolve();
+        await Promise.allSettled([historical]);
+        await h.execute({ action: "stop", sessionId: "notes" });
+      }
+    },
+  );
+
+  it("does not overwrite final notes with an older summary while stop exports them", async () => {
+    const h = harness();
+    await h.start();
+    const session = await h.session();
+    await h.requests[0]!.onUtterance({ text: "Before summary" });
+    const readEntered = createDeferred();
+    const releaseRead = createDeferred();
+    const exportEntered = createDeferred();
+    const releaseExport = createDeferred();
+    const originalRead = h.store.readUtterancesForSession.bind(h.store);
+    const originalExport = h.store.materializeSessionArtifacts.bind(h.store);
+    vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+      async (...args) => {
+        const utterances = await originalRead(...args);
+        readEntered.resolve();
+        await releaseRead.promise;
+        return utterances;
+      },
+    );
+    const summary = h.execute({ action: "summarize", sessionId: "notes" });
+    let stop: ReturnType<typeof h.execute> | undefined;
+    try {
+      await readEntered.promise;
+      await h.requests[0]!.onUtterance({ text: "Before stop" });
+      vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts").mockImplementationOnce(
+        async (...args) => {
+          exportEntered.resolve();
+          await releaseExport.promise;
+          return originalExport(...args);
+        },
+      );
+      stop = h.execute({ action: "stop", sessionId: "notes" });
+      await exportEntered.promise;
+      releaseRead.resolve();
+      await expect(summary).resolves.toMatchObject({ details: { skipped: true } });
+      expect(await h.store.readSummary(session)).toMatchObject({
+        summary: { transcript: ["Before summary", "Before stop"] },
+      });
+    } finally {
+      releaseRead.resolve();
+      releaseExport.resolve();
+      await Promise.allSettled([summary, stop]);
+    }
+  });
+
+  it.each([
+    { action: "stop", key: "sessionId" },
+    { action: "stop", key: "selector" },
+    { action: "summarize", key: "sessionId" },
+    { action: "summarize", key: "selector" },
+    { action: "status", key: "sessionId" },
+  ] as const)(
+    "revalidates capture identity after awaited $action authorization via $key without reusing startup authority",
+    async ({ action, key }) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       const h = harness();
       let callerActive = true;
@@ -262,18 +497,118 @@ describe("transcript capture ownership", () => {
         providerId: "capture",
         sessionId: "notes",
       });
-      const delayed = h.execute({ action, sessionId: "notes" });
-      await entered;
+      const delayed = h.execute({
+        action,
+        ...(action !== "status"
+          ? {
+              [key]:
+                key === "selector" ? `${new Date().toISOString().slice(0, 10)}/notes` : "notes",
+            }
+          : {}),
+      });
+      await Promise.race([entered, delayed]);
       callerActive = false;
       await h.requests[0]!.onStatus?.({ active: false });
       await h.start();
+      const replacement = await h.session();
+      const savedSummary = await h.store.readSummary(replacement);
+      const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
+      const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+      const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
       releaseAuthorization();
-      await expect(delayed).resolves.toMatchObject({
-        details: action === "stop" ? { skipped: true } : { active: [] },
+      await expect.soft(delayed).resolves.toMatchObject({
+        details: action === "status" ? { active: [] } : { skipped: true },
+      });
+      expect.soft(read).not.toHaveBeenCalled();
+      expect.soft(write).not.toHaveBeenCalled();
+      expect.soft(materialize).not.toHaveBeenCalled();
+      expect.soft(await h.store.readSummary(replacement)).toEqual(savedSummary);
+      await expect.soft(fs.stat(h.store.sessionDir(replacement))).rejects.toMatchObject({
+        code: "ENOENT",
       });
       expect(h.provider.stop).not.toHaveBeenCalled();
       expect((await h.session()).stoppedAt).toBeUndefined();
       await h.execute({ action: "stop", sessionId: "notes" });
     },
   );
+
+  it("does not persist or export a summary after its capture retires during the read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    const h = harness();
+    await h.start();
+    const session = await h.session();
+    await h.requests[0]!.onUtterance({ text: "before retirement" });
+    const entered = createDeferred();
+    const release = createDeferred();
+    const originalRead = h.store.readUtterancesForSession.bind(h.store);
+    vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+      async (...args) => {
+        const utterances = await originalRead(...args);
+        entered.resolve();
+        await release.promise;
+        return utterances;
+      },
+    );
+    const delayed = h.execute({
+      action: "summarize",
+      selector: `${session.startedAt.slice(0, 10)}/notes`,
+    });
+    try {
+      await Promise.race([entered.promise, delayed]);
+      await h.requests[0]!.onStatus?.({ active: false });
+      await h.start();
+      await h.requests[1]!.onUtterance({ text: "replacement note" });
+    } finally {
+      release.resolve();
+    }
+    const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
+    const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
+    await expect.soft(delayed).resolves.toMatchObject({ details: { skipped: true } });
+    expect.soft(write).not.toHaveBeenCalled();
+    expect.soft(materialize).not.toHaveBeenCalled();
+    await expect
+      .soft(fs.stat(h.store.sessionDir(session)))
+      .rejects.toMatchObject({ code: "ENOENT" });
+    expect((await h.session()).stoppedAt).toBeUndefined();
+    await h.execute({ action: "stop", sessionId: "notes" });
+  });
+
+  it.each([
+    { phase: "active", fault: "missing" },
+    { phase: "active", fault: "unreadable" },
+    { phase: "terminal", fault: "missing" },
+    { phase: "terminal", fault: "unreadable" },
+  ] as const)("keeps $phase status visible with a $fault stored row", async ({ phase, fault }) => {
+    const h = harness();
+    await h.start();
+    const session = await h.session();
+    if (phase === "terminal") {
+      const write = vi
+        .spyOn(TranscriptsStore.prototype, "writeSession")
+        .mockRejectedValueOnce(new Error("store unavailable"));
+      await expect(h.requests[0]!.onStatus?.({ active: false })).rejects.toThrow(
+        "store unavailable",
+      );
+      write.mockRestore();
+    }
+    const read = vi.spyOn(TranscriptsStore.prototype, "readSessionEntry");
+    if (fault === "missing") {
+      read.mockResolvedValue(undefined);
+    } else {
+      read.mockRejectedValue(new Error("row unreadable"));
+    }
+    await expect.soft(h.execute({ action: "status" })).resolves.toMatchObject({
+      details: {
+        [phase === "terminal" ? "pendingFinalization" : "active"]: [
+          {
+            sessionId: "notes",
+            selector: `${session.startedAt.slice(0, 10)}/notes`,
+          },
+        ],
+      },
+    });
+    expect.soft(read).not.toHaveBeenCalled();
+    read.mockRestore();
+    await h.execute({ action: "stop", sessionId: "notes" });
+  });
 });

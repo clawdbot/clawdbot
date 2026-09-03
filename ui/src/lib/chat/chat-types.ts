@@ -1,14 +1,17 @@
+import type { HumanMention } from "@openclaw/gateway-protocol";
+import type { MediaKind } from "@openclaw/media-core/constants";
 /**
  * Chat message types for the UI layer.
  */
-
-import type { MediaKind } from "@openclaw/media-core/constants";
 import type {
   ChatSendIntent,
   QueueMode,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { BrowserTabTarget } from "../../components/browser/browser-target.ts";
 import type { toolIcons } from "../../components/icons-tools.ts";
 import type { SenderIdentity } from "./sender-label.ts";
+
+export type { HumanMention };
 
 export type BrowserAnnotationAttachment = {
   modelContext: string;
@@ -26,6 +29,15 @@ export type ChatAttachment = {
   fileName?: string;
   sizeBytes?: number;
   /** UI-local context that must remain coupled to its annotated screenshot. */
+  browserAnnotation?: BrowserAnnotationAttachment;
+};
+
+// Shared payload contract: draft and outbox storage must not import each other's runtime.
+export type DurableComposerDraftAttachment = {
+  blob: Blob;
+  mimeType: string;
+  fileName?: string;
+  sizeBytes?: number;
   browserAnnotation?: BrowserAnnotationAttachment;
 };
 
@@ -47,8 +59,10 @@ export type ChatGoalDraft = { sessionId?: string } & (
 export type ChatGoalAction = "pause" | "resume" | "clear";
 
 export type ChatComposerMemoryFallback = {
+  awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
   message: string;
+  mentions?: readonly HumanMention[];
   attachments: ChatAttachment[];
   storageFailed: boolean;
   draftRetry?: ChatComposerDraftRetry;
@@ -79,9 +93,13 @@ export type ToolApprovalReview = {
 export type ChatQueueItem = {
   id: string;
   text: string;
+  mentions?: readonly HumanMention[];
   createdAt: number;
   /** Operator-owned queue position; absent means "wherever arrival put it". */
   orderKey?: number;
+  /** Immutable bytes belong to this queued input; routing belongs to the outbox metadata. */
+  attachmentPayload?: { key: string; recoveryScope: string; tabId: string };
+  attachmentStorageError?: "capacity" | "unavailable" | "missing";
   attachments?: ChatAttachment[];
   refreshSessions?: boolean;
   /** Transcript id of the replied-to message; Gateway hydrates reply context. */
@@ -133,6 +151,8 @@ export type ChatItem =
   | {
       kind: "divider";
       key: string;
+      compaction?: "active" | "complete";
+      compactionId?: string;
       label: string;
       icon?: keyof typeof toolIcons;
       metric?: string;
@@ -226,9 +246,11 @@ export type MessageGroup = {
   key: string;
   role: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   replyToSender?: SenderIdentity;
   messages: Array<{ message: unknown; key: string; duplicateCount?: number }>;
+  visibleContent: "none" | "text" | "non-text";
   timestamp: number;
   isStreaming: boolean;
   runId?: string;
@@ -241,6 +263,17 @@ export type MessageContentItem =
       text?: string;
       name?: string;
       args?: unknown;
+    }
+  | {
+      type: "thinking";
+      thinking: string;
+    }
+  | {
+      type: "omitted_media";
+      media: {
+        kind: "image";
+        sizeBytes?: number;
+      };
     }
   | {
       type: "attachment";
@@ -259,6 +292,15 @@ export type MessageContentItem =
       };
     }
   | {
+      type: "attachment_error";
+      attachment: {
+        code: "file-not-found" | "unsupported-format" | "delivery-failed";
+        kind: Exclude<MediaKind, "sticker" | "unknown">;
+        label: string;
+        mimeType?: string;
+      };
+    }
+  | {
       type: "canvas";
       preview: Extract<NonNullable<ToolCard["preview"]>, { kind: "canvas" }>;
       rawText?: string | null;
@@ -271,6 +313,7 @@ export type NormalizedMessage = {
   timestamp: number;
   id?: string;
   senderLabel?: string | null;
+  senderSession?: { sessionKey?: string; agentId?: string } | null;
   sender?: SenderIdentity;
   audioAsVoice?: boolean;
   replyPreview?: { text: string; senderLabel?: string | null };
@@ -305,27 +348,31 @@ export type ToolCard = {
   /** True once a result landed, including historical results with empty output. */
   completed?: boolean;
   messageId?: string;
-  preview?: {
-    kind: "canvas";
-    surface: "assistant_message";
-    render: "url";
-    title?: string;
-    preferredHeight?: number;
-    url?: string;
-    viewId?: string;
-    className?: string;
-    style?: string;
-    sandbox?: "strict" | "scripts";
-    boardWidgetName?: string;
-    mcpApp?: {
-      viewId: string;
-      serverName?: string;
-      toolName?: string;
-      uiResourceUri?: string;
-      toolCallId?: string;
-      originSessionKey?: string;
-    };
-  };
+  /** UI-local preview identity for results without a call or transcript id. */
+  previewRevision?: string;
+  preview?:
+    | {
+        kind: "canvas";
+        surface: "assistant_message";
+        render: "url";
+        title?: string;
+        preferredHeight?: number;
+        url?: string;
+        viewId?: string;
+        className?: string;
+        style?: string;
+        sandbox?: "strict" | "scripts";
+        boardWidgetName?: string;
+        mcpApp?: {
+          viewId: string;
+          serverName?: string;
+          toolName?: string;
+          uiResourceUri?: string;
+          toolCallId?: string;
+          originSessionKey?: string;
+        };
+      }
+    | (BrowserTabTarget & { kind: "browser-tab"; url?: string; title?: string });
 };
 
 export type ToolCardOutcome = "running" | "succeeded" | "failed" | "unknown";

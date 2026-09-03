@@ -83,6 +83,9 @@ Accepting a discovered direct connection selects direct transport. Choosing a
 discovered SSH tunnel clears saved transport settings for the suggested loopback
 URL, which may now reach a different host; start the displayed tunnel manually.
 
+The onboarding and configure readiness checks use the saved TLS fingerprint for
+that same endpoint. Probing a different URL does not inherit its certificate pin.
+
 Host-key verification is strict by default (`gateway.remote.sshHostKeyPolicy: "strict"`). Set it to `"openssh"` to delegate to your effective OpenSSH config instead; review your user and system SSH settings before enabling it.
 
 For a Gateway already reachable on a trusted LAN or Tailnet, use direct mode:
@@ -311,6 +314,9 @@ launchctl bootstrap gui/$UID ~/Library/LaunchAgents/ai.openclaw.ssh-tunnel.plist
 
 The tunnel starts automatically at login, restarts on crash, and keeps the forwarded port live.
 
+Open or reopen OpenClaw.app after setup, then verify the connection using the
+[macOS remote access](/platforms/mac/remote) checks.
+
 <Note>
 If you have a leftover `com.openclaw.ssh-tunnel` LaunchAgent from an older setup, unload and delete it.
 </Note>
@@ -340,4 +346,3 @@ launchctl bootout gui/$UID/ai.openclaw.ssh-tunnel
 
 - [Tailscale](/gateway/tailscale)
 - [Authentication](/gateway/authentication)
-- [Remote gateway setup](/gateway/remote-gateway-readme)

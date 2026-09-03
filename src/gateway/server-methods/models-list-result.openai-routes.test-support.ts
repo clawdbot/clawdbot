@@ -44,6 +44,9 @@ export function registerTestCatalogAccess(
 
 export async function listModels(params: {
   agentId?: string;
+  agentDir?: string;
+  workspaceDir?: string;
+  preparedOnly?: boolean;
   catalog: ModelCatalogEntry[];
   catalogLoadDelayMs?: number;
   preparedCatalog?: ModelCatalogEntry[];
@@ -52,6 +55,7 @@ export async function listModels(params: {
   staticEntries?: ModelCatalogEntry[];
   cfg?: OpenClawConfig;
   discoveryModes?: Record<string, "refreshable" | "runtime" | "static">;
+  catalogComplete?: boolean;
   preparedAuthModes?: PreparedAgentCredentialModes;
   metadataSnapshot?: PluginMetadataSnapshot;
   routeResolverFactory?: typeof createOpenAIModelRoutesResolver;
@@ -62,14 +66,17 @@ export async function listModels(params: {
   const createCatalogSnapshot = (entries: ModelCatalogEntry[]) =>
     ({
       agentId,
-      agentDir: "/tmp/models-list-openai-agent",
-      catalogComplete: false,
-      workspaceDir: "/tmp/models-list-openai-workspace",
+      agentDir: params.agentDir ?? "/tmp/models-list-openai-agent",
+      catalogComplete: params.catalogComplete ?? false,
+      workspaceDir: params.workspaceDir ?? "/tmp/models-list-openai-workspace",
       config,
       authModes: params.preparedAuthModes ?? {},
-      authStore: loadAuthProfileStoreWithoutExternalProfiles("/tmp/models-list-openai-agent", {
-        allowKeychainPrompt: false,
-      }),
+      authStore: loadAuthProfileStoreWithoutExternalProfiles(
+        params.agentDir ?? "/tmp/models-list-openai-agent",
+        {
+          allowKeychainPrompt: false,
+        },
+      ),
       metadataSnapshot:
         params.metadataSnapshot ?? loadManifestMetadataSnapshot({ config, env: process.env }),
       entries,
@@ -102,7 +109,11 @@ export async function listModels(params: {
   return await buildModelsListResult({
     context,
     agentId,
-    params: { view: params.view ?? "all", ...(params.refresh ? { refresh: true } : {}) },
+    params: {
+      view: params.view ?? "all",
+      ...(params.refresh ? { refresh: true } : {}),
+      ...(params.preparedOnly ? { preparedOnly: true } : {}),
+    },
     ...(params.discoveryModes
       ? {
           preloadedCatalog: {

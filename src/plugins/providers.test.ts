@@ -29,7 +29,7 @@ const resolveRuntimePluginRegistryMock = vi.fn<ResolveRuntimePluginRegistry>();
 const getRuntimePluginRegistryForLoadOptionsMock = vi.fn<GetRuntimePluginRegistryForLoadOptions>();
 const resolveCompatibleRuntimePluginRegistryMock = vi.fn<ResolveCompatibleRuntimePluginRegistry>();
 const loadOpenClawPluginsMock = vi.fn<LoadOpenClawPlugins>();
-const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_) => false);
+const isPluginRegistryLoadInFlightMock = vi.fn<IsPluginRegistryLoadInFlight>((_options) => false);
 const loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistry>();
 const loadPluginMetadataSnapshotMock = vi.fn<LoadPluginMetadataSnapshot>();
 const loadPluginRegistrySnapshotMock = vi.fn<LoadPluginRegistrySnapshot>();
@@ -217,6 +217,7 @@ function createMetadataSnapshotFixture(
       setupProviders: ownerMap([]),
       commandAliases: ownerMap([]),
       contracts: ownerMap([]),
+      modelIdNormalizationPolicies: new Map(),
     },
   };
 }

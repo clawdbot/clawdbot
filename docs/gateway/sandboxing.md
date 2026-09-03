@@ -51,12 +51,23 @@ execution or Gateway/node host overrides cannot bypass it. The default
 - `session`: one container per session.
 - `shared`: one container shared by all sandboxed sessions (per-agent `docker`/`ssh`/`browser` overrides are ignored under this scope).
 
-Sessions whose creator role requires sandboxing use the creator's authenticated
-principal as their isolation boundary instead. Different guests on the same
-agent receive separate sandbox environments and workspaces, regardless of the
-configured scope. Sessions created by the same guest reuse that guest's
-environment and workspace, including when the configured scope is `session`.
+Required sandboxes with proven Gateway-profile creators use that profile as
+their isolation boundary. Different guests on the same agent receive separate
+environments and workspaces, regardless of configured scope. Sessions created
+by the same profile reuse its existing environment and workspace, including
+when the configured scope is `session`; this upgrade does not rekey those paths.
+Channel, unknown, and other non-profile creators instead receive a separate
+required sandbox per canonical session. A matching raw ID cannot reuse a
+profile's resources. Required sandboxing and the read-only workspace cap remain
+in force; backend failure never falls back to host execution.
 Sessions without a role-required sandbox keep the configured scope behavior.
+
+The [creator namespace migration](/reference/database-schemas#creator-namespace-migration)
+does not delete or adopt old ambiguous workspaces or containers. Such sessions
+start with separate resources after upgrade. Preserve any needed old data
+before normal sandbox retention or manual cleanup, then recover selected files
+explicitly as an operator; do not copy an entire ambiguous environment into a
+trusted profile workspace automatically.
 
 Non-shared runtime identity also includes the resolved agent workspace path. This prevents co-hosted workspaces that reuse the same agent or session keys from sharing Docker, browser, SSH, OpenShell, or plugin-provided sandbox state. `shared` scope intentionally remains workspace-independent.
 
@@ -294,11 +305,11 @@ For the full prerequisites, configuration reference, workspace-mode comparison, 
 
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see:
 
-| Value            | Behavior                                                                                  |
-| ---------------- | ----------------------------------------------------------------------------------------- |
-| `none` (default) | Tools see an isolated sandbox workspace under `~/.openclaw/sandboxes`.                    |
-| `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`). |
-| `rw`             | Mounts the agent workspace read/write at `/workspace`.                                    |
+| Value            | Behavior                                                                                                                  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `none` (default) | Tools can read and write an isolated sandbox workspace under `~/.openclaw/sandboxes`; the agent workspace is not exposed. |
+| `ro`             | Mounts the agent workspace read-only at `/agent` (disables `write`/`edit`/`apply_patch`).                                 |
+| `rw`             | Mounts the agent workspace read/write at `/workspace`.                                                                    |
 
 For a role-required sandbox, OpenClaw caps configured `rw` workspace access at
 `ro` and logs an `agent/sandbox` warning. The guest keeps a separate sandbox
@@ -307,12 +318,17 @@ mount. This prevents guests from sharing the writable agent workspace; `none`
 and `ro` remain unchanged. Sessions without a role-required sandbox retain their
 configured workspace access.
 
-With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, `remote` mode uses the remote OpenShell workspace as canonical after the initial seed, and `workspaceAccess: "ro"`/`"none"` still restrict write behavior the same way.
+With the OpenShell backend, `mirror` mode still uses the local workspace as the canonical source between exec turns, and `remote` mode uses the remote OpenShell workspace as canonical after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
 
 <Note>
-**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) so they can be read. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+**Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
+
+Local container mounts and sandbox file tools enforce these read-only roots.
+SSH and OpenShell shell execution relies on the remote host or OpenShell policy
+for filesystem restrictions; `workspaceAccess` alone does not make remote shell
+paths read-only.
 </Note>
 
 ## Multiple folders for one agent
@@ -359,12 +375,12 @@ This example gives the `research` agent a writable primary workspace, read-only 
 
 `workspaceAccess` and bind modes are independent:
 
-| Setting                          | Controls                                                                    |
-| -------------------------------- | --------------------------------------------------------------------------- |
-| `workspaceAccess: "none"`        | Uses an isolated sandbox workspace; does not expose the agent workspace.    |
-| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                           |
-| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                      |
-| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path. |
+| Setting                          | Controls                                                                         |
+| -------------------------------- | -------------------------------------------------------------------------------- |
+| `workspaceAccess: "none"`        | Uses a writable isolated sandbox workspace; does not expose the agent workspace. |
+| `workspaceAccess: "ro"`          | Mounts the agent workspace read-only at `/agent`.                                |
+| `workspaceAccess: "rw"`          | Mounts the agent workspace read/write at `/workspace`.                           |
+| `docker.binds` entry `:ro`/`:rw` | Controls only that additional host folder at its configured container path.      |
 
 Changing `workspaceAccess` does not change an additional bind from `ro` to `rw`, or vice versa. Global and per-agent `docker.binds` are merged. Keep `scope: "agent"` or `"session"` for per-agent binds; `scope: "shared"` ignores all per-agent Docker overrides and uses only global binds.
 
@@ -471,7 +487,13 @@ commands shown below instead.
     scripts/sandbox-common-setup.sh
     ```
 
-    From an npm install, build the default image first (see above), then build the common image on top using [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) from the repository.
+    From an npm install, build the default image first (see above). Download [`scripts/docker/sandbox/Dockerfile.common`](https://github.com/openclaw/openclaw/blob/main/scripts/docker/sandbox/Dockerfile.common) and the root [`package.json`](https://github.com/openclaw/openclaw/blob/main/package.json) from the same OpenClaw commit or tag into an empty directory. Keep their filenames, then run from that directory:
+
+    ```bash
+    docker build -t openclaw-sandbox-common:bookworm-slim -f Dockerfile.common .
+    ```
+
+    `package.json` supplies the pinned pnpm version and must be in the build context, even with `--build-arg INSTALL_PNPM=0`. It is a read-only build input; you do not need a source checkout or a host pnpm installation.
 
     Then set `agents.defaults.sandbox.docker.image` to `openclaw-sandbox-common:bookworm-slim`.
 
@@ -493,11 +515,12 @@ By default, local container sandboxes run with **no network**. Override with `ag
 The default-off [secret egress proxy](/gateway/secrets#secret-egress-proxy) is Gateway-loopback only. Sandbox exec receives neither its proxy/CA environment nor protected sentinels. Sandbox/container proxy reachability is not implemented; do not enable sandbox networking expecting secret substitution to work in this release.
 
 <Note>
-Package installation and certificate-store changes are image provisioning, not
-normal sandbox-turn behavior. The defaults deliberately combine no network,
-a read-only root filesystem, and a non-root image user, so an in-turn package
-install should fail. Prefer a custom image that already contains packages and
-private certificate roots. If a Node process needs a private CA, also configure
+System package installation and certificate-store changes are image provisioning,
+not normal sandbox-turn behavior. The defaults deliberately combine no network,
+a read-only root filesystem, and a non-root image user, so an in-turn system package
+install should fail. Project-local dependencies can be installed in a writable
+workspace when the operator enables network egress. Prefer a custom image that
+already contains system packages and private certificate roots. If a Node process needs a private CA, also configure
 the CA path for Node, for example with `NODE_EXTRA_CA_CERTS`, through the custom
 image or `sandbox.docker.env`.
 </Note>

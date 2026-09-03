@@ -1,8 +1,12 @@
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
+  isGatewayRestartDraining,
   type GatewayRootWorkAdmissionContinuationScope,
 } from "../process/gateway-work-admission.js";
 import { NODE_INVOKE_PAIRING_CHANGED_ABORT } from "./node-registry-private-token.js";
+
+/** A node may emit this only before invoking a handler or sending any progress. */
+export const NODE_INVOKE_NOT_READY = "NODE_NOT_READY";
 
 export type PendingSystemRunEvent = {
   runId: string;
@@ -27,11 +31,13 @@ export type PendingInvoke = {
   idleTimer?: ReturnType<typeof setTimeout>;
   idleTimeoutMs?: number;
   onProgress?: (chunk: string) => void;
+  receivedProgress?: boolean;
   nextProgressSeq: number;
   progressChunks: Map<number, string>;
   nextInputSeq: number;
   removeAbortListener?: () => void;
   admissionContinuation?: GatewayRootWorkAdmissionContinuationScope;
+  isCompletionAuthorized?: () => boolean;
 };
 
 export type NodeInvokeProgressParams = {
@@ -115,29 +121,24 @@ export class NodeInvokeStreamController {
   }
 
   handleResult(params: NodeInvokeResultParams): boolean {
-    const pending = this.options.pendingInvokes.get(params.id);
-    if (
-      !pending ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !this.options.isConnectionActive(pending)
-    ) {
-      return false;
-    }
-    if (this.settleIfExpired(params.id, pending)) {
-      return false;
-    }
-    if (!this.takePending(params.id, pending)) {
+    const pending = this.getPending(params.id, params.nodeId, params.connId);
+    if (!pending || !this.takePending(params.id, pending)) {
       return false;
     }
     if (!params.ok) {
       this.options.onFailedResult(pending);
     }
+    // Even an out-of-order frame proves execution. A contradictory readiness
+    // rejection must not authorize another attempt of a non-idempotent command.
+    const error =
+      params.error?.code === NODE_INVOKE_NOT_READY && pending.receivedProgress
+        ? { code: "UNAVAILABLE", message: "node reported not-ready after invocation progress" }
+        : (params.error ?? null);
     pending.resolve({
       ok: params.ok,
       payload: params.payload,
       payloadJSON: params.payloadJSON ?? null,
-      error: params.error ?? null,
+      error,
     });
     return true;
   }
@@ -193,18 +194,14 @@ export class NodeInvokeStreamController {
   }
 
   handleProgress(params: NodeInvokeProgressParams): boolean {
-    const pending = this.options.pendingInvokes.get(params.invokeId);
-    if (
-      !pending ||
-      pending.nodeId !== params.nodeId ||
-      pending.connId !== params.connId ||
-      !this.options.isConnectionActive(pending) ||
-      !pending.onProgress ||
-      params.seq < pending.nextProgressSeq
-    ) {
+    const pending = this.getPending(params.invokeId, params.nodeId, params.connId);
+    if (!pending || params.seq < pending.nextProgressSeq) {
       return false;
     }
-    if (this.settleIfExpired(params.invokeId, pending)) {
+    // Receipt proves execution even without a stream consumer. Keep ignored
+    // acknowledgments and cancellation capability independent of this fact.
+    pending.receivedProgress = true;
+    if (!pending.onProgress) {
       return false;
     }
     if (params.seq > pending.nextProgressSeq) {
@@ -228,7 +225,7 @@ export class NodeInvokeStreamController {
       if (chunk === undefined) {
         break;
       }
-      if (this.settleIfExpired(params.invokeId, pending)) {
+      if (!this.getPending(params.invokeId, params.nodeId, params.connId)) {
         break;
       }
       pending.progressChunks.delete(pending.nextProgressSeq);
@@ -248,12 +245,54 @@ export class NodeInvokeStreamController {
         pending.progressChunks.clear();
         break;
       }
-      if (this.settleIfExpired(params.invokeId, pending)) {
+      if (!this.getPending(params.invokeId, params.nodeId, params.connId)) {
         break;
       }
       this.resetIdleTimer(params.invokeId, pending);
     }
     return true;
+  }
+
+  runPendingContinuation<T>(params: {
+    invokeId: string;
+    nodeId: string;
+    connId: string | undefined;
+    run: () => Promise<T>;
+  }): Promise<T> | null {
+    const pending = this.getPending(params.invokeId, params.nodeId, params.connId);
+    if (!pending) {
+      return null;
+    }
+    if (pending.admissionContinuation) {
+      return pending.admissionContinuation.run(params.run);
+    }
+    // Shutdown cleanup has no request root. Its live private owner grants only
+    // settlement; do not mint admission or revive a released captured root.
+    return isGatewayRestartDraining() && pending.isCompletionAuthorized ? params.run() : null;
+  }
+
+  isPending(invokeId: string, nodeId: string, connId: string): boolean {
+    return this.getPending(invokeId, nodeId, connId) !== undefined;
+  }
+
+  private getPending(id: string, nodeId: string, connId: string | undefined) {
+    const pending = this.options.pendingInvokes.get(id);
+    if (
+      !pending ||
+      pending.nodeId !== nodeId ||
+      pending.connId !== connId ||
+      !this.options.isConnectionActive(pending) ||
+      this.settleIfExpired(id, pending)
+    ) {
+      return undefined;
+    }
+    // Recheck at settlement as handler loading may await after router admission.
+    // Some lifecycle owners assert by throwing; either form must fail closed.
+    try {
+      return pending.isCompletionAuthorized?.() === false ? undefined : pending;
+    } catch {
+      return undefined;
+    }
   }
 
   clearTimers(pending: PendingInvoke): void {

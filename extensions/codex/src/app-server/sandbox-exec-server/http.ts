@@ -409,6 +409,9 @@ def assert_url_allowed(url):
     PINNED_ADDRESSES[hostname] = sorted(addresses)
 
 class GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    # Python 3.9 lacks the 308 dispatch alias; use the same guarded redirect path.
+    http_error_308 = urllib.request.HTTPRedirectHandler.http_error_302
+
     def __init__(self, redirect_policy):
         self.redirect_policy = redirect_policy
 

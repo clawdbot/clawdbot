@@ -166,66 +166,56 @@ describe("QA Convex credential payload validation", () => {
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
 
-  it("normalizes Telegram user credential payloads", () => {
-    const sha256 = "a".repeat(64);
-
+  it("normalizes Telegram Test Server userbot credentials", () => {
     expect(
-      normalizeCredentialPayloadForKind("telegram-user", {
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
         groupId: " -100123 ",
-        sutToken: " sut-token ",
-        testerUserId: " 8709353529 ",
-        testerUsername: " OpenClawTestUser ",
-        telegramApiId: " 123456 ",
-        telegramApiHash: " api-hash ",
-        tdlibDatabaseEncryptionKey: " db-key ",
-        tdlibArchiveBase64: " tdlib-archive ",
-        tdlibArchiveSha256: sha256.toUpperCase(),
-        desktopTdataArchiveBase64: " desktop-archive ",
-        desktopTdataArchiveSha256: sha256,
+        sutToken: " test-token ",
+        sutUsername: " @test_bot ",
+        sutBotId: " 123 ",
+        testerUserId: " 456 ",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "A".repeat(64),
+        tdlibVersion: " 1.8.67 ",
         ignored: true,
       }),
     ).toEqual({
+      schemaVersion: 1,
+      environment: "test",
       groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: sha256,
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: sha256,
+      sutToken: "test-token",
+      sutUsername: "test_bot",
+      sutBotId: "123",
+      testerUserId: "456",
+      tdlibArchiveBase64: "dGVzdA==",
+      tdlibArchiveSha256: "a".repeat(64),
+      tdlibVersion: "1.8.67",
     });
   });
 
-  it("rejects malformed Telegram user credential payloads", () => {
-    const validPayload = {
-      groupId: "-100123",
-      sutToken: "sut-token",
-      testerUserId: "8709353529",
-      testerUsername: "OpenClawTestUser",
-      telegramApiId: "123456",
-      telegramApiHash: "api-hash",
-      tdlibDatabaseEncryptionKey: "db-key",
-      tdlibArchiveBase64: "tdlib-archive",
-      tdlibArchiveSha256: "a".repeat(64),
-      desktopTdataArchiveBase64: "desktop-archive",
-      desktopTdataArchiveSha256: "b".repeat(64),
-    };
-
+  it.each([
+    ["environment", { environment: "production" }],
+    ["bot identity", { sutBotId: "bot" }],
+    ["archive encoding", { tdlibArchiveBase64: "not-base64" }],
+    ["archive hash", { tdlibArchiveSha256: "not-a-hash" }],
+  ])("rejects malformed Telegram Test Server userbot %s", (_label, patch) => {
     expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        testerUserId: "tester",
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
+        groupId: "-100123",
+        sutToken: "test-token",
+        sutUsername: "test_bot",
+        sutBotId: "123",
+        testerUserId: "456",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "a".repeat(64),
+        tdlibVersion: "1.8.67",
+        ...patch,
       }),
-    ).toThrow(/testerUserId/u);
-    expect(() =>
-      normalizeCredentialPayloadForKind("telegram-user", {
-        ...validPayload,
-        tdlibArchiveSha256: "not-sha",
-      }),
-    ).toThrow(/tdlibArchiveSha256/u);
+    ).toThrow(/telegram-test-userbot/u);
   });
 
   it("normalizes WhatsApp credential payloads", () => {

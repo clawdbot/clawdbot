@@ -133,7 +133,7 @@ describe("tencent provider plugin", () => {
 
   it("builds the static Tencent TokenHub model catalog with reasoning flags", async () => {
     const provider = await getTokenHubProvider();
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://tokenhub.tencentmaas.com/v1");
@@ -165,7 +165,7 @@ describe("tencent provider plugin", () => {
 
   it("builds the static Tencent TokenPlan model catalog with reasoning flags", async () => {
     const provider = await getTokenPlanProvider();
-    const catalogProvider = await runSingleProviderCatalog(provider);
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
 
     expect(catalogProvider.api).toBe("openai-completions");
     expect(catalogProvider.baseUrl).toBe("https://api.lkeap.cloud.tencent.com/plan/v3");

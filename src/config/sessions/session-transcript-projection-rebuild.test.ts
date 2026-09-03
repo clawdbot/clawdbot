@@ -64,8 +64,8 @@ describe("canonical session transcript projection", () => {
       sourceTranscriptUpdatedAt: 42,
     });
     expect(result.activeRows).toEqual([
-      { activePosition: 0, eventSeq: 1, messagePosition: 0 },
-      { activePosition: 1, eventSeq: 3, messagePosition: 1 },
+      { activePosition: 0, contextEligible: 1, eventSeq: 1, messagePosition: 0 },
+      { activePosition: 1, contextEligible: 1, eventSeq: 3, messagePosition: 1 },
     ]);
     expect(result.ftsRows).toEqual([
       { messageId: "root", role: "user", text: "root text", timestamp: 1_000 },
@@ -130,7 +130,9 @@ describe("canonical session transcript projection", () => {
     ]);
 
     expect(result.leafEventId).toBe("root");
-    expect(result.activeRows).toEqual([{ activePosition: 0, eventSeq: 1, messagePosition: 0 }]);
+    expect(result.activeRows).toEqual([
+      { activePosition: 0, contextEligible: 1, eventSeq: 1, messagePosition: 0 },
+    ]);
     expect(result.ftsRows.map((entry) => entry.messageId)).toEqual(["root"]);
   });
 
@@ -150,8 +152,8 @@ describe("canonical session transcript projection", () => {
     ]);
 
     expect(result.activeRows).toEqual([
-      { activePosition: 0, eventSeq: 1, messagePosition: 0 },
-      { activePosition: 1, eventSeq: 2, messagePosition: 1 },
+      { activePosition: 0, contextEligible: 1, eventSeq: 1, messagePosition: 0 },
+      { activePosition: 1, contextEligible: 1, eventSeq: 2, messagePosition: 1 },
     ]);
     expect(result.ftsRows.map((entry) => entry.messageId)).toEqual([
       "legacy-user",

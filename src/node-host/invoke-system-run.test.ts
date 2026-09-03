@@ -277,7 +277,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(requireInvokeResult(params.sendInvokeResult)).toMatchObject({
       ok: false,
       error: {
-        code: "UNAVAILABLE",
+        code: "SYSTEM_RUN_DENIED",
         message: "SYSTEM_RUN_DENIED: approval state could not be persisted",
       },
     });
@@ -547,6 +547,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
   async function runSystemInvoke(params: {
     preferMacAppExecHost: boolean;
+    execHostFallbackAllowed?: boolean;
     runViaResponse?: ExecHostResponse | null;
     command?: string[];
     env?: Record<string, string>;
@@ -647,7 +648,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       },
       signal: params.signal,
       execHostEnforced: false,
-      execHostFallbackAllowed: true,
+      execHostFallbackAllowed: params.execHostFallbackAllowed ?? true,
       resolveExecSecurity: params.resolveExecSecurity ?? (() => params.security ?? "full"),
       resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
@@ -697,6 +698,31 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
   ) {
     return await runMacSystemInvoke({ ...params, security, ask });
   }
+
+  it("preserves a native cwd refusal without labelling it approval-required", async () => {
+    const result = await runMacSystemInvoke({
+      runViaResponse: {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          reason: "cwd-unavailable",
+          message: "Working directory does not exist, is inaccessible, or is not a directory.",
+        },
+      },
+    });
+    expectExecDeniedEvent(result.sendNodeEvent, "cwd-unavailable");
+    expect(result.runCommand).not.toHaveBeenCalled();
+  });
+
+  it("keeps a lost companion response ambiguous", async () => {
+    const result = await runMacSystemInvoke({ execHostFallbackAllowed: false });
+    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+    expect(result.runCommand).not.toHaveBeenCalled();
+    expect(requireInvokeResult(result.sendInvokeResult)).toMatchObject({
+      ok: false,
+      error: { code: "UNAVAILABLE" },
+    });
+  });
 
   it("forwards cancellation to locally spawned node commands", async () => {
     const controller = new AbortController();

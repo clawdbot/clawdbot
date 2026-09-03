@@ -3,11 +3,13 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { withSuppressedNotes } from "../../packages/terminal-core/src/note.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
+import { noteSessionTranscriptHealth } from "./doctor-session-transcripts.js";
 
 export const sqliteImportMemorySupportUrl = import.meta.url;
 
@@ -17,8 +19,10 @@ async function main() {
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
   const sessionCount = scenario === "batch" ? 256 : 1;
-  const eventCount = scenario === "deep" ? 100_000 : scenario === "batch" ? 64 : 8;
-  const payloadBytes = scenario === "deep" ? 4096 : scenario === "batch" ? 32768 : 256;
+  const eventCount =
+    scenario === "deep" || scenario === "public" ? 100_000 : scenario === "batch" ? 64 : 8;
+  const payloadBytes =
+    scenario === "deep" || scenario === "public" ? 4096 : scenario === "batch" ? 32768 : 256;
   const sessionsDir = path.join(stateDir, "agents/main/sessions");
   const storePath = path.join(sessionsDir, "sessions.json");
   fs.mkdirSync(sessionsDir, { recursive: true });
@@ -79,14 +83,27 @@ async function main() {
   fs.writeFileSync(storePath, JSON.stringify(store));
   process.stderr.write(`seeded ${sessionCount} sessions x ${eventCount} events; importing\n`);
   const started = performance.now();
+  if (scenario === "public") {
+    await withSuppressedNotes(() =>
+      noteSessionTranscriptHealth({
+        cfg: { agents: { entries: { main: { default: true } } } },
+        env: process.env,
+        shouldRepair: true,
+      }),
+    );
+    assert(!fs.readdirSync(sessionsDir).some((name) => name.includes(".pre-doctor-")));
+  }
   const report = await runDoctorSessionSqlite({
     mode: "import",
     store: storePath,
     env: process.env,
   });
   assert.equal(report.totals.issues, 0, JSON.stringify(report.targets.map((t) => t.issues)));
-  assert.equal(report.totals.importedEntries, sessionCount);
-  assert.equal(report.totals.importedTranscriptEvents, sessionCount * (eventCount + 2));
+  assert.equal(report.totals.importedEntries, scenario === "public" ? 0 : sessionCount);
+  assert.equal(
+    report.totals.importedTranscriptEvents,
+    scenario === "public" ? 0 : sessionCount * (eventCount + 2),
+  );
   const db = openNodeSqliteDatabase(resolveTargetSqlitePath({ agentId: "main", storePath }), {
     readOnly: true,
   });
@@ -137,7 +154,9 @@ async function main() {
     }),
   );
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Node resolves the bundled module through a worktree's shared node_modules
+// symlink; resolve argv too or the child exits without running the proof.
+if (process.argv[1] && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href) {
   void main().catch((error: unknown) => {
     console.error(error);
     process.exitCode = 1;

@@ -76,7 +76,7 @@ public final class GatewayDiscoveryModel {
     private var gatewaysByDomain: [String: [DiscoveredGateway]] = [:]
     private var statesByDomain: [String: NWBrowser.State] = [:]
     private var localIdentity: LocalIdentity
-    private var localIdentityTask: Task<Void, Never>?
+    @ObservationIgnored private var localIdentityTask: Task<Void, Never>?
     private let filterLocalGateways: Bool
     private var resolvedServiceByID: [String: ResolvedGatewayService] = [:]
     private var pendingServiceResolvers: [String: GatewayServiceResolver] = [:]
@@ -94,7 +94,8 @@ public final class GatewayDiscoveryModel {
         self.localIdentity = Self.buildLocalIdentityFast(displayName: localDisplayName)
     }
 
-    @MainActor deinit {
+    deinit {
+        // Cancellation is thread-safe; isolated deinit can crash when SwiftUI discards a model outside a task.
         self.localIdentityTask?.cancel()
     }
 
@@ -469,55 +470,29 @@ public final class GatewayDiscoveryModel {
     }
 
     public static func parseGatewayTXT(_ txt: [String: String]) -> GatewayTXT {
-        var lanHost: String?
-        var tailnetDns: String?
-        var sshPort = 22
-        var gatewayPort: Int?
-        var gatewayTls = false
-        var gatewayDirectReachable = false
-        var cliPath: String?
+        func nonEmptyString(_ key: String) -> String? {
+            guard let value = txt[key]?.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+            return value.isEmpty ? nil : value
+        }
 
-        if let value = txt["lanHost"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            lanHost = trimmed.isEmpty ? nil : trimmed
+        func positiveInteger(_ key: String) -> Int? {
+            guard let value = nonEmptyString(key), let parsed = Int(value), parsed > 0 else { return nil }
+            return parsed
         }
-        if let value = txt["tailnetDns"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            tailnetDns = trimmed.isEmpty ? nil : trimmed
-        }
-        if let value = txt["sshPort"],
-           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-           parsed > 0
-        {
-            sshPort = parsed
-        }
-        if let value = txt["gatewayPort"],
-           let parsed = Int(value.trimmingCharacters(in: .whitespacesAndNewlines)),
-           parsed > 0
-        {
-            gatewayPort = parsed
-        }
-        if let value = txt["gatewayTls"] {
-            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            gatewayTls = normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        if let value = txt["gatewayDirectReachable"] {
-            let normalized = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            gatewayDirectReachable = normalized == "1" || normalized == "true" || normalized == "yes"
-        }
-        if let value = txt["cliPath"] {
-            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            cliPath = trimmed.isEmpty ? nil : trimmed
+
+        func booleanValue(_ key: String) -> Bool {
+            guard let normalized = nonEmptyString(key)?.lowercased() else { return false }
+            return normalized == "1" || normalized == "true" || normalized == "yes"
         }
 
         return GatewayTXT(
-            lanHost: lanHost,
-            tailnetDns: tailnetDns,
-            sshPort: sshPort,
-            gatewayPort: gatewayPort,
-            gatewayTls: gatewayTls,
-            gatewayDirectReachable: gatewayDirectReachable,
-            cliPath: cliPath)
+            lanHost: nonEmptyString("lanHost"),
+            tailnetDns: nonEmptyString("tailnetDns"),
+            sshPort: positiveInteger("sshPort") ?? 22,
+            gatewayPort: positiveInteger("gatewayPort"),
+            gatewayTls: booleanValue("gatewayTls"),
+            gatewayDirectReachable: booleanValue("gatewayDirectReachable"),
+            cliPath: nonEmptyString("cliPath"))
     }
 
     public static func buildSSHTarget(user: String, host: String, port: Int) -> String {

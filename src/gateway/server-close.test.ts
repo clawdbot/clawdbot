@@ -4,6 +4,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import type { InternalHookEvent } from "../hooks/internal-hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -12,7 +13,13 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
+import {
+  PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+  startPluginServices,
+} from "../plugins/services.js";
+import { getProcessSupervisor, type ManagedRun } from "../process/supervisor/index.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { resolveGlobalMap, resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 type TriggerInternalHookMock = (event: InternalHookEvent) => Promise<void>;
 
@@ -326,6 +333,126 @@ describe("createGatewayCloseHandler", () => {
 
     expect(lifecycleSlot.size).toBe(0);
     expect(getActivePluginRegistry()).toBeNull();
+  });
+
+  it("rejects close when an ambient lifecycle owner cannot drain", async () => {
+    const drainError = new Error("owner drain failed");
+    let rejectDrain = true;
+    resolveGlobalSingleton(
+      Symbol("openclaw.test.gatewayCloseFailedLifecycleOwner"),
+      () => ({}),
+      () => {
+        if (rejectDrain) {
+          rejectDrain = false;
+          throw drainError;
+        }
+      },
+    );
+    const clearSecretsRuntimeSnapshot = vi.fn();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({ clearSecretsRuntimeSnapshot }),
+    );
+
+    await expect(close({ reason: "test" })).rejects.toThrow(
+      "Failed to reset global singleton lifecycle state",
+    );
+    expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it.skipIf(process.platform === "win32")(
+    "terminates supervised process trees before Gateway close returns",
+    async () => {
+      const previousServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
+      process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
+      const supervisor = getProcessSupervisor();
+      let output = "";
+      let run: ManagedRun | undefined;
+
+      try {
+        run = await supervisor.spawn({
+          mode: "child",
+          argv: [
+            "/bin/sh",
+            "-c",
+            'sleep 60 >/dev/null 2>&1 & child=$!; printf "%s %s\\n" "$$" "$child"; wait',
+          ],
+          stdinMode: "pipe-closed",
+          sessionId: "gateway-close-test",
+          backendId: "gateway-close-test",
+          onStdout: (chunk) => {
+            output += chunk;
+          },
+        });
+        await vi.waitFor(() => expect(output).toMatch(/^\d+ \d+/u));
+        const match = /^(\d+) (\d+)/u.exec(output);
+        const rootPid = Number(match?.[1]);
+        const descendantPid = Number(match?.[2]);
+        expect(isProcessAlive(rootPid)).toBe(true);
+        expect(isProcessAlive(descendantPid)).toBe(true);
+
+        const close = createGatewayCloseHandler(createGatewayCloseTestDeps());
+        await close({ reason: "test" });
+
+        expect(isProcessAlive(rootPid)).toBe(false);
+        expect(isProcessAlive(descendantPid)).toBe(false);
+        expect(getProcessSupervisor()).not.toBe(supervisor);
+      } finally {
+        run?.cancel();
+        await run?.waitForExtinction?.().catch(() => undefined);
+        if (previousServiceMarker === undefined) {
+          delete process.env.OPENCLAW_SERVICE_MARKER;
+        } else {
+          process.env.OPENCLAW_SERVICE_MARKER = previousServiceMarker;
+        }
+      }
+    },
+  );
+
+  it("replaces the process supervisor after a concurrent adapter startup failure", async () => {
+    let markEmbeddingDrainStarted!: () => void;
+    const embeddingDrainStarted = new Promise<void>((resolve) => {
+      markEmbeddingDrainStarted = resolve;
+    });
+    let releaseEmbeddingDrain!: () => void;
+    const embeddingDrainReleased = new Promise<void>((resolve) => {
+      releaseEmbeddingDrain = resolve;
+    });
+    const supervisor = getProcessSupervisor();
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        drainRetainedOpenAiEmbeddingProviders: async () => {
+          markEmbeddingDrainStarted();
+          await embeddingDrainReleased;
+        },
+      }),
+    );
+    const closing = close({ reason: "test" });
+    await embeddingDrainStarted;
+
+    const failedStart = supervisor.spawn({
+      mode: "child",
+      argv: [`/openclaw-missing-adapter-${process.pid}`],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-startup-failure",
+      backendId: "gateway-close-startup-failure",
+    });
+    releaseEmbeddingDrain();
+
+    const started = await failedStart;
+    await started.wait();
+    await closing;
+    const nextSupervisor = getProcessSupervisor();
+    const run = await nextSupervisor.spawn({
+      mode: "child",
+      argv: [process.execPath, "-e", ""],
+      exactEnv: true,
+      stdinMode: "pipe-closed",
+      sessionId: "gateway-close-fresh-supervisor",
+      backendId: "gateway-close-fresh-supervisor",
+    });
+    await expect(run.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
+    expect(nextSupervisor).not.toBe(supervisor);
   });
 
   it("joins an in-flight config reload before mutable runtime teardown", async () => {
@@ -721,6 +848,69 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
+  it.each(["settles", "stalls"] as const)(
+    "uses final shutdown grace after a strict replacement timeout when cleanup %s",
+    async (cleanupOutcome) => {
+      vi.useFakeTimers();
+      const cleanup = createDeferredCore();
+      const stop = vi.fn(() => cleanup.promise);
+      const registry = createEmptyPluginRegistry();
+      registry.services.push({
+        pluginId: "shutdown-test",
+        service: { id: "pending-cleanup", start() {}, stop },
+        source: "test",
+        origin: "workspace",
+      });
+      const pluginServices = await startPluginServices({ registry, config: {} });
+      const strictStopping = pluginServices.stop({
+        strict: true,
+        deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+      });
+      const strictFailure = strictStopping.catch((error: unknown) => error);
+      let closing: ReturnType<ReturnType<typeof createGatewayCloseHandler>> | undefined;
+
+      try {
+        await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+        expect(await strictFailure).toMatchObject({
+          errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+        });
+        expect(stop).toHaveBeenCalledOnce();
+
+        const deps = createGatewayCloseTestDeps({ channelIds: ["discord"], pluginServices });
+        const close = createGatewayCloseHandler(deps);
+        let closed = false;
+        closing = close({ reason: "gateway restarting", restartExpectedMs: 1_500 }).then(
+          (result) => {
+            closed = true;
+            return result;
+          },
+        );
+        await vi.advanceTimersByTimeAsync(0);
+
+        if (cleanupOutcome === "settles") {
+          expect(closed).toBe(false);
+          expect(deps.stopChannel).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(300);
+          cleanup.resolve();
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(5_000);
+        }
+
+        expect(closed).toBe(true);
+        const result = await closing;
+        expect(stop).toHaveBeenCalledOnce();
+        expect(deps.stopChannel).toHaveBeenCalledWith("discord");
+        if (cleanupOutcome === "stalls") {
+          expect(result.warnings).toContain("plugin-services");
+        }
+      } finally {
+        cleanup.resolve();
+        await Promise.allSettled([strictStopping, closing]);
+      }
+    },
+  );
+
   it("drains the active-session tracker with reason=shutdown on SIGTERM/SIGINT close", async () => {
     const drainActiveSessionsForShutdown = vi.fn<DrainActiveSessionsForShutdown>(async () => ({
       emittedSessionIds: ["session-A", "session-B"],
@@ -867,7 +1057,7 @@ describe("createGatewayCloseHandler", () => {
     const run = chatRunState.getOrCreate("run-1");
     run.buffer = "partial reply";
     run.deltaSentAt = Date.now();
-    run.deltaLastBroadcastLen = 3;
+    run.assistantScope = { itemId: "assistant-1", prefix: "" };
     run.deltaLastBroadcastText = "par";
     run.agentText = {
       assistant: {
@@ -930,7 +1120,7 @@ describe("createGatewayCloseHandler", () => {
     expect(chatAbortControllers.has("agent-run-1")).toBe(false);
     expect(chatRunState.runs.get("run-1")?.buffer).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaSentAt).toBeUndefined();
-    expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastLen).toBeUndefined();
+    expect(chatRunState.runs.get("run-1")?.assistantScope).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.deltaLastBroadcastText).toBeUndefined();
     expect(chatRunState.runs.get("run-1")?.agentText).toBeUndefined();
     expect(

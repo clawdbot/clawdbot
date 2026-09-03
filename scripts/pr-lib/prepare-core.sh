@@ -9,6 +9,24 @@ checkout_prep_branch() {
   git checkout "$prep_branch"
 }
 
+resolve_pr_author_access_at_prepare() {
+  local author="$1" repo_nwo response permission
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null) || {
+    printf 'unknown\n'
+    return
+  }
+  if response=$(gh api "repos/$repo_nwo/collaborators/$author/permission" 2>/dev/null) &&
+    permission=$(printf '%s\n' "$response" | jq -er '.permission | select(type == "string")' 2>/dev/null); then
+    case "$permission" in
+      admin | write) printf 'maintainer\n' ;;
+      read | none) printf 'external\n' ;;
+      *) printf 'unknown\n' ;;
+    esac
+  else
+    printf 'unknown\n'
+  fi
+}
+
 refresh_prep_branch_for_reviewed_head() {
   local pr="$1"
   require_artifact .local/pr-meta.env
@@ -20,6 +38,7 @@ refresh_prep_branch_for_reviewed_head() {
   local prepared_head_ref="${PR_HEAD:-}"
   local recorded_source_head="${PR_HEAD_SHA_BEFORE:-}"
   local prep_branch="${PREP_BRANCH:-pr-$pr-prep}"
+  local author_access_at_prep="${PR_AUTHOR_ACCESS_AT_PREP:-unknown}"
 
   # shellcheck disable=SC1091
   source .local/pr-meta.env
@@ -66,6 +85,7 @@ refresh_prep_branch_for_reviewed_head() {
     PR_HEAD "$reviewed_head_ref" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "$prep_branch" \
+    PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
@@ -123,7 +143,7 @@ prepare_init() {
   review_validate_artifacts "$pr" || return 1
   require_ready_review_recommendation || return 1
   mark_pr_operation_side_effects_started
-  enter_worktree "$pr" true
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/review.md
@@ -146,9 +166,14 @@ prepare_init() {
     echo "Prepare init failed: missing PR_HEAD_SHA in .local/pr-meta.env. Re-run review-init."
     exit 1
   fi
+  # Keep clean-state admission and recoverable detachment without visiting main.
+  # Fetch cannot update pr-$pr while that branch is checked out.
+  checkout_pr_worktree_target "$pr" "$reviewed_head_sha" || return 1
 
   local json
   json=$(pr_meta_json "$pr")
+  local author_access_at_prep
+  author_access_at_prep=$(resolve_pr_author_access_at_prepare "${PR_AUTHOR:-}")
 
   local head
   head=$(printf '%s\n' "$json" | jq -r .headRefName)
@@ -172,7 +197,6 @@ prepare_init() {
     exit 1
   fi
   git checkout -B "pr-$pr-prep" "$reviewed_head_sha"
-  git fetch origin main
 
   # Security: shell-escape values to prevent command injection via malicious branch names.
   printf '%s=%q\n' \
@@ -180,6 +204,7 @@ prepare_init() {
     PR_HEAD "$reviewed_head" \
     PR_HEAD_SHA_BEFORE "$reviewed_head_sha" \
     PREP_BRANCH "pr-$pr-prep" \
+    PR_AUTHOR_ACCESS_AT_PREP "$author_access_at_prep" \
     PREP_STARTED_AT "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
     > .local/prep-context.env
 
@@ -204,7 +229,7 @@ EOF_PREP
 
 prepare_validate_commit() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
   require_artifact .local/pr-meta.env
 
   mark_pr_operation_side_effects_started
@@ -232,7 +257,8 @@ prepare_validate_commit() {
 
 prepare_push() {
   local pr="$1"
-  enter_worktree "$pr" false
+  PR_MAIN_SHA=""
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
@@ -245,6 +271,7 @@ prepare_push() {
     echo "Prep branch was refreshed for reviewed head drift; rerunning prepare gates before push."
     prepare_gates "$pr"
     checkout_prep_branch "$pr"
+    refresh_main_snapshot || return 1
   fi
   require_artifact .local/gates.env
 
@@ -274,7 +301,7 @@ prepare_push() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
-  mainline_base_sha=$(git merge-base "$local_prep_head_sha" origin/main) || {
+  mainline_base_sha=$(git merge-base "$local_prep_head_sha" "$PR_MAIN_SHA") || {
     echo "Unable to resolve the prepared mainline base."
     exit 1
   }
@@ -319,6 +346,8 @@ EOF_PREP
     PREP_HEAD_SHA "$prep_head_sha" \
     LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PREP_MAINLINE_BASE_SHA "$mainline_base_sha" \
+    PREP_REPLACED_HOSTED_ANCESTRY "$PUSH_REPLACED_HOSTED_ANCESTRY" \
+    PREP_AUTHOR_ACCESS "${PR_AUTHOR_ACCESS_AT_PREP:-unknown}" \
     COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 
@@ -334,7 +363,7 @@ EOF_PREP
 
 prepare_sync_head() {
   local pr="$1"
-  enter_worktree "$pr" false
+  enter_worktree "$pr" false || return 1
 
   require_artifact .local/pr-meta.env
   require_artifact .local/prep-context.env
@@ -349,8 +378,6 @@ prepare_sync_head() {
 
   # merge-verify owns relevance-aware mainline drift. Keep the hosted PR head
   # as the publication parent so fork updates contain only reviewed fixups.
-  git fetch origin main
-
   local prep_head_sha
   prep_head_sha=$(git rev-parse HEAD)
   local local_prep_head_sha
@@ -367,7 +394,7 @@ prepare_sync_head() {
   prep_head_sha="$PUSH_PREP_HEAD_SHA"
   local_prep_head_sha="$PUSH_LOCAL_PREP_HEAD_SHA"
   local mainline_base_sha
-  mainline_base_sha=$(git merge-base "$local_prep_head_sha" origin/main) || {
+  mainline_base_sha=$(git merge-base "$local_prep_head_sha" "$PR_MAIN_SHA") || {
     echo "Unable to resolve the prepared mainline base."
     exit 1
   }
@@ -401,6 +428,8 @@ EOF_PREP
     PREP_HEAD_SHA "$prep_head_sha" \
     LOCAL_PREP_HEAD_SHA "$local_prep_head_sha" \
     PREP_MAINLINE_BASE_SHA "$mainline_base_sha" \
+    PREP_REPLACED_HOSTED_ANCESTRY "$PUSH_REPLACED_HOSTED_ANCESTRY" \
+    PREP_AUTHOR_ACCESS "${PR_AUTHOR_ACCESS_AT_PREP:-unknown}" \
     COAUTHOR_EMAIL "$coauthor_email" \
     > .local/prep.env
 

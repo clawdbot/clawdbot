@@ -81,6 +81,17 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         console.warn,
       ),
     },
+    threading: {
+      matchesToolContextTarget: ({ target, toolContext }) => {
+        const channel = normalizeTwitchMessagingTarget(target);
+        return (
+          Boolean(channel) &&
+          [toolContext.currentChannelId, toolContext.currentMessagingTarget].some(
+            (current) => current != null && normalizeTwitchMessagingTarget(current) === channel,
+          )
+        );
+      },
+    },
     outbound: twitchOutbound,
     base: {
       id: "twitch",
@@ -98,6 +109,11 @@ export const twitchPlugin: ChannelPlugin<ResolvedTwitchAccount> =
         chatTypes: ["group"],
       },
       messaging: {
+        normalizeTarget: normalizeTwitchMessagingTarget,
+        targetResolver: {
+          looksLikeId: (input) => Boolean(normalizeTwitchMessagingTarget(input)),
+          hint: "<channel-name>",
+        },
         inferTargetChatType: ({ to }) => (normalizeTwitchMessagingTarget(to) ? "group" : undefined),
         resolveOutboundSessionRoute: ({ cfg, agentId, accountId, target }) => {
           const channel = normalizeTwitchMessagingTarget(target);

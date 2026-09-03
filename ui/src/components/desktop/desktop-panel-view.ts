@@ -2,6 +2,7 @@ import type { EnvironmentSummary, WorkerDesktopAppId } from "@openclaw/gateway-p
 import { html, nothing, type TemplateResult } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
+import { renderPanelLoadingSkeleton } from "../panel-loading-skeleton.ts";
 import { desktopAppIcon, desktopAppLabel } from "./desktop-app-presentation.ts";
 import type { DesktopPanelState } from "./desktop-panel-state.ts";
 import { desktopSourceForEnvironment } from "./desktop-source.ts";
@@ -80,7 +81,7 @@ export function renderDesktopPicker(options: {
     </div>
     <div class="desktop-picker">
       ${options.loading && options.environments.length === 0
-        ? html`<div class="desktop-status">${t("desktop.loading")}</div>`
+        ? renderPanelLoadingSkeleton("desktop", t("desktop.loading"))
         : options.environments.length === 0
           ? html`<div class="desktop-status">${t("desktop.empty")}</div>`
           : options.environments.map((environment) =>
@@ -227,17 +228,7 @@ export function renderDesktopConnection(options: {
           ></button>`
         : nothing}
       ${options.state === "connecting"
-        ? html`<div class="desktop-connecting" role="status" aria-live="polite">
-            <span class="desktop-connecting__monitor" aria-hidden="true">${icons.monitor}</span>
-            <span class="desktop-connecting__copy">
-              ${t("desktop.connecting")}
-              <span class="desktop-connecting__dots" aria-hidden="true">
-                <span class="desktop-connecting__dot"></span>
-                <span class="desktop-connecting__dot"></span>
-                <span class="desktop-connecting__dot"></span>
-              </span>
-            </span>
-          </div>`
+        ? renderPanelLoadingSkeleton("desktop", t("desktop.connecting"), false, true)
         : nothing}
     </div>
   `;

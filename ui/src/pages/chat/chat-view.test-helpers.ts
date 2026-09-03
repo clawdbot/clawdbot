@@ -1,5 +1,6 @@
 import type { ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
+import { resolveMessageActionDetails } from "./components/chat-message-markdown.ts";
 import { ChatTranscriptController } from "./components/chat-transcript-controller.ts";
 
 export function createTestTranscript(): ChatTranscriptController {
@@ -40,7 +41,18 @@ export function appendChatBubble(
 ) {
   const group = document.createElement("div");
   group.className = options.groupClass ?? "chat-group";
-  const bubble = document.createElement("div");
+  const bubble = Object.assign(document.createElement("div"), {
+    messageActions: resolveMessageActionDetails({
+      message: {
+        role: "user",
+        content: options.text ?? "",
+        ...(options.entryId ? { __openclaw: { id: options.entryId } } : {}),
+      },
+      messageId: options.messageId ?? "test-message",
+      senderLabel: options.senderLabel ?? "User",
+      onReply: () => undefined,
+    }),
+  });
   bubble.className = "chat-bubble";
   if (options.entryId) {
     bubble.dataset.entryId = options.entryId;

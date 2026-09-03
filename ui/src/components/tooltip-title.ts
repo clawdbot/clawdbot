@@ -55,7 +55,12 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
   };
 
-  const content = () => active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "";
+  // Portaled cards open after title discovery, including lazy-loaded providers.
+  // Keep native titles suppressed while the expanded dialog owns the preview.
+  const content = () =>
+    active?.anchor.matches('[aria-haspopup="dialog"][aria-expanded="true"]')
+      ? ""
+      : (active?.anchor.getAttribute("data-tooltip") ?? active?.title ?? "");
   const update = (records: MutationRecord[]) => {
     if (!active) {
       return;
@@ -162,7 +167,12 @@ export function installTitleTooltips(ownerDocument: Document) {
     }
     anchor.addEventListener("pointerleave", handlePointerLeave);
     anchor.addEventListener("focusout", handleFocusOut);
-    observer.observe(anchor, { attributes: true, attributeFilter: ["title", "data-tooltip"] });
+    observer.observe(anchor, {
+      attributes: true,
+      attributeFilter: ["title", "data-tooltip", "aria-hidden", "aria-haspopup", "aria-expanded"],
+      characterData: true,
+      subtree: true,
+    });
     observer.observe(ownerDocument, { childList: true, subtree: true });
     const root = anchor.getRootNode();
     if (root instanceof ShadowRoot) {

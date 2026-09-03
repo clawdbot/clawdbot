@@ -1,11 +1,11 @@
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { PreparedGatewayModelCatalog } from "../server-model-catalog.types.js";
 import type { GatewayRequestContext } from "./types.js";
 
 /** Reads already-published startup facts without starting provider discovery on an RPC hot path. */
 export async function readPreparedServerMethodModelCatalog(
   context: GatewayRequestContext,
   options?: { agentId?: string },
-): Promise<ModelCatalogEntry[] | undefined> {
+): Promise<PreparedGatewayModelCatalog | undefined> {
   try {
     return context.readPreparedGatewayModelCatalog
       ? await context.readPreparedGatewayModelCatalog(options)

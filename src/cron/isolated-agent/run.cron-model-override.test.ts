@@ -15,6 +15,7 @@ import {
   resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   resetRunCronIsolatedAgentTurnHarness,
+  resolveSessionAuthSelectionMock,
   restoreFastTestEnv,
   runWithModelFallbackMock,
   patchSessionEntryMock,
@@ -190,6 +191,86 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     expect(preRunSnapshot.model).toBe("claude-sonnet-4-6");
     expect(preRunSnapshot.modelProvider).toBe("anthropic");
     expect(preRunSnapshot.systemSent).toBe(true);
+  });
+
+  it("passes a configured model auth profile separately into cron auth selection", async () => {
+    resolveConfiguredModelRefMock.mockReturnValue({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+    });
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    );
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.6-luna@openai:test-profile" },
+            },
+          },
+          auth: {
+            profiles: {
+              "openai:test-profile": { provider: "openai", mode: "token" },
+            },
+          },
+        },
+        job: makeJob({
+          payload: { kind: "agentTurn", message: "run daily digest" },
+        }),
+      }),
+    );
+
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        configuredProfileId: "openai:test-profile",
+      }),
+    );
+  });
+
+  it("passes a payload model auth profile separately into cron auth selection", async () => {
+    resolveAllowedModelRefMock.mockReturnValueOnce({
+      ref: { provider: "openai", model: "gpt-5.6-luna" },
+    });
+    runWithModelFallbackMock.mockResolvedValueOnce(
+      makeSuccessfulRunResult({
+        provider: "openai",
+        model: "gpt-5.6-luna",
+      }),
+    );
+
+    await runCronIsolatedAgentTurn(
+      makeParams({
+        cfg: {
+          auth: {
+            profiles: {
+              "openai:test-profile": { provider: "openai", mode: "token" },
+            },
+          },
+        },
+        job: makeJob({
+          payload: {
+            kind: "agentTurn",
+            message: "run daily digest",
+            model: "openai/gpt-5.6-luna@openai:test-profile",
+          },
+        }),
+      }),
+    );
+
+    expect(resolveSessionAuthSelectionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "openai",
+        modelId: "gpt-5.6-luna",
+        configuredProfileId: "openai:test-profile",
+      }),
+    );
   });
 
   it("returns error without persisting model when payload model is disallowed", async () => {

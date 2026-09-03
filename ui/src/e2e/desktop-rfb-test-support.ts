@@ -8,6 +8,7 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         desktopClientFactory: () => {
           connect(options: { credentials?: { username?: string; password?: string } }): Promise<{
             disconnect(): void;
+            disableInput(): void;
           }>;
         };
       }
@@ -16,6 +17,7 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
         element.dataset.connectCount = String(Number(element.dataset.connectCount ?? "0") + 1);
         element.dataset.usedCredentials = options.credentials?.password ? "true" : "false";
         return {
+          disableInput() {},
           disconnect() {
             element.dataset.disconnectCount = String(
               Number(element.dataset.disconnectCount ?? "0") + 1,
@@ -28,10 +30,16 @@ export async function installDesktopClientFake(panel: Locator): Promise<void> {
 }
 
 /** Install the scripted RFB 3.8 endpoint used by Desktop's canonical noVNC E2E. */
-export async function installScriptedRfbServer(page: Page): Promise<void> {
-  await page.evaluate(() => {
+export async function installScriptedRfbServer(
+  page: Page,
+  options: { disconnectAfterLastPeer?: boolean } = {},
+) {
+  await page.evaluate(({ disconnectAfterLastPeer }) => {
     const GatewaySocket = window.WebSocket;
     const sockets = new Set<FakeRfbSocket>();
+    const events: string[] = [];
+    let nextId = 0;
+    let desktopTeardown = false;
     class FakeRfbSocket extends EventTarget {
       binaryType = "arraybuffer";
       protocol = "";
@@ -41,8 +49,12 @@ export async function installScriptedRfbServer(page: Page): Promise<void> {
       onopen: ((event: Event) => void) | null = null;
       onclose: ((event: CloseEvent) => void) | null = null;
       private handshake = 0;
+      private readonly id: number;
+      authenticated = false;
       constructor() {
         super();
+        nextId += 1;
+        this.id = nextId;
         sockets.add(this);
         setTimeout(() => {
           if (this.readyState !== 0) {
@@ -69,6 +81,12 @@ export async function installScriptedRfbServer(page: Page): Promise<void> {
         } else if (this.handshake === 2) {
           this.deliver(new Uint8Array([0, 0, 0, 0]));
         } else if (this.handshake === 3) {
+          if (desktopTeardown) {
+            this.close(1000, "desktop stream closed");
+            return;
+          }
+          this.authenticated = true;
+          events.push(`authenticated:${this.id}`);
           const name = new TextEncoder().encode("scripted-desktop");
           const init = new Uint8Array(24 + name.length);
           const view = new DataView(init.buffer);
@@ -90,6 +108,15 @@ export async function installScriptedRfbServer(page: Page): Promise<void> {
         }
         this.readyState = 3;
         sockets.delete(this);
+        events.push(`closed:${this.id}`);
+        if (
+          disconnectAfterLastPeer &&
+          this.authenticated &&
+          ![...sockets].some((socket) => socket.authenticated)
+        ) {
+          // Model an old native desktop teardown crossing the replacement handshake.
+          desktopTeardown = true;
+        }
         const event = new CloseEvent("close", { code, reason });
         this.onclose?.(event);
         this.dispatchEvent(new CloseEvent("close", { code, reason }));
@@ -115,5 +142,16 @@ export async function installScriptedRfbServer(page: Page): Promise<void> {
         socket.close(1006, reason);
       }
     };
-  });
+    (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents = () => [
+      ...events,
+    ];
+  }, options);
+  return {
+    events: () =>
+      page.evaluate(
+        () =>
+          (window as typeof window & { desktopRfbEvents?: () => string[] }).desktopRfbEvents?.() ??
+          [],
+      ),
+  };
 }

@@ -9,6 +9,7 @@ import { renderSettingsPage, renderSettingsSection } from "../../components/sett
 import "../../components/tooltip.ts";
 import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import { downloadTextFile } from "../../lib/download.ts";
 import "../../styles/usage.css";
 import type { ProviderUsageSummary } from "./data-types.ts";
 import { extractQueryTerms, filterSessionsByQuery } from "./helpers.ts";
@@ -23,12 +24,10 @@ import {
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
 import {
-  addQueryToken,
   applySuggestionToQuery,
   buildDailyCsv,
   buildQuerySuggestions,
   buildSessionsCsv,
-  downloadTextFile,
   normalizeQueryText,
   removeQueryToken,
   setQueryTokensForKey,
@@ -209,7 +208,7 @@ export function renderUsage(props: UsageProps) {
     agentScopedSessions,
     data.aggregates,
   );
-  const queryTerms = extractQueryTerms(filters.query);
+  const queryTerms = extractQueryTerms(filters.queryDraft);
   const selectedValuesFor = (key: string): string[] => {
     const normalized = normalizeQueryText(key);
     return queryTerms
@@ -396,7 +395,7 @@ export function renderUsage(props: UsageProps) {
       <wa-dropdown
         class="usage-filter-select"
         placement="bottom-start"
-        @wa-select=${(event: CustomEvent<{ item: { value?: string } }>) => {
+        @wa-select=${(event: CustomEvent<{ item: { value?: string; checked: boolean } }>) => {
           event.preventDefault();
           const value = event.detail.item.value;
           if (value === "command:select-all") {
@@ -411,12 +410,16 @@ export function renderUsage(props: UsageProps) {
           }
           if (value?.startsWith("option:")) {
             const optionValue = decodeURIComponent(value.slice("option:".length));
-            const token = `${key}:${optionValue}`;
-            const checked = selectedSet.has(normalizeQueryText(optionValue));
             filterActions.onQueryDraftChange(
-              checked
-                ? removeQueryToken(filters.queryDraft, token)
-                : addQueryToken(filters.queryDraft, token),
+              setQueryTokensForKey(
+                filters.queryDraft,
+                key,
+                event.detail.item.checked
+                  ? [...selected, optionValue]
+                  : selected.filter(
+                      (entry) => normalizeQueryText(entry) !== normalizeQueryText(optionValue),
+                    ),
+              ),
             );
           }
         }}
@@ -503,39 +506,36 @@ export function renderUsage(props: UsageProps) {
                         downloadTextFile(
                           `openclaw-usage-sessions-${exportStamp}.csv`,
                           buildSessionsCsv(filteredSessions),
-                          "text/csv",
+                          "text/csv;charset=utf-8",
                         );
                         break;
                       case "daily-csv":
                         downloadTextFile(
                           `openclaw-usage-daily-${exportStamp}.csv`,
                           buildDailyCsv(filteredDaily),
-                          "text/csv",
+                          "text/csv;charset=utf-8",
                         );
                         break;
                       case "json":
-                        downloadTextFile(
-                          `openclaw-usage-${exportStamp}.json`,
-                          JSON.stringify(
-                            {
-                              totals: displayTotals,
-                              sessions: filteredSessions,
-                              daily: filteredDaily,
-                              aggregates: activeAggregates,
-                            },
-                            null,
-                            2,
-                          ),
-                          "application/json",
-                        );
+                        displayActions.onExportJson({
+                          totals: displayTotals,
+                          sessions: filteredSessions,
+                          daily: filteredDaily,
+                          aggregates: activeAggregates,
+                        });
                         break;
                       case undefined:
                         break;
                     }
                   }}
                 >
-                  <button slot="trigger" type="button" class="btn btn--sm">
-                    ${t("usage.export.label")} ▾
+                  <button
+                    slot="trigger"
+                    type="button"
+                    class="btn btn--sm"
+                    aria-busy=${data.exporting}
+                  >
+                    ${data.exporting ? t("common.loading") : t("usage.export.label")} ▾
                   </button>
                   <wa-dropdown-item value="sessions-csv" ?disabled=${filteredSessions.length === 0}>
                     ${t("usage.export.sessionsCsv")}
@@ -545,7 +545,9 @@ export function renderUsage(props: UsageProps) {
                   </wa-dropdown-item>
                   <wa-dropdown-item
                     value="json"
-                    ?disabled=${filteredSessions.length === 0 && filteredDaily.length === 0}
+                    ?disabled=${data.exporting ||
+                    data.loading ||
+                    (filteredSessions.length === 0 && filteredDaily.length === 0)}
                   >
                     ${t("usage.export.json")}
                   </wa-dropdown-item>
@@ -873,6 +875,8 @@ export function renderUsage(props: UsageProps) {
                         detailActions.onLogFilterHasToolsChange,
                         detailActions.onLogFilterQueryChange,
                         detailActions.onLogFilterClear,
+                        detail.context,
+                        detailActions.onRetryContextWeight,
                         display.contextExpanded,
                         detailActions.onToggleContextExpanded,
                         filterActions.onClearSessions,

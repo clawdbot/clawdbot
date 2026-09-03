@@ -118,12 +118,9 @@ const SESSION_LEVEL_DIRECTIVE_FIELDS = [
   ["hasElevatedDirective", "elevatedLevel"],
 ] as const satisfies ReadonlyArray<readonly [keyof InlineDirectives, keyof SessionEntry]>;
 
-const SESSION_EXEC_DIRECTIVE_FIELDS = [
-  "execHost",
-  "execSecurity",
-  "execAsk",
-  "execNode",
-] as const satisfies ReadonlyArray<keyof InlineDirectives & keyof SessionEntry>;
+const SESSION_EXEC_DIRECTIVE_FIELDS = ["execHost", "execNode"] as const satisfies ReadonlyArray<
+  keyof InlineDirectives & keyof SessionEntry
+>;
 
 const SESSION_QUEUE_DIRECTIVE_FIELDS = [
   ["queueMode", "queueMode"],

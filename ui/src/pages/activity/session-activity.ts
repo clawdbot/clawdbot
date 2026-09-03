@@ -1,8 +1,14 @@
+import type { RouteLocation } from "@openclaw/uirouter";
 import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import { ACTIVITY_PERSON_PARAM } from "../../app-route-paths.ts";
+import {
+  ACTIVITY_PERSON_PARAM,
+  activityPersonFromPath,
+  activityPersonLocation,
+  pathForRoute,
+} from "../../app-route-paths.ts";
 import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
-import { projectPresencePayload, type PresenceViewer } from "../../lib/presence-users.ts";
+import type { PresenceViewer } from "../../lib/presence-users.ts";
 
 export const ACTIVITY_TIME_FILTERS = ["24h", "7d", "30d", "all"] as const;
 export type ActivityTimeFilter = (typeof ACTIVITY_TIME_FILTERS)[number];
@@ -40,29 +46,68 @@ function normalized(value: string | null | undefined): string | undefined {
   return trimmed ? trimmed : undefined;
 }
 
-export function parseSessionActivityFilters(search: string): SessionActivityFilters {
+export function parseSessionActivityFilters(
+  search: string,
+  pathPersonId?: string | null,
+): SessionActivityFilters {
   const params = new URLSearchParams(search);
   const rawTime = params.get("time");
   return {
-    personId: normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
+    personId: pathPersonId ?? normalized(params.get(ACTIVITY_PERSON_PARAM)) ?? null,
     query: params.get("q")?.trim() ?? "",
     time: isActivityTimeFilter(rawTime) ? rawTime : DEFAULT_ACTIVITY_TIME_FILTER,
   };
 }
 
-export function sessionActivitySearch(filters: SessionActivityFilters): string {
+export function sessionActivityLocation(
+  filters: SessionActivityFilters,
+  basePath = "",
+  personLabel?: string,
+): { pathname: string; search: string } {
   const params = new URLSearchParams();
   if (filters.time !== DEFAULT_ACTIVITY_TIME_FILTER) {
     params.set("time", filters.time);
-  }
-  if (filters.personId) {
-    params.set(ACTIVITY_PERSON_PARAM, filters.personId);
   }
   if (filters.query) {
     params.set("q", filters.query);
   }
   const serialized = params.toString();
-  return serialized ? `?${serialized}` : "";
+  const search = serialized ? `?${serialized}` : "";
+  const pathname = filters.personId
+    ? activityPersonLocation(filters.personId, basePath, personLabel).pathname
+    : pathForRoute("activity", basePath);
+  return { pathname, search };
+}
+
+export function canonicalSessionActivityLocation(
+  location: RouteLocation,
+  personId: string,
+  label: string | undefined,
+  basePath: string,
+): RouteLocation | null {
+  const params = new URLSearchParams(location.search);
+  const pathReference = activityPersonFromPath(location.pathname, basePath);
+  const compactReference = (pathReference ?? params.get(ACTIVITY_PERSON_PARAM))?.replaceAll(
+    "-",
+    "",
+  );
+  const prefixLength =
+    compactReference &&
+    /^[0-9a-f]{8,32}$/.test(compactReference) &&
+    personId.replaceAll("-", "").startsWith(compactReference)
+      ? compactReference.length
+      : 32;
+  // Empty filtered pages carry no profile metadata; retain the readable incoming link.
+  const pathname =
+    pathReference && !label
+      ? location.pathname
+      : activityPersonLocation(personId, basePath, label, prefixLength).pathname;
+  params.delete(ACTIVITY_PERSON_PARAM);
+  const query = params.toString();
+  const search = query ? `?${query}` : "";
+  return pathname === location.pathname && search === location.search
+    ? null
+    : { pathname, search, hash: location.hash };
 }
 
 export function sessionActivityTimestamp(row: GatewaySessionRow): number {
@@ -136,26 +181,6 @@ export function projectSessionActivity(
     sessions: visible,
     timeCount: result?.peopleSessionCount ?? visible.length,
   };
-}
-
-export function resolveActivityIdentity(
-  userId: string,
-  presencePayload: unknown,
-  people: SessionsListResult["people"],
-): PresenceViewer | null {
-  const online = projectPresencePayload(presencePayload).users.find((user) => user.id === userId);
-  if (online) {
-    return online;
-  }
-  const person = people?.find((candidate) => candidate.identity.id === userId);
-  return person
-    ? {
-        id: person.identity.id,
-        name: person.label,
-        avatarUrl: person.avatarUrl,
-        watchedSessions: [],
-      }
-    : null;
 }
 
 export function resolveViewingNow(

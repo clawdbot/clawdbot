@@ -328,22 +328,6 @@ export function resolveCodexAppServerRuntimeOptions(
     codeModeOnly: config.codeModeOnly === true,
     loopDetectionPreToolUseRelay: config.loopDetectionPreToolUseRelay !== false,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
-    turnCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnCompletionIdleTimeoutMs,
-      60_000,
-    ),
-    turnAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-      config.turnAssistantCompletionIdleTimeoutMs,
-      10_000,
-    ),
-    ...(config.postToolRawAssistantCompletionIdleTimeoutMs !== undefined
-      ? {
-          postToolRawAssistantCompletionIdleTimeoutMs: normalizePositiveNumber(
-            config.postToolRawAssistantCompletionIdleTimeoutMs,
-            60_000,
-          ),
-        }
-      : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
     sandbox: resolvedSandbox,
@@ -567,6 +551,10 @@ export function codexSandboxPolicyForTurn(
       continue;
     }
     const key = override.slice(0, separator).trim();
+    const isTmpdirExclusion = key === "sandbox_workspace_write.exclude_tmpdir_env_var";
+    if (!isTmpdirExclusion && key !== "sandbox_workspace_write.exclude_slash_tmp") {
+      continue;
+    }
     let value: unknown;
     try {
       // Match Codex's TOML value wrapper, including comments after booleans.
@@ -578,9 +566,9 @@ export function codexSandboxPolicyForTurn(
     if (typeof value !== "boolean") {
       continue;
     }
-    if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
+    if (isTmpdirExclusion) {
       excludeTmpdirEnvVar = value;
-    } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
+    } else {
       excludeSlashTmp = value;
     }
   }

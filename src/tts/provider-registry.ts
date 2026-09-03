@@ -5,6 +5,7 @@ import {
   resolvePluginCapabilityProvider,
   resolvePluginCapabilityProviders,
 } from "../plugins/capability-provider-runtime.js";
+import { buildCapabilityProviderIndex } from "../plugins/provider-registry-shared.js";
 import type { SpeechProviderPlugin } from "../plugins/types.js";
 import {
   createSpeechProviderRegistry,
@@ -18,10 +19,6 @@ function resolveSpeechProviderPluginEntries(cfg?: OpenClawConfig): SpeechProvide
     key: "speechProviders",
     cfg,
   });
-}
-
-function resolveLoadedSpeechProviderPluginEntries(): SpeechProviderPlugin[] {
-  return (getActiveRuntimePluginRegistry()?.speechProviders ?? []).map((entry) => entry.provider);
 }
 
 const defaultSpeechProviderRegistryResolver: SpeechProviderRegistryResolver = {
@@ -39,22 +36,15 @@ const defaultSpeechProviderRegistry = createSpeechProviderRegistry(
   defaultSpeechProviderRegistryResolver,
 );
 
-/** Loaded-only registry for runtime paths that must not rediscover plugin manifests. */
-const loadedSpeechProviderRegistry = createSpeechProviderRegistry({
-  getProvider: (providerId) =>
-    resolveLoadedSpeechProviderPluginEntries().find((provider) => {
-      if (provider.id === providerId) {
-        return true;
-      }
-      return provider.aliases?.includes(providerId) ?? false;
-    }),
-  listProviders: () => resolveLoadedSpeechProviderPluginEntries(),
-});
-
 /** List configured speech providers using manifest/capability discovery. */
 export const listSpeechProviders = defaultSpeechProviderRegistry.listSpeechProviders;
 /** List currently loaded speech providers from the active runtime registry. */
-export const listLoadedSpeechProviders = loadedSpeechProviderRegistry.listSpeechProviders;
+export function listLoadedSpeechProviders(_cfg?: OpenClawConfig): SpeechProviderPlugin[] {
+  const providers = (getActiveRuntimePluginRegistry()?.speechProviders ?? []).map(
+    (entry) => entry.provider,
+  );
+  return [...buildCapabilityProviderIndex(providers, "canonical").values()];
+}
 /** Resolve a configured speech provider by canonical ID or alias. */
 export const getSpeechProvider = defaultSpeechProviderRegistry.getSpeechProvider;
 /** Resolve an input provider ID or alias to the provider's canonical ID. */

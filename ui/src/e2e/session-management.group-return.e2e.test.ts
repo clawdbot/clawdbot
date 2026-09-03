@@ -1,12 +1,12 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   captureUiProof,
   createSessionManagementE2eSuite,
   installMockGateway,
   openSessionMenuSubmenu,
   requireRecord,
-  sessionRow,
   sessionsListResponse,
   waitForPatch,
 } from "./session-management.test-support.ts";
@@ -75,9 +75,9 @@ suite.define(() => {
         state: "visible",
       });
       await setThemeMode(page, "light");
-      await captureUiProof(page, "sidebar-done-return-before-light.png");
+      await captureUiProof(suite, page, "sidebar-done-return-before-light.png");
       await setThemeMode(page, "dark");
-      await captureUiProof(page, "sidebar-done-return-before-dark.png");
+      await captureUiProof(suite, page, "sidebar-done-return-before-dark.png");
 
       await setThemeMode(page, "light");
       await page.reload();
@@ -99,9 +99,9 @@ suite.define(() => {
       await groups.locator('[data-session-key="agent:main:done-group"]').waitFor({
         state: "visible",
       });
-      await captureUiProof(page, "sidebar-done-return-after-light.png");
+      await captureUiProof(suite, page, "sidebar-done-return-after-light.png");
       await setThemeMode(page, "dark");
-      await captureUiProof(page, "sidebar-done-return-after-dark.png");
+      await captureUiProof(suite, page, "sidebar-done-return-after-dark.png");
     } finally {
       await context.close();
     }

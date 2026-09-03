@@ -1,8 +1,9 @@
 import type { HealthFinding } from "openclaw/plugin-sdk/health";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { PolicyEvidence, PolicySandboxPostureEvidence } from "../policy-state.js";
-import { CHECK_IDS, POLICY_CHECK_IDS } from "./check-ids.js";
+import { CHECK_IDS } from "./check-ids.js";
 import { SANDBOX_CONTAINER_POLICY_RULES } from "./metadata.js";
+import { policyEvidenceFinding as sandboxPostureFinding } from "./policy-evidence-finding.js";
 import { agentScopedPolicyTargets, scopedAgentIdMatches } from "./policy-scope.js";
 import { sandboxPolicyShapeFinding } from "./sandbox-gateway-shapes.js";
 import { hasValidScopedPolicy } from "./scoped-policy-shape.js";
@@ -233,7 +234,7 @@ function sandboxModeFindings(
         message: `${sandboxPostureLabel(entry)} uses unapproved sandbox mode '${entry.value ?? ""}'.`,
         requirement: `oc://${policyDocName}/${requirementBase}/requireMode`,
         fixHint:
-          "Set agents.defaults.sandbox.mode or agents.list[].sandbox.mode to an approved value.",
+          "Set agents.defaults.sandbox.mode or agents.entries.<id>.sandbox.mode to an approved value.",
       }),
     );
 }
@@ -450,28 +451,6 @@ function sandboxPostureEntries(
   kind: PolicySandboxPostureEvidence["kind"],
 ): readonly PolicySandboxPostureEvidence[] {
   return (evidence.sandboxPosture ?? []).filter((entry) => entry.kind === kind);
-}
-
-function sandboxPostureFinding(
-  entry: PolicySandboxPostureEvidence,
-  params: {
-    readonly checkId: (typeof POLICY_CHECK_IDS)[number];
-    readonly message: string;
-    readonly requirement: string;
-    readonly fixHint: string;
-  },
-): HealthFinding {
-  return {
-    checkId: params.checkId,
-    severity: "error",
-    message: params.message,
-    source: "policy",
-    path: "openclaw config",
-    ocPath: entry.source,
-    target: entry.source,
-    requirement: params.requirement,
-    fixHint: params.fixHint,
-  };
 }
 
 function sandboxPostureLabel(entry: PolicySandboxPostureEvidence): string {

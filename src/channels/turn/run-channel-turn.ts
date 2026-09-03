@@ -51,13 +51,18 @@ function assertPreparedDispatchLifecycle<TDispatchResult>(
   turn: PreparedChannelTurn<TDispatchResult>,
   turnAdoptionLifecycle: RunChannelTurnParams<unknown>["turnAdoptionLifecycle"],
 ): void {
+  if (!turnAdoptionLifecycle) {
+    // Top-level lifecycle ownership is meaningful only when the caller supplied
+    // that owner.
+    return;
+  }
   const lifecycle = turn.runDispatchLifecycle;
   if (!lifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turns must declare runDispatchLifecycle when creating runDispatch",
     );
   }
-  if (turnAdoptionLifecycle && lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
+  if (lifecycle.turnAdoptionLifecycle !== turnAdoptionLifecycle) {
     throw new Error(
       "runChannelInboundEvent prepared turn runDispatchLifecycle must own the top-level turnAdoptionLifecycle",
     );

@@ -67,6 +67,7 @@ type RunIsolatedCompletionParams = {
   prompt: string;
   timeoutMs: number;
   abortSignal?: AbortSignal;
+  assertCurrent?: () => void;
   thinkLevel?: ThinkLevel;
   outputTextPolicy?: AgentHarnessIsolatedCompletionParamsV2["outputTextPolicy"];
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
@@ -191,6 +192,7 @@ async function runCliIsolatedCompletion(params: {
         "isolated-completion",
       );
       try {
+        params.request.assertCurrent?.();
         const result = await runCliAgent({
           preparedRunAdmission,
           sessionId,
@@ -213,6 +215,7 @@ async function runCliIsolatedCompletion(params: {
           thinkLevel: params.request.thinkLevel,
           streamParams: params.request.streamParams,
           abortSignal: params.request.abortSignal,
+          assertCurrent: params.request.assertCurrent,
           executionMode: "side-question",
           cliToolAvailability: { native: [], openClaw: [] },
           disableTools: true,
@@ -419,16 +422,28 @@ async function prepareHostAuthorization(params: {
 export async function runIsolatedCompletion(
   request: RunIsolatedCompletionParams,
 ): Promise<IsolatedCompletionResult> {
+  let active = true;
+  const assertCurrent = () => {
+    if (!active) {
+      throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion has ended.");
+    }
+    request.abortSignal?.throwIfAborted();
+    request.assertCurrent?.();
+  };
+  assertCurrent();
   const config = request.config ?? {};
   const agentId = request.agentId ?? resolveDefaultAgentId(config);
   const agentDir = request.agentDir ?? resolveAgentDir(config, agentId);
   const workspaceDir = request.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId);
-  const provider =
-    resolveCliRuntimeCanonicalProvider({
-      runtime: request.provider,
-      config,
-      includeSetupRegistry: true,
-    }) ?? request.provider;
+  const canonicalProvider = resolveCliRuntimeCanonicalProvider({
+    runtime: request.provider,
+    config,
+    includeSetupRegistry: true,
+  });
+  const provider = canonicalProvider ?? request.provider;
+  // Canonicalizing a CLI model ref must not discard its explicit execution owner.
+  const runtimeOverride =
+    request.agentHarnessRuntimeOverride ?? (canonicalProvider ? request.provider : undefined);
   const lease = await acquireAgentRunPreparedModelRuntime(
     {
       config,
@@ -439,9 +454,7 @@ export async function runIsolatedCompletion(
         {
           provider,
           modelId: request.model,
-          ...(request.agentHarnessRuntimeOverride
-            ? { runtime: request.agentHarnessRuntimeOverride }
-            : {}),
+          ...(runtimeOverride ? { runtime: runtimeOverride } : {}),
           agentId,
         },
       ],
@@ -450,19 +463,20 @@ export async function runIsolatedCompletion(
   );
   const pluginRegistry = lease.snapshot.pluginRegistry;
   try {
+    assertCurrent();
     const run = async (): Promise<IsolatedCompletionResult> => {
       await ensureSelectedAgentHarnessPlugin({
         provider,
         modelId: request.model,
         config,
         agentId,
-        agentHarnessId: request.agentHarnessRuntimeOverride,
-        agentHarnessRuntimeOverride: request.agentHarnessRuntimeOverride,
+        agentHarnessId: runtimeOverride,
+        agentHarnessRuntimeOverride: runtimeOverride,
         workspaceDir,
         pluginRegistry,
       });
       const runtime =
-        request.agentHarnessRuntimeOverride ??
+        runtimeOverride ??
         resolveEffectiveAgentRuntime({ cfg: config, provider, modelId: request.model, agentId });
       const cliOwner = resolveCliOwner({
         request,
@@ -474,7 +488,7 @@ export async function runIsolatedCompletion(
       });
       if (cliOwner) {
         const completion = await runCliIsolatedCompletion({
-          request,
+          request: { ...request, assertCurrent },
           provider: cliOwner,
           modelProvider: provider,
           agentId,
@@ -491,6 +505,7 @@ export async function runIsolatedCompletion(
       }
 
       const harness = await resolveHarness(runtime);
+      assertCurrent();
       if (!harness.runIsolatedCompletionV2 && !harness.runIsolatedCompletion) {
         throw new IsolatedCompletionError(
           "unsupported",
@@ -508,6 +523,7 @@ export async function runIsolatedCompletion(
         prompt: request.prompt,
         timeoutMs: request.timeoutMs,
         abortSignal: request.abortSignal,
+        assertCurrent,
         thinkLevel: request.thinkLevel,
         outputTextPolicy: request.outputTextPolicy,
       };
@@ -556,6 +572,7 @@ export async function runIsolatedCompletion(
         let firstError: unknown;
         let priorProfileAttempted = false;
         for (const preparedAttempt of authAttempts?.length ? authAttempts : [undefined]) {
+          assertCurrent();
           const attempt: PreparedAgentRuntimeAuthAttempt | undefined =
             preparedAttempt?.kind === "profile"
               ? { ...preparedAttempt, plan: selectIsolatedHarnessAuthPlan(preparedAttempt) }
@@ -619,6 +636,7 @@ export async function runIsolatedCompletion(
             ) {
               throw new Error("Prepared runtime auth candidates are temporarily unavailable.");
             }
+            assertCurrent();
             const pending = harness.runIsolatedCompletionV2(
               prepareIsolatedHarnessParamsV2(harness, {
                 ...commonParams,
@@ -630,9 +648,8 @@ export async function runIsolatedCompletion(
             result = await pending;
             break;
           } catch (error) {
-            if (request.abortSignal?.aborted) {
-              throw error;
-            }
+            // Retired authority is terminal, not a reason to try another credential.
+            assertCurrent();
             firstError ??= error;
           }
         }
@@ -665,6 +682,7 @@ export async function runIsolatedCompletion(
             ? { sourceAuthFingerprint: authorization.sourceAuthFingerprint }
             : {}),
         };
+        assertCurrent();
         result = await harness.runIsolatedCompletion!(
           prepareIsolatedHarnessParams(harness, harnessParams),
         );
@@ -681,6 +699,7 @@ export async function runIsolatedCompletion(
       };
     };
     const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
+    assertCurrent();
     if (!result.text && request.outputTextPolicy !== "strict-visible") {
       throw new IsolatedCompletionError(
         "output-rejected",
@@ -689,6 +708,7 @@ export async function runIsolatedCompletion(
     }
     return result;
   } finally {
+    active = false;
     lease.release();
   }
 }

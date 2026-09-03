@@ -320,8 +320,9 @@ function summarizeDirectCronDeliveryError(error: unknown): string {
 }
 
 function isTransientDirectCronDeliveryError(error: unknown): boolean {
-  if (deliveryRecovery.findPlatformMessageRejectedError(error)) {
-    return false;
+  const typedRetryability = deliveryRecovery.resolveDeliveryNotSentRetryability(error);
+  if (typedRetryability !== undefined) {
+    return typedRetryability;
   }
   const message = summarizeDirectCronDeliveryError(error);
   if (!message) {

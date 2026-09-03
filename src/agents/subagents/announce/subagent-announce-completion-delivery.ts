@@ -15,6 +15,7 @@ import {
 } from "../../embedded-agent-runner/delivery-evidence.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import {
+  SourceOwnerChangedError,
   sourceOwnerChangedResult,
   summarizeDeliveryError,
 } from "./subagent-announce-delivery-retry.js";
@@ -24,6 +25,9 @@ import {
 } from "./subagent-announce-delivery.runtime.js";
 import type { SubagentAnnounceDeliveryResult } from "./subagent-announce-dispatch.js";
 import { inferDeliveryTargetChatType } from "./subagent-announce-origin.js";
+
+const FAILED_COMPLETION_NOTICE =
+  "A delegated task failed before it could report a result. Please retry the task.";
 
 export function isGatewayAgentRunPending(response: unknown): boolean {
   if (!response || typeof response !== "object") {
@@ -47,7 +51,13 @@ export function isDirectMessageDeliveryTarget(
   return deriveSessionChatTypeFromKey(requesterSessionKey) === "direct";
 }
 
-function resolveTextCompletionDirectFallback(events: readonly AgentInternalEvent[] | undefined) {
+function resolveTextCompletionDirectFallback(
+  events: readonly AgentInternalEvent[] | undefined,
+  contentKind: "completed_result" | "failed_notice",
+) {
+  if (contentKind === "failed_notice") {
+    return FAILED_COMPLETION_NOTICE;
+  }
   for (let index = (events?.length ?? 0) - 1; index >= 0; index -= 1) {
     const event = events?.[index];
     if (event?.type !== "task_completion" || event.source !== "subagent") {
@@ -94,10 +104,12 @@ export async function deliverCompletionDirect(params: {
     threadId?: string;
   };
   internalEvents?: readonly AgentInternalEvent[];
+  contentKind: "completed_result" | "failed_notice";
+  signal?: AbortSignal;
   onDeliveryResult?: (delivery: SubagentAnnounceDeliveryResult) => void;
   isSourceSessionEffectsAllowed?: () => boolean;
 }): Promise<SubagentAnnounceDeliveryResult | undefined> {
-  const content = resolveTextCompletionDirectFallback(params.internalEvents);
+  const content = resolveTextCompletionDirectFallback(params.internalEvents, params.contentKind);
   if (
     !content ||
     !params.deliveryTarget.deliver ||
@@ -121,6 +133,9 @@ export async function deliverCompletionDirect(params: {
     if (params.isSourceSessionEffectsAllowed?.() === false) {
       return sourceOwnerChangedResult();
     }
+    if (params.signal?.aborted) {
+      return { delivered: false, path: "none" };
+    }
     const sendResult = await sendSubagentAnnounceMessage({
       cfg: params.cfg,
       channel: params.deliveryTarget.channel,
@@ -132,6 +147,14 @@ export async function deliverCompletionDirect(params: {
       conversationType: "direct",
       content,
       idempotencyKey,
+      skipQueue: true,
+      abortSignal: params.signal,
+      onPlatformSendDispatch: async () => {
+        params.signal?.throwIfAborted();
+        if (params.isSourceSessionEffectsAllowed?.() === false) {
+          throw new SourceOwnerChangedError();
+        }
+      },
       onDeliveryResult: () => {
         if (committedDelivery) {
           return;
@@ -155,6 +178,7 @@ export async function deliverCompletionDirect(params: {
       return {
         delivered: false,
         path: "direct",
+        reason: ambiguous ? undefined : "delivery_suppressed",
         error: ambiguous
           ? "text completion direct delivery could not be confirmed: adapter returned no identity"
           : `text completion direct delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
@@ -169,6 +193,12 @@ export async function deliverCompletionDirect(params: {
       // Post-send bookkeeping must never turn an identified delivery into a
       // retryable failure and send the same completion twice.
       return committedDelivery;
+    }
+    if (err instanceof SourceOwnerChangedError) {
+      return sourceOwnerChangedResult();
+    }
+    if (params.signal?.aborted) {
+      return { delivered: false, path: "none" };
     }
     return {
       delivered: false,

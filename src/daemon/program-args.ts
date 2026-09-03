@@ -2,6 +2,7 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SUPPORTED_NODE_VERSIONS } from "../../node-version.mjs";
 import type { GatewayDaemonRuntime } from "../commands/daemon-runtime.js";
 import {
   buildGatewayDistEntrypointCandidates,
@@ -195,7 +196,7 @@ async function resolveCliProgramArguments(params: {
     throw new Error(
       params.runtime === "bun"
         ? "No supported Bun runtime was selected for the daemon. Install Bun 1.4 or newer with WAL-reset-safe node:sqlite, then retry."
-        : "No supported Node runtime was selected for the daemon. Install Node 24.15+ (recommended) or Node 22 LTS (22.22.3+), then retry.",
+        : `No supported Node runtime was selected for the daemon. Install Node ${SUPPORTED_NODE_VERSIONS}, then retry.`,
     );
   }
   const runtimePath = params.runtimePath;
@@ -255,6 +256,7 @@ export async function resolveNodeProgramArguments(params: {
   dev?: boolean;
   runtime: GatewayDaemonRuntime;
   runtimePath?: string;
+  wrapperPath?: string;
 }): Promise<GatewayProgramArgs> {
   const args = ["node", "run", "--host", params.host, "--port", String(params.port)];
   if (params.tls === false && !params.tlsFingerprint) {
@@ -284,5 +286,6 @@ export async function resolveNodeProgramArguments(params: {
     dev: params.dev,
     runtime: params.runtime,
     runtimePath: params.runtimePath,
+    wrapperPath: params.wrapperPath,
   });
 }

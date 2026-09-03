@@ -9,7 +9,7 @@ import { computeCacheHitRate } from "../agents/live-cache-test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { loadOpenClawPlugins } from "../plugins/loader.js";
 
-export const MCP_SCHEMA_PROBE_PLUGIN_ID = "mcp-schema-probe";
+export const CLI_BACKEND_PROBE_PLUGIN_ID = "cli-backend-probe";
 export const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 export const CLI_CACHE_AUTH_PROFILE_ID = "claude-cli:live-cache";
 
@@ -69,21 +69,25 @@ export function logCliCacheUsage(turn: string, result: unknown): number {
   return hitRate;
 }
 
-export async function createMcpSchemaProbePlugin(
+export async function createCliBackendProbePlugin(
   tempDir: string,
+  probes: {
+    mcpSchema: boolean;
+    continuity?: { sessionKey: string; firstTurnMarker: string; injectedContext: string };
+  },
 ): Promise<{ pluginPath: string; resultToken: string }> {
-  const pluginDir = path.join(tempDir, MCP_SCHEMA_PROBE_PLUGIN_ID);
+  const pluginDir = path.join(tempDir, CLI_BACKEND_PROBE_PLUGIN_ID);
   const resultToken = `MCP-SCHEMA-${randomBytes(6).toString("hex").toUpperCase()}`;
   await fs.mkdir(pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(pluginDir, "openclaw.plugin.json"),
     `${JSON.stringify(
       {
-        id: MCP_SCHEMA_PROBE_PLUGIN_ID,
-        name: "MCP Schema Probe",
-        description: "Live test plugin for no-argument MCP tool schemas",
+        id: CLI_BACKEND_PROBE_PLUGIN_ID,
+        name: "CLI Backend Probe",
+        description: "Live test plugin for CLI session continuity and MCP tool schemas",
         configSchema: { type: "object", additionalProperties: false, properties: {} },
-        contracts: { tools: [MCP_SCHEMA_PROBE_TOOL_NAME] },
+        ...(probes.mcpSchema ? { contracts: { tools: [MCP_SCHEMA_PROBE_TOOL_NAME] } } : {}),
       },
       null,
       2,
@@ -92,10 +96,18 @@ export async function createMcpSchemaProbePlugin(
   await fs.writeFile(
     path.join(pluginDir, "index.cjs"),
     `module.exports = {
-  id: "${MCP_SCHEMA_PROBE_PLUGIN_ID}",
-  name: "MCP Schema Probe",
+  id: "${CLI_BACKEND_PROBE_PLUGIN_ID}",
+  name: "CLI Backend Probe",
   register(api) {
-    api.registerTool({
+    const continuity = ${JSON.stringify(probes.continuity ?? null)};
+    if (continuity) {
+      api.on("before_prompt_build", (event, ctx) => {
+        if (ctx.sessionKey === continuity.sessionKey && event.prompt.includes(continuity.firstTurnMarker)) {
+          return { prependContext: continuity.injectedContext };
+        }
+      });
+    }
+    if (${probes.mcpSchema}) api.registerTool({
       name: "${MCP_SCHEMA_PROBE_TOOL_NAME}",
       description: "Live test no-argument tool for MCP schema normalization",
       parameters: { type: "object" },

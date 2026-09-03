@@ -1,7 +1,7 @@
 // Adapts node:sqlite sync database calls for Kysely-style query execution.
 import type { DatabaseSync, SQLInputValue, StatementSync } from "node:sqlite";
-import type { Compilable, CompiledQuery, Kysely, QueryResult } from "kysely";
-import { InsertQueryNode, Kysely as KyselyInstance, SqliteDialect } from "kysely";
+import type { Compilable, CompiledQuery, Kysely, QueryResult, RawBuilder } from "kysely";
+import { InsertQueryNode, Kysely as KyselyInstance, sql as kyselySql, SqliteDialect } from "kysely";
 import {
   clearNodeSqliteKyselyCacheForDatabase,
   kyselyByDatabase,
@@ -267,6 +267,31 @@ export function executeSqliteQuerySync<Row>(
   query: Compilable<Row>,
 ): QueryResult<Row> {
   return executeCompiledSqliteQuerySync<Row>(db, query.compile());
+}
+
+/** Compile a fixed query once; bind fresh values through the normal sync executor on each call. */
+export function prepareSqliteQuerySync<Params, Row = unknown>(
+  db: DatabaseSync,
+  build: (
+    parameter: <Value extends SQLInputValue>(read: (params: Params) => Value) => RawBuilder<Value>,
+  ) => Compilable<Row>,
+): (params: Params) => QueryResult<Row> {
+  const bindings = new Map<unknown, (params: Params) => SQLInputValue>();
+  const compiled = build((read) => {
+    const marker = Symbol("sqlite-query-parameter");
+    bindings.set(marker, read);
+    // Kysely preserves bound values in compiler order. Unique markers avoid
+    // positional assumptions and collisions with literal query parameters.
+    /* kysely-allow-raw: a bound value expression, with no raw SQL or identifiers. */
+    return kyselySql<ReturnType<typeof read>>`${marker}`;
+  }).compile();
+  const readers = compiled.parameters.map((value) => bindings.get(value) ?? (() => value));
+  return (params) =>
+    executeCompiledSqliteQuerySync(db, {
+      ...compiled,
+      // Keep bindings invocation-local: SQLite callbacks can re-enter this runner.
+      parameters: readers.map((read) => read(params)),
+    });
 }
 
 /** Compile and lazily iterate a Kysely query synchronously against node:sqlite. */

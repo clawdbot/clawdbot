@@ -205,6 +205,7 @@ export type GatewayClientCloseInfo = {
 };
 
 export { GatewayClientRequestError } from "./request-error.js";
+export { isGatewayProtocolResponseError } from "./protocol-request.js";
 
 export class GatewayClientRequestTimeoutError extends GatewayProtocolRequestTimeoutError {
   constructor(params: { method: string; timeoutMs: number; requestSent: boolean }) {
@@ -265,6 +266,7 @@ export type GatewayClientOptions = {
   clientBuildId?: string;
   platform?: string;
   deviceFamily?: string;
+  modelIdentifier?: string;
   mode?: GatewayClientMode;
   role?: string;
   scopes?: string[];
@@ -807,6 +809,7 @@ export class GatewayClient {
           buildId: this.opts.clientBuildId,
           platform,
           deviceFamily,
+          modelIdentifier: useLegacyNodeProtocolEnvelope ? undefined : this.opts.modelIdentifier,
           mode: clientMode,
           instanceId: this.opts.instanceId,
         },

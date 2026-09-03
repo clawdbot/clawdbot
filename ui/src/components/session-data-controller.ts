@@ -378,18 +378,18 @@ export class SessionDataController implements ReactiveController, SessionCatalog
     this.scroll.update(element);
   }
 
-  private resetChildSessionState(options: { preserveActiveLineage?: boolean } = {}): void {
+  private resetChildSessionState(preserveOperatorContext = false): void {
     this.childSessionGeneration += 1;
-    this.childSessionRowsByParent = options.preserveActiveLineage
+    this.childSessionRowsByParent = preserveOperatorContext
       ? preserveActiveSessionLineageRows(
           this.activeSessionLineageRouteKey,
           this.childSessionRowsByParent,
         )
       : {};
     this.loadedChildSessionKeys = new Set();
-    this.childSessionErrorsByParent = new Map();
     this.loadingChildSessionKeys = new Set();
-    if (options.preserveActiveLineage !== true) {
+    if (!preserveOperatorContext) {
+      this.childSessionErrorsByParent = new Map();
       this.activeSessionLineageRoot = null;
       this.activeSessionLineageSelectedRow = null;
       this.activeSessionLineageRouteKey = null;
@@ -417,9 +417,9 @@ export class SessionDataController implements ReactiveController, SessionCatalog
           ? preserveRosterPresentationMetadata(canonical, previous)
           : (previous ?? null);
       }
-      // The canonical root list advances after session events, but excludes hidden children.
-      // Drop child snapshots so expanded parents refetch live terminal state.
-      this.resetChildSessionState({ preserveActiveLineage: true });
+      // Canonical root changes invalidate successful child snapshots, not operator-owned failures.
+      // Expanded parents refetch only when no failure blocks them.
+      this.resetChildSessionState(true);
       this.notify();
     }
     const snapshot = sessions.state;
@@ -597,8 +597,7 @@ export class SessionDataController implements ReactiveController, SessionCatalog
       if (generation !== this.childSessionGeneration || sessions !== this.context?.sessions) {
         return;
       }
-      // Stop the expanded-row update loop. A canonical list revision or an
-      // explicit collapse/reopen clears the failure and retries the whole page set.
+      // Stop the expanded-row update loop until the operator chooses Retry or collapse/reopen.
       this.childSessionRowsByParent = {
         ...this.childSessionRowsByParent,
         [parentKey]: this.childSessionRowsByParent[parentKey] ?? [],

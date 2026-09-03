@@ -20,19 +20,3 @@ export async function seedSessionStore(params: {
 export async function readCompactionCount(storePath: string, sessionKey: string): Promise<number> {
   return loadSessionEntry({ storePath, sessionKey })?.compactionCount ?? 0;
 }
-
-export async function waitForCompactionCount(params: {
-  storePath: string;
-  sessionKey: string;
-  expected: number;
-}) {
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    if ((await readCompactionCount(params.storePath, params.sessionKey)) === params.expected) {
-      return;
-    }
-    await new Promise((resolve) => {
-      setTimeout(resolve, 10);
-    });
-  }
-  throw new Error(`timed out waiting for compactionCount=${params.expected}`);
-}

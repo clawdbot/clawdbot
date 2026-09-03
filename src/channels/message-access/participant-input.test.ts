@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input.js";
+import { recordAcceptedSessionParticipantInput } from "../../sessions/session-participant-input-recording.js";
 import { buildChannelInboundEventContext } from "../inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../inbound-event/host-context-builder.js";
 import {

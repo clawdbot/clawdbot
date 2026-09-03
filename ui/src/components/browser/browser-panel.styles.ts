@@ -25,6 +25,15 @@ export const browserPanelStyles = css`
   .bp-actions {
     flex: none;
   }
+  .bp-profile {
+    max-width: 100px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 11px;
+  }
+
   .bp-toolbar {
     display: flex;
     align-items: center;
@@ -202,17 +211,5 @@ export const browserPanelStyles = css`
   }
   .bp-note--error {
     color: var(--danger, #ff6b6b);
-  }
-  .bp-loading {
-    position: absolute;
-    top: 8px;
-    right: 12px;
-    z-index: 3;
-    font-size: 11px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    color: var(--muted, #8a919e);
-    background: color-mix(in srgb, var(--bg, #0e1015) 80%, transparent);
-    border: 1px solid var(--border, #262b34);
   }
 `;

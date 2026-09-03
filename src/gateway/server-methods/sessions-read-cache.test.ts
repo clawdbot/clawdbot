@@ -91,7 +91,7 @@ async function seedSessions(): Promise<OpenClawConfig> {
       {
         sessionId: `${agentId}-${name}`,
         updatedAt,
-        createdActor: { type: "human", id: owner },
+        createdActor: { type: "human", source: "profile", id: owner },
         visibility: "shared",
         ...overrides,
       },
@@ -295,7 +295,7 @@ describe("sessions.list single-flight", () => {
       let catalog = startupCatalog;
       const context = {
         ...requestContext(config),
-        readPreparedGatewayModelCatalog: vi.fn(async () => catalog),
+        readPreparedGatewayModelCatalog: vi.fn(async () => ({ entries: catalog })),
       };
       const client = identifiedClient("owner@example.com");
       const request = { archived: "all" as const, limit: 100 };
@@ -307,13 +307,20 @@ describe("sessions.list single-flight", () => {
       expect(await listSessions({ client, context, request })).toBe(first);
       expect(loader.calls).toHaveBeenCalledTimes(1);
 
+      const mainRequest = { ...request, agentId: "main" };
+      const workRequest = { ...request, agentId: "work" };
+      const main = await listSessions({ client, context, request: mainRequest });
+      const work = await listSessions({ client, context, request: workRequest });
+      expect(await listSessions({ client, context, request: mainRequest })).toBe(main);
+      expect(await listSessions({ client, context, request: workRequest })).toBe(work);
+      expect(await listSessions({ client, context, request })).toBe(first);
       catalog = fullCatalog;
       const refreshed = await listSessions({ client, context, request });
       expect(refreshed).not.toBe(first);
       expect(
         refreshed.sessions.find((session) => session.agentId === "main")?.thinkingOptions,
       ).toEqual(expect.arrayContaining(["off", "low", "high", "max"]));
-      expect(loader.calls).toHaveBeenCalledTimes(2);
+      expect(loader.calls).toHaveBeenCalledTimes(4);
     });
   });
 
@@ -330,7 +337,7 @@ describe("sessions.list single-flight", () => {
         {
           sessionId: "registry-only",
           updatedAt: 500,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -554,7 +561,7 @@ describe("sessions.list single-flight", () => {
         {
           sessionId: "main-external",
           updatedAt: 500,
-          createdActor: { type: "human", id: "owner@example.com" },
+          createdActor: { type: "human", source: "profile", id: "owner@example.com" },
           visibility: "shared",
         },
       );
@@ -910,7 +917,11 @@ describe("sessions.list single-flight", () => {
               sessionId: `profile-${index}`,
               updatedAt: index + 1,
               createdVia: "operator",
-              createdActor: { type: "human", id: client.authenticatedUserProfile!.profileId },
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: client.authenticatedUserProfile!.profileId,
+              },
             },
           );
         }
@@ -992,7 +1003,7 @@ describe("sessions.list single-flight", () => {
           {
             sessionId: `page-${name}`,
             updatedAt,
-            createdActor: { type: "human", id: "owner@example.com" },
+            createdActor: { type: "human", source: "profile", id: "owner@example.com" },
             visibility: "shared",
           },
         );

@@ -5,7 +5,6 @@ import path from "node:path";
 import chokidar from "chokidar";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createModelVisibilityPolicy } from "../agents/model-visibility-policy.js";
-import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace-default.js";
 import { startGatewayConfigReloader } from "../gateway/config-reload.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -32,6 +31,7 @@ import {
   setRuntimeConfigSnapshotRefreshHandler,
   writeConfigFile,
 } from "./io.js";
+import { replaceConfigFile, transformConfigFile, transformConfigFileWithRetry } from "./mutate.js";
 import { ConfigMutationConflictError } from "./mutation-conflict.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
 import type { AgentModelEntryConfig, AgentModelPolicyConfig } from "./types.agent-defaults.js";
@@ -1078,7 +1078,7 @@ describe("config io write", () => {
         params: { transport: "sse", openaiWsWarmup: false },
       });
       expect(persisted.agents?.entries).toEqual({
-        main: { workspace: resolveDefaultAgentWorkspaceDir() },
+        main: { workspace: path.join(home, ".openclaw", "workspace") },
         ops: {},
       });
     },
@@ -1206,6 +1206,43 @@ describe("config io write", () => {
       "config path changed since last load",
     );
   });
+
+  it.each(["replace", "transform", "retry"] as const)(
+    "composes caller authority with captured destination ownership for %s",
+    async (mutation) => {
+      await withSuiteHome(async (home) => {
+        const firstConfigPath = path.join(home, ".openclaw", "first.json");
+        const secondConfigPath = path.join(home, ".openclaw", "second.json");
+        await fs.mkdir(path.dirname(firstConfigPath), { recursive: true });
+        await fs.writeFile(firstConfigPath, "{}\n");
+        await fs.writeFile(secondConfigPath, "{}\n");
+        const env = { OPENCLAW_CONFIG_PATH: firstConfigPath, OPENCLAW_TEST_FAST: "1" };
+        const io = createHomeConfigIO(home, { env });
+        const callerGuard = vi.fn();
+        const writeOptions = {
+          assertConfigPathForWrite: callerGuard,
+          preCommitRuntimePreflight: async () => {
+            env.OPENCLAW_CONFIG_PATH = secondConfigPath;
+          },
+        };
+        const nextConfig: OpenClawConfig = { gateway: { port: 19001 } };
+        const transform = () => ({ nextConfig });
+        const pending =
+          mutation === "replace"
+            ? replaceConfigFile({ io, writeOptions, nextConfig })
+            : (mutation === "transform" ? transformConfigFile : transformConfigFileWithRetry)({
+                io,
+                writeOptions,
+                transform,
+              });
+
+        await expect(pending).rejects.toThrow("config path changed since last load");
+        expect(callerGuard).toHaveBeenCalled();
+        expect(await fs.readFile(firstConfigPath, "utf8")).toBe("{}\n");
+        expect(await fs.readFile(secondConfigPath, "utf8")).toBe("{}\n");
+      });
+    },
+  );
 
   itWithHome(
     "rejects write snapshots when the IO instance no longer owns its config path",

@@ -67,7 +67,7 @@ export type RelayCommandBody =
   | { type: "attach"; tabId: number }
   /** Detach chrome.debugger from a tab (access revoked or client detached). */
   | { type: "detach"; tabId: number }
-  /** Open a new tab inside the OpenClaw tab group. Result: { tabId: number }. */
+  /** Create and attach a grouped tab. Result: { tabId, targetId }; Store 2.2.0 returns tabId only. */
   | { type: "createTab"; url: string; background?: boolean; focus?: boolean }
   /** Close an accessible tab. Result: {}. */
   | { type: "closeTab"; tabId: number }

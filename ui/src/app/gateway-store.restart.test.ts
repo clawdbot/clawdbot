@@ -22,6 +22,40 @@ describe("createApplicationGateway restart state", () => {
     vi.restoreAllMocks();
   });
 
+  it("projects suspension hello/events without changing transport and drops stale connection state", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const first = current();
+    const suspendedHello = { ...HELLO, snapshot: { suspension: { phase: "prepared" } } };
+    try {
+      first.opts.onHello?.(suspendedHello);
+      expect(gateway.snapshot.suspensionPhase).toBe("prepared");
+      for (const phase of [
+        "accepting",
+        "preparing",
+        "draining",
+        "prepared",
+        "accepting",
+      ] as const) {
+        first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase }));
+        expect(gateway.snapshot.suspensionPhase).toBe(phase);
+        expect(gateway.snapshot.phase).toBe("connected");
+      }
+      first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "resuming" }));
+      expect(gateway.snapshot.suspensionPhase).toBe("accepting");
+      first.opts.onHello?.(suspendedHello);
+      first.opts.onClose?.({ code: 1006, reason: "offline", willRetry: true });
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      gateway.connect();
+      first.opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+      current().opts.onHello?.(HELLO);
+      expect(gateway.snapshot.suspensionPhase).toBeUndefined();
+    } finally {
+      gateway.stop();
+    }
+  });
+
   it("publishes shutdown immediately while connected and clears it after the next hello", () => {
     const { gateway, current } = createStore();
     gateway.start();

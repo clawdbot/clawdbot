@@ -12,6 +12,7 @@ import {
   type SandboxResolvedPath,
 } from "openclaw/plugin-sdk/sandbox";
 import { FsSafeError } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeMxcPathForComparison } from "./path-comparison.js";
 import {
   resolveMxcReadOnlySkillMounts,
   type MxcReadOnlySkillMount,
@@ -254,7 +255,7 @@ function resolveWorkspaceMounts(sandbox: MxcFsBridgeContext): readonly MxcFsMoun
 
   if (
     sandbox.workspaceAccess === "ro" &&
-    normalizePathForComparison(agentWorkspaceDir) !== normalizePathForComparison(workspaceDir)
+    normalizeMxcPathForComparison(agentWorkspaceDir) !== normalizeMxcPathForComparison(workspaceDir)
   ) {
     mounts.push({
       hostRoot: agentWorkspaceDir,
@@ -288,9 +289,9 @@ function normalizeMxcProtectedSkillMount(mount: MxcReadOnlySkillMount): MxcFsMou
 function dedupeAndSortMounts(mounts: readonly MxcFsMount[]): readonly MxcFsMount[] {
   const deduped = new Map<string, MxcFsMount>();
   for (const mount of mounts) {
-    const key = `${normalizePathForComparison(mount.hostRoot)}::${normalizePathForComparison(
-      mount.containerRoot,
-    )}`;
+    const key = `${normalizeMxcPathForComparison(
+      mount.hostRoot,
+    )}::${normalizeMxcPathForComparison(mount.containerRoot)}`;
     if (!deduped.has(key)) {
       deduped.set(key, mount);
     }
@@ -310,10 +311,5 @@ function resolveRelativeParentPath(relativePath: string): string | null {
 }
 
 function isSameMountRoot(first: string, second: string): boolean {
-  return normalizePathForComparison(first) === normalizePathForComparison(second);
-}
-
-function normalizePathForComparison(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  return normalizeMxcPathForComparison(first) === normalizeMxcPathForComparison(second);
 }

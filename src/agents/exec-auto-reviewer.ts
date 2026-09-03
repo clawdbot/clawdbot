@@ -361,7 +361,6 @@ export function createModelExecAutoReviewer(params: {
   signal?: AbortSignal;
 }): (input: ModelAutoReviewInput) => Promise<ExecAutoReviewDecision> | ExecAutoReviewDecision {
   const cfg = params.cfg;
-  const agentId = params.agentId ?? (cfg ? resolveAmbientOwnerAgentId(cfg, undefined) : "main");
   if (!cfg) {
     return (input) =>
       "kind" in input
@@ -372,6 +371,7 @@ export function createModelExecAutoReviewer(params: {
           }
         : defaultExecAutoReviewer(input);
   }
+  const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
   const prepareModel =
     params.deps?.prepareSimpleCompletionModelForAgent ?? prepareSimpleCompletionModelForAgent;
   const complete =

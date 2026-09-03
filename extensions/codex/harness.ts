@@ -11,6 +11,7 @@ import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-run
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { runHostPreparedIsolatedCompletion } from "openclaw/plugin-sdk/simple-completion-runtime";
 import { readCodexRuntimeModelId } from "./src/app-server/model-runtime.js";
+import { sessionBindingIdentity } from "./src/app-server/session-binding-record.js";
 import type { CodexAppServerBindingStore } from "./src/app-server/session-binding.js";
 import type { CodexSessionCatalogControlFactory } from "./src/session-catalog-types.js";
 
@@ -86,6 +87,12 @@ export function createCodexAppServerAgentHarness(
   );
   const sessionCatalogControlFactory = options.sessionCatalogControlFactory;
   const sessionRuntime = options.runtime;
+  let modelCatalog:
+    | ReturnType<
+        typeof import("./src/app-server/model-catalog.js").createCodexAppServerModelCatalog
+      >
+    | undefined;
+  let disposed = false;
   const resolveAttemptPluginConfig = (config: OpenClawConfig | undefined) =>
     resolvePluginConfigObject(config, "codex") ??
     options.resolvePluginConfig?.() ??
@@ -109,6 +116,26 @@ export function createCodexAppServerAgentHarness(
       visibleReplies: "message_tool",
     },
     authBootstrap: "harness",
+    resolveSessionRuntimeOwnership: (params) => {
+      const assertCurrent = () => {
+        params.assertCurrent();
+        if (disposed) {
+          throw new Error("Codex agent harness is disposed");
+        }
+      };
+      assertCurrent();
+      const binding = options.bindingStore.read(sessionBindingIdentity(params));
+      assertCurrent();
+      return binding?.preserveNativeModel === true
+        ? {
+            model: "native",
+            auth: binding.connectionScope === "supervision" ? "native" : "host",
+            ...(binding.model?.trim() && binding.modelProvider
+              ? { modelRef: { provider: binding.modelProvider, model: binding.model } }
+              : {}),
+          }
+        : undefined;
+    },
     ...(sessionCatalogControlFactory && sessionRuntime
       ? {
           sessionFork: {
@@ -148,12 +175,16 @@ export function createCodexAppServerAgentHarness(
       });
     },
     loadModelCatalog: async (params) => {
-      const { loadCodexAppServerModelCatalog } = await import("./src/app-server/model-catalog.js");
-      return await loadCodexAppServerModelCatalog(
-        params,
-        resolveAttemptPluginConfig(params.config),
-      );
+      const { createCodexAppServerModelCatalog } =
+        await import("./src/app-server/model-catalog.js");
+      if (disposed) {
+        return [];
+      }
+      modelCatalog ??= createCodexAppServerModelCatalog(harnessRuntimeId);
+      return await modelCatalog.load(params, resolveAttemptPluginConfig(params.config));
     },
+    readModelCatalogReadiness: (params) =>
+      modelCatalog?.read(params, resolveAttemptPluginConfig(params.config)),
     loadMcpToolCatalog: async (params) => {
       const { loadCodexEffectiveMcpCatalog } =
         await import("./src/app-server/effective-mcp-catalog.js");
@@ -297,7 +328,7 @@ export function createCodexAppServerAgentHarness(
     reset: async (params) => {
       if (params.sessionId && params.reason !== "deleted") {
         const [
-          { reclaimCurrentCodexSessionGeneration, sessionBindingIdentity },
+          { reclaimCurrentCodexSessionGeneration },
           { retireCodexAppServerSessionGeneration },
         ] = await Promise.all([
           import("./src/app-server/session-binding.js"),
@@ -332,7 +363,11 @@ export function createCodexAppServerAgentHarness(
         }
       }
     },
-    dispose: disposeSharedCodexAppServerClients,
+    dispose: async () => {
+      disposed = true;
+      modelCatalog?.dispose();
+      await disposeSharedCodexAppServerClients();
+    },
   };
   return harness;
 }

@@ -110,6 +110,7 @@ export type SkillWorkshopProposalRevisionConstraint = {
 };
 
 export type SkillWorkshopRunOptions = {
+  libraryAuthoring?: import("../library/authoring.js").SkillLibraryAuthoringCapability;
   env?: NodeJS.ProcessEnv;
   proposalOnly?: boolean;
   updateProposals?: boolean;

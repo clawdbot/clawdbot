@@ -169,8 +169,18 @@ describe("OAuthManagerRefreshError", () => {
       }),
       profileId: "openai:oauth",
       refreshedStore,
-      cause: new Error(
-        "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+      cause: Object.assign(
+        new Error(
+          "refresh rejected error-access error-refresh error-id-token store-access store-refresh store-id-token",
+        ),
+        {
+          oauthRefreshFailure: {
+            errorType: "invalid_request_error",
+            reason: "refresh_token_reused",
+            status: 401,
+            summary: "refresh rejected error-access",
+          },
+        },
       ),
     });
 
@@ -182,6 +192,10 @@ describe("OAuthManagerRefreshError", () => {
     expect(error.message).not.toContain("store-refresh");
     expect(error.message).not.toContain("store-id-token");
     expect(error.message.match(/\[redacted\]/g)?.length).toBe(6);
+    expect(error.reason).toBe("refresh_token_reused");
+    expect(error.status).toBe(401);
+    expect(error.errorType).toBe("invalid_request_error");
+    expect(error.summary).toBe("refresh rejected [redacted]");
     const surfacedCauseMessage = formatErrorMessage(error.cause);
     expect(surfacedCauseMessage).not.toContain("error-access");
     expect(surfacedCauseMessage).not.toContain("error-refresh");

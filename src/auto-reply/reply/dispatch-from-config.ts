@@ -6,6 +6,7 @@ import { chooseDispatchRoute } from "./dispatch-from-config.choose-route.js";
 import { executeDispatch } from "./dispatch-from-config.execute.js";
 import { finalizeDispatchAndAudit } from "./dispatch-from-config.finalize.js";
 import { gatherDispatchRequest } from "./dispatch-from-config.gather.js";
+import { DispatchSessionRefreshRequiredError } from "./dispatch-from-config.lifecycle.js";
 import { prepareDispatchOperationContext } from "./dispatch-from-config.prepare-context.js";
 import { prepareDispatchDelivery } from "./dispatch-from-config.prepare-delivery.js";
 import { prepareDispatchExecution } from "./dispatch-from-config.prepare-execution.js";
@@ -24,6 +25,20 @@ export type { DispatchFromConfigResult } from "./dispatch-from-config.types.js";
 export async function dispatchReplyFromConfig(
   params: DispatchFromConfigParams,
 ): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, false);
+}
+
+/** Low-level plugin dispatch must reach queue policy before waiting on the active reply owner. */
+export async function dispatchLowLevelChannelReplyFromConfig(
+  params: DispatchFromConfigParams,
+): Promise<DispatchFromConfigResult> {
+  return await dispatchReplyFromConfigWithQueuePolicy(params, true);
+}
+
+async function dispatchReplyFromConfigWithQueuePolicy(
+  params: DispatchFromConfigParams,
+  allowActiveQueueResolution: boolean,
+): Promise<DispatchFromConfigResult> {
   const ticket = reserveReplyAdmissionTicket([
     params.ctx.SessionKey,
     params.ctx.CommandTargetSessionKey,
@@ -35,13 +50,32 @@ export async function dispatchReplyFromConfig(
       }
     : params;
   const messageAuditTerminal = createInboundMessageAuditTerminal(params);
+  let refreshedSessionSnapshot = false;
   try {
-    const result = await dispatchReplyFromConfigInner(ticketedParams, messageAuditTerminal);
-    messageAuditTerminal?.finishSuccess(result);
-    return result;
-  } catch (error) {
-    messageAuditTerminal?.finishError();
-    throw error;
+    while (true) {
+      try {
+        const result = await dispatchReplyFromConfigInner(
+          ticketedParams,
+          messageAuditTerminal,
+          allowActiveQueueResolution,
+        );
+        messageAuditTerminal?.finishSuccess(result);
+        return result;
+      } catch (error) {
+        if (
+          error instanceof DispatchSessionRefreshRequiredError &&
+          !refreshedSessionSnapshot &&
+          params.replyOptions?.abortSignal?.aborted !== true
+        ) {
+          // Rebuild once from the latest store entry. If another lifecycle mutation wins the
+          // refreshed admission race, leave the event retryable for the channel ingress owner.
+          refreshedSessionSnapshot = true;
+          continue;
+        }
+        messageAuditTerminal?.finishError();
+        throw error;
+      }
+    }
   } finally {
     ticket?.release();
   }
@@ -50,8 +84,13 @@ export async function dispatchReplyFromConfig(
 async function dispatchReplyFromConfigInner(
   params: DispatchFromConfigParams,
   messageAuditTerminal: ReturnType<typeof createInboundMessageAuditTerminal>,
+  allowActiveQueueResolution: boolean,
 ): Promise<DispatchFromConfigResult> {
-  const gathered = await gatherDispatchRequest(params, messageAuditTerminal);
+  const gathered = await gatherDispatchRequest(
+    params,
+    messageAuditTerminal,
+    allowActiveQueueResolution,
+  );
   if (gathered.status === "complete") {
     return gathered.result;
   }
@@ -98,15 +137,22 @@ async function dispatchReplyFromConfigInner(
         return finishReplyOperationAbortedDispatch();
       }
       if (inboundDedupeClaim.status === "claimed") {
-        if (errorState.inboundDedupeReplayUnsafe) {
+        if (errorState.turnAdoptionState?.adopted || errorState.inboundDedupeReplayUnsafe) {
           commitInboundDedupe(inboundDedupeClaim.key);
         } else {
           releaseInboundDedupe(inboundDedupeClaim.key);
         }
       }
-      recordAgentDispatchCompleted("error", { error: String(err) });
-      recordProcessed("error", { error: String(err) });
-      markIdle("message_error");
+      if (err instanceof DispatchSessionRefreshRequiredError) {
+        // This attempt already incremented diagnostic queue depth before admission
+        // detected the rotated owner. Balance only that state transition; the
+        // refreshed attempt owns the single processed/audit terminal outcome.
+        markIdle("session_refresh");
+      } else {
+        recordAgentDispatchCompleted("error", { error: String(err) });
+        recordProcessed("error", { error: String(err) });
+        markIdle("message_error");
+      }
       failDispatchReplyOperation(err);
       throw err;
     }

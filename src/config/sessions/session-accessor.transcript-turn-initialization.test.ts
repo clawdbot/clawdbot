@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -10,8 +11,10 @@ import {
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   replaceSessionEntry,
+  replaceSessionEntrySync,
   type SessionTranscriptTurnPersistOptions,
 } from "./session-accessor.js";
+import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import type { SessionEntry } from "./types.js";
@@ -40,7 +43,7 @@ describe("first transcript turn initialization", () => {
     lifecycleRevision: "first-lifecycle",
     createdAt: now,
     createdVia: "operator",
-    createdActor: { type: "human", id: "operator-profile" },
+    createdActor: { type: "human", source: "profile", id: "operator-profile" },
     sandbox: "required",
   };
   const database = () => openOpenClawAgentDatabase(toDatabaseOptions(resolveSqliteScope(scope())));
@@ -118,6 +121,49 @@ describe("first transcript turn initialization", () => {
     expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
   });
 
+  it.each(["inline", "none", "throws"] as const)(
+    "completes committed messages once before publication with %s updates",
+    async (mode) => {
+      const order: string[] = [];
+      const onMessageCommitted = vi.fn(({ messageId }: { messageId: string }) => {
+        expect(loadTranscriptEventsSync(scope())).toContainEqual(
+          expect.objectContaining({
+            id: messageId,
+            message: expect.objectContaining({ role: "user" }),
+          }),
+        );
+        order.push("committed");
+        if (mode === "throws") {
+          throw new Error("completion failed");
+        }
+      });
+      const unsubscribe = onSessionTranscriptUpdate((update) => {
+        if (update.target.sessionId === sessionId) {
+          order.push("published");
+        }
+      });
+      try {
+        const append = admit({
+          updateMode: mode === "none" ? "none" : "inline",
+          onMessageCommitted,
+        });
+        if (mode === "throws") {
+          await expect(append).rejects.toThrow("completion failed");
+        } else {
+          await expect(append).resolves.toMatchObject({ appendedCount: 1 });
+        }
+        expect(counts()).toEqual({ nodes: 1, windows: 1, events: 2, receipts: 1 });
+        // Goal receipt replay returns no matched messages; completion belongs to the
+        // original admission, unlike replaying an existing transcript message.
+        await expect(admit({ onMessageCommitted })).resolves.toMatchObject({ appendedCount: 0 });
+        expect(onMessageCommitted).toHaveBeenCalledTimes(1);
+        expect(order).toEqual(mode === "inline" ? ["committed", "published"] : ["committed"]);
+      } finally {
+        unsubscribe();
+      }
+    },
+  );
+
   it.each([
     { timing: "before preparation", competingSessionId: "competing-session" },
     { timing: "during preparation", competingSessionId: "competing-session" },
@@ -133,9 +179,10 @@ describe("first transcript turn initialization", () => {
         messages: [
           {
             message: { role: "user", content: operation.objective },
-            shouldAppend: async () => {
+            shouldAppend: () => {
               if (timing === "during preparation") {
-                await replaceSessionEntry(scope(), competing);
+                // Direct/cross-process writers bypass the process-local queue.
+                replaceSessionEntrySync(scope(), competing);
               }
               return true;
             },

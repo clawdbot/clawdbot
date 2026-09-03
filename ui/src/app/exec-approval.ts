@@ -32,6 +32,8 @@ export type ExecApprovalRequest = {
   pluginSeverity?: string | null;
   pluginId?: string | null;
   proposalHash?: string | null;
+  /** Canonical raising session when this request is projected into an ancestor session. */
+  sourceSessionKey?: string | null;
   createdAtMs: number;
   expiresAtMs: number;
 };

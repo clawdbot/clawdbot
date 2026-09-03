@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { isPathInside } from "../infra/path-guards.js";
 import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
 import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import {
@@ -325,20 +326,28 @@ export function openOpenClawAgentDatabase(
     const db = openNodeSqliteDatabase(pathname);
     enableNodeSqliteKyselyStatementCache(db);
     openedDb = db;
-    // Eviction churn must avoid schema/registry busy waits on the event loop while
-    // reconcile workers hold write transactions on these same agent databases.
-    const isValidatedReopen = validatedAgentDatabasePaths.get(pathname) === agentId;
+    // Eviction churn must avoid migration/convergence and registry busy waits.
+    // Version and owner can change while evicted, so their read-only gates run on every open.
+    let isValidatedReopen = validatedAgentDatabasePaths.get(pathname) === agentId;
     const walMaintenance = (() => {
       let maintenance: OpenClawAgentDatabase["walMaintenance"] | undefined;
       try {
         db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-        if (!isValidatedReopen) {
-          assertSupportedAgentSchemaVersion(db, pathname);
-          assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
-        }
+        assertSupportedAgentSchemaVersion(db, pathname);
+        assertExistingAgentSchemaOwner(readExistingAgentSchemaMeta(db), agentId, pathname);
         // Integrity is not process-stable: the file can be damaged while evicted.
         // This guard is read-only (no busy waits), so every physical open pays it.
-        assertAgentDatabaseIntegrityBeforeMutation(db, agentId, pathname);
+        const requiresCurrentVersionConvergence = assertAgentDatabaseIntegrityBeforeMutation(
+          db,
+          agentId,
+          pathname,
+        );
+        if (isValidatedReopen && requiresCurrentVersionConvergence) {
+          // Same-version replacement can preserve owner/version while dropping additive schema.
+          // Demote trust so the existing full path repairs atomically before exposure.
+          validatedAgentDatabasePaths.delete(pathname);
+          isValidatedReopen = false;
+        }
         assertCanonicalAgentPersistenceVersion(db, pathname);
         configureSqlitePreSchemaPragmas(db, {
           busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
@@ -358,6 +367,7 @@ export function openOpenClawAgentDatabase(
       } catch (err) {
         maintenance?.close();
         db.close();
+        validatedAgentDatabasePaths.delete(pathname);
         if (
           err instanceof Error &&
           (isSqliteSchemaVersionError(err) || isTerminalSqliteIntegrityError(err))
@@ -645,20 +655,12 @@ export function disposeOpenClawAgentDatabaseByPath(
   return true;
 }
 
-/** Close all cached agent database handles. */
-export function closeOpenClawAgentDatabases(): void {
-  unregisterExitClose?.();
-  unregisterExitClose = null;
-  const removedIncognito = [...cachedDatabases.values()].some(
-    (database) => database.db.isOpen && incognitoDatabases.has(database),
-  );
-  for (const database of cachedDatabases.values()) {
-    closeCachedOpenClawAgentDatabase(database);
-  }
-  cachedDatabases.clear();
-  cachedDatabaseOpenFailures.clear();
-  if (removedIncognito) {
-    incognitoDatabaseGeneration += 1;
+/** Close cached agent handles, optionally restricted to one runtime root. */
+export function closeOpenClawAgentDatabases(rootPath?: string): void {
+  for (const pathname of cachedDatabases.keys()) {
+    if (rootPath === undefined || isPathInside(rootPath, pathname)) {
+      closeOpenClawAgentDatabaseByPath(pathname);
+    }
   }
 }
 
@@ -673,6 +675,7 @@ export function withAgentDatabaseMaintenanceLease<T>(
       database: { scope: "shared", options },
       leaseMs: 60_000,
       waitMs: 5_000,
+      heartbeat: "worker",
       leaseLabel: "agent database maintenance lease",
       operationLabel: "agent.database.maintenance.lease",
     },

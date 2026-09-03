@@ -2,6 +2,7 @@
 summary: "Host exec approvals: policy knobs, allowlists, and the YOLO/strict workflow"
 read_when:
   - Configuring exec approvals or allowlists
+  - Inspecting or revoking durable MCP tool grants
   - Implementing exec approval UX in the macOS app
   - Reviewing sandbox-escape prompts and their implications
 title: "Exec approvals"
@@ -25,6 +26,10 @@ loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
 host-local `ask: "always"` in the execution host approvals document keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
+An unconfigured node uses the same `full` / `off` baseline as the Gateway.
+Node execution still checks the target policy before dispatch: caller
+`allowlist` / `off` denies an unmatched command, and target `ask: "always"`
+requires approval even when the caller requests `full` / `off`.
 </Note>
 
 ## Where it applies
@@ -77,6 +82,12 @@ pending approval message. Matrix seeds reaction shortcuts (`✅` allow once,
 message as a fallback.
 </Tip>
 
+For native chat approval surfaces, a node exec waits for the decision within
+the originating tool call and returns the command output there. Closing or
+cancelling that turn invalidates its pending authority; a late approval cannot
+restart it. A typed `SYSTEM_RUN_DENIED` result means the node rejected execution,
+not that the command may have run.
+
 ## Settings and storage
 
 Approvals live in the shared SQLite state database on the execution host. When
@@ -106,6 +117,14 @@ directory. After upgrading from a file-backed release, stop the Gateway and run
 `exec-approvals.json`. Doctor also imports legacy
 `plugin-binding-approvals.json` only when it belongs to the active state
 directory.
+
+Legacy allowlist entries may contain `null` for `lastUsedAt` or
+`lastUsedCommand`. Doctor treats those two usage fields as absent during
+import, including when the config still needs repair. This does not relax
+canonical policy validation: other malformed fields or conflicting legacy
+policies remain preserved for operator recovery, and exec approvals stay
+blocked until the legacy file is resolved. After repair, verify with
+`openclaw approvals get` using the same state directory.
 
 Example schema:
 
@@ -139,6 +158,14 @@ Example schema:
         },
         {
           "pattern": "~/Projects/**/bin/git"
+        }
+      ],
+      "mcpTools": [
+        {
+          "server": "project-docs",
+          "tool": "publish_page",
+          "source": "allow-always",
+          "addedAt": 1737150000000
         }
       ]
     }
@@ -178,7 +205,7 @@ Default is `full` for gateway/node hosts; a `sandbox` host defaults to
 
 <ParamField path="ask" type='"off" | "on-miss" | "always"'>
   Configured ask policy for host exec. Controls the baseline approval
-  prompt behavior from `tools.exec.ask` and host approvals defaults.
+  prompt behavior from `tools.exec.mode` and host approvals defaults.
   Default is `off`. The per-call `ask` tool parameter (see
   [Exec tool](/tools/exec#parameters)) can only harden that baseline, and
   channel-origin model calls ignore it when the effective host ask is `off`.
@@ -252,7 +279,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off, ordinary path aliases and inline scripts do not require approval binding; restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>
@@ -337,9 +364,9 @@ EOF
 
 </Note>
 
-### Session-only shortcut
+### Session and turn shortcuts
 
-- `/exec security=full ask=off` changes only the current session.
+- `/exec security=full ask=off <task>` requests that policy for the current message only. Include the task in the same message; a standalone directive does not affect the next message. Session permission modes and host policy can still restrict the request.
 - `/elevated full` is a break-glass shortcut that skips exec approvals only
   when both the requested policy and the host approvals document resolve to
   `security: "full"` and `ask: "off"`. A stricter host file, such as `ask:
@@ -427,11 +454,54 @@ Each allowlist entry supports:
 | `lastUsedCommand`  | Last command that matched; omitted for generated hashed argv entries     |
 | `lastResolvedPath` | Last resolved binary path                                                |
 
+## MCP tool grants
+
+For Gateway-hosted Codex runs, **Allow Always** can save a durable grant for one
+MCP tool on a server configured in `mcp.servers`. The Gateway writes the grant
+to `agents.<agentId>.mcpTools` in this same approvals document. It covers the
+exact agent, configured server name, and tool name, **with any arguments**;
+it does not grant access to other agents, servers, or tools.
+
+Each entry has `server`, `tool`, `source: "allow-always"`, and `addedAt`
+(Unix milliseconds). `lastUsedAt` is optional. Codex apps, native plugin
+servers, and computer-use servers do not receive OpenClaw MCP tool grants.
+OpenClaw only mints when durable persistence is offered and it can unambiguously
+match the approval to a live Gateway-owned tool call. Missing or ambiguous
+correlation retains Codex's existing native/session behavior instead.
+
+Grants apply when the server's `codex.defaultToolsApprovalMode` is `auto` or
+unspecified. Explicit `prompt` wins over a stored grant and keeps asking;
+explicit `approve` already bypasses per-call approval. See
+[Codex tool approvals](/cli/mcp#codex-tool-approvals).
+
+The durable grant is read when OpenClaw next prepares the Codex thread
+configuration and hook registration, such as for a new session or after a
+restart. The current session continues using Codex's remembered decision;
+OpenClaw does not reload grants for every tool call.
+
+To inspect grants, run `openclaw approvals get --gateway`. To revoke one,
+export the document, remove its entry from `agents.<agentId>.mcpTools`, and
+replace the document with the existing `set` command:
+
+```bash
+openclaw approvals get --gateway --json | jq '.file' > approvals.json
+# Edit approvals.json, preserving other settings, allowlists, and grants.
+openclaw approvals set --gateway --file approvals.json
+```
+
+Omit `--gateway` from both commands to edit local approvals. Revocation takes
+effect at the next thread preparation/registration too; start a new session
+or restart to discard the active session's remembered approval. If Codex also
+persisted a separate approval in its native config, remove that native grant
+there as well.
+
 ## Standing grants for automations
 
 Approvals raised by gateway-host automation (cron) runs are delivered only to
-connected approval surfaces (Control UI, TUI, macOS app) — never to chat
-channels, which would repeat a card on every occurrence. While a reviewer
+connected exec approval clients: the Control UI, the macOS/iOS/Android apps,
+and API clients that declare the `approvals` or `exec-approvals` capability.
+The TUI does not render exec approval cards, and chat channels never receive
+automation approvals, which would repeat a card on every occurrence. While a reviewer
 surface is connected, the scheduled run waits for the decision like an
 interactive run; automations are single-flight, so at most one card per job
 is pending at a time. With no approval surface connected, the request is
@@ -598,7 +668,7 @@ id=...)` / `Exec denied (gateway id=...)`).
 - **`ask`** keeps you in the loop while still allowing fast approvals.
 - Per-agent allowlists prevent one agent's approvals from leaking into others.
 - Approvals only apply to host exec requests from **authorized senders**. Unauthorized senders cannot issue `/exec`.
-- `/exec security=full` is a session-level convenience for authorized operators and skips approvals by design. To hard-block host exec, set approvals security to `deny` or deny the `exec` tool via tool policy.
+- `/exec security=full <task>` is a current-turn request by an authorized operator, subject to effective session and host policy. To hard-block exec, deny the `exec` tool via tool policy. See [session overrides](/tools/exec#session-overrides-%2Fexec) for the full-access session exception to host approval floors.
 
 ## Related
 

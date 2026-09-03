@@ -1,5 +1,10 @@
 // Tests for SQLite user_version pragma helper.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../version.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../version.js")>();
+  return { ...actual, resolveRuntimeServiceCommit: () => "aaaaaaa" };
+});
 import { VERSION } from "../version.js";
 import {
   createNewerSqliteSchemaVersionError,
@@ -84,5 +89,9 @@ describe("describeRunningOpenClawBuild", () => {
 
     expect(described).toContain(VERSION);
     expect(described).toContain("installed at ");
+  });
+
+  it("reports the loaded build commit", () => {
+    expect(describeRunningOpenClawBuild()).toContain("(aaaaaaa)");
   });
 });

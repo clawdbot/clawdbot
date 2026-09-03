@@ -35,6 +35,7 @@ function makeTempDir() {
 function makeOpenClawDevSourceRoot() {
   const root = makeTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
+  fs.writeFileSync(path.join(root, "pnpm-workspace.yaml"), "packages: [extensions/*]\n");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
   return root;
@@ -73,7 +74,7 @@ function createPluginCandidate(params: {
   sourceName?: string;
   origin: "bundled" | "global" | "workspace" | "config";
   format?: "openclaw" | "bundle";
-  bundleFormat?: "codex" | "claude" | "cursor";
+  bundleFormat?: "agent" | "codex" | "claude" | "cursor";
   packageName?: string;
   packageVersion?: string;
   packageManifest?: OpenClawPackageManifest;
@@ -591,7 +592,7 @@ describe("loadPluginManifestRegistry", () => {
     expectRegistryDiagnosticContains(registry, "plugin manifest not found");
   });
 
-  it("preserves optional manifest icon URLs on registry records", () => {
+  it("ignores legacy manifest icon URLs", () => {
     const dir = makeTempDir();
     writeManifest(dir, {
       id: "icon-demo",
@@ -608,7 +609,52 @@ describe("loadPluginManifestRegistry", () => {
       }),
     ]);
 
-    expect(registry.plugins[0]?.icon).toBe("https://cdn.simpleicons.org/simpleicons");
+    expect(registry.plugins[0]).not.toHaveProperty("icon");
+  });
+
+  it("discovers the portable package icon without manifest indirection", () => {
+    const dir = makeTempDir();
+    writeManifest(dir, {
+      id: "icon-demo",
+      name: "Icon Demo",
+      configSchema: { type: "object" },
+    });
+    writeTextFile(dir, "assets/icon.png", "portable icon");
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "icon-demo",
+        rootDir: dir,
+        origin: "bundled",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
+  });
+
+  it("discovers the same portable icon convention for Agent Plugins bundles", () => {
+    const dir = makeTempDir();
+    setupBundleFixture({
+      bundleDir: dir,
+      manifestRelativePath: "plugin.json",
+      manifest: {
+        $schema: "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+        name: "Portable Icon Bundle",
+      },
+      textFiles: { "assets/icon.png": "portable icon" },
+    });
+
+    const registry = loadRegistry([
+      createPluginCandidate({
+        idHint: "portable-icon-bundle",
+        rootDir: dir,
+        origin: "global",
+        format: "bundle",
+        bundleFormat: "agent",
+      }),
+    ]);
+
+    expect(registry.plugins[0]?.iconPath).toBe(path.join(dir, "assets/icon.png"));
   });
 
   it("preserves manifest catalog metadata on registry records", () => {
@@ -769,19 +815,32 @@ describe("loadPluginManifestRegistry", () => {
     writeManifest(globalDir, manifest);
     writeManifest(configDir, manifest);
 
-    const registry = loadRegistry([
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: globalDir,
-        origin: "global",
-      }),
-      createPluginCandidate({
-        idHint: "external-chat",
-        rootDir: configDir,
-        origin: "config",
-      }),
-    ]);
+    const registry = loadPluginManifestRegistryCore({
+      candidates: [
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: globalDir,
+          origin: "global",
+        }),
+        createPluginCandidate({
+          idHint: "external-chat",
+          rootDir: configDir,
+          origin: "config",
+        }),
+      ],
+      diagnostics: [globalDir, configDir, globalDir].map((source) => ({
+        level: "warn" as const,
+        pluginId: "external-chat",
+        source,
+        message: "extension entry unreadable (I/O error): ./index.js",
+      })),
+    });
 
+    expect(
+      registry.diagnostics
+        .filter((diagnostic) => diagnostic.message.includes("extension entry unreadable"))
+        .map((diagnostic) => diagnostic.source),
+    ).toEqual([globalDir, configDir]);
     const channelConfigWarnings = registry.diagnostics.filter((diagnostic) =>
       diagnostic.message.includes("without channelConfigs metadata"),
     );
@@ -848,40 +907,44 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.origin).toBe("global");
   });
 
-  it("prefers dev source bundled plugins over installed globals with the same id", () => {
-    const devSourceRoot = makeOpenClawDevSourceRoot();
-    const bundledDir = path.join(devSourceRoot, "extensions", "codex");
-    const globalDir = makeTempDir();
-    const manifest = { id: "codex", configSchema: { type: "object" } };
-    mkdirSafe(bundledDir);
-    writeManifest(bundledDir, manifest);
-    writeManifest(globalDir, manifest);
+  it.each(["extensions", "dist/extensions", "dist-runtime/extensions"])(
+    "prefers dev %s plugins over installed globals with the same id",
+    (tree) => {
+      const devSourceRoot = makeOpenClawDevSourceRoot();
+      const bundledDir = path.join(devSourceRoot, tree, "codex");
+      const globalDir = makeTempDir();
+      const manifest = { id: "codex", configSchema: { type: "object" } };
+      mkdirSafe(bundledDir);
+      writeManifest(bundledDir, manifest);
+      writeManifest(globalDir, manifest);
 
-    const registry = loadPluginManifestRegistryCore({
-      env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
-      installRecords: {
-        codex: {
-          source: "npm",
-          installPath: globalDir,
+      const registry = loadPluginManifestRegistryCore({
+        env: hermeticEnv({ OPENCLAW_DEV_SOURCE_ROOT: devSourceRoot }),
+        installRecords: {
+          codex: {
+            source: "npm",
+            installPath: globalDir,
+          },
         },
-      },
-      candidates: [
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: bundledDir,
-          origin: "bundled",
-        }),
-        createPluginCandidate({
-          idHint: "codex",
-          rootDir: globalDir,
-          origin: "global",
-        }),
-      ],
-    });
+        candidates: [
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: bundledDir,
+            origin: "bundled",
+          }),
+          createPluginCandidate({
+            idHint: "codex",
+            rootDir: globalDir,
+            origin: "global",
+            installOwner: "codex",
+          }),
+        ],
+      });
 
-    expect(registry.plugins).toHaveLength(1);
-    expect(registry.plugins[0]?.origin).toBe("bundled");
-  });
+      expect(registry.plugins).toHaveLength(1);
+      expect(registry.plugins[0]?.origin).toBe("bundled");
+    },
+  );
 
   it("suppresses duplicate warnings when the installed global is discovered before bundled", () => {
     const bundledDir = makeTempDir();
@@ -971,6 +1034,18 @@ describe("loadPluginManifestRegistry", () => {
   });
 
   it.each([
+    {
+      name: "conflicting npm requested identity",
+      overrides: { spec: "@vendor/diffs" },
+    },
+    {
+      name: "conflicting npm resolved identity",
+      overrides: { resolvedName: "@vendor/diffs" },
+    },
+    {
+      name: "missing npm identity",
+      overrides: { spec: undefined, resolvedName: undefined, resolvedSpec: undefined },
+    },
     {
       name: "npm-pack archive metadata",
       overrides: {
@@ -1160,7 +1235,7 @@ describe("loadPluginManifestRegistry", () => {
     expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
-  it("preserves legacy spec-only records for catalog-backed ClawHub installs", () => {
+  it("does not trust legacy ClawHub records without source authority", () => {
     const dir = makeTempDir();
     writeManifest(dir, { id: "diagnostics-otel", configSchema: { type: "object" } });
 
@@ -1183,7 +1258,7 @@ describe("loadPluginManifestRegistry", () => {
       ],
     });
 
-    expect(registry.plugins[0]?.trustedOfficialInstall).toBe(true);
+    expect(registry.plugins[0]?.trustedOfficialInstall).toBeUndefined();
   });
 
   it("marks official diagnostics-otel config paths trusted when the install record matches", () => {

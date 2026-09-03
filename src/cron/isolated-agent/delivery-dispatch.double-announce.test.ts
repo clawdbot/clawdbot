@@ -1751,6 +1751,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         mediaUrls: undefined,
       }),
     );
+    expect(
+      vi.mocked(appendAssistantMessageToSessionTranscript).mock.calls[0]?.[0],
+    ).not.toHaveProperty("deliveryMirror");
     expect(enqueueSystemEvent).toHaveBeenCalledWith("Redacted cron update.", {
       sessionKey: "agent:main:main",
       contextKey: "cron-direct-delivery:v1:cron:test-job:1000:telegram::123456:",
@@ -2113,6 +2116,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("skips main-session awareness for best-effort deliveries", async () => {
+    mockResolvedOutboundRoute();
     const params = makeBaseParams({
       synthesizedText: "Best-effort cron update.",
       deliveryBestEffort: true,
@@ -2124,13 +2128,22 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:main:telegram:direct:123456",
+        deliveryMirror: { kind: "cron-direct-delivery-context" },
+      }),
+    );
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
+  it("retains a stale one-shot transcript without delivery or a fallback summary", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
 
     const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
+    params.agentSessionKey = "agent:main:cron:test-job";
+    params.job.deleteAfterRun = true;
+    params.beforeSessionDelete = vi.fn();
     (params.job as { state?: { nextRunAtMs?: number } }).state = {
       nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
     };
@@ -2148,6 +2161,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryError).toEqual(deliveryError);
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryState.status).toBe("not-delivered");
+    expect(state.deliveryState.delivered).toBe(false);
+    expect(state.deliveryState.error).toEqual(deliveryError);
+    expect(state.deliveryState.deliverySuppressionReason).toBeUndefined();
+    expect(params.beforeSessionDelete).not.toHaveBeenCalled();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("still delivers when the run started on time but finished more than three hours later", async () => {
@@ -3496,6 +3515,76 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
+  it("commits a current-target completion on a webchat-only gateway with no configured channels", async () => {
+    // Regression: a Control UI dashboard session key does not contain
+    // "webchat", and a gateway without external channel plugins resolves no
+    // channel at all. The committed completion is the delivery; the run must
+    // not fail as a delivery-target error.
+    const params = makeBaseParams({
+      synthesizedText: "scheduled dashboard report",
+      sessionTarget: "current",
+      runStartedAt: 1_000,
+    });
+    const dashboardSessionKey = "agent:main:dashboard:c5557dcf-54bf-46b0-9bf2-a1f6ad1d0667";
+    (params.job as { sessionKey?: string }).sessionKey = dashboardSessionKey;
+    params.sourceSessionKey = dashboardSessionKey;
+    params.resolvedDelivery = {
+      ok: false,
+      channel: undefined,
+      to: undefined,
+      accountId: undefined,
+      threadId: undefined,
+      mode: "implicit",
+      error: new Error(
+        "Channel is required (no configured channels detected). Run openclaw channels add to configure one, or pass --channel <channel> after enabling a channel. Use openclaw channels list --all to see available channel ids. Set delivery.channel explicitly or use a main session with a previous channel.",
+      ),
+    };
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.result).toBeUndefined();
+    expect(state).toMatchObject({ delivered: true, deliveryAttempted: true });
+    expect(state.deliveryError).toBeUndefined();
+    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: dashboardSessionKey,
+        text: "scheduled dashboard report",
+      }),
+    );
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it.each(["telegram", "unavailable-plugin"])(
+    "keeps a committed current-target run successful when its %s route fails to resolve",
+    async (channel) => {
+      const params = makeBaseParams({
+        synthesizedText: "committed but undeliverable externally",
+        sessionTarget: "current",
+        runStartedAt: 1_500,
+      });
+      params.resolvedDelivery = {
+        ok: false,
+        channel,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        mode: "implicit",
+        error: new Error("Target is required"),
+      };
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(state.result).toBeUndefined();
+      expect(state).toMatchObject({
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "Target is required",
+      });
+      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
+
   it("requires the current-session commit in addition to one external delivery", async () => {
     const params = makeBaseParams({
       synthesizedText: "durable external completion",
@@ -4154,7 +4243,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           },
         ]);
         setActivePluginRegistry(registry);
-        harness.loadAgentRuntimePluginRegistryHandleMock.mockReturnValue(registry);
+        harness.preparedRunPluginRegistryMock.mockReturnValue(registry);
         harness.runEmbeddedAgentMock.mockResolvedValue({
           payloads: partialSend
             ? [{ text: "First payload." }, { text: "Second payload." }]

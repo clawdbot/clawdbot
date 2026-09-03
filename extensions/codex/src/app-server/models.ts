@@ -7,10 +7,10 @@ import type {
   CodexAppServerAuthRequirement,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
-import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import { assertCodexModelListResponse } from "./protocol-validators.js";
 import type { CodexModel, CodexReasoningEffortOption } from "./protocol.js";
+import type { CodexAppServerScopedRequest } from "./request.js";
 
 /** Normalized model metadata returned by the Codex app-server model listing helper. */
 export type CodexAppServerModel = {
@@ -35,6 +35,8 @@ export type CodexAppServerModelListResult = {
 
 /** Options for querying Codex app-server models through a shared or isolated client. */
 type CodexAppServerListModelsOptions = {
+  /** Caller-owned request scope for related catalog/account reads. */
+  request?: CodexAppServerScopedRequest;
   limit?: number;
   cursor?: string;
   includeHidden?: boolean;
@@ -51,8 +53,8 @@ type CodexAppServerListModelsOptions = {
 export async function listCodexAppServerModels(
   options: CodexAppServerListModelsOptions = {},
 ): Promise<CodexAppServerModelListResult> {
-  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) =>
-    requestModelListPage(client, { ...options, timeoutMs }),
+  return await withCodexAppServerModelRequest(options, async (request) =>
+    requestModelListPage(request, options),
   );
 }
 
@@ -61,14 +63,13 @@ export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
   const maxPages = normalizeMaxPages(options.maxPages);
-  return await withCodexAppServerModelClient(options, async ({ client, timeoutMs }) => {
+  return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
     let cursor = options.cursor;
     let nextCursor: string | undefined;
     for (let page = 0; page < maxPages; page += 1) {
-      const result = await requestModelListPage(client, {
+      const result = await requestModelListPage(request, {
         ...options,
-        timeoutMs,
         cursor,
       });
       models.push(...result.models);
@@ -82,10 +83,13 @@ export async function listAllCodexAppServerModels(
   });
 }
 
-async function withCodexAppServerModelClient<T>(
+async function withCodexAppServerModelRequest<T>(
   options: CodexAppServerListModelsOptions,
-  run: (params: { client: CodexAppServerClient; timeoutMs: number }) => Promise<T>,
+  run: (request: CodexAppServerScopedRequest) => Promise<T>,
 ): Promise<T> {
+  if (options.request) {
+    return await run(options.request);
+  }
   const timeoutMs = options.timeoutMs ?? 2500;
   const useSharedClient = options.sharedClient !== false;
   const {
@@ -93,25 +97,24 @@ async function withCodexAppServerModelClient<T>(
     getLeasedSharedCodexAppServerClient,
     releaseLeasedSharedCodexAppServerClient,
   } = await import("./shared-client.js");
-  const client = useSharedClient
-    ? await getLeasedSharedCodexAppServerClient({
-        startOptions: options.startOptions,
-        timeoutMs,
-        authProfileId: options.authProfileId,
-        authRequirement: options.authRequirement,
-        agentDir: options.agentDir,
-        config: options.config,
-      })
-    : await createIsolatedCodexAppServerClient({
-        startOptions: options.startOptions,
-        timeoutMs,
-        authProfileId: options.authProfileId,
-        authRequirement: options.authRequirement,
-        agentDir: options.agentDir,
-        config: options.config,
-      });
+  const { requestCodexAppServerClientJson } = await import("./request.js");
+  const acquireClient = useSharedClient
+    ? getLeasedSharedCodexAppServerClient
+    : createIsolatedCodexAppServerClient;
+  // Standalone listing retains the initialize diagnostic and per-page budget;
+  // catalog/account callers supply their shared operation scope above.
+  const client = await acquireClient({
+    startOptions: options.startOptions,
+    timeoutMs,
+    authProfileId: options.authProfileId,
+    authRequirement: options.authRequirement,
+    agentDir: options.agentDir,
+    config: options.config,
+  });
   try {
-    return await run({ client, timeoutMs });
+    return await run((request) =>
+      requestCodexAppServerClientJson({ ...request, client, timeoutMs, config: options.config }),
+    );
   } finally {
     if (useSharedClient) {
       releaseLeasedSharedCodexAppServerClient(client);
@@ -122,18 +125,17 @@ async function withCodexAppServerModelClient<T>(
 }
 
 async function requestModelListPage(
-  client: CodexAppServerClient,
-  options: CodexAppServerListModelsOptions & { timeoutMs: number },
+  request: CodexAppServerScopedRequest,
+  options: CodexAppServerListModelsOptions,
 ): Promise<CodexAppServerModelListResult> {
-  const response = await client.request(
-    "model/list",
-    {
+  const response = await request({
+    method: "model/list",
+    requestParams: {
       limit: options.limit ?? null,
       cursor: options.cursor ?? null,
       includeHidden: options.includeHidden ?? null,
     },
-    { timeoutMs: options.timeoutMs },
-  );
+  });
   return readModelListResult(response);
 }
 

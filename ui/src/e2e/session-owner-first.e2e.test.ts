@@ -8,7 +8,6 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Control UI owner-first session roster" });
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "session-owner-stack");
 
 function sessionRoster(ownerId: string, key: string, label: string, updatedAt: number) {
   const owner = {
@@ -45,10 +44,10 @@ async function captureSidebar(page: Page, fileName: string) {
   if (!captureProof) {
     return;
   }
-  await mkdir(proofDir, { recursive: true });
+  await mkdir(path.join(suite.artifactDir, "session-owner-stack"), { recursive: true });
   await page.locator(".sidebar-sessions").screenshot({
     animations: "disabled",
-    path: path.join(proofDir, fileName),
+    path: path.join(path.join(suite.artifactDir, "session-owner-stack"), fileName),
   });
 }
 

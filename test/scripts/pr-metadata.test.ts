@@ -15,6 +15,15 @@ function createFakeGh(): string {
     `#!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "$*" == *'{owner}'* || "$*" == *'{repo}'* ]]; then
+  echo "protected gh: unresolved repository placeholder" >&2
+  exit 19
+fi
+if [ "$1 $2" = "repo view" ]; then
+  printf 'base-owner/base-repo\\n'
+  exit 0
+fi
+
 if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
   pr_view_count=0
   if [ -f "$FAKE_PR_VIEW_COUNT_FILE" ]; then
@@ -51,6 +60,7 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
         number: 42,
         url: "https://example.test/pr/42",
         headRefOid: $headRefOid,
+        headRepository: {nameWithOwner: "fork-owner/fork-repo"},
         changedFiles: $changedFiles,
         files: [
           range(0; $fileCount)
@@ -72,7 +82,8 @@ if [ "$1" = "pr" ] && [ "$2" = "view" ]; then
 fi
 
 if [ "$1" = "api" ] && [ "$2" = "--paginate" ]; then
-  [ "$3" = 'repos/{owner}/{repo}/pulls/42/files?per_page=100' ] || { echo "unexpected endpoint: $3" >&2; exit 4; }
+  [[ "$*" == *'repos/base-owner/base-repo/pulls/42/files?per_page=100'* ]] || { echo "unexpected repository" >&2; exit 4; }
+  [[ "$*" == *'Cache-Control: max-age=0'* ]] || { echo "authoritative files require revalidation" >&2; exit 18; }
   if [ "\${FAKE_REST_FILE_COUNT:-101}" = "2" ]; then
     jq -nc '[range(0; 2) | {filename: ("src/file-" + (tostring) + ".ts"), status: (if . == 1 then "removed" else "modified" end), additions: 1, deletions: 0}]'
     exit 0
@@ -132,7 +143,7 @@ function readPrMetadata(
         FAKE_PR_VIEW_FAILURE_TARGET: options.prViewFailureTarget ?? "all",
         FAKE_REJECT_REVIEW_REQUESTS: options.rejectReviewRequests ? "1" : "0",
         FAKE_REST_FILE_COUNT: options.restFileCount ?? "101",
-        OPENCLAW_GH_BIN: join(fakeGhDir, "gh"),
+        OPENCLAW_GH_BIN: "",
         PATH: `${fakeGhDir}:${process.env.PATH}`,
       },
       encoding: "utf8",
@@ -194,7 +205,7 @@ describe("PR metadata", () => {
     ]);
   });
 
-  it("paginates all changed files and preserves the GraphQL file shape", () => {
+  it("paginates fresh base-repository files through protected gh and preserves the GraphQL shape", () => {
     const result = readPrMetadata(createFakeGh());
 
     expect(result.status).toBe(0);

@@ -88,7 +88,7 @@ dump_debug_logs() {
     "$DOCTOR_LOG" \
     "$CLICKCLACK_STATE"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 start_gateway() {
   local log_path="$1"

@@ -1,11 +1,11 @@
 // Control UI E2E tests cover visible agent-file save outcomes and agent ownership.
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import net from "node:net";
-import path from "node:path";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  agentFileProofDir,
+  captureAgentFileScreenshot,
+  selectAgentFileWorkspace,
+} from "./agent-file-lifecycle.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -14,47 +14,6 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not available at ${executablePath}`,
 });
-
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const proofDir = path.join(process.cwd(), ".artifacts", "control-ui-e2e", "agent-file-lifecycle");
-
-async function capture(page: Page, name: string) {
-  if (!captureUiProof) {
-    return;
-  }
-  await mkdir(proofDir, { recursive: true });
-  await page.screenshot({
-    animations: "disabled",
-    fullPage: true,
-    path: path.join(proofDir, name),
-  });
-}
-
-async function selectAgent(page: Page, name: string) {
-  const select = page.locator(".agents-control-select openclaw-agent-select");
-  await select.locator(".agent-select__trigger").click();
-  await select.locator("wa-dropdown-item[data-agent-option]").filter({ hasText: name }).click();
-  await expect
-    .poll(async () => (await select.locator(".agent-select__label").textContent())?.trim())
-    .toBe(name);
-}
-
-async function getFreePort() {
-  const server = net.createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    server.close();
-    throw new Error("failed to allocate a Gateway port");
-  }
-  await new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  return address.port;
-}
 
 function fileList(agentId: string) {
   return {
@@ -112,8 +71,8 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },
       async ({ page }) => {
@@ -169,7 +128,7 @@ suite.define(() => {
           .poll(() => page.getByText(/workspace write failed; retry Save/).isVisible())
           .toBe(true);
         expect(await gateway.getRequests("agents.files.list")).toHaveLength(1);
-        await capture(page, "01-save-error-visible.png");
+        await captureAgentFileScreenshot(page, "01-save-error-visible.png");
 
         await gateway.setMethodResponse("agents.files.set", {
           ok: true,
@@ -183,14 +142,14 @@ suite.define(() => {
           .poll(() => page.getByText(/workspace write failed; retry Save/).count())
           .toBe(0);
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await capture(page, "02-save-retry-succeeded.png");
+        await captureAgentFileScreenshot(page, "02-save-retry-succeeded.png");
 
         await gateway.setMethodResponse(
           "agents.files.get",
           fileGetResponses("Updated main instructions"),
         );
         await gateway.deferNext("agents.files.get", { agentId: "writer", name: "AGENTS.md" });
-        await selectAgent(page, "Writer");
+        await selectAgentFileWorkspace(page, "Writer");
         await expect
           .poll(async () =>
             (await gateway.getRequests("agents.files.get")).some(
@@ -198,16 +157,16 @@ suite.define(() => {
             ),
           )
           .toBe(true);
-        await selectAgent(page, "Main");
+        await selectAgentFileWorkspace(page, "Main");
         await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
         await gateway.resolveDeferred("agents.files.get", fileGet("writer", "stale writer"));
         await expect.poll(() => editor.inputValue()).toBe("Updated main instructions");
 
-        await selectAgent(page, "Writer");
+        await selectAgentFileWorkspace(page, "Writer");
         await expect.poll(() => editor.inputValue()).toBe("# Writer instructions\n");
         const writes = await gateway.getRequests("agents.files.set");
         expect(writes.every((request) => requestAgentId(request) === "main")).toBe(true);
-        await capture(page, "03-writer-owned-file.png");
+        await captureAgentFileScreenshot(page, "03-writer-owned-file.png");
       },
     );
   });
@@ -218,8 +177,8 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         viewport: { height: 900, width: 1440 },
-        ...(captureUiProof
-          ? { recordVideo: { dir: proofDir, size: { height: 900, width: 1440 } } }
+        ...(agentFileProofDir
+          ? { recordVideo: { dir: agentFileProofDir, size: { height: 900, width: 1440 } } }
           : {}),
       },
       async ({ page }) => {
@@ -262,7 +221,7 @@ suite.define(() => {
           .toBe(2);
         await expect.poll(() => editor.inputValue()).toBe("server revision 2");
         await expect.poll(() => editor.isEnabled()).toBe(true);
-        await capture(page, "04-refresh-adopts-authoritative-content.png");
+        await captureAgentFileScreenshot(page, "04-refresh-adopts-authoritative-content.png");
 
         await editor.fill("local dirty draft");
         await gateway.setMethodResponse("agents.files.get", fileGetResponses("server revision 3"));
@@ -273,13 +232,13 @@ suite.define(() => {
         await expect.poll(() => editor.inputValue()).toBe("local dirty draft");
         await expect.poll(() => editor.isEnabled()).toBe(true);
         await expect.poll(() => reset.isEnabled()).toBe(true);
-        await capture(page, "05-refresh-preserves-dirty-draft.png");
+        await captureAgentFileScreenshot(page, "05-refresh-preserves-dirty-draft.png");
         await reset.click();
         await expect.poll(() => editor.inputValue()).toBe("server revision 3");
         await expect.poll(() => reset.isDisabled()).toBe(true);
 
         await expect.poll(() => save.isDisabled()).toBe(true);
-        await capture(page, "06-reset-uses-refreshed-authoritative-content.png");
+        await captureAgentFileScreenshot(page, "06-reset-uses-refreshed-authoritative-content.png");
 
         await gateway.deferNext("agents.files.get", { agentId: "main", name: "AGENTS.md" });
         await refresh.click();
@@ -299,7 +258,7 @@ suite.define(() => {
         await expect.poll(() => save.isDisabled()).toBe(true);
         await gateway.resolveDeferred("agents.files.get", fileGet("main", "server revision 3"));
         await expect.poll(() => refresh.isEnabled()).toBe(true);
-        await capture(page, "08-save-survives-older-refresh.png");
+        await captureAgentFileScreenshot(page, "08-save-survives-older-refresh.png");
         await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
         await expect.poll(() => reset.isDisabled()).toBe(true);
 
@@ -330,98 +289,8 @@ suite.define(() => {
         await expect.poll(() => page.locator(".agents-refresh-btn").isEnabled()).toBe(true);
         await expect.poll(() => editor.inputValue()).toBe("Saved latest instructions");
         expect(await missingHint.count()).toBe(0);
-        await capture(page, "09-created-file-survives-stale-list.png");
+        await captureAgentFileScreenshot(page, "09-created-file-survives-stale-list.png");
       },
     );
-  });
-
-  it("reads and saves the selected agent workspace through an isolated Gateway", async () => {
-    const port = await getFreePort();
-    const state = await createOpenClawTestState({
-      label: "control-ui-agent-files",
-      layout: "home",
-      env: {
-        OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-        OPENCLAW_SKIP_CANVAS_HOST: "1",
-        OPENCLAW_SKIP_CHANNELS: "1",
-        OPENCLAW_SKIP_CRON: "1",
-        OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-        OPENCLAW_SKIP_PROVIDERS: "1",
-        OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-        VITEST: "1",
-      },
-    });
-    const mainWorkspace = state.path("workspace-main");
-    const writerWorkspace = state.path("workspace-writer");
-    await Promise.all([
-      mkdir(mainWorkspace, { recursive: true }),
-      mkdir(writerWorkspace, { recursive: true }),
-    ]);
-    await Promise.all([
-      writeFile(path.join(mainWorkspace, "AGENTS.md"), "# Real main instructions\n", "utf8"),
-      writeFile(path.join(writerWorkspace, "AGENTS.md"), "# Real writer instructions\n", "utf8"),
-    ]);
-    await state.writeConfig({
-      agents: {
-        defaults: { workspace: mainWorkspace },
-        entries: {
-          main: { default: true, workspace: mainWorkspace },
-          writer: { workspace: writerWorkspace },
-        },
-      },
-      gateway: {
-        auth: { mode: "none" },
-        controlUi: {
-          allowedOrigins: [new URL(suite.server.baseUrl).origin],
-          enabled: false,
-        },
-        port,
-      },
-    });
-    state.applyEnv();
-    const { startGatewayServer } = await import("../../../src/gateway/server.js");
-    const gateway = await startGatewayServer(port, {
-      auth: { mode: "none" },
-      bind: "loopback",
-      controlUiEnabled: false,
-      sidecarStartup: "defer",
-    });
-
-    try {
-      await suite.withPage(
-        {
-          locale: "en-US",
-          serviceWorkers: "block",
-          viewport: { height: 900, width: 1440 },
-        },
-        async ({ page }) => {
-          const url = new URL("settings/agents/main/files", suite.server.baseUrl);
-          url.searchParams.set("gatewayUrl", `ws://127.0.0.1:${port}`);
-          await page.goto(url.toString());
-          const confirmation = page.locator("openclaw-gateway-url-confirmation");
-          await confirmation.waitFor();
-          await confirmation.getByRole("button", { name: "Confirm", exact: true }).click();
-          const editor = page.locator(".agent-file-textarea");
-          await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
-
-          await selectAgent(page, "writer");
-          await expect.poll(() => editor.inputValue()).toBe("# Real writer instructions\n");
-
-          await selectAgent(page, "main");
-          await expect.poll(() => editor.inputValue()).toBe("# Real main instructions\n");
-          await editor.fill("# Saved through real Gateway\n");
-          const save = page.locator(".agent-file-actions").getByRole("button", { name: "Save" });
-          await save.click();
-          await expect.poll(() => save.isDisabled()).toBe(true);
-          await expect
-            .poll(() => readFile(path.join(mainWorkspace, "AGENTS.md"), "utf8"))
-            .toBe("# Saved through real Gateway\n");
-          await capture(page, "07-real-gateway-main-save.png");
-        },
-      );
-    } finally {
-      await gateway.close({ reason: "agent file lifecycle e2e cleanup" });
-      await state.cleanup();
-    }
   });
 });

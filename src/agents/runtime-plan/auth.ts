@@ -4,7 +4,6 @@
  * safely forwarded.
  */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { normalizePluginsConfig } from "../../plugins/config-state.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
 import {
@@ -50,8 +49,7 @@ export function buildAgentRuntimeAuthPlan(params: {
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
   const providerAuthAliasesEnabled =
-    params.providerAuthAliasesEnabled ??
-    (params.config ? normalizePluginsConfig(params.config.plugins).enabled : true);
+    params.providerAuthAliasesEnabled ?? params.config?.plugins?.enabled !== false;
   const metadataSnapshot =
     params.metadataSnapshot ??
     (providerAuthAliasesEnabled ? undefined : EMPTY_PROVIDER_AUTH_ALIAS_METADATA);

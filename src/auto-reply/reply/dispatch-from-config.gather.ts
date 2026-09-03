@@ -66,6 +66,7 @@ import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js
 export async function gatherDispatchRequest(
   params: DispatchFromConfigParams,
   messageAuditTerminal: InboundMessageAuditTerminalRecorder | undefined,
+  allowActiveQueueResolution = false,
 ) {
   const ctx = isFinalizedInboundContext(params.ctx)
     ? params.ctx
@@ -191,6 +192,7 @@ export async function gatherDispatchRequest(
       return;
     }
     agentDispatchStartedAt = Date.now();
+    replyHotPathTiming.logPreparationIfSlow({ channel, messageId, sessionKey });
     logMessageDispatchStarted({
       channel,
       sessionKey: acpDispatchSessionKey,
@@ -388,6 +390,7 @@ export async function gatherDispatchRequest(
   const workspaceDir =
     preparedReplyDispatchRuntime?.workspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
   const replyOperationCoordinator = createDispatchReplyOperationCoordinator({
+    allowActiveQueueResolution,
     agentId: sessionAgentId,
     cfg,
     ctx,
@@ -478,6 +481,7 @@ export async function gatherDispatchRequest(
       stageRemoteInboundMediaIfNeeded({
         ctx: hookCtx,
         cfg,
+        agentId: sessionAgentId,
         sessionKey: acpDispatchSessionKey,
         workspaceDir,
         remoteMediaMode: "cache",

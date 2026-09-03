@@ -177,6 +177,7 @@ export type FollowupRun = {
     toolBindings?: Readonly<Record<string, unknown>>;
     chatType?: ChatType;
     agentAccountId?: string;
+    conversationRoutePeerId?: string;
     conversationToolPolicy?: GroupToolPolicyConfig;
     groupId?: string;
     groupChannel?: string;
@@ -252,6 +253,7 @@ export type FollowupRun = {
     suppressTranscriptOnlyAssistantPersistence?: boolean;
     /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
+    skillLibraryAuthoring?: import("../../../skills/library/authoring.js").SkillLibraryAuthoringCapability;
   };
 };
 

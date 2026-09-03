@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { ClawHubTrustErrorCode } from "../infra/clawhub-install-trust.js";
 import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
-import type { PluginCapabilityConsentReview } from "../plugins/capability-consent.js";
+import type { PluginCapabilityConsentReview } from "../plugins/capability-summary.js";
 import {
   attachPluginInstallOwnerMigrations,
   resolvePluginInstallTransactionSink,
@@ -475,16 +475,20 @@ describe("plugins cli update", () => {
       },
     });
     primePluginUpdate(cfg);
-    updateNpmInstalledHookPacksMock.mockResolvedValue({
-      config: nextConfig,
-      changed: true,
-      outcomes: [
-        {
-          hookId: "demo-hooks",
-          status: "updated",
-          message: 'Updated hook pack "demo-hooks": 1.0.0 -> 1.1.0.',
-        },
-      ],
+    const transaction = { commit: vi.fn(async () => {}), rollback: vi.fn(async () => {}) };
+    updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
+      resolvePluginInstallTransactionSink(params)?.push(transaction);
+      return {
+        config: nextConfig,
+        changed: true,
+        outcomes: [
+          {
+            hookId: "demo-hooks",
+            status: "updated",
+            message: 'Updated hook pack "demo-hooks": 1.0.0 -> 1.1.0.',
+          },
+        ],
+      };
     });
 
     await runPluginsCommand(["plugins", "update", target, "--dangerously-force-unsafe-install"]);
@@ -502,7 +506,51 @@ describe("plugins cli update", () => {
       expect.objectContaining({ nextConfig, baseHash: "update-config" }),
     );
     expect(refreshPluginRegistryMock).not.toHaveBeenCalled();
+    expect(transaction.commit).toHaveBeenCalledOnce();
+    expect(transaction.rollback).not.toHaveBeenCalled();
     expectRestartNoticeLogged();
+  });
+
+  it.each([
+    { failure: "later hook install", settlement: "rollback" },
+    { failure: "config write", settlement: "rollback" },
+    { failure: "backup cleanup", settlement: "commit" },
+  ])("settles hook updates when $failure fails", async ({ failure, settlement }) => {
+    primeUpdateConfigSnapshot({ config: {} });
+    setHookInstallRecords({
+      "demo-hooks": { source: "npm", spec: "@acme/demo-hooks@1.0.0" },
+    });
+    const events: string[] = [];
+    updateNpmInstalledHookPacksMock.mockImplementation(async (params) => {
+      resolvePluginInstallTransactionSink(params)?.push({
+        commit: async () => {
+          events.push("commit");
+          if (failure === "backup cleanup") {
+            throw new Error(failure);
+          }
+        },
+        rollback: async () => {
+          events.push("rollback");
+        },
+      });
+      if (failure === "later hook install") {
+        throw new Error(failure);
+      }
+      return { config: params.config, changed: true, outcomes: [] };
+    });
+    if (failure === "config write") {
+      replaceConfigFileMock.mockRejectedValueOnce(new Error(failure));
+    }
+
+    const update = runPluginsCommand(["plugins", "update", "demo-hooks"]);
+    if (settlement === "commit") {
+      await update;
+      expectRestartNoticeLogged();
+    } else {
+      await expect(update).rejects.toThrow(failure);
+    }
+
+    expect(events).toEqual([settlement]);
   });
 
   it("uses the mutation-start snapshot for updater input and hook selection", async () => {
@@ -1266,7 +1314,7 @@ describe("plugins cli update", () => {
     expect(configWriteMock).not.toHaveBeenCalled();
   });
 
-  it("preserves skip behavior for plugin records whose source cannot be updated", async () => {
+  it("skips an exact orphan path record during bulk update", async () => {
     const cfg = {
       plugins: {
         installs: {
@@ -1283,12 +1331,23 @@ describe("plugins cli update", () => {
     primePluginUpdate(cfg, [
       { pluginId: "linked", status: "skipped", message: "Skipping linked." },
     ]);
+    const installedIndexModule = await import("../plugins/installed-plugin-index.js");
+    const indexSpy = vi.spyOn(installedIndexModule, "loadInstalledPluginIndex").mockReturnValue(
+      createTestInstalledPluginIndex({
+        policyHash: "orphan-path-update",
+        installRecords: cfg.plugins?.installs ?? {},
+      }),
+    );
+    try {
+      await runPluginsCommand(["plugins", "update", "--all"]);
 
-    await runPluginsCommand(["plugins", "update", "--all"]);
-
-    expect(updateNpmInstalledPluginsMock).toHaveBeenCalledOnce();
-    expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
-    expect(configWriteMock).not.toHaveBeenCalled();
+      expect(runtimeErrors).toEqual([]);
+      expect(updateNpmInstalledPluginsMock).toHaveBeenCalledOnce();
+      expect(updateNpmInstalledHookPacksMock).not.toHaveBeenCalled();
+      expect(configWriteMock).not.toHaveBeenCalled();
+    } finally {
+      indexSpy.mockRestore();
+    }
   });
 
   it("preserves skip behavior for ClawHub records missing package metadata", async () => {

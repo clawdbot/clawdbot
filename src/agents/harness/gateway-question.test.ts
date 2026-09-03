@@ -332,6 +332,12 @@ describe("gateway harness questions", () => {
       questionId: "ask_44444444444444444444444444444444",
     });
     await vi.waitFor(() => expect(onBlockReply).toHaveBeenCalledOnce());
+    expect(onBlockReply).toHaveBeenCalledWith(
+      expect.any(Object),
+      expect.objectContaining({
+        deliveryIntentId: "block-reply:v1:agent-question:ask_44444444444444444444444444444444",
+      }),
+    );
 
     await expect(
       cancelPendingAgentQuestionForSession({

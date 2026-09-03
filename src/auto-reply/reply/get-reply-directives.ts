@@ -359,11 +359,13 @@ export async function resolveReplyDirectives(params: {
     typing.cleanup();
     const runtimeSandboxed = resolveSandboxRuntimeStatus({
       cfg,
-      sessionKey: resolveRuntimePolicySessionKey({
+      agentId,
+      sessionKey,
+      classificationSessionKey: resolveRuntimePolicySessionKey({
         agentId,
         cfg,
         ctx,
-        sessionKey: ctx.SessionKey,
+        sessionKey,
       }),
     }).sandboxed;
     return {
@@ -612,7 +614,7 @@ export async function resolveReplyDirectives(params: {
     !thinkingActive &&
     !thinkingExplicitlySet
   ) {
-    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel({ provider, model });
   }
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
   const resolvedFastModeState = resolveFastModeState({

@@ -83,7 +83,10 @@ vi.mock("../commands/onboard.js", () => ({
   onboardCommand: programMocks.onboardCommand,
   setupWizardCommand: programMocks.setupWizardCommand,
 }));
-vi.mock("../runtime.js", () => ({ defaultRuntime: programMocks.runtime }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  defaultRuntime: programMocks.runtime,
+}));
 vi.mock("./channel-auth.js", () => ({
   runChannelLogin: programMocks.runChannelLogin,
   runChannelLogout: programMocks.runChannelLogout,

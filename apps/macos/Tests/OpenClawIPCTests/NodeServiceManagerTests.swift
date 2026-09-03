@@ -3,6 +3,31 @@ import Testing
 @testable import OpenClaw
 
 @Suite(.serialized) struct NodeServiceManagerTests {
+    @Test func `absent node service performs no CLI lifecycle work`() async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withIsolatedState(
+            env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path],
+            defaults: ["openclaw.gatewayProjectRootPath": nil])
+        {
+            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+                .standardizedFileURL)
+            CommandResolver.setProjectRoot(root.path)
+            let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
+            try makeExecutableForTests(at: executable)
+            try "#!/bin/sh\nprintf '{\"ok\":false,\"error\":\"Node service not installed.\"}'\n"
+                .write(to: executable, atomically: false, encoding: .utf8)
+            NodeServiceManager._testResetPersistentServiceCalls()
+            let profile = AppProfile(environment: [:])
+
+            #expect(await NodeServiceManager.start(profile: profile) == nil)
+            #expect(await NodeServiceManager.stop(profile: profile) == nil)
+            #expect(await NodeServiceManager.restart(profile: profile) == nil)
+            #expect(await !NodeServiceManager.waitUntilRunning(profile: profile))
+            #expect(NodeServiceManager._testPersistentServiceCallSnapshot().commands.isEmpty)
+        }
+    }
+
     @Test func `active profile performs no persistent node service work`() async {
         let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
         NodeServiceManager._testResetPersistentServiceCalls()
@@ -15,6 +40,29 @@ import Testing
         let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
         #expect(snapshot.commands.isEmpty)
         #expect(snapshot.ownershipReads == 0)
+    }
+
+    @Test(arguments: ["not a plist", "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict/></plist>"])
+    func `unreadable node service refuses CLI lifecycle work`(_ contents: String) async throws {
+        let root = try makeTempDirForTests()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try await TestIsolation.withEnvValues(["HOME": root.path, "CFFIXED_USER_HOME": root.path]) {
+            try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == root
+                .standardizedFileURL)
+            let plist = root.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+            try FileManager.default.createDirectory(
+                at: plist.deletingLastPathComponent(),
+                withIntermediateDirectories: true)
+            try contents.write(to: plist, atomically: false, encoding: .utf8)
+            NodeServiceManager._testResetPersistentServiceCalls()
+            let profile = AppProfile(environment: [:])
+            for action in ["start", "stop", "restart"] {
+                #expect(await self.runNodeServiceAction(action, profile: profile) ==
+                    "Could not read the node service ownership record. Check the node LaunchAgent and retry.")
+            }
+            #expect(await !NodeServiceManager.waitUntilRunning(profile: profile))
+            #expect(NodeServiceManager._testPersistentServiceCallSnapshot().commands.isEmpty)
+        }
     }
 
     @Test func `builds node service commands with current CLI shape`() async throws {
@@ -46,6 +94,8 @@ import Testing
 
         try await TestIsolation.withIsolatedState(
             env: [
+                "HOME": root.path,
+                "CFFIXED_USER_HOME": root.path,
                 "OPENCLAW_NODE_SERVICE_TEST_ROOT": root.path,
                 "OPENCLAW_NODE_SERVICE_DELAYED_ACTION": previousAction,
             ],
@@ -54,6 +104,7 @@ import Testing
             CommandResolver.setProjectRoot(root.path)
             let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
             try makeExecutableForTests(at: executable)
+            try self.installServiceFixture(home: root, executable: executable)
             let script = """
             #!/bin/sh
             action="$2"
@@ -107,12 +158,13 @@ import Testing
         defer { try? FileManager.default.removeItem(at: root) }
 
         try await TestIsolation.withIsolatedState(
-            env: ["OPENCLAW_NODE_SERVICE_TEST_CASE": scenario],
+            env: ["HOME": root.path, "CFFIXED_USER_HOME": root.path, "OPENCLAW_NODE_SERVICE_TEST_CASE": scenario],
             defaults: ["openclaw.gatewayProjectRootPath": nil])
         {
             CommandResolver.setProjectRoot(root.path)
             let executable = root.appendingPathComponent("node_modules/.bin/openclaw")
             try makeExecutableForTests(at: executable)
+            try self.installServiceFixture(home: root, executable: executable)
             let script = """
             #!/bin/sh
             case "$OPENCLAW_NODE_SERVICE_TEST_CASE" in
@@ -189,6 +241,17 @@ import Testing
         #expect(!NodeServiceManager._testRuntimeIsRunning(fromJSON: """
         {"service":{"loaded":true,"runtime":{"status":"stopped"}}}
         """))
+    }
+
+    private func installServiceFixture(home: URL, executable: URL) throws {
+        try #require(FileManager.default.homeDirectoryForCurrentUser.standardizedFileURL == home.standardizedFileURL)
+        let plist = home.appendingPathComponent("Library/LaunchAgents/\(nodeLaunchdLabel).plist")
+        try FileManager.default.createDirectory(
+            at: plist.deletingLastPathComponent(),
+            withIntermediateDirectories: true)
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: ["ProgramArguments": [executable.path, "node", "run"]], format: .xml, options: 0)
+        try data.write(to: plist)
     }
 
     private func runNodeServiceAction(_ action: String, profile: AppProfile) async -> String? {

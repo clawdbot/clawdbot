@@ -16,9 +16,11 @@ import {
 } from "../../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  resolveSessionNavigationAgentId,
   resolveSessionPreferredFace,
   sessionNavigationTarget,
 } from "../../lib/sessions/route-navigation.ts";
+import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import {
   ACTIVITY_TIME_FILTERS,
@@ -35,8 +37,6 @@ type SessionActivityViewProps = {
   expandedAutomationDays: ReadonlySet<string>;
   filters: SessionActivityFilters;
   presenceViewers: readonly PresenceViewer[];
-  retainedIdentity: PresenceViewer | null;
-  rows: readonly GatewaySessionRow[];
   result?: SessionsListResult;
   loading: boolean;
   error?: string;
@@ -205,24 +205,6 @@ function renderPeopleControl(
   </div>`;
 }
 
-function navigateToSession(event: MouseEvent, context: ApplicationContext, row: GatewaySessionRow) {
-  if (!shouldHandleNavigationClick(event)) {
-    return;
-  }
-  event.preventDefault();
-  const face = resolveSessionPreferredFace(row);
-  const target = sessionNavigationTarget({ context, face, sessionKey: row.key });
-  context.navigate(face, target.options);
-}
-
-function sessionHref(context: ApplicationContext, row: GatewaySessionRow): string {
-  return sessionNavigationTarget({
-    context,
-    face: resolveSessionPreferredFace(row),
-    sessionKey: row.key,
-  }).href;
-}
-
 function dayLabel(timestamp: number | null, now = Date.now()): string {
   if (timestamp === null) {
     return t("activityFeed.unknownDate");
@@ -245,6 +227,18 @@ function dayLabel(timestamp: number | null, now = Date.now()): string {
 }
 
 function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) {
+  const face = resolveSessionPreferredFace(row);
+  const target = sessionNavigationTarget({
+    face,
+    sessionKey: row.key,
+    fallbackAgentId: resolveSessionNavigationAgentId(context),
+    basePath: context.basePath,
+    row,
+    mainKey: resolveUiConfiguredMainKey({
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    }),
+  });
   const owner = sessionActivityOwner(row);
   const ownerName = presenceViewerLabel(owner);
   const activityAt = sessionActivityTimestamp(row);
@@ -264,8 +258,13 @@ function renderSessionLink(context: ApplicationContext, row: GatewaySessionRow) 
     <a
       class="activity-feed__session"
       data-activity-session=${row.key}
-      href=${sessionHref(context, row)}
-      @click=${(event: MouseEvent) => navigateToSession(event, context, row)}
+      href=${target.href}
+      @click=${(event: MouseEvent) => {
+        if (shouldHandleNavigationClick(event)) {
+          event.preventDefault();
+          context.navigate(face, target.options);
+        }
+      }}
     >
       <span class="activity-feed__session-avatar">
         ${row.hasActiveRun === true
@@ -419,8 +418,16 @@ function renderIdentityHeader(
 
 export function renderSessionActivityView(props: SessionActivityViewProps) {
   const projection = projectSessionActivity(props.result);
-  const identity = props.retainedIdentity;
-  const onlineById = new Map(props.presenceViewers.map((person) => [person.id, person]));
+  const onlineById = new Map(
+    props.presenceViewers.flatMap((person) =>
+      person.identity ? [[person.identity.id, person] as const] : [],
+    ),
+  );
+  const identity = props.filters.personId
+    ? (onlineById.get(props.filters.personId) ??
+      projection.people.find((person) => person.id === props.filters.personId) ??
+      null)
+    : null;
   const people = projection.people.map((person) => {
     const online = onlineById.get(person.id);
     return online ? { ...person, ...online, count: person.count } : person;
@@ -479,7 +486,7 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
           : nothing}
         ${props.result && props.filters.personId
           ? identity
-            ? renderIdentityHeader(props.context, identity, props.rows)
+            ? renderIdentityHeader(props.context, identity, projection.sessions)
             : html`<section class="activity-feed__not-found" role="status">
                 <h2>${t("activityFeed.notFoundTitle")}</h2>
                 <p>${t("activityFeed.notFoundDescription")}</p>

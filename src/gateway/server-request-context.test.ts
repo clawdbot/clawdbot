@@ -50,6 +50,7 @@ function makeContextParams(
     deps: {} as never,
     runtimeState,
     getRuntimeConfig: vi.fn(() => config),
+    isConfigReloadSettled: vi.fn(() => true),
     getGatewayMethodRegistry: vi.fn(() => ({}) as never),
     sessionCompanion: {} as never,
     sessionObserver: {} as never,
@@ -60,6 +61,7 @@ function makeContextParams(
     isTerminalEnabled: vi.fn(() => false),
     execApprovalManager: undefined,
     pluginApprovalManager: undefined,
+    placementStandingGrants: undefined,
     validateAgentRuntimeApprovalAuthority: () => false,
     listSessionPendingApprovals: undefined,
     loadGatewayModelCatalog: vi.fn(async () => []),
@@ -110,7 +112,7 @@ function makeContextParams(
     findRunningWizard: vi.fn(() => null),
     purgeWizardSession: vi.fn(),
     getRuntimeSnapshot: vi.fn(() => ({}) as never),
-    startChannel: vi.fn(async () => undefined),
+    startChannel: vi.fn(async () => new Map()),
     stopChannel: vi.fn(async () => undefined),
     markChannelLoggedOut: vi.fn(),
     wizardRunner: vi.fn(async () => undefined),
@@ -206,16 +208,23 @@ describe("createGatewayRequestContext", () => {
     expect(context.cronStorePath).toBe("/tmp/cron-b");
   });
 
-  it("reads config hot-reload status through the live kernel bridge", () => {
+  it("reads config reload status and readiness through the live kernel bridge", () => {
     let status: "active" | "disabled" | undefined;
+    let settled = true;
     const context = createGatewayRequestContext(
-      makeContextParams({ getConfigReloaderHotReloadStatus: () => status }),
+      makeContextParams({
+        getConfigReloaderHotReloadStatus: () => status,
+        isConfigReloadSettled: () => settled,
+      }),
     );
 
     expect(context.getConfigReloaderHotReloadStatus?.()).toBeUndefined();
 
     status = "active";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("active");
+    expect(context.isConfigReloadSettled()).toBe(true);
+    settled = false;
+    expect(context.isConfigReloadSettled()).toBe(false);
 
     status = "disabled";
     expect(context.getConfigReloaderHotReloadStatus?.()).toBe("disabled");
@@ -347,6 +356,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -355,6 +365,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-new-png",
@@ -375,6 +386,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@example.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -383,6 +395,7 @@ describe("createGatewayRequestContext", () => {
           expect.objectContaining({
             user: {
               id: "profile-ada",
+              identity: { type: "profile", id: "profile-ada" },
               email: "ada@work.test",
               name: "Augusta Ada",
               avatarUrl: "/api/users/profile-ada/avatar?v=avatar-newer-png",
@@ -469,7 +482,7 @@ describe("createGatewayRequestContext", () => {
       expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
       for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
         expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
-          user: { id: target.id },
+          user: { id: target.id, identity: { type: "profile", id: target.id } },
           onlineSince: 1_000,
           lastActivityAt: 3_000,
         });
@@ -481,6 +494,7 @@ describe("createGatewayRequestContext", () => {
         presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
       ).toEqual({
         id: target.id,
+        identity: { type: "profile", id: target.id },
         email: "merge-source@example.test",
         name: target.displayName,
         avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
@@ -489,6 +503,54 @@ describe("createGatewayRequestContext", () => {
         false,
       );
     });
+  });
+
+  it("publishes an owner rename to every tab without inventing an email", () => {
+    const ownerClients = [];
+    for (const tab of ["one", "two"]) {
+      ownerClients.push({
+        ...makeGatewayClient({
+          connId: `owner-${tab}`,
+          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
+        }),
+        authenticatedUserProfile: {
+          profileId: "profile-owner",
+          displayName: "Ada",
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+        presenceKey: `profile-owner-${tab}`,
+        personPresence: { onlineSince: 1_000 },
+      });
+    }
+    const params = makeContextParams({ clients: new Set(ownerClients) as never });
+    createGatewayRequestContext(params).refreshConnectedUserProfile?.({
+      id: "profile-owner",
+      displayName: "Augusta Ada",
+      avatarRevision: "2",
+      hasAvatar: false,
+      updatedAt: 2,
+    });
+
+    for (const client of ownerClients) {
+      expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
+    }
+    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "profile-owner");
+    expect(ownerRows).toHaveLength(2);
+    for (const entry of ownerRows) {
+      expect(entry.user).toEqual({
+        id: "profile-owner",
+        identity: { type: "profile", id: "profile-owner" },
+        name: "Augusta Ada",
+        avatarUrl: "/api/users/profile-owner/avatar?v=2",
+      });
+    }
+    expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "presence",
+      { presence: expect.arrayContaining(ownerRows) },
+      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
+    );
   });
 
   it("publishes only server-stamped activity from the exact live client", () => {
@@ -599,6 +661,7 @@ describe("createGatewayRequestContext", () => {
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
     ).toEqual({
       id: "profile-ada-avatar-removed",
+      identity: { type: "profile", id: "profile-ada-avatar-removed" },
       email: "ada@example.test",
       name: "Ada",
       avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
@@ -640,6 +703,7 @@ describe("createGatewayRequestContext", () => {
       presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
     ).toEqual({
       id: "profile-ada-tailscale",
+      identity: { type: "profile", id: "profile-ada-tailscale" },
       name: "Augusta Ada",
       avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
     });

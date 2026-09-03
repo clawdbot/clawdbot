@@ -16,7 +16,7 @@ export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pair
 export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { listSkillCommandsForAgents } from "openclaw/plugin-sdk/command-auth-native";
-export { buildModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
+export { buildPreparedModelsProviderData } from "openclaw/plugin-sdk/models-provider-runtime";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 export {
   resolveAllowlistProviderRuntimeGroupPolicy,
@@ -32,8 +32,9 @@ export {
   createChannelHistoryWindow,
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
+export { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
 export {
-  isRequestBodyLimitError,
   readRequestBodyWithLimit,
-} from "openclaw/plugin-sdk/webhook-ingress";
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";

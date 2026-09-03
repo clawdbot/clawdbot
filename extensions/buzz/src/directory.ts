@@ -2,13 +2,19 @@ import type {
   ChannelDirectoryEntry,
   DirectoryConfigParams,
 } from "openclaw/plugin-sdk/directory-runtime";
+import { listBuzzDirectoryGroupsFromConfig } from "./directory-config.js";
 import { queryBuzzDirectoryProfiles, queryBuzzDirectoryRooms } from "./directory-relay.js";
 import { BuzzDirectoryState } from "./directory-state.js";
 import { getActiveBuzzBus } from "./gateway.js";
 import { connectAuthenticatedBuzzRelaySession, parseBuzzAuthTag } from "./relay-auth.js";
 import { queryBuzzRoomMemberships } from "./room-membership-query.js";
 import { parseBuzzTarget } from "./target.js";
-import { assertBuzzAccountAvailable, decodeBuzzPrivateKey, resolveBuzzAccount } from "./types.js";
+import {
+  assertBuzzAccountAvailable,
+  decodeBuzzPrivateKey,
+  resolveBuzzAccount,
+  resolveBuzzAccountConfig,
+} from "./types.js";
 
 const DIRECTORY_LIVE_TIMEOUT_MS = 10_000;
 
@@ -24,7 +30,9 @@ function createConfiguredDirectoryState(params: DirectoryConfigParams): {
   state: BuzzDirectoryState;
 } | null {
   const account = resolveBuzzAccount({ cfg: params.cfg, accountId: params.accountId });
-  assertBuzzAccountAvailable(account);
+  if (account.enabled) {
+    assertBuzzAccountAvailable(account);
+  }
   if (!account.publicKey) {
     return null;
   }
@@ -45,7 +53,12 @@ async function loadBuzzDirectoryState(
   options: { refreshRooms: boolean },
 ): Promise<BuzzDirectoryState | null> {
   const configured = createConfiguredDirectoryState(params);
-  if (!configured || !configured.account.configured || configured.channelIds.length === 0) {
+  if (
+    !configured ||
+    !configured.account.enabled ||
+    !configured.account.configured ||
+    configured.channelIds.length === 0
+  ) {
     return configured?.state ?? null;
   }
   const activeBus = getActiveBuzzBus(configured.account.accountId);
@@ -119,6 +132,9 @@ export async function listBuzzDirectoryPeersLive(
 export async function listBuzzDirectoryGroupsLive(
   params: DirectoryConfigParams,
 ): Promise<ChannelDirectoryEntry[]> {
+  if (!resolveBuzzAccountConfig(params).config.enabled) {
+    return listBuzzDirectoryGroupsFromConfig(params);
+  }
   return (
     (await loadBuzzDirectoryState(params, { refreshRooms: true }))?.listGroups({
       query: params.query,

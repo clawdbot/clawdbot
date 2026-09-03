@@ -35,13 +35,15 @@ describe("plugin registry SQLite session ownership", () => {
         agents: { list: [{ id: "researcher", default: true }] },
       } as OpenClawConfig;
       const subagent = {
+        complete: vi.fn(async () => ({ text: "completed" })),
         run: vi.fn(async () => ({ runId: "workboard-run" })),
         waitForRun: vi.fn(async () => ({ status: "ok" as const })),
         getSessionMessages: vi.fn(async () => ({ messages: [] })),
         deleteSession: vi.fn(async () => {}),
       } satisfies PluginRuntime["subagent"];
       const runtime = createPluginRuntime({ subagent });
-      runtime.config = { ...runtime.config, current: () => config };
+      let runtimeConfig = config;
+      runtime.config = { ...runtime.config, current: () => runtimeConfig };
       const pluginRegistry = createTestRegistry(runtime);
       const record = createPluginRecord({
         id: "workboard",
@@ -94,6 +96,20 @@ describe("plugin registry SQLite session ownership", () => {
         await expect(
           api.runtime.subagent.run({ sessionKey: lockedSessionKey, message: "continue" }),
         ).rejects.toThrow('owned by plugin "harness-owner"');
+        expect(subagent.run).toHaveBeenCalledOnce();
+
+        await replaceSessionEntry(
+          { agentId: "replacement", sessionKey: `agent:replacement:${sessionKey}` },
+          {
+            sessionId: "replacement-owned-session",
+            updatedAt: 2,
+            agentHarnessId: "test-harness",
+            modelSelectionLocked: true,
+          },
+        );
+        const pending = api.runtime.subagent.run({ sessionKey, message: "continue" });
+        runtimeConfig = { agents: { list: [{ id: "replacement", default: true }] } };
+        await expect(pending).rejects.toThrow('owned by plugin "harness-owner"');
         expect(subagent.run).toHaveBeenCalledOnce();
       } finally {
         closeOpenClawAgentDatabasesForTest();

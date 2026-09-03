@@ -11,6 +11,7 @@ defineDiscordVoiceTests(
     createManager,
     entersStateMock,
     getSessionEntry,
+    getLastAudioPlayer,
     getVoiceReceive,
     lastTtsStreamArgs,
     loggerWarnMock,
@@ -209,6 +210,7 @@ defineDiscordVoiceTests(
         );
         await manager.join({ guildId: "g1", channelId: "1001" });
         const entry = getSessionEntry(manager);
+        const player = getLastAudioPlayer();
         entersStateMock.mockImplementation(async (_target, state, signal) => {
           if (state === (buffering ? "playing" : "idle")) {
             await new Promise<void>((_resolve, reject) => {
@@ -222,8 +224,8 @@ defineDiscordVoiceTests(
             });
           }
         });
-        entry.player.stop.mockImplementation(() => {
-          const idleHandler = entry.player.on.mock.calls.find(([event]) => event === "idle")?.[1];
+        player.stop.mockImplementation(() => {
+          const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1];
           idleHandler?.();
           return true;
         });
@@ -246,7 +248,7 @@ defineDiscordVoiceTests(
         expect((await manager.leave({ guildId: "g1" })).ok).toBe(true);
         await entry.playbackQueue;
 
-        expect(entry.player.stop).toHaveBeenCalledOnce();
+        expect(player.stop).toHaveBeenCalledOnce();
         expect(release).toHaveBeenCalledOnce();
         expect(loggerWarnMock).not.toHaveBeenCalledWith(
           expect.stringContaining("discord voice: playback failed"),

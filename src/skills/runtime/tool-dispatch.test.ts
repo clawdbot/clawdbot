@@ -30,6 +30,38 @@ const dependencies: SkillToolDispatchDependencies = {
 };
 
 describe("resolveSkillDispatchTools", () => {
+  it.each([
+    { agentId: "isolated", expectedTools: ["read"] },
+    { agentId: "direct", expectedTools: ["read", "cron", "exec", "conversations_send"] },
+  ])("applies $agentId sandbox policy to global skill dispatch", ({ agentId, expectedTools }) => {
+    const tools = resolveSkillDispatchTools(
+      {
+        message: { surface: "webchat" },
+        cfg: {
+          session: { scope: "global" },
+          agents: {
+            entries: {
+              isolated: {
+                sandbox: { mode: "all" },
+                tools: { sandbox: { tools: { allow: ["read"] } } },
+              },
+              direct: { sandbox: { mode: "off" } },
+            },
+          },
+        },
+        agentId,
+        sessionKey: "global",
+        workspaceDir: "/tmp/openclaw-skill-tool-dispatch-test",
+        provider: "openai",
+        model: "gpt-5.6-luna",
+        senderIsOwner: true,
+      },
+      dependencies,
+    );
+
+    expect(tools.map((tool) => tool.name)).toEqual(expectedTools);
+  });
+
   it("passes final filtered tool surface to cron jobs", () => {
     const tools = resolveSkillDispatchTools(
       {
@@ -51,7 +83,7 @@ describe("resolveSkillDispatchTools", () => {
       dependencies,
     );
 
-    const args = createOpenClawToolsMock.mock.calls[0]?.[0];
+    const args = createOpenClawToolsMock.mock.calls.at(-1)?.[0];
     expect(tools.map((tool) => tool.name)).toEqual(["read", "cron"]);
     expect(args?.cronCreatorToolAllowlist).toEqual([{ name: "read" }, { name: "automations" }]);
     expect(args?.nativeChannelId).toBe("native-room-1");

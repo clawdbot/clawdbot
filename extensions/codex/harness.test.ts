@@ -239,30 +239,36 @@ describe("Codex agent harness supports()", () => {
     expect(!result.supported ? result.reason : undefined).toContain("not declared");
   });
 
-  it("lets explicitly selected Codex discover unlisted models with its own account", () => {
-    expect(
-      harness.supports({
-        provider: "openai",
-        modelId: "gpt-future",
-        requestedRuntime: "codex",
-        modelProvider: {
-          requestTransportOverrides: "none",
-          preparedAuth: { source: "harness" },
-        },
-      }),
-    ).toEqual({ supported: true, priority: 100 });
-  });
+  it.each(["gpt-future", "test-next-model"])(
+    "lets explicitly selected Codex discover %s with its own account",
+    (modelId) => {
+      expect(
+        harness.supports({
+          provider: "openai",
+          modelId,
+          requestedRuntime: "codex",
+          modelProvider: {
+            requestTransportOverrides: "none",
+            preparedAuth: { source: "harness" },
+          },
+        }),
+      ).toEqual({ supported: true, priority: 100 });
+    },
+  );
 
-  it("lets explicit Codex model discovery run before auth has been prepared", () => {
-    expect(
-      harness.supports({
-        provider: "openai",
-        modelId: "gpt-future",
-        requestedRuntime: "codex",
-        modelProvider: { requestTransportOverrides: "none" },
-      }),
-    ).toEqual({ supported: true, priority: 100 });
-  });
+  it.each(["gpt-future", "test-next-model"])(
+    "lets explicit Codex discovery of %s run before auth has been prepared",
+    (modelId) => {
+      expect(
+        harness.supports({
+          provider: "openai",
+          modelId,
+          requestedRuntime: "codex",
+          modelProvider: { requestTransportOverrides: "none" },
+        }),
+      ).toEqual({ supported: true, priority: 100 });
+    },
+  );
 
   it.each([
     {
@@ -485,7 +491,7 @@ describe("Codex agent harness reset()", () => {
         binding: { threadId: "thread-1", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-1" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-1" });
   });
 
   it("clears an in-place session generation without stranding its replacement", async () => {
@@ -511,14 +517,14 @@ describe("Codex agent harness reset()", () => {
       reason: "reset",
     });
 
-    await expect(bindingStore.read(identity)).resolves.toBeUndefined();
+    expect(bindingStore.read(identity)).toBeUndefined();
     await expect(
       bindingStore.mutate(identity, {
         kind: "set",
         binding: { threadId: "thread-2", cwd: "/repo" },
       }),
     ).resolves.toBe(true);
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({ threadId: "thread-2" });
+    expect(bindingStore.read(identity)).toMatchObject({ threadId: "thread-2" });
   });
 
   it("repairs a retirement fence left by an earlier in-place reset", async () => {
@@ -637,7 +643,7 @@ describe("Codex agent harness reset()", () => {
       ),
     ).rejects.toThrow("owned by supervision");
     expect(run).not.toHaveBeenCalled();
-    await expect(bindingStore.read(identity)).resolves.toMatchObject({
+    expect(bindingStore.read(identity)).toMatchObject({
       threadId: "thread-supervised",
     });
   });
