@@ -72,7 +72,7 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
   // would fail identically. The tree degrades to capacity polling instead.
   let capacityExhausted = false;
 
-  const closeAndFallback = (message: string, err?: unknown) => {
+  const closeAndFallback = (message: string, options?: { capacity?: boolean }) => {
     log.warn(message);
     if (pair) {
       ctx.closePair(pair);
@@ -81,7 +81,7 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
       return;
     }
     markDirty();
-    if (isKernelWatchCapacityError(err)) {
+    if (options?.capacity === true) {
       ctx.onCapacityExhausted(dir, markDirty);
       return;
     }
@@ -134,7 +134,12 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
         if (filename == null) {
           markDirty();
           if (!attachLinuxMemoryDirectoryTreeSubtree(ctx, watchDir, attachDirectory)) {
-            closeAndFallback(`failed to refresh Linux memory directory watchers under ${watchDir}`);
+            // A nested attach that hit capacity exhaustion sets the sticky
+            // closure flag; the refresh must degrade, not restart chokidar.
+            closeAndFallback(
+              `failed to refresh Linux memory directory watchers under ${watchDir}`,
+              { capacity: capacityExhausted },
+            );
           }
           return;
         }
@@ -154,7 +159,9 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
             closeDirectorySubtree(full);
           }
           if (!attachLinuxMemoryDirectoryTreeSubtree(ctx, full, attachDirectory)) {
-            closeAndFallback(`failed to attach Linux memory directory watcher under ${full}`);
+            closeAndFallback(`failed to attach Linux memory directory watcher under ${full}`, {
+              capacity: capacityExhausted,
+            });
             return;
           }
         }
@@ -181,7 +188,9 @@ export function attachLinuxMemoryDirectoryTreeWatchForDir(
         return;
       }
       const detail = err instanceof Error ? err.message : String(err);
-      closeAndFallback(`memory Linux directory watcher error on ${watchDir}: ${detail}`, err);
+      closeAndFallback(`memory Linux directory watcher error on ${watchDir}: ${detail}`, {
+        capacity: isKernelWatchCapacityError(err),
+      });
     });
     return watcher;
   };

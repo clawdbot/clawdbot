@@ -397,6 +397,45 @@ describe("memory watcher kernel capacity degrade", () => {
     }
   });
 
+  it("runtime new-child capacity failure degrades through the event path", async () => {
+    Object.defineProperty(process, "platform", { value: "linux", configurable: true });
+    await setupCapacityWorkspace();
+    const memoryDir = path.join(workspaceDir, "memory");
+
+    const active = await createManager(createWatchConfig());
+    await vi.waitFor(() =>
+      expect(nativeWatchFactoryMock.mock.calls.some((call) => String(call[0]) === memoryDir)).toBe(
+        true,
+      ),
+    );
+    const rootWatcher = createdNativeWatchers.find((watcher) => watcher.dir === memoryDir);
+    const chokidarBaseline = createdChokidarWatchers.length;
+
+    // A new subdirectory appears at runtime; attaching it exhausts capacity.
+    const childDir = path.join(memoryDir, "runtime-child");
+    await fs.mkdir(childDir);
+    capacityOverride.current = "EMFILE";
+    rootWatcher?.emit("rename", "runtime-child");
+
+    // The event path must degrade the tree, not restart the chokidar fallback.
+    // The event path must degrade the tree, not restart the chokidar
+    // fallback (spy is decisive even when a startup watcher exists to reuse).
+    // SAFETY: test-only spy on the protected fallback entry point.
+    const fallbackSpy = vi.spyOn(
+      active as unknown as { attachMemoryChokidarFallback: () => void },
+      "attachMemoryChokidarFallback",
+    );
+    await vi.waitFor(() => {
+      const degraded = memoryLoggerWarn.mock.calls.some((call) =>
+        String(call[0]).includes("kernel watch capacity exhausted"),
+      );
+      expect(degraded).toBe(true);
+    });
+    expect(createdChokidarWatchers.length).toBe(chokidarBaseline);
+    expect(readIntervalTimer(active)).toBeTruthy();
+    expect(fallbackSpy).not.toHaveBeenCalled();
+  });
+
   it("root reattachment under capacity degrades instead of dropping coverage", async () => {
     Object.defineProperty(process, "platform", { value: "linux", configurable: true });
     await setupCapacityWorkspace();
