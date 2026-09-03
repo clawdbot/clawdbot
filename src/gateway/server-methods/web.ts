@@ -39,18 +39,8 @@ type WebLoginProvider = NonNullable<ReturnType<typeof resolveWebLoginProvider>>;
 type WebLoginGateway = NonNullable<WebLoginProvider["gateway"]>;
 type WebLoginGatewayMethod = "loginWithQrStart" | "loginWithQrWait";
 
-function resolveAccountId(params: unknown): string | undefined {
-  return typeof (params as { accountId?: unknown }).accountId === "string"
-    ? (params as { accountId?: string }).accountId
-    : undefined;
-}
-
-function resolveChannelId(params: unknown): string | undefined {
-  if (!params || typeof params !== "object") {
-    return undefined;
-  }
-  const channel = Reflect.get(params, "channel");
-  return typeof channel === "string" ? channel : undefined;
+function resolveAccountId(params: Record<string, unknown>): string | undefined {
+  return typeof params.accountId === "string" ? params.accountId : undefined;
 }
 
 function resolveMissingWebLoginPluginHint(context: GatewayRequestContext): string | null {
@@ -100,7 +90,7 @@ function respondWebLoginUnavailable(respond: RespondFn, err: unknown) {
 
 /** Resolves a concrete provider gateway login method or sends the public error. */
 function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
-  rawParams: unknown;
+  rawParams: Record<string, unknown>;
   respond: RespondFn;
   context: GatewayRequestContext;
   gatewayMethod: TMethod;
@@ -110,7 +100,9 @@ function resolveWebLoginRequest<TMethod extends WebLoginGatewayMethod>(params: {
   run: NonNullable<WebLoginGateway[TMethod]>;
 } | null {
   const accountId = resolveAccountId(params.rawParams);
-  const provider = resolveWebLoginProvider(resolveChannelId(params.rawParams));
+  const provider = resolveWebLoginProvider(
+    typeof params.rawParams.channel === "string" ? params.rawParams.channel : undefined,
+  );
   if (!provider) {
     respondProviderUnavailable({
       respond: params.respond,

@@ -324,6 +324,7 @@ describe("webHandlers web.login.start", () => {
       },
       {
         id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: weixinLogin, loginWithQrWait: vi.fn() },
       },
     ]);
@@ -352,6 +353,37 @@ describe("webHandlers web.login.start", () => {
       true,
       expect.objectContaining({ sessionKey: "weixin-session" }),
       undefined,
+    );
+  });
+
+  it("does not fall back to the first provider for an unknown channel", async () => {
+    const whatsappLogin = vi.fn();
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        gatewayMethods: ["web.login.start"],
+        gateway: { loginWithQrStart: whatsappLogin },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await expectDefined(
+      webHandlers["web.login.start"],
+      'webHandlers["web.login.start"] test invariant',
+    )(
+      createOptions(
+        { channel: "missing-channel" },
+        {
+          respond,
+        },
+      ),
+    );
+
+    expect(whatsappLogin).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
 });
@@ -434,6 +466,7 @@ describe("webHandlers web.login.wait", () => {
       },
       {
         id: "openclaw-weixin",
+        gatewayMethods: ["web.login.start", "web.login.wait"],
         gateway: { loginWithQrStart: vi.fn(), loginWithQrWait: weixinWait },
       },
     ]);
