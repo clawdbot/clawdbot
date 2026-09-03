@@ -1,3 +1,4 @@
+import { deriveEnvironmentIntent } from "./service-contract.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { resolveNodeCommandAllowlist } from "../node-command-policy.js";
 import {
@@ -40,7 +41,6 @@ import type {
   WorkerPlacementMoveRequest,
   WorkerPlacementReclaimRequest,
 } from "./service-contract.js";
-import { deriveEnvironmentIntent } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
 import { isFailedWorkerPlacementEnvironmentGone } from "./session-placement-lifecycle.js";
 import { WorkerTunnelOwnerDisconnectedError } from "./tunnel-contract.js";
@@ -184,9 +184,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
         to: "provisioning",
         expectedGeneration: placement.generation,
         patch: { environmentId: expectedEnvironmentId },
-        ...(request.delegatedSpawnOperation
-          ? { delegatedSpawnOperation: request.delegatedSpawnOperation }
-          : {}),
+        delegatedSpawnOperation: request.delegatedSpawnOperation,
       });
       reportPlacementTransition(onTransition, placement);
       const environment = request.inheritedProfile

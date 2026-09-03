@@ -31,6 +31,20 @@ export type InterruptedDelegatedChildPlacement = {
   environmentId: string;
 };
 
+export function isInterruptedDelegatedChildPlacement(
+  interrupted: readonly InterruptedDelegatedChildPlacement[] | undefined,
+  placement: { sessionId: string; sessionKey: string; environmentId: string | null },
+): boolean {
+  return (
+    interrupted?.some(
+      (candidate) =>
+        candidate.sessionId === placement.sessionId &&
+        candidate.sessionKey === placement.sessionKey &&
+        candidate.environmentId === placement.environmentId,
+    ) === true
+  );
+}
+
 export type WorkerDelegatedSpawnOperation = {
   sourceSessionId: string;
   sourceClaimId: string;

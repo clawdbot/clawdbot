@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import type { SecretRef } from "../../config/types.secrets.js";
 import {
   WorkerProviderError,
   type WorkerExecutionMode,
@@ -21,7 +20,10 @@ import {
   retireMismatchedWorkerLease,
 } from "./provider-persisted-lease.js";
 import { createWorkerProvisionCancellation } from "./provider-provisioning-cancellation.js";
-import { createWorkerSshProvisioning } from "./provider-ssh-provisioning.js";
+import {
+  createWorkerSshIdentityResolver,
+  createWorkerSshProvisioning,
+} from "./provider-ssh-provisioning.js";
 import {
   normalizeWorkerMachineOptions,
   requireProviderOperationTimeoutMs,
@@ -44,22 +46,12 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
   const { commitReady, ensurePendingCredential } = options.credentialBroker;
 
   const checkedProfile = (value: unknown) => requireWorkerProfile(value, serviceError);
-  const identityResolverFor = (
-    record: WorkerEnvironmentRecord,
-    provider: WorkerProvider,
-    leaseId: string,
-  ) => {
-    const profile = checkedProfile(record.profileSnapshot.settings);
-    const resolveSshIdentity = options.resolveSshIdentity;
-    return async (keyRef: SecretRef) => {
-      if (!resolveSshIdentity) {
-        throw new Error("Worker SSH identity resolution is unavailable");
-      }
-      return await callProvider(record.environmentId, () =>
-        resolveSshIdentity({ provider, leaseId, profile, keyRef }),
-      );
-    };
-  };
+
+  const identityResolverFor = createWorkerSshIdentityResolver({
+    callProvider,
+    requireWorkerProfile: checkedProfile,
+    resolveSshIdentity: options.resolveSshIdentity,
+  });
 
   const providerFor = (providerId: string): WorkerProvider => {
     const provider = options.resolveProvider(providerId);
@@ -378,7 +370,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
       bootstrapping,
       provider,
       installation,
-      identityResolverFor(bootstrapping, provider, lease.leaseId),
+      identityResolverFor(bootstrapping, provider, lease.leaseId, authorize),
       cancellation,
       authorize,
     );
@@ -641,7 +633,7 @@ export function createWorkerProviderLifecycle(options: WorkerProviderLifecycleOp
           bootstrapping,
           provider,
           installation,
-          identityResolverFor(bootstrapping, provider, leaseId),
+          identityResolverFor(bootstrapping, provider, leaseId, authorize),
           cancellation,
           authorize,
         ).catch(() => undefined);

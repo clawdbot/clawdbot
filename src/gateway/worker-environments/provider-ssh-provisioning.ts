@@ -1,6 +1,6 @@
 import type { WorkerAdmissionHandshake } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { SecretRef } from "../../config/types.secrets.js";
-import type { WorkerProvider, WorkerSshIdentity } from "../../plugins/types.js";
+import type { WorkerProfile, WorkerProvider, WorkerSshIdentity } from "../../plugins/types.js";
 import { verifyWorkerAdmissionHandshake } from "./admission.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
 import type { WorkerCredentialBroker } from "./credential-broker.js";
@@ -20,6 +20,31 @@ type WorkerSshProvisioningOptions = Pick<
     error: unknown,
   ) => Promise<never>;
 };
+
+export function createWorkerSshIdentityResolver(options: {
+  callProvider: WorkerProviderLifecycleOptions["callProvider"];
+  requireWorkerProfile: (value: unknown) => WorkerProfile;
+  resolveSshIdentity: WorkerProviderLifecycleOptions["resolveSshIdentity"];
+}) {
+  return (
+    record: WorkerEnvironmentRecord,
+    provider: WorkerProvider,
+    leaseId: string,
+    authorize?: () => void,
+  ) => {
+    const profile = options.requireWorkerProfile(record.profileSnapshot.settings);
+    return async (keyRef: SecretRef) => {
+      const resolveSshIdentity = options.resolveSshIdentity;
+      if (!resolveSshIdentity) {
+        throw new Error("Worker SSH identity resolution is unavailable");
+      }
+      return await options.callProvider(record.environmentId, () => {
+        authorize?.();
+        return resolveSshIdentity({ provider, leaseId, profile, keyRef });
+      });
+    };
+  };
+}
 
 export function createWorkerSshProvisioning(options: WorkerSshProvisioningOptions) {
   return async (

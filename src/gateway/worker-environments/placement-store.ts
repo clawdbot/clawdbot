@@ -284,7 +284,7 @@ export function createWorkerSessionPlacementStore(
       to: WorkerSessionPlacementState;
       expectedGeneration: number;
       patch?: WorkerSessionPlacementTransitionPatch;
-      delegatedSpawnOperation?: WorkerDelegatedSpawnOperation;
+      delegatedSpawnOperation?: WorkerDelegatedSpawnOperation | undefined;
     }): WorkerSessionPlacementRecord {
       if (!canTransitionWorkerSessionPlacement(input.from, input.to)) {
         throw new Error(
