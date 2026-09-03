@@ -19,6 +19,7 @@ import {
   resolveAllowedSkillSymlinkTargetRealPaths,
   tryRealpath,
 } from "../loading/symlink-targets.js";
+import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "../workshop/skills-root.js";
 import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
@@ -26,7 +27,6 @@ import {
   setSkillsChangeListenerErrorHandler,
 } from "./refresh-state.js";
 import { resolveSkillsWatchPath, toWatchRoot } from "./refresh-watch-path.js";
-import { createWorkshopWatcherKey, resolveWorkshopWatchRoots } from "./workshop-refresh-watch.js";
 export { registerSkillsChangeListener } from "./refresh-state.js";
 
 type SkillsPathWatchState = {
