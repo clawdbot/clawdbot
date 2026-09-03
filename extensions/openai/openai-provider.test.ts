@@ -620,6 +620,7 @@ describe("buildOpenAIProvider", () => {
 
   it("does not send a selected SecretRef marker when locked materialization fails", async () => {
     const profileId = "openai:secretref";
+    const baseUrl = "https://gateway.example.test/v1";
     mocks.resolveApiKeyForProvider.mockRejectedValue(new Error("secret unavailable"));
     const fetchSpy = vi.spyOn(globalThis, "fetch");
 
@@ -631,7 +632,10 @@ describe("buildOpenAIProvider", () => {
         source: "profile",
       }),
       resolveProviderApiKey: vi.fn(),
-      config: { auth: { profiles: {} } },
+      config: {
+        auth: { profiles: {} },
+        models: { providers: { openai: { baseUrl, models: [] } } },
+      },
       agentDir: "/tmp/openai-agent",
       workspaceDir: "/tmp/openai-workspace",
     } as never);
@@ -640,6 +644,7 @@ describe("buildOpenAIProvider", () => {
       throw new Error("expected OpenAI live provider catalog");
     }
     expect(fetchSpy).not.toHaveBeenCalled();
+    expect(result.providers.openai?.baseUrl).toBe(baseUrl);
     expect(result.outcomes).toEqual([
       {
         provider: "openai",

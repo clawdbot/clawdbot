@@ -151,7 +151,7 @@ describe("provider catalog auth order", () => {
     });
   });
 
-  it("advances when a catalog hook excludes a failed canonical profile", () => {
+  it("supports owner-local exclusion of a failed canonical profile", () => {
     const profileA = "openai:oauth-a";
     const profileB = "openai:api-key-b";
     const resolveAuth = createProviderAuthResolver(

@@ -152,8 +152,9 @@ describe("runProviderCatalog", () => {
       label: "OpenAI",
       auth: [],
       catalog: {
-        run: async () => {
+        run: async (ctx) => {
           await Promise.resolve();
+          ctx.resolveProviderAuth("openai");
           return {
             providers: {},
             outcomes: [
@@ -176,7 +177,12 @@ describe("runProviderCatalog", () => {
       workspaceDir: "/tmp/openclaw-workspace",
       env: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
-      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      resolveProviderAuth: () => ({
+        apiKey: "selected-key",
+        mode: "api_key",
+        profileId: "openai:chatgpt",
+        source: "profile",
+      }),
       reportCatalogOutcome: (outcome) => outcomes.push(outcome),
     });
 
@@ -199,7 +205,6 @@ describe("runProviderCatalog", () => {
       catalog: {
         run: async (ctx) => {
           ctx.resolveProviderAuth("proof-alias");
-          ctx.resolveProviderAuth("proof-alias");
           return {
             providers: {},
             outcomes: [
@@ -220,26 +225,57 @@ describe("runProviderCatalog", () => {
         config: {},
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: vi
-          .fn()
-          .mockReturnValueOnce({
-            apiKey: "first-key",
-            mode: "api_key",
-            profileId: "openai:profile-a",
-            source: "profile",
-          })
-          .mockReturnValueOnce({
-            apiKey: "selected-key",
-            mode: "api_key",
-            profileId: "openai:profile-b",
-            source: "profile",
-          }),
+        resolveProviderAuth: () => ({
+          apiKey: "selected-key",
+          mode: "api_key",
+          profileId: "openai:profile-b",
+          source: "profile",
+        }),
         resolveProviderAuthProviderId: (providerId) =>
           providerId === "proof-alias" ? "openai" : (providerId ?? "openai"),
         reportCatalogOutcome: (outcome) => outcomes.push(outcome),
       }),
     ).rejects.toThrow("did not match the selected authentication profile");
     expect(outcomes).toEqual([]);
+  });
+
+  it("rejects changing the selected profile within one catalog run", async () => {
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          ctx.resolveProviderAuth("openai");
+          ctx.resolveProviderAuth("openai");
+          return { providers: {} };
+        },
+      },
+    };
+    const resolveProviderAuth = vi
+      .fn()
+      .mockReturnValueOnce({
+        apiKey: "first-key",
+        mode: "api_key",
+        profileId: "openai:profile-a",
+        source: "profile",
+      })
+      .mockReturnValueOnce({
+        apiKey: "second-key",
+        mode: "api_key",
+        profileId: "openai:profile-b",
+        source: "profile",
+      });
+
+    await expect(
+      runProviderCatalog({
+        provider,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth,
+      }),
+    ).rejects.toThrow("changed the selected authentication profile");
   });
 
   it.each([
@@ -255,14 +291,18 @@ describe("runProviderCatalog", () => {
         label: "OpenAI",
         auth: [],
         catalog: {
-          run: async () => ({
-            providers: {},
-            outcomes: [
-              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
-              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
-              { provider: "unrelated", status: "unavailable" },
-            ],
-          }),
+          run: async (ctx) => {
+            ctx.resolveProviderAuth("openai");
+            ctx.resolveProviderAuth("azure-openai");
+            return {
+              providers: {},
+              outcomes: [
+                { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+                { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+                { provider: "unrelated", status: "unavailable" },
+              ],
+            };
+          },
         },
       };
 
@@ -272,7 +312,12 @@ describe("runProviderCatalog", () => {
         config: {},
         env: {},
         resolveProviderApiKey: () => ({ apiKey: undefined }),
-        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        resolveProviderAuth: (providerId) => ({
+          apiKey: "selected-key",
+          mode: "api_key",
+          profileId: providerId === "azure-openai" ? "azure-openai:selected" : "openai:private",
+          source: "profile",
+        }),
         reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
       });
 

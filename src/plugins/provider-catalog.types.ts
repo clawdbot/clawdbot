@@ -27,8 +27,6 @@ export type ProviderCatalogContext = {
     providerId?: string,
     options?: {
       oauthMarker?: string;
-      /** Profiles already attempted by this catalog hook in canonical order. */
-      excludeProfileIds?: readonly string[];
     },
   ) => {
     apiKey: string | undefined;

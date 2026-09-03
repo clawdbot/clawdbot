@@ -200,6 +200,12 @@ export async function runProviderCatalog(params: {
       providerId,
       resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
     })) {
+      const selectedProfileId = selectedProfiles.get(providerKey);
+      if (selectedProfileId && selectedProfileId !== profileId) {
+        throw new Error(
+          `Provider catalog changed the selected authentication profile (${providerKey})`,
+        );
+      }
       selectedProfiles.set(providerKey, profileId);
     }
     return auth;
@@ -216,12 +222,19 @@ export async function runProviderCatalog(params: {
       captureSelectedProfile(providerId, params.resolveProviderAuth(providerId, options)),
   });
   for (const outcome of copyProviderCatalogOutcomes(result)) {
-    const outcomeProvider = normalizeProviderId(outcome.provider);
-    const selected = selectedProfiles.get(outcomeProvider);
-    if (outcome.profileId && selected && outcome.profileId !== selected) {
-      throw new Error(
-        `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
-      );
+    if (outcome.profileId) {
+      const selected = providerCatalogIdentityKeys({
+        provider: params.provider,
+        providerId: outcome.provider,
+        resolveProviderAuthProviderId: params.resolveProviderAuthProviderId,
+      })
+        .map((providerKey) => selectedProfiles.get(providerKey))
+        .find((profileId): profileId is string => Boolean(profileId));
+      if (!selected || outcome.profileId !== selected) {
+        throw new Error(
+          `Provider catalog outcome did not match the selected authentication profile (${outcome.provider})`,
+        );
+      }
     }
     if (
       params.providerIds !== undefined &&

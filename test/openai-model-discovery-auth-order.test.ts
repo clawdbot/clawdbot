@@ -186,7 +186,7 @@ describe("OpenAI model discovery auth order", () => {
       outcomes,
       action: plan.action,
     }).toEqual({
-      runtimeProfiles: [profileA, profileB],
+      runtimeProfiles: [profileB],
       requests: [`Bearer ${keyB}`],
       outcomes: [{ provider: "openai", profileId: profileB, status: "ready" }],
       action: "write",
