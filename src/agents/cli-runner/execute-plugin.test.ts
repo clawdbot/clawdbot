@@ -238,6 +238,7 @@ describe("plugin-owned CLI execution host boundary", () => {
       runId: "plugin-user-input",
       nativeTools: ["AskUserQuestion"],
     });
+    context.params.sessionKey = "main";
     context.params.runtimePolicySessionKey = "agent:main:telegram:default:direct:canonical-sender";
     let promptDelivered = createDeferred();
     const onBlockReply = vi.fn(async () => {
