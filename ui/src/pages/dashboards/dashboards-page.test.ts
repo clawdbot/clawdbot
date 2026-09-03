@@ -109,7 +109,7 @@ describe("DashboardsPage", () => {
     await element.updateComplete;
 
     expect(subscribeList).toHaveBeenCalledWith(
-      { limit: SIDEBAR_SESSION_ROSTER_LIMIT, boardFace: "dashboard", archivedFilter: "all" },
+      { limit: SIDEBAR_SESSION_ROSTER_LIMIT, hasBoard: true, archivedFilter: "all" },
       expect.any(Function),
     );
     expect(refreshList).not.toHaveBeenCalled();
@@ -120,7 +120,7 @@ describe("DashboardsPage", () => {
     await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(1));
     expect(refreshList).toHaveBeenCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      boardFace: "dashboard",
+      hasBoard: true,
       archivedFilter: "all",
       agentId: "writer",
       force: true,
@@ -158,7 +158,7 @@ describe("DashboardsPage", () => {
     expect(refreshList).toHaveBeenCalledOnce();
     expect(refreshList).toHaveBeenLastCalledWith({
       limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-      boardFace: "dashboard",
+      hasBoard: true,
       archivedFilter: "all",
       agentId: "writer",
       force: true,

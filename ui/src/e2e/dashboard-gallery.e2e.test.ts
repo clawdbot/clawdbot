@@ -56,7 +56,7 @@ suite.define(() => {
           "sessions.list": {
             cases: [
               {
-                match: { boardFace: "dashboard" },
+                match: { hasBoard: true },
                 response: {
                   count: dashboardRows.length,
                   defaults: { contextTokens: null, model: null, modelProvider: null },

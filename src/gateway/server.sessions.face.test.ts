@@ -1,5 +1,6 @@
 /** Gateway durable session-face behavior. */
 import { expect, test } from "vitest";
+import { boardStore } from "./board-store.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
@@ -80,5 +81,48 @@ test("sessions.list applies face filtering before pagination", async () => {
   expect(listed.payload?.totalCount).toBe(1);
   expect(listed.payload?.sessions).toEqual([
     expect.objectContaining({ key: "agent:main:dashboard", boardFace: "dashboard" }),
+  ]);
+});
+
+test("sessions.list filters dashboard sessions by board existence instead of saved face", async () => {
+  await createSessionStoreDir();
+  const now = Date.now();
+  await writeSessionStore({
+    entries: {
+      board: {
+        sessionId: "sess-board",
+        updatedAt: now,
+        boardFace: "chat",
+      },
+      faceOnly: {
+        sessionId: "sess-face-only",
+        updatedAt: now - 1,
+        boardFace: "dashboard",
+      },
+    },
+  });
+  boardStore.applyOps({ sessionKey: "agent:main:board" }, [
+    { kind: "tab_create", tabId: "main", title: "Dashboard" },
+  ]);
+
+  const listed = await directSessionReq<{
+    sessions: Array<{ key: string; boardFace?: string }>;
+    totalCount: number;
+  }>("sessions.list", { hasBoard: true, limit: 50 });
+
+  expect(listed.ok).toBe(true);
+  expect(listed.payload?.totalCount).toBe(1);
+  expect(listed.payload?.sessions).toEqual([
+    expect.objectContaining({ key: "agent:main:board", boardFace: "chat" }),
+  ]);
+
+  const withoutBoards = await directSessionReq<{
+    sessions: Array<{ key: string }>;
+    totalCount: number;
+  }>("sessions.list", { hasBoard: false, limit: 50 });
+  expect(withoutBoards.ok).toBe(true);
+  expect(withoutBoards.payload?.totalCount).toBe(1);
+  expect(withoutBoards.payload?.sessions).toEqual([
+    expect.objectContaining({ key: "agent:main:faceonly" }),
   ]);
 });
