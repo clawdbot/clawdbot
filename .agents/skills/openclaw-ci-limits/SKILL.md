@@ -189,11 +189,13 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
   without checkout or dependency setup. This removes one Blacksmith registration
   from previously eligible runs; hosted assignment can still delay completion.
-  `preflight` keeps its existing routing, and `security-fast` stays hosted outside
-  eligible hybrid first attempts. Security hooks use pinned installed packages
+  `preflight` uses GitHub-hosted Ubuntu in hybrid mode; its logical planner
+  profile and cache trust stay unchanged. Default Blacksmith preflight routing
+  remains intact. `security-fast` stays hosted outside eligible hybrid first
+  attempts. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
   outage override remains intact. Budget one control-job registration per eligible
-  Blacksmith run and two per eligible hybrid first attempt.
+  Blacksmith run or eligible hybrid first attempt.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - Current fast plugin/channel contract families each share one checkout/setup.
@@ -239,20 +241,22 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   full named shards.
 - The combined Node matrix admits compact and plugin descriptors by estimated
   duration within the same cap. Catch-all, QA and provider configs use the
-  existing 90-file job budget with native Vitest sharding; retain complete
+  existing 90-file envelope budget with native Vitest sharding; retain complete
   config discovery, exclusions and process isolation. Count every appended
   plugin row, including the five added QA/provider rows, in the burst envelope.
 - Plugin fallback groups retain separate child processes, including process-bounded
-  configs. Different compatible configs share up to 240 predicted seconds without
-  a pair-count limit; expanded serial compact jobs use 210. Runtime preparation stays
-  separate; no process/file/worker limits are relaxed. The complete supplemental boundary list runs in one job
+  configs. Compatible envelopes, including repeated configs, run one at a time
+  within 240 predicted seconds without a pair-count limit; expanded serial compact
+  jobs use 210. Runtime preparation stays separate. Each original envelope retains
+  its file/process bounds, native shard arguments and worker limits. The complete supplemental boundary list runs in one job
   with four concurrent checks and one full-root focused-rule scan.
 - Measured Blacksmith chat/session, Gateway core-3 and infrastructure storage/state
   outliers reuse the existing file splitter. Preserve serial execution, worker
   pins and complete timing-history floors; no blanket increase in sharding.
 - Blacksmith and hybrid compact bins with multiple ordinary groups request the
   existing 32-vCPU class and two child slots with a 360s aggregate budget.
-  Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
+  Compatible two-slot bins use the time budget without the ten-group cutoff;
+  serial bins retain that cutoff. Blacksmith serial bins retain 200/276s, hybrid serial bins retain 210s,
   exclusive bins retain 150s, and groups above their serial cap stay alone.
   Runtime consumers in ordinary bins share preparation only with other consumers;
   hybrid exclusive/dist sharing is unchanged. Complete inventories remain intact.

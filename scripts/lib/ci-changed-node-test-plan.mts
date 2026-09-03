@@ -502,7 +502,6 @@ export function createChangedExtensionFallbackShards(
       bin.every(
         (entry) =>
           !entry.pretestBuildMode &&
-          entry.configs[0] !== shard.configs[0] &&
           entry.runner === shard.runner &&
           entry.requiresDist === shard.requiresDist,
       ) &&

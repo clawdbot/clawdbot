@@ -31,19 +31,21 @@ const githubActivityHelper = ".agents/skills/openclaw-pr-maintainer/scripts/gith
 function expectBoundedCodexFallback(
   shards: ReturnType<typeof createChangedExtensionFallbackShards>,
 ) {
-  const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+  const groups = fallbackGroups(shards);
+  const targets = groups.flatMap((group) => group.includePatterns ?? []);
 
-  expect(shards.length).toBeGreaterThan(1);
+  expect(groups.length).toBeGreaterThan(1);
   expect(
-    shards.every(
+    groups.every(
       (shard) =>
         shard.configs[0] === "test/vitest/vitest.extension-codex.config.ts" &&
         (shard.includePatterns?.length ?? 0) > 0 &&
         (shard.includePatterns?.length ?? 0) <= CODEX_TEST_PROCESS_FILE_LIMIT,
     ),
   ).toBe(true);
-  expect(targets).toEqual(listExtensionTestFilesForRoots(["extensions/codex"]));
-  expect(new Set(targets).size).toBe(targets.length);
+  expect(targets.toSorted()).toEqual(
+    listExtensionTestFilesForRoots(["extensions/codex"]).toSorted(),
+  );
 }
 
 function fallbackGroups(shards: ReturnType<typeof createChangedExtensionFallbackShards>) {
@@ -118,7 +120,9 @@ describe("CI changed Node test plan", () => {
     const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
     const shards = createChangedNodeTestShards([changedPath]);
     expect(shards).not.toBeNull();
-    expect(shards).toHaveLength(createChangedExtensionFallbackShards([changedPath]).length + 1);
+    expect(shards).toHaveLength(
+      fallbackGroups(createChangedExtensionFallbackShards([changedPath])).length + 1,
+    );
     expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
     expect(new Set(shards?.flatMap((shard) => shard.configs))).toEqual(
       new Set(["test/vitest/vitest.extensions.config.ts"]),
@@ -647,9 +651,6 @@ describe("CI changed Node test plan", () => {
     expect(bundles.length).toBeGreaterThan(0);
     for (const bundle of bundles) {
       expect(bundle.groups!.length).toBeGreaterThan(1);
-      expect(new Set(bundle.groups!.flatMap((group) => group.configs)).size).toBe(
-        bundle.groups!.length,
-      );
       expect(bundle.predictedSeconds).toBeLessThanOrEqual(240);
       expect(bundle.configs).toEqual([]);
       expect(bundle.pretestBuildMode).toBeUndefined();
@@ -661,13 +662,11 @@ describe("CI changed Node test plan", () => {
     }
     for (const [index, shard] of shards.entries()) {
       for (const other of shards.slice(index + 1)) {
-        const combined = fallbackGroups([shard, other]);
         const canShareJob =
           !shard.pretestBuildMode &&
           !other.pretestBuildMode &&
           shard.runner === other.runner &&
           shard.requiresDist === other.requiresDist &&
-          new Set(combined.flatMap((group) => group.configs)).size === combined.length &&
           shard.predictedSeconds! + other.predictedSeconds! <= 240;
         expect(canShareJob, `${shard.shardName} and ${other.shardName} fit one job`).toBe(false);
       }
@@ -759,22 +758,26 @@ describe("CI changed Node test plan", () => {
     expect(shards?.flatMap((shard) => shard.configs)).toContain(config);
   });
 
-  it("packs Telegram process lifetimes into bounded changed-extension jobs", () => {
+  it("packs separate Telegram envelopes into serial jobs without merging their file scopes", () => {
     const shards = createChangedExtensionFallbackShards(["extensions/telegram/src/channel.ts"]);
-    const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+    const groups = fallbackGroups(shards);
+    const targets = groups.flatMap((group) => group.includePatterns ?? []);
 
-    expect(shards.length).toBeGreaterThan(1);
+    expect(shards.length).toBeLessThan(groups.length);
+    expect(shards.every((shard) => shard.planConcurrency === 1)).toBe(true);
+    expect(shards.every((shard) => shard.predictedSeconds! <= 240)).toBe(true);
     expect(
-      shards.every(
-        (shard) =>
-          shard.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
-          (shard.includePatterns?.length ?? 0) > 0 &&
-          (shard.includePatterns?.length ?? 0) <= 10,
+      groups.every(
+        (group) =>
+          group.configs[0] === "test/vitest/vitest.extension-telegram.config.ts" &&
+          (group.includePatterns?.length ?? 0) > 0 &&
+          (group.includePatterns?.length ?? 0) <= 10,
       ),
     ).toBe(true);
-    expect(targets.length).toBeGreaterThan(10);
-    expect(new Set(targets).size).toBe(targets.length);
-    expect(shards).toHaveLength(Math.ceil(targets.length / 10));
+    expect(targets.toSorted()).toEqual(
+      listExtensionTestFilesForRoots(["extensions/telegram"]).toSorted(),
+    );
+    expect(groups).toHaveLength(Math.ceil(targets.length / 10));
   });
 
   it.each([
@@ -782,7 +785,8 @@ describe("CI changed Node test plan", () => {
     ["test/vitest/vitest.extension-qa.config.ts", "extensions/qa-lab/src/cli.runtime.ts"],
     ["test/vitest/vitest.extension-providers.config.ts", "extensions/anthropic/index.ts"],
   ])("partitions the whole %s for direct and core-driven plugin changes", (config, changedPath) => {
-    const direct = createChangedExtensionFallbackShards([changedPath]);
+    const directShards = createChangedExtensionFallbackShards([changedPath]);
+    const direct = fallbackGroups(directShards);
     const broad = fallbackGroups(
       createChangedExtensionFallbackShards(["scripts/lib/ci-changed-node-test-plan.mts"]),
     ).filter((group) => group.configs.includes(config));
@@ -791,20 +795,23 @@ describe("CI changed Node test plan", () => {
     expect(direct.every((shard) => shard.configs.length === 1 && shard.configs[0] === config)).toBe(
       true,
     );
-    expect(direct.every((shard) => !shard.includePatterns && !shard.targets)).toBe(true);
-    const directArgs = direct.map((shard) => shard.env);
-    expect(directArgs).toEqual(
-      direct.map((_, index) => ({
-        OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
-          `--shard=${index + 1}/${direct.length}`,
-        ]),
-      })),
-    );
+    expect(direct.every((group) => !group.includePatterns)).toBe(true);
+    expect(directShards.every((shard) => !shard.targets)).toBe(true);
     // Packing changes job order, never a native shard's complete argument envelope.
     const sortArgs = (args: Array<Record<string, string> | undefined>) =>
       args.toSorted((left, right) =>
         JSON.stringify(left ?? {}).localeCompare(JSON.stringify(right ?? {})),
       );
+    const directArgs = direct.map((shard) => shard.env);
+    expect(sortArgs(directArgs)).toEqual(
+      sortArgs(
+        direct.map((_, index) => ({
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([
+            `--shard=${index + 1}/${direct.length}`,
+          ]),
+        })),
+      ),
+    );
     expect(sortArgs(broad.map((group) => group.env))).toEqual(sortArgs(directArgs));
   });
 
@@ -813,19 +820,21 @@ describe("CI changed Node test plan", () => {
       "packages/gateway-protocol/src/frame-guards.ts",
       "extensions/matrix/src/channel.ts",
     ]);
-    const targets = shards.flatMap((shard) => shard.includePatterns ?? []);
+    const groups = fallbackGroups(shards);
+    const targets = groups.flatMap((group) => group.includePatterns ?? []);
 
-    expect(shards.length).toBeGreaterThan(1);
+    expect(groups.length).toBeGreaterThan(1);
     expect(
-      shards.every(
+      groups.every(
         (shard) =>
           shard.configs[0] === "test/vitest/vitest.extension-matrix.config.ts" &&
           (shard.includePatterns?.length ?? 0) > 0 &&
           (shard.includePatterns?.length ?? 0) <= 40,
       ),
     ).toBe(true);
-    expect(targets.length).toBeGreaterThan(40);
-    expect(new Set(targets).size).toBe(targets.length);
+    expect(targets.toSorted()).toEqual(
+      listExtensionTestFilesForRoots(["extensions/matrix"]).toSorted(),
+    );
   });
 
   it("skips extension fallback when the core-impact predicate does not fire", () => {

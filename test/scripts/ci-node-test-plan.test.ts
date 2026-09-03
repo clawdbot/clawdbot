@@ -583,6 +583,23 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       } finally {
         fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...originalShards);
       }
+
+      // Cheap envelopes use the time budget instead of creating extra
+      // runners at ten groups; serial placements keep their existing count limit.
+      timings.mockReturnValue(
+        Object.fromEntries(createNodeTestShards(options).map((shard) => [shard.shardName, 1])),
+      );
+      const dense = createNodeTestShardBundles(options);
+      expect(dense.some((shard) => shard.groups.length > 10)).toBe(profile !== "github");
+      for (const shard of dense.filter((entry) => entry.groups.length > 10)) {
+        expect(shard).toMatchObject({
+          planConcurrency: 2,
+          requiresDist: false,
+          runner: EXTRA_LARGE_NODE_TEST_RUNNER,
+        });
+        expect(shard.pretestBuildMode).toBeUndefined();
+        expect(shard.predictedSeconds).toBeLessThanOrEqual(360);
+      }
     },
   );
 
@@ -917,9 +934,12 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
               : 150;
           expect(shard.predictedSeconds, profile.name).toBeLessThanOrEqual(budget);
         }
-        expect(plan.every((shard) => shard.groups.length > 0 && shard.groups.length <= 10)).toBe(
-          true,
-        );
+        expect(
+          plan.every(
+            (shard) =>
+              shard.groups.length > 0 && (shard.planConcurrency === 2 || shard.groups.length <= 10),
+          ),
+        ).toBe(true);
         expect(plan.every((shard) => Number.isFinite(shard.predictedSeconds))).toBe(true);
         const names = plan.flatMap((shard) => shard.groups.map((group) => group.shard_name));
         expect(new Set(names).size).toBe(names.length);
@@ -929,7 +949,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       }
     }
     expect(compact.every((shard) => Array.isArray(shard.groups))).toBe(true);
-    expect(compact.every((shard) => shard.groups.length <= 10)).toBe(true);
+    expect(compact.every((shard) => shard.planConcurrency === 2 || shard.groups.length <= 10)).toBe(
+      true,
+    );
     expect(compact.some((shard) => shard.requiresDist)).toBe(true);
     expect(
       compact.every((shard) =>
@@ -2611,7 +2633,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       expect(
         after.every(
           (shard) =>
-            shard.groups.length <= 10 &&
+            (shard.planConcurrency === 2 || shard.groups.length <= 10) &&
             (shard.planConcurrency === 1 ||
               (runnerBackend !== "github" &&
                 shard.planConcurrency === 2 &&
