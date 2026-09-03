@@ -92,7 +92,11 @@ export function startsWithSvgRootElement(text: string): boolean {
     return false;
   }
   const delimiter = text[index + "<svg".length];
-  return delimiter === ">" || (delimiter !== undefined && /\s/u.test(delimiter));
+  return (
+    delimiter === ">" ||
+    (delimiter === "/" && text[index + "<svg/".length] === ">") ||
+    (delimiter !== undefined && /\s/u.test(delimiter))
+  );
 }
 
 /**
