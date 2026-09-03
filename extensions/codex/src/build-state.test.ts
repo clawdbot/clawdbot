@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import codexPluginPackage from "../package.json" with { type: "json" };
 import { defineCodexBuildState } from "./build-state.js";
 
 const globalState = globalThis as Record<symbol, unknown>;
@@ -17,30 +18,30 @@ describe("defineCodexBuildState", () => {
     }
   });
 
-  it("shares one record across module copies of the same build", () => {
-    const create = () => ({ items: new Set<string>() });
-    const first = defineCodexBuildState("openclaw.codexBuildStateTest", create);
-    const second = defineCodexBuildState("openclaw.codexBuildStateTest", create);
+  it("shares one record with every module copy of the same plugin version", () => {
+    // Another copy of this build (dist bundle beside the src bundle) already
+    // wrote its record under the versioned key; this copy must find that one.
+    const fromOtherCopy = { items: new Set<string>(["shared"]) };
+    globalState[Symbol.for(`openclaw.codexBuildStateTest@${codexPluginPackage.version}`)] =
+      fromOtherCopy;
 
-    first().items.add("shared");
+    const getState = defineCodexBuildState("openclaw.codexBuildStateTest", () => ({
+      items: new Set<string>(),
+    }));
 
-    expect(second()).toBe(first());
-    expect(second().items.has("shared")).toBe(true);
+    expect(getState()).toBe(fromOtherCopy);
   });
 
-  it("never hands a build the record written by a build with other fields", () => {
-    const older = defineCodexBuildState("openclaw.codexBuildStateTest", () => ({
+  it("never hands this build a record from another key scheme, even with matching field names", () => {
+    // The shipped 2026.8.1 build keyed by bare name; its record may carry the
+    // same field names with a different entry contract.
+    globalState[Symbol.for("openclaw.codexBuildStateTest")] = { items: ["stale"] };
+
+    const getState = defineCodexBuildState("openclaw.codexBuildStateTest", () => ({
       items: new Set<string>(),
     }));
-    const newer = defineCodexBuildState("openclaw.codexBuildStateTest", () => ({
-      items: new Set<string>(),
-      owners: new Map<string, string>(),
-    }));
 
-    older().items.add("stale");
-
-    expect(newer()).not.toBe(older());
-    expect(newer().owners).toBeInstanceOf(Map);
-    expect(newer().items.size).toBe(0);
+    expect(getState().items).toBeInstanceOf(Set);
+    expect(getState().items.size).toBe(0);
   });
 });
