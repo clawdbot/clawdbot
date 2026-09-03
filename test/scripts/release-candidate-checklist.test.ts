@@ -122,7 +122,9 @@ describe("release candidate checklist", () => {
         "--skip-parallels",
         "--skip-telegram",
         "--skip-local-generated-check",
-        ...(tag.includes("-alpha.") ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"] : []),
+        ...(tag.includes("-alpha.")
+          ? ["--workflow-ref", "tideclaw/alpha/2026-09-01-1200Z"]
+          : ["--publish-workflow-ref", publishWorkflowRef]),
       ]);
       options.outputDir = join(targetRoot, "evidence");
       mkdirSync(join(options.outputDir, "npm-preflight"), { recursive: true });
@@ -151,6 +153,11 @@ describe("release candidate checklist", () => {
         gitTopLevel: (root: string) => root,
         gitRevParse: (_ref: string, root: string) => (root === targetRoot ? targetSha : toolingSha),
         fetchTrustedWorkflowSha: () => toolingSha,
+        // The protected publish tag is verified against live GitHub refs in production.
+        verifyReleaseToolingIdentity: () => ({
+          workflowRef: options.publishWorkflowRef,
+          workflowSha: toolingSha,
+        }),
         gitTrackedStatus: () => "",
         assertPlannedReleaseTagIsAbsent: () => {},
         validateTrustedToolingPin,
