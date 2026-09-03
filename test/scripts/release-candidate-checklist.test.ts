@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { releaseBranchForTag } from "../../scripts/lib/release-context.mjs";
@@ -60,15 +61,31 @@ async function withGithubApiTimeoutEnv<T>(value: string, fn: () => Promise<T>): 
 }
 
 describe("release candidate checklist", () => {
-  it("runs plugin planners from trusted tooling while retaining candidate inputs", () => {
+  it.each([
+    { warnings: [] },
+    {
+      warnings: [
+        '@openclaw/example@2026.9.1: example-runtime pinned "1.2.3", npm latest is "1.2.4".',
+      ],
+    },
+  ])("keeps plugin plan warnings advisory and visible: $warnings", ({ warnings }) => {
     const source = readFileSync("scripts/release-candidate-checklist.mts", "utf8");
     const owner = source.match(/^function collectPluginPlan\([\s\S]*?^\}/mu)?.[0];
+    const summary = source.match(/^function formatPluginPlanSummary\([\s\S]*?^\}/mu)?.[0];
     expect(owner).toBeDefined();
-    const runPlanner = vi.fn((_command, args, options) => JSON.stringify({ args, options }));
+    expect(summary).toBeDefined();
+    const log = vi.fn();
+    const runPlanner = vi.fn((_command, args, options) =>
+      JSON.stringify({ args, options, all: [{ packageName: "@openclaw/example" }], warnings }),
+    );
     const result = runInNewContext(
-      stripTypeScriptTypes(`${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`),
+      stripTypeScriptTypes(
+        `${summary}\n${owner}\ncollectPluginPlan("scripts/plugin-npm-release-plan.ts", {})`,
+      ),
       {
         TOOLING_ROOT: "/trusted/tooling",
+        console: { log },
+        isRecord,
         join,
         pluginPlanArgs: () => ["--selection-mode", "all-publishable"],
         run: runPlanner,
@@ -82,6 +99,14 @@ describe("release candidate checklist", () => {
       "all-publishable",
     ]);
     expect(result.options).not.toHaveProperty("cwd");
+    expect(result.warnings).toEqual(warnings);
+    expect(runPlanner).toHaveBeenCalledTimes(1);
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      [
+        "- scripts/plugin-npm-release-plan.ts: 1 packages",
+        ...warnings.map((warning) => `- Warning: ${warning}`),
+      ].join("\n"),
+    );
   });
 
   it("routes a repaired publisher independently from immutable preflight evidence", () => {
