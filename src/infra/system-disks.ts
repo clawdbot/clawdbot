@@ -113,25 +113,30 @@ async function collectSystemDisks(): Promise<SystemDisk[] | undefined> {
     ...commandOptions,
     env: { LC_ALL: "C" },
   });
-  const disks = stdout.split("\n").flatMap((line) => {
+  // An unmounted volume's directory can resolve to another sampled filesystem.
+  // Key by the returned mount path so df's repeated rows remain one disk.
+  const disks = new Map<string, SystemDisk>();
+  for (const line of stdout.split("\n")) {
     const match = /^.+?\s+(\d+)\s+\d+\s+(-?\d+)\s+\d+%\s+(.+)$/.exec(line);
     if (!match) {
-      return [];
+      continue;
     }
     const [, total, available, mountPath] = match;
     const totalBytes = Number(total) * 1024;
     const availableBytes = Math.max(0, Number(available) * 1024);
-    return mountPath &&
+    if (
+      mountPath &&
       paths.includes(mountPath) &&
       Number.isSafeInteger(totalBytes) &&
       totalBytes > 0 &&
       Number.isSafeInteger(availableBytes)
-      ? [{ path: mountPath, totalBytes, availableBytes }]
-      : [];
-  });
+    ) {
+      disks.set(mountPath, { path: mountPath, totalBytes, availableBytes });
+    }
+  }
   // Preserve completed rows from a partial df failure, but distinguish a
   // failed probe from successful discovery of no eligible disks.
-  return code !== 0 && disks.length === 0 ? undefined : disks;
+  return code !== 0 && disks.size === 0 ? undefined : [...disks.values()];
 }
 
 export function readSystemDisks(): Promise<SystemDisk[] | undefined> {

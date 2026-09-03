@@ -56,19 +56,26 @@ describe("system disk snapshots", () => {
     );
   });
 
-  it("keeps container root storage and omits a volume that disappears while sampling", async () => {
-    mocks.readFile.mockResolvedValue(
-      "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
-    );
-    mocks.runCommandWithTimeout.mockResolvedValue({
-      code: 1,
-      stdout: "overlay 2000 2001 -1 101% /\n",
-    });
-    const { readSystemDisks } = await import("./system-disks.js");
-    expect(await readSystemDisks()).toEqual([
-      { path: "/", totalBytes: 2_048_000, availableBytes: 0 },
-    ]);
-  });
+  it.each([
+    { directory: "removed", code: 1, stdout: "overlay 2000 2001 -1 101% /\n" },
+    {
+      directory: "remaining",
+      code: 0,
+      stdout: "overlay 2000 2001 -1 101% /\noverlay 2000 2001 -1 101% /\n",
+    },
+  ])(
+    "keeps one container root when a volume disappears with its directory $directory",
+    async ({ code, stdout }) => {
+      mocks.readFile.mockResolvedValue(
+        "1 0 0:5 / / rw - overlay overlay rw\n2 1 8:1 / /data rw - ext4 /dev/sdb rw",
+      );
+      mocks.runCommandWithTimeout.mockResolvedValue({ code, stdout });
+      const { readSystemDisks } = await import("./system-disks.js");
+      expect(await readSystemDisks()).toEqual([
+        { path: "/", totalBytes: 2_048_000, availableBytes: 0 },
+      ]);
+    },
+  );
 
   it.each(["tmpfs tmpfs", "nfs server:/root", "nfs4 server:/root"])(
     "excludes a non-local Linux root (%s) without hiding local data disks",
