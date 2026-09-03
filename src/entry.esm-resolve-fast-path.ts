@@ -27,6 +27,7 @@ const NODE_RESOLVER_HOOK_OPTIONS = new Set([
   "--experimental-loader",
   "--experimental-config-file",
   "--experimental-default-config-file",
+  "--snapshot-blob",
 ]);
 
 const normalizeNodeOptionName = (token: string) =>

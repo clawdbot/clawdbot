@@ -251,6 +251,7 @@ async function main(): Promise<void> {
       { env: process.env },
     ),
     command: process.execPath,
+    nodeEntryIndex: 1,
     args: [
       "--no-maglev",
       resolveVitestCliEntry(),

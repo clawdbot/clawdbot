@@ -143,6 +143,7 @@ describe("installDistEsmResolveFastPath gating", () => {
     ["--experimental-loader", ["--experimental_loader", "./hook.mjs"]],
     ["--experimental-config-file", ["--experimental_config_file=./node.config.json"]],
     ["--experimental-default-config-file", ["--experimental_default_config_file"]],
+    ["--snapshot-blob", ["--snapshot_blob=./snapshot.blob"]],
   ])("declines when execArgv contains %s", (_name, execArgv) => {
     let registered = 0;
     const installed = installDistEsmResolveFastPath(

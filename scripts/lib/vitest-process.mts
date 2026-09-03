@@ -3,6 +3,13 @@ import fs from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { waitForever } from "../../src/cli/wait.ts";
+import {
+  composeVitestLauncherNodeOptions,
+  resolveVitestLauncherResourceContext,
+  VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN,
+} from "../../src/infra/vitest-resource-context.test-support.ts";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.ts";
 import {
   resolveTestBrowserCache,
@@ -23,24 +30,47 @@ import {
 import { runWithFailedTrailer, writeFailedTrailer } from "./failed-trailer.mts";
 import { signalExitCode } from "./managed-child-process.mts";
 import {
+  assertVitestResourceContextSafeNodeArgv,
   createVitestResourceOwner,
   findVitestResourceOwner,
+  type VitestResourceOwner,
 } from "./vitest-resource-ownership.mts";
+
+export {
+  VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT,
+  VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN,
+};
 
 /** Own temporary files until the Vitest child, its group, and its pipes have joined. */
 export function spawnOwnedVitestProcess(spec: {
   command: string;
   args: string[];
+  /** Trusted index of the Node entry script, `-e`/`-p`, stdin, or `--`. */
+  nodeEntryIndex?: number;
   options: SpawnOptions;
   // Preparatory tools share lifetime ownership, but are not Vitest home consumers.
   homeMode?: TestHomeSelection | "tooling";
 }) {
   const env = spec.options.env ?? process.env;
+  const nodeOptions = composeVitestLauncherNodeOptions(env.NODE_OPTIONS);
+  let isNodeCommand = /^(?:node|node\.exe)$/iu.test(path.basename(spec.command));
+  try {
+    isNodeCommand ||= fs.realpathSync(spec.command) === fs.realpathSync(process.execPath);
+  } catch {
+    // A missing command is handled by spawn after the allocation-free check.
+  }
+  if (isNodeCommand) {
+    assertVitestResourceContextSafeNodeArgv(spec.args, spec.nodeEntryIndex);
+  }
   const mode = spec.homeMode ?? "unknown";
   if (mode !== "tooling") {
     assertTestHomeSelection(env, mode);
   }
   const policy = resolveTestHomePolicy(env, mode === "tooling" ? "live-aware" : mode);
+  const inheritedContext = resolveVitestLauncherResourceContext(env);
+  const inheritedOwners = inheritedContext.kind === "owned" ? inheritedContext.owners : [];
+  const productionLockRoot = inheritedContext.productionRuntimeDirectory;
   const tempDirs = createTempDirTracker();
   const detached = spec.options.detached ?? shouldUseDetachedVitestProcessGroup();
   const verifiedGroup = detached && shouldUseDetachedVitestProcessGroup();
@@ -48,7 +78,7 @@ export function spawnOwnedVitestProcess(spec: {
   let owner: ReturnType<typeof createVitestResourceOwner> | undefined;
   let parent: { root: string; release: () => void } | undefined;
   const dispose = () => {
-    owner?.assertReleased();
+    owner?.closeAndAssertReleased();
     tempDirs.cleanup();
     parent?.release();
   };
@@ -63,7 +93,23 @@ export function spawnOwnedVitestProcess(spec: {
     }
     tempRoot = tempDirs.make("oc-vt-", containingRoot);
     owner = createVitestResourceOwner(tempRoot);
-    const childEnv: NodeJS.ProcessEnv = { ...env, TMPDIR: tempRoot, TMP: tempRoot, TEMP: tempRoot };
+    const resourceRoots = [owner, containingOwner, ...inheritedOwners]
+      .filter((candidate): candidate is VitestResourceOwner => candidate !== undefined)
+      .filter(
+        (candidate, index, candidates) =>
+          candidates.findIndex((other) => other.root === candidate.root) === index,
+      )
+      .map((candidate) => ({ root: candidate.root, identity: candidate.identity }));
+    const childEnv: NodeJS.ProcessEnv = {
+      ...env,
+      TMPDIR: tempRoot,
+      TMP: tempRoot,
+      TEMP: tempRoot,
+      NODE_OPTIONS: nodeOptions,
+      [VITEST_OPENCLAW_RESOURCE_ROOT]: tempRoot,
+      [VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN]: JSON.stringify(resourceRoots),
+      [VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT]: productionLockRoot,
+    };
     if (mode !== "tooling" && !(policy.live && policy.allowRealHome)) {
       const nativeHome = path.join(tempRoot, "home");
       fs.mkdirSync(nativeHome);

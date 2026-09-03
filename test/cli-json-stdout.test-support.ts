@@ -1,5 +1,6 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { applyVitestResourceContextToChildEnv } from "../src/infra/vitest-resource-ownership.js";
 
 export function runBuiltCli(
   tempHome: string,
@@ -18,6 +19,7 @@ export function runBuiltCli(
   delete env.OPENCLAW_CONFIG_PATH;
   delete env.VITEST;
   Object.assign(env, envOverrides);
+  applyVitestResourceContextToChildEnv(env);
 
   const entry = path.resolve(process.cwd(), "openclaw.mjs");
   return spawnSync(process.execPath, [entry, ...args], {

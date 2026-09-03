@@ -46,11 +46,40 @@ describe("gateway process boundary", () => {
         launcherPath,
         tempRoot,
       });
+      const ownedRoot = process.env.VITEST_OPENCLAW_RESOURCE_ROOT;
+      if (!ownedRoot) {
+        throw new Error("expected owned Vitest resource root");
+      }
+      await expect(
+        controller.prepare({
+          args: ["gateway", "run"],
+          cwd: tempRoot,
+          env: { PATH: process.env.PATH, VITEST_OPENCLAW_RESOURCE_ROOT: ownedRoot },
+        }),
+      ).rejects.toThrow("Incomplete Vitest resource context in child environment");
+      const fixturePreload =
+        "--import=data:text/javascript,globalThis.qaBoundaryFixture%3D%27loaded%27";
       const prepared = await controller.prepare({
         args: ["gateway", "run"],
         cwd: tempRoot,
-        env: { HOME: path.join(tempRoot, "home"), PATH: process.env.PATH },
+        env: {
+          HOME: path.join(tempRoot, "home"),
+          NODE_OPTIONS: fixturePreload,
+          PATH: process.env.PATH,
+        },
       });
+      expect(prepared.command.envKeys).toEqual(
+        expect.arrayContaining([
+          "NODE_OPTIONS",
+          "VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT",
+          "VITEST_OPENCLAW_RESOURCE_ROOT",
+          "VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN",
+        ]),
+      );
+      expect(prepared.env.NODE_OPTIONS).toContain(
+        "vitest-resource-context-preload.test-support.ts",
+      );
+      expect(prepared.env.NODE_OPTIONS).toContain(fixturePreload);
       const launcherPid = 4242;
       const runtimePid = 4243;
       const uid = process.getuid?.() ?? 1001;
@@ -77,7 +106,7 @@ describe("gateway process boundary", () => {
           version: 1,
           generation: prepared.generation,
           status: "pass",
-          envKeys: ["PATH", "HOME", "PATH", "OPENCLAW_QA_SUT_PREENTRY_STOP"],
+          envKeys: prepared.command.envKeys,
         })}\n`,
         { mode: 0o640 },
       );

@@ -78,6 +78,7 @@ export function buildVitestProfileCommandWithArgs({
 }: ReturnType<typeof parseArgs>) {
   return {
     command: process.execPath,
+    nodeEntryIndex: 0,
     args: [
       fileURLToPath(new URL("./run-vitest-profile-child.mts", import.meta.url)),
       mode,

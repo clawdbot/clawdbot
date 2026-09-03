@@ -802,14 +802,16 @@ export function spawnWatchedVitestProcess({
   }
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
+  const directNodeEntryIndex = directNodeArgs?.findIndex(
+    (arg) => path.basename(arg) === "vitest.mjs",
+  );
+  if (directNodeArgs && directNodeEntryIndex === -1) {
+    throw new Error("Direct Vitest launch requires a native Vitest CLI entry");
+  }
   if (workerRun && directNodeArgs) {
     // Preserve Node flags while giving the same owned child its private generation.
-    const cliIndex = directNodeArgs.findIndex((arg) => path.basename(arg) === "vitest.mjs");
-    if (cliIndex < 0) {
-      throw new Error("Compiled subprocess owner requires a native Vitest CLI spec");
-    }
     directNodeArgs.splice(
-      cliIndex,
+      directNodeEntryIndex!,
       0,
       path.join(resolveRepoRoot(import.meta.url), "scripts/lib/vitest-worker-bootstrap.mts"),
       workerRun.descriptor.directory,
@@ -832,7 +834,12 @@ export function spawnWatchedVitestProcess({
     : spawnParams;
   const { child, completion: childCompletion } = spawnOwnedVitestProcess({
     ...(directNodeArgs
-      ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
+      ? {
+          command: process.execPath,
+          args: directNodeArgs,
+          nodeEntryIndex: directNodeEntryIndex!,
+          options: childSpawnParams,
+        }
       : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
     homeMode,
   });

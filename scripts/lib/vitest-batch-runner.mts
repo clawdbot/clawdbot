@@ -28,6 +28,7 @@ const repoRoot = path.resolve(scriptDir, "../..");
  */
 export async function runVitestBatch(params: VitestBatchRunParams): Promise<number> {
   return await new Promise<number>((resolve, reject) => {
+    const nodeArgs = resolveVitestNodeArgs(params.env);
     // Match project runs: installed tooling must not rediscover pnpm in an isolated HOME.
     const { child, completion } = spawnOwnedVitestProcess({
       homeMode:
@@ -37,8 +38,9 @@ export async function runVitestBatch(params: VitestBatchRunParams): Promise<numb
           env: params.env,
         }),
       command: process.execPath,
+      nodeEntryIndex: nodeArgs.length,
       args: [
-        ...resolveVitestNodeArgs(params.env),
+        ...nodeArgs,
         resolveVitestCliEntry({ env: params.env }),
         "run",
         "--config",

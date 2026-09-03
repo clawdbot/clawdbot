@@ -613,6 +613,7 @@ if (process.argv[2] === "supervise") {
     // Use the actual outer namespace owner, including its cleanup on exit code 1.
     const { child, completion } = spawnOwnedVitestProcess({
       command: process.execPath,
+      nodeEntryIndex: 1,
       args: [
         "--input-type=module",
         "-e",

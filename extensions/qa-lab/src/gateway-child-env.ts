@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { applyVitestResourceContextToChildEnv } from "openclaw/plugin-sdk/test-env";
 import { buildQaCodexAppServerArgs } from "./codex-app-server-args.js";
 import type { QaProviderMode } from "./model-selection.js";
 import {
@@ -122,6 +123,7 @@ export function buildQaRuntimeEnv(params: {
   delete normalizedEnv.OPENCLAW_SKIP_CHANNELS;
   delete normalizedEnv.OPENCLAW_SKIP_PROVIDERS;
   Object.assign(normalizedEnv, params.runtimeEnvPatch);
+  applyVitestResourceContextToChildEnv(normalizedEnv);
   // Parent shell startup controls must be removed after caller patches so no
   // launcher or runtime child can import them before its own allowlist runs.
   normalizedEnv.OPENCLAW_BUILD_PRIVATE_QA = "1";

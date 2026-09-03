@@ -117,7 +117,7 @@ export function openNodeSqliteDatabase(
 export function tryAcquireExclusiveSqliteCoordinator(
   location: string,
   options: { busyTimeoutMs?: number } = {},
-): { release: () => void } | null {
+): { isReleased: () => boolean; release: () => void } | null {
   const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? 0));
   const database = openNodeSqliteDatabase(location);
   try {
@@ -130,7 +130,9 @@ export function tryAcquireExclusiveSqliteCoordinator(
     }
     throw error;
   }
+  let released = false;
   return {
+    isReleased: () => released,
     release: () => {
       const errors: unknown[] = [];
       try {
@@ -140,6 +142,7 @@ export function tryAcquireExclusiveSqliteCoordinator(
       }
       try {
         database.close();
+        released = true;
       } catch (error) {
         errors.push(error);
       }

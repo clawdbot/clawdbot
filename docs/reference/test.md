@@ -379,6 +379,52 @@ This does not detect descendants that deliberately leave the managed groups.
 `run-vitest` (including project shards), plugin batches, `test-live`
 (including live shards), `run-vitest-profile`, and the TUI PTY watcher give each
 Vitest invocation an owned temporary namespace through `TMPDIR`, `TMP`, and `TEMP`.
+The launcher also records that exact namespace in the inherited
+`VITEST_OPENCLAW_RESOURCE_ROOT` marker before Vitest or its configuration imports.
+An exact repository-owned Node preload entry validates the complete marker tuple before
+Vitest or application imports and publishes only a cloneable, identity-bound descriptor;
+the parser and nested-launcher helper module itself has no load-time publication side effect.
+The descriptor is also inherited through Node worker environment data, including workers
+that clear `execArgv`; worker code that later changes temporary-directory variables or
+removes `VITEST` therefore cannot split resource ownership. Normal test environment
+sanitization retains that one exact preload token for spawned Node descendants, while
+safe caller `NODE_OPTIONS` such as heap sizing are preserved after the lifecycle preload.
+Malformed options and startup hooks that can run before that preload fail before namespace
+allocation.
+Repository-owned child environment builders revalidate every owner identity, inherit
+the complete tuple when it is absent, and prepend that exact preload to any explicit
+fixture options. Partial or conflicting tuples fail before spawn, and allowlisting
+process boundaries forward every required context key. Composition removes duplicate
+lifecycle imports and prepends exactly one canonical import. Owned descendants reject every
+Node startup surface that can evaluate user code before an ordinary ESM preload:
+`--require`/`-r` uses the earlier CommonJS preload phase, loader modules initialize before
+application imports, experimental startup config files can inject those earlier hooks, and
+`--snapshot-blob` can run isolate deserialization callbacks before preloads. Custom `--import`
+options remain safe after the canonical lifecycle import. Environment files do not apply a
+new `NODE_OPTIONS` value to the same Node startup, while snapshot builders, test global setup,
+and ordinary entry scripts run after startup preloads; they therefore remain allowed.
+
+The launcher applies the same denial to Node runtime options before allocating a namespace.
+Each repository-owned direct Node call declares the exact entry-script, eval/print, stdin, or
+`--` boundary; a Node option stream without a provable or declared boundary fails admission.
+Only arguments before that boundary are startup options, so identically named application
+arguments after a declared entry remain allowed.
+Nested launchers also pass an owner-identity-bound, exact-validated
+`VITEST_OPENCLAW_RESOURCE_ROOT_CHAIN`.
+This lets a worker route a database in any still-owned parent namespace to the nearest
+containing owner without scanning production paths for arbitrary ownership metadata.
+Each lineage entry includes the owner's immutable identity; a missing, replaced, or
+conflicting explicit owner fails admission instead of starting a new lineage. The root
+marker is never valid by itself: omitting its identity-bearing chain also fails admission.
+Likewise, a chain without its root marker is an invalid partial tuple and fails admission.
+The launcher likewise preserves the production lock root in
+`VITEST_OPENCLAW_PRODUCTION_LOCK_ROOT` before replacing an isolated process's home;
+on Windows this keeps external databases coordinated through the original user's
+OpenClaw AppData lock directory. The production marker is honored only alongside
+the exact validated resource-owner marker; unpaired or stale inherited values are
+recomputed from the launcher environment. Once a validated lineage exists, its production
+lock root is mandatory too; a descendant cannot silently derive it from an isolated home.
+Only an unmarked top-level launcher derives `/tmp` or the original Windows profile's AppData.
 Before Vitest starts, isolated invocations also receive native `HOME` and
 `USERPROFILE` inside that namespace. This protects home fallbacks used by worker
 threads, named builtin imports, and import-time captures; changing only a worker's
@@ -400,18 +446,27 @@ selection separately using `node scripts/test-live.mts -- <live-test-path>`.
 The launcher does not split runs or change watch, filter, or report semantics.
 
 The namespace contains isolated homes, their JIT caches, SDK/shared-home allocation
-roots, and fallback SQLite state; its lifetime spans shared-worker files and module
-resets. On POSIX detached launches, the parent removes
+roots, fallback SQLite state, and lifecycle coordinators for databases canonically
+contained by the namespace; its lifetime spans shared-worker files and module resets.
+Databases outside the namespace, including explicitly real-home live state, keep the
+normal cross-process lifecycle coordinator under `/tmp` on POSIX or the OpenClaw
+AppData lock directory on Windows. On POSIX detached launches, the parent removes
 only that namespace after its child process group has stopped, output pipes
 have closed, and nested resource owners have released their pending claims,
 including passing and failing runs, child crashes, caught `SIGINT`/`SIGTERM`
 signals, and watchdog termination where supported. Explicit state, profile output,
 and mirror artifacts outside the namespace remain untouched. Failed or unverified
 group joins or unresolved nested claims retain the namespace and report the exact
-path for manual recovery. Nested namespaces, fixture lifetimes, and managed commands
-register ephemeral filesystem ownership before admitting work. Release requires
-positive completion evidence; caught cleanup failures, module resets, worker exit,
-or an intermediate runner crash cannot release a pending claim or its ancestors.
+path for manual recovery. Nested namespaces, fixture lifetimes, managed commands,
+and lifecycle coordinators inside a removable namespace register ephemeral filesystem
+ownership before admitting work. A lifecycle coordinator publishes its release receipt
+only after the SQLite coordinator has fully released. Release requires positive
+completion evidence; cleanup failures that leave SQLite closure unverified, module resets,
+worker exit, an escaped
+descendant still holding a coordinator, or an intermediate runner crash cannot release
+a pending claim or its ancestors. Before deletion, the namespace creator atomically
+closes the claim registry and then verifies every receipt. Claims admitted before that
+gate can still publish into the closed registry; later claims fail without reopening it.
 Managed commands keep their existing close-based completion contract unless strict
 tree verification is requested; failed finalization never releases ownership.
 Stop all remaining writers before manually removing the reported exact directory.

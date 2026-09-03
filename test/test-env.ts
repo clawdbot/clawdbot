@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import JSON5 from "json5";
 import { resolveEffectiveHomeDir } from "../src/infra/home-dir.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../src/infra/supervisor-markers.js";
+import { composeVitestResourceContextNodeOptions } from "../src/infra/vitest-resource-ownership.js";
 import { captureFullEnv, deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 import { readTestHomeSource, resolveTestCorepackHome } from "./test-home-context.mts";
 import {
@@ -271,8 +272,14 @@ function initializeIsolatedTestEnv(tempHome: string): void {
   for (const key of ISOLATED_TEST_SERVICE_ENV_KEYS) {
     deleteTestEnvValue(key);
   }
-  // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
-  deleteTestEnvValue("NODE_OPTIONS");
+  // Preserve only the launcher-owned lifecycle preload so descendant Node
+  // processes inherit the validated resource context. Drop every ambient flag.
+  const lifecycleNodeOption = composeVitestResourceContextNodeOptions(undefined);
+  if (lifecycleNodeOption) {
+    setTestEnvValue("NODE_OPTIONS", lifecycleNodeOption);
+  } else {
+    deleteTestEnvValue("NODE_OPTIONS");
+  }
 
   // Windows: prefer the default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {

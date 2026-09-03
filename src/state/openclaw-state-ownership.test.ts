@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -15,6 +14,7 @@ import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { requireNodeSqlite, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import * as sqliteReadonlyLocation from "../infra/sqlite-readonly-location.js";
+import { resolveStateLifecycleRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { withEnv, withEnvAsync } from "../test-utils/env.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -99,10 +99,7 @@ function snapshotSqliteFamily(databasePath: string) {
 
 function resolveExpectedOwnershipCoordinatorPath(databasePath: string): string {
   const canonicalDatabasePath = resolvePathViaExistingAncestorSync(databasePath);
-  const runtimeDirectory =
-    process.platform === "win32"
-      ? path.join(os.homedir(), "AppData", "Local", "OpenClaw", "locks")
-      : "/tmp";
+  const runtimeDirectory = resolveStateLifecycleRuntimeDirectory(databasePath);
   const canonicalRuntimeDirectory = resolvePathViaExistingAncestorSync(runtimeDirectory);
   const suffix =
     typeof process.getuid === "function"

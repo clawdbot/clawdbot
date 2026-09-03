@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
+import { applyVitestResourceContextToChildEnv } from "openclaw/plugin-sdk/test-env";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
 
@@ -513,8 +514,11 @@ export async function createQaGatewayProcessBoundaryController(params: {
     const commandFilePath = path.join(controlDir, `command-${generation}.json`);
     const identityFilePath = path.join(controlDir, `identity-${generation}.json`);
     const sandboxFilePath = path.join(controlDir, `sandbox-${generation}.json`);
+    const childEnv = { ...spawnParams.env };
+    const vitestResourceContextKeys = applyVitestResourceContextToChildEnv(childEnv);
     const envKeys = normalizeEnvKeys([
-      ...forwardedEnvKeys.filter((key) => spawnParams.env[key] !== undefined),
+      ...forwardedEnvKeys.filter((key) => childEnv[key] !== undefined),
+      ...vitestResourceContextKeys,
       "OPENCLAW_QA_SUT_PREENTRY_STOP",
     ]);
     const command: QaGatewayProcessCommand = {
@@ -535,7 +539,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
       commandFilePath,
       commandSha256,
       env: {
-        ...spawnParams.env,
+        ...childEnv,
         OPENCLAW_QA_SUT_BOUNDARY_COMMAND_FILE: commandFilePath,
         OPENCLAW_QA_SUT_BOUNDARY_COMMAND_SHA256: commandSha256,
         OPENCLAW_QA_SUT_BOUNDARY_GENERATION: generation,
