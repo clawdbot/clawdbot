@@ -67,18 +67,20 @@ adoption can tombstone a row before the channel's delivery promise returns.
 ### One turn, several durable claims
 
 A channel that answers several inbound events as one turn holds one durable
-claim per event, and every one of them has to reach the same terminal state.
-`fanInChannelIngressLifecycles(lifecycles)` returns a single
+claim per event, and every one of them has to reach a terminal disposition.
+`fanInChannelIngressLifecycles(lifecycles)`, from
+`openclaw/plugin-sdk/channel-ingress-runtime`, returns a single
 `ChannelIngressLifecycle` that fans each callback out across all of them, plus
 `settle`, `abandon`, and `cancel` for the paths that finish outside a callback.
 Pass the events' lifecycles in the order they were claimed; `undefined` entries
 are skipped, and an empty input yields `lifecycle: undefined` so a caller can
 fall back to the single-claim path without branching. Adopting the combined
 lifecycle adopts every claim, and abandoning it returns every claim to its retry
-budget — a partial outcome is what this exists to prevent. Adoption runs in the
-order the claims were passed, and a claim whose adoption is rejected — the drain
-raises that when another owner has taken it — releases itself and every claim
-behind it, so a rejection reaches the caller with nothing left held.
+budget — no claim is left half-settled. Adoption runs in the order the claims
+were passed, and a claim whose adoption is rejected — the drain raises that when
+another owner has taken it — fails itself and every claim behind it while the
+claims already adopted stay adopted, so a rejection reaches the caller with
+nothing left held.
 
 Use it only when one agent turn genuinely consumes several claims. A channel
 that answers each event on its own keeps passing that event's lifecycle
