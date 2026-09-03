@@ -222,6 +222,16 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions): LineWe
           // Another part holds this set and delivers every claim behind it.
           return undefined;
         }
+        if (set.missing) {
+          // The turn answers what arrived; the rest becomes its own turn later.
+          // Without this the operator sees only a short mediaCount and nothing
+          // that explains the difference.
+          options.runtime.error?.(
+            danger(
+              `line: image set ${imageSet.setId} delivered ${set.events.length} of ${set.events.length + set.missing} parts`,
+            ),
+          );
+        }
         turnEvents = set.events;
         turnLifecycles = set.lifecycles;
         // Hold the lane until this delivery is done, or a message sent after the

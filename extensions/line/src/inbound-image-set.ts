@@ -13,6 +13,14 @@
 // `index` and `total` are both optional in LINE's own contract, and `index` is
 // documented absent for senders on LINE 11.15 or earlier for Android - so completion
 // can never be assumed and the timer, not the count, guarantees a set is delivered.
+//
+// The shared `createInboundDebouncer` buffers by key and serializes by key too,
+// while a set needs two: the buffer is per sender's set so one member's images
+// cannot join another's turn, and the order queue is per lane so a message
+// released behind the set still waits for it. Its window also starts when an
+// item is buffered, and this one starts after the lane is entered, so time spent
+// queued behind earlier work on the lane is not charged to the gap between
+// parts.
 const IMAGE_SET_FLUSH_DELAY_MS = 4_000;
 
 type PendingImageSetPart<TEvent, TLifecycle> = {
@@ -38,6 +46,11 @@ type PendingImageSet<TEvent, TLifecycle> = {
 type LineImageSetDelivery<TEvent, TLifecycle> = {
   events: readonly TEvent[];
   lifecycles: readonly TLifecycle[];
+  /**
+   * Parts LINE announced but never delivered before the wait expired. The turn
+   * answers what arrived, so this is the only place the shortfall is knowable.
+   */
+  missing?: number;
   /**
    * Leaves the lane queue. Call it once the set has been delivered, not when it
    * is taken: the holder still has to fetch media and build its turn, and
@@ -192,9 +205,11 @@ export function createLineImageSetIngressBuffer<TEvent, TLifecycle>(): {
     // queues behind this delivery rather than joining a snapshot it missed.
     pendingBySet.delete(key);
     const ordered = orderedParts(pending);
+    const missing = pending.total === undefined ? 0 : pending.total - ordered.length;
     return {
       events: ordered.map((entry) => entry.event),
       lifecycles: ordered.map((entry) => entry.lifecycle),
+      ...(missing > 0 ? { missing } : {}),
       finish: releaseLane,
     };
   };

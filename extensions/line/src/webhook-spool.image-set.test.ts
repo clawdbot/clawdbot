@@ -423,6 +423,54 @@ describe("LINE webhook spool image sets", () => {
       }
     });
   });
+  // A set that never completes is delivered short. The turn answers what arrived,
+  // so the shortfall is only knowable here - the operator sees a small media count
+  // and nothing else that explains it.
+  it("reports how many parts a short set was missing", async () => {
+    await withQueue(async (queue) => {
+      const runtimeEnv = runtime();
+      const deliver = vi.fn(
+        async (
+          _events: readonly webhook.Event[],
+          _destination: string,
+          control: { turnAdoptionLifecycle: LineWebhookTurnAdoptionLifecycle },
+        ) => {
+          await control.turnAdoptionLifecycle.onAdopted();
+        },
+      );
+      const spool = createLineWebhookSpool({
+        accountId: "default",
+        runtime: runtimeEnv,
+        queue,
+        deliver,
+      });
+
+      spool.start();
+      try {
+        // Two of a three-part set arrive; the third never does.
+        for (const index of [1, 2]) {
+          await spool.accept(
+            callback(
+              createEvent({
+                webhookEventId: `event-short-${index}`,
+                userId: "user-short",
+                imageSet: { id: "set-short", index, total: 3 },
+              }),
+            ),
+          );
+        }
+
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { timeout: 20_000 });
+        expect(deliver.mock.calls[0]?.[0]).toHaveLength(2);
+        expect(
+          runtimeEnv.error.mock.calls.map(([message]) => String(message)).join("\n"),
+        ).toContain("image set set-short delivered 2 of 3 parts");
+      } finally {
+        await spool.stop();
+      }
+    });
+  });
+
   // A later part's adoption write can lose its claim to another owner. The
   // handoff is already marked by then, so the parts the adoption loop never
   // reached have to be released here or they stay claimed until recovery.
@@ -469,8 +517,6 @@ describe("LINE webhook spool image sets", () => {
         }
 
         await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(1), { timeout: 20_000 });
-        // The third part sat behind the lost one and was never adopted; it comes
-        // back for retry instead of staying held.
         // The third part sat behind the lost one and was never adopted; it comes
         // back for retry instead of staying held until recovery.
         const stranded = "message:message-event-lost-3";
