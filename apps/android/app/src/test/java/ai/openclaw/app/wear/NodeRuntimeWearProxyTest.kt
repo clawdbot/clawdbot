@@ -36,6 +36,7 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.util.ReflectionHelpers
 import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -75,11 +76,15 @@ class NodeRuntimeWearProxyTest {
       val runtime = NodeRuntime.forGatewayAuthReset(app, prefs)
 
       try {
+        gateway.holdNodeHellos()
         runtime.connect(gateway.endpoint)
         awaitOperatorReady(runtime, gateway.endpoint)
         assertTrue(runtime.handleWearProxyRequest("watch-1", sessionsRequest()).ok)
+        gateway.releaseNodeHellos()
+        awaitPhoneSessionsReady(runtime, gateway.endpoint)
 
         gateway.holdOperatorHellos()
+        gateway.holdNodeHellos()
         val disconnected = runtime.handleWearProxyRequest("watch-1", request(WearRpcMethod.GatewayDisconnect))
         assertFalse(checkNotNull(disconnected.result).jsonObject.getValue("connected").jsonPrimitive.content.toBoolean())
         assertUnavailable(runtime.handleWearProxyRequest("watch-1", sessionsRequest()))
@@ -104,6 +109,7 @@ class NodeRuntimeWearProxyTest {
         assertEquals(2, gateway.wearSessionsRequests.get())
       } finally {
         gateway.releaseOperatorHellos()
+        gateway.releaseNodeHellos()
         closeNodeRuntimeTestFixture(runtime)
         gateway.close()
       }
@@ -113,17 +119,45 @@ class NodeRuntimeWearProxyTest {
     runtime: NodeRuntime,
     endpoint: GatewayEndpoint,
   ) {
-    val session =
-      NodeRuntime::class.java
-        .getDeclaredField("operatorSession")
-        .apply { isAccessible = true }
-        .get(runtime) as GatewaySession
+    val session = readGatewaySession(runtime, "operatorSession")
+    val statusLock = ReflectionHelpers.getField<Any>(runtime, "gatewayStatusLock")
+    withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
+      while (
+        session.captureRequestLease(endpoint.stableId)?.isCurrent() != true ||
+          !synchronized(statusLock) {
+            ReflectionHelpers.getField<Boolean>(runtime, "operatorConnected")
+          }
+      ) {
+        delay(10)
+      }
+    }
+  }
+
+  private suspend fun awaitPhoneSessionsReady(
+    runtime: NodeRuntime,
+    endpoint: GatewayEndpoint,
+  ) {
+    awaitSessionReady(runtime, endpoint, "nodeSession")
+    awaitOperatorReady(runtime, endpoint)
+  }
+
+  private suspend fun awaitSessionReady(
+    runtime: NodeRuntime,
+    endpoint: GatewayEndpoint,
+    fieldName: String,
+  ) {
+    val session = readGatewaySession(runtime, fieldName)
     withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
       while (session.captureRequestLease(endpoint.stableId)?.isCurrent() != true) {
         delay(10)
       }
     }
   }
+
+  private fun readGatewaySession(
+    runtime: NodeRuntime,
+    fieldName: String,
+  ): GatewaySession = ReflectionHelpers.getField(runtime, fieldName)
 
   private fun assertUnavailable(response: WearMessage.Response) {
     assertFalse(response.ok)
@@ -148,10 +182,8 @@ class NodeRuntimeWearProxyTest {
 private class NodeRuntimeWearGateway : AutoCloseable {
   private val json = Json { ignoreUnknownKeys = true }
   private val server = MockWebServer()
-  private val operatorHelloGateLock = Any()
-  private var operatorHellosHeld = false
-  private val heldOperatorHellos = mutableListOf<Pair<WebSocket, String>>()
-  private val heldOperatorHelloObserved = CompletableDeferred<Unit>()
+  private val operatorHelloGate = GatewayHelloGate()
+  private val nodeHelloGate = GatewayHelloGate()
   val wearSessionsRequests = AtomicInteger()
   val endpoint: GatewayEndpoint
 
@@ -170,38 +202,24 @@ private class NodeRuntimeWearGateway : AutoCloseable {
   }
 
   fun holdOperatorHellos() {
-    synchronized(operatorHelloGateLock) {
-      operatorHellosHeld = true
-    }
+    operatorHelloGate.hold()
+  }
+
+  fun holdNodeHellos() {
+    nodeHelloGate.hold()
   }
 
   suspend fun awaitHeldOperatorHello() {
-    withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
-      heldOperatorHelloObserved.await()
-    }
+    operatorHelloGate.awaitHeld()
   }
 
   fun releaseOperatorHellos() {
-    val pending =
-      synchronized(operatorHelloGateLock) {
-        operatorHellosHeld = false
-        heldOperatorHellos.toList().also { heldOperatorHellos.clear() }
-      }
-    pending.forEach { (socket, id) ->
-      sendHello(socket, id, role = "operator")
-    }
+    operatorHelloGate.release { socket, id -> sendHello(socket, id, role = "operator") }
   }
 
-  private fun holdOperatorHello(
-    webSocket: WebSocket,
-    id: String,
-  ): Boolean =
-    synchronized(operatorHelloGateLock) {
-      if (!operatorHellosHeld) return@synchronized false
-      heldOperatorHellos += webSocket to id
-      heldOperatorHelloObserved.complete(Unit)
-      true
-    }
+  fun releaseNodeHellos() {
+    nodeHelloGate.release { socket, id -> sendHello(socket, id, role = "node") }
+  }
 
   private fun listener() =
     object : WebSocketListener() {
@@ -225,7 +243,8 @@ private class NodeRuntimeWearGateway : AutoCloseable {
         val params = frame["params"] as? JsonObject ?: JsonObject(emptyMap())
         if (method == "connect") {
           val role = checkNotNull(params["role"]?.jsonPrimitive?.content)
-          if (role == "operator" && holdOperatorHello(webSocket, id)) return
+          val gate = if (role == "operator") operatorHelloGate else nodeHelloGate
+          if (gate.capture(webSocket, id)) return
           sendHello(webSocket, id, role)
           return
         }
@@ -255,5 +274,48 @@ private class NodeRuntimeWearGateway : AutoCloseable {
 
   override fun close() {
     server.shutdown()
+  }
+}
+
+private class GatewayHelloGate {
+  private val lock = Any()
+  private var held = false
+  private var observed = CompletableDeferred<Unit>()
+  private val pending = mutableListOf<Pair<WebSocket, String>>()
+
+  fun hold() {
+    synchronized(lock) {
+      check(!held)
+      check(pending.isEmpty())
+      observed = CompletableDeferred()
+      held = true
+    }
+  }
+
+  suspend fun awaitHeld() {
+    val signal = synchronized(lock) { observed }
+    withTimeout(WEAR_GATEWAY_READY_TIMEOUT_MS) {
+      signal.await()
+    }
+  }
+
+  fun capture(
+    webSocket: WebSocket,
+    id: String,
+  ): Boolean =
+    synchronized(lock) {
+      if (!held) return@synchronized false
+      pending += webSocket to id
+      observed.complete(Unit)
+      true
+    }
+
+  fun release(sendHello: (WebSocket, String) -> Unit) {
+    val captured =
+      synchronized(lock) {
+        held = false
+        pending.toList().also { pending.clear() }
+      }
+    captured.forEach { (socket, id) -> sendHello(socket, id) }
   }
 }
