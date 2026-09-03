@@ -8,7 +8,6 @@ import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-w
 import {
   isIncognitoOpenClawAgentSqlitePath,
   openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
 } from "../../state/openclaw-agent-db.js";
@@ -23,11 +22,15 @@ import { materializeSessionStateDeletePlans } from "./session-accessor.sqlite-ar
 import { emitArchivedTranscriptUpdates } from "./session-accessor.sqlite-events.js";
 import {
   collectSessionStateIdsForEntry,
-  deleteMaterializedSessionStatePlans,
   planSessionStateDeleteIfUnreferenced,
   readReferencedSessionIds,
 } from "./session-accessor.sqlite-lifecycle-state.js";
 import { refreshSqliteSessionPlannerStatisticsBestEffort } from "./session-accessor.sqlite-maintenance.js";
+import {
+  createHistoryEvictionReclamationPlan,
+  runExclusiveSqliteSessionReclamation,
+  runSqliteSessionReclamation,
+} from "./session-accessor.sqlite-reclamation.js";
 import {
   getSessionKysely,
   resolveSqliteScope,
@@ -558,44 +561,35 @@ async function enforceSessionHistoryMaintenanceSerialized(
         }
         // Extract-before-delete is the retention invariant. The lifecycle hold
         // fences admission while the store writer is released for archive I/O.
-        const materialized = await materializeSessionStateDeletePlans([plan]);
-        const committedArchives = await runExclusiveSqliteSessionWrite(resolved, async () => {
-          let deleted = false;
-          let archivedTranscripts: ReturnType<typeof deleteMaterializedSessionStatePlans> = [];
-          runOpenClawAgentWriteTransaction((transactionDb) => {
-            const protectedAtDelete = collectCandidateProtectedHistoricalSessionIds({
-              database: transactionDb,
-              preserveRecentMs: params.maintenance.preserveRecentMs,
+        const committedArchives = await runExclusiveSqliteSessionReclamation(async () => {
+          const materialized = await materializeSessionStateDeletePlans([plan]);
+          return await runExclusiveSqliteSessionWrite(resolved, async () => {
+            const database = openOpenClawAgentDatabase(databaseOptions);
+            const reclamationPlan = createHistoryEvictionReclamationPlan({
+              databaseOptions,
+              materializedPlans: materialized,
+              protectedSessionIds: collectCandidateProtectedHistoricalSessionIds({
+                database,
+                preserveRecentMs: params.maintenance.preserveRecentMs,
+                sessionId,
+                storePath: params.storePath,
+              }),
               sessionId,
-              storePath: params.storePath,
             });
-            archivedTranscripts = deleteMaterializedSessionStatePlans(
-              transactionDb,
-              materialized,
-              protectedAtDelete,
-            );
-            const db = getSessionKysely(transactionDb.db);
-            deleted =
-              executeSqliteQuerySync(
-                transactionDb.db,
-                db
-                  .selectFrom("session_windows")
-                  .select("session_id")
-                  .where("session_id", "=", sessionId),
-              ).rows.length === 0;
-          }, databaseOptions);
-          if (!deleted) {
-            return null;
-          }
-          try {
-            // The deletion is committed; checkpoint/incremental-vacuum failure
-            // must not hide it from accounting or observers. Pages reclaim on
-            // a later pass instead.
-            reclaimSqliteFreePages(databaseOptions);
-          } catch {
-            // Best-effort reclamation only.
-          }
-          return archivedTranscripts;
+            const reclaimed = await runSqliteSessionReclamation({
+              forceInProcess: false,
+              plan: reclamationPlan,
+            });
+            if (reclaimed.kind !== reclamationPlan.kind) {
+              throw new Error(
+                `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
+              );
+            }
+            if (!reclaimed.value.deleted) {
+              return null;
+            }
+            return reclaimed.value.archivedTranscripts;
+          });
         });
         if (!committedArchives) {
           return null;

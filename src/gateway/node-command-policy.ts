@@ -590,7 +590,12 @@ export function resolveRequiredNodeCommandAuthority(params: {
     ) {
       continue;
     }
-    if (declaredCommands.has(command) && !effectiveCommands.has(command)) {
+    // Hot reload retains declarations; a policy denial is not a new pairing request.
+    if (
+      declaredCommands.has(command) &&
+      !effectiveCommands.has(command) &&
+      !withheldCommands.has(command)
+    ) {
       return { command, state: "pending-approval" };
     }
     if (declaredCommands.has(command) || withheldCommands.has(command)) {

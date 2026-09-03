@@ -147,10 +147,7 @@ async function prepareWorkerGeneration(value: PreparedModelCatalogWorkerInput) {
     preferBuiltPluginArtifacts: prepared.pluginGeneration.preferBuiltPluginArtifacts,
     pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
   });
-  if (reconstructedFingerprint !== value.generationFingerprint) {
-    throw new Error("prepared model catalog worker reconstructed a different runtime generation");
-  }
-  return { agentFacts, pluginGeneration: prepared.pluginGeneration };
+  return { agentFacts, pluginGeneration: prepared.pluginGeneration, reconstructedFingerprint };
 }
 
 export async function runPreparedModelCatalogWorkerRequest(
@@ -160,6 +157,15 @@ export async function runPreparedModelCatalogWorkerRequest(
 ): Promise<PreparedModelWorkerResult> {
   try {
     const prepared = await preparedGeneration;
+    // Every ok reply is cached under the owner's generation. Facts rebuilt under another
+    // fingerprint leave only as this typed outcome, so the owner retires the worker instead.
+    if (prepared.reconstructedFingerprint !== value.generationFingerprint) {
+      return {
+        status: "generation-mismatch",
+        generationFingerprint: value.generationFingerprint,
+        reconstructedFingerprint: prepared.reconstructedFingerprint,
+      };
+    }
     if (request.kind === "auth-refresh") {
       const authStore = refreshAuthStore({
         agentDir: value.input.agentDir,

@@ -31,6 +31,7 @@ import {
 } from "../../lib/nodes/inventory.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { renderCapabilityChips } from "./capability-chips.ts";
+import { deviceDesktopEnvironment, renderDeviceEntryMenu } from "./entry-menu.ts";
 import { renderHostStats } from "./host-stats.ts";
 import { renderPendingDeviceRows } from "./view-pending-devices.ts";
 import { deviceIcon, renderDeviceTile } from "./view-shared.ts";
@@ -285,9 +286,8 @@ function renderCommandLine(values: string[]) {
   const visible = values.slice(0, COMMAND_LINE_LIMIT);
   const overflow = values.length - visible.length;
   const suffix = overflow > 0 ? ` +${overflow}` : "";
-  return html`<div class="muted">
-    ${t("devices.inventory.commands")}: ${formatList(visible)}${suffix}
-  </div>`;
+  return html`<dt class="settings-row__desc">${t("devices.inventory.commands")}</dt>
+    <dd class="settings-row__value settings-row__value--mono">${formatList(visible)}${suffix}</dd>`;
 }
 
 function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
@@ -297,24 +297,45 @@ function renderEntryDetails(entry: DeviceInventoryEntry, props: DevicesProps) {
   return html`
     <details class="device-entry__details">
       <summary>${t("devices.inventory.details")}</summary>
-      <div class="muted">${t("devices.inventory.deviceId", { id: entry.id })}</div>
-      ${entry.remoteIp
-        ? html`<div class="muted">${t("devices.inventory.remoteIp", { ip: entry.remoteIp })}</div>`
-        : nothing}
-      ${scopes.length > 0
-        ? html`<div class="muted">
-            ${t("devices.inventory.scopes", { scopes: formatList(scopes) })}
-          </div>`
-        : nothing}
-      ${tokens.length > 0
-        ? html`
-            <div class="muted">${t("devices.inventory.tokens")}</div>
-            ${tokens.map((token) =>
-              renderTokenRow({ id: entry.id, name: entry.name }, token, props),
-            )}
-          `
-        : nothing}
-      ${renderCommandLine(commands)}
+      <dl class="device-entry__facts">
+        <dt class="settings-row__desc">${t("devices.inventory.deviceIdLabel")}</dt>
+        <dd class="settings-row__value settings-row__value--mono" title=${entry.id}>${entry.id}</dd>
+        ${entry.remoteIp
+          ? html`<dt class="settings-row__desc">${t("devices.inventory.remoteIpLabel")}</dt>
+              <dd class="settings-row__value settings-row__value--mono">${entry.remoteIp}</dd>`
+          : nothing}
+        ${scopes.length > 0
+          ? html`<dt class="settings-row__desc">${t("devices.inventory.scopesLabel")}</dt>
+              <dd class="device-entry__scopes">
+                ${scopes.map(
+                  (scope) =>
+                    html`<span class="device-capability device-capability--scope">${scope}</span>`,
+                )}
+              </dd>`
+          : nothing}
+        ${tokens.length > 0
+          ? html`<dt class="settings-row__desc">${t("devices.inventory.tokens")}</dt>
+              <dd class="device-entry__tokens">
+                <table class="device-token-table" aria-label=${t("devices.inventory.tokens")}>
+                  <thead>
+                    <tr>
+                      <th scope="col">${t("devices.inventory.tokenRole")}</th>
+                      <th scope="col">${t("devices.inventory.tokenStatus")}</th>
+                      <th scope="col">${t("devices.inventory.scopesLabel")}</th>
+                      <th scope="col">${t("devices.inventory.tokenAge")}</th>
+                      <th scope="col">${t("devices.inventory.actions")}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${tokens.map((token) =>
+                      renderTokenRow({ id: entry.id, name: entry.name }, token, props),
+                    )}
+                  </tbody>
+                </table>
+              </dd>`
+          : nothing}
+        ${renderCommandLine(commands)}
+      </dl>
     </details>
   `;
 }
@@ -331,53 +352,38 @@ function renderInventoryEntry(entry: DeviceInventoryEntry, props: DevicesProps) 
     entry.node?.approvalState === "pending-reapproval"
       ? entry.node.pendingRequestId
       : undefined;
-  const connectionStatus =
-    (entry.node?.connected ?? entry.connected)
-      ? renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })
-      : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
+  const desktopEnvironment = deviceDesktopEnvironment(props, `node:${entry.id}`);
+  const rowConnected = entry.node?.connected ?? entry.connected;
+  const connectionStatus = rowConnected
+    ? renderSettingsStatus({ kind: "ok", label: t("devices.inventory.connected") })
+    : renderSettingsStatus({ kind: "muted", label: t("devices.inventory.offline") });
   return html`
     <div class="settings-row device-entry" title=${capacity?.title ?? nothing}>
       ${renderDeviceTile(deviceIcon(entry))}
-      <div class="settings-row__text">
+      <div class="device-entry__body">
         <div class="device-entry__heading">
           <span class="settings-row__title">${entry.name}</span>
           <span class="device-entry__status">${connectionStatus}</span>
         </div>
         <span class="settings-row__desc">${entryMetaLine(entry)}</span>
-        ${renderHostStats(entry.node?.hostStats)} ${renderCapabilityChips(entry.node?.caps ?? [])}
-        ${renderEntryDetails(entry, props)}
+        ${renderHostStats(
+          entry.node?.hostStats,
+          !rowConnected ? entry.node?.hostStats?.updatedAtMs : undefined,
+        )}
+        ${renderCapabilityChips(entry.node?.caps ?? [])}
       </div>
       <div class="settings-row__control">
         ${capacity?.meter ?? nothing} ${entryWarnStatuses(entry, props.gatewayVersion)}
-        ${renderDesktopControl(props, `node:${entry.id}`, entry.node?.commands)}
-        ${pendingRequestId
-          ? html`
-              <button
-                class="btn btn--sm"
-                ?disabled=${!props.canManagePairing}
-                @click=${() => props.onNodeApprove(pendingRequestId)}
-              >
-                ${t("devices.inventory.approve")}
-              </button>
-              <button
-                class="btn btn--sm"
-                ?disabled=${!props.canManagePairing}
-                @click=${() => props.onNodeReject(pendingRequestId)}
-              >
-                ${t("devices.inventory.reject")}
-              </button>
-            `
-          : nothing}
-        <button
-          class="btn btn--sm danger device-entry__remove"
-          aria-label=${t("devices.inventory.removeName", { name: entry.name })}
-          title=${t("devices.inventory.remove")}
-          ?disabled=${!props.canManagePairing}
-          @click=${() => props.onInventoryRemove(toRemovalRequest(entry))}
-        >
-          ${icons.x}
-        </button>
+        ${renderDesktopControl(props, desktopEnvironment, entry.node?.commands)}
+        ${renderDeviceEntryMenu(props, {
+          name: entry.name,
+          deviceId: entry.id,
+          desktopEnvironment,
+          pendingRequestId,
+          onRemove: () => props.onInventoryRemove(toRemovalRequest(entry)),
+        })}
       </div>
+      ${renderEntryDetails(entry, props)}
     </div>
   `;
 }
@@ -430,10 +436,11 @@ function renderPresenceRow(
   const title = gateway
     ? (entry.host ?? t("devices.execApprovals.gateway"))
     : (entry.host ?? entry.mode ?? t("devices.inventory.unknownClient"));
+  const desktopEnvironment = gateway ? deviceDesktopEnvironment(props, "gateway") : undefined;
   return html`
     <div class="settings-row device-entry">
       ${renderDeviceTile(icon)}
-      <div class="settings-row__text">
+      <div class="device-entry__body">
         <div class="device-entry__heading">
           <span class="settings-row__title">${title}</span>
           <span class="device-entry__status">
@@ -448,18 +455,23 @@ function renderPresenceRow(
         ${gateway ? renderHostStats(props.gatewaySystemInfo) : nothing}
       </div>
       <div class="settings-row__control">
-        ${gateway ? renderDesktopControl(props, "gateway") : nothing}
+        ${renderDesktopControl(props, desktopEnvironment)}
+        ${renderDeviceEntryMenu(props, {
+          name: title,
+          deviceId: entry.deviceId,
+          desktopEnvironment,
+        })}
       </div>
     </div>
   `;
 }
 
-function renderDesktopControl(props: DevicesProps, environmentId: string, commands?: string[]) {
-  if (
-    props.desktopEnvironments?.some(
-      (environment) => environment.id === environmentId && environment.desktop === true,
-    )
-  ) {
+function renderDesktopControl(
+  props: DevicesProps,
+  environmentId: string | undefined,
+  commands?: string[],
+) {
+  if (environmentId) {
     // Settings routes suppress the docked Desktop panel, so the row opens the
     // standalone desktop focus window instead of dispatching a panel toggle.
     return html`<button
@@ -488,33 +500,38 @@ function renderTokenRow(
   const status = tokenSummary.revokedAtMs
     ? t("devices.inventory.revoked")
     : t("devices.inventory.active");
-  const scopes = t("devices.inventory.scopes", { scopes: formatList(tokenSummary.scopes) });
+  const scopes = formatList(tokenSummary.scopes);
   const when = formatRelativeTimestamp(
     tokenSummary.rotatedAtMs ?? tokenSummary.createdAtMs ?? tokenSummary.lastUsedAtMs ?? null,
   );
   return html`
-    <div class="device-entry__token">
-      <span class="muted">${tokenSummary.role} · ${status} · ${scopes} · ${when}</span>
-      <span class="device-entry__token-actions">
-        <button
-          class="btn btn--sm"
-          ?disabled=${!props.canManagePairing}
-          @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
-        >
-          ${t("devices.inventory.rotate")}
-        </button>
-        ${tokenSummary.revokedAtMs
-          ? nothing
-          : html`
-              <button
-                class="btn btn--sm danger"
-                ?disabled=${!props.canManagePairing}
-                @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
-              >
-                ${t("devices.inventory.revoke")}
-              </button>
-            `}
-      </span>
-    </div>
+    <tr>
+      <td>${tokenSummary.role}</td>
+      <td>${status}</td>
+      <td>${scopes}</td>
+      <td>${when}</td>
+      <td>
+        <div class="device-entry__token-actions">
+          <button
+            class="btn btn--sm"
+            ?disabled=${!props.canManagePairing}
+            @click=${() => props.onDeviceRotate(device, tokenSummary.role, tokenSummary.scopes)}
+          >
+            ${t("devices.inventory.rotate")}
+          </button>
+          ${tokenSummary.revokedAtMs
+            ? nothing
+            : html`
+                <button
+                  class="btn btn--sm danger"
+                  ?disabled=${!props.canManagePairing}
+                  @click=${() => props.onDeviceRevoke(device.id, tokenSummary.role)}
+                >
+                  ${t("devices.inventory.revoke")}
+                </button>
+              `}
+        </div>
+      </td>
+    </tr>
   `;
 }
