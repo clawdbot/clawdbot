@@ -4,6 +4,7 @@
  * Harnesses use this to trigger skill experience review and plugin agent_end hooks
  * either fire-and-forget or awaited during tests/shutdown.
  */
+import { getRuntimeConfig } from "../../config/config.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { consumeRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import type { EmbeddedForegroundPromptContext } from "../embedded-agent-runner/run/params.js";
@@ -32,9 +33,8 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
   if (!params.ctx.foregroundPromptContext) {
     return;
   }
-  if (!params.ctx.config) {
-    return;
-  }
+  // Hook contexts do not always carry the config; the runtime config is the owner at this boundary.
+  const config = params.ctx.config ?? getRuntimeConfig();
   const ctx = { ...params.ctx, foregroundPromptContext: params.ctx.foregroundPromptContext };
   try {
     const { scheduleSkillExperienceReview } =
@@ -43,7 +43,7 @@ async function runCoreAgentEndSideEffects(params: AgentEndSideEffectsParams): Pr
       event: params.event,
       ctx,
       usedSkills,
-      config: params.ctx.config,
+      config,
     });
   } catch (error) {
     // Side effects are observational; failures must not change the completed run result.
