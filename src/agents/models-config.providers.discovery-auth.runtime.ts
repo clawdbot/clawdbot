@@ -131,6 +131,9 @@ export async function prepareProviderCatalogOAuthAuth(
     }
     failedProfileIds.push(auth.profileId);
   }
-  return (requestedProvider: string, options?: { oauthMarker?: string }) =>
-    resolveProviderAuth(requestedProvider, { ...options, excludeProfileIds: failedProfileIds });
+  return (requestedProvider?: string, options?: { oauthMarker?: string }) =>
+    resolveProviderAuth(requestedProvider?.trim() || provider, {
+      ...options,
+      excludeProfileIds: failedProfileIds,
+    });
 }
