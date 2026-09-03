@@ -2195,6 +2195,15 @@ describe("state migrations", () => {
       "Migrated 2 ACP session metadata rows → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
     ]);
+    expect(result.stepReceipts.find((receipt) => receipt.id === "sessions")).toMatchObject({
+      outcome: "warning",
+      warnings: [
+        `Preserved 1 ambiguous session key(s) while importing legacy sessions into ${targetStorePath}`,
+      ],
+    });
+    expect(result.stepReceipts.map((receipt) => receipt.id)).toEqual(
+      expect.arrayContaining(["acp-session-metadata", "agent-dir"]),
+    );
 
     const mergedStore = JSON.parse(
       await fs.readFile(
@@ -2929,6 +2938,16 @@ describe("state migrations", () => {
     }
     expect(result.changes).toContain("Migrated 2 ACP session metadata rows → shared SQLite state");
     expect(result.warnings).toHaveLength(0);
+    const receipt = result.stepReceipts.find((entry) => entry.id === "acp-session-metadata");
+    expect(receipt).toMatchObject({ outcome: "completed" });
+    expect(receipt?.source).toEqual(expect.arrayContaining([{ kind: "path", path: storePath }]));
+    expect(receipt?.target).toEqual(
+      expect.arrayContaining([
+        { kind: "path", path: storePath },
+        { kind: "sqlite", path: resolveOpenClawStateSqlitePath(env) },
+      ]),
+    );
+    expect(receipt?.source).not.toContainEqual(expect.objectContaining({ kind: "sqlite" }));
   });
 
   it("preserves multi-owner rows through coalesced templated-store migration", async () => {

@@ -17,8 +17,6 @@ import {
 
 export type PreparedLegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome">;
 
-const SHA256_DIGEST_PATTERN = /^sha256:[0-9a-f]{64}$/u;
-
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }
@@ -214,27 +212,22 @@ export function createLegacyStateMigrationPlanEnv(params: {
 
 export function createLegacyStateMigrationPlan(params: {
   mode: LegacyStateMigrationMode;
-  candidate: LegacyStateMigrationPlan["candidate"];
+  candidate: Pick<LegacyStateMigrationPlan["candidate"], "root" | "version">;
   snapshot: LegacyStateMigrationPlan["snapshot"];
   steps: readonly PreparedLegacyStateMigrationStep[];
   warnings?: readonly string[];
   refusal?: { code: string; message: string };
 }): LegacyStateMigrationPlan {
-  // Only the staged-candidate owner can verify package, dependency, and bundled-plugin
-  // bytes. Root and version remain diagnostic when that owner has not bound a digest.
-  const artifact =
-    params.candidate.artifact.outcome === "bound" &&
-    SHA256_DIGEST_PATTERN.test(params.candidate.artifact.digest)
-      ? { ...params.candidate.artifact }
-      : params.candidate.artifact.outcome === "bound"
-        ? {
-            outcome: "deferred" as const,
-            refusal: {
-              code: "candidate-artifact-digest-invalid",
-              message: "The staged-candidate owner supplied an invalid artifact SHA-256 digest.",
-            },
-          }
-        : { ...params.candidate.artifact, refusal: { ...params.candidate.artifact.refusal } };
+  // This planner does not own staged package bytes. Keep every result closed until
+  // the staged-candidate owner adds and revalidates its immutable artifact identity.
+  const artifact = {
+    outcome: "deferred" as const,
+    refusal: {
+      code: "candidate-artifact-digest-required" as const,
+      message:
+        "Candidate artifact content identity must be supplied by the staged-candidate owner.",
+    },
+  };
   const candidate = {
     root: path.resolve(params.candidate.root),
     version: params.candidate.version,

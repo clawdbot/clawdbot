@@ -34,6 +34,7 @@ export type LegacyStateDetection = {
   targetScope?: SessionScope;
   stateDir: string;
   oauthDir: string;
+  pluginSessionStoreAgentIds: readonly string[];
   sessions: {
     legacyDir: string;
     legacyStorePath: string;
@@ -177,6 +178,8 @@ export type MigrationMessages = {
   changes: string[];
   warnings: string[];
   notices?: string[];
+  /** The owner completed its required work and classified every warning as advisory. */
+  warningDisposition?: "recoverable";
 };
 
 export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
@@ -211,16 +214,10 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
 type LegacyStateMigrationCandidate = {
   root: string;
   version: string;
-  artifact:
-    | {
-        outcome: "bound";
-        owner: "staged-candidate";
-        digest: string;
-      }
-    | {
-        outcome: "deferred";
-        refusal: { code: string; message: string };
-      };
+  artifact: {
+    outcome: "deferred";
+    refusal: { code: "candidate-artifact-digest-required"; message: string };
+  };
 };
 
 export type LegacyStateMigrationPlan = {

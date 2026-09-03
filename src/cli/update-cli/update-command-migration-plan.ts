@@ -20,7 +20,7 @@ function requiredValue(value: string, flag: string): string {
 }
 
 async function createUpdateMigrationPlan(params: {
-  candidate: LegacyStateMigrationPlan["candidate"];
+  candidate: Pick<LegacyStateMigrationPlan["candidate"], "root" | "version">;
   snapshot: Pick<LegacyStateMigrationPlan["snapshot"], "homeDir" | "configPath" | "stateDir">;
   env?: NodeJS.ProcessEnv;
 }): Promise<LegacyStateMigrationPlan> {
@@ -43,22 +43,14 @@ async function createUpdateMigrationPlan(params: {
 export async function updateMigrationPlanCommand(
   opts: UpdateMigrationPlanCommandOptions,
 ): Promise<void> {
-  // Root and version are observations only. The staged-candidate owner must
-  // supply an immutable artifact digest through the planner API.
+  // Root and version are observations only. This diagnostic command cannot bind
+  // candidate bytes, so the planner returns a closed artifact-identity refusal.
   const root = await resolveUpdateRoot();
   const version = await readPackageVersion(root);
   const plan = await createUpdateMigrationPlan({
     candidate: {
       root,
       version: version ?? "unknown",
-      artifact: {
-        outcome: "deferred",
-        refusal: {
-          code: "candidate-artifact-digest-required",
-          message:
-            "Candidate artifact content identity must be supplied by the staged-candidate owner.",
-        },
-      },
     },
     snapshot: {
       homeDir: requiredValue(opts.snapshotHome, "--snapshot-home"),

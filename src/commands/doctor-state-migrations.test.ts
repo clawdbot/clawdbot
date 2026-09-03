@@ -2593,6 +2593,16 @@ describe("doctor legacy state migrations", () => {
     expect(firstResult.warnings).toStrictEqual([
       `Failed archiving plugin-state sidecar ${walPath}: Error: forced archive failure`,
     ]);
+    expect(
+      firstResult.stepReceipts.find((receipt) => receipt.id === "plugin-state-sidecar"),
+    ).toMatchObject({
+      outcome: "refused",
+      changes: ["Migrated 1 plugin-state sidecar entry → shared SQLite state"],
+      refusal: { code: "step-refused" },
+    });
+    expect(
+      firstResult.stepReceipts.find((receipt) => receipt.id === "plugin-install-index"),
+    ).toBeUndefined();
     expect(fs.existsSync(sourcePath)).toBe(false);
     expect(fs.existsSync(`${sourcePath}.migrated`)).toBe(true);
     expect(fs.existsSync(walPath)).toBe(true);

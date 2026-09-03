@@ -787,6 +787,7 @@ export async function detectLegacyStateMigrations(params: {
     targetScope,
     stateDir,
     oauthDir,
+    pluginSessionStoreAgentIds,
     sessions: {
       legacyDir: sessionsLegacyDir,
       legacyStorePath: sessionsLegacyStorePath,
@@ -1203,8 +1204,8 @@ type LegacyStateMigrationExecutionPlan = {
   sessionConfig?: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   now?: () => number;
-  pluginSessionStoreAgentIds?: readonly string[];
-  agentSessionStoreEndpoints?: LegacyStateMigrationEndpoint[];
+  agentDatabaseEndpoints?: LegacyStateMigrationEndpoint[];
+  legacySessionStoreEndpoints?: LegacyStateMigrationEndpoint[];
   recoverCorruptTargetStore?: boolean;
   allowLegacyDeviceIdentityImport?: boolean;
   skipAgentScopedMigrations?: boolean;
@@ -1231,9 +1232,23 @@ function buildLegacyStateMigrationSteps(
     target?: LegacyStateMigrationEndpoint[],
     reversibility?: PreparedLegacyStateMigrationStep["reversibility"],
   ];
-  const agentSessionStores: LegacyStateMigrationEndpoint[] = params.agentSessionStoreEndpoints ?? [
-    { kind: "owner", id: "configured-agent-session-stores" },
+  // Detection owns plugin session-store discovery. Carry the prepared owner set
+  // into receipts and execution so planning cannot observe a different plugin load.
+  const pluginSessionStoreAgentIds = detected.pluginSessionStoreAgentIds;
+  const legacySessionStores =
+    params.legacySessionStoreEndpoints ??
+    inspectOrphanSessionStoreEndpoints({
+      config: params.sessionConfig ?? params.config,
+      env,
+      pluginSessionStoreAgentIds,
+    }).endpoints;
+  const agentDatabases = params.agentDatabaseEndpoints ?? [
+    { kind: "owner" as const, id: "configured-agent-databases" },
   ];
+  const canonicalSessionStores = uniqueMigrationEndpoints([
+    ...legacySessionStores,
+    ...agentDatabases,
+  ]);
   const stepSpecs = {
     "managed-worktrees": [
       [stateDatabase],
@@ -1378,8 +1393,12 @@ function buildLegacyStateMigrationSteps(
       detected.sessions.hasLegacy,
       pathEndpoints(detected.sessions.targetDir, detected.sessions.targetStorePath),
     ],
-    "legacy-main-session-keys": [agentSessionStores, "conditional", agentSessionStores],
-    "acp-session-metadata": [agentSessionStores, "conditional", agentSessionStores],
+    "legacy-main-session-keys": [canonicalSessionStores, "conditional", canonicalSessionStores],
+    "acp-session-metadata": [
+      legacySessionStores,
+      "conditional",
+      uniqueMigrationEndpoints([...legacySessionStores, stateDatabase]),
+    ],
     "agent-dir": [
       pathEndpoints(detected.agentDir.legacyDir),
       detected.agentDir.hasLegacy,
@@ -1607,7 +1626,7 @@ function buildLegacyStateMigrationSteps(
           cfg: params.sessionConfig ?? params.config,
           env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
           now,
-          pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds,
+          pluginSessionStoreAgentIds,
           legacySessionSurfaces: params.legacySessionSurfaces,
         }),
       ),
@@ -1650,7 +1669,7 @@ function migrationStepPlan(step: LegacyStateMigrationStep): PreparedLegacyStateM
  */
 export async function planLegacyStateMigrationsReadOnly(params: {
   mode: LegacyStateMigrationMode;
-  candidate: LegacyStateMigrationPlan["candidate"];
+  candidate: Pick<LegacyStateMigrationPlan["candidate"], "root" | "version">;
   snapshot: LegacyStateMigrationPlan["snapshot"];
   env?: NodeJS.ProcessEnv;
   initialWarnings?: readonly string[];
@@ -1765,23 +1784,41 @@ export async function planLegacyStateMigrationsReadOnly(params: {
     planningWarnings.push(message);
     agentTargetRefusal = { code: "agent-target-discovery-failed", message };
   }
+  const pluginIds = collectRelevantDoctorPluginIds(configBefore.config);
+  const deferredPluginSessionStores =
+    params.mode === "doctor"
+      ? pluginIds.map(
+          (pluginId): LegacyStateMigrationEndpoint => ({
+            kind: "owner",
+            id: `plugin:${pluginId}:session-store`,
+          }),
+        )
+      : [];
+  const copiedSessionStores = inspectOrphanSessionStoreEndpoints({
+    config: configBefore.config,
+    env,
+    pluginSessionStoreAgentIds: [],
+  });
+  planningWarnings.push(...copiedSessionStores.warnings);
   const mainSteps = buildLegacyStateMigrationSteps({
     mode: params.mode,
     detected,
     config: configBefore.config,
     env,
-    pluginSessionStoreAgentIds: [],
-    agentSessionStoreEndpoints: agentDatabaseTargets.map(({ path: databasePath }) => ({
+    agentDatabaseEndpoints: agentDatabaseTargets.map(({ path: databasePath }) => ({
       kind: "sqlite",
       path: databasePath,
     })),
+    legacySessionStoreEndpoints: uniqueMigrationEndpoints([
+      ...copiedSessionStores.endpoints,
+      ...deferredPluginSessionStores,
+    ]),
     legacySessionSurfaces,
   });
   const [stateSchemaStep, ...remainingMainSteps] = mainSteps;
   if (!stateSchemaStep || stateSchemaStep.id !== "state-schema") {
     throw new Error("legacy state migration plan is missing its state-schema prelude");
   }
-  const pluginIds = collectRelevantDoctorPluginIds(configBefore.config);
   const pluginPreparationRefusal =
     pluginIds.length > 0
       ? {
@@ -1859,6 +1896,25 @@ export async function planLegacyStateMigrationsReadOnly(params: {
       }
     }
   }
+  const sessionTargetRefusal =
+    copiedSessionStores.warnings.length > 0
+      ? {
+          code: "session-target-discovery-failed",
+          message: copiedSessionStores.warnings.join("\n"),
+        }
+      : deferredPluginSessionStores.length > 0
+        ? {
+            code: "plugin-planning-deferred",
+            message: "Plugin-owned session migration targets are deferred to candidate validation.",
+          }
+        : undefined;
+  if (sessionTargetRefusal) {
+    for (const step of steps) {
+      if (step.id === "legacy-main-session-keys" || step.id === "acp-session-metadata") {
+        step.refusal = sessionTargetRefusal;
+      }
+    }
+  }
   const pluginStep = steps.find((step) => step.id === "plugin-doctor-state");
   if (pluginStep && pluginIds.length > 0) {
     pluginStep.source = pluginIds.map((pluginId) => ({ kind: "owner", id: `plugin:${pluginId}` }));
@@ -1912,7 +1968,10 @@ function completedStepReceipt(
   step: LegacyStateMigrationStep,
   result: MigrationMessages,
 ): LegacyStateMigrationStepReceipt {
-  const refused = result.warnings.length > 0 && result.changes.length === 0;
+  const refused =
+    result.warnings.length > 0 &&
+    (result.changes.length === 0 ||
+      (step.requiredness === "required" && result.warningDisposition !== "recoverable"));
   return {
     ...migrationStepPlan(step),
     outcome: refused
@@ -2230,6 +2289,9 @@ export async function autoMigrateLegacyState(params: {
             });
             return { changes: [], warnings: [] };
           } catch (error) {
+            if (mode === "automatic") {
+              throw error;
+            }
             return {
               changes: [],
               warnings: [`Could not resolve configured agent migration targets: ${String(error)}`],
@@ -2492,6 +2554,11 @@ export async function autoMigrateLegacyState(params: {
     };
   }
   const hasCustomAgentDir = env.OPENCLAW_AGENT_DIR?.trim() || env.PI_CODING_AGENT_DIR?.trim();
+  const legacySessionStoreEndpoints = inspectOrphanSessionStoreEndpoints({
+    config: params.cfg,
+    env: stateEnv,
+    pluginSessionStoreAgentIds: detected.pluginSessionStoreAgentIds,
+  }).endpoints;
   const migrationSteps = buildLegacyStateMigrationSteps({
     mode,
     detected,
@@ -2499,11 +2566,11 @@ export async function autoMigrateLegacyState(params: {
     sessionConfig: params.cfg,
     env,
     now: params.now,
-    pluginSessionStoreAgentIds,
-    agentSessionStoreEndpoints: agentDatabaseTargets.map(({ path: databasePath }) => ({
+    agentDatabaseEndpoints: agentDatabaseTargets.map(({ path: databasePath }) => ({
       kind: "sqlite",
       path: databasePath,
     })),
+    legacySessionStoreEndpoints,
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
     skipAgentScopedMigrations: Boolean(hasCustomAgentDir),
     allowLegacyDeviceIdentityImport: params.allowLegacyDeviceIdentityImport,

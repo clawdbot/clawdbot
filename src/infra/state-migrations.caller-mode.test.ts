@@ -33,16 +33,11 @@ function sha256(value: string | Buffer): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function boundCandidate(root: string, version = "test"): LegacyStateMigrationPlan["candidate"] {
-  return {
-    root,
-    version,
-    artifact: {
-      outcome: "bound",
-      owner: "staged-candidate",
-      digest: `sha256:${"a".repeat(64)}`,
-    },
-  };
+function candidateAt(
+  root: string,
+  version = "test",
+): Pick<LegacyStateMigrationPlan["candidate"], "root" | "version"> {
+  return { root, version };
 }
 
 function writeLegacyDoctorSources(
@@ -156,7 +151,7 @@ describe("legacy state migration caller mode", () => {
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(path.join(fixture.root, "candidate"), "2026.9.2-candidate"),
+      candidate: candidateAt(path.join(fixture.root, "candidate"), "2026.9.2-candidate"),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -168,16 +163,16 @@ describe("legacy state migration caller mode", () => {
     expect(plan).toMatchObject({
       schemaVersion: "openclaw.legacyStateMigrationPlan.v1",
       mutationAllowed: false,
-      outcome: "planned",
+      outcome: "refused",
+      refusal: { code: "candidate-artifact-digest-required" },
       warnings: [],
       mode: "doctor",
       candidate: {
         root: path.resolve(fixture.root, "candidate"),
         version: "2026.9.2-candidate",
         artifact: {
-          outcome: "bound",
-          owner: "staged-candidate",
-          digest: `sha256:${"a".repeat(64)}`,
+          outcome: "deferred",
+          refusal: { code: "candidate-artifact-digest-required" },
         },
       },
       snapshot: {
@@ -226,7 +221,7 @@ describe("legacy state migration caller mode", () => {
 
     const first = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -237,9 +232,10 @@ describe("legacy state migration caller mode", () => {
     const firstAgentStep = first.steps.find((step) => step.id === "acp-session-metadata");
     expect.soft(firstAgentStep?.target).toEqual([
       {
-        kind: "sqlite",
-        path: path.join(fixture.stateDir, "agents", "atlas", "agent", "openclaw-agent.sqlite"),
+        kind: "path",
+        path: path.join(fixture.stateDir, "agents", "atlas", "sessions", "sessions.json"),
       },
+      { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) },
     ]);
     const firstConfigDigest = first.snapshot.configDigest;
     if (!firstConfigDigest) {
@@ -249,7 +245,7 @@ describe("legacy state migration caller mode", () => {
     fs.writeFileSync(includePath, `${JSON.stringify(configFor("beacon"))}\n`);
     const stale = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -266,7 +262,7 @@ describe("legacy state migration caller mode", () => {
 
     const second = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -278,9 +274,10 @@ describe("legacy state migration caller mode", () => {
     expect.soft(second.snapshot.configDigest).not.toBe(firstConfigDigest);
     expect.soft(secondAgentStep?.target).toEqual([
       {
-        kind: "sqlite",
-        path: path.join(fixture.stateDir, "agents", "beacon", "agent", "openclaw-agent.sqlite"),
+        kind: "path",
+        path: path.join(fixture.stateDir, "agents", "beacon", "sessions", "sessions.json"),
       },
+      { kind: "sqlite", path: resolveOpenClawStateSqlitePath(fixture.env) },
     ]);
   });
 
@@ -298,9 +295,16 @@ describe("legacy state migration caller mode", () => {
       "agent",
       "openclaw-agent.sqlite",
     );
+    const legacySessionStorePath = path.join(
+      fixture.stateDir,
+      "agents",
+      "planner",
+      "sessions",
+      "sessions.json",
+    );
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -311,8 +315,14 @@ describe("legacy state migration caller mode", () => {
 
     expect(plan.mode).toBe("automatic");
     expect(plan.steps.find((step) => step.id === "legacy-main-session-keys")).toMatchObject({
-      source: [{ kind: "sqlite", path: agentDatabasePath }],
-      target: [{ kind: "sqlite", path: agentDatabasePath }],
+      source: [
+        { kind: "path", path: legacySessionStorePath },
+        { kind: "sqlite", path: agentDatabasePath },
+      ],
+      target: [
+        { kind: "path", path: legacySessionStorePath },
+        { kind: "sqlite", path: agentDatabasePath },
+      ],
       requiredness: "conditional",
       outcome: "planned",
     });
@@ -338,21 +348,20 @@ describe("legacy state migration caller mode", () => {
     );
   });
 
-  it("refuses an invalid staged-candidate artifact digest", async () => {
+  it("does not accept a caller-asserted staged-candidate artifact identity", async () => {
     const fixture = await makeFixture();
-    const candidate: LegacyStateMigrationPlan["candidate"] = {
-      root: fixture.root,
-      version: "test",
+    const assertedCandidate = {
+      ...candidateAt(fixture.root),
       artifact: {
-        outcome: "bound",
-        owner: "staged-candidate",
-        digest: "sha256:not-a-digest",
+        outcome: "bound" as const,
+        owner: "staged-candidate" as const,
+        digest: `sha256:${"a".repeat(64)}`,
       },
     };
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate,
+      candidate: assertedCandidate,
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -363,11 +372,11 @@ describe("legacy state migration caller mode", () => {
 
     expect(plan).toMatchObject({
       outcome: "refused",
-      refusal: { code: "candidate-artifact-digest-invalid" },
+      refusal: { code: "candidate-artifact-digest-required" },
       candidate: {
         artifact: {
           outcome: "deferred",
-          refusal: { code: "candidate-artifact-digest-invalid" },
+          refusal: { code: "candidate-artifact-digest-required" },
         },
       },
     });
@@ -378,7 +387,7 @@ describe("legacy state migration caller mode", () => {
     const before = snapshotFiles(fixture.root);
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -412,7 +421,7 @@ describe("legacy state migration caller mode", () => {
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -443,7 +452,7 @@ describe("legacy state migration caller mode", () => {
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -475,7 +484,7 @@ describe("legacy state migration caller mode", () => {
 
       const plan = await planLegacyStateMigrationsReadOnly({
         mode: "doctor",
-        candidate: boundCandidate(fixture.root),
+        candidate: candidateAt(fixture.root),
         snapshot: {
           homeDir: fixture.homeDir,
           configPath: fixture.configPath,
@@ -501,7 +510,7 @@ describe("legacy state migration caller mode", () => {
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -551,7 +560,7 @@ describe("legacy state migration caller mode", () => {
     writeLegacyStateSchemaV1(stateDatabasePath);
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "doctor",
-      candidate: boundCandidate(fixture.root),
+      candidate: candidateAt(fixture.root),
       snapshot: {
         homeDir: fixture.homeDir,
         configPath: fixture.configPath,
@@ -769,6 +778,36 @@ describe("legacy state migration caller mode", () => {
     expect(emittedReceipts.at(-1)).toMatchObject({
       outcome: "refused",
       refusal: { code: "step-threw", message: "synthetic automatic migration failure" },
+    });
+  });
+
+  it("records and rethrows automatic agent-target discovery failures", async () => {
+    const fixture = await makeFixture();
+    const cfg = Object.defineProperty({}, "session", {
+      get() {
+        throw new Error("synthetic automatic target discovery failure");
+      },
+    }) as OpenClawConfig;
+    const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
+
+    await expect(
+      autoMigrateLegacyState({
+        cfg,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+        onStepReceipt: (receipt) => emittedReceipts.push(receipt),
+      }),
+    ).rejects.toThrow("synthetic automatic target discovery failure");
+
+    expect(emittedReceipts.map((receipt) => receipt.id)).toEqual([
+      "state-schema",
+      "config-machine-state",
+      "agent-migration-targets",
+    ]);
+    expect(emittedReceipts.at(-1)).toMatchObject({
+      outcome: "refused",
+      refusal: { code: "step-threw", message: "synthetic automatic target discovery failure" },
     });
   });
 
