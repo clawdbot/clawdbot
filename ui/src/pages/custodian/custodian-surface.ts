@@ -135,7 +135,11 @@ class CustodianSurface extends OpenClawLightDomElement {
             <h2>${t("modelSetup.required.title")}</h2>
             <p>${t("modelSetup.required.body")}</p>
             <div class="custodian__setup-actions">
-              <button class="btn primary" type="button" @click=${() => store.openModelSetup()}>
+              <button
+                class="btn primary"
+                type="button"
+                @click=${() => store.exitSetup("model-setup")}
+              >
                 ${t("modelSetup.required.action")}
               </button>
             </div>

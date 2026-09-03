@@ -134,7 +134,15 @@ export async function runDevicePairingHealth(ctx: DoctorHealthFlowContext): Prom
 }
 
 export async function runGatewayDaemonHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  if (ctx.gatewayMaintenanceActive || !isDefaultInstallIdentity(ctx.env ?? process.env)) {
+  if (!isDefaultInstallIdentity(ctx.env ?? process.env)) {
+    return;
+  }
+  if (ctx.cfg.gateway?.mode !== "remote") {
+    const { noteMacDisabledGatewayLaunchAgent } =
+      await import("../commands/doctor-platform-notes.js");
+    await noteMacDisabledGatewayLaunchAgent(ctx.env ?? process.env);
+  }
+  if (ctx.gatewayMaintenanceActive) {
     return;
   }
   const { maybeRepairGatewayDaemon } = await import("../commands/doctor-gateway-daemon-flow.js");

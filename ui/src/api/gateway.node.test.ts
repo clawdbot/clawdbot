@@ -762,7 +762,8 @@ describe("GatewayBrowserClient", () => {
     const { connectFrame } = await startConnect(client);
 
     expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth?.token).toBe("bootstrap-device-token");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.deviceToken).toBe("bootstrap-device-token");
     expect(connectFrame.params?.scopes).toEqual([
       "operator.approvals",
       "operator.read",
@@ -1816,7 +1817,8 @@ describe("GatewayBrowserClient", () => {
 
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.token).toBeUndefined();
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
     const [privateKey, signedPayload] = requireFirstSignCall();
     expect(privateKey).toBe("private-key");
     expectSignedPayloadFields(signedPayload, {
@@ -1868,7 +1870,6 @@ describe("GatewayBrowserClient", () => {
     const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
     const { connectFrame } = await startConnect(nextClient);
     expect(connectFrame.params?.auth).toMatchObject({
-      token: "replacement-device-token",
       deviceToken: "replacement-device-token",
     });
     nextClient.stop();
@@ -1918,7 +1919,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
   });
 
   it("migrates the legacy device token store to the first gateway opened after upgrade", async () => {
@@ -1932,7 +1933,7 @@ describe("GatewayBrowserClient", () => {
     });
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.params?.auth?.token).toBe(STORED_CRED);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
     expect(localStorage.getItem(LEGACY_DEVICE_AUTH_STORAGE_KEY)).toBeNull();
     expect(localStorage.getItem(DEFAULT_DEVICE_AUTH_STORAGE_KEY)).toBe(legacyStore);
   });
@@ -1958,14 +1959,14 @@ describe("GatewayBrowserClient", () => {
       url: "wss://gateway.example/rosita",
     });
     const { connectFrame: rositaConnect } = await startConnect(rositaClient);
-    expect(rositaConnect.params?.auth?.token).toBe(ROSITA_CRED);
+    expect(rositaConnect.params?.auth?.deviceToken).toBe(ROSITA_CRED);
     rositaClient.stop();
 
     const wilfredClient = new GatewayBrowserClient({
       url: "wss://gateway.example/wilfred",
     });
     const { connectFrame: wilfredConnect } = await startConnect(wilfredClient, "nonce-2");
-    expect(wilfredConnect.params?.auth?.token).toBe(WILFRED_CRED);
+    expect(wilfredConnect.params?.auth?.deviceToken).toBe(WILFRED_CRED);
     wilfredClient.stop();
   });
 
@@ -1990,14 +1991,14 @@ describe("GatewayBrowserClient", () => {
       url: "wss://gateway.example/control?tenant=a",
     });
     const { connectFrame: tenantAConnect } = await startConnect(tenantAClient);
-    expect(tenantAConnect.params?.auth?.token).toBe(TENANT_A_CRED);
+    expect(tenantAConnect.params?.auth?.deviceToken).toBe(TENANT_A_CRED);
     tenantAClient.stop();
 
     const tenantBClient = new GatewayBrowserClient({
       url: "wss://gateway.example/control?tenant=b",
     });
     const { connectFrame: tenantBConnect } = await startConnect(tenantBClient, "nonce-2");
-    expect(tenantBConnect.params?.auth?.token).toBe(TENANT_B_CRED);
+    expect(tenantBConnect.params?.auth?.deviceToken).toBe(TENANT_B_CRED);
     tenantBClient.stop();
   });
 
@@ -2436,7 +2437,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
 
     ws.emitMessage({
       type: "res",
@@ -2471,7 +2472,7 @@ describe("GatewayBrowserClient", () => {
     });
 
     const { ws, connectFrame } = await startConnect(client);
-    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+    expect(connectFrame.params?.auth?.deviceToken).toBe("stored-device-token");
 
     ws.emitMessage({
       type: "res",

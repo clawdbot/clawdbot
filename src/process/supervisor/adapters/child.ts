@@ -95,6 +95,7 @@ type ChildAdapterInput = {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
+  abortSignal?: AbortSignal;
 } & (
   | { argv: string[]; anchoredShellCommand?: never }
   | { argv?: never; anchoredShellCommand: string }
@@ -111,6 +112,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       env: params.env,
       stdinMode: "pipe-closed",
       oomScoreWrapperSelected: false,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -143,6 +145,7 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
       input: params.input,
       secretInput: params.secretInput,
       oomScoreWrapperSelected: preparedSpawn.wrapped,
+      abortSignal: params.abortSignal,
     });
   }
 
@@ -184,9 +187,15 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
   });
 
   const child = spawned.child as ChildProcessWithoutNullStreams;
-  if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+  try {
+    // Startup acknowledgement may outlive the caller; withhold all private input if it did.
+    params.assertCurrent?.();
+    if (params.ownedWorker !== undefined && (!child.connected || !child.channel)) {
+      throw new Error("worker lifecycle IPC channel was not created");
+    }
+  } catch (error) {
     spawned.child.kill("SIGKILL");
-    throw new Error("worker lifecycle IPC channel was not created");
+    throw error;
   }
   if (params.onWorkerMessage) {
     child.on("message", (message) => {
@@ -394,7 +403,8 @@ export async function createChildAdapter(params: ChildAdapterInput): Promise<Wor
 
   if (params.secretInput) {
     try {
-      await secretDelivery?.deliverTo(spawned.child);
+      params.assertCurrent?.();
+      await secretDelivery?.deliverTo(spawned.child, { abortSignal: params.abortSignal });
     } catch (error) {
       spawned.child.kill("SIGKILL");
       throw error;

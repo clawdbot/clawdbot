@@ -5,6 +5,7 @@ import {
   validateSessionsCompactionBranchParams,
   validateSessionsCompactionRestoreParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions.js";
 import {
@@ -12,7 +13,6 @@ import {
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
 } from "../../sessions/session-lifecycle-admission.js";
-import { GATEWAY_OWNER_PROFILE_ID } from "../../state/user-profiles.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
 import {
   createFileBackedCompactionCheckpointStore,

@@ -213,6 +213,8 @@ function renderSessions(
 
 export function renderPersonActivityCard(input: PersonCardInput) {
   const { user } = input;
+  // Presence projections always have entries; roster-only owners have no live facts.
+  const offline = (user.entries?.length ?? 0) === 0;
   const entries = user.entries ?? [];
   const onlineSince = observedTimestamp(
     entries.map((entry) => entry.onlineSince),
@@ -265,33 +267,40 @@ export function renderPersonActivityCard(input: PersonCardInput) {
       ></openclaw-viewer-avatar>
       <div>
         <h2>${user.name ?? user.email ?? t("presence.card.person")}</h2>
-        <span class="person-activity-card__status"
-          ><span aria-hidden="true"></span>${onlineSince === undefined
-            ? t("presence.rosterTitle")
-            : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`}</span
+        <span
+          class="person-activity-card__status ${offline
+            ? "person-activity-card__status--offline"
+            : ""}"
+          ><span aria-hidden="true"></span>${offline
+            ? t("presence.offline")
+            : onlineSince === undefined
+              ? t("presence.rosterTitle")
+              : html`${t("presence.card.onlineFor")} ${elapsed(onlineSince, "minute-compact")}`}</span
         >
       </div>
     </header>
-    <dl class="person-activity-card__facts">
-      ${where.length || zones.length
-        ? html`<div>
-            <dt>${t("presence.card.where")}</dt>
+    ${offline
+      ? nothing
+      : html`<dl class="person-activity-card__facts">
+          ${where.length || zones.length
+            ? html`<div>
+                <dt>${t("presence.card.where")}</dt>
+                <dd>
+                  ${where.map((description) => html`<span>${description}</span>`)}${zones.map(
+                    (zone) => html`<small>${t("presence.card.reportedTimeZone", { zone })}</small>`,
+                  )}
+                </dd>
+              </div>`
+            : nothing}
+          <div>
+            <dt>${t("presence.card.lastActivity")}</dt>
             <dd>
-              ${where.map((description) => html`<span>${description}</span>`)}${zones.map(
-                (zone) => html`<small>${t("presence.card.reportedTimeZone", { zone })}</small>`,
-              )}
+              ${lastActivityAt === undefined
+                ? t("presence.card.notObserved")
+                : html`<span>${elapsed(lastActivityAt)} ${t("presence.card.ago")}</span>`}
             </dd>
-          </div>`
-        : nothing}
-      <div>
-        <dt>${t("presence.card.lastActivity")}</dt>
-        <dd>
-          ${lastActivityAt === undefined
-            ? t("presence.card.notObserved")
-            : html`<span>${elapsed(lastActivityAt)} ${t("presence.card.ago")}</span>`}
-        </dd>
-      </div>
-    </dl>
+          </div>
+        </dl>`}
     ${renderSessions(viewing, input, false)}${renderSessions(recent, input, true)}
     ${activity
       ? html`<footer>

@@ -168,8 +168,10 @@ export function createProcessSupervisor(): ProcessSupervisor & {
   const waitForScope = (scopeKey: string): Promise<void> => waitForRuns(scopeKey);
 
   const startRun = async (input: SpawnInput, owner: OwnedRun): Promise<ManagedRun> => {
-    // A scope fence can outlive its caller; reject before replacing the surviving process.
-    input.assertCurrent?.();
+    // A queued replacement must still own authority before stopping the surviving run.
+    if (!owner.terminationReason) {
+      input.assertCurrent?.();
+    }
     const { runId, scopeKey } = owner;
     const startedAtMs = Date.now();
     const startingTerminationReason = owner.terminationReason;
@@ -240,10 +242,25 @@ export function createProcessSupervisor(): ProcessSupervisor & {
     };
 
     let cancelAdapter: ((reason: TerminationReason) => void) | null = null;
+    const constructionAbort = new AbortController();
+    const constructionAbortError = new Error("adapter construction aborted");
+    const constructionAbortPromise = new Promise<never>((_, reject) => {
+      const rejectConstruction = () => reject(constructionAbortError);
+      if (constructionAbort.signal.aborted) {
+        rejectConstruction();
+      } else {
+        constructionAbort.signal.addEventListener("abort", rejectConstruction, { once: true });
+      }
+    });
 
     const requestCancel = (reason: TerminationReason) => {
       setForcedReason(reason);
       cancelAdapter?.(reason);
+      // Any cancel must abort construction: the relay may already be spawned
+      // and waiting for ready, and a later deadline must not replace this reason.
+      if (!cancelAdapter) {
+        constructionAbort.abort();
+      }
     };
     owner.cancel = requestCancel;
 
@@ -292,23 +309,28 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       if (input.mode !== "anchored-shell" && input.argv.length === 0) {
         throw new Error("spawn argv cannot be empty");
       }
-      const adapter =
+      // Cover construction: secret-fd writes and relay ready have no inner deadline.
+      overallDeadline.reset();
+      outputDeadline.reset();
+      const adapterPromise =
         input.mode === "pty"
-          ? await createPtyAdapter({
+          ? createPtyAdapter({
               assertCurrent: input.assertCurrent,
               shell: expectDefined(input.argv[0], "spawn executable"),
               args: input.argv.slice(1),
               cwd: input.cwd,
               env: input.env,
+              abortSignal: constructionAbort.signal,
             })
           : input.mode === "anchored-shell"
-            ? await createChildAdapter({
+            ? createChildAdapter({
                 assertCurrent: input.assertCurrent,
                 anchoredShellCommand: input.command,
                 cwd: input.cwd,
                 env: input.env,
+                abortSignal: constructionAbort.signal,
               })
-            : await createChildAdapter({
+            : createChildAdapter({
                 assertCurrent: input.assertCurrent,
                 argv: input.argv,
                 argv0: input.argv0,
@@ -319,7 +341,42 @@ export function createProcessSupervisor(): ProcessSupervisor & {
                 input: input.input,
                 stdinMode: input.stdinMode,
                 secretInput: input.secretInput,
+                abortSignal: constructionAbort.signal,
               });
+      let adapter: Awaited<typeof adapterPromise>;
+      try {
+        adapter = await Promise.race([adapterPromise, constructionAbortPromise]);
+      } catch (err) {
+        if (err !== constructionAbortError || !forcedReason) {
+          throw err;
+        }
+        overallDeadline.clear();
+        outputDeadline.clear();
+        void adapterPromise.then(
+          (started) => {
+            started.kill("SIGKILL");
+            started.dispose();
+          },
+          () => undefined,
+        );
+        const exit: RunExit = {
+          reason: forcedReason,
+          exitCode: null,
+          exitSignal: null,
+          durationMs: Date.now() - startedAtMs,
+          stdout: "",
+          stderr: "",
+          timedOut: isTimeoutReason(forcedReason),
+          noOutputTimedOut: forcedReason === "no-output-timeout",
+        };
+        registration.finalize(exit);
+        return {
+          runId,
+          startedAtMs,
+          wait: async () => exit,
+          cancel: () => undefined,
+        };
+      }
 
       registration.updateState(forcedReason ? "exiting" : "running", {
         pid: adapter.pid,
@@ -388,9 +445,6 @@ export function createProcessSupervisor(): ProcessSupervisor & {
         }, GRACEFUL_CANCEL_TIMEOUT_MS);
         forceKillTimer.unref?.();
       };
-
-      overallDeadline.reset();
-      outputDeadline.reset();
 
       const withOutputFence =
         <Chunk>(deliver?: (chunk: Chunk) => void, recordsOutput = true) =>
@@ -488,6 +542,8 @@ export function createProcessSupervisor(): ProcessSupervisor & {
       }
       return managedRun;
     } catch (err) {
+      overallDeadline.clear();
+      outputDeadline.clear();
       registration.finalize({
         reason: "spawn-error",
         exitCode: null,

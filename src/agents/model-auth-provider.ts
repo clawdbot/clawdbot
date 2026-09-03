@@ -81,6 +81,7 @@ export function resolveScopedAuthProfileStore(params: {
   preferredProfile?: string;
 }): AuthProfileStore {
   return ensureAuthProfileStore(params.agentDir, {
+    profileId: params.profileId,
     externalCli: externalCliDiscoveryForProviderAuth(params),
   });
 }

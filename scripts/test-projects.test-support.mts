@@ -215,7 +215,7 @@ const CONTRACTS_CHANNEL_SESSION_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-session.config.ts";
 const CONTRACTS_CHANNEL_SURFACE_VITEST_CONFIG =
   "test/vitest/vitest.contracts-channel-surface.config.ts";
-const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
+export const CONTRACTS_PLUGIN_VITEST_CONFIG = "test/vitest/vitest.contracts-plugin.config.ts";
 const CRON_VITEST_CONFIG = "test/vitest/vitest.cron.config.ts";
 const DAEMON_VITEST_CONFIG = "test/vitest/vitest.daemon.config.ts";
 const E2E_VITEST_CONFIG = "test/vitest/vitest.e2e.config.ts";
@@ -2286,6 +2286,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/package-manifest.mjs", ["test/openclaw-prepack.test.ts"]],
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
+  ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
@@ -2324,7 +2325,15 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/run.sh",
-    ["upgrade-survivor-assertions", "upgrade-survivor-recovery-cleanup"],
+    [
+      "upgrade-survivor-assertions",
+      "upgrade-survivor-recovery-cleanup",
+      "upgrade-survivor-watchos-direct-node",
+    ],
+  ],
+  [
+    "scripts/e2e/lib/upgrade-survivor/watchos-direct-node.mjs",
+    ["upgrade-survivor-watchos-direct-node"],
   ],
   [
     "scripts/e2e/lib/upgrade-survivor/recovery-cleanup-fixture.mjs",
@@ -2830,6 +2839,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^test\/vitest\/vitest\.contracts-paths\.mjs$/u,
     [
       "test-projects",
+      "test/vitest-projects-config.test.ts",
       "test/vitest/vitest.contracts-channel-surface.config.ts",
       "test/vitest/vitest.contracts-channel-config.config.ts",
       "test/vitest/vitest.contracts-channel-registry.config.ts",

@@ -2550,6 +2550,30 @@ describe("agent event handler", () => {
     );
   });
 
+  it("drops an expired run audience while preserving current session subscribers", () => {
+    const { nowSpy, broadcastToConnIds, toolEventRecipients, sessionEventSubscribers, handler } =
+      createHarness({ now: 1_000, resolveSessionKeyForRun: () => "session-1" });
+    try {
+      registerAgentRunContext("run-expired", { sessionKey: "session-1", verboseLevel: "off" });
+      toolEventRecipients.add("run-expired", "conn-run");
+      sessionEventSubscribers.subscribe("conn-session");
+      toolEventRecipients.markFinal("run-expired");
+      nowSpy!.mockReturnValue(31_000);
+
+      emitAgentEvent(handler, "run-expired", "tool", {
+        phase: "result",
+        name: "read",
+        toolCallId: "late-result",
+      });
+
+      expect(
+        broadcastToConnIds.mock.calls.map(([event, , recipients]) => [event, recipients]),
+      ).toEqual([["session.tool", new Set(["conn-session"])]]);
+    } finally {
+      nowSpy?.mockRestore();
+    }
+  });
+
   it("broadcasts tool events to WS recipients even when verbose is off, but skips node send", () => {
     const { broadcastToConnIds, nodeSendToSession, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",

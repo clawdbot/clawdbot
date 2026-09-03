@@ -355,22 +355,25 @@ function isPendingBridgeRequestReplaySafe(
   return binding ? runtime.isReplaySafeExactId(binding.id) : false;
 }
 
-export function createPendingBridgeStates(params: {
-  pendingRequests: PendingBridgeRequest[];
-  config: CodeModeConfig;
-  runtime: ToolSearchRuntime;
-  catalogProjection: CodeModeCatalogProjection;
-  namespaceRuntime: CodeModeNamespaceRuntime;
-  parentToolCallId: string;
-  codeModeRunId: string;
-  remainingMs: number;
-  activeRunId?: string;
-  ctx: ToolSearchToolContext;
-  signal: AbortSignal;
-  onUpdate?: AgentToolUpdateCallback;
-  bridgeDispatch: CodeModeBridgeDispatchState;
-}): PendingBridgeState[] {
-  return params.pendingRequests.map((request) => {
+export function createPendingBridgeStates(
+  pendingRequests: PendingBridgeRequest[],
+  params: {
+    config: CodeModeConfig;
+    runtime: ToolSearchRuntime;
+    catalogProjection: CodeModeCatalogProjection;
+    namespaceRuntime: CodeModeNamespaceRuntime;
+    parentToolCallId: string;
+    codeModeRunId: string;
+    remainingMs: number;
+    activeRunId?: string;
+    ctx: ToolSearchToolContext;
+    signal: AbortSignal;
+    onUpdate?: AgentToolUpdateCallback;
+    bridgeDispatch: CodeModeBridgeDispatchState;
+  },
+): PendingBridgeState[] {
+  // Pending siblings retain dispatch context, never the original request batch.
+  return pendingRequests.map((request) => {
     // Bridge calls start immediately while the VM snapshot is stored. Their
     // settled values are later replayed into QuickJS by the wait tool.
     const abortController = new AbortController();
@@ -429,6 +432,9 @@ export function createPendingBridgeStates(params: {
         }
         state.settledSequence = ++nextPendingBridgeSettlementSequence;
         state.settled = settled;
+        // Only the response is needed until guest replay; live calls keep their own request.
+        state.args = [];
+        state.cancel = undefined;
         if (state.method === "agentWait" && params.activeRunId) {
           const active = activeRuns.get(params.activeRunId);
           if (active?.pending.includes(state)) {

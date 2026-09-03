@@ -26,6 +26,7 @@ const MAX_MESSAGE_LENGTH = 500;
 const MAX_URL_LENGTH = 1024;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+const REVIEWED_TELEGRAM_WAIVERS = new Set(["2026.8.1-owner-approved", "2026.9.1-owner-approved"]);
 const HARD_GH_TRANSPORT_PATTERN =
   /HTTP (?:400|401|403|404|410|422)\b|Bad credentials|authentication required|not authenticated|gh auth login|unknown (?:command|flag)|Usage: gh\b|ENOENT|EACCES/iu;
 const RATE_LIMITED_403_PATTERN =
@@ -337,7 +338,7 @@ export function validateReleaseCoveragePolicyBinding(plan, validationInputs = {}
   }
 }
 
-// Owner declarations bind omissions to one release; waived or unrun never means passed.
+// Each omission requires a reviewed code change; waived or unrun never means passed.
 export function normalizeReleaseTelegramWaiver({
   telegramWaiver,
   targetVersion,
@@ -353,6 +354,7 @@ export function normalizeReleaseTelegramWaiver({
     return "";
   }
   if (
+    !REVIEWED_TELEGRAM_WAIVERS.has(telegramWaiver) ||
     telegramWaiver !== `${targetVersion}-owner-approved` ||
     parseReleaseVersion(stringValue(targetVersion))?.baseVersion !== stringValue(targetVersion) ||
     !["stable", "full"].includes(releaseProfile)

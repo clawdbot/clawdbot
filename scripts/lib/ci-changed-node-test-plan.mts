@@ -1,9 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { pluginContractPatterns } from "../../test/vitest/vitest.contracts-paths.mjs";
 import { isUiBrowserTestFile } from "../../test/vitest/vitest.ui-paths.mjs";
 import { detectChangedLanes } from "../changed-lanes.mts";
 import {
   buildVitestRunPlans,
+  CHANNEL_CONTRACT_CONFIG_PATTERNS,
+  CONTRACTS_PLUGIN_VITEST_CONFIG,
   findUnmatchedExplicitTestTargets,
   hasImportGraphImpactOnTargets,
   isTestFileTarget,
@@ -54,7 +57,7 @@ const MAX_CHANGED_NODE_TEST_TARGETS = 96;
 // Each target runs in its own child process (isolation contract), so bound the
 // serial tail per job; the shard runner overlaps two children at a time.
 const CHANGED_NODE_TEST_TARGETS_PER_JOB = 12;
-const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 150;
+const CHANGED_EXTENSION_FALLBACK_JOB_SECONDS = 240;
 const MAX_CHANGED_EXTENSION_FALLBACK_JOBS = 50;
 // Memory Core targets perform real SQLite/indexing work. Two concurrent Vitest
 // processes starve each other on 4-vCPU runners and push otherwise healthy
@@ -325,7 +328,7 @@ function resolvePreciseChangedTargets(
   ) {
     return null;
   }
-  return targetPlans.map(({ target }) => target);
+  return targetPlans;
 }
 
 function createChangedTargetShards(
@@ -499,7 +502,6 @@ export function createChangedExtensionFallbackShards(
       bin.every(
         (entry) =>
           !entry.pretestBuildMode &&
-          entry.configs[0] !== shard.configs[0] &&
           entry.runner === shard.runner &&
           entry.requiresDist === shard.requiresDist,
       ) &&
@@ -543,7 +545,9 @@ export function createChangedExtensionFallbackShards(
  */
 export function createChangedNodeTestShards(
   changedPaths: string[],
-  options: CwdOptions = {},
+  options: CwdOptions & {
+    dedicatedContractShards?: readonly { task: string; includePatterns: readonly string[] }[];
+  } = {},
 ): ChangedNodeTestShard[] | null {
   const cwd = options.cwd ?? process.cwd();
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) {
@@ -584,7 +588,7 @@ export function createChangedNodeTestShards(
     return null;
   }
 
-  const targets = resolvePreciseChangedTargets(regularLivePaths, cwd, [
+  const targetPlans = resolvePreciseChangedTargets(regularLivePaths, cwd, [
     ...[...policyTargetsByPath.values()].flat(),
     // Plugin changes normally select only extension suites. This host-owned
     // proof also exercises the real Copilot entrypoint and manifest discovery.
@@ -592,9 +596,33 @@ export function createChangedNodeTestShards(
       ? ["src/agents/prepared-model-runtime.copilot.integration.test.ts"]
       : []),
   ]);
-  if (targets === null) {
+  if (targetPlans === null) {
     return null;
   }
+  // CI supplies the same enabled envelopes it emits. Validate all changed paths
+  // first, then subtract only exact targets owned by those configs and includes.
+  const targets = targetPlans
+    .filter(
+      ({ target, plans }) =>
+        !plans.every((plan) => {
+          const plugin = plan.config === CONTRACTS_PLUGIN_VITEST_CONFIG;
+          const patterns = plugin
+            ? pluginContractPatterns
+            : CHANNEL_CONTRACT_CONFIG_PATTERNS.get(plan.config);
+          return (
+            !plan.watchMode &&
+            plan.forwardedArgs.length === 0 &&
+            plan.includePatterns?.every((pattern) => pattern === target) &&
+            patterns?.some((pattern) => path.matchesGlob(target, pattern)) &&
+            options.dedicatedContractShards?.some(
+              (shard) =>
+                shard.task === (plugin ? "contracts-plugins" : "contracts-channels") &&
+                shard.includePatterns.includes(target),
+            )
+          );
+        }),
+    )
+    .map(({ target }) => target);
 
   // Boundary-config targets run as regular nondist targets: the boundary
   // suite scans the checked-out tree and never consumes the built dist.
@@ -610,5 +638,6 @@ export function createChangedNodeTestShards(
     ),
     ...(hasBuildArtifactAffectingChange(changedPaths) ? [] : [createBoundaryShard()]),
   ];
-  return shards.length > 0 ? shards : null;
+  // Covered source targets keep build-artifacts ownership even with no Node rows.
+  return shards.length > 0 || targets.length < targetPlans.length ? shards : null;
 }

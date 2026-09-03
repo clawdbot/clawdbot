@@ -1,8 +1,10 @@
 // Openai tests cover openai chatgpt oauth flow plugin behavior.
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { Agent, createServer, get, type IncomingHttpHeaders, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const ssrfMocks = vi.hoisted(() => ({
@@ -35,6 +37,7 @@ import {
   refreshOpenAIAccessToken,
 } from "./openai-chatgpt-oauth-token.runtime.js";
 import { loginOpenAICodexOAuth } from "./openai-chatgpt-oauth.runtime.js";
+import { buildOpenAIProvider } from "./openai-provider.js";
 
 function timeoutError(): Error {
   return new DOMException("timed out", "TimeoutError");
@@ -240,6 +243,134 @@ describe("OpenAI Codex OAuth flow", () => {
 
     await expect(loginPromise).rejects.toThrow("Login cancelled");
     expect(onAuth).not.toHaveBeenCalled();
+  });
+
+  it.each(["callback", "manual input", "transport preparation"] as const)(
+    "revalidates live authority after held %s before exchanging the code",
+    async (boundary) => {
+      const held = createDeferred<void>();
+      const release = createDeferred<void>();
+      const controller = new AbortController();
+      const agent = new Agent();
+      let current = true;
+      const sendToken = vi.fn(async () => ({
+        response: new Response(
+          JSON.stringify({
+            access_token: fakeJwt({
+              "https://api.openai.com/auth": { chatgpt_account_id: "account" },
+            }),
+            refresh_token: "refresh",
+            expires_in: 60,
+          }),
+        ),
+        release: vi.fn(async () => undefined),
+      }));
+      ssrfMocks.fetchWithSsrFGuard.mockImplementation(
+        async ({ beforeRequest }: { beforeRequest?: () => void }) => {
+          if (boundary === "transport preparation") {
+            held.resolve();
+            await release.promise;
+          }
+          beforeRequest?.();
+          return await sendToken();
+        },
+      );
+      const outcome = loginOpenAICodex({
+        signal: controller.signal,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("owner retired");
+          }
+        },
+        onAuth: async ({ url }) => {
+          if (boundary === "callback") {
+            const authUrl = new URL(url);
+            const callback = new URL(authUrl.searchParams.get("redirect_uri") ?? "");
+            callback.searchParams.set("state", authUrl.searchParams.get("state") ?? "");
+            callback.searchParams.set("code", "synthetic-code");
+            await requestCallback(callback.toString(), agent);
+            held.resolve();
+            await release.promise;
+          }
+        },
+        onPrompt: async () => "synthetic-code",
+        onManualCodeInput: async () => {
+          if (boundary === "manual input") {
+            held.resolve();
+            await release.promise;
+          }
+          return "synthetic-code";
+        },
+      }).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await held.promise;
+        current = false;
+        release.resolve();
+        const result = await outcome;
+        expect(sendToken).not.toHaveBeenCalled();
+        expect(result).toEqual({
+          error: expect.objectContaining({ message: expect.stringContaining("owner retired") }),
+        });
+        expect(controller.signal.aborted).toBe(false);
+      } finally {
+        controller.abort();
+        release.resolve();
+        await outcome;
+        agent.destroy();
+      }
+    },
+  );
+
+  it("closes the callback listener when cancellation outlives a pending browser presentation", async () => {
+    const events = new EventEmitter();
+    const ready = once(events, "ready");
+    const release = once(events, "release");
+    const controller = new AbortController();
+    const rejected = vi.fn();
+    const login = loginOpenAICodex({
+      onAuth: async ({ url }) => {
+        events.emit("ready", url);
+        await release;
+      },
+      onPrompt: vi.fn(async () => "unused-code"),
+      signal: controller.signal,
+    }).catch(rejected);
+    let socket: Socket | undefined;
+    try {
+      const [url] = await ready;
+      const redirectUri = new URL(url).searchParams.get("redirect_uri");
+      if (!redirectUri) {
+        throw new Error("expected the callback redirect URI");
+      }
+      const callbackSocket = await connectIdleSocket(redirectUri);
+      socket = callbackSocket;
+      const socketErrors: Error[] = [];
+      callbackSocket.on("error", (error) => socketErrors.push(error));
+      const closed = new Promise<void>((resolve) => {
+        callbackSocket.once("close", () => resolve());
+      });
+      controller.abort();
+      await vi.waitFor(() =>
+        expect(rejected).toHaveBeenCalledWith(
+          expect.objectContaining({ message: "Login cancelled" }),
+        ),
+      );
+      await closed;
+      expect(socket.destroyed).toBe(true);
+      // Forced callback shutdown may reset a preconnected socket instead of sending FIN.
+      for (const error of socketErrors) {
+        expect(error).toMatchObject({ code: "ECONNRESET" });
+      }
+      expect(ssrfMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    } finally {
+      controller.abort();
+      events.emit("release");
+      await login;
+      socket?.destroy();
+    }
   });
 
   it("waits for Node OAuth runtime before creating an authorization flow", async () => {
@@ -532,6 +663,78 @@ describe("OpenAI Codex OAuth flow", () => {
     expect(ssrfMocks.fetchWithSsrFGuard).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 30_000 }),
     );
+  });
+});
+
+describe("OpenAI model-account credential ownership", () => {
+  it.each([
+    { name: "same user and workspace", accountId: "workspace-1", userId: "user-1", matches: true },
+    {
+      name: "another workspace member",
+      accountId: "workspace-1",
+      userId: "user-2",
+      matches: false,
+    },
+    {
+      name: "the same user in another workspace",
+      accountId: "workspace-2",
+      userId: "user-1",
+      matches: false,
+    },
+    { name: "missing user claims", accountId: "workspace-1", userId: undefined, matches: false },
+  ])(
+    "matches $name from token claims, never email or stored workspace metadata",
+    ({ accountId, userId, matches }) => {
+      const access = fakeJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "workspace-1",
+          chatgpt_user_id: "user-1",
+        },
+        "https://api.openai.com/profile": { email: "same@example.test" },
+      });
+      const credential: OAuthCredential = {
+        type: "oauth",
+        provider: "openai",
+        access,
+        refresh: "synthetic-refresh",
+        expires: 1,
+      };
+      for (const methodId of ["oauth", "device-code"]) {
+        const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
+        expect(method?.matchesPersonalAccount).toBeTypeOf("function");
+        expect(
+          method?.matchesPersonalAccount?.(credential, {
+            ...credential,
+            // Identical stored metadata must not substitute for the actual token identity.
+            accountId: "workspace-1",
+            access: fakeJwt({
+              "https://api.openai.com/auth": {
+                chatgpt_account_id: accountId,
+                chatgpt_user_id: userId,
+              },
+              "https://api.openai.com/profile": { email: "same@example.test" },
+            }),
+          }),
+        ).toBe(matches);
+      }
+    },
+  );
+
+  it("refuses to replace any prior credential without an incoming user claim", () => {
+    const credential: OAuthCredential = {
+      type: "oauth",
+      provider: "openai",
+      access: fakeJwt({
+        "https://api.openai.com/auth": { chatgpt_account_id: "workspace-1" },
+      }),
+      refresh: "synthetic-refresh",
+      expires: 1,
+    };
+    for (const methodId of ["oauth", "device-code"]) {
+      const method = buildOpenAIProvider().auth.find((entry) => entry.id === methodId);
+      expect(method?.matchesPersonalAccount).toBeTypeOf("function");
+      expect(method?.matchesPersonalAccount?.(credential, credential)).toBe(false);
+    }
   });
 });
 

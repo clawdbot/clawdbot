@@ -36,7 +36,7 @@ extensions/anthropic/session-catalog-listing.ts	1
 extensions/anthropic/session-catalog-parsing.ts	7
 extensions/anthropic/session-catalog-registration.ts	3
 extensions/anthropic/session-catalog-runtime.ts	1
-extensions/anthropic/stream-wrappers.ts	6
+extensions/anthropic/stream-wrappers.ts	5
 extensions/baseten/models.ts	3
 extensions/beam/src/mirror.ts	3
 extensions/beam/src/types.ts	2
@@ -1415,7 +1415,6 @@ extensions/xai/src/x-search-shared.ts	1
 extensions/xai/stream.ts	5
 extensions/xai/tts.ts	1
 extensions/xai/x-search.ts	7
-extensions/xai/xai-oauth.ts	1
 extensions/xiaomi/onboard.ts	1
 extensions/xiaomi/speech-provider.ts	2
 extensions/zai/detect.ts	1
@@ -1660,7 +1659,6 @@ src/agents/auth-profiles/profiles.ts	1
 src/agents/auth-profiles/repair.ts	1
 src/agents/auth-profiles/source-check.ts	1
 src/agents/auth-profiles/sqlite.ts	2
-src/agents/auth-profiles/state.ts	5
 src/agents/auth-profiles/store.ts	1
 src/agents/auth-profiles/usage.ts	4
 src/agents/bash-process-registry.ts	1
@@ -1831,7 +1829,7 @@ src/agents/embedded-agent-runner/thinking.ts	25
 src/agents/embedded-agent-runner/tool-call-argument-decoding.ts	5
 src/agents/embedded-agent-runner/tool-result-char-estimator.ts	9
 src/agents/embedded-agent-runner/tool-result-context-guard.ts	13
-src/agents/embedded-agent-runner/tool-result-truncation.ts	22
+src/agents/embedded-agent-runner/tool-result-truncation.ts	20
 src/agents/embedded-agent-runner/tool-schema-runtime.ts	1
 src/agents/embedded-agent-runner/transcript-rewrite.ts	2
 src/agents/embedded-agent-subscribe.handlers.messages.lifecycle.ts	2
@@ -2065,7 +2063,7 @@ src/agents/tools/sessions-list-tool.ts	5
 src/agents/tools/sessions-search-tool.ts	1
 src/agents/tools/sessions-send-tool.ts	1
 src/agents/tools/sessions-spawn-tool.ts	5
-src/agents/tools/sessions-tool.ts	2
+src/agents/tools/sessions-tool.ts	1
 src/agents/tools/sessions-yield-tool.ts	1
 src/agents/tools/skill-workshop-tool-helpers.ts	3
 src/agents/tools/structured-output-tool.ts	3
@@ -2639,7 +2637,7 @@ src/config/sessions/session-accessor.entry-mutation.ts	2
 src/config/sessions/session-accessor.entry.ts	1
 src/config/sessions/session-accessor.sqlite-active-events.ts	2
 src/config/sessions/session-accessor.sqlite-archive-store.ts	1
-src/config/sessions/session-accessor.sqlite-archive.ts	3
+src/config/sessions/session-accessor.sqlite-archive.ts	2
 src/config/sessions/session-accessor.sqlite-archive.worker.ts	7
 src/config/sessions/session-accessor.sqlite-canonical-inventory.ts	1
 src/config/sessions/session-accessor.sqlite-checkpoint.ts	3
@@ -2818,7 +2816,7 @@ src/gateway/node-command-policy.ts	2
 src/gateway/node-invoke-system-run-approval.ts	1
 src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
-src/gateway/node-registry.ts	27
+src/gateway/node-registry.ts	5
 src/gateway/openai-agent-run-usage.ts	1
 src/gateway/openai-http.ts	29
 src/gateway/openresponses-http.ts	4
@@ -2923,7 +2921,7 @@ src/gateway/server-methods/terminal.ts	6
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
-src/gateway/server-methods/web.ts	3
+src/gateway/server-methods/web.ts	1
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
 src/gateway/server-node-events.ts	3
@@ -3916,7 +3914,6 @@ ui/src/lib/board/widget-bridge.ts	3
 ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
-ui/src/lib/channels/index.ts	3
 ui/src/lib/chat/message-extract.ts	5
 ui/src/lib/chat/message-normalizer.ts	2
 ui/src/lib/chat/outbox-store-codec.ts	1
@@ -3971,7 +3968,6 @@ ui/src/pages/chat/chat-gateway.ts	2
 ui/src/pages/chat/chat-history-retry.ts	1
 ui/src/pages/chat/chat-page-retained-sessions.ts	1
 ui/src/pages/chat/chat-page.ts	1
-ui/src/pages/chat/chat-pane-board.ts	2
 ui/src/pages/chat/chat-pane-browser-annotation.ts	2
 ui/src/pages/chat/chat-pane-lifecycle.ts	4
 ui/src/pages/chat/chat-pane-render.ts	3

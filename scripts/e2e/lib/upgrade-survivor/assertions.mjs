@@ -33,6 +33,7 @@ const SCENARIOS = new Set([
   "sqlite-volume",
   "recovery-cleanup",
   "auth-profile-v2026-7-2-beta-5",
+  "watchos-direct-node",
 ]);
 
 const PERSONA_FILES = new Map([
@@ -371,6 +372,11 @@ function seedState() {
     version: 1,
     setupCompletedAt: "2026-04-01T00:00:00.000Z",
   });
+  // The watch row proves only direct-node identity/auth survival. Unrelated
+  // migration specimens can prevent the shipped baseline Gateway from starting.
+  if (scenario === "watchos-direct-node") {
+    return;
+  }
   writeJson(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json"), {
     id: "legacy-session",
     agentId: "main",
@@ -639,6 +645,9 @@ function assertStateSurvived() {
   const scenario = getScenario();
   const stage = process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival";
   assert(fs.existsSync(path.join(workspace, "IDENTITY.md")), "workspace identity file missing");
+  if (scenario === "watchos-direct-node") {
+    return;
+  }
   assert(
     fs.existsSync(path.join(stateDir, "agents", "main", "sessions", "legacy-session.json")),
     "legacy session file missing",
@@ -1640,10 +1649,12 @@ if (command === "list-scenarios") {
 } else if (command === "seed") {
   seedState();
 } else if (command === "assert-exec-approvals") {
-  assertExecApprovalPolicySurvived(
-    requireEnv("OPENCLAW_STATE_DIR"),
-    process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
-  );
+  if (getScenario() !== "watchos-direct-node") {
+    assertExecApprovalPolicySurvived(
+      requireEnv("OPENCLAW_STATE_DIR"),
+      process.env.OPENCLAW_UPGRADE_SURVIVOR_ASSERT_STAGE || "survival",
+    );
+  }
 } else if (command === "seed-volume") {
   assert(getScenario() === "sqlite-volume", "seed-volume requires the sqlite-volume scenario");
   const stateDir = requireEnv("OPENCLAW_STATE_DIR");

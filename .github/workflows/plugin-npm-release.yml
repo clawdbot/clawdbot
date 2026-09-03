@@ -497,6 +497,7 @@ jobs:
           sparse-checkout: |
             packages/normalization-core
             scripts
+            src/plugins
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -760,6 +761,7 @@ jobs:
           sparse-checkout: |
             .github/workflows
             scripts
+            src/plugins
 
       - name: Download immutable npm preflight artifact
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

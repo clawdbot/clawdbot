@@ -685,6 +685,21 @@ export const en: TranslationMap & {
       title: "Paired devices",
       connected: "connected",
       desktop: "Desktop",
+      actions: "Actions",
+      actionsName: "Actions for {name}",
+      openDesktop: "Open desktop",
+      copyDeviceId: "Copy device ID",
+      deviceIdCopied: "Device ID copied",
+      removeAction: "Remove…",
+      lastKnown: "last known {time}",
+      deviceIdLabel: "Device ID",
+      remoteIpLabel: "Remote IP",
+      scopesLabel: "Scopes",
+      requestedAccessLabel: "Requested access",
+      approvedAccessLabel: "Approved access",
+      tokenRole: "Role",
+      tokenStatus: "Status",
+      tokenAge: "Age",
       desktopOpenWindow: "Open this desktop in a new window",
       desktopEnableHint:
         "Enable desktop.host.enabled: true in the node config and add desktop.stream to gateway.nodes.commands.allow, then restart both. The node reconnects with a pending reapproval for desktop.stream; approve it here or with openclaw nodes approve.",
@@ -719,8 +734,6 @@ export const en: TranslationMap & {
       approved: "approved {time}",
       details: "Details",
       deviceId: "Device ID: {id}",
-      remoteIp: "Remote IP: {ip}",
-      scopes: "scopes: {scopes}",
       tokens: "Tokens",
       capabilities: "Capabilities",
       commands: "Commands",
@@ -728,7 +741,6 @@ export const en: TranslationMap & {
       approve: "Approve",
       reject: "Reject",
       remove: "Remove",
-      removeName: "Remove {name}",
       removePromptTitle: "Remove {name}?",
       removePromptBody: "This device must pair again before it can reconnect.",
       removeStalePromptTitle: "Remove {count} stale pairings?",
@@ -764,8 +776,6 @@ export const en: TranslationMap & {
       newPairing: "new device pairing request",
       repair: "repair",
       requestedAt: "{note} · requested {time}",
-      requestedAccess: "requested: {access}",
-      approvedAccess: "approved now: {access}",
     },
     // Lazy: en-devices.ts registers this subtree when the Devices page renders chips.
     capabilities: {},
@@ -965,9 +975,24 @@ export const en: TranslationMap & {
   },
   dashboardsPage: {
     emptyTitle: "No dashboards yet",
-    emptyDescription: "Open a session and switch to the Dashboard face to add it here.",
+    emptyDescription: "Dashboards created in your tasks will appear here.",
     loadError: "Could not load dashboards: {error}",
     openFocusMode: "Open dashboard in focus mode",
+    live: "Live",
+    byAuthor: "By {author}",
+    updated: "Updated {time}",
+    updatedUnknown: "Update time unknown",
+    totalLabel: "dashboards",
+    searchLabel: "Search dashboards",
+    searchPlaceholder: "Search dashboards…",
+    authorFilter: "Author",
+    allAuthors: "All authors",
+    sortLabel: "Sort",
+    sortUpdated: "Recently updated",
+    sortTitle: "Title A–Z",
+    resultCount: "{count} dashboards",
+    noResultsTitle: "No matching dashboards",
+    noResultsDescription: "Try another search or author.",
   },
   dashboardDocument: {
     close: "Close dashboard",
@@ -2327,7 +2352,7 @@ export const en: TranslationMap & {
     devices: "Paired devices, pairing approvals, and exec bindings.",
     cloudWorkers: "Profiles and machine sizes for cloud sessions.",
     chat: "Gateway chat for quick interventions.",
-    dashboards: "Sessions that open on their dashboard face.",
+    dashboards: "Tasks with saved dashboards.",
     custodian: "System setup and care.",
     config: "Legacy settings route; opens Appearance.",
     profile: "Your display name, avatar, and identity on this gateway.",
@@ -3281,6 +3306,8 @@ export const en: TranslationMap & {
   },
   presence: {
     rosterTitle: "Online",
+    idle: "Idle",
+    offline: "Offline",
     card: {
       details: "Details for {name}",
       loadFailed: "Could not open details. Try again, or open this person’s Activity page.",
@@ -3437,16 +3464,91 @@ export const en: TranslationMap & {
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
       githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
+      ownerGithubDescription:
+        "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
       gitCoauthorDescription:
         "Adds this account's public GitHub noreply address to commits created from shared sessions. Turning it off affects future commits only.",
       gitCoauthorUnavailable:
         "Available after your GitHub-backed sign-in is verified. Refresh to retry.",
+      ownerGitCoauthorDescription:
+        "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       avatarErrors: {
         invalid: "That image could not be processed.",
         sourceTooLarge: "Choose an image that is 10 MB or smaller.",
         tooLarge: "The processed avatar is larger than 512 KB.",
       },
+    },
+    modelAccounts: {
+      title: "Connected accounts",
+      addAccount: "Add account",
+      provider: "Provider",
+      method: "Sign-in method",
+      noMethods: "No personal sign-in methods are available. Ask your administrator for help.",
+      gateway: "Gateway",
+      gatewayUnavailable: "Endpoint unavailable",
+      person: "Person",
+      currentPerson: "Current person",
+      noPerson: "Not identified",
+      scope: "Scope",
+      personal: "Personal",
+      personalDescription:
+        "Sign-in saves an account for this person on this Gateway. System and agent credentials are unchanged.",
+      signInUnavailable: "Sign-in not ready",
+      connectionSettings: "Connection settings",
+      unavailable: {
+        identity:
+          "Use the identity-enabled Gateway address supplied by your administrator, through Tailscale Serve or a trusted proxy. A shared token or device pairing alone does not identify a person.",
+        write:
+          "Personal account sign-in requires operator.write access. Ask your administrator for access, then reconnect to the Gateway.",
+        profile:
+          "Wait for your identity profile to load. If it does not appear, use Refresh or Set identity above to retry.",
+      },
+      description:
+        "Choose the account new chats prefer. Existing chats keep their account choice. Gateway fallback rules still apply; this preference is not a billing guarantee.",
+      empty: "No personal default selected. New chats use the gateway's default account.",
+      linkedDescription:
+        "Preferred for new chats with this provider. Clearing the default keeps the saved credential and existing chat choices.",
+      linkedStatus: "New chat default",
+      gatewayAccount: "Selected saved account",
+      selectAction: "Use for new chats",
+      savedAccounts: "Saved accounts",
+      loadMore: "Load more saved accounts",
+      inventoryFailed: "Could not load saved accounts. Refresh to retry.",
+      authTypes: {
+        oauth: "Browser sign-in · saved account",
+        token: "Token · saved account",
+        api_key: "API key · saved account",
+      },
+      checkStatusAction: "Check status",
+      actionFailed: "Could not update connected accounts. Try again.",
+      statusFailed: "Could not check sign-in status. Check again or cancel this attempt.",
+      statusTimedOut: "Sign-in has not finished. Check its status or cancel and sign in again.",
+      notices: {
+        connected: "Account added.",
+        cancelled: "Sign-in cancelled. No account was added by this attempt.",
+        expired: "Sign-in expired. Sign in again to start a new attempt.",
+        selected: "Default updated for new chats. Existing chats are unchanged.",
+        cleared:
+          "New chats use the gateway default for this provider. Saved credentials and existing chats are unchanged.",
+      },
+      connectErrors: {
+        exchange: "Sign-in failed while exchanging the authorization code. Sign in again.",
+        identity:
+          "The account identity could not be verified. Sign in again with your own account.",
+        authority:
+          "Your access changed before sign-in finished. Reconnect to the gateway and try again.",
+        unavailable:
+          "The gateway could not save the account. Sign in again or ask an administrator for help.",
+      },
+      inputLabel: "Use an existing gateway credential",
+      inputDescription:
+        "Admin only: choose an existing Gateway credential for this person's new chats. This does not sign in or change the stored credential.",
+      inputPlaceholder: "openai:alice",
+      linkAction: "Use for new chats",
+      unlinkAction: "Use gateway default",
+      connectAction: "Sign in",
+      cancelAction: "Cancel",
     },
   },
   tasksPage: {
@@ -5046,6 +5148,14 @@ export const en: TranslationMap & {
     },
   },
   chat: {
+    modelAccounts: {
+      label: "Account for this chat",
+      automatic: "Automatic (new-chat default)",
+      manage: "Manage saved accounts…",
+      hint: "This is the chat's saved account choice, not a billing receipt. Gateway fallback rules still apply.",
+      draftHint:
+        "Applies only to this session. Your new-chat default is unchanged; Gateway fallback rules still apply.",
+    },
     mentions: {
       menu: "Mention a person",
       loading: "Loading people…",
@@ -5218,6 +5328,7 @@ export const en: TranslationMap & {
       suggest: "Suggest",
       draft: "Draft",
       publishDraft: "Publish draft",
+      owner: "Owner",
       members: "Members",
       selected: "Member",
       noPeople: "No paired people found.",
@@ -5895,7 +6006,7 @@ export const en: TranslationMap & {
       label: "Side panel",
       addTab: "Add side panel tab",
       expand: "Expand side panel",
-      restore: "Restore side panel",
+      restore: "Collapse",
       minimize: "Minimize side panel",
       resize: "Resize side panel",
       emptyTitle: "Open a tab",
@@ -5915,8 +6026,8 @@ export const en: TranslationMap & {
       desktopEmpty: "Connect to an available remote desktop.",
       discussion: "Discussion",
       discussionEmpty: "Open the shared discussion for this session.",
-      boardChat: "Board chat",
-      boardChatEmpty: "Open the board conversation alongside its dashboard.",
+      dashboard: "Dashboard",
+      dashboardEmpty: "This task does not have a dashboard yet.",
     },
     thread: {
       search: "Search messages",
@@ -6122,7 +6233,11 @@ export const en: TranslationMap & {
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:
         "Rejected by the local attachment allowlist. Send a supported file type.",
+      history: "History",
+      image: "Image",
       notSent: "Not sent",
+      omittedFromHistory: "Omitted from history",
+      omittedFromHistoryWithSize: "Omitted from history · {size}",
       video: "Video",
     },
     voice: {

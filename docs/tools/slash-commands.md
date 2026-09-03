@@ -74,7 +74,7 @@ command handling is enabled for the surface.
     mcp: false,
     plugins: false,
     debug: false,
-    restart: true,
+    restart: true, // enables /restart and /update
     ownerAllowFrom: ["discord:123456789012345678"],
     allowFrom: {
       "*": ["user1"],
@@ -130,12 +130,15 @@ command handling is enabled for the surface.
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart` and external `SIGUSR1` restart requests.
+  Enables `/restart`, `/update`, and external `SIGUSR1` restart requests.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">
   Explicit owner allowlist for owner-only command surfaces. Separate from
-  `commands.allowFrom` and DM pairing access.
+  `commands.allowFrom` and DM pairing access. CLI pairing approval records the
+  first owner; Control UI pairing has an explicit owner checkbox. Authorized
+  non-owners receive a refusal with the exact configuration command for their
+  sender ID when using an owner-only command such as `/restart` or `/update`.
 </ParamField>
 
 Channel plugins can enforce owner-only command access through their
@@ -307,6 +310,7 @@ plugins.
     | `/plugins list\|inspect\|show\|get\|install\|enable\|disable` | `commands.plugins: true` | Inspect or mutate plugin state. Owner-only for writes. Alias: `/plugin` |
     | `/debug show\|set\|unset\|reset` | `commands.debug: true` | Runtime-only config overrides. Owner-only |
     | `/restart` | `commands.restart: true` (default) | Restart OpenClaw |
+    | `/update` | `commands.restart: true` (default), owner | Update OpenClaw and restart; receive a completion or failure notice in the same chat |
     | `/send on\|off\|inherit` | owner | Set send policy |
   </Accordion>
 

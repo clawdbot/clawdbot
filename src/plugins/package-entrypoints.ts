@@ -25,13 +25,10 @@ export function listBuiltRuntimeEntryCandidates(entryPath: string): string[] {
       : sourceExtension === ".cts"
         ? [".cjs", ".js", ".mjs"]
         : [".js", ".mjs", ".cjs"];
-  const outputBases = [
+  // Dist/source bases and JS suffixes form unique candidates, never the TS source.
+  return [
     distWithoutExtension,
     ...(normalizedRelative.startsWith("src/") ? [`./dist/${normalizedRelative}`] : []),
     withoutExtension,
-  ];
-  const candidates = outputBases.flatMap((basePath) =>
-    outputExtensions.map((extension) => `${basePath}${extension}`),
-  );
-  return [...new Set(candidates)].filter((candidate) => candidate !== normalized);
+  ].flatMap((basePath) => outputExtensions.map((extension) => `${basePath}${extension}`));
 }

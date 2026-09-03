@@ -169,8 +169,12 @@ describe("lazy protocol validators", () => {
   });
 
   it("validates session board face list and patch values", () => {
-    expectAccepted(validateSessionsListParams, [{ boardFace: "dashboard" }]);
-    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }]);
+    expectAccepted(validateSessionsListParams, [
+      { boardFace: "dashboard" },
+      { hasBoard: true },
+      { hasBoard: false },
+    ]);
+    expectRejected(validateSessionsListParams, [{ boardFace: "grid" }, { hasBoard: "yes" }]);
     expectAccepted(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "chat" }]);
     expectRejected(validateSessionsPatchParams, [{ key: "agent:main:main", boardFace: "grid" }]);
     // The schemas are closed objects; the pre-rename name must not slip back in.
@@ -397,12 +401,13 @@ describe("lazy protocol validators", () => {
     expectAccepted(protocol.validateSessionsCompactParams, [{ key: "global", agentId: "work" }]);
   });
 
-  it("accepts selected-agent scope on chat metadata params", () => {
+  it("accepts distinct session and draft-account scopes on chat metadata params", () => {
     expectAccepted(validateChatMetadataParams, [
       {},
       { agentId: "work" },
       { sessionKey: "agent:work:main" },
       { agentId: "work", sessionKey: "global" },
+      { agentId: "work", authProfileId: "test:locked" },
     ]);
     expectRejected(validateChatMetadataParams, [
       { agentId: "" },

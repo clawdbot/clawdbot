@@ -1,6 +1,7 @@
 import AppKit
 import Foundation
 import Observation
+import OSLog
 import SwiftUI
 
 /// Unified store + window owner for node/device pairing approvals. Both
@@ -22,6 +23,12 @@ final class PairingApprovalCenter {
     }
 
     struct Card: Identifiable, Equatable {
+        struct ID: Hashable {
+            let kind: Kind
+            let requestId: String
+            let source: ObjectIdentifier?
+        }
+
         let kind: Kind
         let requestId: String
         /// nodeId or deviceId.
@@ -46,24 +53,26 @@ final class PairingApprovalCenter {
         /// trust claim must never come from a stale snapshot.
         let previouslyPaired: Bool?
         let requestedAt: Date
+        var source: PairingPromptSupport.Source?
 
-        var id: String {
-            self.requestId
+        var id: ID {
+            ID(kind: self.kind, requestId: self.requestId, source: self.source.map(ObjectIdentifier.init))
         }
     }
 
     typealias DecisionHandler = @MainActor (Card, Decision) async -> Void
 
     private(set) var cards: [Card] = []
-    private(set) var decisionsInFlight: Set<String> = []
+    private(set) var decisionsInFlight: Set<Card.ID> = []
     private var handlersByKind: [Kind: DecisionHandler] = [:]
+    private let logger = Logger(subsystem: "ai.openclaw", category: "pairing-decisions")
     private var panel: PairingApprovalPanelController?
     /// Request ids visible when the user chose "Not Now"; the panel reopens
     /// automatically only when a request they have not seen yet arrives.
-    private var snoozedRequestIds: Set<String> = []
+    private var snoozedRequestIds: Set<Card.ID> = []
     /// Request ids the visible panel has already presented. Periodic queue
     /// syncs must not re-activate the app; only genuinely new requests may.
-    private var presentedRequestIds: Set<String> = []
+    private var presentedRequestIds: Set<Card.ID> = []
 
     func register(kind: Kind, handler: @escaping DecisionHandler) {
         self.handlersByKind[kind] = handler
@@ -79,12 +88,11 @@ final class PairingApprovalCenter {
     func sync(kind: Kind, cards: [Card]) {
         var others = self.cards.filter { $0.kind != kind }
         #if DEBUG
-        others += self.cards.filter { $0.kind == kind && self.demoRequestIds.contains($0.requestId) }
+        others += self.cards.filter { $0.kind == kind && self.demoRequestIds.contains($0.id) }
         #endif
-        // requestId tiebreaker: Swift sort is not stable and equal timestamps
-        // would let cards swap positions between syncs.
+        // Wire ids can repeat across kinds; keep equal-time cards deterministic.
         self.cards = (others + cards).sorted {
-            ($0.requestedAt, $0.requestId) < ($1.requestedAt, $1.requestId)
+            ($0.requestedAt, $0.requestId, $0.kind.rawValue) < ($1.requestedAt, $1.requestId, $1.kind.rawValue)
         }
         self.snoozedRequestIds.formIntersection(self.cards.map(\.id))
         self.updatePanel()
@@ -92,19 +100,31 @@ final class PairingApprovalCenter {
 
     func decide(_ card: Card, _ decision: Decision) {
         #if DEBUG
-        if self.demoRequestIds.contains(card.requestId) {
-            self.demoRequestIds.remove(card.requestId)
-            self.cards.removeAll { $0.requestId == card.requestId }
+        if self.demoRequestIds.contains(card.id) {
+            self.demoRequestIds.remove(card.id)
+            self.cards.removeAll { $0.id == card.id }
             self.updatePanel()
             return
         }
         #endif
-        guard let handler = self.handlersByKind[card.kind] else { return }
-        guard self.decisionsInFlight.insert(card.requestId).inserted else { return }
+        guard let handler = self.currentDecisionHandler(for: card) else { return }
+        guard self.decisionsInFlight.insert(card.id).inserted else { return }
         Task { @MainActor in
+            defer { self.decisionsInFlight.remove(card.id) }
+            // The rendered action may outlive its source or wait behind a switch.
+            guard self.currentDecisionHandler(for: card) != nil else { return }
             await handler(card, decision)
-            self.decisionsInFlight.remove(card.requestId)
         }
+    }
+
+    private func currentDecisionHandler(for card: Card) -> DecisionHandler? {
+        guard let handler = self.handlersByKind[card.kind],
+              self.cards.contains(where: { $0.id == card.id }), card.source?.isCurrent != false
+        else {
+            self.logger.info("pairing decision discarded because its request or Gateway connection changed")
+            return nil
+        }
+        return handler
     }
 
     /// Resolve a batch of cards with one decision. Takes the caller's
@@ -131,7 +151,7 @@ final class PairingApprovalCenter {
         self.ensurePanel().show()
     }
 
-    static func shouldAutoPresent(cardIds: [String], snoozedIds: Set<String>) -> Bool {
+    static func shouldAutoPresent<ID: Hashable>(cardIds: [ID], snoozedIds: Set<ID>) -> Bool {
         !cardIds.isEmpty && !cardIds.allSatisfy { snoozedIds.contains($0) }
     }
 
@@ -179,7 +199,7 @@ final class PairingApprovalCenter {
 
     /// Demo/screenshot hook: decisions on injected cards resolve locally
     /// instead of routing to a prompter.
-    private var demoRequestIds: Set<String> = []
+    private var demoRequestIds: Set<Card.ID> = []
 
     func injectDemoCards(_ cards: [Card]) {
         self.demoRequestIds.formUnion(cards.map(\.id))

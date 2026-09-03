@@ -577,6 +577,8 @@ export type PluginManifestProviderAuthChoice = {
   cliDescription?: string;
   /** One pasted secret plus provider defaults is sufficient for app-guided setup. */
   appGuidedSecret?: boolean;
+  /** Interactive method stages one inline credential without host login imports or persistence. */
+  personalAccount?: boolean;
   /** Short provider-owned command label for starting app-guided setup. */
   appGuidedActionLabel?: string;
   /** Provider-owned interactive login that native setup clients can render generically. */

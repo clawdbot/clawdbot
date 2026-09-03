@@ -3,7 +3,10 @@
  */
 
 import { mediaKindFromMime } from "@openclaw/media-core/constants";
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import {
+  asFiniteNumber,
+  asNonNegativeFiniteNumber,
+} from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord, readStringField } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
@@ -62,6 +65,26 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
         ...("agentId" in source ? { agentId } : {}),
       }
     : undefined;
+}
+
+function normalizeOmittedMediaContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "omitted_media" }> | null {
+  if (
+    item.type !== "image" ||
+    item.omitted !== true ||
+    normalizeOptionalString(item.url) !== undefined
+  ) {
+    return null;
+  }
+  const sizeBytes = asNonNegativeFiniteNumber(item.bytes);
+  return {
+    type: "omitted_media",
+    media: {
+      kind: "image",
+      ...(sizeBytes !== undefined ? { sizeBytes } : {}),
+    },
+  };
 }
 
 export function normalizeRoleForGrouping(role: string): string {
@@ -421,6 +444,10 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
       const item = asOptionalRecord(value);
       if (!item) {
         return [];
+      }
+      const omittedMedia = normalizeOmittedMediaContentBlock(item);
+      if (omittedMedia) {
+        return [omittedMedia];
       }
       const type = item.type;
       const text = readStringField(item, "text");

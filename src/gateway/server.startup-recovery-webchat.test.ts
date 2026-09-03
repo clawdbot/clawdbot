@@ -232,7 +232,8 @@ it(
       ).resolves.toMatchObject({ aborted: true, runIds: [canceledRunId] });
       await vi.waitFor(() => {
         const queue = getExistingFollowupQueue(sessionKey);
-        expect(new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])])).toHaveLength(1);
+        const queued = new Set([...(queue?.items ?? []), ...(queue?.inFlight ?? [])]);
+        expect(Array.from(queued, (item) => item.messageId)).toEqual([survivorRunId]);
       });
 
       replacementOwner.release();

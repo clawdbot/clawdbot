@@ -537,11 +537,21 @@ function runCiManifestFixture(options: {
       writeFileSync(sqliteLifecycleProof, "export {};\n");
       writeFileSync(
         path.join(scriptsDir, "channel-contract-test-plan.mts"),
-        `export const createChannelContractTestShards = () => [{ checkName: "channel-contracts" }];\n`,
+        `export const createChannelContractTestShards = () => ["a", "b"].map((suffix) => ({
+          checkName: "channel-contracts-" + suffix,
+          includePatterns: ["src/channels/plugins/contracts/fixture-" + suffix + ".test.ts"],
+          runtime: "node",
+          task: "contracts-channels",
+        }));\n`,
       );
       writeFileSync(
         path.join(scriptsDir, "plugin-contract-test-plan.mts"),
-        `export const createPluginContractTestShards = () => [{ checkName: "plugin-contracts" }];\n`,
+        `export const createPluginContractTestShards = () => ["a", "b"].map((suffix) => ({
+          checkName: "plugin-contracts-" + suffix,
+          includePatterns: ["src/plugins/contracts/fixture-" + suffix + ".test.ts"],
+          runtime: "node",
+          task: "contracts-plugins",
+        }));\n`,
       );
     }
     if (options.qaSmokePlan ?? options.bundledPlanner) {
@@ -742,6 +752,29 @@ function runCiManifestFixture(options: {
     rmSync(root, { force: true, recursive: true });
   }
 }
+
+const readFrozenAdditionalCheckRows = (() => {
+  let rows: Array<{ check_name: string; group: string; runner: string }> | undefined;
+  return () => {
+    if (!rows) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "workflow_dispatch",
+        historicalCompatibility: true,
+        changedPaths: [],
+        scopeEnv: {
+          OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
+          OPENCLAW_CI_WORKFLOW_REVISION: "b".repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      rows = JSON.parse(
+        expectDefined(manifest.outputs.check_additional_matrix, "additional check matrix"),
+      ).include;
+    }
+    return structuredClone(expectDefined(rows, "frozen additional check rows"));
+  };
+})();
 
 function runRunnerProfileFixture(options: {
   authorAssociation?: string;
@@ -1597,55 +1630,158 @@ function runCheckShardFixture(options: {
   scripts: string[];
   task?: "guards" | "npm-lock" | "test-types";
   checkoutBase?: string;
+  types?: {
+    compose?: boolean;
+    profile?: "blacksmith" | "github" | "hybrid";
+    eventName?: "pull_request" | "push" | "workflow_dispatch";
+    stripeSupport?: boolean;
+    hostedContract?: boolean;
+    failStripe?: string;
+  };
 }): {
   calls: string[];
   output: string;
   status: number | null;
+  typeCalls: { row: string; command: string; localCheck: string | null }[];
+  rows: { name: string; status: number | null }[];
 } {
   const root = tempDirs.make("openclaw-ci-guards-");
   const fakeBin = path.join(root, "bin");
   const callsPath = path.join(root, "pnpm-calls.txt");
+  const typeCallsPath = path.join(root, "type-calls.txt");
+  const typeCheck = options.task === "test-types";
   mkdirSync(fakeBin);
-  if (options.task === "test-types") {
+  if (typeCheck) {
     mkdirSync(path.join(root, "scripts"));
-    writeFileSync(path.join(root, "scripts/run-tsgo-core-test-shards.mts"), "// --stripe\n");
+    writeFileSync(
+      path.join(root, "scripts/run-tsgo-core-test-shards.mts"),
+      options.types?.stripeSupport === false ? "// legacy runner\n" : "// --stripe\n",
+    );
+    writeFileSync(
+      path.join(root, "scripts/run-tsgo-core-test-shards.mjs"),
+      `import { appendFileSync } from "node:fs";
+const args = process.argv.slice(2);
+appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCLAW_LOCAL_CHECK ?? "<unset>", "node " + args.join(" ")].join("\\t") + "\\n");
+if (args[args.indexOf("--stripe") + 1] === process.env.FAIL_TYPE_STRIPE) process.exit(17);
+`,
+    );
   }
-  writeFileSync(
-    path.join(root, "package.json"),
-    `${JSON.stringify({
-      scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
-    })}\n`,
-  );
+  const scripts = Object.fromEntries(options.scripts.map((name) => [name, "true"]));
+  if (options.types?.compose) {
+    // The full-path root-coverage probe must see the actual package alias.
+    scripts["tsgo:test"] = (
+      JSON.parse(readFileSync("package.json", "utf8")) as { scripts: Record<string, string> }
+    ).scripts["tsgo:test"]!;
+  }
+  writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ scripts })}\n`);
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'if [ "$*" = "run --silent" ]; then exit 1; fi',
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
+    ...(typeCheck
+      ? [
+          'printf "%s\\t%s\\tpnpm %s\\n" "$TYPE_ROW" "${OPENCLAW_LOCAL_CHECK-<unset>}" "$*" >> "$TYPE_CALLS"',
+        ]
+      : []),
   ]);
-  const checkShardRun = readCiWorkflow().jobs["check-shard"].steps.find(
+  const workflow = readCiWorkflow();
+  const checkShardStep = workflow.jobs["check-shard"].steps.find(
     (step: WorkflowStep) => step.name === "Run check shard",
-  ).run;
-  const run = spawnSync("bash", ["-c", checkShardRun], {
-    cwd: root,
-    encoding: "utf8",
-    env: {
-      ...process.env,
-      FROZEN_TARGET: options.frozenTarget ? "true" : "false",
-      FORMAT_CHECK: "false",
-      HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
-      HOSTED_RUNNER_STRIPES: "true",
-      CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
-      PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-      PNPM_CALLS: callsPath,
-      TASK: options.task ?? "guards",
+  );
+  const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+    eventName:
+      options.types?.eventName ?? (options.frozenTarget ? "workflow_dispatch" : "pull_request"),
+    repository: "openclaw/openclaw",
+    runAttempt: 1,
+    frozenTarget: options.frozenTarget,
+    hostedRunnerProfileContract: options.types?.hostedContract ?? true,
+    runnerProfile: options.types?.profile ?? "hybrid",
+    preflightOutputs: {
+      compatibility_target: String(options.frozenTarget),
+      run_format_check: "false",
     },
+  };
+  const rows: { name: string; step: WorkflowStep; matrix: Record<string, unknown> }[] = [];
+  const coreJob = workflow.jobs["check-test-types-hosted-core-shard"];
+  if (options.types?.compose && evaluateWorkflowExpression(coreJob.if, context)) {
+    for (const stripe of coreJob.strategy.matrix.stripe) {
+      rows.push({
+        name: `core-${stripe}`,
+        step: coreJob.steps.find(
+          (step: WorkflowStep) => step.name === "Run hosted core test-types stripe",
+        ),
+        matrix: { stripe },
+      });
+    }
+  }
+  rows.push({ name: "central", step: checkShardStep, matrix: { task: options.task ?? "guards" } });
+  // Rows are independent (matrix fail-fast:false); each real Bash body owns its halt.
+  const runs = rows.map((row) => {
+    const resolveValue = (value: unknown) =>
+      typeof value === "string" && value.startsWith("${{")
+        ? evaluateWorkflowExpression(value, { ...context, matrix: row.matrix })
+        : value;
+    const command = typeCheck
+      ? row.step.run!.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression) =>
+          String(resolveValue(expression)),
+        )
+      : row.step.run!;
+    return Object.assign(
+      spawnSync("bash", ["-c", command], {
+        cwd: root,
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          FROZEN_TARGET: options.frozenTarget ? "true" : "false",
+          FORMAT_CHECK: "false",
+          HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
+          HOSTED_RUNNER_STRIPES: "true",
+          CHECKOUT_BASE_SHA: options.checkoutBase ?? "",
+          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          PNPM_CALLS: callsPath,
+          TASK: options.task ?? "guards",
+          ...(typeCheck
+            ? {
+                OPENCLAW_LOCAL_CHECK: undefined,
+                TYPE_ROW: row.name,
+                TYPE_CALLS: typeCallsPath,
+                FAIL_TYPE_STRIPE: options.types?.failStripe,
+                ...Object.fromEntries(
+                  Object.entries(row.step.env ?? {}).map(([key, value]) => [
+                    key,
+                    String(resolveValue(value)),
+                  ]),
+                ),
+              }
+            : {}),
+        },
+      }),
+      { name: row.name },
+    );
   });
+  const failed = runs.find((run) => run.status !== 0);
   return {
     calls: existsSync(callsPath)
       ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
       : [],
-    output: `${run.stdout}${run.stderr}`,
-    status: run.status,
+    output: runs.map((run) => `${run.stdout}${run.stderr}`).join("\n"),
+    status: failed ? failed.status : 0,
+    typeCalls: existsSync(typeCallsPath)
+      ? readFileSync(typeCallsPath, "utf8")
+          .trim()
+          .split("\n")
+          .filter(Boolean)
+          .map((line) => {
+            const [row, localCheck, command] = line.split("\t");
+            return {
+              row: row!,
+              command: command!,
+              localCheck: localCheck === "<unset>" ? null : localCheck!,
+            };
+          })
+      : [],
+    rows: runs.map(({ name, status }) => ({ name, status })),
   };
 }
 
@@ -4016,6 +4152,166 @@ NODE
     expect(workflow.jobs["security-fast"].needs).toBeUndefined();
   });
 
+  it.each([false, true])(
+    "composes dedicated contract coverage before precise planning (build=%s)",
+    (buildImpact) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        changedPaths: [buildImpact ? "src/fixture.ts" : "src/plugins/contracts/fixture-a.test.ts"],
+        changedPlannerSource: `
+        export const createChangedNodeTestShards = (_paths, options = {}) => {
+          console.log("dedicated-coverage:" + JSON.stringify(options.dedicatedContractShards ?? null));
+          return ${
+            buildImpact
+              ? "[]"
+              : `[{ checkName: "changed-boundary", shardName: "changed-boundary",
+            configs: ["test/vitest/vitest.boundary.config.ts"], requiresDist: false,
+            runner: "ubuntu-24.04" }]`
+          };
+        };
+        export const createChangedExtensionFallbackShards = () => { throw new Error("Unexpected broad fallback"); };
+        export const hasBuildArtifactAffectingChange = () => ${buildImpact};
+        export const hasSqliteSessionLifecycleAffectingChange = () => false;
+      `,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const dedicated = ["plugin", "channel"].flatMap((family) => {
+        expect(manifest.outputs[`run_${family}_contracts_shards`]).toBe("true");
+        const rows = JSON.parse(
+          expectDefined(manifest.outputs[`${family}_contracts_matrix`], family),
+        ).include;
+        expect(rows).toHaveLength(1);
+        return rows.flatMap((row: { groups: unknown[] }) => row.groups);
+      });
+      expect(dedicated).toHaveLength(4);
+      const coverage = expectDefined(
+        manifest.output.split("\n").find((line) => line.startsWith("dedicated-coverage:")),
+        "precise planner coverage input",
+      );
+      expect(JSON.parse(coverage.slice("dedicated-coverage:".length))).toEqual(dedicated);
+      const nodeRows = JSON.parse(
+        expectDefined(manifest.outputs.checks_node_core_nondist_matrix, "precise matrix"),
+      ).include;
+      expect(nodeRows).toEqual(
+        buildImpact ? [] : [expect.objectContaining({ shard_name: "changed-boundary" })],
+      );
+      expect(manifest.outputs.run_build_artifacts).toBe(String(buildImpact));
+      expect(manifest.outputs.run_checks_node_core_dist).toBe(String(buildImpact));
+    },
+  );
+
+  it.each([
+    ["push", "blacksmith", false],
+    ["pull_request", "github", false],
+    ["pull_request", "hybrid", false],
+    ["workflow_dispatch", "blacksmith", false],
+    ["workflow_dispatch", "blacksmith", true],
+    ["workflow_dispatch", "github", true],
+  ] as const)(
+    "shares contract setup while retaining process envelopes (%s, %s, frozen=%s)",
+    (eventName, runnerProfile, frozenTarget) => {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        changedPaths: ["package.json"],
+        eventName,
+        runnerProfile,
+        scopeEnv: {
+          OPENCLAW_CI_WORKFLOW_REVISION: (frozenTarget ? "b" : "a").repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      for (const family of ["plugin", "channel"] as const) {
+        const outputName = `${family}_contracts_matrix`;
+        const rows = JSON.parse(expectDefined(manifest.outputs[outputName], outputName)).include;
+        const expected = ["a", "b"].map((suffix) => ({
+          checkName: `${family}-contracts-${suffix}`,
+          includePatterns: [
+            `${family === "plugin" ? "src/plugins" : "src/channels/plugins"}/contracts/fixture-${suffix}.test.ts`,
+          ],
+          runtime: "node",
+          task: `contracts-${family}s`,
+        }));
+        expect(rows).toHaveLength(frozenTarget ? 2 : 1);
+        expect(rows.flatMap((row: { groups: unknown[] }) => row.groups)).toEqual(expected);
+        expect(rows.map((row: { checkName: string }) => row.checkName)).toEqual(
+          frozenTarget
+            ? expected.map((shard) => shard.checkName)
+            : [`checks-fast-contracts-${family}s`],
+        );
+      }
+    },
+  );
+
+  it.each(["plugin", "channel"] as const)(
+    "joins %s contract envelopes and stops admission on any failure",
+    (family) => {
+      const workflow = readCiWorkflow();
+      const job = workflow.jobs[`checks-fast-${family}-contracts-shard`];
+      const step = job.steps.find(
+        (candidate: WorkflowStep) => candidate.name === `Run ${family} contract shard`,
+      );
+      expect(step.env.OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON).toBe("${{ toJson(matrix) }}");
+      expect(step.env.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe(family === "channel" ? "4" : undefined);
+      const fixture = tempDirs.make("openclaw-contract-groups-");
+      const binDir = path.join(fixture, "bin");
+      mkdirSync(binDir);
+      const commandLog = path.join(fixture, "commands.jsonl");
+      const pnpm = path.join(binDir, "pnpm");
+      writeFileSync(
+        pnpm,
+        String.raw`#!${process.execPath}
+const fs = require("node:fs");
+const files = JSON.parse(fs.readFileSync(process.env.OPENCLAW_VITEST_INCLUDE_FILE, "utf8"));
+const record = { args: process.argv.slice(2), files, parallel: process.env.OPENCLAW_TEST_PROJECTS_PARALLEL ?? null };
+fs.appendFileSync(process.env.CONTRACT_COMMAND_LOG, JSON.stringify({ ...record, phase: "start" }) + "\n");
+setImmediate(() => {
+  fs.appendFileSync(process.env.CONTRACT_COMMAND_LOG, JSON.stringify({ ...record, phase: "end" }) + "\n");
+  process.exitCode = files[0] === "first.test.ts" ? Number(process.env.CONTRACT_FIRST_EXIT) : 0;
+});
+`,
+      );
+      chmodSync(pnpm, 0o755);
+      for (const firstExit of [0, 7, 143]) {
+        writeFileSync(commandLog, "");
+        const run = runWorkflowShellScript(step.run, {
+          cwd: fixture,
+          env: {
+            PATH: `${binDir}${path.delimiter}${process.env.PATH ?? ""}`,
+            RUNNER_TEMP: fixture,
+            CONTRACT_COMMAND_LOG: commandLog,
+            CONTRACT_FIRST_EXIT: String(firstExit),
+            OPENCLAW_TEST_PROJECTS_PARALLEL: step.env.OPENCLAW_TEST_PROJECTS_PARALLEL,
+            OPENCLAW_CONTRACT_INCLUDE_PATTERNS_JSON: JSON.stringify({
+              task: `contracts-${family}s`,
+              groups: [
+                { checkName: "first-envelope", includePatterns: ["first.test.ts"] },
+                { checkName: "second-envelope", includePatterns: ["second.test.ts"] },
+              ],
+            }),
+          },
+        });
+        expect(run.status, `${run.stdout}${run.stderr}`).toBe(firstExit);
+        const files = firstExit === 0 ? ["first.test.ts", "second.test.ts"] : ["first.test.ts"];
+        expect(
+          readFileSync(commandLog, "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => JSON.parse(line)),
+        ).toEqual(
+          files.flatMap((file) =>
+            ["start", "end"].map((phase) => ({
+              args: [`test:contracts:${family}s`],
+              files: [file],
+              parallel: family === "channel" ? "4" : null,
+              phase,
+            })),
+          ),
+        );
+      }
+    },
+  );
+
   it("keeps CodeQL critical quality scans off Blacksmith registrations", () => {
     const source = readCriticalQualityWorkflow();
     const workflow = parse(source);
@@ -4028,9 +4324,9 @@ NODE
     expect(source).not.toContain("blacksmith-");
   });
 
-  it("routes the gate like preflight while security keeps its hybrid-only Blacksmith route", () => {
+  it("keeps hybrid preflight and the gate hosted while security uses Blacksmith", () => {
     const workflow = readCiWorkflow();
-    expect(workflow.jobs["ci-gate"]["runs-on"]).toBe(workflow.jobs.preflight["runs-on"]);
+    expect(workflow.jobs["ci-gate"]["runs-on"]).toBe("ubuntu-24.04");
     const context = {
       eventName: "pull_request",
       repository: "openclaw/openclaw",
@@ -4038,11 +4334,11 @@ NODE
       runnerBackend: "hybrid",
     } as const;
 
-    for (const jobName of ["preflight", "security-fast", "ci-gate"]) {
+    for (const jobName of ["preflight", "security-fast"]) {
       const expression = workflow.jobs[jobName]["runs-on"];
       for (const eventName of ["pull_request", "push"] as const) {
         expect(evaluateWorkflowExpression(expression, { ...context, eventName }), jobName).toBe(
-          "blacksmith-4vcpu-ubuntu-2404",
+          jobName === "preflight" ? "ubuntu-24.04" : "blacksmith-4vcpu-ubuntu-2404",
         );
       }
       for (const override of [
@@ -4375,7 +4671,6 @@ NODE
       "build-artifacts": "ubuntu-24.04",
       "check-additional-shard": "ubuntu-24.04",
       "check-shard": "ubuntu-24.04",
-      "ci-gate": "ubuntu-24.04",
       "checks-fast-channel-contracts-shard": "ubuntu-24.04",
       "checks-fast-core": "ubuntu-24.04",
       "checks-fast-plugin-contracts-shard": "ubuntu-24.04",
@@ -4400,9 +4695,7 @@ NODE
     } as const;
     const expectedHybridFirstAttemptRunners = {
       ...expectedHostedRunners,
-      preflight: "blacksmith-4vcpu-ubuntu-2404",
       "security-fast": "blacksmith-4vcpu-ubuntu-2404",
-      "ci-gate": "blacksmith-4vcpu-ubuntu-2404",
       android: "blacksmith-8vcpu-ubuntu-2404",
       "build-artifacts": "blacksmith-32vcpu-ubuntu-2404",
       "checks-node-core-test-nondist-shard": "blacksmith-32vcpu-ubuntu-2404",
@@ -6647,22 +6940,22 @@ server.listen(0, "127.0.0.1", () => {
       });
     }
     expect(workflow.jobs["check-additional-shard"]["runs-on"]).toContain("matrix.runner");
-    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+    expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-runtime-topology-architecture",
       group: "runtime-topology-architecture",
       runner: "blacksmith-32vcpu-ubuntu-2404",
     });
-    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+    expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-session-accessor-boundary",
       group: "session-accessor-boundary",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
-    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+    expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-export-name-collisions",
       group: "export-name-collisions",
       runner: "blacksmith-4vcpu-ubuntu-2404",
     });
-    expect(workflow.jobs["check-additional-shard"].strategy.matrix.include).toContainEqual({
+    expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-sqlite-session-schema-baseline",
       group: "sqlite-session-schema-baseline",
       runner: "blacksmith-4vcpu-ubuntu-2404",
@@ -6680,7 +6973,7 @@ server.listen(0, "127.0.0.1", () => {
     const hostedCoreJob = workflow.jobs["check-lint-hosted-core-shard"];
 
     // Cold SDK preparation and plugin compilation need CPU and memory headroom.
-    expect(additionalJob.strategy.matrix.include).toContainEqual({
+    expect(readFrozenAdditionalCheckRows()).toContainEqual({
       check_name: "check-additional-extension-package-boundary",
       group: "extension-package-boundary",
       runner: "blacksmith-32vcpu-ubuntu-2404",
@@ -7120,51 +7413,13 @@ server.listen(0, "127.0.0.1", () => {
     }
   });
 
-  it("runs the session accessor ratchet as a visible additional check", () => {
-    const workflow = readCiWorkflow();
-    const additionalJob = workflow.jobs["check-additional-shard"];
-    const matrixRows = additionalJob.strategy.matrix.include;
-    expect(matrixRows).toContainEqual({
-      check_name: "check-session-accessor-boundary",
-      group: "session-accessor-boundary",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-    });
-
-    const runStep = additionalJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run additional check shard",
-    );
-    expect(runStep.run).toContain("session-accessor-boundary)");
-    expect(runStep.run).toContain(
-      'run_check "lint:tmp:session-accessor-boundary" pnpm run lint:tmp:session-accessor-boundary',
-    );
-  });
-
-  it("runs the export name collision ratchet as a visible additional check", () => {
-    const workflow = readCiWorkflow();
-    const additionalJob = workflow.jobs["check-additional-shard"];
-    const matrixRows = additionalJob.strategy.matrix.include;
-    expect(matrixRows).toContainEqual({
-      check_name: "check-export-name-collisions",
-      group: "export-name-collisions",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-    });
-
-    const runStep = additionalJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run additional check shard",
-    );
-    expect(runStep.run).toContain("export-name-collisions)");
-    expect(runStep.run).toContain(
-      'run_check "lint:tmp:export-name-collisions" pnpm run lint:tmp:export-name-collisions',
-    );
-  });
-
   it("selects every supplemental boundary check exactly once across the CI matrix", () => {
     const job = readCiWorkflow().jobs["check-additional-shard"];
     const step = job.steps.find(
       (entry: WorkflowStep) => entry.name === "Run additional check shard",
     );
     const selector = String(step?.env?.OPENCLAW_ADDITIONAL_BOUNDARY_SHARD ?? "");
-    const rows: Array<{ group: string }> = job.strategy.matrix.include;
+    const rows = readFrozenAdditionalCheckRows();
     const selected = rows
       .filter((row) => row.group === "boundaries")
       .flatMap(() => selectChecksForShard(BOUNDARY_CHECKS, selector));
@@ -7173,12 +7428,12 @@ server.listen(0, "127.0.0.1", () => {
     );
   });
 
-  it("runs all session boundary checks and preserves individual failures", () => {
+  it("runs all source checks serially and preserves individual failures", () => {
     const additionalJob = readCiWorkflow().jobs["check-additional-shard"];
     const runStep = additionalJob.steps.find(
       (step: WorkflowStep) => step.name === "Run additional check shard",
     );
-    const commands = [
+    const sessionCommands = [
       "lint:tmp:session-accessor-boundary",
       "lint:tmp:sqlite-transaction-boundary",
       "lint:tmp:session-transcript-reader-boundary",
@@ -7194,68 +7449,154 @@ server.listen(0, "127.0.0.1", () => {
       "utf8",
     );
     chmodSync(pnpmPath, 0o755);
-    for (const scenario of [
-      { failed: "", missing: "" },
-      ...commands.map((failed) => ({ failed, missing: "" })),
-      ...commands.map((missing) => ({ failed: "", missing })),
-    ]) {
-      const present = commands.filter((command) => command !== scenario.missing);
-      writeFileSync(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          scripts: Object.fromEntries(present.map((command) => [command, "fixture"])),
-        }),
-      );
-      writeFileSync(callsPath, "");
-      const result = runWorkflowShellScript(runStep.run, {
-        cwd: root,
-        env: {
-          ...process.env,
-          ADDITIONAL_CHECK_GROUP: "session-accessor-boundary",
-          PATH: `${binDir}:${process.env.PATH ?? ""}`,
-          PNPM_CALLS: callsPath,
-          PNPM_FAIL: scenario.failed,
-        },
-      });
-      const context = `${JSON.stringify(scenario)}\n${result.stdout}${result.stderr}`;
-      expect(readFileSync(callsPath, "utf8").trim().split("\n"), context).toEqual(
-        present.map((command) => `run ${command}`),
-      );
-      expect(result.status, context).toBe(scenario.failed ? 1 : 0);
-      expect(result.stdout.match(/^::error .+$/gmu) ?? [], context).toEqual(
-        scenario.failed
-          ? [`::error title=${scenario.failed} failed::${scenario.failed} failed`]
-          : [],
-      );
-      for (const command of present.filter((entry) => entry !== scenario.failed)) {
-        expect(result.stdout, context).toContain(`[ok] ${command}`);
+    const exportScript = path.join(root, "scripts/check-export-name-collisions.mts");
+    mkdirSync(path.dirname(exportScript));
+    for (const [group, commands] of [
+      [
+        "source-contracts",
+        ["lint:tmp:export-name-collisions", ...sessionCommands, "sqlite:sessions-schema:check"],
+      ],
+      ["session-accessor-boundary", sessionCommands],
+      ["export-name-collisions", ["lint:tmp:export-name-collisions"]],
+      ["sqlite-session-schema-baseline", ["sqlite:sessions-schema:check"]],
+    ] as const) {
+      for (const scenario of [
+        { failed: "", missing: "", missingFile: false },
+        ...commands.map((failed) => ({ failed, missing: "", missingFile: false })),
+        ...commands.map((missing) => ({ failed: "", missing, missingFile: false })),
+        ...(commands.some((command) => command === "lint:tmp:export-name-collisions")
+          ? [{ failed: "", missing: "", missingFile: true }]
+          : []),
+      ]) {
+        const present = commands.filter(
+          (command) =>
+            command !== scenario.missing &&
+            !(scenario.missingFile && command === "lint:tmp:export-name-collisions"),
+        );
+        if (scenario.missingFile) {
+          rmSync(exportScript, { force: true });
+        } else {
+          writeFileSync(exportScript, "");
+        }
+        writeFileSync(
+          path.join(root, "package.json"),
+          JSON.stringify({
+            scripts: Object.fromEntries(
+              commands
+                .filter((command) => command !== scenario.missing)
+                .map((command) => [command, "fixture"]),
+            ),
+          }),
+        );
+        writeFileSync(callsPath, "");
+        const result = runWorkflowShellScript(runStep.run, {
+          cwd: root,
+          env: {
+            ...process.env,
+            ADDITIONAL_CHECK_GROUP: group,
+            PATH: `${binDir}:${process.env.PATH ?? ""}`,
+            PNPM_CALLS: callsPath,
+            PNPM_FAIL: scenario.failed,
+          },
+        });
+        const context = `${group} ${JSON.stringify(scenario)}\n${result.stdout}${result.stderr}`;
+        expect(readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean), context).toEqual(
+          present.map((command) => `run ${command}`),
+        );
+        expect(result.status, context).toBe(scenario.failed ? 1 : 0);
+        expect(result.stdout.match(/^::error .+$/gmu) ?? [], context).toEqual(
+          scenario.failed
+            ? [`::error title=${scenario.failed} failed::${scenario.failed} failed`]
+            : [],
+        );
+        for (const command of present.filter((entry) => entry !== scenario.failed)) {
+          expect(result.stdout, context).toContain(`[ok] ${command}`);
+        }
+        expect(result.stdout.match(/^\[skip\].+$/gmu) ?? [], context).toHaveLength(
+          scenario.missing || scenario.missingFile ? 1 : 0,
+        );
       }
-      expect(result.stdout.match(/^\[skip\].+$/gmu) ?? [], context).toHaveLength(
-        scenario.missing ? 1 : 0,
-      );
     }
-    expect(
-      additionalJob.strategy.matrix.include.filter((row: { group: string }) =>
-        ["session-accessor-boundary", "session-transcript-reader-boundary"].includes(row.group),
-      ),
-    ).toEqual([
-      {
-        check_name: "check-session-accessor-boundary",
-        group: "session-accessor-boundary",
-        runner: "blacksmith-4vcpu-ubuntu-2404",
-      },
-    ]);
   });
 
-  it("reports the Plugin SDK API diff as a visible additional check", () => {
+  it("groups current source checks and allocates SDK reports only for dispatch", () => {
     const workflow = readCiWorkflow();
     const additionalJob = workflow.jobs["check-additional-shard"];
-    const matrixRows = additionalJob.strategy.matrix.include;
-    expect(matrixRows).toContainEqual({
-      check_name: "report-plugin-sdk-api-diff",
-      group: "plugin-sdk-api-diff",
-      runner: "blacksmith-8vcpu-ubuntu-2404",
-    });
+    expect(additionalJob.strategy.matrix).toBe(
+      "${{ fromJSON(needs.preflight.outputs.check_additional_matrix) }}",
+    );
+    expect(workflow.jobs.preflight.outputs.check_additional_matrix).toBe(
+      "${{ steps.manifest.outputs.check_additional_matrix }}",
+    );
+    const frozenGroups = [
+      "boundaries",
+      "prompt-snapshots",
+      "export-name-collisions",
+      "session-accessor-boundary",
+      "sqlite-session-schema-baseline",
+      "plugin-sdk-api-diff",
+      "extension-package-boundary",
+      "runtime-topology-architecture",
+    ];
+    for (const [eventName, frozen] of [
+      ["push", false],
+      ["pull_request", false],
+      ["workflow_dispatch", false],
+      ["workflow_dispatch", true],
+    ] as const) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName,
+        historicalCompatibility: frozen,
+        changedPaths: [],
+        scopeEnv: {
+          OPENCLAW_CI_CHECKOUT_REVISION: "a".repeat(40),
+          OPENCLAW_CI_WORKFLOW_REVISION: (frozen ? "b" : "a").repeat(40),
+        },
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      const rows = JSON.parse(
+        expectDefined(manifest.outputs.check_additional_matrix, "additional check matrix"),
+      ).include;
+      const expectedGroups = frozen
+        ? frozenGroups
+        : [
+            "boundaries",
+            "prompt-snapshots",
+            "source-contracts",
+            ...(eventName === "workflow_dispatch" ? ["plugin-sdk-api-diff"] : []),
+            "extension-package-boundary",
+            "runtime-topology-architecture",
+          ];
+      expect(rows.map((row: { group: string }) => row.group)).toEqual(expectedGroups);
+      expect(manifest.outputs.run_check_additional).toBe("true");
+      for (const row of rows) {
+        if (row.group === "source-contracts") {
+          expect(row).toEqual({
+            check_name: "check-source-contracts",
+            group: "source-contracts",
+            runner: "blacksmith-4vcpu-ubuntu-2404",
+          });
+        } else {
+          expect(readFrozenAdditionalCheckRows()).toContainEqual(row);
+        }
+      }
+    }
+    for (const selection of [{ runNode: false }, { nodeFastOnly: true }]) {
+      const manifest = runCiManifestFixture({
+        bundledPlanner: true,
+        eventName: "pull_request",
+        changedPaths: [],
+        ...selection,
+      });
+      expect(manifest.status, manifest.output).toBe(0);
+      expect(manifest.outputs.run_check_additional).toBe("false");
+      expect(
+        JSON.parse(
+          expectDefined(manifest.outputs.check_additional_matrix, "additional check matrix"),
+        ).include,
+      ).toEqual([]);
+    }
 
     expect(workflow.jobs.preflight.outputs.diff_head_revision).toBe(
       "${{ steps.diff_base.outputs.head_sha }}",
@@ -7309,6 +7650,7 @@ server.listen(0, "127.0.0.1", () => {
       scripts: Record<string, string>,
       compatibilityTarget: boolean,
       eventName = "workflow_dispatch",
+      fail = false,
     ) => {
       const root = tempDirs.make("openclaw-plugin-sdk-api-workflow-");
       const binDir = path.join(root, "bin");
@@ -7319,7 +7661,7 @@ server.listen(0, "127.0.0.1", () => {
       const pnpmPath = path.join(binDir, "pnpm");
       writeFileSync(
         pnpmPath,
-        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$*" >> "$PNPM_CALLS"\n',
+        '#!/usr/bin/env bash\nset -euo pipefail\nprintf \'%s\\n\' "$*" >> "$PNPM_CALLS"\nexit "$PNPM_RESULT"\n',
         "utf8",
       );
       chmodSync(pnpmPath, 0o755);
@@ -7336,6 +7678,7 @@ server.listen(0, "127.0.0.1", () => {
           GITHUB_STEP_SUMMARY: summaryPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           PNPM_CALLS: callsPath,
+          PNPM_RESULT: fail ? "1" : "0",
           RUN_PROMPT_SNAPSHOTS: "false",
         },
       });
@@ -7348,10 +7691,12 @@ server.listen(0, "127.0.0.1", () => {
 
     // Pure reporting: pushes and PRs skip the diff; dispatches (including
     // release validation) still produce it.
-    const pushSkip = runCase({ "plugin-sdk:api:diff": "mock" }, false, "push");
-    expect(pushSkip.result.status, pushSkip.result.stderr).toBe(0);
-    expect(pushSkip.calls).toEqual([]);
-    expect(pushSkip.result.stdout).toContain("manual and release dispatches only");
+    for (const eventName of ["push", "pull_request"]) {
+      const skipped = runCase({ "plugin-sdk:api:diff": "mock" }, false, eventName);
+      expect(skipped.result.status, skipped.result.stderr).toBe(0);
+      expect(skipped.calls).toEqual([]);
+      expect(skipped.result.stdout).toContain("manual and release dispatches only");
+    }
 
     const current = runCase({ "plugin-sdk:api:diff": "mock" }, false);
     expect(current.result.status, current.result.stderr).toBe(0);
@@ -7359,6 +7704,13 @@ server.listen(0, "127.0.0.1", () => {
       "run plugin-sdk:api:diff -- --base base-sha --head synthetic-head-sha --json .artifacts/plugin-sdk-api-diff.json --summary " +
         current.summaryPath,
     ]);
+
+    const failed = runCase({ "plugin-sdk:api:diff": "mock" }, false, "workflow_dispatch", true);
+    expect(failed.result.status, failed.result.stderr).toBe(1);
+    expect(failed.calls).toHaveLength(1);
+    expect(failed.result.stdout).toContain(
+      "::error title=plugin-sdk:api:diff failed::plugin-sdk:api:diff failed",
+    );
 
     const historical = runCase({ "plugin-sdk:api:check": "mock" }, true);
     expect(historical.result.status, historical.result.stderr).toBe(0);
@@ -7369,25 +7721,6 @@ server.listen(0, "127.0.0.1", () => {
     expect(missingCurrent.calls).toEqual([]);
     expect(missingCurrent.result.stdout).toContain(
       "Current CI targets must provide plugin-sdk:api:diff.",
-    );
-  });
-
-  it("runs the SQLite transaction ratchet in the session boundary check", () => {
-    const workflow = readCiWorkflow();
-    const additionalJob = workflow.jobs["check-additional-shard"];
-    const matrixRows = additionalJob.strategy.matrix.include;
-    expect(matrixRows).toContainEqual({
-      check_name: "check-session-accessor-boundary",
-      group: "session-accessor-boundary",
-      runner: "blacksmith-4vcpu-ubuntu-2404",
-    });
-
-    const runStep = additionalJob.steps.find(
-      (step: WorkflowStep) => step.name === "Run additional check shard",
-    );
-    expect(runStep.run).toContain("session-accessor-boundary)");
-    expect(runStep.run).toContain(
-      'run_check "lint:tmp:sqlite-transaction-boundary" pnpm run lint:tmp:sqlite-transaction-boundary',
     );
   });
 
@@ -9293,6 +9626,67 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(result.calls).toEqual(calls);
     },
   );
+
+  it.each([
+    ["hybrid", "pull_request", false, true, true, true],
+    ["github", "workflow_dispatch", false, true, true, true],
+    ["blacksmith", "push", false, true, true, false],
+    ["hybrid", "workflow_dispatch", true, false, true, false],
+    ["hybrid", "workflow_dispatch", true, true, false, false],
+    ["hybrid", "workflow_dispatch", true, true, true, true],
+  ] as const)(
+    "preserves type workload for %s %s frozen=%s hosted-contract=%s stripe-support=%s",
+    (profile, eventName, frozenTarget, hostedContract, stripeSupport, striped) => {
+      const result = runCheckShardFixture({
+        task: "test-types",
+        scripts: ["tsgo:scripts", "tsgo:test:root"],
+        frozenTarget,
+        types: { compose: true, profile, eventName, hostedContract, stripeSupport },
+      });
+      expect(result.status, result.output).toBe(0);
+      const stripes = result.typeCalls.filter((call) => call.command.startsWith("node "));
+      const packages = result.typeCalls.filter((call) => call.command.startsWith("pnpm "));
+      expect(packages.map((call) => call.localCheck)).toEqual(packages.map(() => "0"));
+      if (striped) {
+        expect(result.rows).toHaveLength(3);
+        expect(
+          result.rows.map((row) =>
+            stripes
+              .filter((call) => call.row === row.name)
+              .map((call) => call.command.split(" ")[2]),
+          ),
+        ).toEqual([["1/5", "2/5"], ["3/5", "4/5"], ["5/5"]]);
+        for (const call of stripes) {
+          const args = call.command.split(" ").slice(1);
+          expect(args).toEqual(["--stripe", expect.any(String), "--concurrency", "2"]);
+          expect(call.localCheck).toBeNull();
+        }
+        expect(result.calls).toEqual(["tsgo:extensions:test", "tsgo:scripts", "tsgo:test:root"]);
+      } else {
+        expect(stripes).toEqual([]);
+        expect(result.calls).toEqual(["check:test-types", "tsgo:scripts"]);
+      }
+    },
+  );
+
+  it.each(["1/5", "5/5"])("halts only the type row whose first stripe %s fails", (failStripe) => {
+    const result = runCheckShardFixture({
+      task: "test-types",
+      scripts: ["tsgo:scripts", "tsgo:test:root"],
+      frozenTarget: false,
+      types: { compose: true, failStripe },
+    });
+    expect(result.status, result.output).toBe(17);
+    expect(readCiWorkflow().jobs["check-test-types-hosted-core-shard"].strategy["fail-fast"]).toBe(
+      false,
+    );
+    const failed = result.rows.filter((row) => row.status !== 0);
+    expect(failed).toHaveLength(1);
+    expect(result.rows.filter((row) => row.status === 0)).toHaveLength(2);
+    expect(
+      result.typeCalls.filter((call) => call.row === failed[0]!.name).map((call) => call.command),
+    ).toEqual([`node --stripe ${failStripe} --concurrency 2`]);
+  });
 
   it.each(["main", "trunk/release"])(
     "resolves manual diff and cache bases from authenticated %s when anonymous Git is unavailable",
@@ -11654,7 +12048,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
             JSON.parse(expectDefined(manifest.outputs.ui_e2e_matrix, assertionName)),
             assertionName,
           ).toEqual(
-            expectedUiE2eMatrices[runnerBackend === "blacksmith" && runAttempt === "1" ? 0 : 1],
+            expectedUiE2eMatrices[
+              (runnerBackend === "blacksmith" || runnerBackend === "hybrid") && runAttempt === "1"
+                ? 0
+                : 1
+            ],
           );
         }
       }
@@ -11757,6 +12155,27 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
           eventName: "pull_request",
           headRepository: "openclaw/openclaw",
           repository: "openclaw/openclaw",
+          runAttempt: 2,
+        },
+        expected: { blacksmith: false, dependencyCache: "false" },
+      },
+      {
+        name: "same-repo pull request with hybrid backend retry",
+        context: {
+          eventName: "pull_request",
+          headRepository: "openclaw/openclaw",
+          repository: "openclaw/openclaw",
+          runnerBackend: "hybrid",
+          runAttempt: 2,
+        },
+        expected: { blacksmith: false, dependencyCache: "false" },
+      },
+      {
+        name: "canonical hybrid push retry",
+        context: {
+          eventName: "push",
+          repository: "openclaw/openclaw",
+          runnerBackend: "hybrid",
           runAttempt: 2,
         },
         expected: { blacksmith: false, dependencyCache: "false" },
@@ -12405,7 +12824,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "scoped SQLite verifier invocation",
       );
 
-      expect(additionalJob.strategy.matrix.include).not.toContainEqual(
+      expect(readFrozenAdditionalCheckRows()).not.toContainEqual(
         expect.objectContaining({ group: "sqlite-session-flip-proof" }),
       );
       expect(additionalRunStep.run).not.toContain("sqlite-session-flip-proof)");

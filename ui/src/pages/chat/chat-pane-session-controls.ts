@@ -19,6 +19,7 @@ import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { refreshChatModelCatalogOnDemand } from "./chat-state-refresh.ts";
 import type { ChatProps } from "./chat-view.ts";
+import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import {
   renderChatModelControls,
   type ChatModelCatalogState,
@@ -97,6 +98,7 @@ export function renderChatPaneComposerControls(params: {
   permissionAccess: SessionMethodAccess;
   canSelectFull: boolean;
   onModelSetup: () => void;
+  onModelAccounts?: () => void;
 }): {
   composerControls: NonNullable<ChatProps["composerControls"]>;
   permissionPicker: ChatPermissionPickerProps;
@@ -111,9 +113,11 @@ export function renderChatPaneComposerControls(params: {
     permissionAccess,
     canSelectFull,
     onModelSetup,
+    onModelAccounts,
   } = params;
   const sessionKey = state.sessionKey;
   const client = state.client;
+  const accountSelection = state.chatAccountSelection;
   const connectionEpoch = state.connectionEpoch;
   const agentScope = scopedAgentParamsForSession(state, sessionKey);
   const expectedSessionId = selectedSession?.sessionId?.trim();
@@ -158,6 +162,31 @@ export function renderChatPaneComposerControls(params: {
     composerControls: html`
       <div class="chat-composer-model-control">
         ${renderChatModelControls({
+          renderAccountControl: (accountModel) =>
+            renderChatModelAccountControl({
+              owner: state,
+              client,
+              selection: accountSelection,
+              model: accountModel,
+              disabled:
+                !modelAccess.allowed ||
+                !state.connected ||
+                !accountModel ||
+                selectedSession?.modelSelectionLocked === true ||
+                state.chatLoading ||
+                state.chatSending ||
+                Boolean(state.chatRunId) ||
+                state.chatStream !== null ||
+                Boolean(state.chatModelSwitchPromises[sessionKey]),
+              ownsSelection: () =>
+                ownsSelection() && state.chatAccountSelection === accountSelection,
+              onSelect: (account) =>
+                ownsSelection() && modelAccess.allowed
+                  ? switchChatModel(state, `${accountModel}@${account.authProfileId}`, sessionKey)
+                  : Promise.resolve(false),
+              onManage: onModelAccounts,
+              onRequestUpdate: () => state.requestUpdate?.(),
+            }),
           activeRunId: state.chatRunId,
           agentDefaultModel,
           connected: state.connected,

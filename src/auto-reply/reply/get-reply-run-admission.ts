@@ -6,7 +6,7 @@ import { resolveSessionAuthSelection } from "../../agents/auth-profiles/session-
 import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
 import { MAIN_SESSION_RECOVERY_WORK_ADMISSION_OWNER } from "../../agents/main-session-recovery/main-session-recovery-admission.js";
 import { hasResolvedThinkingCatalogEntry } from "../../agents/thinking-runtime.js";
-import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
+import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import {
   resolveSessionFilePathCore,
@@ -21,6 +21,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   interruptSessionWorkAdmissions,
 } from "../../sessions/session-lifecycle-admission.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import {
   formatThinkingLevels,
@@ -415,7 +416,7 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
     if (useFastReplyRuntime) {
       return {
         authProfileId: preparedSessionState.sessionEntry?.authProfileOverride,
-        authProfileIdSource: resolveSessionAuthProfileOverrideSource(
+        authProfileIdSource: resolveCollapsedSessionAuthPinSource(
           preparedSessionState.sessionEntry,
         ),
       };
@@ -444,6 +445,9 @@ export async function prepareReplyRunAdmission(context: PreparedReplyRunContext)
       sessionKey: authSessionKey,
       storePath: shouldUseEphemeralSession ? undefined : storePath,
       isNewSession,
+      // Only an authenticated Gateway profile establishes a person-linked pin;
+      // channel senders read as observations and resolve to undefined here.
+      requesterProfileId: readSessionInputProfileId(ctx),
     });
     return {
       authProfileId: selection?.profileId,

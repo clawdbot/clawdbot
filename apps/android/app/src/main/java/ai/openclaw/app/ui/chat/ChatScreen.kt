@@ -181,6 +181,7 @@ import androidx.compose.ui.input.key.onPreInterceptKeyBeforeSoftKeyboard
 import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -192,7 +193,6 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
-import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.Lifecycle
@@ -222,14 +222,6 @@ internal fun resolvePendingAssistantAutoSend(
   if (!healthOk || pendingRunCount > 0) return null
   return queued
 }
-
-/** Reserves a viewport strip so the jump-to-latest target never covers chat content. */
-internal fun chatReaderListBottomInset(showJumpToLatest: Boolean): Dp =
-  if (showJumpToLatest) {
-    56.dp
-  } else {
-    0.dp
-  }
 
 internal enum class ChatComposerPrimaryAction {
   StartTalk,
@@ -722,42 +714,6 @@ fun ChatScreen(
         .padding(vertical = 10.dp),
     verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
-    ChatHeader(
-      activeAgent = activeAgent,
-      projectLabel = activeProjectLabel,
-      sessionTitle = activeSessionTitle,
-      sessionColor = activeSession?.color,
-      showSidebarButton = showSidebarButton,
-      onOpenSidebar = onOpenSidebar,
-      healthOk = healthOk,
-      pendingRunCount = pendingRunCount,
-      sessionCreating = sessionCreating,
-      newChatEnabled = newChatEnabled,
-      workspaceGit = workspaceGit,
-      branches = sessionBranches,
-      branchesLoading = sessionBranchesLoading,
-      branchSwitchEnabled =
-        outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
-      onNewChatInWorktree = { startNewChat(true) },
-      onRefresh = {
-        viewModel.refreshChat()
-        viewModel.refreshChatSessions(limit = 100)
-      },
-      onOpenDashboard = { onOpenDashboard(sessionKey) },
-      onOpenBackgroundTasks = { showBackgroundTasks = true },
-      onOpenBranchSwitcher = {
-        showBranchSwitcher = true
-        scope.launch { viewModel.refreshChatSessionBranches() }
-      },
-    )
-
-    errorText?.takeIf { it.isNotBlank() }?.let { error ->
-      ChatNotice(
-        title = nativeString("Chat needs attention"),
-        body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
-      )
-    }
-
     ChatMessageList(
       sessionKey = sessionKey,
       fullMessageOwner = composerOwner,
@@ -835,7 +791,45 @@ fun ChatScreen(
       resolveInlineWidgetResource = viewModel::resolveInlineWidgetResource,
       loadImageArtifact = viewModel::loadChatImageArtifact,
       loadMediaArtifact = viewModel::loadChatMediaArtifact,
-      modifier = Modifier.weight(1f).padding(horizontal = 16.dp),
+      modifier = Modifier.weight(1f),
+      header = { onJumpToLatest ->
+        ChatHeader(
+          activeAgent = activeAgent,
+          projectLabel = activeProjectLabel,
+          sessionTitle = activeSessionTitle,
+          sessionColor = activeSession?.color,
+          showSidebarButton = showSidebarButton,
+          onOpenSidebar = onOpenSidebar,
+          onJumpToLatest = onJumpToLatest,
+          healthOk = healthOk,
+          pendingRunCount = pendingRunCount,
+          sessionCreating = sessionCreating,
+          newChatEnabled = newChatEnabled,
+          workspaceGit = workspaceGit,
+          branches = sessionBranches,
+          branchesLoading = sessionBranchesLoading,
+          branchSwitchEnabled =
+            outboxPresentationRestored && pendingRunCount == 0 && !sessionBranchSwitching && currentSessionOutboxItems.isEmpty(),
+          onNewChatInWorktree = { startNewChat(true) },
+          onRefresh = {
+            viewModel.refreshChat()
+            viewModel.refreshChatSessions(limit = 100)
+          },
+          onOpenDashboard = { onOpenDashboard(sessionKey) },
+          onOpenBackgroundTasks = { showBackgroundTasks = true },
+          onOpenBranchSwitcher = {
+            showBranchSwitcher = true
+            scope.launch { viewModel.refreshChatSessionBranches() }
+          },
+        )
+
+        errorText?.takeIf { it.isNotBlank() }?.let { error ->
+          ChatNotice(
+            title = nativeString("Chat needs attention"),
+            body = userFacingChatError(error = error, gatewayConnected = gatewayConnectionDisplay.isConnected),
+          )
+        }
+      },
     )
 
     ChatSwarmProgress(groups = swarmGroups)
@@ -1100,6 +1094,7 @@ private fun ChatHeader(
   sessionColor: String?,
   showSidebarButton: Boolean,
   onOpenSidebar: () -> Unit,
+  onJumpToLatest: (() -> Unit)?,
   healthOk: Boolean,
   pendingRunCount: Int,
   sessionCreating: Boolean,
@@ -1148,7 +1143,7 @@ private fun ChatHeader(
         Modifier
           .align(Alignment.CenterStart)
           .fillMaxWidth()
-          .padding(start = 52.dp, end = 52.dp)
+          .padding(start = 52.dp, end = if (onJumpToLatest != null) 100.dp else 52.dp)
           .clearAndSetSemantics {
             contentDescription = listOfNotNull(projectLabel, sessionTitle, statusLabel).joinToString(", ")
           },
@@ -1222,57 +1217,66 @@ private fun ChatHeader(
         }
       }
     }
-    Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-      HeaderIcon(
-        icon = Icons.Default.MoreVert,
-        contentDescription = nativeString("Chat actions"),
-        onClick = { actionsMenuExpanded = true },
-      )
-      DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
-        DropdownMenuItem(
-          text = { Text(nativeString("Refresh chat")) },
-          leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
-          onClick = {
-            actionsMenuExpanded = false
-            onRefresh()
-          },
+    Row(modifier = Modifier.align(Alignment.CenterEnd)) {
+      if (onJumpToLatest != null) {
+        HeaderIcon(
+          icon = Icons.Default.ArrowDownward,
+          contentDescription = nativeString("Jump to latest"),
+          onClick = onJumpToLatest,
         )
-        if (branches.size > 1) {
+      }
+      Box {
+        HeaderIcon(
+          icon = Icons.Default.MoreVert,
+          contentDescription = nativeString("Chat actions"),
+          onClick = { actionsMenuExpanded = true },
+        )
+        DropdownMenu(expanded = actionsMenuExpanded, onDismissRequest = { actionsMenuExpanded = false }) {
           DropdownMenuItem(
-            text = { Text(nativeString("Switch branch")) },
-            leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
-            enabled = branchSwitchEnabled && !branchesLoading,
+            text = { Text(nativeString("Refresh chat")) },
+            leadingIcon = { Icon(Icons.Default.Refresh, contentDescription = null) },
             onClick = {
               actionsMenuExpanded = false
-              onOpenBranchSwitcher()
+              onRefresh()
             },
           )
-        }
-        DropdownMenuItem(
-          text = { Text(nativeString("Dashboard")) },
-          leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
-          onClick = {
-            actionsMenuExpanded = false
-            onOpenDashboard()
-          },
-        )
-        DropdownMenuItem(
-          text = { Text(nativeString("Background tasks")) },
-          leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
-          onClick = {
-            actionsMenuExpanded = false
-            onOpenBackgroundTasks()
-          },
-        )
-        if (workspaceGit) {
+          if (branches.size > 1) {
+            DropdownMenuItem(
+              text = { Text(nativeString("Switch branch")) },
+              leadingIcon = { Icon(Icons.Default.ArrowDropDown, contentDescription = null) },
+              enabled = branchSwitchEnabled && !branchesLoading,
+              onClick = {
+                actionsMenuExpanded = false
+                onOpenBranchSwitcher()
+              },
+            )
+          }
           DropdownMenuItem(
-            text = { Text(newChatInWorktreeLabel) },
-            enabled = newChatEnabled,
+            text = { Text(nativeString("Dashboard")) },
+            leadingIcon = { Icon(Icons.Default.Dashboard, contentDescription = null) },
             onClick = {
               actionsMenuExpanded = false
-              onNewChatInWorktree()
+              onOpenDashboard()
             },
           )
+          DropdownMenuItem(
+            text = { Text(nativeString("Background tasks")) },
+            leadingIcon = { Icon(Icons.Default.HourglassEmpty, contentDescription = null) },
+            onClick = {
+              actionsMenuExpanded = false
+              onOpenBackgroundTasks()
+            },
+          )
+          if (workspaceGit) {
+            DropdownMenuItem(
+              text = { Text(newChatInWorktreeLabel) },
+              enabled = newChatEnabled,
+              onClick = {
+                actionsMenuExpanded = false
+                onNewChatInWorktree()
+              },
+            )
+          }
         }
       }
     }
@@ -1341,6 +1345,7 @@ private fun ChatMessageList(
   loadImageArtifact: suspend (String) -> GatewayLoadedImage?,
   loadMediaArtifact: suspend (String, GatewayMediaKind, Boolean) -> GatewayLoadedMedia?,
   modifier: Modifier = Modifier,
+  header: @Composable ((() -> Unit)?) -> Unit,
 ) {
   val baseTimeline =
     remember(messages, activeRunCount, pendingToolCalls, subagentActivities, questions, streamingAssistantText, outboxItems, recoveryOutboxItems) {
@@ -1390,6 +1395,8 @@ private fun ChatMessageList(
     onDispose { turnRecapResolver.abandonActiveWatch(sessionKey) }
   }
 
+  // The header stays outside the weighted transcript so composer panels cannot collapse it.
+  header(readerScroll.jumpToLatest.takeIf { readerScroll.showJumpToLatest })
   CompositionLocalProvider(LocalChatReaderNavigation provides readerScroll.onManualNavigation) {
     ChatMessageDisclosure(
       messages = messages,
@@ -1398,13 +1405,9 @@ private fun ChatMessageList(
       catalogRevision = gatewayCatalogRevision,
       prepareRead = prepareFullMessageRead,
     ) { visibleContent, disclosure ->
-      Box(modifier = modifier.fillMaxWidth()) {
+      Box(modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         LazyColumn(
-          modifier =
-            Modifier
-              .fillMaxSize()
-              .nestedScroll(readerScroll.nestedScrollConnection)
-              .padding(bottom = chatReaderListBottomInset(readerScroll.showJumpToLatest)),
+          modifier = Modifier.fillMaxSize().nestedScroll(readerScroll.nestedScrollConnection),
           state = readerScroll.listState,
           reverseLayout = true,
           verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1537,37 +1540,6 @@ private fun ChatMessageList(
               onStarterPrompt = onStarterPrompt,
               modifier = Modifier.align(Alignment.Center),
             )
-          }
-        }
-
-        if (readerScroll.showJumpToLatest) {
-          // Compact icon-only affordance; parity with the iOS/macOS chat reader circle.
-          // The clickable outer surface stays unsized so Material's 48dp minimum
-          // interactive size applies; the 36dp inner circle is visual only.
-          Surface(
-            onClick = readerScroll.jumpToLatest,
-            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp),
-            shape = CircleShape,
-            color = Color.Transparent,
-          ) {
-            Box(contentAlignment = Alignment.Center) {
-              Surface(
-                modifier = Modifier.size(36.dp),
-                shape = CircleShape,
-                color = ClawTheme.colors.surfaceRaised,
-                contentColor = ClawTheme.colors.text,
-                shadowElevation = 6.dp,
-                border = BorderStroke(1.dp, ClawTheme.colors.border),
-              ) {
-                Box(contentAlignment = Alignment.Center) {
-                  Icon(
-                    imageVector = Icons.Default.ArrowDownward,
-                    contentDescription = nativeString("Jump to latest"),
-                    modifier = Modifier.size(18.dp),
-                  )
-                }
-              }
-            }
           }
         }
       }
@@ -2262,7 +2234,7 @@ private fun ProgressCardPill(
       nativeString("\$activityLabel \u00b7 \$currentPosition/\${steps.size}", activityLabel, currentPosition, steps.size)
     }
 
-  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp)) {
+  Column(modifier = modifier.fillMaxWidth().heightIn(max = 240.dp).testTag("chat-progress-card")) {
     Surface(
       onClick = { expanded = !expanded },
       modifier = Modifier.fillMaxWidth().heightIn(min = 42.dp),
@@ -2509,15 +2481,6 @@ private fun ChatComposer(
       AttachmentStrip(attachments = attachments, onRemoveAttachment = onRemoveAttachment)
     }
 
-    progressCard?.let { card ->
-      ProgressCardPill(
-        card = card,
-        hasActiveRun = pendingRunCount > 0,
-        // Keep the editor and run controls visible when progress expands above the keyboard.
-        modifier = Modifier.weight(1f, fill = false),
-      )
-    }
-
     if (shouldShowSlashCommandMenu(value)) {
       SlashCommandPanel(
         commands = slashCommands,
@@ -2525,6 +2488,12 @@ private fun ChatComposer(
         // Reserve the editor and run controls before measuring suggestions.
         modifier = Modifier.weight(1f, fill = false),
       )
+    }
+
+    if (voiceNoteState is VoiceNoteRecorderState.Recording || voiceNoteState is VoiceNoteRecorderState.Preparing) {
+      progressCard?.let { card ->
+        ProgressCardPill(card = card, hasActiveRun = pendingRunCount > 0, modifier = Modifier.weight(1f, fill = false))
+      }
     }
 
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -2540,6 +2509,8 @@ private fun ChatComposer(
         VoiceNotePreparing(modifier = Modifier.weight(1f))
       } else {
         ChatInputPill(
+          progressCard = progressCard,
+          progressCardHasActiveRun = pendingRunCount > 0,
           value = value,
           onValueChange = onValueChange,
           onPickImages = onPickImages,
@@ -3098,6 +3069,8 @@ internal fun canSelectChatPermissionMode(
 
 @Composable
 private fun ChatInputPill(
+  progressCard: ChatProgressCard?,
+  progressCardHasActiveRun: Boolean,
   value: String,
   onValueChange: (String) -> Unit,
   onPickImages: () -> Unit,
@@ -3134,7 +3107,7 @@ private fun ChatInputPill(
   val draftStyle = ClawTheme.type.body.copy(fontSize = 16.sp, lineHeight = 22.sp)
 
   Surface(
-    modifier = modifier,
+    modifier = modifier.testTag("chat-composer-surface"),
     shape = RoundedCornerShape(20.dp),
     color = ClawTheme.colors.surfaceRaised,
     contentColor = ClawTheme.colors.text,
@@ -3142,6 +3115,9 @@ private fun ChatInputPill(
     shadowElevation = 1.dp,
   ) {
     Column {
+      progressCard?.let { card ->
+        ProgressCardPill(card = card, hasActiveRun = progressCardHasActiveRun, modifier = Modifier.weight(1f, fill = false))
+      }
       ChatTextFieldValueAdapter(
         value = value,
         onValueChange = onValueChange,

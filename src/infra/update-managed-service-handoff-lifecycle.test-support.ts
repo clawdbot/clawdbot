@@ -28,6 +28,8 @@ export type ManagedServiceManagerBoundaryOptions = {
   systemdHandoffFailure?: boolean;
   systemdPostExitStates?: ManagedSystemdPostExitState[];
   systemdStopDelayMs?: number;
+  revokeOwner?: boolean;
+  requester?: { channel?: string; accountId?: string; senderId?: string };
   updaterExitCode?: number;
   recoveryExitCode?: number;
   recoveryHang?: boolean;
@@ -213,6 +215,7 @@ if (${JSON.stringify(kind)} === "systemd") {
       try { process.kill(${parentPid}, 0); sleep(10); } catch { break; }
     }
     sleep(${options?.systemdStopDelayMs ?? 0});
+    ${options?.revokeOwner ? `fs.writeFileSync(process.env.OPENCLAW_CONFIG_PATH, JSON.stringify({ commands: { ownerAllowFrom: [] } })); state.ownerRevokedAfterExit = true;` : ""}
     state.stopCompleted = true;
   }
   if (action === "reset-failed") state.reset = true;
@@ -427,4 +430,59 @@ export function createManagedServiceLaunchdClockPreload(params: {
     "  return child;",
     "};",
   ].join("\n");
+}
+
+export function registerManagedHandoffOwnerTests(
+  runManagedServiceManagerBoundary: (
+    kind: "systemd",
+    options?: ManagedServiceManagerBoundaryOptions,
+  ) => Promise<ManagedServiceManagerBoundaryResult>,
+  itUnix: ReturnType<typeof import("vitest").it.runIf>,
+  expect: typeof import("vitest").expect,
+): void {
+  itUnix.each(["revoked", "unchanged", "internal", "channel-less"] as const)(
+    "rechecks the %s requester after helper readiness and parent exit",
+    async (owner) => {
+      const { state, sentinel, log, sensitiveFilesRemoved } =
+        await runManagedServiceManagerBoundary("systemd", {
+          requester: {
+            channel:
+              owner === "internal" ? "webchat" : owner === "channel-less" ? undefined : "slack",
+            accountId: "primary",
+            senderId: "owner",
+          },
+          revokeOwner: owner === "revoked",
+          helperExitCode: owner === "revoked" ? 1 : 0,
+          updaterExitCode: 0,
+          updaterResult: { status: "ok", mode: "npm" },
+        });
+      expect(state).toMatchObject({ parked: true, stopCompleted: true });
+      expect(state.ownerChecked).toBe(
+        owner === "revoked" || owner === "unchanged" ? true : undefined,
+      );
+      if (owner === "revoked") {
+        expect(state).toMatchObject({
+          ownerRevokedAfterExit: true,
+          restored: true,
+          healthProbed: true,
+        });
+        expect(sentinel).toMatchObject({
+          payload: {
+            status: "error",
+            stats: {
+              reason: "owner_required",
+              steps: expect.arrayContaining([
+                expect.objectContaining({ name: "service-restore", log: { exitCode: 0 } }),
+              ]),
+            },
+          },
+        });
+        expect(log).toContain("owner_required");
+        expect(log).not.toContain("starting managed update command");
+      } else {
+        expect(log).toContain("starting managed update command");
+      }
+      expect(sensitiveFilesRemoved).toBe(true);
+    },
+  );
 }

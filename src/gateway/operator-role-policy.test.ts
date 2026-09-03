@@ -1,11 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import {
-  GATEWAY_OWNER_PROFILE_ID,
-  ensureProfileForEmail,
-  setUserProfileRole,
-} from "../state/user-profiles.js";
+import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   authorizeGatewaySessionCreation,

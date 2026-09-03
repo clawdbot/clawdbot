@@ -3,6 +3,7 @@
  */
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
+import { isCliTerminalStopCode } from "../../failover-error.js";
 
 /** Failover action selected for one embedded run failure decision point. */
 type ContinueNormalDecision = { action: "continue_normal" };
@@ -178,7 +179,7 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   }
 
   if (params.stage === "prompt") {
-    if (params.failoverCode === "cli_max_turns") {
+    if (isCliTerminalStopCode(params.failoverCode)) {
       // Plugin-harness errors can propagate arbitrary string codes through failover-error normalization;
       // normal CLI paths are protected in model-fallback-runner instead.
       return {

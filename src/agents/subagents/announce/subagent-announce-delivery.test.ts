@@ -216,8 +216,9 @@ const slackThreadOrigin = {
 
 const sentDeliveryStatus = { status: "sent", resultCount: 1 } as const;
 
-function createGatewayMock(response: Record<string, unknown> = {}) {
+function createGatewayMock(response: Record<string, unknown> = {}, onCall?: () => void) {
   return vi.fn(async (opts: Parameters<typeof runtimeCallGateway>[0]) => {
+    onCall?.();
     opts.onAccepted?.({ status: "accepted" });
     return response;
   }) as unknown as typeof runtimeCallGateway;
@@ -319,11 +320,13 @@ function createQueueOutcomeMock(
 
 function createQueueOutcomeSequenceMock(
   queuedOutcomes: (boolean | EmbeddedAgentQueueFailureReason)[],
+  onCall?: () => void,
 ): ReturnType<typeof vi.fn<QueueEmbeddedAgentMessageWithOutcome>> {
   // Sequence mocks model retry paths where the embedded run can become
   // unavailable between announce attempts.
   let index = 0;
   return vi.fn((sessionId: string) => {
+    onCall?.();
     const outcome = queuedOutcomes[Math.min(index, queuedOutcomes.length - 1)] ?? false;
     index += 1;
     return outcome === true
@@ -466,6 +469,7 @@ async function deliverSlackThreadAnnouncement(params: {
   sourceSessionKey?: string;
   sourceTool?: string;
   requesterAbandoned?: boolean;
+  requesterAbandonment?: "timeout" | "recovering_timeout";
   isSourceSessionEffectsAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   requesterSessionActivity?: () => { sessionId: string; isActive: boolean };
@@ -488,7 +492,8 @@ async function deliverSlackThreadAnnouncement(params: {
         sessionId: params.sessionId ?? "requester-session-4",
         isActive: params.isActive === true,
       })),
-    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
+    resolveRequesterSessionAbandonment: () =>
+      params.requesterAbandonment ?? (params.requesterAbandoned === true ? "timeout" : undefined),
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.requesterTranscriptFixture
@@ -601,6 +606,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterAbandoned?: boolean;
+  requesterAbandonment?: "timeout" | "recovering_timeout";
   origin?: {
     channel: "telegram";
     to: string;
@@ -623,7 +629,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
           : (params.requesterSessionId ?? "requester-session-telegram"),
       isActive: params.isActive === true,
     }),
-    isRequesterSessionAbandoned: () => params.requesterAbandoned === true,
+    resolveRequesterSessionAbandonment: () =>
+      params.requesterAbandonment ?? (params.requesterAbandoned === true ? "timeout" : undefined),
     getRuntimeConfig: () => (params.runtimeConfig ?? {}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
     ...(params.queueEmbeddedAgentMessageWithOutcome
@@ -673,7 +680,6 @@ async function deliverSlackChannelAnnouncement(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceSessionKey?: string;
-  sourceChannel?: string;
   sourceTool?: string;
   runtimeConfig?: Record<string, unknown>;
   requesterSessionEntry?: SessionEntry;
@@ -722,7 +728,6 @@ async function deliverSlackChannelAnnouncement(params: {
     internalEvents: params.internalEvents,
     sourceRunId: "run-generated-media",
     sourceSessionKey: params.sourceSessionKey,
-    sourceChannel: params.sourceChannel,
     sourceTool: params.sourceTool,
     isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
   });
@@ -1275,53 +1280,58 @@ describe("deliverSubagentAnnouncement active requester steering", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
   });
 
-  it("preserves best-effort steering for active runtimes without transcript wait support", async () => {
+  it("does not drop the transcript-commit gate for active runtimes without support", async () => {
     const queueEmbeddedAgentMessageWithOutcome = vi
       .fn<QueueEmbeddedAgentMessageWithOutcome>()
-      .mockImplementationOnce((sessionId: string) => ({
+      .mockImplementation((sessionId: string) => ({
         queued: false,
         sessionId,
         reason: "transcript_commit_wait_unsupported",
         gatewayHealth: "live",
-      }))
-      .mockImplementationOnce((sessionId: string) => ({
-        queued: true,
-        sessionId,
-        target: "embedded_run",
-        gatewayHealth: "live",
-        enqueuedAtMs: 4_100,
       }));
-    const callGateway = await deliverSteeredAnnouncement({
+    const callGateway = createGatewayMock();
+    testing.setDepsForTest({
+      callGateway,
+      getRequesterSessionActivity: () => ({
+        sessionId: "paperclip-session",
+        isActive: true,
+      }),
       queueEmbeddedAgentMessageWithOutcome,
+      getRuntimeConfig: () =>
+        ({
+          messages: { queue: { mode: "followup" } },
+        }) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:eng:paperclip:issue:123",
+      targetRequesterSessionKey: "agent:eng:paperclip:issue:123",
+      triggerMessage: "child done",
+      steerMessage: "child done",
       requesterOrigin: {
         channel: "slack",
         to: "channel:C123",
         accountId: "acct-1",
       },
+      requesterIsSubagent: false,
+      expectsCompletionMessage: false,
+      directIdempotencyKey: "announce-no-external-route",
     });
 
-    expect(callGateway).not.toHaveBeenCalled();
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    // The unsupported backend must fall through to the requester-agent handoff
+    // instead of silently removing the requested transcript-commit wait.
+    expectDeliveryPath(result, "direct");
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "paperclip-session",
       "child done",
-      {
+      expect.objectContaining({
         steeringMode: "all",
         debounceMs: 500,
         waitForTranscriptCommit: true,
         deliveryTimeoutMs: 120_000,
-      },
-    );
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
-      2,
-      "paperclip-session",
-      "child done",
-      {
-        steeringMode: "all",
-        debounceMs: 500,
-        deliveryTimeoutMs: 120_000,
-      },
+      }),
     );
   });
 
@@ -2878,12 +2888,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       },
     },
   ])("does not credit stale thread completions after $name", async ({ deliveryStatus }) => {
-    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } });
+    const callOrder: string[] = [];
+    const callGateway = createGatewayMock({ result: { payloads: [], deliveryStatus } }, () => {
+      callOrder.push("gateway");
+    });
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
-      "transcript_commit_wait_unsupported",
-      "no_active_run",
-    ]);
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(
+      ["transcript_commit_wait_unsupported", "no_active_run"],
+      () => {
+        callOrder.push("queue");
+      },
+    );
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sendMessage,
@@ -2909,7 +2924,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: "171.222",
     });
-    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(3);
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenNthCalledWith(
       1,
       "requester-session-4",
@@ -2930,9 +2945,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         debounceMs: 500,
         deliveryTimeoutMs: 120_000,
         steeringMode: "all",
+        waitForTranscriptCommit: true,
         userTurnTranscriptRecorder: expect.any(Object),
       }),
     );
+    expect(callOrder).toEqual(["queue", "gateway", "queue"]);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -3275,6 +3292,34 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         path: "none",
       }),
     ]);
+    expect(callGateway).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
+  });
+
+  it("defers completion dispatch while requester timeout recovery is unsettled", async () => {
+    const callGateway = createPayloadGatewayMock({ text: "child completion output" });
+    const sendMessage = createSendMessageMock();
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeMock(true);
+    const result = await deliverTelegramDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      requesterAbandonment: "recovering_timeout",
+      isActive: false,
+      queueEmbeddedAgentMessageWithOutcome,
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        taskLabel: "telegram recovering completion",
+      }),
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "none",
+      reason: "completion_handoff_pending",
+      error: "requester timeout recovery is still settling",
+      disposition: "retryable",
+    });
     expect(callGateway).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
     expect(queueEmbeddedAgentMessageWithOutcome).not.toHaveBeenCalled();
@@ -3830,7 +3875,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
         },
         inputProvenance: {
           kind: "inter_session",
-          sourceChannel: "webchat",
+          sourceChannel: "internal",
           sourceTool: "image_generate",
         },
         sourceReplyDeliveryMode: "message_tool_only",
@@ -3859,7 +3904,6 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceTool: "image_generate",
       internalEvents: imageCompletionEvents(),
       sourceSessionKey: "image_generate:task-123",
-      sourceChannel: "internal",
     });
 
     expectDeliveryPath(result, "queued");

@@ -173,7 +173,6 @@
     "native.android.1b95ee4b75f6033b": "保存的身份验证无效",
     "native.android.1bbbdb0fb0e3a5a3": "禁用",
     "native.android.1c35de4d06275916": "欢迎使用 OpenClaw",
-    "native.android.1c3686e1c087e2c8": "无法加载提供商目录。",
     "native.android.1c4acd27277544e0": "只读访问；仍适用原生工具审批规则。",
     "native.android.1c4be71b5c3aa079": "需要连接",
     "native.android.1c62b20321fbbd26": "忘记",
@@ -1455,7 +1454,6 @@
     "native.android.e5021b83ff593f1e": "当前",
     "native.android.e502c87002ff73f0": "${seconds}秒",
     "native.android.e50e16c71fc204f1": "部分渠道状态检查未完成。",
-    "native.android.e5387d6aaf34ede8": "正在搜索…",
     "native.android.e53f4d638a7fa07e": "连接 Gateway 以在应用中加载审批请求。",
     "native.android.e541942ff77b53eb": "正在聆听（按住说话）",
     "native.android.e54941cceace936d": "回退到此处",
@@ -2243,6 +2241,7 @@
     "native.apple.36797a0a0d370b1c": "立即运行健康检查",
     "native.apple.367d222547a7dfa4": "上下文",
     "native.apple.3704f5846ba19f61": "正在测试…",
+    "native.apple.3707ddd116730423": "\\(minimum)–\\(maximum)",
     "native.apple.3763e29c884dd87a": "更新 Gateway 令牌",
     "native.apple.37715ac8050292a6": "由 %@ 更新",
     "native.apple.377a95b3a57b9e32": "凭据将随此配置文件存储在你的 Mac 钥匙串中。",
@@ -2450,6 +2449,7 @@
     "native.apple.4a85eb1605f1ba49": "+%1$lld 个进行中",
     "native.apple.4a999d79dfd4a4e2": "Gateway 返回了意外的渠道状态响应。",
     "native.apple.4aa0a356f580cb09": "unknown gateway error",
+    "native.apple.4adc28ed0e25f735": "无法打开后台会话",
     "native.apple.4b1707775e3d4ded": "Watch 节点在线",
     "native.apple.4b1c264d08779b81": "已降级",
     "native.apple.4b34153a64ea0fbe": "%@，健康",
@@ -3657,6 +3657,7 @@
     "native.apple.bb24048d5940285c": "在此 Gateway 上启用或安装文本推理提供商插件，然后再次检查。",
     "native.apple.bb25a6eb7fab6d0e": "浮出水面中",
     "native.apple.bb3054116d83e716": "重新打开 OpenClaw 以重试内嵌 CUA 守护进程。",
+    "native.apple.bb3b23bb105850ba": "\\(maximum)",
     "native.apple.bb5f5e891aeadb25": "此已配对的 gateway 不再可用。",
     "native.apple.bb69920e6930860f": "自动化问题",
     "native.apple.bb7347e3399c42ee": "来自 %@ 的上下文 — %@",
@@ -4298,6 +4299,7 @@
     "native.apple.f4155b853aa86198": "Skills 部分",
     "native.apple.f420de18a586c900": "使用你的浏览器登录信息",
     "native.apple.f43c1f8049a80f31": "删除对话",
+    "native.apple.f4483cba92be9484": "选择文本",
     "native.apple.f454890b0dc22cfd": "本地（此 Mac）",
     "native.apple.f47dbe72f59ee9cb": "需要麦克风和语音识别权限。",
     "native.apple.f496b5c54219ca5f": "可进行快捷操作",
@@ -4428,6 +4430,7 @@
     "native.apple.ff9163dd493d583b": "唤醒",
     "native.apple.ffba42bcdc2cc866": "1 个 token",
     "native.apple.ffcccb2c944378ff": "扬声器",
-    "native.apple.ffd5f2e059651aa1": "打开 Gateway 设置"
+    "native.apple.ffd5f2e059651aa1": "打开 Gateway 设置",
+    "native.apple.ffefad3c8b30c36d": "复制代码"
   }
 }

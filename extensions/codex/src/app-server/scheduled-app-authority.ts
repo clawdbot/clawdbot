@@ -13,6 +13,7 @@ import { readCodexMcpToolConnectorId } from "./mcp-tool-metadata.js";
 import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   buildPluginAppPolicyContext,
+  disableUnlistedCodexApps,
   type CodexAppPolicyContextEntry,
   type CodexPluginThreadConfig,
   type PluginAppPolicyContext,
@@ -581,7 +582,10 @@ export function intersectCodexPluginThreadConfigWithScheduledAuthority(
       .filter(([, ids]) => ids.length > 0),
   );
   const policyContext = buildPluginAppPolicyContext(apps, pluginAppIds);
-  const configPatch = buildCodexPluginAppsConfigPatchFromPolicyContext(policyContext);
+  const configPatch = disableUnlistedCodexApps(
+    buildCodexPluginAppsConfigPatchFromPolicyContext(policyContext),
+    currentPolicy.config,
+  );
   const appsPatch = asOptionalRecord(configPatch.apps);
   for (const [appId, captured] of capturedById) {
     const appPatch = asOptionalRecord(appsPatch?.[appId]);

@@ -4,6 +4,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
+import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   isIncognitoOpenClawAgentDatabase,
@@ -37,7 +38,6 @@ import type {
   ProjectedLifecycleMutation,
   SessionEntryRemovalPlan,
 } from "./session-accessor.sqlite-lifecycle-types.js";
-import { coerceSqliteNumber } from "./session-accessor.sqlite-normalize.js";
 import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import { cloneSessionEntry, getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
@@ -123,7 +123,7 @@ function readSessionTranscriptUpdatedAt(
   if (row?.updated_at === null || row?.updated_at === undefined) {
     return undefined;
   }
-  return coerceSqliteNumber(row.updated_at);
+  return sqliteNumber(row.updated_at);
 }
 
 function sqliteTranscriptStateIsReclaimable(params: {
@@ -637,7 +637,7 @@ export function planSessionLifecycleArtifactCleanup(
       !sqliteTranscriptStateIsReclaimable({
         database,
         // Admission updates the node even when a run has no event yet or reuses old events.
-        sessionUpdatedAt: coerceSqliteNumber(row.updated_at),
+        sessionUpdatedAt: sqliteNumber(row.updated_at),
         sessionId: row.current_session_id,
         nowMs: params.nowMs,
         orphanTranscriptMinAgeMs: params.orphanTranscriptMinAgeMs,

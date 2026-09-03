@@ -310,8 +310,9 @@ route and scoped profiles, or the harness's native account when the plan leaves
 auth to the harness. The harness must not switch routes, reuse a native thread,
 attach tools, invoke agent lifecycle hooks, or deliver output.
 
-When supplied, call `params.assertCurrent()` immediately before each inference
-request or process start, including after preparation awaits and on retries.
+When supplied, call `params.assertCurrent()` after preparation awaits and
+immediately before each credential handoff, inference request, or process start,
+including retries.
 It revalidates the caller's live authority and expires when the completion ends.
 A thrown assertion ends execution; do not treat it as a credential failure or
 retry with another profile. Continue to honor `abortSignal`; cleanup must remain
@@ -532,6 +533,17 @@ the prompt, deliver it through OpenClaw's blocking reply path, and normalize
 choice/free-form answers back into the runtime's native response shape. The
 helper keeps channel/TUI presentation consistent while each harness keeps its
 own protocol parsing and pending-request lifecycle.
+
+OpenClaw's own blocking question tools — `ask_user`, and a `secrets` request —
+are a separate case. They register a Gateway question and then wait, and the
+prompt that lets a person answer it is published by whatever runs the tool. A
+harness whose tools go through the embedded tool lifecycle gets that publication
+from its tool-start handler. A harness that dispatches tools itself passes
+`questionPrompt` to `createOpenClawCodingTools` instead, on every path where it
+builds a tool surface — a side thread is its own such path: `send` is the run's
+`onToolResult`, and `messageChannel` is the conversation the prompt would appear
+in. Leave it out and the question is registered but never shown, so the turn
+waits out its whole timeout and then reports that nobody answered.
 
 For schema-backed forms and literal URL confirmation, use the
 `agentHarnessStructuredInput` runtime surface from the same subpath. It

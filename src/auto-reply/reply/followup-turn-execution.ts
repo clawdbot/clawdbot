@@ -1,5 +1,6 @@
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
+import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
@@ -12,6 +13,7 @@ import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./followup-turn-admission.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { hasReplyOperationExecutionStarted } from "./reply-run-registry.js";
 import { createTypingSignaler, type TypingSignaler } from "./typing-mode.js";
 
@@ -123,7 +125,7 @@ export async function executeFollowupTurn(params: {
     });
   let progressChain: Promise<void> = Promise.resolve();
   let pendingProgressTaskFailure: unknown;
-  const pendingProgressTasks = new Set<Promise<void>>();
+  const pendingWorkTasks = new Set<Promise<void>>();
   const enqueueProgress = (deliver: () => Promise<void> | void): Promise<void> => {
     const deliveryTask = progressChain.then(deliver);
     progressChain = deliveryTask.catch(() => undefined);
@@ -131,9 +133,9 @@ export async function executeFollowupTurn(params: {
       pendingProgressTaskFailure ??= error;
       throw error;
     });
-    const trackedTask = observedTask.finally(() => pendingProgressTasks.delete(trackedTask));
+    const trackedTask = observedTask.finally(() => pendingWorkTasks.delete(trackedTask));
     void trackedTask.catch(() => undefined);
-    pendingProgressTasks.add(trackedTask);
+    pendingWorkTasks.add(trackedTask);
     return progressChain;
   };
   const enqueueProgressResult = async (
@@ -287,19 +289,28 @@ export async function executeFollowupTurn(params: {
     },
   };
   let pendingToolTaskFailure: unknown;
-  const pendingToolTaskWatchers = new Set<Promise<void>>();
   const pendingToolTasks = new (class extends Set<Promise<void>> {
     override add(task: Promise<void>): this {
       const observedTask = task.catch((error: unknown) => {
         pendingToolTaskFailure ??= error;
         throw error;
       });
-      const watcher = observedTask.finally(() => pendingToolTaskWatchers.delete(watcher));
+      const watcher = observedTask.finally(() => pendingWorkTasks.delete(watcher));
       void watcher.catch(() => undefined);
-      pendingToolTaskWatchers.add(watcher);
+      pendingWorkTasks.add(watcher);
       return super.add(task);
     }
   })();
+  let pendingWorkDrain: Promise<void> | undefined;
+  const drainPendingWork = () => {
+    pendingWorkDrain ??= (async () => {
+      await drainPendingToolTasks({ tasks: pendingWorkTasks, onTimeout: logVerbose });
+      // This terminal owner gets one bounded wait. Retire the accounting handoff
+      // so timed-out tool delivery cannot start a second idle window.
+      pendingToolTasks.clear();
+    })();
+    return pendingWorkDrain;
+  };
   const sessionCtx = buildFollowupTemplateContext(turn);
   if (turn.preflightError) {
     throw turn.preflightError instanceof Error
@@ -380,17 +391,7 @@ export async function executeFollowupTurn(params: {
         ? recorder.withPendingInput(execute)
         : execute());
     } catch (error) {
-      while (
-        pendingProgressTasks.size > 0 ||
-        pendingToolTasks.size > 0 ||
-        pendingToolTaskWatchers.size > 0
-      ) {
-        await Promise.allSettled([
-          ...pendingProgressTasks,
-          ...pendingToolTasks,
-          ...pendingToolTaskWatchers,
-        ]);
-      }
+      await drainPendingWork();
       if (!hasReplyOperationExecutionStarted(turn.operation)) {
         throw error;
       }
@@ -417,20 +418,8 @@ export async function executeFollowupTurn(params: {
     pendingToolTasks,
     progress: {
       drain: async () => {
-        let firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
-        while (
-          pendingProgressTasks.size > 0 ||
-          pendingToolTasks.size > 0 ||
-          pendingToolTaskWatchers.size > 0
-        ) {
-          const results = await Promise.allSettled([
-            ...pendingProgressTasks,
-            ...pendingToolTasks,
-            ...pendingToolTaskWatchers,
-          ]);
-          firstFailure ??= results.find((result) => result.status === "rejected")?.reason;
-        }
-        firstFailure ??= pendingProgressTaskFailure ?? pendingToolTaskFailure;
+        await drainPendingWork();
+        const firstFailure: unknown = pendingProgressTaskFailure ?? pendingToolTaskFailure;
         if (firstFailure !== undefined) {
           throw firstFailure instanceof Error
             ? firstFailure

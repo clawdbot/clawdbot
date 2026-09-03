@@ -141,7 +141,6 @@ export async function startGatewayCoreRuntime(input: {
     workerPlacementDispatchAvailable,
     workerPlacementControlAvailable,
     workerDesktopObserveAvailable,
-    desktopObserveAvailable,
     desktopSessionRegistry,
     listStartupChannelGatewayMethods,
     coreGatewayMethodNames,
@@ -155,9 +154,7 @@ export async function startGatewayCoreRuntime(input: {
     activateRuntimeSecrets,
   } = runtime;
   const pluginMetadataSnapshot = runtime.pluginMetadataSnapshot;
-  if (desktopSessionRegistry) {
-    kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
-  }
+  kernel.addGatewayLifetimeSidecar({ stop: () => desktopSessionRegistry.stopAll() });
   const secretEgressProxy =
     cfgAtStart.secrets?.egressProxy?.enabled === true
       ? await import("../secrets/egress-proxy/runtime.js").then((egressRuntime) =>
@@ -411,7 +408,6 @@ export async function startGatewayCoreRuntime(input: {
         (workerPlacementDispatchAvailable || descriptor.name !== "sessions.dispatch") &&
         (workerPlacementControlAvailable ||
           (descriptor.name !== "sessions.reclaim" && descriptor.name !== "sessions.move")) &&
-        (desktopObserveAvailable || descriptor.name !== "desktop.observe") &&
         (workerDesktopObserveAvailable ||
           (descriptor.name !== "desktop.launch" &&
             descriptor.name !== "worker.desktop.observe" &&
@@ -458,7 +454,7 @@ export async function startGatewayCoreRuntime(input: {
     attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRuntime.registry.gatewayHandlers));
     attachedGatewayMethodRegistry = buildAttachedGatewayMethodRegistry(pluginRuntime.registry);
     kernel.publishMethodSurface(listAttachedGatewayMethods());
-    nodeRegistry.refreshNodePluginTools();
+    nodeRegistry.refreshRuntimePolicy();
   };
   const refreshAttachedGatewayDiscovery = async (
     nextPluginRegistry: typeof pluginRuntime.registry,

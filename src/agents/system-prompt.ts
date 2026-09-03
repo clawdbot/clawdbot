@@ -882,7 +882,8 @@ export function buildAgentSystemPrompt(params: {
     conversations_send: "Send directly to an external conversation",
     conversations_turn: "Send and wait for one correlated external reply",
     openclaw: "Gateway restart/system setup/config",
-    gateway: "Read gateway config/schema",
+    gateway:
+      "Read gateway config/schema; owner-only update on explicit request; automatic restart and completion notice; never via shell",
     agents_list: acpSpawnRuntimeEnabled
       ? "List allowed OpenClaw subagent ids; not ACP ids"
       : "List allowed subagent ids",
@@ -1321,15 +1322,17 @@ export function buildAgentSystemPrompt(params: {
       "",
       "## OpenClaw Control",
       "Do not invent commands.",
-      ...(hasOpenClaw
-        ? [
-            "Gateway restart, config, channels, plugins, agents, models/providers, updates: ask `openclaw`. Never restart the Gateway through shell commands or write your own config.",
-          ]
+      hasOpenClaw
+        ? "Gateway restart, config, channels, plugins, agents, models/providers: ask `openclaw`."
         : hasGateway
-          ? [
-              "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human.",
-            ]
-          : ["System controls unavailable; ask human."]),
+          ? "Config read: `gateway` (`config.get|config.schema.lookup`). Write/restart unavailable; ask human."
+          : "",
+      [
+        hasGateway
+          ? "Update OpenClaw: `gateway` action update.run, only on explicit user request; restart and completion notice are automatic."
+          : `${hasOpenClaw ? "Updates" : "System controls unavailable. Updates and restarts"} need the OpenClaw owner: tell the user to run \`openclaw update\` in a terminal or use the Control UI.`,
+        `Never run ${hasGateway ? "openclaw update, npm install -g openclaw, or stop/restart" : "npm install -g openclaw or stop"} the gateway service via exec.`,
+      ].join(" "),
       "",
       ...skillsSection,
       ...skillWorkshopSection,

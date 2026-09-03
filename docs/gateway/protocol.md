@@ -513,8 +513,13 @@ The Gateway accepts updates only from the current node connection and stamps
 `updatedAtMs` with its own receipt time; nodes never send a timestamp. Successful
 updates appear as `hostStats` in `node.list` and `node.describe` and broadcast
 `node.hostStats` with `{ nodeId, hostStats }` to read-scoped operators, using
-`dropIfSlow: true`. Stats are operator-facing, do not update model-visible node
-context, and disappear when the live session ends. They are never persisted.
+`dropIfSlow: true`. Stats are operator-facing and do not update model-visible
+node context. When received, the Gateway persists the snapshot as `lastHostStats`
+on the paired node record. Disconnecting or reconnecting without a new snapshot
+leaves the previous value intact.
+`node.list` and `node.describe` use live session stats while connected and
+project the saved snapshot as `hostStats` while offline, keeping its original
+`updatedAtMs` so clients can show the last-known age.
 
 The structured `node.event` result uses `reason: "updated"`, `"stale_connection"`,
 or `"invalid_payload"`. An older Gateway may return `handled: false`; the node
@@ -625,8 +630,8 @@ methods. Treat this as feature discovery, not a full enumeration of
     - `channels.start` (`operator.admin`) starts one channel account runtime without re-authenticating. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, started, outcome }`, with `started` true only when the resulting runtime snapshot reports `running: true`. `outcome` carries the account lifecycle decision: `{ status: "handed-off" }`, `{ status: "retry", reason }`, or `{ status: "skipped", reason }`. The RPC is a manual override of automatic-start suppression; no `manual` parameter is accepted. This is not a provider-connectivity check; see [Per-account recovery](/cli/channels#per-account-recovery-non-destructive) for reasons and recovery guidance.
     - `channels.stop` (`operator.admin`) stops one channel account runtime without clearing auth state. Params `{ channel, accountId? }`; omitted `accountId` selects the default account. Responds `{ channel, accountId, stopped }`, with `stopped` true when the resulting runtime snapshot does not report `running: true`. Unlike `channels.logout`, it retains the account's credentials.
     - `channels.logout` logs out a specific channel/account where the channel supports it.
-    - `web.login.start` starts a QR/web login flow for the current QR-capable web channel provider.
-    - `web.login.wait` waits for that flow to complete and starts the channel on success.
+    - `web.login.start` starts a QR/web login flow. Params include optional `{ channel, accountId, force, timeoutMs, verbose }`. When `channel` is present, the Gateway normalizes its canonical id or alias and dispatches only to that installed channel plugin. Omitting `channel` preserves the legacy behavior of selecting the first loaded QR-capable provider. A provider may return an opaque `sessionKey` with its QR response.
+    - `web.login.wait` waits for that flow to complete and starts the channel on success. Params include optional `{ channel, accountId, sessionKey, timeoutMs, currentQrDataUrl }`. Use the same `channel` as `web.login.start` and pass its returned `sessionKey` through unchanged so the provider can correlate the wait request with the QR session. Omitting `channel` retains the same legacy provider fallback as `web.login.start`.
     - `push.test` sends a test APNs push to a registered iOS node.
     - `voicewake.get` returns the stored wake-word triggers.
     - `voicewake.set` updates wake-word triggers and broadcasts the change.

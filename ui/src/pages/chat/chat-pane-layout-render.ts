@@ -126,14 +126,9 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       ...chatProps,
       browserTabPreviewsActive: this.active && this.presented,
       historyState: catalog ? undefined : state,
-      header: !this.compact && board.face === "dashboard" ? nothing : html`${header}${recovery}`,
+      header: this.compact ? nothing : html`${header}${recovery}`,
     });
-    // Keep this root stable across board face changes so the guarded board runtime
-    // remains connected while Chat is active.
-    const primary = html`<div class="chat-pane-primary-column">
-      ${!this.compact && board.face === "dashboard" ? html`${header}${recovery}` : nothing}
-      ${this.compact ? chat : this.renderBoardPrimary(board, chat)}
-    </div>`;
+    const primary = html`<div class="chat-pane-primary-column">${chat}</div>`;
     const discussion = this.buildSessionDiscussionPanel(state, state.sessionKey.trim());
     const discussionState = this.sessionDiscussionStates.get(state.sessionKey.trim());
     const discussionAvailable = discussionState === "available" || discussionState === "open";
@@ -157,8 +152,8 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
       desktopRefreshOnPresentation,
       desktopAvailable,
       desktopSource: resolveChatPaneDesktopTarget(selectedSession),
-      hasBoard: !this.compact && board.hasBoard,
-      chat,
+      dashboard:
+        !this.compact && board.hasBoard ? this.renderBoardPanel(board, sidebarLayout) : nothing,
       workspace: renderSessionWorkspaceRail(sessionWorkspace, { embedded: true }),
       tasks: renderBackgroundTasksRail(backgroundTasks, { embedded: true }),
       detailOpen: this.presented && sidebarLayout.open === true && detailSlotOpen(sidebarLayout),
@@ -202,7 +197,6 @@ export abstract class ChatPaneLayoutRender extends ChatPaneBrowserAnnotationRend
         layout: sidebarLayout,
         closePanelSlot,
         openPanelSlot,
-        hideBoard: () => this.handleBoardDockChange("hidden"),
         forgetDiscussionUrl: () => this.sessionDiscussionOpenUrls.delete(state.sessionKey.trim()),
         resizePanel: (columnId, size) =>
           this.commitSidebarPanelResize(sidebarLayout, columnId, size),
