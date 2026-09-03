@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { Page } from "playwright";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatSessionListResponse,
@@ -28,6 +28,17 @@ async function captureRunnerOffline(page: Page): Promise<void> {
       path: path.join(suite.artifactDir, "runner-offline", runnerOfflineProofName),
     });
   }
+}
+
+async function assertPromptBeforeReply(transcript: Locator, prompt: string, reply: string) {
+  expect(await transcript.getByText(prompt, { exact: true }).count()).toBe(1);
+  expect(await transcript.getByText(reply, { exact: true }).count()).toBe(1);
+  const promptBounds = await transcript.getByText(prompt, { exact: true }).boundingBox();
+  const replyBounds = await transcript.getByText(reply, { exact: true }).boundingBox();
+  if (!promptBounds || !replyBounds) {
+    throw new Error("The placement prompt and reply must both be visible");
+  }
+  expect(promptBounds.y).toBeLessThan(replyBounds.y);
 }
 
 function contextOptions() {
@@ -194,7 +205,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "available" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Runs on device" }).waitFor();
       expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
@@ -203,7 +214,7 @@ suite.define(() => {
         ...session.placement,
         runner: { kind: "device", status: "offline" },
       } as typeof session.placement;
-      await gateway.setMethodResponse("sessions.list", chatSessionListResponse([session]));
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
       await page.getByRole("button", { name: "Device offline" }).waitFor();
       const continueAction = page.getByText("Continue on Gateway…", { exact: true });
@@ -456,16 +467,23 @@ suite.define(() => {
             .poll(() => pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count())
             .toBe(1);
         }
+        await capture(page, `07-split-early-durable-reply-${attempt}.png`);
+        const sendingTranscript = panes.last().locator(".chat-thread-inner");
+        await assertPromptBeforeReply(sendingTranscript, `Resume locally ${attempt}.`, finalText);
 
-        await gateway.emitChatFinal({ runId: localRunId, sessionKey, text: finalText });
-        for (const pane of await panes.all()) {
+        const assertSettledPane = async (pane: Locator) => {
           const transcript = pane.locator(".chat-thread-inner");
           await expect
             .poll(() => transcript.getByText(partialText, { exact: true }).count())
             .toBe(1);
           await expect.poll(() => transcript.getByText(finalText, { exact: true }).count()).toBe(1);
+          await assertPromptBeforeReply(transcript, `Resume locally ${attempt}.`, finalText);
           expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
           expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
+        };
+        await gateway.emitChatFinal({ runId: localRunId, sessionKey, text: finalText });
+        for (const pane of await panes.all()) {
+          await assertSettledPane(pane);
         }
         await capture(page, `08-split-abandoned-partial-local-final-${attempt}.png`);
 
@@ -480,13 +498,7 @@ suite.define(() => {
         const reloadedPanes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => reloadedPanes.count()).toBe(2);
         for (const pane of await reloadedPanes.all()) {
-          const transcript = pane.locator(".chat-thread-inner");
-          await expect
-            .poll(() => transcript.getByText(partialText, { exact: true }).count())
-            .toBe(1);
-          await expect.poll(() => transcript.getByText(finalText, { exact: true }).count()).toBe(1);
-          expect(await pane.locator(".chat-duplicate-count").count()).toBe(0);
-          expect(await pane.locator(`[data-entry-id="${localFinalIdentity.id}"]`).count()).toBe(1);
+          await assertSettledPane(pane);
         }
         await capture(page, `09-reloaded-split-abandoned-partial-local-final-${attempt}.png`);
       } finally {

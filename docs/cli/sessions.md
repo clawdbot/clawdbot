@@ -34,20 +34,25 @@ session keys.
 
 Flags:
 
-| Flag                 | Description                                                                   |
-| -------------------- | ----------------------------------------------------------------------------- |
-| `--agent <id>`       | One configured agent store (required for multiple explicit agents).           |
-| `--all-agents`       | Aggregate all configured agent stores.                                        |
-| `--store <path>`     | Legacy store selector path (cannot combine with `--agent` or `--all-agents`). |
-| `--active <minutes>` | Only show sessions updated within the past N minutes.                         |
-| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).               |
-| `--json`             | Machine-readable output.                                                      |
-| `--verbose`          | Verbose logging.                                                              |
+| Flag                 | Description                                                         |
+| -------------------- | ------------------------------------------------------------------- |
+| `--agent <id>`       | One configured agent store (required for multiple explicit agents). |
+| `--all-agents`       | Aggregate all configured agent stores.                              |
+| `--store <path>`     | Legacy store selector path (cannot combine with `--all-agents`).    |
+| `--active <minutes>` | Only show sessions updated within the past N minutes.               |
+| `--limit <n\|all>`   | Max rows to output (default `100`; `all` restores full output).     |
+| `--json`             | Machine-readable output.                                            |
+| `--verbose`          | Verbose logging.                                                    |
 
 `--store` accepts the documented legacy selector form, including `sessions.json`
 and suffixless custom selectors. OpenClaw resolves that selector to its physical
 SQLite target, verifies the target exists and is usable, and reports the physical
-path it actually read.
+path it actually read. Combine it with `--agent <id>` when you must select the
+configured agent that owns the store.
+
+`--agent` and `--store` require non-blank values. Selection errors exit non-zero
+and use the standard [CLI JSON failure envelope](/cli#json-failures) when `--json`
+is set.
 
 `openclaw sessions` and the Gateway `sessions.list` RPC are bounded by default
 so large long-lived stores cannot monopolize the CLI process or Gateway event
@@ -190,10 +195,17 @@ print before follow mode; default `80`, and `0` starts at the current end.
 fixed-width terminal columns, with long keys truncated at whole grapheme boundaries
 so CJK characters, combining accents, and joined emoji keep progress lines aligned.
 
+A fully qualified `--session-key` selects its agent only when `--agent`, `--store`,
+and `--all-agents` are absent. An explicitly empty or whitespace-only `--agent`
+is rejected instead of selecting an inferred agent.
+
 The progress view is intentionally conservative: prompt text, tool arguments,
 and tool result bodies are not printed. Tool calls show the tool name with
 `{...redacted...}`; tool results show status such as `ok`, `error`, or `done`;
-model completion lines show provider/model and terminal status.
+model completion lines show provider/model and terminal status. Provider failures
+and turns without delivery show `error`; cancellation shows `aborted`, timeouts
+show `timeout`, and successful completions (including delivered partial replies)
+show `done`.
 
 ## Export a trajectory bundle
 

@@ -2,7 +2,11 @@ import { homedir } from "node:os";
 /** Main doctor config flow: preflight, migrations, previews, repairs, and final write decision. */
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
-import { readAgentRosterProperty, tryResolveSoleAgentId } from "../agents/agent-scope-config.js";
+import {
+  listAgentEntries,
+  readAgentRosterProperty,
+  tryResolveSoleAgentId,
+} from "../agents/agent-scope-config.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { withProgress } from "../cli/progress.js";
@@ -239,7 +243,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     .filter((source) => source !== undefined)
     .map((source) => migratePersistedImplicitMainRoster(source));
   const rosterMigrations = rawRosterMigrations.filter((migration) => migration.changed);
-  const rosterMigrationNeeded = rosterMigrations.length > 0;
+  const rosterMigrationNeeded =
+    rosterMigrations.length > 0 ||
+    (baseCfg.agents?.ownership === undefined && listAgentEntries(baseCfg).length > 1);
   const legacyDefaultAgentId = rawRosterMigrations
     .map((migration) => migration.retainedLegacyDefaultAgentId)
     .find((agentId) => agentId !== undefined);
@@ -259,7 +265,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const legacyMigrationBlocksWrite = legacyStep.blocksWrite === true;
   const includeOwnsRoster = configIncludeOwnsAgentRoster(snapshot);
-  if (snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster) {
+  const persistCanonicalAgentRoster =
+    snapshot.exists && rosterMigrationNeeded && !includeOwnsRoster;
+  if (persistCanonicalAgentRoster) {
     // Runtime roster normalization is read-only; doctor --fix owns persistence.
     // Persist the legacy owner's workspace in doctor's canonical candidate. The writer may run
     // again after health repairs, when the retired owner marker is no longer available to recover it.
@@ -295,9 +303,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     applyConfigMutation(rosterRepair, {
       fixHint: `Run "${doctorFixCommand}" to persist the explicit agent roster.`,
     });
-    // Read-time normalization already exposes this roster in the runtime shape.
-    // Preserve doctor's write intent so the atomic writer does not restore the authored omission.
-    explicitSetPaths.push(["agents", "entries"]);
     if (stampsExplicitOwnership) {
       explicitSetPaths.push(["agents", "ownership"]);
     }
@@ -408,6 +413,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     fixHint: `Run "${doctorFixCommand}" to apply these changes.`,
     emitWarnings: true,
   });
+
+  const { repairUnownedChannelAccountBindings } =
+    await import("./doctor/shared/legacy-config-binding-repair.js");
+  applyConfigMutation(
+    runWithCurrentPluginMetadata(state.candidate, () =>
+      repairUnownedChannelAccountBindings(state.candidate),
+    ),
+    {
+      fixHint: `Run "${doctorFixCommand}" to bind channel accounts with a single existing route owner.`,
+    },
+  );
 
   const { prepareTailscaleConfigMigration } = await import("./doctor-tailscale.js");
   applyConfigMutation(
@@ -672,6 +688,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
     ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
     ...(shouldWriteConfig && explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+    ...(shouldWriteConfig && persistCanonicalAgentRoster
+      ? { persistCanonicalAgentRoster: true }
+      : {}),
     ...(singleTopLevelIncludeWrite ? { skipWizardMetadataForIncludeWrite: true } : {}),
     ...(shouldRepairCronCodexModelRefsAfterConfigWrite
       ? { shouldRepairCronCodexModelRefsAfterConfigWrite: true }

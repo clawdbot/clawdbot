@@ -8,7 +8,7 @@ import type { RuntimeEnv } from "../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
-  resolveSessionStoreTargetsOrExit: vi.fn(),
+  resolveCommandSessionStoreTargets: vi.fn(),
   resolveSessionCleanupAction: vi.fn(),
   runSessionsCleanup: vi.fn(),
   runLocalSessionsCleanup: vi.fn(),
@@ -24,7 +24,7 @@ vi.mock("./sessions-cleanup.runtime.js", () => ({
 }));
 
 vi.mock("./session-store-targets.js", () => ({
-  resolveSessionStoreTargetsOrExit: mocks.resolveSessionStoreTargetsOrExit,
+  resolveCommandSessionStoreTargets: mocks.resolveCommandSessionStoreTargets,
 }));
 
 vi.mock("../config/sessions.js", async (importOriginal) => ({
@@ -70,13 +70,33 @@ function gatewayTransportError(kind: "closed" | "timeout", code?: number): Gatew
   });
 }
 
+function gatewayCleanupResult(storePath: string) {
+  return {
+    agentId: "main",
+    storePath,
+    mode: "enforce",
+    dryRun: false,
+    beforeCount: 3,
+    afterCount: 1,
+    missing: 0,
+    dmScopeRetired: 0,
+    modelRunPruned: 0,
+    pruned: 2,
+    capped: 0,
+    diskBudget: null,
+    wouldMutate: true,
+    applied: true,
+    appliedCount: 1,
+  } as const;
+}
+
 describe("sessionsCleanupCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     process.exitCode = undefined;
     mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
     mocks.loadConfig.mockReturnValue({ session: { store: "/cfg/sessions.json" } });
-    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
+    mocks.resolveCommandSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
     mocks.callGateway.mockResolvedValue(null);
@@ -109,6 +129,19 @@ describe("sessionsCleanupCommand", () => {
       previewResults: [],
       appliedSummaries: [],
     });
+  });
+
+  it("keeps an empty explicit store local instead of delegating default cleanup to the gateway", async () => {
+    // Resolve a full result so a regression that delegates fails on the
+    // gateway assertion below instead of throwing on the beforeEach null.
+    mocks.callGateway.mockResolvedValue(gatewayCleanupResult("/gateway/sessions.json"));
+    const { runtime } = makeRuntime();
+    await sessionsCleanupCommand({ store: "", enforce: true }, runtime);
+
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandSessionStoreTargets).toHaveBeenCalledWith(
+      expect.objectContaining({ opts: expect.objectContaining({ store: "" }) }),
+    );
   });
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
@@ -225,23 +258,7 @@ describe("sessionsCleanupCommand", () => {
 
   it("delegates non-store enforcing cleanup through the Gateway writer when reachable", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\agents\\main\\sessions\\sessions.json";
-    mocks.callGateway.mockResolvedValue({
-      agentId: "main",
-      storePath: remoteStorePath,
-      mode: "enforce",
-      dryRun: false,
-      beforeCount: 3,
-      afterCount: 1,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 2,
-      capped: 0,
-      diskBudget: null,
-      wouldMutate: true,
-      applied: true,
-      appliedCount: 1,
-    });
+    mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
 
     const { runtime, logs } = makeRuntime();
     await sessionsCleanupCommand(
@@ -341,23 +358,7 @@ describe("sessionsCleanupCommand", () => {
 
   it("preserves a Gateway-owned store path in human output", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
-    mocks.callGateway.mockResolvedValue({
-      agentId: "main",
-      storePath: remoteStorePath,
-      mode: "enforce",
-      dryRun: false,
-      beforeCount: 3,
-      afterCount: 1,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 2,
-      capped: 0,
-      diskBudget: null,
-      wouldMutate: true,
-      applied: true,
-      appliedCount: 1,
-    });
+    mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
 
     const { runtime, logs } = makeRuntime();
     await sessionsCleanupCommand({ enforce: true }, runtime);
@@ -760,7 +761,7 @@ describe("sessionsCleanupCommand", () => {
   });
 
   it("returns grouped JSON for --all-agents dry-runs", async () => {
-    mocks.resolveSessionStoreTargetsOrExit.mockReturnValue([
+    mocks.resolveCommandSessionStoreTargets.mockReturnValue([
       { agentId: "main", storePath: "/resolved/main-sessions.json" },
       { agentId: "work", storePath: "/resolved/work-sessions.json" },
     ]);

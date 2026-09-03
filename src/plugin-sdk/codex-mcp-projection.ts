@@ -1,7 +1,5 @@
-// Private helper surface for the bundled Codex plugin. Mirrors the Codex CLI
-// runtime's user-mcp-server projection so the bundled Codex app-server harness
-// can attach the same user `mcp.servers` entries to its thread config without
-// deep-importing core helpers.
+// Private thread-configuration projections for the bundled Codex plugin.
+// Workspace preparation and MCP metadata remain separate from live run resources.
 import { pinExecToolTarget } from "../agents/exec-tool-target-pinning.js";
 import type { AgentHarnessHostCapabilities } from "../agents/harness/host-capability-types.js";
 import {
@@ -18,6 +16,13 @@ import type {
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 
 export { pinExecToolTarget };
+export { resolveBootstrapFilesForPreparation } from "../agents/bootstrap-files.js";
+export { loadCodexBundleMcpApprovalConfig } from "../agents/codex-mcp-config.js";
+export {
+  formatMcpCodexApprovalRemedy,
+  requiresMcpCodexToolApproval,
+  resolveProjectedMcpCodexToolApprovalMode,
+} from "../agents/mcp-codex-tool-approval.js";
 export type CodexScheduledToolProjectionFactory = AgentHarnessScheduledToolProjectionFactory;
 export type CodexTtsProvenanceTransfer = AgentHarnessTtsProvenanceTransfer;
 
@@ -52,13 +57,13 @@ export {
   runWithCronCreatorAuthorityResolver,
 } from "../agents/cron-creator-authority-context.js";
 
-/** Materialize static configured MCP under a scheduled Codex authority envelope. */
-export async function materializeStaticMcpToolsForScheduledHarnessRun(
+/** Materialize static configured MCP under the Codex harness authority envelope. */
+export async function materializeStaticMcpToolsForHarnessRun(
   params: Parameters<
-    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForScheduledHarnessRunCore
+    typeof import("../agents/agent-bundle-mcp-harness.js").materializeStaticMcpToolsForHarnessRunCore
   >[0],
 ) {
-  const { materializeStaticMcpToolsForScheduledHarnessRunCore: materialize } =
+  const { materializeStaticMcpToolsForHarnessRunCore: materialize } =
     await import("../agents/agent-bundle-mcp-harness.js");
   return materialize(params);
 }

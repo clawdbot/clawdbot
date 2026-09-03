@@ -278,9 +278,10 @@ Dream Diary details.
 
 The dreaming system has two related review lanes:
 
-- **Live dreaming** works from the short-term dreaming store under
-  `memory/.dreams/` and is what the normal deep phase uses to decide what
-  graduates into `MEMORY.md`.
+- **Live dreaming** works from short-term dreaming state in SQLite plugin
+  storage and is what the normal deep phase uses to decide what graduates into
+  `MEMORY.md`. Doctor owns migration of legacy dreaming JSON state from
+  `memory/.dreams/`; run `openclaw doctor --fix` before using that old state.
 - **Grounded backfill** reads historical `memory/YYYY-MM-DD.md` notes as
   standalone day files and writes structured review output into `DREAMS.md`.
 

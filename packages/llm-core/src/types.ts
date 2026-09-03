@@ -129,11 +129,6 @@ export interface StreamOptions {
    */
   timeoutMs?: number;
   /**
-   * Maximum retry attempts for providers/SDKs that support client-side retries.
-   * For example, OpenAI and Anthropic SDK clients default to 2.
-   */
-  maxRetries?: number;
-  /**
    * Maximum delay in milliseconds to wait for a retry when the server requests a long wait.
    * If the server's requested delay exceeds this value, the request fails immediately
    * with an error containing the requested delay, allowing higher-level retry logic
@@ -501,6 +496,8 @@ export interface OpenAICompletionsCompat {
   supportsDeveloperRole?: boolean;
   /** Whether the provider supports `reasoning_effort`. Default: auto-detected from URL. */
   supportsReasoningEffort?: boolean;
+  /** Per-level reasoning effort overrides, e.g. map "off" to "low" for models that cannot disable thinking. */
+  reasoningEffortMap?: Record<string, string>;
   /** Whether the provider supports `stream_options: { include_usage: true }` for token usage in streaming responses. Default: true. */
   supportsUsageInStreaming?: boolean;
   /** Which field to use for max tokens. Default: auto-detected from URL. */

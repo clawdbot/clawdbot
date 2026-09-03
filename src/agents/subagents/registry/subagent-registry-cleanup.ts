@@ -149,8 +149,16 @@ export function shouldDeleteSubagentAttachments(
   return (cleanup ?? entry.cleanup) === "delete" || !entry.retainAttachmentsOnKeep;
 }
 
-function resolveEndedAgoMs(entry: SubagentRunRecord, now: number): number {
-  return typeof entry.execution.endedAt === "number" ? now - entry.execution.endedAt : 0;
+/** Required-delivery retries renew their window; optional delivery expires from completion. */
+export function resolveAnnounceDeliveryDeadline(
+  entry: SubagentRunRecord,
+  now: number,
+  expiryMs: number,
+): number {
+  const delivery = entry.expectsCompletionMessage === true ? entry.delivery : undefined;
+  return (
+    delivery?.deadlineAt ?? (delivery?.windowStartedAt ?? entry.execution.endedAt ?? now) + expiryMs
+  );
 }
 
 /** Decide whether deferred subagent cleanup should retry, defer, or give up. */
@@ -163,21 +171,20 @@ export function resolveDeferredCleanupDecision(params: {
   deferDescendantDelayMs: number;
   resolveAnnounceRetryDelayMs: (retryCount: number) => number;
 }): DeferredCleanupDecision {
-  const endedAgo = resolveEndedAgoMs(params.entry, params.now);
   const isCompletionMessageFlow = params.entry.expectsCompletionMessage === true;
-  const completionHardExpiryExceeded =
-    isCompletionMessageFlow && endedAgo > params.announceCompletionHardExpiryMs;
+  const expiryMs = isCompletionMessageFlow
+    ? params.announceCompletionHardExpiryMs
+    : params.announceExpiryMs;
+  const expiryExceeded =
+    params.now >= resolveAnnounceDeliveryDeadline(params.entry, params.now, expiryMs);
   if (isCompletionMessageFlow && params.activeDescendantRuns > 0) {
-    if (completionHardExpiryExceeded) {
+    if (expiryExceeded) {
       return { kind: "give-up", reason: "expiry" };
     }
     return { kind: "defer-descendants", delayMs: params.deferDescendantDelayMs };
   }
 
   const retryCount = getDeliveryAttemptCount(params.entry) + 1;
-  const expiryExceeded = isCompletionMessageFlow
-    ? completionHardExpiryExceeded
-    : endedAgo > params.announceExpiryMs;
   if (params.entry.delivery?.disposition === "permanent_failure" || expiryExceeded) {
     return {
       kind: "give-up",

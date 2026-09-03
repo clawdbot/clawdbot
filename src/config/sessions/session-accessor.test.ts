@@ -83,7 +83,7 @@ import {
 } from "./session-accessor.js";
 import {
   readSessionEntryCount,
-  readSessionEntryKeys,
+  iterateSessionEntryKeys,
 } from "./session-accessor.sqlite-entry-store.js";
 import * as sessionEntryStore from "./session-accessor.sqlite-entry-store.js";
 import { loadExactSessionEntry, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -323,7 +323,7 @@ describe("session accessor seam", () => {
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
 
     expect(readSessionEntryCount(database)).toBe(1);
-    expect(readSessionEntryKeys(database)).toEqual(["agent:main:logical-entry"]);
+    expect([...iterateSessionEntryKeys(database)]).toEqual(["agent:main:logical-entry"]);
     expect(countSessionEntryRowsReadOnly({ agentId: "main", storePath })).toBe(2);
   });
 
@@ -706,14 +706,16 @@ describe("session accessor seam", () => {
 
   it("opens a borrowed read view with raw exact-key probes and deferred enumeration", async () => {
     const mixedKey = "agent:main:matrix:channel:!RoomAbC:example.org";
+    const skillsSnapshot = { prompt: "saved skill prompt", skills: [] };
     await upsertSessionEntryCore(
       { sessionKey: mixedKey, storePath },
-      { sessionId: "mixed-session", updatedAt: 10 },
+      { sessionId: "mixed-session", updatedAt: 10, skillsSnapshot },
     );
 
     const view = openSessionEntryReadView({ storePath });
 
     expect(view.get(mixedKey)?.sessionId).toBe("mixed-session");
+    expect(view.get(mixedKey)?.skillsSnapshot).toEqual(skillsSnapshot);
     // Raw probe contract: unlike loadSessionEntry, no folded-alias or
     // canonical-key resolution happens on get.
     expect(view.get(mixedKey.toLowerCase())).toBeUndefined();
@@ -723,6 +725,9 @@ describe("session accessor seam", () => {
         entry: expect.objectContaining({ sessionId: "mixed-session" }),
       },
     ]);
+    const metadata = openSessionEntryReadView({ storePath, projection: "list" });
+    expect(metadata.get(mixedKey)?.skillsSnapshot).toBeUndefined();
+    expect(metadata.entries()).toEqual([{ sessionKey: mixedKey, entry: metadata.get(mixedKey) }]);
   });
 
   it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
@@ -1465,10 +1470,10 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
+          shouldAppend: () => {
             // Simulate a concurrent reset rotating the session id between target
-            // resolution and the transcript append.
-            await replaceSessionEntry(
+            // resolution and the transcript append. Sync writers bypass the process queue.
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-rotate-session", updatedAt: Date.now() },
             );
@@ -1512,8 +1517,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "default-rotate-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath: expectedStorePath },
               { sessionId: "new-default-rotate", updatedAt: Date.now() },
             );
@@ -1637,8 +1642,8 @@ describe("session accessor seam", () => {
       messages: [
         {
           message: { role: "user", content: "durable-fallback-hello", timestamp: Date.now() },
-          shouldAppend: async () => {
-            await replaceSessionEntry(
+          shouldAppend: () => {
+            replaceSessionEntrySync(
               { sessionKey: scope.sessionKey, storePath },
               { sessionId: "new-durable-fallback", updatedAt: Date.now() },
             );

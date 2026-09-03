@@ -1,6 +1,10 @@
 // Covers session binding adapter registration, generic current-conversation
 // fallback, capability errors, deduping, and duplicate graph teardown.
 import { expectDefined } from "@openclaw/normalization-core";
+import {
+  inspectConversationBinding as inspectSessionBindingByConversation,
+  type ConversationBindingInspection,
+} from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -10,7 +14,6 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   testing,
   getSessionBindingService,
-  inspectSessionBindingByConversation,
   isSessionBindingError,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
@@ -377,7 +380,9 @@ describe("session binding service", () => {
         unbindSupported: false,
         placements: [],
       });
-      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+      const unavailable: ConversationBindingInspection =
+        inspectSessionBindingByConversation(conversation);
+      expect(unavailable).toEqual({
         status: "unavailable",
       });
       await expectSessionBindingError(

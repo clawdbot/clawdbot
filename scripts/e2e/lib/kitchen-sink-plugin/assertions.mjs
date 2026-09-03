@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import { isExplicitPluginDisableMarker } from "../plugin-uninstall-assertions.mjs";
 
 const command = process.argv[2];
 const scratchRoot = process.env.KITCHEN_SINK_TMP_DIR || os.tmpdir();
@@ -668,8 +669,8 @@ function assertRemoved() {
   }
 
   const { config } = readConfig();
-  if (config.plugins?.entries?.[pluginId]) {
-    throw new Error(`kitchen-sink config entry still present after uninstall: ${pluginId}`);
+  if (!isExplicitPluginDisableMarker(config, pluginId)) {
+    throw new Error(`kitchen-sink exact disabled uninstall marker missing: ${pluginId}`);
   }
   if ((config.plugins?.allow || []).includes(pluginId)) {
     throw new Error(`kitchen-sink allowlist still contains ${pluginId}`);

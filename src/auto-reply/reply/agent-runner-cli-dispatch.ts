@@ -3,7 +3,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { runCliAgent } from "../../agents/cli-runner.js";
 import type { RunCliAgentParams } from "../../agents/cli-runner/types.js";
-import { clearCliSession, getCliSessionBinding } from "../../agents/cli-session.js";
 import type { MediaImageLayout } from "../../agents/embedded-agent-runner/run/prompt-image-metadata.js";
 import { extractToolResultText } from "../../agents/embedded-agent-tool-results.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent.js";
@@ -20,8 +19,6 @@ import {
 } from "../../agents/run-termination.js";
 import { inferToolMetaFromArgsCore, isCommandBearingToolCall } from "../../agents/tool-display.js";
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
-import type { SessionEntry } from "../../config/sessions.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { AgentEventPayload } from "../../infra/agent-events.js";
 import { emitAgentEvent, withAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
 import { FAST_MODE_AUTO_PROGRESS_KIND, type ReplyPayload } from "../reply-payload.js";
@@ -221,44 +218,6 @@ export function keepCliSessionBindingOnlyWhenReused(params: {
       },
     },
   };
-}
-
-export async function clearCliSessionBindingForRun(params: {
-  provider: string;
-  expectedSessionId?: string;
-  sessionKey?: string;
-  sessionStore?: Record<string, SessionEntry>;
-  storePath?: string;
-  activeSessionEntry?: SessionEntry;
-}): Promise<void> {
-  const updatedAt = Date.now();
-  const clearEntry = (entry: SessionEntry | undefined) => {
-    if (!entry) {
-      return;
-    }
-    // A later turn may already have adopted a replacement session; only the
-    // failed run that still owns this binding may clear it.
-    if (
-      params.expectedSessionId &&
-      getCliSessionBinding(entry, params.provider)?.sessionId !== params.expectedSessionId
-    ) {
-      return;
-    }
-    clearCliSession(entry, params.provider);
-    entry.updatedAt = updatedAt;
-  };
-  clearEntry(params.activeSessionEntry);
-  clearEntry(params.sessionKey ? params.sessionStore?.[params.sessionKey] : undefined);
-  if (!params.storePath || !params.sessionKey) {
-    return;
-  }
-  await updateSessionEntry(
-    { storePath: params.storePath, sessionKey: params.sessionKey },
-    (entry) => {
-      clearEntry(entry);
-      return entry;
-    },
-  );
 }
 
 function createToolEventBridge(params: {

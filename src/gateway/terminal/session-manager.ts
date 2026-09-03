@@ -268,6 +268,7 @@ export class TerminalSessionManager {
       agentId: request.agentId,
       cwd: request.cwd,
       shell: request.shell,
+      ...(request.title ? { title: request.title } : {}),
       backend,
       stageUpload: request.stageUpload ?? stageTerminalUpload,
       closed: false,

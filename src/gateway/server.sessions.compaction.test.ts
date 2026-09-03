@@ -824,6 +824,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         model?: string;
         provider?: string;
         reasoningLevel?: string;
+        runId?: string;
         sessionFile?: string;
         sessionId?: string;
         sessionKey?: string;
@@ -846,6 +847,7 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
     agents?: { defaults?: { model?: { primary?: unknown }; workspace?: unknown } };
   };
   expect(compactionCall.sessionId).toBe("sess-main");
+  expect(compactionCall.runId).toBe(startPayload.operationId);
   expect(compactionCall.sessionKey).toBe("agent:main:main");
   if (!compactionCall.sessionFile) {
     throw new Error("expected embedded compaction session file");

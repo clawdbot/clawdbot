@@ -528,24 +528,6 @@ describe("subagent announce timeout config", () => {
     expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
   });
 
-  it("keeps authoritative empty success intentional without transcript inference", async () => {
-    chatHistoryMessages = [
-      { role: "assistant", content: [{ type: "text", text: "stale transcript output" }] },
-    ];
-
-    await runAnnounceFlowForTest("run-ok-empty-terminal", {
-      outcome: { status: "ok" },
-      roundOneReply: undefined,
-      terminalReply: { disposition: "empty" },
-    });
-
-    const directAgentCall = findFinalDirectAgentCall();
-    const internalEvents =
-      (directAgentCall?.params?.internalEvents as Array<{ result?: string }>) ?? [];
-    expect(internalEvents[0]?.result).toBe("(no output)");
-    expect(gatewayCalls.some((call) => call.method === "chat.history")).toBe(false);
-  });
-
   // Regression: openclaw-kkv1. A wait that expired without observing the child
   // stop was announced identically to a child that really died ("timed out",
   // "(no output)"), so a parent read it as death and spawned a successor into

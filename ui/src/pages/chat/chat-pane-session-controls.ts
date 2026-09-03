@@ -7,6 +7,7 @@ import {
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
   switchChatContextWindow,
@@ -32,11 +33,15 @@ type SessionActionCallbacks = Pick<
 >;
 
 type PendingPermissionChange = {
-  previousMode: ChatPermissionPickerProps["mode"];
+  expectedSessionId?: string;
+  nextMode: ChatPermissionPickerProps["mode"];
   ownsSelection: () => boolean;
+  pending: boolean;
+  retainUntilRevision?: number;
 };
 
 const pendingPermissionChanges = new WeakMap<ChatPageHost, Map<string, PendingPermissionChange>>();
+const permissionOutcomeOwners = new WeakMap<ChatPageHost, Map<string, symbol>>();
 
 export function readChatPaneMutationAccess(
   snapshot: ApplicationGatewaySnapshot,
@@ -111,19 +116,39 @@ export function renderChatPaneComposerControls(params: {
   const client = state.client;
   const connectionEpoch = state.connectionEpoch;
   const agentScope = scopedAgentParamsForSession(state, sessionKey);
+  const expectedSessionId = selectedSession?.sessionId?.trim();
   const permissionScopeKey = JSON.stringify([sessionKey, agentScope.agentId]);
   const permissionChanges =
     pendingPermissionChanges.get(state) ?? new Map<string, PendingPermissionChange>();
   pendingPermissionChanges.set(state, permissionChanges);
-  const ownsSelection = () =>
+  const ownsRoute = () =>
     state.connected &&
     state.sessionKey === sessionKey &&
     state.client === client &&
     state.connectionEpoch === connectionEpoch &&
     scopedAgentParamsForSession(state, sessionKey).agentId === agentScope.agentId;
-  const pendingChange = permissionChanges.get(permissionScopeKey);
+  const ownsSelection = () => {
+    const currentSessionId =
+      state.sessionsResult?.sessions.find((row) => areUiSessionKeysEquivalent(row.key, sessionKey))
+        ?.sessionId ?? selectedSession?.sessionId;
+    return ownsRoute() && currentSessionId === expectedSessionId;
+  };
+  let pendingChange = permissionChanges.get(permissionScopeKey);
+  if (pendingChange && pendingChange.expectedSessionId !== expectedSessionId) {
+    permissionChanges.delete(permissionScopeKey);
+    pendingChange = undefined;
+  }
+  if (
+    pendingChange?.retainUntilRevision !== undefined &&
+    state.sessions.canonicalListRevision > pendingChange.retainUntilRevision
+  ) {
+    permissionChanges.delete(permissionScopeKey);
+    pendingChange = undefined;
+  }
   const currentChange = pendingChange?.ownsSelection() ? pendingChange : undefined;
-  const permissionApplying = Boolean(currentChange || selectedSession?.permissionModePending);
+  const permissionPending = Boolean(
+    currentChange?.pending || selectedSession?.permissionModePending,
+  );
   const modelCatalogState = resolveChatModelCatalogState(state);
   const thinkingLevelOverride = state.sessions.think(sessionKey, agentScope.agentId);
   const thinkingSession = thinkingLevelOverride
@@ -143,6 +168,7 @@ export function renderChatPaneComposerControls(params: {
           modelOverrides: state.sessions.state.modelOverrides,
           thinkingSession,
           modelSelectionLocked: selectedSession?.modelSelectionLocked === true,
+          modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
           modelSelectionRuntimeId: selectedSession?.agentRuntime?.id,
           modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
           modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
@@ -182,25 +208,33 @@ export function renderChatPaneComposerControls(params: {
     permissionPicker: {
       canSelectFull,
       defaultMode: agentDefaultPermissionMode,
-      applying: permissionApplying,
-      disabled: !permissionAccess.allowed || permissionApplying,
+      disabled: !permissionAccess.allowed,
       disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
-      mode: currentChange ? currentChange.previousMode : selectedSession?.permissionMode,
+      mode: currentChange ? currentChange.nextMode : selectedSession?.permissionMode,
+      pending: permissionPending,
       onSelect: async (permissionMode) => {
+        const activeChange = permissionChanges.get(permissionScopeKey);
         if (
           !permissionAccess.allowed ||
           !ownsSelection() ||
           selectedSession?.permissionModePending ||
-          permissionChanges.get(permissionScopeKey)?.ownsSelection()
+          (activeChange?.pending && activeChange.ownsSelection())
         ) {
           return;
         }
-        // Saved rows can arrive before the runtime ACK. Keep the initiating
-        // picker on its previous mode until the exact update settles.
+        // Keep the selected mode visible while the exact runtime update settles.
+        // The pending owner rejects duplicates; the shared settings tail serializes later work.
         const change: PendingPermissionChange = {
-          previousMode: selectedSession?.permissionMode,
+          expectedSessionId,
+          nextMode: permissionMode ?? undefined,
           ownsSelection,
+          pending: true,
         };
+        const outcomeOwner = Symbol(permissionScopeKey);
+        const outcomeOwners = permissionOutcomeOwners.get(state) ?? new Map<string, symbol>();
+        permissionOutcomeOwners.set(state, outcomeOwners);
+        outcomeOwners.set(permissionScopeKey, outcomeOwner);
+        const ownsOutcome = () => outcomeOwners.get(permissionScopeKey) === outcomeOwner;
         permissionChanges.set(permissionScopeKey, change);
         state.requestUpdate?.();
         try {
@@ -209,7 +243,7 @@ export function renderChatPaneComposerControls(params: {
             state,
             sessionKey,
             { permissionMode },
-            agentScope,
+            { ...agentScope, expectedSessionId },
           );
           if (!ownsSelection()) {
             return;
@@ -217,18 +251,38 @@ export function renderChatPaneComposerControls(params: {
           if (!patched) {
             throw new Error("Session capability is unavailable");
           }
+          if (patched.listRefreshError && ownsOutcome()) {
+            state.chatError = state.lastError = t("chat.permissionControls.refreshFailed", {
+              error: patched.listRefreshError,
+            });
+          }
         } catch (error) {
-          if (!ownsSelection()) {
+          if (!ownsRoute() || !ownsOutcome()) {
             return;
+          }
+          const revision = state.sessions.canonicalListRevision;
+          await state.sessions.refreshReplacement(agentScope.agentId);
+          if (!ownsRoute() || !ownsOutcome()) {
+            return;
+          }
+          if (ownsSelection() && state.sessions.canonicalListRevision === revision) {
+            change.pending = false;
+            change.retainUntilRevision = revision;
           }
           state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
           });
         } finally {
-          if (permissionChanges.get(permissionScopeKey) === change) {
+          if (ownsOutcome()) {
+            outcomeOwners.delete(permissionScopeKey);
+          }
+          if (
+            permissionChanges.get(permissionScopeKey) === change &&
+            change.retainUntilRevision === undefined
+          ) {
             permissionChanges.delete(permissionScopeKey);
           }
-          if (ownsSelection()) {
+          if (ownsRoute()) {
             state.requestUpdate?.();
           }
         }

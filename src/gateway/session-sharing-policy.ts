@@ -72,7 +72,6 @@ export function resolveSessionSharingTarget(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
-  projection?: "full" | "list";
   storeCache?: GatewaySessionStoreCache;
   targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
 }): SessionSharingTarget | null {
@@ -81,7 +80,8 @@ export function resolveSessionSharingTarget(params: {
     key: params.sessionKey,
     agentId: params.agentId,
     clone: false,
-    ...(params.projection ? { projection: params.projection } : {}),
+    // Authorization rechecks current metadata; prompt snapshots are not part of that binding.
+    projection: "list",
     ...(params.storeCache ? { storeCache: params.storeCache } : {}),
     ...(params.targetDiscoveryCache ? { targetDiscoveryCache: params.targetDiscoveryCache } : {}),
   });

@@ -201,6 +201,68 @@ describe("agentsListCommand", () => {
     ]);
   });
 
+  it.each([
+    {
+      label: "configured",
+      identity: {
+        name: " Chosen Identity ",
+        emoji: "🦉",
+        avatar: "https://example.invalid/new.png",
+      },
+      expected: {
+        identityName: "Chosen Identity",
+        identityEmoji: "🦉",
+        identityAvatarUrl: "https://example.invalid/new.png",
+        identitySource: "config",
+      },
+    },
+    {
+      label: "partially configured",
+      identity: { name: "Chosen Identity" },
+      expected: {
+        identityName: "Chosen Identity",
+        identityEmoji: "🦞",
+        identityAvatarUrl: "https://example.invalid/workspace.png",
+        identitySource: "config",
+      },
+    },
+    ...[
+      { label: "workspace-only", identity: undefined },
+      { label: "blank configured", identity: { name: " ", emoji: "\t", avatar: " " } },
+      { label: "unsupported configured avatar", identity: { avatar: "slack://avatar.png" } },
+    ].map(({ label, identity }) => ({
+      label,
+      identity,
+      expected: {
+        identityName: "Workspace Identity",
+        identityEmoji: "🦞",
+        identityAvatarUrl: "https://example.invalid/workspace.png",
+        identitySource: "identity",
+      },
+    })),
+  ])("lists $label identity values with workspace fallback", async ({ identity, expected }) => {
+    await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
+      const identityPath = path.join(workspace, "IDENTITY.md");
+      const identityFile =
+        "# Identity\n\n- Name: Workspace Identity\n- Emoji: 🦞\n- Avatar: https://example.invalid/workspace.png\n";
+      fs.writeFileSync(identityPath, identityFile);
+      requireValidConfigMock.mockResolvedValue({
+        agents: { entries: { proof: { workspace, identity } } },
+      } satisfies OpenClawConfig);
+      const jsonRuntime = createRuntime();
+      await agentsListCommand({ json: true }, jsonRuntime);
+      expect(jsonRuntime.json[0]).toEqual([expect.objectContaining(expected)]);
+
+      const textRuntime = createRuntime();
+      await agentsListCommand({}, textRuntime);
+      const source = expected.identitySource === "config" ? "config" : "IDENTITY.md";
+      expect(vi.mocked(textRuntime.log).mock.calls.flat().join("\n")).toContain(
+        `Identity: ${expected.identityEmoji} ${expected.identityName} (${source})`,
+      );
+      expect(fs.readFileSync(identityPath, "utf8")).toBe(identityFile);
+    });
+  });
+
   it("sanitizes configured agent text without changing JSON summaries", async () => {
     const control = "\u001B]0;agents-list-injection\u0007";
     const identityName = `${control}Operator 🦞\r\nforged-row`;

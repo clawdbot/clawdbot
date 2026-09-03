@@ -1,6 +1,6 @@
 // Whatsapp tests cover quoted message plugin behavior.
 import { generateWAMessageFromContent } from "baileys";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildQuotedMessageOptions,
   cacheInboundMessageMeta,
@@ -241,4 +241,52 @@ describe("quoted message metadata cache", () => {
       ).toBeUndefined();
     },
   );
+
+  it.each([
+    ["auto-reply", lookupInboundMessageMeta],
+    ["outbound", lookupInboundMessageMetaForTarget],
+  ] as const)("sends an expired %s quote as an ordinary message", (name, lookup) => {
+    const accountId = `quote-expiry-${name}`;
+    const remoteJid = "120363000000000000@g.us";
+    const messageId = "expired-inbound";
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    const encodeReply = () => {
+      const cached = lookup(accountId, remoteJid, messageId);
+      return generateWAMessageFromContent(
+        remoteJid,
+        { extendedTextMessage: { text: "Reply remains visible" } },
+        {
+          userJid: "15555550123@s.whatsapp.net",
+          messageId: "outbound-reply",
+          timestamp: new Date(now),
+          ...buildQuotedMessageOptions({
+            messageId,
+            remoteJid,
+            participant: cached?.participant,
+            messageText: cached?.body,
+            media: cached?.media,
+          }),
+        },
+      ).message?.extendedTextMessage;
+    };
+    try {
+      cacheInboundMessageMeta(accountId, remoteJid, messageId, {
+        body: "Original message",
+        participant: "15555550124@s.whatsapp.net",
+      });
+      expect(encodeReply()?.contextInfo).toMatchObject({
+        stanzaId: messageId,
+        quotedMessage: { conversation: "Original message" },
+      });
+
+      clock.mockReturnValue(now + 10 * 60 * 1000 + 1);
+      expect(lookup(accountId, remoteJid, messageId)).toBeUndefined();
+      const expiredReply = encodeReply();
+      expect(expiredReply?.text).toBe("Reply remains visible");
+      expect(expiredReply?.contextInfo).toBeUndefined();
+    } finally {
+      clock.mockRestore();
+    }
+  });
 });

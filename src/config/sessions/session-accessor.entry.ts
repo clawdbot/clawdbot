@@ -36,6 +36,7 @@ import {
   resolveSessionEntry,
   upsertSessionEntryCore,
 } from "./session-accessor.sqlite-entry.js";
+import { readSessionStoreSummaryReadOnly } from "./session-accessor.sqlite-summary.js";
 import type {
   SessionAccessScope,
   LogicalSessionAccessScope,
@@ -88,6 +89,7 @@ export {
   // fresh-reads and checks sessionId inside its locked commit, and void/entry has no rebound signal.
   replaceSessionEntrySync,
   resolveSessionEntryFromStore,
+  readSessionStoreSummaryReadOnly,
   upsertSessionEntryCore,
 };
 
@@ -396,7 +398,7 @@ export function listSessionEntriesCore(scope: SessionEntryListScope = {}): Sessi
 
 /**
  * Synchronous read view: `get` queries one exact persisted key without alias resolution;
- * `entries` reuses a validated store snapshot. List rows and their nested values are
+ * `entries` caches listing metadata or loads complete entries. Rows and nested values are
  * borrowed: callers must not mutate them and must drop the view before any await.
  */
 export function openSessionEntryReadView(
@@ -428,8 +430,3 @@ export async function patchSessionEntryWithKey(
   const entry = await patchSessionEntryCore(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
 }
-
-/**
- * Copies one parent transcript into a new child transcript target.
- * This is for guarded callers that already own the eventual entry commit.
- */

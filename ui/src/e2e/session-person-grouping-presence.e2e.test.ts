@@ -82,7 +82,7 @@ suite.define(() => {
         : {}),
     });
     const page = await context.newPage();
-    await routeAvatarFixtures(context, page, [
+    await routeAvatarFixtures(page, [
       { id: "profile-ada", background: "#3f6f76", label: "A" },
       { id: "profile-bob", background: "#985b42", label: "B" },
       { id: "profile-morgan", background: "#66508c", label: "M" },

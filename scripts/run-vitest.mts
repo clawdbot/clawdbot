@@ -4,18 +4,17 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import { constants as osConstants } from "node:os";
 import path from "node:path";
+import { assertTestHomeSelection } from "../test/test-home-policy.mts";
 import {
   agentVitestProjectOwners,
   embeddedAgentVitestProjectOwners,
 } from "../test/vitest/vitest.agents-paths.mjs";
 import { toolingIsolatedTestFiles } from "../test/vitest/vitest.tooling-isolated-paths.mjs";
-import { isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
+import { isUiBrowserTestFile, isUiTestTarget } from "../test/vitest/vitest.ui-paths.mjs";
 import { boundaryTestFiles } from "../test/vitest/vitest.unit-paths.mjs";
 import { parsePermissiveBooleanToken } from "./lib/arg-utils.mts";
 import { resolveExtensionTestConfig } from "./lib/extension-test-plan.mts";
-import { runWithFailedTrailer, writeFailedTrailer } from "./lib/failed-trailer.mts";
 import { createGatewayServerTestTargetChunks } from "./lib/gateway-server-test-plan.mts";
-import { signalExitCode } from "./lib/managed-child-process.mts";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 import { spawnTestProjectsRunner } from "./lib/test-projects-delegation.mts";
 import {
@@ -28,6 +27,8 @@ import {
   isVitestWorkerMetadataRequest,
   vitestOptionConsumesNextArg,
 } from "./lib/vitest-cli-mode.mts";
+import { runVitestCli, type exitVitestBySignal } from "./lib/vitest-cli.mts";
+import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestProcessEnv } from "./lib/vitest-process-env.mts";
 import { spawnOwnedVitestProcess } from "./lib/vitest-process.mts";
 import {
@@ -49,7 +50,6 @@ type VitestFs = {
   symlinkSync?(target: string, path: string, type: "dir" | "junction"): void;
 };
 type VitestPathFs = Pick<typeof fs, "existsSync" | "statSync">;
-type VitestProcessHandle = Omit<ReturnType<typeof spawnWatchedVitestProcess>, "teardown">;
 type WatchdogStream = {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
   off(event: string, listener: (...args: unknown[]) => void): unknown;
@@ -76,6 +76,7 @@ export const DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS = 2_400_000;
 const VITEST_NO_OUTPUT_TIMEOUT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS";
 const VITEST_NO_OUTPUT_HEARTBEAT_ENV_KEY = "OPENCLAW_VITEST_NO_OUTPUT_HEARTBEAT_MS";
 const UI_VITEST_CONFIG = "test/vitest/vitest.ui.config.ts";
+const UI_BROWSER_VITEST_CONFIG = "test/vitest/vitest.ui-browser.config.ts";
 const TOOLING_DOCKER_VITEST_CONFIG = "test/vitest/vitest.tooling-docker.config.ts";
 const TOOLING_VITEST_CONFIG = "test/vitest/vitest.tooling.config.ts";
 const GATEWAY_CORE_VITEST_CONFIG = "test/vitest/vitest.gateway-core.config.ts";
@@ -985,6 +986,9 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
     resolved.splice(separatorIndex < 0 ? resolved.length : separatorIndex, 0, "--isolate");
     return resolved;
   }
+  if (collectExplicitDirectoryTargetArgs(argv, cwd).length > 0) {
+    return argv;
+  }
   const testTargets = argv
     .filter((arg) => !arg.startsWith("-") && arg.endsWith(".test.ts"))
     .map((arg) => toRepoRelativeArg(arg, cwd));
@@ -994,7 +998,17 @@ export function resolveImplicitVitestArgs(argv: string[], cwd = process.cwd()): 
   if (testTargets.length > 0 && testTargets.every(isToolingTestTarget)) {
     return withImplicitVitestConfig(argv, TOOLING_VITEST_CONFIG);
   }
-  if (testTargets.length > 0 && testTargets.every(isUiTestTarget)) {
+  // Glob selectors can span both browser owners; the root project matrix partitions them.
+  if (testTargets.some((target) => /[*?[\]{}]|[@+!]\(/u.test(target))) {
+    return argv;
+  }
+  if (testTargets.length > 0 && testTargets.every(isUiBrowserTestFile)) {
+    return withImplicitVitestConfig(argv, UI_BROWSER_VITEST_CONFIG);
+  }
+  if (
+    testTargets.length > 0 &&
+    testTargets.every((target) => isUiTestTarget(target) && !isUiBrowserTestFile(target))
+  ) {
     return withImplicitVitestConfig(argv, UI_VITEST_CONFIG);
   }
   return argv;
@@ -1191,14 +1205,18 @@ export function spawnWatchedVitestProcess({
   env,
   onNoOutputTimeout,
   workerRun,
+  homeMode = resolveVitestHomeSelection(pnpmArgs, { cwd: spawnParams.cwd, env }),
 }: {
   pnpmArgs: string[];
   spawnParams: PnpmRunnerParams;
   env: NodeJS.ProcessEnv;
   onNoOutputTimeout?: () => void;
   workerRun?: VitestWorkerRun;
+  homeMode?: Parameters<typeof spawnOwnedVitestProcess>[0]["homeMode"];
 }) {
-  let forwardedSignal: NodeSignal | null = null;
+  if (homeMode !== "tooling") {
+    assertTestHomeSelection(env, homeMode);
+  }
   let diagnosticsCompletion: Promise<void> | null = null;
   const directNodeArgs = resolveDirectNodeVitestArgs(pnpmArgs);
   if (workerRun && directNodeArgs) {
@@ -1229,18 +1247,16 @@ export function spawnWatchedVitestProcess({
         ],
       }
     : spawnParams;
-  const { child, completion: childCompletion } = spawnOwnedVitestProcess(
-    directNodeArgs
+  const { child, completion: childCompletion } = spawnOwnedVitestProcess({
+    ...(directNodeArgs
       ? { command: process.execPath, args: directNodeArgs, options: childSpawnParams }
-      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams }),
-  );
-  const teardownChildCleanup = installVitestProcessGroupCleanup({
+      : createPnpmRunnerSpawnSpec({ pnpmArgs, ...childSpawnParams })),
+    homeMode,
+  });
+  const childCleanup = installVitestProcessGroupCleanup({
     child,
     forceSignal: "SIGKILL",
     forceSignalDelayMs: 100,
-    onSignal: (signal) => {
-      forwardedSignal ??= signal;
-    },
   });
   const teardownNoOutputWatchdog = installVitestNoOutputWatchdog({
     streams: [child.stdout, child.stderr],
@@ -1280,7 +1296,7 @@ export function spawnWatchedVitestProcess({
   ]);
 
   const teardown = () => {
-    teardownChildCleanup();
+    childCleanup.teardown();
     teardownNoOutputWatchdog();
   };
   const completion = Promise.all([childCompletion, forwardedOutput])
@@ -1297,37 +1313,13 @@ export function spawnWatchedVitestProcess({
   return {
     child,
     completion: workerRun ? workerRun.borrow(child, completion) : completion,
-    getForwardedSignal: () => forwardedSignal,
+    getForwardedSignal: childCleanup.getForwardedSignal,
     teardown,
   };
 }
 
-async function finishVitestProcess({
-  completion,
-  getForwardedSignal,
-  beforeSignal,
-}: Pick<VitestProcessHandle, "completion" | "getForwardedSignal"> & {
-  beforeSignal?: () => void | Promise<void>;
-}): Promise<number> {
-  const { code, signal } = await completion;
-  const exitSignal = getForwardedSignal() ?? signal;
-  if (exitSignal) {
-    try {
-      await beforeSignal?.();
-    } catch (error) {
-      console.error(error);
-    } finally {
-      writeFailedTrailer("vitest", signalExitCode(exitSignal));
-      process.kill(process.pid, exitSignal);
-    }
-    return signalExitCode(exitSignal);
-  }
-  const exitCode = code ?? 1;
-  process.exitCode = exitCode;
-  return exitCode;
-}
-
-async function main(
+export async function runVitest(
+  exitBySignal: typeof exitVitestBySignal,
   argv: string[] = process.argv.slice(2),
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<void> {
@@ -1351,11 +1343,18 @@ async function main(
 
   const delegatedArgs = resolveTestProjectsDelegationArgs(argv);
   if (delegatedArgs) {
-    await finishVitestProcess(spawnTestProjectsRunner(delegatedArgs, env));
+    const handle = spawnTestProjectsRunner(delegatedArgs, env);
+    const { code, signal } = await handle.completion;
+    const exitSignal = handle.getForwardedSignal() ?? signal;
+    if (exitSignal) {
+      await exitBySignal(exitSignal);
+    }
+    process.exitCode = code ?? 1;
     return;
   }
 
   const vitestArgs = resolveImplicitVitestArgs(argv);
+  assertTestHomeSelection(env, resolveVitestHomeSelection(vitestArgs, { env }));
   const invocations = resolveBoundedVitestInvocations(vitestArgs, { env });
   const config = resolveVitestConfigArg(vitestArgs);
   const repoRoot = resolveRepoRoot(import.meta.url);
@@ -1400,6 +1399,14 @@ async function main(
   const sourceMode =
     resolveExplicitVitestMode(vitestArgs) === "watch" || isVitestWorkerMetadataRequest(vitestArgs);
   const workers = sourceMode ? undefined : createVitestWorkerRun();
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals) => {
+    interrupted ??= signal;
+  };
+  // The invocation outlives child-scoped handlers when admission or final
+  // verification is still reading. Retain signal ownership through disposal.
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
   try {
     let failedExitCode = 0;
     for (const [index, invocation] of invocations.entries()) {
@@ -1420,27 +1427,34 @@ async function main(
         spawnParams: resolveVitestSpawnParams(spawnEnv),
         env: spawnEnv,
       });
-      const exitCode = await finishVitestProcess({
-        ...handle,
-        beforeSignal: () => workers?.dispose(),
-      });
-      // Ordinary test failures must not hide later files. Signals are forwarded by
-      // finishVitestProcess and stop this owner before another child is admitted.
-      if (
-        handle.getForwardedSignal() ||
-        handle.child.signalCode ||
-        (exitCode !== 0 && exitCode !== 1)
-      ) {
+      const { code, signal } = await handle.completion;
+      interrupted ??= handle.getForwardedSignal() ?? signal ?? undefined;
+      const exitCode = code ?? 1;
+      // Ordinary test failures must not hide later files; interruptions stop
+      // admission and are re-raised only after the invocation has been disposed.
+      if (interrupted || (exitCode !== 0 && exitCode !== 1)) {
+        process.exitCode = exitCode;
         return;
       }
       failedExitCode ||= exitCode;
     }
     process.exitCode = failedExitCode;
   } finally {
-    await workers?.dispose();
+    try {
+      await workers?.dispose().catch((error: unknown) => {
+        process.exitCode ||= 1;
+        console.error(error);
+      });
+    } finally {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      if (interrupted) {
+        await exitBySignal(interrupted);
+      }
+    }
   }
 }
 
 if (import.meta.main) {
-  await runWithFailedTrailer("vitest", main);
+  await runVitestCli("vitest", runVitest);
 }

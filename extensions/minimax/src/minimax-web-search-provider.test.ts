@@ -1,7 +1,7 @@
-// Minimax tests cover minimax web search provider plugin behavior.
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { minimaxWebSearchTesting } from "../test-api.js";
 import { createMiniMaxWebSearchProvider } from "./minimax-web-search-provider.js";
+import { testing as minimaxWebSearchTesting } from "./minimax-web-search-provider.runtime.js";
 
 const {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
@@ -11,20 +11,14 @@ const {
   resolveMiniMaxRegion,
 } = minimaxWebSearchTesting;
 
-function restoreEnvValue(key: string, value: string | undefined) {
-  if (value === undefined) {
-    delete process.env[key];
-  } else {
-    process.env[key] = value;
-  }
-}
-
 describe("minimax web search provider", () => {
-  const originalApiHost = process.env.MINIMAX_API_HOST;
-  const originalCodePlanKey = process.env.MINIMAX_CODE_PLAN_KEY;
-  const originalCodingApiKey = process.env.MINIMAX_CODING_API_KEY;
-  const originalOauthToken = process.env.MINIMAX_OAUTH_TOKEN;
-  const originalApiKey = process.env.MINIMAX_API_KEY;
+  const envSnapshot = captureEnv([
+    "MINIMAX_API_HOST",
+    "MINIMAX_CODE_PLAN_KEY",
+    "MINIMAX_CODING_API_KEY",
+    "MINIMAX_OAUTH_TOKEN",
+    "MINIMAX_API_KEY",
+  ]);
 
   beforeEach(() => {
     delete process.env.MINIMAX_API_HOST;
@@ -35,11 +29,7 @@ describe("minimax web search provider", () => {
   });
 
   afterEach(() => {
-    restoreEnvValue("MINIMAX_API_HOST", originalApiHost);
-    restoreEnvValue("MINIMAX_CODE_PLAN_KEY", originalCodePlanKey);
-    restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
-    restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
-    restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
+    envSnapshot.restore();
   });
 
   it.each([0, 1])(

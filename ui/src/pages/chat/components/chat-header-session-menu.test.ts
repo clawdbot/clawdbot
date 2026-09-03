@@ -212,6 +212,7 @@ describe("chat header session menu", () => {
           false,
           undefined,
           false,
+          null,
         ),
         container,
       );
@@ -290,6 +291,7 @@ describe("chat header session menu", () => {
         false,
         undefined,
         false,
+        null,
       ),
       container,
     );
@@ -303,7 +305,7 @@ describe("chat header session menu", () => {
     const groupLabels = Array.from(
       moveToGroup.querySelectorAll<MenuItemElement>("wa-dropdown-item[slot='submenu']"),
     ).map(itemLabel);
-    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group…"]);
+    expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
   });
 
   it("dispatches canonical session actions from the header surface", async () => {
@@ -454,7 +456,7 @@ describe("chat header session menu", () => {
     expect(splitRight).toHaveBeenCalledOnce();
   });
 
-  it("offers direct and submenu owner assignment", async () => {
+  it("offers self and named owner assignment in one submenu", async () => {
     const onAction = vi.fn<(action: HeaderMenuAction) => void>();
     const ada = { type: "human", id: "profile-ada", label: "Ada" } as const;
     const research = { type: "agent", id: "research:one", label: "Research" } as const;
@@ -465,18 +467,22 @@ describe("chat header session menu", () => {
       onAction,
     });
 
-    expect(item(menu, "Assign to me").disabled).toBe(false);
     const submenu = item(menu, "Assign to…");
     expect(
+      Array.from(menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"))
+        .map(itemLabel)
+        .filter((label) => label.startsWith("Assign to")),
+    ).toEqual(["Assign to…"]);
+    expect(
       Array.from(submenu.querySelectorAll("wa-dropdown-item[slot='submenu']")).map(itemLabel),
-    ).toEqual(["Ada", "Research"]);
+    ).toEqual(["Me", "Research"]);
     const selected = item(menu, "Research");
     expect(selected.getAttribute("role")).toBe("menuitemradio");
     expect(selected.getAttribute("aria-checked")).toBe("true");
     expect(selected.disabled).toBe(true);
     expect(selected.querySelector("[slot='details']")).not.toBeNull();
 
-    select(menu, item(menu, "Assign to me").getAttribute("value") ?? "");
+    select(menu, item(menu, "Me").getAttribute("value") ?? "");
     select(menu, "assign-owner:agent:research%3Aone");
     expect(onAction.mock.calls).toEqual([
       [{ kind: "assign-owner", owner: { type: "human", id: "profile-ada" } }],
@@ -615,7 +621,7 @@ describe("chat header session menu", () => {
       Array.from(
         menu.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
-    ).toEqual(["Back", "Ada", "Research"]);
+    ).toEqual(["Back", "Me", "Research"]);
     select(menu, "assign-owner:human:profile-ada");
     expect(onAction).toHaveBeenCalledWith({
       kind: "assign-owner",

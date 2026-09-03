@@ -89,8 +89,7 @@ suite.define(() => {
         status: "done",
         updatedAt: baseTime + 200,
       };
-      await gateway.setMethodResponse(
-        "sessions.list",
+      await gateway.setSessionsListResponse(
         sessionsListResponse([parentRow, completedChild, ...siblingRows]),
       );
       const listCount = (await gateway.getRequests("sessions.list")).length;

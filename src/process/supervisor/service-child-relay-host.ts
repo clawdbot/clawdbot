@@ -126,6 +126,7 @@ function createOutputRelay(stream?: Readable) {
 export async function createServiceChildRelayAdapter(params: {
   command: string;
   args: string[];
+  argv0?: string;
   cwd?: string;
   env?: NodeJS.ProcessEnv;
   stdinMode: "inherit" | "pipe-open" | "pipe-closed";
@@ -420,6 +421,7 @@ export async function createServiceChildRelayAdapter(params: {
     generation,
     command: params.command,
     args: params.args,
+    argv0: params.argv0,
     cwd: params.cwd,
     env: params.env ? toStringEnv(params.env) : undefined,
     stdinMode: params.stdinMode,
@@ -464,7 +466,8 @@ export async function createServiceChildRelayAdapter(params: {
   }
 
   const kill = (signal: NodeJS.Signals = "SIGKILL") => {
-    if (state === "closed" || state === "identity-lost") {
+    // A closing receipt retires cancellation; channel/anchor exit still owns extinction.
+    if (state !== "active") {
       return;
     }
     const normalized = signal === "SIGTERM" ? "SIGTERM" : "SIGKILL";
@@ -476,15 +479,19 @@ export async function createServiceChildRelayAdapter(params: {
       generation,
       sequence: outboundSequence,
       signal: normalized,
-    }).catch((error: unknown) =>
-      loseIdentity(toErrorObject(error, "service child cancellation failed").message),
-    );
+    }).catch((error: unknown) => {
+      // Delivery can fail after the anchor has already sent its closing receipt.
+      if (state === "active") {
+        loseIdentity(toErrorObject(error, "service child cancellation failed").message);
+      }
+    });
   };
 
   return {
     pid: commandPid,
     stdin,
     oomScoreWrapperSelected: params.oomScoreWrapperSelected,
+    supportsRawOutput: !useWindowsJobAnchor,
     onStdout: stdoutRelay.subscribe,
     onStderr: stderrRelay.subscribe,
     wait: async () => {

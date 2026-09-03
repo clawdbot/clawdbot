@@ -86,6 +86,22 @@ describe("backup run records", () => {
     });
   });
 
+  it("does not split surrogate pairs at the persisted diagnostic limit", async () => {
+    const env = await testEnv({ bootstrap: true });
+    recordBackupRunOutcome({
+      env,
+      archivePath: "/backups/git",
+      status: "ok",
+      kind: "git",
+      error: `${"x".repeat(1_199)}😀tail`,
+      pushFailed: true,
+      createdAt: 1,
+    });
+
+    const persisted = readBackupFreshness(env).latest?.error;
+    expect(persisted).toBe("x".repeat(1_199));
+  });
+
   it("treats an older same-version database without backup_runs as no recorded backups", async () => {
     const env = await testEnv({ bootstrap: true });
     withExistingOpenClawStateDatabaseReadOnly(() => undefined, { env });

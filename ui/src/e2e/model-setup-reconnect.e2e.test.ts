@@ -67,7 +67,8 @@ suite.define(() => {
               "chat.metadata",
               "chat.startup",
               "openclaw.setup.detect",
-              "openclaw.setup.activate",
+              "openclaw.setup.activate.start",
+              "wizard.next",
               "openclaw.setup.verify",
               "openclaw.chat",
             ],
@@ -79,9 +80,14 @@ suite.define(() => {
                 setupComplete: false,
                 manualProviders: [{ id: "openai", label: "OpenAI" }],
               },
-              "openclaw.setup.activate": {
-                ok: false,
-                status: "auth",
+              "openclaw.setup.activate.start": {
+                sessionId: "activation-session",
+                done: false,
+                status: "running",
+              },
+              "wizard.next": {
+                done: true,
+                status: "error",
                 error: "401: invalid test API key",
               },
               "openclaw.setup.verify": pendingVerification,
@@ -100,11 +106,14 @@ suite.define(() => {
           expect(new URL(page.url()).pathname).toBe("/settings/model-setup");
           expect(await gateway.getRequests("openclaw.setup.verify")).toHaveLength(0);
 
-          await gateway.setMethodResponse("openclaw.setup.activate", {
-            ok: true,
-            modelRef,
-            latencyMs: 42,
-            gatewayRestartRequired: true,
+          await page
+            .locator("openclaw-modal-dialog")
+            .getByRole("button", { name: "Close", exact: true })
+            .click();
+          await gateway.setMethodResponse("wizard.next", {
+            done: true,
+            status: "done",
+            modelActivation: { modelRef, gatewayRestartRequired: true },
           });
           const initialRefreshes = (await gateway.getRequests("config.get")).length;
           await gateway.deferNext("config.get");
@@ -160,7 +169,7 @@ suite.define(() => {
           await destination.getByRole("button", { name: "Verify & use selected model" }).click();
           await expect.poll(() => new URL(destination.url()).pathname).toBe("/custodian");
           if (restart === "reconnect") {
-            expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(2);
+            expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(2);
             const connections = await gateway.getRequests("connect");
             expect(connectParams(connections.at(-1)?.params).auth).toMatchObject({
               deviceToken: "e2e-device-token",
@@ -169,7 +178,9 @@ suite.define(() => {
               "bootstrapToken",
             );
           } else {
-            expect(await reconnectedGateway.getRequests("openclaw.setup.activate")).toHaveLength(0);
+            expect(
+              await reconnectedGateway.getRequests("openclaw.setup.activate.start"),
+            ).toHaveLength(0);
           }
           await destination.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
           const welcomeRequest = await reconnectedGateway.waitForRequest("openclaw.chat");
@@ -196,7 +207,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           featureMethods: [
             "openclaw.setup.detect",
-            "openclaw.setup.activate",
+            "openclaw.setup.activate.start",
             "openclaw.setup.verify",
             "openclaw.setup.auth.start",
             "openclaw.setup.prepare.start",
@@ -227,7 +238,11 @@ suite.define(() => {
                 { id: "provider-login", label: "Provider login", kind: "oauth", featured: true },
               ],
             },
-            "openclaw.setup.activate": { ok: true, ...activation },
+            "openclaw.setup.activate.start": {
+              sessionId: "activation-session",
+              done: false,
+              status: "running",
+            },
             "openclaw.setup.auth.start": {
               sessionId: "auth-session",
               done: false,
@@ -239,11 +254,12 @@ suite.define(() => {
               status: "running",
             },
             "wizard.next": {
-              done: true,
-              status: "done",
-              ...(entry === "prepared model"
-                ? { preparedModelRef: modelRef }
-                : { modelActivation: activation }),
+              sequence: [
+                ...(entry === "prepared model"
+                  ? [{ done: true, status: "done", preparedModelRef: modelRef }]
+                  : []),
+                { done: true, status: "done", modelActivation: activation },
+              ],
             },
             "openclaw.setup.verify": { ok: true, modelRef, latencyMs: 31 },
           },
@@ -254,7 +270,7 @@ suite.define(() => {
         // activation response so only that mutation's refresh is interrupted.
         let refreshes = (await gateway.getRequests("config.get")).length;
         if (entry === "prepared model") {
-          await gateway.deferNext("openclaw.setup.activate");
+          await gateway.deferNext("openclaw.setup.activate.start");
         } else {
           await gateway.deferNext("config.get");
         }
@@ -266,15 +282,15 @@ suite.define(() => {
           await page.locator('[data-auth-choice="provider-login"] button').click();
         }
         if (entry === "prepared model") {
-          await gateway.waitForRequest("openclaw.setup.activate");
+          await gateway.waitForRequest("openclaw.setup.activate.start");
           await gateway.deferNext("config.get");
           refreshes = (await gateway.getRequests("config.get")).length;
         }
         if (entry === "prepared model") {
-          await gateway.resolveDeferred("openclaw.setup.activate");
+          await gateway.resolveDeferred("openclaw.setup.activate.start");
         } else {
           await gateway.waitForRequest(
-            entry === "clicked candidate" ? "openclaw.setup.activate" : "wizard.next",
+            entry === "clicked candidate" ? "openclaw.setup.activate.start" : "wizard.next",
           );
         }
         await expect
@@ -286,7 +302,7 @@ suite.define(() => {
         await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
         expect(new URL(page.url()).searchParams.get("onboarding")).toBe("1");
         await page.getByText(onboardingWelcome.reply, { exact: true }).waitFor();
-        expect(await gateway.getRequests("openclaw.setup.activate")).toHaveLength(
+        expect(await gateway.getRequests("openclaw.setup.activate.start")).toHaveLength(
           entry === "provider sign-in" ? 0 : 1,
         );
       });

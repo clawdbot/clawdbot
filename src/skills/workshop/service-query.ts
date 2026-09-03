@@ -9,6 +9,7 @@ import {
   readWorkspaceSkillFile,
 } from "../lifecycle/workspace-skill-write.js";
 import { transitionPendingSkillProposalToStale } from "./apply-transition.js";
+import { resolveSkillProposalName } from "./frontmatter.js";
 import { dispatchSkillProposalChanged } from "./plugin-hooks.js";
 import { hashSkillProposalRevision } from "./revision-hash.js";
 import {
@@ -153,7 +154,7 @@ export async function resolvePendingSkillProposal(input: {
   if (matches.length > 1) {
     const candidates = matches
       .slice(0, 8)
-      .map((proposal) => `${proposal.id} (${proposal.skillKey})`)
+      .map((proposal) => `${proposal.id} (${resolveSkillProposalName(proposal.kind, proposal)})`)
       .join(", ");
     throw new Error(`Multiple pending skill proposals matched ${name}: ${candidates}`);
   }

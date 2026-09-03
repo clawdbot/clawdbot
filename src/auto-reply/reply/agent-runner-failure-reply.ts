@@ -7,6 +7,7 @@ import {
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
+import { classifyFailoverReason } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "../../agents/embedded-agent-helpers/user-facing-text.js";
 import { classifyCompactionReason } from "../../agents/embedded-agent-runner/compact-reasons.js";
@@ -25,17 +26,20 @@ import {
   renderBillingReplyCopy,
   renderCliTimeoutReplyCopy,
   renderFailoverCodeUserCopy,
+  renderHeartbeatRunFailureCopy,
   renderMissingApiKeyReplyCopy,
   renderRateLimitOrOverloadedCopy,
   renderRateLimitReplyCopy,
   resolveProviderRequestFailureCopy,
   type ReplyFallbackAttempt,
 } from "../../agents/failover/user-copy.js";
+import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
 import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { buildCodexLoginRecovery } from "../codex-login-recovery.js";
 import {
   copyReplyPayloadMetadata,
@@ -51,23 +55,25 @@ import type { ReplyPayload } from "../types.js";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const described = describeFailoverError(error);
-  const classification = described.reason
-    ? ({ kind: "reason", reason: described.reason } as const)
-    : null;
+  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
+  const reason =
+    described.reason ??
+    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
+  const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
     code: described.code,
     provider: described.provider,
     model: described.model,
-    status: described.status,
+    status,
     authMode: described.authMode,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
-        status: described.status,
+        status,
         message: described.rawError ?? message,
       }),
-      status: described.status,
+      status,
       technicalMessage: message,
     }),
   };
@@ -197,19 +203,21 @@ export function buildAuthProfileFailoverFailureText(error: unknown): string | nu
   });
 }
 
-function formatForwardedExternalRunFailureText(message: string): string {
-  const sanitized = renderUserFacingText(message, { errorContext: true })
+function resolveExternalRunFailureDetail(message: string): string | undefined {
+  const sanitized = message
     .trim()
     .replace(/^⚠️\s*/u, "")
     .replace(/\s+/gu, " ");
-  if (!sanitized) {
-    return GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
-  }
-  const detail =
-    sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
-      ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
-      : sanitized;
-  return `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`;
+  return sanitized.length > EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS
+    ? `${truncateUtf16Safe(sanitized, EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS - 1).trimEnd()}…`
+    : sanitized || undefined;
+}
+
+function formatForwardedExternalRunFailureText(message: string): string {
+  const detail = resolveExternalRunFailureDetail(message);
+  return detail
+    ? `⚠️ Agent failed before reply: ${detail}${/[.!?]$/u.test(detail) ? "" : "."} Please try again, or use /new to start a fresh session.`
+    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
 }
 
 export function buildExternalRunFailureReply(
@@ -225,6 +233,20 @@ export function buildExternalRunFailureReply(
   const message = typeof input === "string" ? input : input.message;
   const error = typeof input === "string" ? undefined : input.error;
   const normalizedMessage = collapseRepeatedFailureDetail(message);
+  // A preflight refusal is host-authored and names the next step. Heartbeats run
+  // unattended in the owner's session, so they disclose it without the verbose
+  // opt-in; raw thrown detail further below stays verbose-gated.
+  if (isAgentHarnessPreflightError(error)) {
+    const sanitizedMessage = sanitizeUserFacingText(normalizedMessage, { errorContext: true });
+    return {
+      text: options?.isHeartbeat
+        ? renderHeartbeatRunFailureCopy(resolveExternalRunFailureDetail(sanitizedMessage))
+        : options?.includeDetails
+          ? formatForwardedExternalRunFailureText(sanitizedMessage)
+          : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !options?.isHeartbeat,
+    };
+  }
   const failoverFacts =
     options?.failoverFacts ??
     resolveReplyFailoverFacts(error ?? normalizedMessage, normalizedMessage);
@@ -292,10 +314,10 @@ export function buildExternalRunFailureReply(
   }
   const providerRequestError = failoverFacts.providerRequestError;
   if (providerRequestError) {
-    return {
-      text: providerRequestError.userMessage ?? renderAssistantRequestFailureCopy(failoverFacts),
-      isGenericRunnerFailure: false,
-    };
+    // Curated facet copy carries recovery guidance (quota/billing ambiguity,
+    // /new for conversation-state, config fix for model_not_found); the
+    // classified summary below is the fallback for facts without a facet.
+    return { text: providerRequestError.userMessage, isGenericRunnerFailure: false };
   }
   const authError = isProviderAuthError(error) ? error : undefined;
   const missingApiKeyFailure = renderMissingApiKeyReplyCopy(
@@ -307,7 +329,12 @@ export function buildExternalRunFailureReply(
     return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
-    return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
+    const detail = options.includeDetails
+      ? resolveExternalRunFailureDetail(
+          sanitizeUserFacingText(normalizedMessage, { errorContext: true }),
+        )
+      : undefined;
+    return { text: renderHeartbeatRunFailureCopy(detail), isGenericRunnerFailure: false };
   }
   const codexAppServerFailure = buildCodexAppServerFailureText(normalizedMessage);
   if (codexAppServerFailure) {
@@ -321,7 +348,9 @@ export function buildExternalRunFailureReply(
   // explicit opt-in because sanitization does not make raw provider bodies safe.
   return {
     text: options?.includeDetails
-      ? formatForwardedExternalRunFailureText(normalizedMessage)
+      ? formatForwardedExternalRunFailureText(
+          renderUserFacingText(normalizedMessage, { errorContext: true }),
+        )
       : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
     isGenericRunnerFailure: true,
   };
@@ -416,6 +445,11 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   resolvedVerboseLevel: VerboseLevel | undefined;
   cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
+  // Direct preflight diagnostics are not provider failures; preserve their
+  // identity for the caller's generic settlement and disclosure policy.
+  if (isAgentHarnessPreflightError(params.err)) {
+    return undefined;
+  }
   const message = formatErrorMessage(params.err);
   const failoverFacts = resolveReplyFailoverFacts(params.err, message);
   const fallbackAttempts = readFallbackAttempts(params.err);

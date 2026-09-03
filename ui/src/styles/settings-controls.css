@@ -47,12 +47,6 @@ wa-radio-group.settings-segmented::part(form-control-label) {
   clip: rect(0, 0, 0, 0);
 }
 
-wa-radio-group.settings-segmented::part(radios) {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-}
-
 .settings-segmented__btn {
   font-size: var(--control-ui-text-sm);
   font-weight: 550;
@@ -111,12 +105,27 @@ select.settings-select:not([multiple]) {
 
 .settings-input,
 .settings-select {
-  --control-ui-touch-input-size: var(--control-ui-input-text-size);
-
   width: 100%;
   min-width: 0;
   font: inherit;
+}
+
+.settings-input {
+  --control-ui-touch-input-size: var(--control-ui-input-text-size);
+
   font-size: var(--control-ui-input-text-size);
+}
+
+.settings-select {
+  --control-ui-touch-input-size: var(--control-ui-text-sm);
+
+  font-size: var(--control-ui-text-sm);
+}
+
+@media (pointer: coarse) {
+  wa-select.settings-select {
+    font-size: max(16px, var(--control-ui-touch-input-size));
+  }
 }
 
 /* Native controls own their box. Web Awesome selects are styled by their

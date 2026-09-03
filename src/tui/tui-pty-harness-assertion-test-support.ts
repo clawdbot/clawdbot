@@ -209,7 +209,7 @@ function replayTerminalState(
   if (!terminalOutputIsComplete(raw)) {
     return undefined;
   }
-  for (const segment of ansiSequences.splitAnsiSegments(raw)) {
+  for (const segment of ansiSequences.iterateAnsiSegments(raw)) {
     if (segment.kind === "text") {
       // pi-tui expands visible tabs and does not use literal HT/BS for output layout.
       // Captured HT/BS bytes are invalid evidence, not terminal operations to replay.

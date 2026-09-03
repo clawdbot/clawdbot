@@ -42,19 +42,19 @@ const moved = "d".repeat(40);
 const merge = "e".repeat(40);
 const defaults: Record<string, string> = {
   CHECKOUT_REPO: "fixture/checkout",
+  CHECKOUT_TOKEN: "",
   CHECKOUT_REF: candidate,
   CHECKOUT_SHA: candidate,
   CHECKOUT_FALLBACK_REF: candidate,
   CHECKOUT_EVENT_REF: "refs/heads/main",
   WORKFLOW_SHA: harness,
+  CHECKOUT_GIT_COMMITS_JSON: "null",
   GITHUB_EVENT_NAME: "push",
   GITHUB_REPOSITORY: "fixture/checkout",
   DEFAULT_BRANCH: "main",
   EVENT_BASE_SHA: base,
   GH_TOKEN: "",
   PULL_REQUEST_NUMBER: "17",
-  PR_COMMIT_COUNT: "5",
-  PR_MERGE_SHA: merge,
   TARGET_SHA: candidate,
   RELEASE_GATE: "false",
   FROZEN_TARGET: "false",
@@ -136,6 +136,7 @@ export async function runCiGitStep(options: {
   checkoutResults?: number[];
   mergeSnapshots?: { sha: string; head: string }[];
   prepare?: boolean;
+  checkoutBeforeStep?: boolean;
   cancelDuringCleanup?: boolean;
   cleanupCancelMatch?: string;
   startupDelay?: { tree: number };
@@ -213,8 +214,9 @@ export async function runCiGitStep(options: {
     `linux:${options.scenario ?? "configured"}`,
     (root) => {
       const actions = path.join(root, "trusted-actions");
-      if (options.performance)
+      if (options.performance) {
         performanceFixture = preparePerformanceFixture(root, options.performance);
+      }
       env = stepEnvironment(step, {
         PUBLISH_ACTION_PATH: path.resolve(".github/actions/publish-generated-pr"),
         CONTENTS_TOKEN: "fixture-contents",
@@ -397,7 +399,7 @@ def main():`,
           releaseAdmission,
           checkoutResults: options.checkoutResults,
           mergeSnapshots: options.mergeSnapshots,
-          consumers: Boolean(options.prepare || externalOwner),
+          consumers: Boolean(options.prepare || options.checkoutBeforeStep || externalOwner),
           cancelDuringCleanup: options.cancelDuringCleanup,
           cleanupCancelMatch: options.cleanupCancelMatch,
           baseAvailableAfter: options.baseAvailableAfter,
@@ -446,6 +448,11 @@ ${run}`;
         writeFileSync(path.join(root, "prepare.sh"), renderGitTestClock(prepare.run, clock));
         // Run the actual prepare body in its own shell: its exec must not replace the caller.
         run = `CHECKOUT_KIND=${prepareEnv.CHECKOUT_KIND} bash --noprofile --norc -eo pipefail "$TMPDIR/prepare.sh"\n${run}`;
+      }
+      if (options.checkoutBeforeStep) {
+        const checkout = readCiCheckoutStep(options.job ?? "checks-fast-core");
+        writeFileSync(path.join(root, "bootstrap.sh"), renderGitTestClock(checkout.run, clock));
+        run = `bash --noprofile --norc -eo pipefail "$TMPDIR/bootstrap.sh"\n${run}`;
       }
       if (options.performance) {
         const mapfileShim =

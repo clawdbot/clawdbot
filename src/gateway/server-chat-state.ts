@@ -73,6 +73,8 @@ export function isChatAbortMarkerCurrent(
 export type BufferedAgentEvent = {
   sessionKey?: string;
   agentId?: string;
+  controlUiVisible?: boolean;
+  isCurrent?: () => boolean;
   payload: AgentEventPayload & { spawnedBy?: string };
 };
 
@@ -101,6 +103,7 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
+  bufferIsCurrent?: () => boolean;
   /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
@@ -111,15 +114,11 @@ type ChatRunRecord = {
   assistantScope?: { itemId: string; prefix: string };
   managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
-  agentText?: {
-    assistant?: ChatRunAgentTextState;
-    thinking?: ChatRunAgentTextState;
-  };
+  agentText?: Partial<
+    Record<"assistant" | "thinking" | "preamble" | "answer_candidate", ChatRunAgentTextState>
+  >;
   abortMarker?: ChatAbortMarker;
   toolRecipient?: ChatRunToolRecipientState;
-};
-
-type InternalChatRunRecord = ChatRunRecord & {
   /** Fixed-deadline trailing wake-up owned by this run's buffered state. */
   pendingTextFlushes?: Partial<Record<"chat" | "agent", PendingLiveTextFlush>>;
 };
@@ -151,16 +150,11 @@ function createChatRunRecordStore(): ChatRunRecordStore {
   return { runs, getOrCreate, releaseIfEmpty };
 }
 
-function internalChatRunRecord(record: ChatRunRecord): InternalChatRunRecord {
-  return record;
-}
-
 function clearPendingLiveTextFlushes(record: ChatRunRecord): void {
-  const internal = internalChatRunRecord(record);
-  for (const pending of Object.values(internal.pendingTextFlushes ?? {})) {
+  for (const pending of Object.values(record.pendingTextFlushes ?? {})) {
     clearTimeout(pending.timer);
   }
-  delete internal.pendingTextFlushes;
+  delete record.pendingTextFlushes;
 }
 
 export type ChatRunRegistry = {
@@ -272,6 +266,7 @@ export function createChatRunState(): ChatRunState {
     }
     delete record.rawBuffer;
     delete record.buffer;
+    delete record.bufferIsCurrent;
     delete record.bufferProjection;
     delete record.planSnapshot;
     delete record.progressSnapshot;
@@ -294,7 +289,7 @@ export function createChatRunState(): ChatRunState {
 
   const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
     const record = store.runs.get(runId);
-    if (!record) {
+    if (!record || record.bufferIsCurrent?.() === false) {
       return projectLiveAssistantBufferedText("");
     }
     const rawText = record.rawBuffer;

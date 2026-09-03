@@ -10,7 +10,11 @@ import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.j
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
 import { isRecord } from "../utils.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { modelKey, createConfiguredProviderCatalogModelIdNormalizer } from "./model-ref-shared.js";
+import {
+  modelKey,
+  createConfiguredProviderCatalogModelIdNormalizer,
+  type ModelManifestNormalizationContext,
+} from "./model-ref-shared.js";
 import {
   mergeProviders,
   mergeWithExistingProviderSecrets,
@@ -126,7 +130,7 @@ function buildPluginCatalogWrites(
 
 function buildSourceModelFields(
   sourceProviders: Record<string, ProviderConfig> | undefined,
-  manifestPlugins: PluginMetadataSnapshot["manifestRegistry"]["plugins"] | undefined,
+  manifestPlugins: ModelManifestNormalizationContext["manifestPlugins"],
 ): SourceModelFields {
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer({ manifestPlugins });
   const fields = new Map<
@@ -163,7 +167,7 @@ async function resolveProvidersForModelsJsonWithDeps(
   const cfg = context.cfg.models?.providers
     ? { ...context.cfg, models: { ...context.cfg.models, providers: explicitProviders } }
     : context.cfg;
-  const manifestPlugins = context.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const manifestPlugins = context.pluginMetadataSnapshot;
   const sourceModelFields = buildSourceModelFields(context.cfg.models?.providers, manifestPlugins);
   // When models.mode is "replace" the user opts out of provider discovery, so
   // skip the (potentially slow) implicit-provider resolver entirely and return
@@ -254,7 +258,8 @@ function isWritableProviderConfig(provider: ProviderConfig): boolean {
   if (!Array.isArray(provider.models) || provider.models.length === 0) {
     return true;
   }
-  return Boolean(provider.baseUrl?.trim() && provider.apiKey);
+  // AuthStorage can supply omitted keys; an explicitly empty key still violates the schema.
+  return Boolean(provider.baseUrl?.trim() && (provider.apiKey === undefined || provider.apiKey));
 }
 
 function filterWritableProviders(
@@ -301,7 +306,7 @@ async function planOpenClawModelsJsonWithDeps(
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
-  const manifestPlugins = context.pluginMetadataSnapshot?.manifestRegistry.plugins;
+  const manifestPlugins = context.pluginMetadataSnapshot;
   const providerPolicyManifestRegistry =
     context.pluginMetadataSnapshot?.pluginIds === undefined
       ? context.pluginMetadataSnapshot?.manifestRegistry

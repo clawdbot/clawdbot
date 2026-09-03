@@ -43,7 +43,6 @@ export type LiveModelCatalogHeaderContext = {
   discoveryApiKey?: string;
 };
 
-export { normalizeOpenRouterModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
 export { clearLiveCatalogCacheForTests } from "./provider-catalog-shared.js";
 export {
   readLiveModelCatalogBooleanField,

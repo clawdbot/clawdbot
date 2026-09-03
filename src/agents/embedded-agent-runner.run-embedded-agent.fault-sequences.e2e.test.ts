@@ -4,7 +4,6 @@ import os from "node:os";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { wrapRunWithTestPreparedAdmission } from "./admitted-run-context.test-support.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
@@ -66,10 +65,6 @@ vi.mock("./models-config.js", async () => {
 });
 
 type ProductionRunEmbeddedAgent = typeof import("./embedded-agent-runner/run.js").runEmbeddedAgent;
-type TestRunEmbeddedAgent = (
-  params: Omit<Parameters<ProductionRunEmbeddedAgent>[0], "admittedRunContext">,
-) => ReturnType<ProductionRunEmbeddedAgent>;
-let runEmbeddedAgent: TestRunEmbeddedAgent;
 let runEmbeddedAgentWithPreparedAdmission: ProductionRunEmbeddedAgent;
 let runWithModelFallback: typeof import("./model-fallback-runner.js").runWithModelFallback;
 let captureRoutingDecisionWork: typeof import("./test-helpers/model-routing-decision-e2e-fixtures.js").captureRoutingDecisionWork;
@@ -94,7 +89,6 @@ beforeAll(async () => {
 
   runEmbeddedAgentWithPreparedAdmission = (await import("./embedded-agent-runner/run.js"))
     .runEmbeddedAgent;
-  runEmbeddedAgent = wrapRunWithTestPreparedAdmission(runEmbeddedAgentWithPreparedAdmission);
   ({ runWithModelFallback } = await import("./model-fallback-runner.js"));
   ({ captureRoutingDecisionWork, createModelRoutingTestAdmission } =
     await import("./test-helpers/model-routing-decision-e2e-fixtures.js"));
@@ -276,6 +270,13 @@ async function runScenario(params: {
     sessionKey: `agent:test:${params.runId}`,
     storePath: path.join(params.agentDir, "openclaw-agent.sqlite"),
   };
+  // Every fallback candidate belongs to the same outer admitted run.
+  const preparedRunAdmission = createModelRoutingTestAdmission({
+    cfg: params.config,
+    runId: params.runId,
+    agentId: sessionTarget.agentId,
+    boundary: "provider-fault-sequence",
+  });
   try {
     // The synthetic attempt skips transcript creation; seed the real row so the
     // runner claims its writer normally before entering compaction recovery.
@@ -299,7 +300,9 @@ async function runScenario(params: {
           preferredResult,
         }),
       run: async (provider, model, options) =>
-        await runEmbeddedAgent({
+        await runEmbeddedAgentWithPreparedAdmission({
+          preparedRunAdmission,
+          agentId: sessionTarget.agentId,
           sessionId: sessionTarget.sessionId,
           sessionKey: sessionTarget.sessionKey,
           sessionTarget,
@@ -329,6 +332,8 @@ async function runScenario(params: {
       throw error;
     }
     return { kind: "error", error };
+  } finally {
+    preparedRunAdmission.close();
   }
 }
 
@@ -337,6 +342,7 @@ async function readUsageStats(agentDir: string) {
 }
 
 function expectResult(outcome: ScenarioOutcome): Extract<ScenarioOutcome, { kind: "result" }> {
+  expect(outcome.kind).toBe("result");
   if (outcome.kind !== "result") {
     throw outcome.error;
   }

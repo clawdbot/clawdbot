@@ -31,7 +31,7 @@ const CHIP_PROPERTIES = [
 ] as const;
 
 // sidebar-markdown.css must load after chat/text.css, matching the import order
-// in styles/chat.css — the file-link rules are written to win at that order.
+// in styles/chat.ts — the file-link rules are written to win at that order.
 function readChatCss(): string {
   return [
     "ui/src/styles/base.css",

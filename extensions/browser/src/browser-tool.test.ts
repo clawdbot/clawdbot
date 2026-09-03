@@ -1,8 +1,11 @@
 // Browser tests cover browser tool plugin behavior.
 import { fileURLToPath } from "node:url";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveBrowserToolTimeoutMs } from "./browser-tool.routing.js";
 import type { BrowserActionPathResult } from "./browser/client-actions-types.js";
+import { resolveBrowserConfig } from "./browser/config.js";
 
 const browserClientMocks = vi.hoisted(() => ({
   browserCloseTab: vi.fn(async (..._args: unknown[]) => ({})),
@@ -179,6 +182,7 @@ const nodesUtilsMocks = vi.hoisted(() => ({
 }));
 
 const gatewayMocks = vi.hoisted(() => ({
+  hasGatewayToolRoutingContext: vi.fn(() => true),
   callGatewayTool: vi.fn(
     async (): Promise<Record<string, unknown>> => ({
       ok: true,
@@ -191,7 +195,7 @@ const configMocks = vi.hoisted(() => ({
   loadConfig: vi.fn<
     () => {
       browser: Record<string, unknown>;
-      gateway?: { nodes?: { browser?: { node?: string; mode?: "off" | "auto" | "manual" } } };
+      gateway?: OpenClawConfig["gateway"];
       agents?: { defaults?: { imageMaxDimensionPx?: number } };
     }
   >(() => ({ browser: {} })),
@@ -244,6 +248,7 @@ vi.mock("./sdk-setup-tools.js", async () => {
   return {
     ...actual,
     callGatewayTool: gatewayMocks.callGatewayTool,
+    hasGatewayToolRoutingContext: gatewayMocks.hasGatewayToolRoutingContext,
     imageResultFromFile: toolCommonMocks.imageResultFromFile,
     describeImageFile: toolCommonMocks.describeImageFile,
     saveMediaBuffer: toolCommonMocks.saveMediaBuffer,
@@ -378,6 +383,7 @@ function mockSingleBrowserProxyNode() {
 
 function resetBrowserToolMocks() {
   vi.clearAllMocks();
+  gatewayMocks.hasGatewayToolRoutingContext.mockReturnValue(true);
   configMocks.loadConfig.mockReturnValue({ browser: {} });
   browserConfigMocks.resolveBrowserConfig.mockReturnValue({
     enabled: true,
@@ -1418,13 +1424,13 @@ describe("browser tool snapshot maxChars", () => {
       "host-tab-compensate",
       {
         profile: "work-actual",
-        timeoutMs: undefined,
+        timeoutMs: 60_000,
       },
     );
     expect(toolCommonMocks.fetchBrowserJson).toHaveBeenLastCalledWith("/tabs/open?profile=work", {
       method: "POST",
       body: JSON.stringify({ url: "https://example.com" }),
-      timeoutMs: undefined,
+      timeoutMs: 60_000,
       signal: controller.signal,
     });
   });
@@ -2355,6 +2361,96 @@ describe("browser tool snapshot maxChars", () => {
     const opts = lastMockCallArg<{ profile?: string }>(browserClientMocks.browserStatus, 1);
     expect(opts.profile).toBe("user");
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+});
+
+describe("browser tool standalone routing", () => {
+  registerBrowserToolAfterEachReset();
+  beforeEach(() => {
+    gatewayMocks.hasGatewayToolRoutingContext.mockReturnValue(false);
+    vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
+  });
+  afterEach(() => vi.unstubAllEnvs());
+
+  it.each<{ name: string; gateway?: OpenClawConfig["gateway"] }>([
+    { name: "no Gateway config" },
+    { name: "only a local port", gateway: { port: 19970 } },
+    { name: "only browser-control auth", gateway: { auth: { token: "browser-control-token" } } },
+  ])("uses the host for repeated standalone calls with $name", async ({ gateway }) => {
+    configMocks.loadConfig.mockReturnValue({ browser: {}, gateway });
+    nodesUtilsMocks.listNodes.mockRejectedValue(
+      new Error("gateway node.list requires credentials before opening a websocket"),
+    );
+    const tool = createBrowserTool();
+
+    for (const callId of ["first-status", "second-status"]) {
+      const result = await tool.execute(callId, { action: "status", profile: "openclaw" });
+      expect(result.details).toMatchObject({ ok: true, running: true });
+    }
+
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledTimes(2);
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith(undefined, {
+      profile: "openclaw",
+    });
+    expect(nodesUtilsMocks.listNodes).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it.each<{
+    name: string;
+    gateway?: OpenClawConfig["gateway"];
+    target?: "node";
+    node?: string;
+    gatewayUrl?: string;
+  }>([
+    { name: "an explicit node target", target: "node" },
+    { name: "an explicit node selector", node: "node-1" },
+    { name: "a configured node", gateway: { nodes: { browser: { node: "node-1" } } } },
+    { name: "explicit automatic routing", gateway: { nodes: { browser: { mode: "auto" } } } },
+    {
+      name: "a configured manual node",
+      gateway: { nodes: { browser: { mode: "manual", node: "node-1" } } },
+    },
+    { name: "remote Gateway mode", gateway: { mode: "remote" } },
+    {
+      name: "a configured remote URL",
+      gateway: { remote: { url: "wss://gateway.example.com" } },
+    },
+    { name: "an environment-selected Gateway", gatewayUrl: "wss://gateway.example.com" },
+  ])(
+    "preserves discovery errors for $name without an in-process Gateway",
+    async ({ gateway, target, node, gatewayUrl }) => {
+      configMocks.loadConfig.mockReturnValue({ browser: {}, gateway });
+      vi.stubEnv("OPENCLAW_GATEWAY_URL", gatewayUrl);
+      const error = new Error("configured Gateway unavailable");
+      nodesUtilsMocks.listNodes.mockRejectedValueOnce(error);
+
+      await expect(
+        createBrowserTool().execute("configured-status", { action: "status", target, node }),
+      ).rejects.toBe(error);
+      expect(nodesUtilsMocks.listNodes).toHaveBeenCalledTimes(1);
+      expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
+      expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps sandbox routing and host restrictions without a Gateway", async () => {
+    const tool = createBrowserTool({
+      sandboxBridgeUrl: "http://127.0.0.1:9999",
+      allowHostControl: false,
+    });
+
+    await tool.execute("sandbox-status", { action: "status" });
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledWith("http://127.0.0.1:9999", {
+      profile: undefined,
+    });
+    for (const target of ["host", "node"]) {
+      await expect(tool.execute("blocked-status", { action: "status", target })).rejects.toThrow(
+        /browser control is disabled by sandbox policy/i,
+      );
+    }
+    expect(browserClientMocks.browserStatus).toHaveBeenCalledTimes(1);
+    expect(nodesUtilsMocks.listNodes).not.toHaveBeenCalled();
   });
 });
 
@@ -5252,4 +5348,40 @@ describe("browser observation actions and tab previews", () => {
       stats: { chars: 5, refs: 0 },
     });
   });
+});
+
+describe("resolveBrowserToolTimeoutMs", () => {
+  const resolvedBrowser = resolveBrowserConfig({ enabled: true });
+
+  it("keeps the caller-supplied deadline even for persistent-Playwright profiles", () => {
+    const timeoutMs = resolveBrowserToolTimeoutMs({
+      requestedTimeoutMs: 45_000,
+      action: "tabs",
+      isUserBrowserProfile: false,
+      usesPersistentPlaywright: true,
+      isNodeProxy: false,
+      resolvedBrowser,
+    });
+    expect(timeoutMs).toBe(45_000);
+  });
+
+  it.each([
+    ["persistent tab listing", "tabs", true, false, 60_000],
+    ["persistent lifecycle action", "status", true, false, undefined],
+    ["proxied profile listing", "profiles", false, true, 60_000],
+    ["managed tab listing", "tabs", false, false, undefined],
+  ] as const)(
+    "resolves the %s budget",
+    (_label, action, usesPersistentPlaywright, isNodeProxy, expected) => {
+      const timeoutMs = resolveBrowserToolTimeoutMs({
+        requestedTimeoutMs: undefined,
+        action,
+        isUserBrowserProfile: false,
+        usesPersistentPlaywright,
+        isNodeProxy,
+        resolvedBrowser,
+      });
+      expect(timeoutMs).toBe(expected);
+    },
+  );
 });

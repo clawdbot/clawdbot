@@ -12,7 +12,6 @@ import {
 } from "./model-providers/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
 import { page as pluginsPage } from "./plugins/route.ts";
-import { page as sessionsPage, type SessionsRouteData } from "./sessions/route.ts";
 import { page as skillsPage } from "./skills/route.ts";
 import type { SkillsRouteData } from "./skills/skills-page.ts";
 import { page as usagePage } from "./usage/route.ts";
@@ -97,31 +96,6 @@ describe("route preload gateway provenance", () => {
     } as unknown as ApplicationContext);
     expect(devicesData.gateway).toBe(devicesGateway.gateway);
     expect(devicesData.gatewaySnapshot).toBe(devicesGateway.gateway.snapshot);
-  });
-
-  it("keeps sessions provenance from before its async preload", async () => {
-    const client = {} as GatewayBrowserClient;
-    const originalSnapshot = snapshot(client, true);
-    const mutable = mutableGateway(originalSnapshot);
-    const gateway = mutable.gateway;
-    const refresh = deferred<void>();
-    const managedSnapshot = { result: null, agentId: null, loading: false, error: null };
-    const request = loadRoute<SessionsRouteData>(sessionsPage, {
-      gateway,
-      sessions: {
-        listSnapshot: vi.fn(() => managedSnapshot),
-        refreshList: vi.fn(() => refresh.promise),
-      },
-      runtimeConfig: { ensureLoaded: vi.fn(async () => undefined) },
-      agentSelection: { state: { selectedId: null, scopeId: null } },
-    } as unknown as ApplicationContext);
-
-    mutable.replaceSnapshot(snapshot(client, false));
-    refresh.resolve();
-    const data = await request;
-
-    expect(data.gateway).toBe(gateway);
-    expect(data.gatewaySnapshot).toBe(originalSnapshot);
   });
 
   it("keeps usage provenance from before its async preload", async () => {

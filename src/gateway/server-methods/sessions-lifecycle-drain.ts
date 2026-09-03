@@ -18,7 +18,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { getCommandLaneSnapshot } from "../../process/command-queue.js";
 import {
   closeSessionWorkAdmissions,
-  interruptSessionWorkAdmissions,
+  startSessionWorkAdmissionInterruption,
   isCompetingSessionWorkAdmissionActive,
   runExclusiveSessionLifecycleMutation,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -200,10 +200,9 @@ export async function prepareSessionLifecycleDrain(
     }
 
     params.authorize?.();
-    const admittedWork = interruptSessionWorkAdmissions({
+    const { released: admittedWork } = startSessionWorkAdmissionInterruption({
       scope: params.storePath,
       identities: params.lifecycleIdentities,
-      timeoutMs,
     });
     const replyWork = Promise.all([
       ...params.sessionKeys.map((key) => replyRunRegistry.waitForIdle(key, timeoutMs)),
@@ -236,7 +235,6 @@ export async function prepareSessionLifecycleDrain(
       : Promise.resolve(true);
     const drains = await Promise.all([
       prepared.controllerDrain,
-      admittedWork,
       replyWork,
       embeddedWork,
       placementWork,
@@ -248,6 +246,9 @@ export async function prepareSessionLifecycleDrain(
     }
     // Safe reclaim must finish before the archive or delete can commit.
     await prepared.reclaim();
+    // Provider settlement keeps its placement custody and deadline. Only after reclaim
+    // finishes does the ordinary admission bound apply, including for local sessions.
+    await withTimeout(admittedWork, timeoutMs, "session work admission lifecycle drain");
     const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
       context: params.context,
       sessionId: params.sessionId,

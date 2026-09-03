@@ -2,6 +2,8 @@ import { normalizeUsage, type AgentHarnessV2 } from "openclaw/plugin-sdk/agent-h
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
+import { CodexSettledTurnContext } from "./settled-turn-context.js";
+import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -66,9 +68,8 @@ function createSettledAttempt(): EmbeddedRunAttemptResult {
         content: [{ type: "text", text: "Message sent." }],
       } as never,
     ],
-    settledTurnFinalizationContext: {
-      source: "openclaw-transcript",
-      messages: [
+    settledTurnFinalizationContext: new CodexSettledTurnContext(
+      projectSettledCodexMessages([
         { role: "user", content: "Send the update to Alice." } as never,
         {
           role: "assistant",
@@ -80,8 +81,8 @@ function createSettledAttempt(): EmbeddedRunAttemptResult {
           toolName: "message",
           content: [{ type: "text", text: "Message sent." }],
         } as never,
-      ],
-    },
+      ]),
+    ),
     assistantTexts: [],
     toolMetas: [{ toolName: "message", replaySafe: false }],
     lastAssistant: undefined,
@@ -336,16 +337,23 @@ describe("runCodexSettledTurnFinalization", () => {
     expect(mocks.mirror).not.toHaveBeenCalled();
   });
 
-  it("rejects a missing frozen context before starting the isolated turn", async () => {
-    const settledAttempt = createSettledAttempt();
-    delete settledAttempt.settledTurnFinalizationContext;
-
-    await expect(
-      runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
-    ).rejects.toThrow("finalization context is unavailable");
-    expect(mocks.runBounded).not.toHaveBeenCalled();
-    expect(mocks.mirror).not.toHaveBeenCalled();
-  });
+  it.each(["missing", "foreign", "unavailable"])(
+    "rejects %s context before starting the isolated turn",
+    async (kind) => {
+      const settledAttempt = createSettledAttempt();
+      settledAttempt.settledTurnFinalizationContext =
+        kind === "missing"
+          ? undefined
+          : kind === "foreign"
+            ? { source: "harness", data: [] }
+            : { source: "unavailable" };
+      await expect(
+        runCodexSettledTurnFinalization({ attempt: createAttempt(), settledAttempt }, {}),
+      ).rejects.toThrow("finalization context is unavailable");
+      expect(mocks.runBounded).not.toHaveBeenCalled();
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
     mocks.mirror.mockImplementation(

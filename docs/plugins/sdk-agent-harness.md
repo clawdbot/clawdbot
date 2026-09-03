@@ -126,6 +126,14 @@ snapshot. Preserve the selected attempt's profile, API, and fallback restriction
 when materializing credentials; this keeps control calls on the same billing
 route as agent turns.
 
+For tools that support both standalone and Gateway execution,
+`hasGatewayToolRoutingContext()` from
+`openclaw/plugin-sdk/agent-harness-runtime` reports whether the caller or hosting
+process owns Gateway routing. Local embedded RPC contexts do not count as a
+running Gateway. A caller's or ambient binding remains present after its
+Gateway retires, so dispatch can reject the stale call. The helper does not
+check credentials, grant authority, or guarantee that the Gateway is available.
+
 ### Request-transport contract
 
 `supports(ctx)` receives the resolved model transport in `ctx.modelProvider`.
@@ -151,6 +159,20 @@ When auth preparation yields multiple retry routes, one harness must support
 all of them before dispatch. Implicit selection uses OpenClaw if no plugin can
 own the full set; an explicit or persisted plugin selection fails closed unless
 the plugin declares the lossless OpenClaw fallback.
+
+### Per-turn temporal context
+
+Native harnesses that own their model prompt can use `buildTemporalContextText`
+from `openclaw/plugin-sdk/agent-harness-runtime`. It renders the same current
+local date and time zone as the built-in OpenClaw runtime. It uses
+`agents.defaults.userTimezone` when configured and the host zone otherwise.
+
+Call it for each turn, after the final tool surface is known. Pass
+`sessionStatusAvailable: true` only when that exact surface includes
+`session_status`; this keeps the exact-time hint out of prompts where the tool
+is unavailable. Carry the result through the native runtime's existing
+per-turn application or developer context instead of appending it to stable
+thread instructions.
 
 ## Register a harness
 
@@ -775,14 +797,35 @@ rejects canonical failure, tool, delivery, replay, and lifecycle evidence, then
 projects only the narrow result. It is defense in depth after native isolation,
 not a substitute for removing the native capability surface.
 
-A projection-backed harness must put the complete context on
-`settledAttempt.settledTurnFinalizationContext` with
-`source: "openclaw-transcript"`. It must capture the active branch after the
-settled turn is mirrored, prove that the current prompt and every current tool
-call/result are present through that boundary, and freeze the resulting message
-array before returning the attempt. The finalizer must reject a missing,
+A projection-backed harness must capture the active branch after the settled
+turn is mirrored and prove that the current prompt and every current tool
+call/result are present through that boundary. Put the frozen evidence on
+`settledAttempt.settledTurnFinalizationContext` as one of:
+
+- `source: "openclaw-transcript"` with `messages`: the complete application
+  transcript through the boundary.
+- `source: "harness"` with `data`: an immutable, bounded projection interpreted
+  only by the owning harness. Core passes this opaque value through; the
+  finalizer must verify its own context type before using it.
+- `source: "unavailable"`: the harness permits finalization for this settled
+  turn, but safe replay evidence could not be captured. The finalizer must
+  reject this state before provider or native I/O; core can still use its
+  existing host-owned fallback without repeating tools.
+
+The unavailable state records eligibility, not validated history. Eligible
+capture failures, including missing, drifting, or oversized evidence, can reach
+that no-model fallback. Do not emit it for failures the harness excludes from
+finalization, such as authentication or usage-limit errors. Command-only
+harnesses must retain the attributed assistant tool-call entry in
+`messagesSnapshot`; the host fallback can use that settled-batch identity when
+visible-assistant fields are absent.
+
+Enforce projection limits while acquiring messages, rather than cloning the
+whole transcript before checking its size. Successful capture must finish all
+identity and source-evidence checks before returning the attempt. Do not retain
+an open transcript reader in `data`. The finalizer must reject a missing,
 unsupported, ambiguous, or oversized context. It must not truncate messages,
-drop earlier history, or describe this application transcript as exact native
+drop earlier history, or describe an application projection as exact native
 history. Harnesses that resume one restricted native session do not need this
 projection field.
 

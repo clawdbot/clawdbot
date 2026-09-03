@@ -396,6 +396,10 @@ function retainYamlPackage() {
   let totalBytes = 0;
   const walk = (directory: string, relativeDirectory = "") => {
     for (const name of fs.readdirSync(directory).toSorted(compareAscii)) {
+      // Installer-created dependencies and bin shims are not package bytes or retained modules.
+      if (!relativeDirectory && name === "node_modules") {
+        continue;
+      }
       const path = relativeDirectory ? `${relativeDirectory}/${name}` : name;
       assertSafeYamlPath(path);
       if (entries.length >= YAML_PACKAGE_MAX_ENTRIES) {

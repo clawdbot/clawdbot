@@ -1,7 +1,11 @@
 import path from "node:path";
 import type { Browser, Page } from "playwright";
 import { expect } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installMockGateway,
+  waitForControlUiRoute,
+} from "../test-helpers/control-ui-e2e.ts";
 
 type SidebarAttentionScopeFlowOptions = {
   artifactDir: string;
@@ -126,6 +130,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
 
   try {
     await page.goto(`${params.baseUrl}new`);
+    await waitForControlUiRoute(page, { pathname: "/new", routeId: "new-session" });
     await setDarkTheme(page);
     await waitForCronScope("main");
     await gateway.emitGatewayEvent("exec.approval.requested", {
@@ -168,6 +173,8 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
       .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="agent:writer"]')
       .click();
     await waitForCronScope("writer");
+    // The agent's cron refresh can precede the Chat route commit that closes Inbox.
+    await waitForControlUiRoute(page, { pathname: "/chat/writer", routeId: "chat" });
     await openAutomations();
     await expect.poll(() => automationRows.getByText("Writer release digest").count()).toBe(1);
     await expect.poll(() => automationRows.getByText("Main release digest").count()).toBe(0);
@@ -176,7 +183,7 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await sidebar.locator(".sidebar-issues-button").click();
 
     await sidebar.getByRole("link", { name: "Automations", exact: true }).click();
-    await expect.poll(() => new URL(page.url()).pathname).toBe("/automations");
+    await waitForControlUiRoute(page, { pathname: "/automations", routeId: "cron" });
     const pageScope = page.locator(".agent-scope-control openclaw-agent-select");
     await pageScope.locator(".agent-select__trigger").click();
     await pageScope
@@ -315,6 +322,12 @@ export async function runSidebarAttentionScopeFlow(params: SidebarAttentionScope
     await captureProof(params, page, "12-mobile-inbox-dismissed-alerts.png");
 
     expect(floatingKinds).toEqual([]);
+  } catch (error) {
+    await captureControlUiE2eFailureDiagnostics(page, {
+      error: error instanceof Error ? error : new Error(String(error)),
+      label: "Control UI Inbox automation scope",
+    });
+    throw error;
   } finally {
     await context.close();
     if (proofVideo) {

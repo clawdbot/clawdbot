@@ -102,7 +102,7 @@ export function buildSkillWorkshopToolSchema(collectionOnly: boolean, proposalRe
       skill_name: Type.Optional(
         Type.String({
           description:
-            "Existing skill name or key for action=update, action=prepare_patch, action=patch, or action=read.",
+            "Existing skill name or key for action=update, action=prepare_patch, action=patch, or action=read. Reuse the returned skillName for follow-up calls.",
         }),
       ),
       old_string: Type.Optional(

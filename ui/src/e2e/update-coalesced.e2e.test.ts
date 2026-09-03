@@ -1,7 +1,10 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  captureControlUiE2eFailureDiagnostics,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -12,10 +15,17 @@ const suite = createControlUiE2eSuite({
 
 const captureUiProofEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const NATIVE_UPDATE_DECLINED_EVENT = "openclaw:native-update-declined";
+const MANAGED_UPDATE_PENDING_SENTINEL = {
+  kind: "update",
+  status: "skipped",
+  ts: 1_000,
+  stats: { handoffId: "managed-update-handoff", reason: "managed-service-handoff-started" },
+} as const;
 const MANAGED_UPDATE_HANDOFF_RESPONSE = {
   ok: true,
   handoff: { status: "started" },
   result: { reason: "managed-service-handoff-started", status: "skipped" },
+  sentinel: { payload: MANAGED_UPDATE_PENDING_SENTINEL },
 } as const;
 
 async function openUpdateConfirmation(page: Page): Promise<void> {
@@ -144,19 +154,27 @@ suite.define(() => {
         await dialog
           .getByText(
             "Update error: global-install-failed. The global package install did not verify on disk. Retry or reinstall from the CLI.",
-            { exact: true },
+            { exact: false },
           )
           .waitFor();
+        expect(await dialog.textContent()).toContain("openclaw triage");
+        expect(await dialog.textContent()).toContain("Diagnose the cause before retrying.");
 
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
+        expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
+        // Failure triage navigates to Updates when Ask OpenClaw is unavailable.
+        await page.waitForURL("**/settings/updates");
+        await page.locator("openclaw-config-page").waitFor();
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await page.locator(".sidebar-issues-button").click();
-        const updateIssue = page.locator(
-          'openclaw-sidebar-update-card[data-attention-kind="updateAvailable"]',
-        );
-        await updateIssue.locator("summary").click();
-        await updateIssue.locator(".sidebar-update-card__compact-reason").waitFor();
-        expect(await page.locator(".sidebar-issues-button__count").count()).toBe(1);
+        await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/updates");
+        expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
+        await page.getByText("Latest update attempt", { exact: true }).waitFor();
+        await page
+          .locator(".settings-status--danger")
+          .getByText("global-install-failed", {
+            exact: false,
+          })
+          .waitFor();
         expect(pageErrors).toEqual([]);
         await captureUpdateProof(page, artifactDir, "package-update-failure.png");
       },
@@ -228,14 +246,14 @@ suite.define(() => {
   it.each([
     {
       artifactName: "response-first",
-      expectedStatusRequests: 2,
+      expectedStatusRequests: 4,
       expectedText: "Expected v2.0.0, running v1.0.0",
       name: "after the response arrives before disconnect",
       responseFirst: true,
     },
     {
       artifactName: "disconnect-first",
-      expectedStatusRequests: 2,
+      expectedStatusRequests: 4,
       expectedText: "Expected v2.0.0, running v1.0.0",
       name: "when disconnect arrives before the response",
       responseFirst: false,
@@ -264,18 +282,17 @@ suite.define(() => {
               "update.run": MANAGED_UPDATE_HANDOFF_RESPONSE,
               "update.status": {
                 sequence: [
-                  {
-                    sentinel: {
-                      kind: "update",
-                      status: "skipped",
-                      stats: { reason: "managed-service-handoff-started" },
-                    },
-                  },
+                  { sentinel: null },
+                  { sentinel: MANAGED_UPDATE_PENDING_SENTINEL },
                   {
                     sentinel: {
                       kind: "update",
                       status: "ok",
-                      stats: { after: { version: "1.0.0" } },
+                      ts: 2_000,
+                      stats: {
+                        handoffId: "managed-update-handoff",
+                        after: { version: "1.0.0" },
+                      },
                     },
                   },
                 ],
@@ -305,10 +322,25 @@ suite.define(() => {
           }
           await gateway.closeLatest(1012, "managed update handoff");
 
-          await page
-            .locator("openclaw-modal-dialog")
-            .getByText(expectedText, { exact: false })
-            .waitFor({ timeout: 15_000 });
+          try {
+            // Without an Ask OpenClaw method, failure opens Updates. Its status
+            // refresh must preserve the mismatch already verified on reconnect.
+            await page.waitForURL("**/settings/updates");
+            await expect
+              .poll(async () => (await gateway.getRequests("update.status")).length)
+              .toBe(expectedStatusRequests);
+            await page
+              .locator("openclaw-modal-dialog")
+              .getByText(expectedText, { exact: false })
+              .waitFor({ timeout: 15_000 });
+          } catch (error) {
+            await captureControlUiE2eFailureDiagnostics(page, {
+              error: error instanceof Error ? error : new Error(String(error)),
+              label: `managed-handoff-${artifactName}`,
+              pageErrors,
+            });
+            throw error;
+          }
           expect(await gateway.getRequests("update.run")).toHaveLength(1);
           expect(await gateway.getRequests("update.status")).toHaveLength(expectedStatusRequests);
           expect(pageErrors).toEqual([]);
@@ -376,10 +408,9 @@ suite.define(() => {
       ).toEqual([{ type: "start-update" }]);
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
-      // The confirmation closes the lazy Inbox. Recovery belongs to the
-      // persistent attention owner, not the now-disconnected update card.
-      await page.keyboard.press("Escape");
-      await expect.poll(() => page.locator(".sidebar-issues-panel").count()).toBe(0);
+      await page.keyboard.press("Control+Shift+,");
+      await page.locator(".shell--settings").waitFor();
+      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
       await page.evaluate(
         (eventName) => window.dispatchEvent(new CustomEvent(eventName)),
         NATIVE_UPDATE_DECLINED_EVENT,

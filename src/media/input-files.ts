@@ -11,7 +11,7 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readResponseWithLimit } from "../infra/http-body.js";
+import { cancelUnreadResponseBody, readResponseWithLimit } from "../infra/http-body.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
@@ -216,7 +216,7 @@ async function fetchWithGuard(params: {
 
   try {
     if (!response.ok) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
     }
 
@@ -224,11 +224,11 @@ async function fetchWithGuard(params: {
     try {
       contentLength = parseMediaContentLength(response.headers.get("content-length"));
     } catch (err) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw err;
     }
     if (contentLength !== null && contentLength > params.maxBytes) {
-      await discardIgnoredResponseBody(response);
+      await cancelUnreadResponseBody(response);
       throw new Error(
         `Content too large: ${contentLength} bytes (limit: ${params.maxBytes} bytes)`,
       );
@@ -243,18 +243,6 @@ async function fetchWithGuard(params: {
   }
 }
 
-async function discardIgnoredResponseBody(response: Response): Promise<void> {
-  const body = response.body;
-  if (!body) {
-    return;
-  }
-  try {
-    await body.cancel();
-  } catch {
-    // Best-effort cleanup after rejecting a response body.
-  }
-}
-
 function decodeTextContent(buffer: Buffer, charset: string | undefined): string {
   const encoding = normalizeOptionalLowercaseString(charset) || "utf-8";
   try {
@@ -262,13 +250,6 @@ function decodeTextContent(buffer: Buffer, charset: string | undefined): string 
   } catch {
     return new TextDecoder("utf-8").decode(buffer);
   }
-}
-
-function clampText(text: string, maxChars: number): string {
-  if (text.length <= maxChars) {
-    return text;
-  }
-  return truncateUtf16Safe(text, maxChars);
 }
 
 function withInputFileTimeout<T>(params: {
@@ -481,7 +462,7 @@ export async function extractFileContentFromBuffer(params: {
         },
       }),
     });
-    const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
+    const text = extracted.text ? truncateUtf16Safe(extracted.text, limits.maxChars) : "";
     return {
       filename,
       text,
@@ -489,6 +470,6 @@ export async function extractFileContentFromBuffer(params: {
     };
   }
 
-  const text = clampText(decodeTextContent(buffer, charset), limits.maxChars);
+  const text = truncateUtf16Safe(decodeTextContent(buffer, charset), limits.maxChars);
   return { filename, text };
 }
