@@ -51,7 +51,7 @@ export type HandleDirectiveOnlyParams = HandleDirectiveOnlyCoreParams & {
   currentFastMode?: FastMode;
   currentVerboseLevel?: VerboseLevel;
   currentReasoningLevel?: ReasoningLevel;
-  currentElevatedLevel?: ElevatedLevel;
+  currentElevatedLevel: ElevatedLevel;
   effectiveElevatedLevel?: ElevatedLevel;
   workspaceDir?: string;
   surface?: string;

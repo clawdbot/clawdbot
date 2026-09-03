@@ -56,6 +56,7 @@ async function runDirectiveStatus(
     sessionKey: effectiveSessionKey,
     elevatedEnabled: false,
     elevatedAllowed: false,
+    currentElevatedLevel: "off",
     defaultProvider: "anthropic",
     defaultModel: "claude-opus-4-6",
     aliasIndex: emptyAliasIndex,

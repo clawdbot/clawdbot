@@ -274,7 +274,6 @@ export function resolveEffectiveElevatedState(params: {
   currentLevel: ElevatedLevel;
   level: ElevatedLevel;
   sandboxed: boolean;
-  sandboxRequired: boolean;
 } {
   const permissions = resolveElevatedPermissions(params);
   const runtime = resolveSandboxRuntimeStatus({
@@ -299,6 +298,5 @@ export function resolveEffectiveElevatedState(params: {
     currentLevel,
     level: allowed ? (params.requestedLevel ?? currentLevel) : "off",
     sandboxed: runtime.sandboxed,
-    sandboxRequired,
   };
 }

@@ -172,7 +172,6 @@ describe("resolveEffectiveElevatedState", () => {
 
     expect(result).toMatchObject({
       allowed: false,
-      sandboxRequired: true,
       currentLevel: "off",
       level: "off",
       failures: [{ gate: "sandbox", key: "session.sandbox" }],

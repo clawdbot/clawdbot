@@ -160,7 +160,7 @@ export async function applyInlineDirectiveOverrides(params: {
   initialModelLabel: string;
   formatModelSwitchEvent: (label: string, alias?: string) => string;
   resolvedElevatedLevel: ElevatedLevel;
-  currentElevatedLevel?: ElevatedLevel;
+  currentElevatedLevel: ElevatedLevel;
   defaultActivation: () => "always" | "mention";
   contextTokens: number;
   effectiveModelDirective?: string;
@@ -386,7 +386,7 @@ export async function applyInlineDirectiveOverrides(params: {
     ).handleDirectiveOnly({
       ...createDirectiveHandlingBase(),
       ...currentLevels,
-      currentElevatedLevel: currentElevatedLevel ?? resolvedElevatedLevel,
+      currentElevatedLevel,
       effectiveElevatedLevel: resolvedElevatedLevel,
       thinkingCatalog,
       ctx,

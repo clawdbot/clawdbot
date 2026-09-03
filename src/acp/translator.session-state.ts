@@ -191,13 +191,11 @@ export class AcpTranslatorSessionState {
           overrides: { responseUsage: next as GatewaySessionPresentationRow["responseUsage"] },
         };
       }
-      case ACP_ELEVATED_LEVEL_CONFIG_ID: {
-        const next = value === "inherit" ? null : value;
+      case ACP_ELEVATED_LEVEL_CONFIG_ID:
         return {
-          patch: { elevatedLevel: next },
-          overrides: { elevatedLevel: next },
+          patch: { elevatedLevel: value },
+          overrides: { elevatedLevel: value },
         };
-      }
       case ACP_TIMEOUT_CONFIG_ID:
       case ACP_TIMEOUT_SECONDS_CONFIG_ID:
         return {

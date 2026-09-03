@@ -50,10 +50,11 @@ export type GatewaySessionPresentationRow = Pick<
   | "traceLevel"
   | "reasoningLevel"
   | "responseUsage"
+  | "elevatedLevel"
   | "totalTokens"
   | "totalTokensFresh"
   | "contextTokens"
-> & { elevatedLevel?: string | null };
+>;
 
 /** ACP session controls and modes shown to the client. */
 type SessionPresentation = {
@@ -205,10 +206,9 @@ export function buildSessionPresentation(params: {
     buildSelectConfigOption({
       id: ACP_ELEVATED_LEVEL_CONFIG_ID,
       name: "Elevated actions",
-      description:
-        "Overrides elevated execution behavior for the session. 'inherit' follows the configured default.",
-      currentValue: normalizeOptionalString(row.elevatedLevel) || "inherit",
-      values: ["inherit", "off", "on", "ask", "full"],
+      description: "Controls how aggressively the session allows elevated execution behavior.",
+      currentValue: normalizeOptionalString(row.elevatedLevel) || "off",
+      values: ["off", "on", "ask", "full"],
     }),
   ];
 

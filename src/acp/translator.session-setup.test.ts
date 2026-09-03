@@ -99,7 +99,7 @@ describe("acp session UX bridge behavior", () => {
     expectConfigOption(result.configOptions, "reasoning_level", { currentValue: "off" });
     // Unset session inherits the configured default → control reads "inherit", not "off".
     expectConfigOption(result.configOptions, "response_usage", { currentValue: "inherit" });
-    expectConfigOption(result.configOptions, "elevated_level", { currentValue: "inherit" });
+    expectConfigOption(result.configOptions, "elevated_level", { currentValue: "off" });
   });
 
   it("replays user text, assistant text, and hidden assistant thinking on loadSession", async () => {

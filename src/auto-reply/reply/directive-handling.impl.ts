@@ -85,7 +85,7 @@ export async function handleDirectiveOnly(
     currentFastMode,
     currentVerboseLevel,
     currentReasoningLevel,
-    currentElevatedLevel = "off",
+    currentElevatedLevel,
   } = params;
   const allowPrivilegedPersistence = canPersistSessionDirectiveDefaults(params);
   const rejectModelTransaction = (errorText: string) => {
@@ -440,7 +440,7 @@ export async function handleDirectiveOnly(
   const elevatedChanged =
     directives.hasElevatedDirective &&
     directives.elevatedLevel !== undefined &&
-    directives.elevatedLevel !== (currentElevatedLevel ?? sessionEntry.elevatedLevel ?? "off") &&
+    directives.elevatedLevel !== currentElevatedLevel &&
     elevatedEnabled &&
     elevatedAllowed;
   let modelSelectionUpdated = false;

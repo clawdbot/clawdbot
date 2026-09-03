@@ -67,6 +67,7 @@ it.each([
         directives: parseInlineSessionDirectives(command),
         elevatedEnabled: false,
         elevatedAllowed: false,
+        currentElevatedLevel: "off",
         defaultProvider: "openai",
         defaultModel: "gpt-5.5",
         provider: "openai",
