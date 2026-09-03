@@ -11,6 +11,7 @@ import {
   type RealtimeVoiceBridgeSession,
   type RealtimeVoiceTurnContextHandle,
   type RealtimeVoiceTurnContextTracker,
+  type RealtimeVoiceTranscriptSource,
   type RealtimeVoiceWakeNamePolicy,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -29,6 +30,7 @@ const logger = createSubsystemLogger("discord/voice");
 const DISCORD_REALTIME_PENDING_SPEAKER_CONTEXT_LIMIT = 32;
 const DISCORD_REALTIME_IGNORED_WAKE_NAME_CONTEXT_TTL_MS = 10_000;
 const DISCORD_REALTIME_WAKE_NAME_FOLLOWUP_TTL_MS = 10_000;
+const DISCORD_REALTIME_INPUT_ITEM_SPEAKER_LIMIT = 64;
 const REALTIME_PCM16_BYTES_PER_SAMPLE = 2;
 const DISCORD_REALTIME_TRAILING_SILENCE_MIN_MS = 700;
 const DISCORD_REALTIME_TRAILING_SILENCE_MAX_MS = 3_000;
@@ -70,6 +72,13 @@ export class DiscordRealtimeTurns {
   );
   private partialUserTranscript = "";
   private wakeNameAckedForTurn = false;
+  // Provider input items are correlated with Discord speakers through in-band VAD events:
+  // speech_started pins the segment to the turn whose audio is streaming, the admitted
+  // conversation item inherits that binding by item id, and the delayed final transcript
+  // resolves its speaker from the item id instead of callback timing.
+  private inputItemSpeakers = new Map<string, PendingSpeakerTurn>();
+  private lastAudioTurn: PendingSpeakerTurn | undefined;
+  private pendingSegmentSpeaker: PendingSpeakerTurn | undefined;
   private pendingWakeNameFollowup:
     | {
         context: DiscordRealtimeSpeakerContext;
@@ -140,45 +149,75 @@ export class DiscordRealtimeTurns {
     this.params.playback.sendWakeNameAck(wakeNameResult);
   }
 
-  async handleFinalUserTranscript(text: string): Promise<void> {
+  async handleFinalUserTranscript(
+    text: string,
+    source?: RealtimeVoiceTranscriptSource,
+  ): Promise<void> {
     const providerEpoch = this.params.providerEpoch();
     const trimmed = text.trim();
     if (!trimmed) {
       return;
     }
     this.partialUserTranscript = "";
-    const transcriptsTurn = this.peekPendingSpeakerTurn();
+    let boundTurn: PendingSpeakerTurn | undefined;
+    if (source) {
+      // Identity-capable providers report which input item produced this transcript.
+      // Callback timing, question text, and model claims cannot establish the speaker,
+      // so an uncorrelated transcript must never borrow the newest pending context.
+      boundTurn = this.takeBoundSpeakerTurn(source.itemId);
+      if (!boundTurn) {
+        logger.warn(
+          `discord voice: realtime transcript dropped without a speaker binding chars=${trimmed.length} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
+        );
+        return;
+      }
+      this.speakerTurns.remove(boundTurn);
+    }
+    const transcriptsTurn = boundTurn ?? this.peekPendingSpeakerTurn();
     let transcriptAttribution = this.transcriptAttributionFromTurn(transcriptsTurn);
     const humanParticipantCount = this.params.getHumanParticipantCount();
     const requireWakeName = this.isWakeNameRequired(humanParticipantCount);
     const wakeNameResult = this.resolveWakeNameTranscript(trimmed, requireWakeName);
     let forcedSpeakerContext: DiscordRealtimeSpeakerContext | undefined;
     if (!wakeNameResult.allowed) {
-      const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
-      transcriptAttribution ??= pendingWakeNameFollowup;
-      if (!pendingWakeNameFollowup) {
-        this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
-        this.rememberIgnoredWakeNameSpeakerContext(this.consumePendingSpeakerContext());
+      if (this.pendingWakeNameFollowup && boundTurn) {
+        // A pending follow-up is satisfied by this transcript, and the item binding
+        // supplies the actual speaker instead of the timing-armed follow-up context.
+        this.pendingWakeNameFollowup = undefined;
+        forcedSpeakerContext = boundTurn.context;
+      } else {
+        const pendingWakeNameFollowup = this.consumePendingWakeNameFollowup();
+        transcriptAttribution ??= pendingWakeNameFollowup;
+        if (!pendingWakeNameFollowup) {
+          this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
+          this.rememberIgnoredWakeNameSpeakerContext(
+            boundTurn?.context ?? this.consumePendingSpeakerContext(),
+          );
+          logger.info(
+            `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} humanParticipants=${humanParticipantCount} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.params.wakeNames().join(",") || "none"}`,
+          );
+          return;
+        }
+        forcedSpeakerContext = pendingWakeNameFollowup.context;
         logger.info(
-          `discord voice: realtime wake-name gate ignored transcript chars=${trimmed.length} humanParticipants=${humanParticipantCount} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId} wakeNames=${this.params.wakeNames().join(",") || "none"}`,
+          `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
         );
-        return;
       }
-      forcedSpeakerContext = pendingWakeNameFollowup.context;
-      logger.info(
-        `discord voice: realtime wake-name follow-up accepted chars=${trimmed.length} speaker=${forcedSpeakerContext.speakerLabel} voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,
-      );
     }
     this.recordTranscriptUtterance(trimmed, transcriptAttribution, providerEpoch);
     const acceptedText = wakeNameResult.allowed ? wakeNameResult.text || trimmed : trimmed;
     if (wakeNameResult.allowed && !wakeNameResult.text.trim()) {
-      this.armWakeNameFollowup();
+      this.armWakeNameFollowup(boundTurn);
       return;
     }
     if (wakeNameResult.allowed) {
       this.pendingWakeNameFollowup = undefined;
     }
-    await this.params.onAcceptedTranscript(acceptedText, forcedSpeakerContext, providerEpoch);
+    await this.params.onAcceptedTranscript(
+      acceptedText,
+      forcedSpeakerContext ?? boundTurn?.context,
+      providerEpoch,
+    );
   }
 
   resetPartialWakeNameTracking(): void {
@@ -189,12 +228,43 @@ export class DiscordRealtimeTurns {
   resetProviderContinuity(): void {
     this.partialUserTranscript = "";
     this.pendingWakeNameFollowup = undefined;
+    // Provider item ids from a previous connection can never correlate again.
+    this.pendingSegmentSpeaker = undefined;
+    this.inputItemSpeakers.clear();
   }
 
   clear(): void {
     this.speakerTurns.clear();
     this.resetPartialWakeNameTracking();
-    this.pendingWakeNameFollowup = undefined;
+    this.lastAudioTurn = undefined;
+    this.resetProviderContinuity();
+  }
+
+  /**
+   * Pins the in-flight provider speech segment to the speaker whose audio is streaming.
+   * The VAD start event arrives in band with the audio stream, before any newer capture
+   * can begin, so it is the only reliable point to observe who is speaking.
+   */
+  markProviderSpeechSegmentStarted(): void {
+    this.pendingSegmentSpeaker = this.lastAudioTurn;
+  }
+
+  /** Binds an admitted provider input item to the speaker pinned for its speech segment. */
+  bindSpeakerInputItem(itemId: string): void {
+    const speaker = this.pendingSegmentSpeaker ?? this.lastAudioTurn;
+    this.pendingSegmentSpeaker = undefined;
+    if (!speaker) {
+      return;
+    }
+    this.inputItemSpeakers.delete(itemId);
+    this.inputItemSpeakers.set(itemId, speaker);
+    while (this.inputItemSpeakers.size > DISCORD_REALTIME_INPUT_ITEM_SPEAKER_LIMIT) {
+      const oldest = this.inputItemSpeakers.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      this.inputItemSpeakers.delete(oldest);
+    }
   }
 
   consumePendingSpeakerContext(): DiscordRealtimeSpeakerContext | undefined {
@@ -211,6 +281,18 @@ export class DiscordRealtimeTurns {
 
   hasPendingSpeakerAudioContext(): boolean {
     return this.speakerTurns.hasAudioContext();
+  }
+
+  private takeBoundSpeakerTurn(itemId: string | undefined): PendingSpeakerTurn | undefined {
+    if (!itemId) {
+      return undefined;
+    }
+    const turn = this.inputItemSpeakers.get(itemId);
+    if (!turn) {
+      return undefined;
+    }
+    this.inputItemSpeakers.delete(itemId);
+    return turn;
   }
 
   private sendInputAudioForTurn(turn: PendingSpeakerTurn, discordPcm48kStereo: Buffer): void {
@@ -251,6 +333,7 @@ export class DiscordRealtimeTurns {
       return;
     }
     this.speakerTurns.markAudio(turn);
+    this.lastAudioTurn = turn;
     logger.info(
       `discord voice: realtime speaker turn opened guild=${this.params.entry.guildId} channel=${this.params.entry.channelId} user=${turn.context.userId} speaker=${turn.context.speakerLabel} owner=${turn.context.senderIsOwner} pendingTurns=${this.speakerTurns.size()}`,
     );
@@ -370,9 +453,9 @@ export class DiscordRealtimeTurns {
       });
   }
 
-  private armWakeNameFollowup(): void {
-    const turn = this.peekPendingSpeakerTurn();
-    const context = this.consumePendingSpeakerContext();
+  private armWakeNameFollowup(boundTurn?: PendingSpeakerTurn): void {
+    const turn = boundTurn ?? this.peekPendingSpeakerTurn();
+    const context = boundTurn?.context ?? this.consumePendingSpeakerContext();
     if (!context) {
       logger.warn(
         `discord voice: realtime wake-name follow-up has no speaker context voiceSession=${this.params.entry.voiceSessionKey} agent=${this.params.entry.route.agentId}`,

@@ -3,6 +3,7 @@ import type {
   RealtimeVoiceBridgeEvent,
   RealtimeVoiceBridgeCreateRequest,
   RealtimeVoiceResponseOutcome,
+  RealtimeVoiceTranscriptSource,
 } from "openclaw/plugin-sdk/realtime-voice";
 import { vi, type Mock } from "vitest";
 import { ChannelType } from "../internal/discord.js";
@@ -26,7 +27,12 @@ export type TestRealtimeBridgeParams = {
     event: { args: unknown; callId: string; itemId: string; name: string },
     session: unknown,
   ) => Promise<void> | void;
-  onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+  onTranscript?: (
+    role: "user" | "assistant",
+    text: string,
+    isFinal: boolean,
+    source?: RealtimeVoiceTranscriptSource,
+  ) => void;
   tools?: Array<{ name: string }>;
 };
 

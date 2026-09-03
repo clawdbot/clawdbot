@@ -225,6 +225,100 @@ defineDiscordVoiceTests(
       expect(bobCall?.senderIsOwner).toBe(true);
     });
 
+    it("keeps a delayed final transcript on the speaker whose audio produced it", async () => {
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "talkback answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+        config: {
+          voice: { realtime: { debounceMs: 1, requireWakeName: false, toolPolicy: "none" } },
+        },
+      });
+
+      const guestTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: false,
+        speakerLabel: "Guest",
+        userId: "u-guest",
+      });
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "input_audio_buffer.speech_started",
+      });
+      guestTurn.close();
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_guest_speech",
+        itemRole: "user",
+      });
+
+      const ownerTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: true,
+        speakerLabel: "Owner",
+        userId: "u-owner",
+      });
+      ownerTurn.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "input_audio_buffer.speech_started",
+      });
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_owner_speech",
+        itemRole: "user",
+      });
+
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "delayed guest question", true, {
+          itemId: "item_guest_speech",
+        });
+      });
+
+      expect(lastAgentCommandArgs().senderIsOwner).toBe(false);
+    });
+
+    it("does not run an uncorrelated delayed transcript with a newer speaker's authority", async () => {
+      agentCommandMock.mockResolvedValue({ payloads: [{ text: "talkback answer" }] });
+      const { bridgeParams, entry } = await createJoinedAgentProxyFixture({
+        config: {
+          voice: { realtime: { debounceMs: 1, requireWakeName: false, toolPolicy: "none" } },
+        },
+      });
+
+      const guestTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: false,
+        speakerLabel: "Guest",
+        userId: "u-guest",
+      });
+      guestTurn.close();
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_guest_speech",
+        itemRole: "user",
+      });
+
+      const ownerTurn = beginSpeakerTurn(entry, {
+        senderIsOwner: true,
+        speakerLabel: "Owner",
+        userId: "u-owner",
+      });
+      ownerTurn.sendInputAudio(Buffer.alloc(8));
+      bridgeParams?.onEvent?.({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_owner_speech",
+        itemRole: "user",
+      });
+
+      await flushRealtimeForcedConsultTimers(() => {
+        bridgeParams?.onTranscript?.("user", "uncorrelated speech", true, {
+          itemId: "item_unknown_speech",
+        });
+      });
+
+      expect(agentCommandMock).not.toHaveBeenCalled();
+    });
+
     it("drops stale active-run control after provider continuity reset", async () => {
       let resolveOldControl: ((result: RealtimeVoiceAgentControlResult) => void) | undefined;
       controlRealtimeVoiceAgentRunMock

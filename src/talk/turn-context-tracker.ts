@@ -46,6 +46,8 @@ export type RealtimeVoiceTurnContextTracker<
   ): RealtimeVoiceTurnContextHandle<TContext, TExtra>;
   markAudio(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>): void;
   close(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>): void;
+  /** Removes a specific turn when its consumer resolved it outside the FIFO read path. */
+  remove(handle: RealtimeVoiceTurnContextHandle<TContext, TExtra>): void;
   consumeAudioContext(): TContext | undefined;
   peekAudioTurn(): RealtimeVoiceTurnContextHandle<TContext, TExtra> | undefined;
   hasAudioContext(): boolean;
@@ -167,6 +169,15 @@ export function createRealtimeVoiceTurnContextTracker<
         return;
       }
       prune();
+    },
+    remove(handle) {
+      if (!owns(handle)) {
+        return;
+      }
+      const index = turns.indexOf(handle);
+      if (index >= 0) {
+        turns.splice(index, 1);
+      }
     },
     consumeAudioContext() {
       prepareForAudioContextRead();

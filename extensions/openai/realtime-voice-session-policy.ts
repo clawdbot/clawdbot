@@ -159,6 +159,7 @@ export type RealtimeEvent = {
   item?: {
     id?: string;
     type?: string;
+    role?: string;
     name?: string;
     call_id?: string;
     arguments?: string;

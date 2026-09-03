@@ -68,6 +68,30 @@ describe("realtime voice turn context tracker", () => {
     expect(tracker.consumeAudioContext()).toBeUndefined();
   });
 
+  it("removes only the targeted turn so resolved bindings stay single-consumption", () => {
+    const tracker = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const first = tracker.open({ id: "first" });
+    tracker.markAudio(first);
+    const second = tracker.open({ id: "second" });
+    tracker.markAudio(second);
+
+    tracker.remove(first);
+
+    expect(tracker.consumeAudioContext()).toEqual({ id: "second" });
+    expect(tracker.consumeAudioContext()).toBeUndefined();
+  });
+
+  it("ignores remove for foreign handles", () => {
+    const first = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const second = createRealtimeVoiceTurnContextTracker<{ id: string }>();
+    const turn = first.open({ id: "speaker" });
+    first.markAudio(turn);
+
+    second.remove(turn);
+
+    expect(first.consumeAudioContext()).toEqual({ id: "speaker" });
+  });
+
   it("retains caller-owned turn stats on peeked audio turns", () => {
     const tracker = createRealtimeVoiceTurnContextTracker<
       { id: string },

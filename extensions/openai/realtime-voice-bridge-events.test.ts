@@ -276,6 +276,36 @@ describe("OpenAI realtime voice bridge events", () => {
     });
   });
 
+  it("forwards admitted input items and their identity on final user transcripts", async () => {
+    const onTranscript = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = createNativeBridge({ onTranscript, onEvent });
+    const socket = await connectReadyBridge(bridge);
+
+    emitServerEvent(socket, {
+      type: "conversation.item.added",
+      item_id: "item_guest_speech",
+      item: { id: "item_guest_speech", type: "message", role: "user" },
+    });
+    emitServerEvent(socket, {
+      type: "conversation.item.input_audio_transcription.completed",
+      item_id: "item_guest_speech",
+      transcript: "delayed guest question",
+    });
+
+    expect(onEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        direction: "server",
+        type: "conversation.item.added",
+        itemId: "item_guest_speech",
+        itemRole: "user",
+      }),
+    );
+    expect(onTranscript).toHaveBeenCalledWith("user", "delayed guest question", true, {
+      itemId: "item_guest_speech",
+    });
+  });
+
   it("preserves corrected final text from legacy realtime text events", async () => {
     const onTranscript = vi.fn();
     const bridge = createNativeBridge({ onTranscript });

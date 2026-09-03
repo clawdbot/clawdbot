@@ -91,7 +91,17 @@ export type RealtimeVoiceBridgeEvent = {
   type: string;
   detail?: string;
   itemId?: string;
+  itemRole?: string;
   responseId?: string;
+};
+
+/**
+ * Provider-side identity for the input that produced a transcript callback. Presence
+ * signals that the provider can correlate transcripts with admitted input items, so
+ * consumers must not fall back to timing-based speaker attribution for these callbacks.
+ */
+export type RealtimeVoiceTranscriptSource = {
+  itemId?: string;
 };
 
 export type RealtimeVoiceResponseError = {
@@ -175,7 +185,12 @@ export type RealtimeVoiceBridgeCallbacks = {
   onAudio: (audio: Buffer) => void;
   onClearAudio: (reason?: RealtimeVoiceAudioClearReason) => void;
   onMark?: (markName: string) => void;
-  onTranscript?: (role: RealtimeVoiceRole, text: string, isFinal: boolean) => void;
+  onTranscript?: (
+    role: RealtimeVoiceRole,
+    text: string,
+    isFinal: boolean,
+    source?: RealtimeVoiceTranscriptSource,
+  ) => void;
   onEvent?: (event: RealtimeVoiceBridgeEvent) => void;
   onResponseDone?: (outcome: RealtimeVoiceResponseOutcome) => void;
   onToolCall?: (event: RealtimeVoiceToolCallEvent) => void;

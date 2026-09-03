@@ -347,7 +347,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           this.harness.flushOutput(() => this.playback.clearOutputAudio("provider-clear-audio"));
         },
       },
-      onTranscript: (role, text, isFinal) => {
+      onTranscript: (role, text, isFinal, source) => {
         this.markProviderGenerationObserved();
         if (isFinal && text.trim()) {
           logger.info(
@@ -364,7 +364,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
           this.turns.handlePartialUserTranscript(text);
           return;
         }
-        void this.turns.handleFinalUserTranscript(text);
+        void this.turns.handleFinalUserTranscript(text, source);
       },
       onToolCall: (event, session) => {
         this.markProviderGenerationObserved();
@@ -494,6 +494,15 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     }
     if (event.direction === "server" && event.type === "input_audio_buffer.speech_started") {
       this.turns.resetPartialWakeNameTracking();
+      this.turns.markProviderSpeechSegmentStarted();
+    }
+    if (
+      event.direction === "server" &&
+      (event.type === "conversation.item.added" || event.type === "conversation.item.created") &&
+      event.itemRole === "user" &&
+      event.itemId
+    ) {
+      this.turns.bindSpeakerInputItem(event.itemId);
     }
     if (shouldLogRealtimeVerboseEvent(event)) {
       logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);

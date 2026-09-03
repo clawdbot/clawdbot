@@ -311,11 +311,11 @@ export function createRealtimeVoiceSessionHarness<TForcedConsultContext = unknow
     createBridge(bridgeParams) {
       bridge = createRealtimeVoiceBridgeSession({
         ...bridgeParams,
-        onTranscript: (role, text, isFinal) => {
+        onTranscript: (role, text, isFinal, source) => {
           if (isFinal) {
             harness.recordTranscript(role, text);
           }
-          bridgeParams.onTranscript?.(role, text, isFinal);
+          bridgeParams.onTranscript?.(role, text, isFinal, source);
         },
         onEvent: (event) => {
           claimResponseEvent(event);

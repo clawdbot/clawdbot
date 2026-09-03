@@ -32,6 +32,7 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
         type: event.type,
         detail: this.describeServerEvent(event),
         ...(event.item_id ? { itemId: event.item_id } : {}),
+        ...(event.item?.role ? { itemRole: event.item.role } : {}),
         ...((event.response_id ?? event.response?.id)
           ? { responseId: event.response_id ?? event.response?.id }
           : {}),
@@ -131,7 +132,9 @@ export abstract class OpenAIRealtimeEvents extends OpenAIRealtimeProtocol {
 
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
-          this.config.onTranscript?.("user", event.transcript, true);
+          this.config.onTranscript?.("user", event.transcript, true, {
+            itemId: event.item_id,
+          });
         }
         return;
 
